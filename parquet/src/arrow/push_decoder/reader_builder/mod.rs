@@ -888,6 +888,13 @@ fn prepare_selection_for_page_skipping(
     offset_index: Option<&[Option<OffsetIndexMetaData>]>,
     total_rows: usize,
 ) -> ReadPlanBuilder {
+    // With no selection there are no skipped pages and no execution strategy
+    // to prepare. Preserve Auto so a first predicate can choose its backing
+    // while constructing the resulting selection.
+    if plan_builder.selection().is_none() {
+        return plan_builder;
+    }
+
     match plan_builder.resolve_selection_strategy() {
         RowSelectionStrategy::Mask => {
             let loaded = loaded_row_ranges_for_projection(
@@ -981,6 +988,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(loaded.ranges(), &[0..4, 10..12]);
+    }
+
+    #[test]
+    fn test_page_skipping_preparation_preserves_auto_without_selection() {
+        let policy = RowSelectionPolicy::Auto { threshold: 17 };
+        let plan_builder = ReadPlanBuilder::new(12).with_row_selection_policy(policy);
+
+        let prepared =
+            prepare_selection_for_page_skipping(plan_builder, &ProjectionMask::all(), None, 12);
+
+        assert_eq!(prepared.row_selection_policy(), &policy);
+        assert!(prepared.selection().is_none());
     }
 
     #[test]

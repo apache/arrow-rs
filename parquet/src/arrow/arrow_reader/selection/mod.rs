@@ -322,6 +322,76 @@ impl RowSelection {
         Self::from_consecutive_ranges(iter, total_rows)
     }
 
+    /// Builds a selection using the same run-count threshold as
+    /// [`RowSelectionPolicy::Auto`], but stops materializing selectors as soon
+    /// as the final mask strategy is known.
+    pub(crate) fn from_filters_auto(filters: &[BooleanArray], threshold: usize) -> Self {
+        let total_rows = filters.iter().map(|filter| filter.len()).sum::<usize>();
+
+        // Empty selector-backed selections resolve to Mask under Auto. Preserve
+        // that decision in the backing selected by this constructor.
+        if total_rows == 0 {
+            return Self::from_boolean_buffer(BooleanBuffer::new_unset(0));
+        }
+
+        // Auto selects Mask when:
+        //
+        // total_rows < run_count * threshold
+        //
+        // For a non-zero threshold, the first run count that can satisfy this
+        // inequality is floor(total_rows / threshold) + 1. A checked overflow
+        // means no attainable run count can select Mask.
+        let mask_run_limit = total_rows
+            .checked_div(threshold)
+            .and_then(|count| count.checked_add(1));
+
+        let mut selectors = Vec::new();
+        let mut next_offset = 0usize;
+        let mut last_end = 0usize;
+
+        for filter in filters {
+            assert_eq!(filter.null_count(), 0);
+            let offset = next_offset;
+            next_offset = next_offset.checked_add(filter.len()).unwrap();
+
+            for (start, end) in SlicesIterator::new(filter) {
+                let start = start.checked_add(offset).unwrap();
+                let end = end.checked_add(offset).unwrap();
+
+                if start > last_end
+                    && append_auto_selector(
+                        &mut selectors,
+                        RowSelector::skip(start - last_end),
+                        mask_run_limit,
+                    )
+                {
+                    return Self::from_boolean_buffer(filters_to_boolean_buffer(filters));
+                }
+
+                if append_auto_selector(
+                    &mut selectors,
+                    RowSelector::select(end - start),
+                    mask_run_limit,
+                ) {
+                    return Self::from_boolean_buffer(filters_to_boolean_buffer(filters));
+                }
+                last_end = end;
+            }
+        }
+
+        if last_end != total_rows
+            && append_auto_selector(
+                &mut selectors,
+                RowSelector::skip(total_rows - last_end),
+                mask_run_limit,
+            )
+        {
+            return Self::from_boolean_buffer(filters_to_boolean_buffer(filters));
+        }
+
+        Self::from_selectors(selectors)
+    }
+
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
     pub fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
         ranges: I,
@@ -668,6 +738,37 @@ impl RowSelection {
     }
 }
 
+/// Append a selector while maintaining the normalized selector invariants.
+/// Returns `true` once the Auto mask run limit has been reached.
+fn append_auto_selector(
+    selectors: &mut Vec<RowSelector>,
+    selector: RowSelector,
+    mask_run_limit: Option<usize>,
+) -> bool {
+    if selector.row_count == 0 {
+        return false;
+    }
+
+    match selectors.last_mut() {
+        Some(last) if last.skip == selector.skip => {
+            last.row_count = last.row_count.checked_add(selector.row_count).unwrap()
+        }
+        _ => selectors.push(selector),
+    }
+
+    mask_run_limit.is_some_and(|limit| selectors.len() >= limit)
+}
+
+fn filters_to_boolean_buffer(filters: &[BooleanArray]) -> BooleanBuffer {
+    let total_rows = filters.iter().map(|filter| filter.len()).sum();
+    let mut builder = BooleanBufferBuilder::new(total_rows);
+    for filter in filters {
+        assert_eq!(filter.null_count(), 0);
+        builder.append_buffer(filter.values());
+    }
+    builder.finish()
+}
+
 impl From<Vec<RowSelector>> for RowSelection {
     fn from(selectors: Vec<RowSelector>) -> Self {
         selectors.into_iter().collect()
@@ -759,6 +860,9 @@ impl FromIterator<RowSelection> for RowSelection {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod auto_construction_tests;
 
 #[cfg(test)]
 mod tests {
