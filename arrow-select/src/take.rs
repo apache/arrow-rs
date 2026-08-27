@@ -471,8 +471,12 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
             let mut output = MutableBuffer::new_null(len);
             let out_ptr = output.as_mut_ptr();
             nulls.valid_indices().for_each(|i| {
-                // SAFETY: i < len from the validity bitmap
-                let src_idx = unsafe { indices.value_unchecked(i) }.as_usize() + src_offset;
+                let src_idx = if CHECKED {
+                    indices.value(i).as_usize()
+                } else {
+                    // SAFETY: i < len from the validity bitmap
+                    unsafe { indices.value_unchecked(i) }.as_usize()
+                } + src_offset;
                 // SAFETY: src_idx bounded by take's prior bounds check
                 unsafe {
                     if bit_util::get_bit_raw(src_ptr, src_idx) {
@@ -495,9 +499,12 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let base = byte_idx * 8;
                 let mut byte = 0u8;
                 for bit in 0..8usize {
-                    // SAFETY: base + bit < len
-                    let src_idx =
-                        unsafe { indices.value_unchecked(base + bit) }.as_usize() + src_offset;
+                    let src_idx = if CHECKED {
+                        indices.value(base + bit).as_usize()
+                    } else {
+                        // SAFETY: base + bit < len
+                        unsafe { indices.value_unchecked(base + bit) }.as_usize()
+                    } + src_offset;
                     // SAFETY: src_idx bounded by take's prior bounds check
                     let raw = unsafe { *src_ptr.add(src_idx >> 3) };
                     byte |= ((raw >> (src_idx & 7)) & 1) << bit;
@@ -508,8 +515,13 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let base = full_bytes * 8;
                 let mut byte = 0u8;
                 for bit in 0..(len - base) {
-                    let src_idx =
-                        unsafe { indices.value_unchecked(base + bit) }.as_usize() + src_offset;
+                    let src_idx = if CHECKED {
+                        indices.value(base + bit).as_usize()
+                    } else {
+                        // SAFETY: base + bit < len
+                        unsafe { indices.value_unchecked(base + bit) }.as_usize()
+                    } + src_offset;
+                    // SAFETY: src_idx bounded by take's prior bounds check
                     let raw = unsafe { *src_ptr.add(src_idx >> 3) };
                     byte |= ((raw >> (src_idx & 7)) & 1) << bit;
                 }
@@ -611,17 +623,18 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
 
 /// `take` implementation for boolean arrays
 fn take_boolean<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
-    values: &BooleanArray,
+    array: &BooleanArray,
     indices: &PrimitiveArray<IndexType>,
 ) -> BooleanArray {
-    match values.nulls().filter(|n| n.null_count() > 0) {
-        Some(value_nulls) => {
+    let bits = array.values();
+    match array.nulls().filter(|n| n.null_count() > 0) {
+        Some(array_nulls) => {
             let (val_buf, null_buf) =
-                take_bits_with_validity(values.values(), value_nulls.inner(), indices);
+                take_bits_with_validity(bits, array_nulls.inner(), indices);
             BooleanArray::new(val_buf, null_buf)
         }
         None => {
-            let val_buf = take_bits::<_, CHECKED>(values.values(), indices);
+            let val_buf = take_bits::<_, CHECKED>(bits, indices);
             let null_buf = take_nulls::<_, CHECKED>(None, indices);
             BooleanArray::new(val_buf, null_buf)
         }
@@ -1263,6 +1276,36 @@ pub fn take_record_batch(
         .map(|c| take(c, indices, None))
         .collect::<Result<Vec<_>, _>>()?;
     RecordBatch::try_new(record_batch.schema(), columns)
+}
+
+/// Take rows by index from [`RecordBatch`], returning a new [`RecordBatch`], without bounds
+/// checking.
+///
+/// # Safety
+///
+/// The caller must guarantee that every non-null value in `indices` is a valid row index for
+/// `record_batch` (i.e. `index < record_batch.num_rows()`). Violating this will cause a panic
+/// or undefined behaviour inside the inner kernels.
+///
+/// # Errors
+///
+/// Returns an [`ArrowError`] if `indices` is not an integer array type.
+pub unsafe fn take_record_batch_unchecked(
+    record_batch: &RecordBatch,
+    indices: &dyn Array,
+) -> Result<RecordBatch, ArrowError> {
+    downcast_integer_array!(
+        indices => {
+            let indices = indices.to_indices();
+            let columns = record_batch
+                .columns()
+                .iter()
+                .map(|c| take_impl::<_, false>(c.as_ref(), &indices))
+                .collect::<Result<Vec<_>, _>>()?;
+            RecordBatch::try_new(record_batch.schema(), columns)
+        },
+        d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
+    )
 }
 
 #[cfg(test)]
