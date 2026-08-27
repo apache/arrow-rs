@@ -3084,4 +3084,34 @@ mod tests {
             ]
         );
     }
+
+    // parent null rows on FixedSizeList must propagate to child elements.
+    #[test]
+    fn test_take_fixed_size_list_parent_nulls() {
+        let list = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2)]),
+                None,
+                Some(vec![Some(5), Some(6)]),
+            ],
+            2,
+        );
+
+        let indices = UInt32Array::from(vec![2, 1, 0]);
+        let result = take(&list, &indices, None).unwrap();
+        let result = result.as_fixed_size_list();
+
+        assert_eq!(result.len(), 3);
+        assert!(result.is_valid(0));
+        assert!(result.is_null(1));
+        assert!(result.is_valid(2));
+
+        let child = result.values().as_primitive::<Int32Type>();
+        assert_eq!(child.value(0), 5);
+        assert_eq!(child.value(1), 6);
+        assert!(child.is_null(2));
+        assert!(child.is_null(3));
+        assert_eq!(child.value(4), 1);
+        assert_eq!(child.value(5), 2);
+    }
 }
