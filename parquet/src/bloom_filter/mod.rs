@@ -873,7 +873,10 @@ mod tests {
             (0.1, 1000000, 5772541),
             (0.01, 1000000, 9681526),
             (0.001, 1000000, 14607697),
-            (1e-9, 10_000_000, 1026297530),
+            // powf/ln are not bit-for-bit reproducible and Miri perturbs them by a few
+            // ULP, which shifts this ~1.42e19 result by thousands of bits.
+            #[cfg(not(miri))]
+            (1e-50, 1_000_000_000_000, 14226231280773240832),
         ] {
             assert_eq!(*num_bits, num_of_bits_from_ndv_fpp(*ndv, *fpp) as u64);
         }

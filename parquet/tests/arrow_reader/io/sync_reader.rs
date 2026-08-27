@@ -33,7 +33,6 @@ use std::io::Read;
 use std::sync::Arc;
 
 #[test]
-#[cfg_attr(miri, ignore)] // fork is not supported
 fn test_read_entire_file() {
     // read entire file without any filtering or projection
     let test_file = test_file();
@@ -70,7 +69,6 @@ fn test_read_entire_file() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // fork is not supported
 fn test_read_single_group() {
     let test_file = test_file();
     let builder = sync_builder(&test_file, test_options()).with_row_groups(vec![1]); // read only second row group
@@ -98,7 +96,6 @@ fn test_read_single_group() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // fork is not supported
 fn test_read_single_column() {
     let test_file = test_file();
     let builder = sync_builder(&test_file, test_options());
@@ -124,7 +121,6 @@ fn test_read_single_column() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // fork is not supported
 fn test_read_single_column_no_page_index() {
     let test_file = test_file();
     let options = test_options().with_page_index_policy(PageIndexPolicy::from(false));
@@ -159,7 +155,6 @@ fn test_read_single_column_no_page_index() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // fork is not supported
 fn test_read_row_selection() {
     // There are 400 total rows spread across 4 data pages (100 rows each)
     // select rows 175..225 (i.e. DataPage(1) of row group 0 and DataPage(0) of row group 1)
@@ -199,7 +194,6 @@ fn test_read_row_selection() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // fork is not supported
 fn test_read_limit() {
     // There are 400 total rows spread across 4 data pages (100 rows each)
     // a limit of 125 rows should only fetch the first two data pages (DataPage(0) and DataPage(1)) from row group 0
@@ -226,7 +220,6 @@ fn test_read_limit() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // fork is not supported
 fn test_read_single_row_filter() {
     // Values from column "b" range 400..799
     // filter  "b" > 575 and < 625
@@ -275,7 +268,6 @@ fn test_read_single_row_filter() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // fork is not supported
 fn test_read_multiple_row_filter() {
     // Values in column "a" range 0..399
     // Values in column "b" range 400..799
@@ -328,7 +320,6 @@ fn test_read_multiple_row_filter() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // fork is not supported
 fn test_read_single_row_filter_all() {
     // Apply a filter that entirely filters out rows based on a predicate from one column
     // should not read any data pages for any other column
