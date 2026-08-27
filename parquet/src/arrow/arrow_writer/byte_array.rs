@@ -88,9 +88,15 @@ macro_rules! downcast_op {
                 DataType::LargeUtf8 => {
                     downcast_dict_op!(key, LargeStringArray, $array, $op$(, $arg)*)
                 }
+                DataType::Utf8View => {
+                    downcast_dict_op!(key, StringViewArray, $array, $op$(, $arg)*)
+                }
                 DataType::Binary => downcast_dict_op!(key, BinaryArray, $array, $op$(, $arg)*),
                 DataType::LargeBinary => {
                     downcast_dict_op!(key, LargeBinaryArray, $array, $op$(, $arg)*)
+                }
+                DataType::BinaryView => {
+                    downcast_dict_op!(key, BinaryViewArray, $array, $op$(, $arg)*)
                 }
                 DataType::FixedSizeBinary(_) => {
                     downcast_dict_op!(key, FixedSizeBinaryArray, $array, $op$(, $arg)*)

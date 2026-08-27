@@ -216,6 +216,8 @@ pub struct ArrayData {
     ///
     /// The offset applies to [`Self::child_data`] and [`Self::buffers`]. It
     /// does NOT apply to [`Self::nulls`].
+    ///
+    /// See [`Self::offset()`] for details and diagrams.
     offset: usize,
 
     /// The buffers that store the actual data for this array, as defined
@@ -241,13 +243,15 @@ pub struct ArrayData {
     ///
     /// If the child element also has an offset then these offsets are
     /// cumulative.
+    ///
+    /// See [`Self::child_data()`] and [`Self::offset()`] for details.
     child_data: Vec<ArrayData>,
 
     /// The null bitmap.
     ///
     /// `None` indicates all values are non-null in this array.
     ///
-    /// [`Self::offset]` does not apply to the null bitmap. While the
+    /// [`Self::offset()`] does not apply to the null bitmap. While the
     /// BooleanBuffer may be sliced (have its own offset) internally, this
     /// `NullBuffer` always represents exactly `len` elements.
     nulls: Option<NullBuffer>,
@@ -432,6 +436,11 @@ impl ArrayData {
 
     /// Returns a slice of children [`ArrayData`]. This will be non
     /// empty for type such as lists and structs.
+    ///
+    /// Note: For nested types where the parent element `i` corresponds directly
+    /// to child element `i` (such as structs), both the parent's offset and
+    /// each child's own offset apply when locating child values — see
+    /// [`Self::offset`] for details.
     pub fn child_data(&self) -> &[ArrayData] {
         &self.child_data[..]
     }
@@ -471,7 +480,57 @@ impl ArrayData {
         self.len == 0
     }
 
-    /// Returns the offset of this [`ArrayData`]
+    /// Returns the offset in elements of this [`ArrayData`]
+    ///
+    /// The offset applies to [`Self::buffers`] and [`Self::child_data`],
+    /// but does NOT apply to [`Self::nulls`], which always represents exactly
+    /// [`Self::len`] elements.
+    ///
+    /// # Offsets for Non-nested types
+    ///
+    /// For non-nested types, the offset skips leading elements in the buffers.
+    /// Logical element `i` is stored at physical position `offset + i`.
+    ///
+    /// For example, with `offset = 2` and `len = 3` the following array
+    /// represents elements `[C, D, E]`:
+    ///
+    /// ```text
+    ///                     offset: 2        len: 3
+    ///                   ◀───────────▶◀────────────────▶
+    ///                   ┌─────┬─────┬─────┬─────┬─────┬─────┐
+    ///    values buffer  │  A  │  B  │  C  │  D  │  E  │  F  │
+    ///                   └─────┴─────┴─────┴─────┴─────┴─────┘
+    ///    physical index    0     1     2     3     4     5
+    ///    logical index                 0     1     2
+    /// ```
+    ///
+    /// # Offsets for Struct types
+    ///
+    /// For [struct]s, logical element `i` of the parent corresponds directly to
+    /// element `i` of each child, with no indirection in between. Since a
+    /// struct has no buffers of its own, its offset applies to each child,
+    /// composing cumulatively with any child offset. Logical element `i` of the
+    /// struct corresponds to element `offset + i` of each child.
+    ///
+    /// For example, a struct with `offset = 2` and `len = 3` whose children
+    /// `c1` and `c2` themselves each have an offset of `1` represents the
+    /// elements `{c1: D, c2: d}`, `{c1: E, c2: e}`, `{c1: F, c2: f}`:
+    ///
+    /// ```text
+    ///                        struct offset: 2    len: 3
+    ///                          ◀───────────▶◀────────────────▶
+    ///    child offset: 1 ◀─────▶
+    ///                    ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┐
+    ///    child c1        │  A  │  B  │  C  │  D  │  E  │  F  │  G  │
+    ///                    ├─────┼─────┼─────┼─────┼─────┼─────┼─────┤
+    ///    child c2        │  a  │  b  │  c  │  d  │  e  │  f  │  g  │
+    ///                    └─────┴─────┴─────┴─────┴─────┴─────┴─────┘
+    ///    physical index     0     1     2     3     4     5     6
+    ///    child index              0     1     2     3     4     5
+    ///    struct index                         0     1     2
+    /// ```
+    ///
+    /// [struct]: https://arrow.apache.org/docs/format/Columnar.html#struct-layout
     #[inline]
     pub const fn offset(&self) -> usize {
         self.offset
