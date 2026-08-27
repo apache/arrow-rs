@@ -1363,13 +1363,6 @@ where
 
 /// Writes the `Debug` representation of a single temporal value (converted to
 /// `i64`) of the given [`DataType`] to `f`
-///
-/// This function is deliberately not generic over [`ArrowPrimitiveType`]: it
-/// only depends on the runtime [`DataType`], and keeping it non-generic means
-/// it is compiled once rather than once for each of the ~32 primitive types
-/// (see [#10889])
-///
-/// [#10889]: https://github.com/apache/arrow-rs/issues/10889
 fn write_temporal_value(
     f: &mut std::fmt::Formatter,
     data_type: &DataType,
