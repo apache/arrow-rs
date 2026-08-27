@@ -19,9 +19,9 @@
 //!
 //! These benchmarks measure the structural cost of creating, writing, and
 //! closing a parquet file with many columns while keeping actual data
-//! encoding negligible (1 row per column). This isolates overhead such as
-//! `WriterProperties` per-column lookups, `GenericColumnWriter` allocation,
-//! and metadata assembly.
+//! encoding negligible. This isolates overhead such as `WriterProperties`
+//! per-column lookups, `GenericColumnWriter` allocation, metadata assembly,
+//! and the per-column work repeated by every `write` call.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
@@ -68,6 +68,12 @@ fn make_per_column_props(schema: &SchemaRef) -> WriterProperties {
     builder.build()
 }
 
+/// Measures the per-column-writer overhead of a wide schema, by writing a
+/// single one-row batch per file.
+///
+/// Writing one batch per file means this is dominated by column writer
+/// construction and metadata assembly. [`bench_writer_repeated_batches`]
+/// isolates the work that repeats on every batch instead.
 fn bench_writer_overhead(c: &mut Criterion) {
     for &num_cols in COLUMN_COUNTS {
         let schema = make_wide_schema(num_cols);
@@ -86,27 +92,21 @@ fn bench_writer_overhead(c: &mut Criterion) {
     }
 }
 
-/// Column counts for [`bench_writer_repeated_batches`]. Kept below the widest
-/// case in [`COLUMN_COUNTS`] so the benchmark stays a few hundred milliseconds
-/// per iteration.
-const REPEATED_COLUMN_COUNTS: &[usize] = &[1_000, 5_000];
-
-/// Number of batches written per file by [`bench_writer_repeated_batches`], and
-/// the number of rows in each of them.
-const REPEATED_BATCH_COUNT: usize = 32;
-const REPEATED_BATCH_ROWS: usize = 32;
-
 /// Measures the per-`write` (rather than per-column-writer) overhead of a wide
 /// schema, by writing many small batches into a single row group.
 ///
-/// [`bench_writer_overhead`] writes one batch per file, so it is dominated by
-/// column writer construction and metadata assembly. This benchmark keeps the
-/// number of column writers fixed and increases the number of `write` calls,
-/// isolating the work that repeats on every batch.
+/// This keeps the number of column writers fixed and increases the number of
+/// `write` calls, isolating the work that repeats on every batch.
 fn bench_writer_repeated_batches(c: &mut Criterion) {
-    for &num_cols in REPEATED_COLUMN_COUNTS {
+    // Number of batches written per file, and the number of rows in each.
+    const BATCH_COUNT: usize = 32;
+    const BATCH_ROWS: usize = 32;
+
+    // Kept below the widest case in `COLUMN_COUNTS` so that one iteration stays
+    // well under a second.
+    for &num_cols in &[1_000, 5_000] {
         let schema = make_wide_schema(num_cols);
-        let batch = make_batch(&schema, REPEATED_BATCH_ROWS);
+        let batch = make_batch(&schema, BATCH_ROWS);
         let props = make_per_column_props(&schema);
 
         c.bench_function(
@@ -116,7 +116,7 @@ fn bench_writer_repeated_batches(c: &mut Criterion) {
                     let mut writer =
                         ArrowWriter::try_new(Empty::default(), schema.clone(), Some(props.clone()))
                             .unwrap();
-                    for _ in 0..REPEATED_BATCH_COUNT {
+                    for _ in 0..BATCH_COUNT {
                         writer.write(black_box(&batch)).unwrap();
                     }
                     black_box(writer.close()).unwrap();
