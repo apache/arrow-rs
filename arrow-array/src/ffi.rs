@@ -552,7 +552,7 @@ mod tests_to_then_from_ffi {
     use std::mem::ManuallyDrop;
 
     use arrow_buffer::{ArrowNativeType, NullBuffer};
-    use arrow_schema::Field;
+    use arrow_schema::{Field, Fields};
 
     use crate::builder::UnionBuilder;
     use crate::cast::AsArray;
@@ -1188,6 +1188,65 @@ mod tests_to_then_from_ffi {
         let array = array.as_any().downcast_ref::<StructArray>().unwrap();
         assert_eq!(array.data_type(), struct_array.data_type());
         assert_eq!(array, &struct_array);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_array_sliced_by_producer() -> Result<()> {
+        // C++ slices an array by adjusting `offset`/`length` on the array data
+        // and leaving `child_data` alone, so a sliced struct crosses the C data
+        // interface as a parent with a non-zero `offset` over whole children.
+        // Checked against pyarrow 25.0.1:
+        //
+        //   arr = pa.StructArray.from_arrays(
+        //       [pa.array([0, 1, 2, 3, None, 5], type=pa.int32())],
+        //       names=["x"],
+        //       mask=pa.array([False, False, False, True, False, False]))
+        //   c = ffi.new("struct ArrowArray*")
+        //   arr.slice(1, 5)._export_to_c(int(ffi.cast("uintptr_t", c)), ...)
+        //   # c: length=5 offset=1 n_children=1
+        //   # c.children[0][0]: length=6 offset=0
+        //
+        // Slicing what we import from that used to panic, because the parent's
+        // offset was applied twice (#7595).
+        let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(x) as ArrayRef],
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        );
+
+        // Slice the way a C producer does: offset on the parent, children whole.
+        let producer_data = struct_array
+            .to_data()
+            .into_builder()
+            .offset(1)
+            .len(5)
+            .nulls(Some(NullBuffer::from(vec![true, true, false, true, true])))
+            .build()?;
+
+        let (array, schema) = to_ffi(&producer_data)?;
+
+        // The exported C array has the layout pyarrow produces above.
+        assert_eq!(array.offset(), 1);
+        assert_eq!(array.len(), 5);
+        assert_eq!(array.num_children(), 1);
+        assert_eq!(array.child(0).offset(), 0);
+        assert_eq!(array.child(0).len(), 6);
+
+        // (simulate consumer) import it: the offset stays on the parent
+        let imported = unsafe { from_ffi(array, &schema) }?;
+        assert_eq!(imported.offset(), 1);
+        assert_eq!(imported.len(), 5);
+        assert_eq!(imported.child_data()[0].offset(), 0);
+        assert_eq!(imported.child_data()[0].len(), 6);
+
+        let sliced = make_array(imported.slice(1, 3));
+        assert_eq!(sliced.as_struct(), &struct_array.slice(2, 3));
+
+        let array = make_array(imported);
+        assert_eq!(array.as_struct(), &struct_array.slice(1, 5));
 
         Ok(())
     }
