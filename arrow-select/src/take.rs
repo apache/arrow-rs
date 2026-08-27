@@ -833,7 +833,7 @@ fn take_fixed_size_list_primitive<IndexType: ArrowPrimitiveType>(
     // - The data buffer has `indices.len() * row_bytes` bytes = `out_len` elements of a
     //   primitive type, matching `.len(out_len)`.
     // - The null buffer (when present) is `ceil(out_len, 8)` bytes via `from_len_zeroed`.
-    // - The data type is primitive: exactly one data buffer, no children required.
+    // - Primitive types have exactly one value buffer.
     let array_data = unsafe {
         ArrayData::builder(child.data_type().clone())
             .len(out_len)
