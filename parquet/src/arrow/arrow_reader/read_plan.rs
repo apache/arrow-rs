@@ -21,7 +21,6 @@
 use crate::arrow::array_reader::ArrayReader;
 use crate::arrow::arrow_reader::selection::{
     LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy,
-    filters_to_boolean_buffer,
 };
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
@@ -275,7 +274,7 @@ impl ReadPlanBuilder {
         }
         let raw = match (self.selection.as_ref(), self.row_selection_policy) {
             (Some(selection), _) if selection.as_mask().is_some() => {
-                RowSelection::from_boolean_buffer(filters_to_boolean_buffer(&filters))
+                RowSelection::from_filters_mask(&filters)
             }
             (None, RowSelectionPolicy::Auto { threshold }) => {
                 RowSelection::from_filters_auto(&filters, threshold)
