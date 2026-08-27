@@ -476,7 +476,9 @@ impl ImportedArrowArray<'_> {
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i32>();
-                // get last offset
+                // Safety: `len` is the byte length of the offset buffer; dividing by `size_of::<i32>()`
+                // gives the number of i32 elements. The `- 1` is safe because the array is non-empty
+                // (checked above), so the offset buffer has at least one element.
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
             (DataType::LargeUtf8 | DataType::LargeBinary, 2) => {
@@ -490,7 +492,7 @@ impl ImportedArrowArray<'_> {
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i64>();
-                // get last offset
+                // Safety: same as the i32 case above but for i64 offsets.
                 (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
             }
             // View types: these have variadic buffers.
