@@ -66,5 +66,9 @@ harness = false
 name = "variant_validation"
 harness = false
 
+[[bench]]
+name = "variant_metadata_access"
+harness = false
+
 [lints]
 workspace = true
