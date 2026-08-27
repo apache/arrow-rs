@@ -1196,13 +1196,29 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
 impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
     fn from(array: PrimitiveArray<T>) -> Self {
-        let builder = ArrayDataBuilder::new(array.data_type)
-            .len(array.values.len())
-            .nulls(array.nulls)
-            .buffers(vec![array.values.into_inner()]);
-
-        unsafe { builder.build_unchecked() }
+        let len = array.values.len();
+        primitive_to_array_data(array.data_type, len, array.values.into_inner(), array.nulls)
     }
+}
+
+/// Converts the parts of a valid `PrimitiveArray` into [`ArrayData`]
+///
+/// Deliberately not generic over [`ArrowPrimitiveType`]: after extracting the
+/// untyped [`Buffer`] the conversion is identical for all primitive types, so
+/// keeping it non-generic means it is compiled once rather than once per type
+fn primitive_to_array_data(
+    data_type: DataType,
+    len: usize,
+    values: Buffer,
+    nulls: Option<NullBuffer>,
+) -> ArrayData {
+    let builder = ArrayDataBuilder::new(data_type)
+        .len(len)
+        .nulls(nulls)
+        .buffers(vec![values]);
+
+    // SAFETY: the parts came from a valid PrimitiveArray
+    unsafe { builder.build_unchecked() }
 }
 
 /// SAFETY: Correctly implements the contract of Arrow Arrays
