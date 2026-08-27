@@ -656,9 +656,9 @@ mod ree {
     use arrow_schema::ArrowError;
 
     /// Downcasts an array to a TypedRunArray.
-    fn downcast<'a, I: RunEndIndexType, V: ArrowNumericType>(
-        array: &'a dyn Array,
-    ) -> Option<TypedRunArray<'a, I, PrimitiveArray<V>>> {
+    fn downcast<I: RunEndIndexType, V: ArrowNumericType>(
+        array: &dyn Array,
+    ) -> Option<TypedRunArray<'_, I, PrimitiveArray<V>>> {
         let array = array.as_run_opt::<I>()?;
         // We only support RunArray wrapping primitive types.
         array.downcast::<PrimitiveArray<V>>()
@@ -697,8 +697,8 @@ mod ree {
     }
 
     /// Folds over the values in a run-end-encoded array.
-    fn fold<'a, I: RunEndIndexType, V: ArrowNumericType, F, E>(
-        array: TypedRunArray<'a, I, PrimitiveArray<V>>,
+    fn fold<I: RunEndIndexType, V: ArrowNumericType, F, E>(
+        array: TypedRunArray<'_, I, PrimitiveArray<V>>,
         mut f: F,
     ) -> Result<Option<V::Native>, E>
     where
@@ -1557,27 +1557,27 @@ mod tests {
     test_binary!(
         test_binary_min_max_with_nulls,
         vec![
-            Some("b01234567890123".as_bytes()), // long bytes
+            Some(b"b01234567890123".as_slice()), // long bytes
             None,
             None,
             Some(b"a"),
             Some(b"c"),
             Some(b"abcdedfg0123456"),
         ],
-        Some("a".as_bytes()),
-        Some("c".as_bytes())
+        Some(b"a".as_slice()),
+        Some(b"c".as_slice())
     );
 
     test_binary!(
         test_binary_min_max_no_null,
         vec![
-            Some("b".as_bytes()),
+            Some(b"b".as_slice()),
             Some(b"abcdefghijklmnopqrst"), // long bytes
             Some(b"c"),
             Some(b"b01234567890123"), // long bytes for view types
         ],
-        Some("abcdefghijklmnopqrst".as_bytes()),
-        Some("c".as_bytes())
+        Some(b"abcdefghijklmnopqrst".as_slice()),
+        Some(b"c".as_slice())
     );
 
     test_binary!(test_binary_min_max_all_nulls, vec![None, None], None, None);
@@ -1586,13 +1586,13 @@ mod tests {
         test_binary_min_max_1,
         vec![
             None,
-            Some("b01234567890123435".as_bytes()), // long bytes for view types
+            Some(b"b01234567890123435".as_slice()), // long bytes for view types
             None,
             Some(b"b0123xxxxxxxxxxx"),
             Some(b"a")
         ],
-        Some("a".as_bytes()),
-        Some("b0123xxxxxxxxxxx".as_bytes())
+        Some(b"a".as_slice()),
+        Some(b"b0123xxxxxxxxxxx".as_slice())
     );
 
     macro_rules! test_string {
@@ -2005,7 +2005,7 @@ mod tests {
         ItemType: Clone + Into<Option<V::Native>> + 'static,
     {
         let mut builder = arrow_array::builder::PrimitiveRunBuilder::<I, V>::new();
-        for v in values.into_iter() {
+        for v in values {
             builder.append_option((*v).clone().into());
         }
         builder.finish()

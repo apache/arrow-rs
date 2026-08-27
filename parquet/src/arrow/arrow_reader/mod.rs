@@ -18,11 +18,15 @@
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, RecordBatch, RecordBatchReader};
+use arrow_array::{BooleanArray, RecordBatch, RecordBatchReader};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector};
+use selection::MaskCursor;
+pub use selection::{
+    MaskRunIter, RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector,
+};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -59,6 +63,120 @@ pub mod statistics;
 
 /// Default batch size for reading parquet files
 pub const DEFAULT_BATCH_SIZE: usize = 1024;
+
+/// A row group and its optional row-group-local [`RowSelection`].
+///
+/// A row-group-local selection is relative to the rows in this row group. For
+/// example, an offset of 100 refers to the row at offset 100 within the row
+/// group, not within the Parquet file.
+///
+/// A `None` selection reads the entire row group. Omitting a row group skips
+/// it. Entries are decoded in the supplied order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowGroupSelection {
+    pub(crate) row_group_index: usize,
+    pub(crate) selection: Option<RowSelection>,
+}
+
+impl RowGroupSelection {
+    /// Creates a row-group-local selection.
+    pub fn new(row_group_index: usize, selection: Option<RowSelection>) -> Self {
+        Self {
+            row_group_index,
+            selection,
+        }
+    }
+
+    /// The index of the row group this selection applies to.
+    pub fn row_group_index(&self) -> usize {
+        self.row_group_index
+    }
+
+    /// The row-group-local selection, or `None` if the entire row group is
+    /// read.
+    pub fn selection(&self) -> Option<&RowSelection> {
+        self.selection.as_ref()
+    }
+}
+
+/// Row-selection configuration shared by the Arrow reader builders.
+#[derive(Debug)]
+pub(crate) enum RowGroupPlan {
+    /// First select `row_groups`, if provided, and then apply `selection`
+    /// across the concatenated rows from those row groups.
+    ///
+    /// This is formed by [`ArrowReaderBuilder::with_row_groups`] and
+    /// [`ArrowReaderBuilder::with_row_selection`].
+    Global {
+        row_groups: Option<Vec<usize>>,
+        selection: Option<RowSelection>,
+    },
+    /// Apply each row-group-local selection independently, in the order
+    /// supplied.
+    ///
+    /// This is formed by `with_row_group_selections` on the push decoder and
+    /// async stream builders.
+    PerRowGroup(Vec<RowGroupSelection>),
+    /// Mutually exclusive global and per-row-group configuration was supplied.
+    /// This is reported as an error when the reader is built.
+    Conflicting,
+}
+
+impl RowGroupPlan {
+    fn set_row_groups(&mut self, new_row_groups: Vec<usize>) {
+        match self {
+            Self::Global { row_groups, .. } => *row_groups = Some(new_row_groups),
+            Self::PerRowGroup(_) => *self = Self::Conflicting,
+            Self::Conflicting => {}
+        }
+    }
+
+    fn set_row_selection(&mut self, new_selection: RowSelection) {
+        match self {
+            Self::Global { selection, .. } => *selection = Some(new_selection),
+            Self::PerRowGroup(_) => *self = Self::Conflicting,
+            Self::Conflicting => {}
+        }
+    }
+
+    pub(crate) fn set_row_group_selections(
+        &mut self,
+        row_group_selections: Vec<RowGroupSelection>,
+    ) {
+        match self {
+            Self::Global {
+                row_groups: None,
+                selection: None,
+            }
+            | Self::PerRowGroup(_) => {
+                *self = Self::PerRowGroup(row_group_selections);
+            }
+            Self::Global { .. } => *self = Self::Conflicting,
+            Self::Conflicting => {}
+        }
+    }
+
+    pub(crate) fn conflict_error() -> ParquetError {
+        ParquetError::General(
+            "with_row_group_selections cannot be combined with with_row_groups or with_row_selection"
+                .to_string(),
+        )
+    }
+
+    fn into_global(self) -> Result<(Option<Vec<usize>>, Option<RowSelection>)> {
+        match self {
+            Self::Global {
+                row_groups,
+                selection,
+            } => Ok((row_groups, selection)),
+            Self::PerRowGroup(_) => Err(ParquetError::General(
+                "Row-group-local selections are not supported by the synchronous reader"
+                    .to_string(),
+            )),
+            Self::Conflicting => Err(Self::conflict_error()),
+        }
+    }
+}
 
 /// Builder for constructing Parquet readers that decode into [Apache Arrow]
 /// arrays.
@@ -126,13 +244,11 @@ pub struct ArrowReaderBuilder<T> {
 
     pub(crate) batch_size: usize,
 
-    pub(crate) row_groups: Option<Vec<usize>>,
+    pub(crate) row_group_plan: RowGroupPlan,
 
     pub(crate) projection: ProjectionMask,
 
     pub(crate) filter: Option<RowFilter>,
-
-    pub(crate) selection: Option<RowSelection>,
 
     pub(crate) row_selection_policy: RowSelectionPolicy,
 
@@ -153,10 +269,9 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("schema", &self.schema)
             .field("fields", &self.fields)
             .field("batch_size", &self.batch_size)
-            .field("row_groups", &self.row_groups)
+            .field("row_group_plan", &self.row_group_plan)
             .field("projection", &self.projection)
             .field("filter", &self.filter)
-            .field("selection", &self.selection)
             .field("row_selection_policy", &self.row_selection_policy)
             .field("limit", &self.limit)
             .field("offset", &self.offset)
@@ -173,10 +288,12 @@ impl<T> ArrowReaderBuilder<T> {
             schema: metadata.schema,
             fields: metadata.fields,
             batch_size: DEFAULT_BATCH_SIZE,
-            row_groups: None,
+            row_group_plan: RowGroupPlan::Global {
+                row_groups: None,
+                selection: None,
+            },
             projection: ProjectionMask::all(),
             filter: None,
-            selection: None,
             row_selection_policy: RowSelectionPolicy::default(),
             limit: None,
             offset: None,
@@ -215,11 +332,17 @@ impl<T> ArrowReaderBuilder<T> {
     /// Only read data from the provided row group indexes
     ///
     /// This is also called row group filtering
-    pub fn with_row_groups(self, row_groups: Vec<usize>) -> Self {
-        Self {
-            row_groups: Some(row_groups),
-            ..self
-        }
+    ///
+    /// On [`ParquetPushDecoderBuilder`] and [`ParquetRecordBatchStreamBuilder`],
+    /// which additionally offer `with_row_group_selections`, this cannot be
+    /// combined with that method; attempting to do so returns an error from
+    /// `build`.
+    ///
+    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    /// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
+    pub fn with_row_groups(mut self, row_groups: Vec<usize>) -> Self {
+        self.row_group_plan.set_row_groups(row_groups);
+        self
     }
 
     /// Only read data from the provided column indexes
@@ -255,9 +378,17 @@ impl<T> ArrowReaderBuilder<T> {
     /// applying the row selection, and therefore rows from skipped row groups
     /// should not be included in the [`RowSelection`] (see example below)
     ///
+    /// On [`ParquetPushDecoderBuilder`] and [`ParquetRecordBatchStreamBuilder`],
+    /// which additionally offer `with_row_group_selections`, this cannot be
+    /// combined with that method; attempting to do so returns an error from
+    /// `build`.
+    ///
+    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    /// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
+    ///
     /// It is recommended to enable writing the page index if using this
     /// functionality, to allow more efficient skipping over data pages. See
-    /// [`ArrowReaderOptions::with_page_index`].
+    /// [`ArrowReaderOptions::with_page_index_policy`].
     ///
     /// # Example
     ///
@@ -299,11 +430,9 @@ impl<T> ArrowReaderBuilder<T> {
     /// ```
     ///
     /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
-    pub fn with_row_selection(self, selection: RowSelection) -> Self {
-        Self {
-            selection: Some(selection),
-            ..self
-        }
+    pub fn with_row_selection(mut self, selection: RowSelection) -> Self {
+        self.row_group_plan.set_row_selection(selection);
+        self
     }
 
     /// Provide a [`RowFilter`] to skip decoding rows
@@ -311,7 +440,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// Row filters are applied after row group selection and row selection
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`].
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`].
     ///
     /// See the [blog post on late materialization] for a more technical explanation.
     ///
@@ -358,7 +487,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// allowing it to limit the final set of rows decoded after any pushed down predicates
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`]
     pub fn with_limit(self, limit: usize) -> Self {
         Self {
             limit: Some(limit),
@@ -372,7 +501,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// allowing it to skip rows after any pushed down predicates
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
-    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`]
+    /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index_policy`]
     pub fn with_offset(self, offset: usize) -> Self {
         Self {
             offset: Some(offset),
@@ -611,30 +740,13 @@ impl ArrowReaderOptions {
         }
     }
 
-    #[deprecated(since = "57.2.0", note = "Use `with_page_index_policy` instead")]
-    /// Enable reading the [`PageIndex`] from the metadata, if present (defaults to `false`)
+    /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
     ///
     /// The `PageIndex` can be used to push down predicates to the parquet scan,
     /// potentially eliminating unnecessary IO, by some query engines.
-    ///
-    /// If this is enabled, [`ParquetMetaData::column_index`] and
-    /// [`ParquetMetaData::offset_index`] will be populated if the corresponding
-    /// information is present in the file.
-    ///
-    /// [`PageIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
-    /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
-    pub fn with_page_index(self, page_index: bool) -> Self {
-        self.with_page_index_policy(PageIndexPolicy::from(page_index))
-    }
-
-    /// Sets the [`PageIndexPolicy`] for both the column and offset indexes.
-    ///
     /// The `PageIndex` consists of two structures: the `ColumnIndex` and `OffsetIndex`.
     /// This method sets the same policy for both. For fine-grained control, use
     /// [`Self::with_column_index_policy`] and [`Self::with_offset_index_policy`].
-    ///
-    /// See [`Self::with_page_index`] for more details on page indexes.
     pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
         self.with_column_index_policy(policy)
             .with_offset_index_policy(policy)
@@ -796,20 +908,6 @@ impl ArrowReaderOptions {
         })
     }
 
-    #[deprecated(
-        since = "57.2.0",
-        note = "Use `column_index_policy` or `offset_index_policy` instead"
-    )]
-    /// Returns whether page index reading is enabled.
-    ///
-    /// This returns `true` if both the column index and offset index policies are not [`PageIndexPolicy::Skip`].
-    ///
-    /// This can be set via [`with_page_index`][Self::with_page_index] or
-    /// [`with_page_index_policy`][Self::with_page_index_policy].
-    pub fn page_index(&self) -> bool {
-        self.offset_index != PageIndexPolicy::Skip && self.column_index != PageIndexPolicy::Skip
-    }
-
     /// Retrieve the currently set [`PageIndexPolicy`] for the offset index.
     ///
     /// This can be set via [`with_offset_index_policy`][Self::with_offset_index_policy]
@@ -838,6 +936,44 @@ impl ArrowReaderOptions {
     #[cfg(feature = "encryption")]
     pub fn file_decryption_properties(&self) -> Option<&Arc<FileDecryptionProperties>> {
         self.file_decryption_properties.as_ref()
+    }
+}
+
+impl ParquetMetaDataReader {
+    /// Applies the metadata related settings from [`ArrowReaderOptions`],
+    /// such as the [`ParquetMetaDataOptions`], decryption properties, and
+    /// [`PageIndexPolicy`] to this reader.
+    ///
+    /// The page index policies are only applied if at least one of them is not
+    /// [`PageIndexPolicy::Skip`], so policies previously configured on this
+    /// reader (e.g. from a preload setting) are preserved when the options do
+    /// not request the page index.
+    ///
+    /// This encodes the canonical way to construct a `ParquetMetaDataReader`
+    /// inside `AsyncFileReader::get_metadata` (available with the `async`
+    /// feature), so implementations outside this crate do not need to
+    /// duplicate it.
+    pub fn with_arrow_reader_options(mut self, options: Option<&ArrowReaderOptions>) -> Self {
+        let Some(options) = options else { return self };
+
+        self = self.with_metadata_options(Some(options.metadata_options().clone()));
+
+        #[cfg(feature = "encryption")]
+        {
+            self = self.with_decryption_properties(
+                options.file_decryption_properties.as_ref().map(Arc::clone),
+            );
+        }
+
+        if options.column_index_policy() != PageIndexPolicy::Skip
+            || options.offset_index_policy() != PageIndexPolicy::Skip
+        {
+            self = self
+                .with_column_index_policy(options.column_index_policy())
+                .with_offset_index_policy(options.offset_index_policy());
+        }
+
+        self
     }
 }
 
@@ -874,9 +1010,11 @@ impl ArrowReaderMetadata {
     ///
     /// # Notes
     ///
-    /// If `options` has [`ArrowReaderOptions::with_page_index`] true, but
+    /// If `options` indicates the page index should be read, but
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
+    ///
+    /// See [`ArrowReaderOptions::with_page_index_policy`] for more information on the page index.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
             .with_column_index_policy(options.column_index)
@@ -1186,10 +1324,9 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             schema: _,
             fields,
             batch_size,
-            row_groups,
+            row_group_plan,
             projection,
             mut filter,
-            selection,
             row_selection_policy,
             limit,
             offset,
@@ -1200,6 +1337,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         // Try to avoid allocate large buffer
         let batch_size = batch_size.min(metadata.file_metadata().num_rows() as usize);
+
+        let (row_groups, selection) = row_group_plan.into_global()?;
 
         let row_groups = row_groups.unwrap_or_else(|| (0..metadata.num_row_groups()).collect());
 
@@ -1215,7 +1354,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
-            for predicate in filter.predicates.iter_mut() {
+            for predicate in &mut filter.predicates {
                 // break early if we have ruled out all rows
                 if !plan_builder.selects_any() {
                     break;
@@ -1297,15 +1436,14 @@ struct ReaderPageIterator<T: ChunkReader> {
 
 impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
     /// Return the next SerializedPageReader
-    fn next_page_reader(&mut self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
+    fn next_page_reader(&self, rg_idx: usize) -> Result<SerializedPageReader<T>> {
         let rg = self.metadata.row_group(rg_idx);
         let column_chunk_metadata = rg.column(self.column_idx);
-        let offset_index = self.metadata.offset_index();
-        // `offset_index` may not exist and `i[rg_idx]` will be empty.
-        // To avoid `i[rg_idx][self.column_idx`] panic, we need to filter out empty `i[rg_idx]`.
-        let page_locations = offset_index
-            .filter(|i| !i[rg_idx].is_empty())
-            .map(|i| i[rg_idx][self.column_idx].page_locations.clone());
+        let page_locations = self
+            .metadata
+            .page_index()
+            .map(|i| i.page_locations(rg_idx, self.column_idx).cloned())
+            .unwrap_or(None);
         let total_rows = rg.num_rows() as usize;
         let reader = self.reader.clone();
 
@@ -1349,6 +1487,140 @@ pub struct ParquetRecordBatchReader {
     read_plan: ReadPlan,
 }
 
+/// Accumulates filter masks for decoded chunks in one logical output batch.
+///
+/// The first chunk keeps its [`BooleanBuffer`] without copying. A second chunk
+/// promotes the accumulator to a [`BooleanBufferBuilder`], and later chunks are
+/// appended to it. For example, chunks `1001` and `1` become `10011`:
+///
+/// ```text
+///           append(1001)             append(1)
+///   Empty ───────────────▶ Single ───────────────▶ Combined
+///                          1001                    10011
+///                          (zero copy)             (promoted to builder)
+/// ```
+///
+/// The combined mask lines up with the rows that [`ArrayReader::read_records`]
+/// buffered across the decoded chunks (see [`read_mask_batch`]). Consuming the
+/// buffered batch and filtering it with the accumulated mask yields the output.
+///
+/// ```text
+///   decoded rows:   0 1 2 3   11   <-- buffered by the array reader
+///   chunk masks:   [1 0 0 1] [1]
+///   finish():       1 0 0 1   1    <-- filters the whole batch in one pass
+/// ```
+#[derive(Default)]
+enum FilterMaskAccumulator {
+    #[default]
+    Empty,
+    Single(BooleanBuffer),
+    Combined(BooleanBufferBuilder),
+}
+
+impl FilterMaskAccumulator {
+    fn append(&mut self, mask: BooleanBuffer) {
+        *self = match std::mem::take(self) {
+            Self::Empty => Self::Single(mask),
+            Self::Single(first) => {
+                let mut combined = BooleanBufferBuilder::new(first.len() + mask.len());
+                combined.append_buffer(&first);
+                combined.append_buffer(&mask);
+                Self::Combined(combined)
+            }
+            Self::Combined(mut combined) => {
+                combined.append_buffer(&mask);
+                Self::Combined(combined)
+            }
+        };
+    }
+
+    fn finish(self) -> Option<BooleanBuffer> {
+        match self {
+            Self::Empty => None,
+            Self::Single(mask) => Some(mask),
+            Self::Combined(combined) => Some(combined.build()),
+        }
+    }
+}
+
+/// Converts the projection buffered by `array_reader` into a record batch.
+fn consume_record_batch(array_reader: &mut dyn ArrayReader) -> Result<RecordBatch> {
+    let array = array_reader.consume_batch()?;
+    let struct_array = array.as_struct_opt().ok_or_else(|| {
+        ArrowError::ParquetError("Struct array reader should return struct array".to_string())
+    })?;
+    Ok(RecordBatch::from(struct_array))
+}
+
+/// Reads one logical Mask batch, potentially spanning multiple loaded ranges.
+///
+/// Each [`MaskCursor`] chunk is safe to decode because it stays within loaded
+/// pages. Gaps are crossed with [`ArrayReader::skip_records`], while decoded
+/// arrays and their mask fragments remain buffered. Once `batch_size` selected
+/// rows have accumulated, this consumes the underlying batch and filters it
+/// once with the combined mask.
+fn read_mask_batch(
+    array_reader: &mut dyn ArrayReader,
+    mask_cursor: &mut MaskCursor,
+    batch_size: usize,
+) -> Result<Option<RecordBatch>> {
+    let mut selected_rows = 0;
+    let mut filter_mask = FilterMaskAccumulator::default();
+
+    while selected_rows < batch_size && !mask_cursor.is_empty() {
+        let mask_chunk = mask_cursor.next_chunk(batch_size - selected_rows)?;
+
+        if mask_chunk.initial_skip > 0 {
+            let skipped = array_reader.skip_records(mask_chunk.initial_skip)?;
+            if skipped != mask_chunk.initial_skip {
+                return Err(general_err!(
+                    "failed to skip rows, expected {}, got {}",
+                    mask_chunk.initial_skip,
+                    skipped
+                ));
+            }
+        }
+
+        let mask = mask_cursor.mask_values_for(&mask_chunk)?;
+        let read = array_reader.read_records(mask_chunk.chunk_rows)?;
+        if read == 0 {
+            return Err(general_err!(
+                "reached end of column while expecting {} rows",
+                mask_chunk.chunk_rows
+            ));
+        }
+        if read != mask_chunk.chunk_rows {
+            return Err(general_err!(
+                "insufficient rows read from array reader - expected {}, got {}",
+                mask_chunk.chunk_rows,
+                read
+            ));
+        }
+
+        filter_mask.append(mask.values().clone());
+        selected_rows += mask_chunk.selected_rows;
+    }
+
+    if selected_rows == 0 {
+        return Ok(None);
+    }
+
+    let filter_mask = filter_mask
+        .finish()
+        .ok_or_else(|| general_err!("Internal Error: decoded Mask batch has no filter values"))?;
+    let batch = consume_record_batch(array_reader)?;
+    let filtered_batch = filter_record_batch(&batch, &BooleanArray::from(filter_mask))?;
+    if filtered_batch.num_rows() != selected_rows {
+        return Err(general_err!(
+            "filtered rows mismatch selection - expected {}, got {}",
+            selected_rows,
+            filtered_batch.num_rows()
+        ));
+    }
+
+    Ok(Some(filtered_batch))
+}
+
 impl Debug for ParquetRecordBatchReader {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParquetRecordBatchReader")
@@ -1383,74 +1655,7 @@ impl ParquetRecordBatchReader {
         }
         match self.read_plan.row_selection_cursor_mut() {
             RowSelectionCursor::Mask(mask_cursor) => {
-                // Stream the record batch reader using contiguous segments of the selection
-                // mask, avoiding the need to materialize intermediate `RowSelector` ranges.
-                while !mask_cursor.is_empty() {
-                    let Some(mask_chunk) = mask_cursor.next_mask_chunk(batch_size) else {
-                        return Ok(None);
-                    };
-
-                    if mask_chunk.initial_skip > 0 {
-                        let skipped = self.array_reader.skip_records(mask_chunk.initial_skip)?;
-                        if skipped != mask_chunk.initial_skip {
-                            return Err(general_err!(
-                                "failed to skip rows, expected {}, got {}",
-                                mask_chunk.initial_skip,
-                                skipped
-                            ));
-                        }
-                    }
-
-                    if mask_chunk.chunk_rows == 0 {
-                        if mask_cursor.is_empty() && mask_chunk.selected_rows == 0 {
-                            return Ok(None);
-                        }
-                        continue;
-                    }
-
-                    let mask = mask_cursor.mask_values_for(&mask_chunk)?;
-
-                    let read = self.array_reader.read_records(mask_chunk.chunk_rows)?;
-                    if read == 0 {
-                        return Err(general_err!(
-                            "reached end of column while expecting {} rows",
-                            mask_chunk.chunk_rows
-                        ));
-                    }
-                    if read != mask_chunk.chunk_rows {
-                        return Err(general_err!(
-                            "insufficient rows read from array reader - expected {}, got {}",
-                            mask_chunk.chunk_rows,
-                            read
-                        ));
-                    }
-
-                    let array = self.array_reader.consume_batch()?;
-                    // The column reader exposes the projection as a struct array; convert this
-                    // into a record batch before applying the boolean filter mask.
-                    let struct_array = array.as_struct_opt().ok_or_else(|| {
-                        ArrowError::ParquetError(
-                            "Struct array reader should return struct array".to_string(),
-                        )
-                    })?;
-
-                    let filtered_batch =
-                        filter_record_batch(&RecordBatch::from(struct_array), &mask)?;
-
-                    if filtered_batch.num_rows() != mask_chunk.selected_rows {
-                        return Err(general_err!(
-                            "filtered rows mismatch selection - expected {}, got {}",
-                            mask_chunk.selected_rows,
-                            filtered_batch.num_rows()
-                        ));
-                    }
-
-                    if filtered_batch.num_rows() == 0 {
-                        continue;
-                    }
-
-                    return Ok(Some(filtered_batch));
-                }
+                return read_mask_batch(self.array_reader.as_mut(), mask_cursor, batch_size);
             }
             RowSelectionCursor::Selectors(selectors_cursor) => {
                 while read_records < batch_size && !selectors_cursor.is_empty() {
@@ -1488,21 +1693,17 @@ impl ParquetRecordBatchReader {
                     match self.array_reader.read_records(to_read)? {
                         0 => break,
                         rec => read_records += rec,
-                    };
+                    }
                 }
             }
             RowSelectionCursor::All => {
                 self.array_reader.read_records(batch_size)?;
             }
-        };
+        }
 
-        let array = self.array_reader.consume_batch()?;
-        let struct_array = array.as_struct_opt().ok_or_else(|| {
-            ArrowError::ParquetError("Struct array reader should return struct array".to_string())
-        })?;
-
-        Ok(if struct_array.len() > 0 {
-            Some(RecordBatch::from(struct_array))
+        let batch = consume_record_batch(self.array_reader.as_mut())?;
+        Ok(if batch.num_rows() > 0 {
+            Some(batch)
         } else {
             None
         })
@@ -1590,19 +1791,20 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use rand::rngs::StdRng;
-    use rand::{Rng, RngCore, SeedableRng, random, rng};
+    use rand::{Rng, RngExt, SeedableRng, random, rng};
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
+        ParquetRecordBatchReaderBuilder, RowFilter, RowGroupPlan, RowGroupSelection, RowSelection,
+        RowSelector,
     };
     use crate::arrow::schema::{
         add_encoded_arrow_schema_to_metadata,
         virtual_type::{RowGroupIndex, RowNumber},
     };
     use crate::arrow::{ArrowWriter, ProjectionMask};
-    use crate::basic::{ConvertedType, Encoding, LogicalType, Repetition, Type as PhysicalType};
+    use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, DoubleType, FixedLenByteArray,
@@ -1623,13 +1825,109 @@ pub(crate) mod tests {
         Time64MicrosecondType,
     };
     use arrow_array::*;
-    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, NullBuffer, i256};
+    use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, NullBuffer, i256};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit};
     use arrow_select::concat::concat_batches;
     use bytes::Bytes;
     use half::f16;
     use num_traits::PrimInt;
+
+    fn row_selection(rows: usize) -> RowSelection {
+        RowSelection::from(vec![RowSelector::select(rows)])
+    }
+
+    #[test]
+    fn row_group_selection_accessors() {
+        let row_group = RowGroupSelection::new(3, Some(row_selection(5)));
+        assert_eq!(row_group.row_group_index(), 3);
+        assert_eq!(row_group.selection().unwrap().row_count(), 5);
+
+        let row_group = RowGroupSelection::new(4, None);
+        assert_eq!(row_group.row_group_index(), 4);
+        assert!(row_group.selection().is_none());
+    }
+
+    #[test]
+    fn row_group_plan_tracks_global_configuration() {
+        let mut plan = RowGroupPlan::Global {
+            row_groups: None,
+            selection: None,
+        };
+        plan.set_row_groups(vec![0]);
+        plan.set_row_groups(vec![1, 2]);
+        plan.set_row_selection(row_selection(3));
+        plan.set_row_selection(row_selection(4));
+
+        let (row_groups, selection) = plan.into_global().unwrap();
+        assert_eq!(row_groups, Some(vec![1, 2]));
+        assert_eq!(selection.unwrap().row_count(), 4);
+    }
+
+    #[test]
+    fn row_group_plan_replaces_local_configuration() {
+        let mut plan = RowGroupPlan::Global {
+            row_groups: None,
+            selection: None,
+        };
+        plan.set_row_group_selections(vec![RowGroupSelection::new(0, None)]);
+        plan.set_row_group_selections(vec![RowGroupSelection::new(1, None)]);
+
+        let RowGroupPlan::PerRowGroup(row_groups) = plan else {
+            panic!("expected per-row-group plan");
+        };
+        assert_eq!(row_groups, vec![RowGroupSelection::new(1, None)]);
+    }
+
+    #[test]
+    fn row_group_plan_rejects_mixed_configuration() {
+        let mut row_groups_then_local = RowGroupPlan::Global {
+            row_groups: None,
+            selection: None,
+        };
+        row_groups_then_local.set_row_groups(vec![0]);
+        row_groups_then_local.set_row_group_selections(vec![RowGroupSelection::new(0, None)]);
+        assert!(matches!(row_groups_then_local, RowGroupPlan::Conflicting));
+        row_groups_then_local.set_row_groups(vec![1]);
+        row_groups_then_local.set_row_selection(row_selection(1));
+        row_groups_then_local.set_row_group_selections(vec![RowGroupSelection::new(1, None)]);
+        assert!(row_groups_then_local.into_global().is_err());
+
+        let mut local_then_row_groups =
+            RowGroupPlan::PerRowGroup(vec![RowGroupSelection::new(0, None)]);
+        local_then_row_groups.set_row_groups(vec![0]);
+        assert!(matches!(local_then_row_groups, RowGroupPlan::Conflicting));
+
+        let mut local_then_selection =
+            RowGroupPlan::PerRowGroup(vec![RowGroupSelection::new(0, None)]);
+        local_then_selection.set_row_selection(row_selection(1));
+        assert!(matches!(local_then_selection, RowGroupPlan::Conflicting));
+
+        let local = RowGroupPlan::PerRowGroup(vec![RowGroupSelection::new(0, None)]);
+        assert!(local.into_global().is_err());
+    }
+
+    #[test]
+    fn filter_mask_accumulator_handles_empty_single_and_multiple_chunks() {
+        let first = BooleanBuffer::from(vec![true, false, false, false]);
+        let second = BooleanBuffer::from(vec![true]);
+        let third = BooleanBuffer::from(vec![false, true]);
+
+        assert!(super::FilterMaskAccumulator::default().finish().is_none());
+
+        let mut single = super::FilterMaskAccumulator::default();
+        single.append(first.clone());
+        assert_eq!(single.finish().unwrap(), first);
+
+        let mut combined = super::FilterMaskAccumulator::default();
+        combined.append(BooleanBuffer::from(vec![true, false, false, false]));
+        combined.append(second);
+        combined.append(third);
+        assert_eq!(
+            combined.finish().unwrap(),
+            BooleanBuffer::from(vec![true, false, false, false, true, false, true])
+        );
+    }
 
     #[test]
     fn test_arrow_reader_all_columns() {
@@ -1841,14 +2139,14 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(BooleanArray::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(BooleanArray::from_iter(vals.iter().copied())),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
         );
         run_single_column_reader_tests::<Int32Type, _, Int32Type>(
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Int32Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Int32Array::from_iter(vals.iter().copied())),
             &[
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
@@ -1860,7 +2158,7 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Int64Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Int64Array::from_iter(vals.iter().copied())),
             &[
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
@@ -1872,7 +2170,7 @@ pub(crate) mod tests {
             2,
             ConvertedType::NONE,
             None,
-            |vals| Arc::new(Float32Array::from_iter(vals.iter().cloned())),
+            |vals| Arc::new(Float32Array::from_iter(vals.iter().copied())),
             &[Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT],
         );
     }
@@ -2027,7 +2325,7 @@ pub(crate) mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
             Field::new(
                 "time_micros",
@@ -2036,7 +2334,7 @@ pub(crate) mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
         ]));
 
@@ -2317,106 +2615,6 @@ pub(crate) mod tests {
                 encodings,
             );
         })
-    }
-
-    #[test]
-    fn test_int96_from_spark_file_with_provided_schema() {
-        // int96_from_spark.parquet was written based on Spark's microsecond timestamps which trade
-        // range for resolution compared to a nanosecond timestamp. We must provide a schema with
-        // microsecond resolution for the Parquet reader to interpret these values correctly.
-        use arrow_schema::DataType::Timestamp;
-        let test_data = arrow::util::test_util::parquet_test_data();
-        let path = format!("{test_data}/int96_from_spark.parquet");
-        let file = File::open(path).unwrap();
-
-        let supplied_schema = Arc::new(Schema::new(vec![Field::new(
-            "a",
-            Timestamp(TimeUnit::Microsecond, None),
-            true,
-        )]));
-        let options = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
-
-        let mut record_reader =
-            ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
-                .unwrap()
-                .build()
-                .unwrap();
-
-        let batch = record_reader.next().unwrap().unwrap();
-        assert_eq!(batch.num_columns(), 1);
-        let column = batch.column(0);
-        assert_eq!(column.data_type(), &Timestamp(TimeUnit::Microsecond, None));
-
-        let expected = Arc::new(Int64Array::from(vec![
-            Some(1704141296123456),
-            Some(1704070800000000),
-            Some(253402225200000000),
-            Some(1735599600000000),
-            None,
-            Some(9089380393200000000),
-        ]));
-
-        // arrow-rs relies on the chrono library to convert between timestamps and strings, so
-        // instead compare as Int64. The underlying type should be a PrimitiveArray of Int64
-        // anyway, so this should be a zero-copy non-modifying cast.
-
-        let binding = arrow_cast::cast(batch.column(0), &arrow_schema::DataType::Int64).unwrap();
-        let casted_timestamps = binding.as_primitive::<types::Int64Type>();
-
-        assert_eq!(casted_timestamps.len(), expected.len());
-
-        casted_timestamps
-            .iter()
-            .zip(expected.iter())
-            .for_each(|(lhs, rhs)| {
-                assert_eq!(lhs, rhs);
-            });
-    }
-
-    #[test]
-    fn test_int96_from_spark_file_without_provided_schema() {
-        // int96_from_spark.parquet was written based on Spark's microsecond timestamps which trade
-        // range for resolution compared to a nanosecond timestamp. Without a provided schema, some
-        // values when read as nanosecond resolution overflow and result in garbage values.
-        use arrow_schema::DataType::Timestamp;
-        let test_data = arrow::util::test_util::parquet_test_data();
-        let path = format!("{test_data}/int96_from_spark.parquet");
-        let file = File::open(path).unwrap();
-
-        let mut record_reader = ParquetRecordBatchReaderBuilder::try_new(file)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let batch = record_reader.next().unwrap().unwrap();
-        assert_eq!(batch.num_columns(), 1);
-        let column = batch.column(0);
-        assert_eq!(column.data_type(), &Timestamp(TimeUnit::Nanosecond, None));
-
-        let expected = Arc::new(Int64Array::from(vec![
-            Some(1704141296123456000),  // Reads as nanosecond fine (note 3 extra 0s)
-            Some(1704070800000000000),  // Reads as nanosecond fine (note 3 extra 0s)
-            Some(-4852191831933722624), // Cannot be represented with nanos timestamp (year 9999)
-            Some(1735599600000000000),  // Reads as nanosecond fine (note 3 extra 0s)
-            None,
-            Some(-4864435138808946688), // Cannot be represented with nanos timestamp (year 290000)
-        ]));
-
-        // arrow-rs relies on the chrono library to convert between timestamps and strings, so
-        // instead compare as Int64. The underlying type should be a PrimitiveArray of Int64
-        // anyway, so this should be a zero-copy non-modifying cast.
-
-        let binding = arrow_cast::cast(batch.column(0), &arrow_schema::DataType::Int64).unwrap();
-        let casted_timestamps = binding.as_primitive::<types::Int64Type>();
-
-        assert_eq!(casted_timestamps.len(), expected.len());
-
-        casted_timestamps
-            .iter()
-            .zip(expected.iter())
-            .for_each(|(lhs, rhs)| {
-                assert_eq!(lhs, rhs);
-            });
     }
 
     struct RandUtf8Gen {}
@@ -3566,9 +3764,7 @@ pub(crate) mod tests {
     }
 
     fn get_test_file(file_name: &str) -> File {
-        let mut path = PathBuf::new();
-        path.push(arrow::util::test_util::arrow_test_data());
-        path.push(file_name);
+        let path = PathBuf::from(arrow::util::test_util::arrow_test_data()).join(file_name);
 
         File::open(path.as_path()).expect("File not found!")
     }
@@ -3955,9 +4151,7 @@ pub(crate) mod tests {
 
         let schema_without_metadata = Arc::new(Schema::new(vec![field.clone()]));
 
-        let metadata = [("key".to_string(), "value".to_string())]
-            .into_iter()
-            .collect();
+        let metadata = arrow_schema::Metadata::from([("key".to_string(), "value".to_string())]);
 
         let schema_with_metadata = Arc::new(Schema::new(vec![field.with_metadata(metadata)]));
 
@@ -4692,7 +4886,19 @@ pub(crate) mod tests {
                 ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
-            assert!(!builder.metadata().offset_index().unwrap()[0].is_empty());
+            let page_index = builder
+                .metadata()
+                .page_index()
+                .expect("page index should be present");
+            let num_columns = builder.metadata().row_group(0).num_columns();
+            let offset_indexes = page_index.offset_indexes_for_rowgroup(0);
+            assert!(offset_indexes.is_some_and(|ois| ois.len() == num_columns));
+            let column_indexes = page_index.offset_indexes_for_rowgroup(0);
+            assert!(column_indexes.is_some_and(|cis| cis.len() == num_columns));
+            assert!(page_index.offset_index(0, 0).is_some());
+            assert!(page_index.column_index(0, 0).is_some());
+            assert!(page_index.page_locations(0, 0).is_some());
+            assert_eq!(page_index.num_data_pages(0, 0), Some(325));
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 8);
@@ -4709,7 +4915,7 @@ pub(crate) mod tests {
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
             // we should read the file successfully.
-            assert!(builder.metadata().offset_index().is_none());
+            assert!(builder.metadata().page_index().is_none());
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 1);
@@ -5315,71 +5521,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_map_no_value() {
-        // File schema:
-        // message schema {
-        //   required group my_map (MAP) {
-        //     repeated group key_value {
-        //       required int32 key;
-        //       optional int32 value;
-        //     }
-        //   }
-        //   required group my_map_no_v (MAP) {
-        //     repeated group key_value {
-        //       required int32 key;
-        //     }
-        //   }
-        //   required group my_list (LIST) {
-        //     repeated group list {
-        //       required int32 element;
-        //     }
-        //   }
-        // }
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/map_no_value.parquet");
-        let file = File::open(path).unwrap();
-
-        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
-            .unwrap()
-            .build()
-            .unwrap();
-        let out = reader.next().unwrap().unwrap();
-        assert_eq!(out.num_rows(), 3);
-        assert_eq!(out.num_columns(), 3);
-        // my_map_no_v and my_list columns should now be equivalent
-        let c0 = out.column(1).as_list::<i32>();
-        let c1 = out.column(2).as_list::<i32>();
-        assert_eq!(c0.len(), c1.len());
-        c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
-    }
-
-    #[test]
-    fn test_read_unknown_logical_type() {
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/unknown-logical-type.parquet");
-        let test_file = File::open(path).unwrap();
-
-        let builder = ParquetRecordBatchReaderBuilder::try_new(test_file)
-            .expect("Error creating reader builder");
-
-        let schema = builder.metadata().file_metadata().schema_descr();
-        assert_eq!(
-            schema.column(0).logical_type_ref(),
-            Some(&LogicalType::String)
-        );
-        assert_eq!(
-            schema.column(1).logical_type_ref(),
-            Some(&LogicalType::_Unknown { field_id: 2555 })
-        );
-        assert_eq!(schema.column(1).physical_type(), PhysicalType::BYTE_ARRAY);
-
-        let mut reader = builder.build().unwrap();
-        let out = reader.next().unwrap().unwrap();
-        assert_eq!(out.num_rows(), 3);
-        assert_eq!(out.num_columns(), 2);
-    }
-
-    #[test]
     fn test_read_row_numbers() {
         let file = write_parquet_from_iter(vec![(
             "value",
@@ -5519,6 +5660,85 @@ pub(crate) mod tests {
                 row_numbers: (50..100).chain(0..50).collect(),
             },
             ValuesAndRowNumbers::new_from_reader(arrow_reader)
+        );
+
+        Ok(())
+    }
+
+    /// A file with *mixed* row-group ordinal metadata (spec-valid — the
+    /// `RowGroup.ordinal` thrift field is optional; Go parquet writers emit
+    /// such files) must read fine without row numbers, and must fail
+    /// deterministically with them — even when every *selected* row group
+    /// carries an ordinal. See <https://github.com/apache/arrow-rs/issues/10381>.
+    #[test]
+    fn test_mixed_row_group_ordinals() -> Result<()> {
+        use crate::file::metadata::{ParquetMetaDataReader, RowGroupMetaData};
+
+        // 100 rows split across 4 row groups of 25
+        let array = Int64Array::from_iter_values(5000..5100);
+        let batch = RecordBatch::try_from_iter([("col", Arc::new(array) as ArrayRef)])?;
+        let mut buffer = Vec::new();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(25))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema().clone(), Some(props))?;
+        for batch_chunk in (0..10).map(|i| batch.slice(i * 10, 10)) {
+            writer.write(&batch_chunk)?;
+        }
+        writer.close()?;
+        let buffer = Bytes::from(buffer);
+
+        // Strip the ordinal from row group 1 to simulate a mixed-ordinal
+        // writer (the builder starts with no ordinal; copy everything else).
+        let metadata = ParquetMetaDataReader::new().parse_and_finish(&buffer)?;
+        let schema_descr = metadata.file_metadata().schema_descr_ptr();
+        let mut row_groups = metadata.row_groups().to_vec();
+        let stripped = row_groups[1].clone();
+        let mut builder = RowGroupMetaData::builder(schema_descr)
+            .set_num_rows(stripped.num_rows())
+            .set_total_byte_size(stripped.total_byte_size())
+            .set_sorting_columns(stripped.sorting_columns().cloned())
+            .set_column_metadata(stripped.columns().to_vec());
+        if let Some(offset) = stripped.file_offset() {
+            builder = builder.set_file_offset(offset);
+        }
+        row_groups[1] = builder.build()?;
+        assert_eq!(row_groups[1].ordinal(), None);
+        let metadata = Arc::new(metadata.into_builder().set_row_groups(row_groups).build());
+
+        // Plain read (no row numbers): succeeds and returns all values.
+        let arrow_metadata =
+            ArrowReaderMetadata::try_new(Arc::clone(&metadata), ArrowReaderOptions::new())?;
+        let reader =
+            ParquetRecordBatchReaderBuilder::new_with_metadata(buffer.clone(), arrow_metadata)
+                .build()?;
+        let values: Vec<i64> = reader
+            .flat_map(|batch| {
+                let batch = batch.expect("could not read batch");
+                batch
+                    .column(0)
+                    .as_primitive::<types::Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(values, (5000..5100).collect::<Vec<_>>());
+
+        // Row-number read: fails deterministically, even when selecting only
+        // row groups that DO carry ordinals.
+        let row_number_field = Arc::new(
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+        );
+        let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field])?;
+        let arrow_metadata = ArrowReaderMetadata::try_new(Arc::clone(&metadata), options)?;
+        let result = ParquetRecordBatchReaderBuilder::new_with_metadata(buffer, arrow_metadata)
+            .with_row_groups(vec![0]) // row group 0 has an ordinal
+            .build()
+            .and_then(|mut reader| reader.next().transpose().map_err(|e| e.into()));
+        let err = result.expect_err("row numbers over mixed ordinals must fail");
+        assert!(
+            err.to_string().contains("inconsistent row-group ordinals"),
+            "unexpected error: {err}"
         );
 
         Ok(())
@@ -5811,7 +6031,7 @@ pub(crate) mod tests {
         F: FnOnce(PathBuf, RowSelection, Option<RowFilter>, usize) -> Vec<RecordBatch>,
     {
         let seed: u64 = random();
-        println!("test_row_numbers_with_multiple_row_groups seed: {}", seed);
+        println!("test_row_numbers_with_multiple_row_groups seed: {seed}");
         let mut rng = StdRng::seed_from_u64(seed);
 
         use tempfile::TempDir;

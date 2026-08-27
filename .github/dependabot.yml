@@ -32,6 +32,16 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
     open-pull-requests-limit: 10
-    labels: [auto-dependencies]
+    labels: [auto-dependencies, development-process]
+    groups:
+      codeql-actions:
+        patterns:
+          - "github/codeql-action/*"
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+    labels: [auto-dependencies, development-process]

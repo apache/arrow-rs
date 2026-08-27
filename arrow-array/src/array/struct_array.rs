@@ -138,13 +138,13 @@ impl StructArray {
             )));
         }
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect number of nulls for StructArray, expected {len} got {}",
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect number of nulls for StructArray, expected {len} got {}",
+                n.len(),
+            )));
         }
 
         for (f, a) in fields.iter().zip(&arrays) {
@@ -166,17 +166,15 @@ impl StructArray {
                 )));
             }
 
-            if !f.is_nullable() {
-                if let Some(a) = a.logical_nulls() {
-                    if !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default()
-                        && a.null_count() > 0
-                    {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "Found unmasked nulls for non-nullable StructArray field {:?}",
-                            f.name()
-                        )));
-                    }
-                }
+            if !f.is_nullable()
+                && let Some(a) = a.logical_nulls()
+                && nulls.as_ref().is_none_or(|n| !n.contains(&a))
+                && a.null_count() > 0
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Found unmasked nulls for non-nullable StructArray field {:?}",
+                    f.name()
+                )));
             }
         }
 
@@ -274,14 +272,16 @@ impl StructArray {
 
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (Fields, Vec<ArrayRef>, Option<NullBuffer>) {
-        let f = match self.data_type {
-            DataType::Struct(f) => f,
-            _ => unreachable!(),
+        let DataType::Struct(f) = self.data_type else {
+            unreachable!()
         };
         (f, self.fields, self.nulls)
     }
 
     /// Returns the field at `pos`.
+    ///
+    /// # Panics
+    /// Panics if `pos` is out of bounds
     pub fn column(&self, pos: usize) -> &ArrayRef {
         &self.fields[pos]
     }
@@ -341,6 +341,9 @@ impl StructArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,
@@ -389,9 +392,8 @@ impl StructArray {
     pub fn flatten(&self) -> (Fields, Vec<ArrayRef>) {
         let schema_fields = self.fields();
 
-        let struct_nulls = match &self.nulls {
-            Some(n) => n,
-            None => return (schema_fields.clone(), self.fields.clone()),
+        let Some(struct_nulls) = &self.nulls else {
+            return (schema_fields.clone(), self.fields.clone());
         };
 
         let new_fields: Fields = schema_fields
@@ -1025,7 +1027,7 @@ mod tests {
 
     #[test]
     fn test_struct_array_fmt_debug() {
-        let arr: StructArray = StructArray::new(
+        let arr = StructArray::new(
             vec![Arc::new(Field::new("c", DataType::Int32, true))].into(),
             vec![Arc::new(Int32Array::from((0..30).collect::<Vec<_>>())) as ArrayRef],
             Some(NullBuffer::new(BooleanBuffer::from(

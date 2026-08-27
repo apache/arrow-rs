@@ -26,13 +26,8 @@
 #![warn(missing_docs)]
 #![recursion_limit = "128"]
 
-extern crate proc_macro;
-extern crate proc_macro2;
-extern crate syn;
 #[macro_use]
 extern crate quote;
-
-extern crate parquet;
 
 use ::syn::{Data, DataStruct, DeriveInput, ext::IdentExt, parse_macro_input};
 

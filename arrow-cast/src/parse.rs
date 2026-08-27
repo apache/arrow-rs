@@ -445,6 +445,10 @@ pub trait Parser: ArrowPrimitiveType {
 
 impl Parser for Float16Type {
     fn parse(string: &str) -> Option<f16> {
+        if let Ok(raw_float) = lexical_core::parse(string.as_bytes()) {
+            return Some(f16::from_f32(raw_float));
+        }
+        let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes())
             .ok()
             .map(f16::from_f32)
@@ -453,13 +457,35 @@ impl Parser for Float16Type {
 
 impl Parser for Float32Type {
     fn parse(string: &str) -> Option<f32> {
+        if let Ok(raw_float) = lexical_core::parse(string.as_bytes()) {
+            return Some(raw_float);
+        }
+        let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes()).ok()
     }
 }
 
 impl Parser for Float64Type {
     fn parse(string: &str) -> Option<f64> {
+        if let Ok(raw_float) = lexical_core::parse(string.as_bytes()) {
+            return Some(raw_float);
+        }
+        let string = trim_pre_and_post_whitespace(string);
         lexical_core::parse(string.as_bytes()).ok()
+    }
+}
+
+/// this is a no-op if the string starts and ends with a digit, otherwise it will trim whitespace from the start and end of the string.
+#[inline]
+fn trim_pre_and_post_whitespace(string: &str) -> &str {
+    let bytes = string.as_bytes();
+    let prefix = bytes.first().is_some_and(|b| !b.is_ascii_digit());
+    let suffix = bytes.last().is_some_and(|b| !b.is_ascii_digit());
+    match (prefix, suffix) {
+        (false, false) => string,
+        (true, false) => string.trim_ascii_start(),
+        (false, true) => string.trim_ascii_end(),
+        (true, true) => string.trim_ascii(),
     }
 }
 
@@ -467,14 +493,23 @@ macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
-                    return None;
+                let mut raw_bytes = string.as_bytes();
+                if !raw_bytes.last().is_some_and(|x| x.is_ascii_digit()) {
+                    raw_bytes = raw_bytes.trim_ascii_end();
+                    if !raw_bytes.last().is_some_and(|x| x.is_ascii_digit()) {
+                        return None;
+                    }
                 }
-                match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
-                    string.as_bytes(),
-                ) {
-                    (Some(n), x) if x == string.len() => Some(n),
-                    _ => None,
+                match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(raw_bytes) {
+                    (Some(n), x) if x == raw_bytes.len() => Some(n),
+                    _ => {
+                        let trimmed = raw_bytes.trim_ascii_start();
+                        match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(trimmed)
+                        {
+                            (Some(n), x) if x == trimmed.len() => Some(n),
+                            _ => None,
+                        }
+                    }
                 }
             }
         }
@@ -629,7 +664,7 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
         return string_to_datetime(&Utc, string)
             .map(|dt| dt.date_naive())
             .ok();
-    };
+    }
     let mut digits = [0; 10];
     let mut mask = 0;
 
@@ -774,7 +809,7 @@ fn parse_e_notation<T: DecimalType>(
     let base = T::Native::usize_as(10);
 
     // e has a plus sign
-    let mut pos_shift_direction: bool = true;
+    let mut pos_shift_direction = true;
 
     // skip to the exponent index directly or just after any processed fractionals
     let mut bs = s.as_bytes().iter().skip(index + fractionals as usize);
@@ -800,7 +835,7 @@ fn parse_e_notation<T: DecimalType>(
                     "can't parse the string value {s} to decimal"
                 )));
             }
-        };
+        }
     }
 
     // parse the exponent itself
@@ -1805,7 +1840,7 @@ mod tests {
         for case in cases {
             let v = date32_to_datetime(Date32Type::parse(case).unwrap()).unwrap();
             let expected = NaiveDate::parse_from_str(case, "%Y-%m-%d")
-                .or(NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
+                .or_else(|_| NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
                 .unwrap();
             assert_eq!(v.date(), expected);
         }
@@ -2871,5 +2906,51 @@ mod tests {
         assert_eq!(interval.months, 0);
         assert_eq!(interval.days, 0);
         assert_eq!(interval.nanoseconds, NANOS_PER_SECOND);
+    }
+    #[test]
+    fn test_parse_prefix_white_space() {
+        assert_eq!(Float64Type::parse(" 1.5"), Some(1.5));
+        assert_eq!(Float64Type::parse("\t\n 20.54"), Some(20.54));
+        assert_eq!(Float64Type::parse("\n2.5"), Some(2.5));
+        assert_eq!(Float64Type::parse("\n-942.5423"), Some(-942.5423));
+        assert_eq!(Float64Type::parse("\n\t\n\t\n40.5123"), Some(40.5123));
+        assert_eq!(Float64Type::parse(" 1.5"), Some(1.5));
+        assert_eq!(Float64Type::parse("\n\t\n\t\n-40.5123"), Some(-40.5123));
+        assert_eq!(Float64Type::parse(" -1.5"), Some(-1.5));
+        assert_eq!(Int32Type::parse(" 3"), Some(3));
+        assert_eq!(Int32Type::parse("          30"), Some(30));
+        assert_eq!(Int32Type::parse("\n \n 100"), Some(100));
+        assert_eq!(Int32Type::parse(" \n25"), Some(25));
+        assert_eq!(Int32Type::parse("\t800"), Some(800));
+        assert_eq!(Int32Type::parse("\t  \n \t 851"), Some(851));
+        assert_eq!(Int32Type::parse("\t\n\t\n\n\n\t1"), Some(1));
+        assert_eq!(Int32Type::parse(" \n-25"), Some(-25));
+        assert_eq!(Int32Type::parse("\t-800"), Some(-800));
+
+        // suffix whitespace
+        assert_eq!(Float64Type::parse("1.5 "), Some(1.5));
+        assert_eq!(Float64Type::parse("40.5123\n"), Some(40.5123));
+        assert_eq!(Float64Type::parse("40.5123\n\t\n\t\n"), Some(40.5123));
+        assert_eq!(Float64Type::parse("-942.5423\t"), Some(-942.5423));
+        assert_eq!(Int32Type::parse("3 "), Some(3));
+        assert_eq!(Int32Type::parse("30          "), Some(30));
+        assert_eq!(Int32Type::parse("-25 \n"), Some(-25));
+        assert_eq!(Int32Type::parse("800\t"), Some(800));
+        // whitespace on both sides
+        assert_eq!(Float64Type::parse(" 1.5 "), Some(1.5));
+        assert_eq!(Float64Type::parse("\t\n 20.54 \t"), Some(20.54));
+        assert_eq!(Float64Type::parse("\n-942.5423\n"), Some(-942.5423));
+        assert_eq!(Int32Type::parse(" 3 "), Some(3));
+        assert_eq!(Int32Type::parse("\n \n 100 \n"), Some(100));
+        assert_eq!(Int32Type::parse("\t-800\t\n"), Some(-800));
+
+        // trailing non-whitespace chars should not parse
+        assert_eq!(Float64Type::parse("1.5abc"), None);
+        assert_eq!(Float64Type::parse("40.5123x"), None);
+        assert_eq!(Int32Type::parse("30x"), None);
+        assert_eq!(Int32Type::parse("100px"), None);
+        assert_eq!(Int32Type::parse("-25!"), None);
+        assert_eq!(Int32Type::parse("3j"), None);
+        assert_eq!(Int32Type::parse("3"), Some(3));
     }
 }

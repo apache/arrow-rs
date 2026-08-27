@@ -21,7 +21,7 @@ use bytes::Bytes;
 use num_traits::{FromPrimitive, WrappingAdd};
 use std::{cmp, marker::PhantomData, mem};
 
-use super::rle::RleDecoder;
+use super::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
@@ -386,10 +386,9 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
         }
 
         let bit_width = data.as_ref()[0];
-        if bit_width > 32 {
+        if bit_width > MAX_RLE_DICTIONARY_BIT_WIDTH {
             return Err(general_err!(
-                "Invalid or corrupted RLE bit width {}. Max allowed is 32",
-                bit_width
+                "Invalid or corrupted RLE bit width {bit_width}. Max allowed is {MAX_RLE_DICTIONARY_BIT_WIDTH}"
             ));
         }
         let mut rle_decoder = RleDecoder::new(bit_width);
@@ -703,14 +702,14 @@ where
         self.first_value =
             Some(T::T::from_i64(first_value).ok_or_else(|| general_err!("first value too large"))?);
 
-        if self.block_size % 128 != 0 {
+        if !self.block_size.is_multiple_of(128) {
             return Err(general_err!(
                 "'block_size' must be a multiple of 128, got {}",
                 self.block_size
             ));
         }
 
-        if self.block_size % self.mini_blocks_per_block != 0 {
+        if !self.block_size.is_multiple_of(self.mini_blocks_per_block) {
             return Err(general_err!(
                 "'block_size' must be a multiple of 'mini_blocks_per_block' got {} and {}",
                 self.block_size,
@@ -724,7 +723,7 @@ where
         self.mini_block_remaining = 0;
         self.mini_block_bit_widths.clear();
 
-        if self.values_per_mini_block % 32 != 0 {
+        if !self.values_per_mini_block.is_multiple_of(32) {
             return Err(general_err!(
                 "'values_per_mini_block' must be a multiple of 32 got {}",
                 self.values_per_mini_block
@@ -1327,7 +1326,7 @@ mod tests {
         );
 
         // unsupported
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         create_and_check_decoder::<Int32Type>(
             Encoding::BIT_PACKED,
             Some(nyi_err!("Encoding BIT_PACKED is not supported")),
@@ -2266,14 +2265,14 @@ mod tests {
         let mut decoder = get_decoder::<T>(col_descr, encoding).expect("get decoder");
         decoder.set_data(bytes, data.len()).expect("ok to set data");
 
+        let skipped = decoder.skip(skip).expect("ok to skip");
+
         if skip >= data.len() {
-            let skipped = decoder.skip(skip).expect("ok to skip");
             assert_eq!(skipped, data.len());
 
             let skipped_again = decoder.skip(skip).expect("ok to skip again");
             assert_eq!(skipped_again, 0);
         } else {
-            let skipped = decoder.skip(skip).expect("ok to skip");
             assert_eq!(skipped, skip);
 
             let remaining = data.len() - skip;
@@ -2322,14 +2321,12 @@ mod tests {
 
     /// A util trait to convert slices of different types to byte arrays
     trait ToByteArray<T: DataType> {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[T::T]) -> Vec<u8>;
     }
 
     macro_rules! to_byte_array_impl {
         ($ty: ty) => {
             impl ToByteArray<$ty> for $ty {
-                #[allow(clippy::wrong_self_convention)]
                 fn to_byte_array(data: &[<$ty as DataType>::T]) -> Vec<u8> {
                     <$ty as DataType>::T::slice_as_bytes(data).to_vec()
                 }
@@ -2343,7 +2340,6 @@ mod tests {
     to_byte_array_impl!(DoubleType);
 
     impl ToByteArray<BoolType> for BoolType {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[bool]) -> Vec<u8> {
             let mut v = vec![];
             for (i, item) in data.iter().enumerate() {
@@ -2359,7 +2355,6 @@ mod tests {
     }
 
     impl ToByteArray<Int96Type> for Int96Type {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[Int96]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -2370,7 +2365,6 @@ mod tests {
     }
 
     impl ToByteArray<ByteArrayType> for ByteArrayType {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[ByteArray]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -2384,7 +2378,6 @@ mod tests {
     }
 
     impl ToByteArray<FixedLenByteArrayType> for FixedLenByteArrayType {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[FixedLenByteArray]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -2397,7 +2390,7 @@ mod tests {
 
     #[test]
     // Allow initializing a vector and pushing to it for clarity in this test
-    #[allow(clippy::vec_init_then_push)]
+    #[expect(clippy::vec_init_then_push)]
     fn test_delta_bit_packed_invalid_bit_width() {
         // Manually craft a buffer with an invalid bit width
         let mut buffer = vec![];

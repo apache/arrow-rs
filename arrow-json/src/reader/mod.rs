@@ -161,7 +161,7 @@ use crate::reader::run_end_array::RunEndEncodedArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
-use crate::reader::tape::{Tape, TapeDecoder};
+use crate::reader::tape::{Tape, TapeDecoder, TapeDecoderOptions};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
 pub use schema::*;
@@ -185,6 +185,7 @@ mod timestamp_array;
 mod value_iter;
 
 /// A builder for [`Reader`] and [`Decoder`]
+#[derive(Clone)]
 pub struct ReaderBuilder {
     batch_size: usize,
     coerce_primitive: bool,
@@ -192,6 +193,7 @@ pub struct ReaderBuilder {
     ignore_type_conflicts: bool,
     is_field: bool,
     struct_mode: StructMode,
+    flatten_top_level_arrays: bool,
 
     schema: SchemaRef,
 }
@@ -213,6 +215,7 @@ impl ReaderBuilder {
             ignore_type_conflicts: false,
             is_field: false,
             struct_mode: Default::default(),
+            flatten_top_level_arrays: false,
             schema,
         }
     }
@@ -255,6 +258,7 @@ impl ReaderBuilder {
             ignore_type_conflicts: false,
             is_field: true,
             struct_mode: Default::default(),
+            flatten_top_level_arrays: false,
             schema: Arc::new(Schema::new([field.into()])),
         }
     }
@@ -313,6 +317,29 @@ impl ReaderBuilder {
             ..self
         }
     }
+    /// Sets whether to flatten top-level arrays.
+    ///
+    /// * When `true`, each element of a top-level array will be treated as its own row.
+    /// * When `false` (the default), the entire top-level array will be treated as one row.
+    ///
+    /// For example, consider this input file:
+    /// ```text
+    /// [{ "a": 1 }, { "a": 2 }, { "b": 3 }]
+    /// [{ "a": 4 }, { "a": 5 }, { "b": 6 }]
+    /// ```
+    ///
+    /// By default, this would be parsed as two rows, each an array containing three elements.
+    /// With this option set to `true`, however, this would be parsed as six rows.
+    ///
+    /// Note that even with this option set to `true`, top-level objects are still permitted
+    /// and will be parsed as individual rows in the exact same manner as when this option is
+    /// set to `false`. It is even possible to mix top-level arrays with top-level objects.
+    pub fn with_flatten(self, flatten_top_level_arrays: bool) -> Self {
+        Self {
+            flatten_top_level_arrays,
+            ..self
+        }
+    }
 
     /// Create a [`Reader`] with the provided [`BufRead`]
     pub fn build<R: BufRead>(self, reader: R) -> Result<Reader<R>, ArrowError> {
@@ -346,7 +373,11 @@ impl ReaderBuilder {
         Ok(Decoder {
             decoder,
             is_field: self.is_field,
-            tape_decoder: TapeDecoder::new(self.batch_size, num_fields),
+            tape_decoder: TapeDecoder::new(TapeDecoderOptions {
+                batch_size: self.batch_size,
+                num_fields,
+                flatten_top_level_arrays: self.flatten_top_level_arrays,
+            }),
             batch_size: self.batch_size,
             schema: self.schema,
         })
@@ -877,13 +908,21 @@ mod tests {
         strict_mode: bool,
         schema: SchemaRef,
     ) -> Vec<RecordBatch> {
+        let config = ReaderBuilder::new(schema)
+            .with_batch_size(batch_size)
+            .with_strict_mode(strict_mode)
+            .with_coerce_primitive(coerce_primitive);
+        do_read_config(buf, config)
+    }
+
+    fn do_read_config(buf: &str, builder: ReaderBuilder) -> Vec<RecordBatch> {
         let mut unbuffered = vec![];
 
         // Test with different batch sizes to test for boundary conditions
-        for batch_size in [1, 3, 100, batch_size] {
-            unbuffered = ReaderBuilder::new(schema.clone())
+        for batch_size in [1, 3, 100, builder.batch_size] {
+            unbuffered = builder
+                .clone()
                 .with_batch_size(batch_size)
-                .with_coerce_primitive(coerce_primitive)
                 .build(Cursor::new(buf.as_bytes()))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
@@ -895,10 +934,9 @@ mod tests {
 
             // Test with different buffer sizes to test for boundary conditions
             for b in [1, 3, 5] {
-                let buffered = ReaderBuilder::new(schema.clone())
+                let buffered = builder
+                    .clone()
                     .with_batch_size(batch_size)
-                    .with_coerce_primitive(coerce_primitive)
-                    .with_strict_mode(strict_mode)
                     .build(BufReader::with_capacity(b, Cursor::new(buf.as_bytes())))
                     .unwrap()
                     .collect::<Result<Vec<_>, _>>()
@@ -1287,9 +1325,13 @@ mod tests {
         "#;
         let map = Field::new_map(
             "map",
-            "entries",
-            Field::new("key", DataType::Utf8, false),
-            Field::new_list("value", Field::new("element", DataType::Utf8, true), true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new_list(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                Field::new("element", DataType::Utf8, true),
+                true,
+            ),
             false,
             true,
         );
@@ -1319,6 +1361,31 @@ mod tests {
         assert_eq!(formatter.value(0).to_string(), "{a: [foo, null]}");
         assert_eq!(formatter.value(1).to_string(), "{a: [null], b: []}");
         assert_eq!(formatter.value(2).to_string(), "{c: null, a: [baz]}");
+    }
+
+    #[test]
+    fn test_map_non_nullable_value() {
+        let map = Field::new_map(
+            "map",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            false,
+            false,
+        );
+        let schema = Arc::new(Schema::new(vec![map]));
+        let buf = r#"{"map": {"key": null}}"#;
+
+        let err = ReaderBuilder::new(schema)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .read()
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Found unmasked nulls for non-nullable StructArray field \"value\""
+        );
     }
 
     #[test]
@@ -1542,6 +1609,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_timestamps() {
         test_timestamp::<TimestampSecondType>();
         test_timestamp::<TimestampMillisecondType>();
@@ -1560,9 +1628,8 @@ mod tests {
         {"c": "14:26:56.123"}
         "#;
 
-        let unit = match T::DATA_TYPE {
-            DataType::Time32(unit) | DataType::Time64(unit) => unit,
-            _ => unreachable!(),
+        let (DataType::Time32(unit) | DataType::Time64(unit)) = T::DATA_TYPE else {
+            unreachable!()
         };
 
         let unit_in_nanos = match unit {
@@ -2313,6 +2380,34 @@ mod tests {
     }
 
     #[test]
+    fn test_read_list_view_rejects_null_non_nullable_child() {
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        for (data_type, array_type) in [
+            (DataType::ListView(field.clone()), "ListViewArray"),
+            (DataType::LargeListView(field.clone()), "LargeListViewArray"),
+        ] {
+            let schema = Arc::new(Schema::new(vec![Field::new("lv", data_type, true)]));
+            let buf = r#"
+            {"lv": [1, 2, 3]}
+            {"lv": [4, null]}
+            "#;
+
+            let error = ReaderBuilder::new(schema)
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "Invalid argument error: Non-nullable field of {array_type} \"item\" cannot contain nulls"
+                )
+            );
+        }
+    }
+
+    #[test]
     fn test_fixed_size_list() {
         let buf = r#"
         {"a": [1, 2, 3]}
@@ -2682,7 +2777,7 @@ mod tests {
         )]));
 
         let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
-        let _ = decoder.decode(r#"{"a": { "child":"#.as_bytes()).unwrap();
+        let _ = decoder.decode(br#"{"a": { "child":"#).unwrap();
         assert!(decoder.tape_decoder.has_partial_row());
         assert_eq!(decoder.tape_decoder.num_buffered_rows(), 1);
         let _ = decoder.flush().unwrap_err();
@@ -2899,6 +2994,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_serialize_f32_into_string() {
+        // Coercing an f32 into a string column must render the value, not its raw bit pattern.
+        let field = Field::new("f", DataType::Utf8, true);
+        let mut decoder = ReaderBuilder::new_with_field(field)
+            .with_coerce_primitive(true)
+            .build_decoder()
+            .unwrap();
+        decoder.serialize(&[1.5_f32, -2.25_f32]).unwrap();
+        let batch = decoder.flush().unwrap().unwrap();
+        let values = batch.column(0).as_string::<i32>();
+        assert_eq!(values.value(0), "1.5");
+        assert_eq!(values.value(1), "-2.25");
+    }
+
     // Parse the given `row` in `struct_mode` as a type given by fields.
     //
     // If as_struct == true, wrap the fields in a Struct field with name "r".
@@ -2993,9 +3103,9 @@ mod tests {
             Field::new("b", DataType::new_list(DataType::Int32, true), true),
             Field::new_map(
                 "c",
-                "entries",
-                Field::new("keys", DataType::Utf8, false),
-                Field::new("values", DataType::Int32, true),
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 false,
                 false,
             ),
@@ -3183,10 +3293,10 @@ mod tests {
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Utf8, true),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),
@@ -3222,7 +3332,7 @@ mod tests {
                     .iter()
                     .chain(json_values[..i].iter())
                     .zip(&schema.fields)
-                    .map(|(v, f)| (f.name().to_string(), v.clone()))
+                    .map(|(v, f)| (f.name().clone(), v.clone()))
                     .collect();
                 serde_json::Value::Object(pairs)
             })
@@ -3441,10 +3551,10 @@ mod tests {
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Utf8, true),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),
@@ -3502,10 +3612,10 @@ mod tests {
                 "map",
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("keys", DataType::Utf8, false),
-                            Field::new("values", DataType::Utf8, true),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                         ])),
                         false, // not nullable
                     )),
@@ -3598,6 +3708,45 @@ mod tests {
     }
 
     #[test]
+    fn test_read_run_end_encoded_nullability() {
+        for field_nullable in [false, true] {
+            for values_nullable in [false, true] {
+                let ree_type = DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Utf8, values_nullable)),
+                );
+                let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, field_nullable)]));
+
+                for buf in [
+                    r#"{"a": "x"}
+                    {"a": null}
+                    {"a": "y"}"#,
+                    r#"{"a": "x"}
+                    {}
+                    {"a": "y"}"#,
+                ] {
+                    let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+                    let result = decoder.decode(buf.as_bytes()).and_then(|_| decoder.flush());
+
+                    if field_nullable && values_nullable {
+                        result.expect("REE field and values are both nullable");
+                    } else {
+                        let err = result.expect_err(
+                            "REE nulls require both the field and values to be nullable",
+                        );
+                        assert!(
+                            err.to_string().contains(
+                                "Encountered nulls in non-nullable values of RunEndEncoded"
+                            ),
+                            "unexpected error: {err}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_read_run_end_encoded_all_unique() {
         let buf = r#"
         {"a": 1}
@@ -3681,5 +3830,28 @@ mod tests {
         assert_eq!(nested_values.len(), 2);
         assert_eq!(nested_values.value(0), "x");
         assert_eq!(nested_values.value(1), "y");
+    }
+
+    #[test]
+    fn test_flatten_top_level_arrays() {
+        let buf = r#"
+            [
+                {"a": 1},
+                {"a": 2}
+            ]
+            {"a": 3}
+            [{"a": 4}, {"a": 5}, {"a": 6}]
+            "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let batches = do_read_config(buf, ReaderBuilder::new(schema).with_flatten(true));
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0);
+        let col = col.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(col.len(), 6);
+        for i in 0..6 {
+            assert_eq!(col.value(i), (i as i32) + 1);
+        }
     }
 }

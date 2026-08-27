@@ -51,6 +51,10 @@ use tokio::runtime::Handle;
 /// print_parquet_metadata(&mut stdout(), builder.metadata());
 /// # }
 /// ```
+#[deprecated(
+    since = "59.2.0",
+    note = "Implement `AsyncFileReader` directly instead; see the example on the `AsyncFileReader` trait documentation and `parquet/examples/object_store.rs`. Use `SpawnedReader` to perform I/O on a dedicated runtime. See https://github.com/apache/arrow-rs/issues/10308"
+)]
 #[derive(Clone, Debug)]
 pub struct ParquetObjectReader {
     store: Arc<dyn ObjectStore>,
@@ -62,6 +66,7 @@ pub struct ParquetObjectReader {
     runtime: Option<Handle>,
 }
 
+#[expect(deprecated)]
 impl ParquetObjectReader {
     /// Creates a new [`ParquetObjectReader`] for the provided [`ObjectStore`] and [`Path`].
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
@@ -133,6 +138,10 @@ impl ParquetObjectReader {
     /// other issues. For more information see [here].
     ///
     /// [here]: https://www.influxdata.com/blog/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
+    #[deprecated(
+        since = "59.2.0",
+        note = "Wrap the reader in a `SpawnedReader` instead, e.g. `SpawnedReader::new(reader, handle)`. See https://github.com/apache/arrow-rs/issues/10308"
+    )]
     pub fn with_runtime(self, handle: Handle) -> Self {
         Self {
             runtime: Some(handle),
@@ -168,6 +177,7 @@ impl ParquetObjectReader {
     }
 }
 
+#[expect(deprecated)]
 impl MetadataSuffixFetch for &mut ParquetObjectReader {
     fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
         let options = GetOptions {
@@ -184,6 +194,7 @@ impl MetadataSuffixFetch for &mut ParquetObjectReader {
     }
 }
 
+#[expect(deprecated)]
 impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
         self.spawn(|store, path| store.get_range(path, range).boxed())
@@ -225,14 +236,13 @@ impl AsyncFileReader for ParquetObjectReader {
             // When page_index_policy is Skip (default), use the reader's preload flags.
             // When page_index_policy is Optional or Required, override the preload flags
             // to ensure the specified policy takes precedence.
-            if let Some(options) = options {
-                if options.column_index_policy() != PageIndexPolicy::Skip
-                    || options.offset_index_policy() != PageIndexPolicy::Skip
-                {
-                    metadata = metadata
-                        .with_column_index_policy(options.column_index_policy())
-                        .with_offset_index_policy(options.offset_index_policy());
-                }
+            if let Some(options) = options
+                && (options.column_index_policy() != PageIndexPolicy::Skip
+                    || options.offset_index_policy() != PageIndexPolicy::Skip)
+            {
+                metadata = metadata
+                    .with_column_index_policy(options.column_index_policy())
+                    .with_offset_index_policy(options.offset_index_policy());
             }
 
             let metadata = if let Some(file_size) = self.file_size {
@@ -247,9 +257,10 @@ impl AsyncFileReader for ParquetObjectReader {
 }
 
 #[cfg(test)]
+#[expect(deprecated)]
 mod tests {
-    use crate::arrow::async_reader::ArrowReaderOptions;
     use crate::file::metadata::PageIndexPolicy;
+    use crate::{arrow::async_reader::ArrowReaderOptions, file::metadata::PageIndex};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -331,7 +342,7 @@ mod tests {
             Ok(_) => panic!("expected failure"),
             Err(e) => {
                 let err = e.to_string();
-                assert!(err.contains("I don't exist.parquet not found:"), "{err}",);
+                assert!(err.contains("I don't exist.parquet not found:"), "{err}");
             }
         }
     }
@@ -416,7 +427,7 @@ mod tests {
 
         let err = reader.get_bytes(0..1).await.unwrap_err().to_string();
 
-        assert!(err.to_string().contains("was cancelled"));
+        assert!(err.contains("was cancelled"));
     }
 
     #[tokio::test]
@@ -436,7 +447,7 @@ mod tests {
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
 
         // With preload=true, indexes should be loaded since the test file has them
-        assert!(metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
     }
 
     #[tokio::test]
@@ -457,7 +468,7 @@ mod tests {
 
         // With Optional policy, it will TRY to load indexes but won't fail if they don't exist
         // The test file has page indexes, so they will be some
-        assert!(metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some());
     }
 
     #[tokio::test]
@@ -485,8 +496,8 @@ mod tests {
         // Both should succeed (no panic/error)
         // metadata1 (Skip) uses preload=false -> Skip policy
         // metadata2 (Optional) overrides preload=false -> Optional policy
-        assert!(metadata1.column_index().is_none());
-        assert!(metadata2.column_index().is_some());
+        assert!(metadata1.page_index().is_none());
+        assert!(metadata2.page_index().is_some());
     }
 
     #[tokio::test]
@@ -505,6 +516,6 @@ mod tests {
         // With no options provided, preload flags (true) should be respected
         // and converted to Optional policy internally (preload=true -> Optional)
         // The test file has page indexes, so they will be some
-        assert!(metadata.column_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
     }
 }

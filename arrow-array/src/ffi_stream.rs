@@ -74,29 +74,40 @@ use crate::record_batch::{RecordBatch, RecordBatchReader};
 
 type Result<T> = std::result::Result<T, ArrowError>;
 
+// Errno values returned through the C stream interface, taken from libc so they match
+// the platform the consumer interprets them against.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use libc::{EINVAL, EIO, ENOMEM, ENOSYS};
+
+// wasm32-unknown-unknown has no libc, and no OS to interpret the codes either — any
+// non-zero value works there, so use Linux's.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const ENOMEM: i32 = 12;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const EIO: i32 = 5;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 const EINVAL: i32 = 22;
-const ENOSYS: i32 = 78;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+const ENOSYS: i32 = 38;
 
 /// ABI-compatible struct for `ArrayStream` from C Stream Interface
 /// See <https://arrow.apache.org/docs/format/CStreamInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
 #[derive(Debug)]
-#[allow(non_camel_case_types)]
 pub struct FFI_ArrowArrayStream {
+    // Fields are intentionally private so safety guarantees can be upheld via
+    // explicit unsafe functions.
     /// C function to get schema from the stream
-    pub get_schema:
-        Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int>,
+    get_schema: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int>,
     /// C function to get next array from the stream
-    pub get_next: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowArray) -> c_int>,
+    get_next: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowArray) -> c_int>,
     /// C function to get the error from last operation on the stream
-    pub get_last_error: Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char>,
+    get_last_error: Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char>,
     /// C function to release the stream
-    pub release: Option<unsafe extern "C" fn(arg1: *mut Self)>,
-    /// Private data used by the stream
-    pub private_data: *mut c_void,
+    release: Option<unsafe extern "C" fn(arg1: *mut Self)>,
+    /// Private data used by the stream, owned by the release callback.
+    private_data: *mut c_void,
 }
 
 unsafe impl Send for FFI_ArrowArrayStream {}
@@ -112,7 +123,7 @@ unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
     stream.get_next = None;
     stream.get_last_error = None;
 
-    let private_data = unsafe { Box::from_raw(stream.private_data as *mut StreamPrivateData) };
+    let private_data = unsafe { Box::from_raw(stream.private_data.cast::<StreamPrivateData>()) };
     drop(private_data);
 
     stream.release = None;
@@ -155,7 +166,7 @@ impl Drop for FFI_ArrowArrayStream {
         match self.release {
             None => (),
             Some(release) => unsafe { release(self) },
-        };
+        }
     }
 }
 
@@ -172,7 +183,7 @@ impl FFI_ArrowArrayStream {
             get_next: Some(get_next),
             get_last_error: Some(get_last_error),
             release: Some(release_stream),
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
         }
     }
 
@@ -202,6 +213,45 @@ impl FFI_ArrowArrayStream {
             private_data: std::ptr::null_mut(),
         }
     }
+
+    /// Returns the producer-provided release callback, if any.
+    pub fn release(&self) -> Option<unsafe extern "C" fn(arg1: *mut Self)> {
+        self.release
+    }
+
+    /// Returns the opaque producer-provided private data pointer.
+    pub fn private_data(&self) -> *mut c_void {
+        self.private_data
+    }
+
+    /// Replaces the release callback, returning the previous one.
+    ///
+    /// Lets a consumer wrap release: save the old callback, install its own, and
+    /// chain back on drop. See <https://github.com/apache/arrow-rs/issues/9771>.
+    ///
+    /// # Safety
+    ///
+    /// [`Drop`] calls this callback with a pointer to `self`. The new callback
+    /// must correctly release this stream (usually by chaining to the returned
+    /// one) and must match the [`FFI_ArrowArrayStream::private_data`] it reads.
+    /// A wrong callback is undefined behavior on drop.
+    pub unsafe fn set_release(
+        &mut self,
+        release: Option<unsafe extern "C" fn(arg1: *mut Self)>,
+    ) -> Option<unsafe extern "C" fn(arg1: *mut Self)> {
+        std::mem::replace(&mut self.release, release)
+    }
+
+    /// Replaces the private data pointer, returning the previous one.
+    ///
+    /// # Safety
+    ///
+    /// The old pointer is returned without being freed; the caller owns it from
+    /// here. The new pointer must match what the current
+    /// [`FFI_ArrowArrayStream::release`] callback expects.
+    pub unsafe fn set_private_data(&mut self, private_data: *mut c_void) -> *mut c_void {
+        std::mem::replace(&mut self.private_data, private_data)
+    }
 }
 
 struct ExportedArrayStream {
@@ -210,7 +260,7 @@ struct ExportedArrayStream {
 
 impl ExportedArrayStream {
     fn get_private_data(&mut self) -> &mut StreamPrivateData {
-        unsafe { &mut *((*self.stream).private_data as *mut StreamPrivateData) }
+        unsafe { &mut *(*self.stream).private_data.cast::<StreamPrivateData>() }
     }
 
     pub fn get_schema(&mut self, out: *mut FFI_ArrowSchema) -> i32 {
@@ -287,6 +337,32 @@ pub struct ArrowArrayStreamReader {
     schema: SchemaRef,
 }
 
+/// Returns the producer's message for the last failed call on a `FFI_ArrowArrayStream`.
+///
+/// Returns `None` when the producer supplies no message, either because it installs no
+/// `get_last_error` callback or because that callback returns NULL: the C Stream Interface
+/// lets `get_last_error` return NULL when no detailed description is available.
+///
+/// # Safety
+///
+/// `stream_ptr` must point to a valid, not yet released [`FFI_ArrowArrayStream`], and the last
+/// operation on it must have returned an error: the C Stream Interface forbids calling
+/// `get_last_error` in any other case.
+unsafe fn producer_error(stream_ptr: *mut FFI_ArrowArrayStream) -> Option<String> {
+    let get_last_error = unsafe { (*stream_ptr).get_last_error }?;
+
+    let error_str = unsafe { get_last_error(stream_ptr) };
+    if error_str.is_null() {
+        return None;
+    }
+
+    Some(
+        unsafe { CStr::from_ptr(error_str) }
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
 /// Gets schema from a raw pointer of `FFI_ArrowArrayStream`. This is used when constructing
 /// `ArrowArrayStreamReader` to cache schema.
 fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef> {
@@ -298,16 +374,20 @@ fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef>
         let schema = Schema::try_from(&schema)?;
         Ok(Arc::new(schema))
     } else {
-        Err(ArrowError::CDataInterface(format!(
-            "Cannot get schema from input stream. Error code: {ret_code:?}"
-        )))
+        let message = format!("Cannot get schema from input stream. Error code: {ret_code}");
+        // SAFETY: `stream_ptr` is valid and unreleased, and the `get_schema` call above
+        // returned a non-zero code.
+        let message = match unsafe { producer_error(stream_ptr) } {
+            Some(producer_message) => format!("{message}. Producer error: {producer_message}"),
+            None => message,
+        };
+        Err(ArrowError::CDataInterface(message))
     }
 }
 
 impl ArrowArrayStreamReader {
     /// Creates a new `ArrowArrayStreamReader` from a `FFI_ArrowArrayStream`.
     /// This is used to import from the C Stream Interface.
-    #[allow(dead_code)]
     pub fn try_new(mut stream: FFI_ArrowArrayStream) -> Result<Self> {
         if stream.release.is_none() {
             return Err(ArrowError::CDataInterface(
@@ -332,19 +412,6 @@ impl ArrowArrayStreamReader {
     /// See [`FFI_ArrowArrayStream::from_raw`]
     pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
         Self::try_new(unsafe { FFI_ArrowArrayStream::from_raw(raw_stream) })
-    }
-
-    /// Get the last error from `ArrowArrayStreamReader`
-    fn get_stream_last_error(&mut self) -> Option<String> {
-        let get_last_error = self.stream.get_last_error?;
-
-        let error_str = unsafe { get_last_error(&mut self.stream) };
-        if error_str.is_null() {
-            return None;
-        }
-
-        let error_str = unsafe { CStr::from_ptr(error_str) };
-        Some(error_str.to_string_lossy().to_string())
     }
 }
 
@@ -374,9 +441,15 @@ impl Iterator for ArrowArrayStreamReader {
                 )
             }))
         } else {
-            let last_error = self.get_stream_last_error();
-            let err = ArrowError::CDataInterface(last_error.unwrap());
-            Some(Err(err))
+            let message =
+                format!("Cannot get next batch from input stream. Error code: {ret_code}");
+            // SAFETY: `self.stream` is valid and unreleased by construction, and the
+            // `get_next` call above returned a non-zero code.
+            let message = match unsafe { producer_error(&mut self.stream) } {
+                Some(producer_message) => format!("{message}. Producer error: {producer_message}"),
+                None => message,
+            };
+            Some(Err(ArrowError::CDataInterface(message)))
         }
     }
 }
@@ -406,8 +479,8 @@ mod tests {
         pub fn new(
             schema: SchemaRef,
             iter: Box<dyn Iterator<Item = Result<RecordBatch>> + Send>,
-        ) -> Box<TestRecordBatchReader> {
-            Box::new(TestRecordBatchReader { schema, iter })
+        ) -> TestRecordBatchReader {
+            TestRecordBatchReader { schema, iter }
         }
     }
 
@@ -428,7 +501,7 @@ mod tests {
     fn _test_round_trip_export(batch: RecordBatch, schema: Arc<Schema>) -> Result<()> {
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
-        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+        let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
         // Export a `RecordBatchReader` through `FFI_ArrowArrayStream`
         let mut ffi_stream = FFI_ArrowArrayStream::new(reader);
@@ -473,7 +546,7 @@ mod tests {
     fn _test_round_trip_import(batch: RecordBatch, schema: Arc<Schema>) -> Result<()> {
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
-        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+        let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
         let stream = FFI_ArrowArrayStream::new(reader);
@@ -533,9 +606,10 @@ mod tests {
     fn test_error_import() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
 
-        let iter = Box::new(vec![Err(ArrowError::MemoryError("".to_string()))].into_iter());
+        let iter =
+            Box::new(vec![Err(ArrowError::MemoryError("out of memory".to_string()))].into_iter());
 
-        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+        let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
         let stream = FFI_ArrowArrayStream::new(reader);
@@ -551,8 +625,162 @@ mod tests {
 
         // The results should outlive the lifetime of the stream itself.
         assert_eq!(produced_batches.len(), 1);
-        assert!(produced_batches[0].is_err());
+        assert_eq!(
+            produced_batches[0].as_ref().unwrap_err().to_string(),
+            format!(
+                "C Data interface error: Cannot get next batch from input stream. \
+                 Error code: {ENOMEM}. Producer error: Memory error: out of memory"
+            )
+        );
 
         Ok(())
+    }
+
+    unsafe extern "C" fn failing_get_schema(
+        _stream: *mut FFI_ArrowArrayStream,
+        _out: *mut FFI_ArrowSchema,
+    ) -> c_int {
+        EIO
+    }
+
+    unsafe extern "C" fn working_get_schema(
+        _stream: *mut FFI_ArrowArrayStream,
+        out: *mut FFI_ArrowSchema,
+    ) -> c_int {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        unsafe { std::ptr::write(out, FFI_ArrowSchema::try_from(&schema).unwrap()) };
+        0
+    }
+
+    unsafe extern "C" fn failing_get_next(
+        _stream: *mut FFI_ArrowArrayStream,
+        _out: *mut FFI_ArrowArray,
+    ) -> c_int {
+        EIO
+    }
+
+    unsafe extern "C" fn producer_last_error(_stream: *mut FFI_ArrowArrayStream) -> *const c_char {
+        c"the producer failed".as_ptr()
+    }
+
+    unsafe extern "C" fn null_last_error(_stream: *mut FFI_ArrowArrayStream) -> *const c_char {
+        std::ptr::null()
+    }
+
+    unsafe extern "C" fn mark_released(stream: *mut FFI_ArrowArrayStream) {
+        unsafe { (*stream).release = None };
+    }
+
+    fn failing_stream(
+        get_last_error: Option<unsafe extern "C" fn(*mut FFI_ArrowArrayStream) -> *const c_char>,
+    ) -> FFI_ArrowArrayStream {
+        let mut stream = FFI_ArrowArrayStream::empty();
+        stream.get_schema = Some(failing_get_schema);
+        stream.get_next = Some(failing_get_next);
+        stream.get_last_error = get_last_error;
+        stream.release = Some(mark_released);
+        stream
+    }
+
+    #[test]
+    fn test_import_schema_error_reports_producer_message() {
+        let err =
+            ArrowArrayStreamReader::try_new(failing_stream(Some(producer_last_error))).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "C Data interface error: Cannot get schema from input stream. \
+                 Error code: {EIO}. Producer error: the producer failed"
+            )
+        );
+    }
+
+    #[test]
+    fn test_import_schema_error_without_producer_message() {
+        // A producer need not supply a message: `get_last_error` may return NULL when no
+        // detailed description is available.
+        let err =
+            ArrowArrayStreamReader::try_new(failing_stream(Some(null_last_error))).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "C Data interface error: Cannot get schema from input stream. Error code: {EIO}"
+            )
+        );
+    }
+
+    #[test]
+    fn test_import_schema_error_without_error_callback() {
+        let err = ArrowArrayStreamReader::try_new(failing_stream(None)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "C Data interface error: Cannot get schema from input stream. Error code: {EIO}"
+            )
+        );
+    }
+
+    #[test]
+    fn test_import_next_error_without_producer_message() {
+        // Previously panicked: the message was unwrapped without checking that the producer
+        // supplied one.
+        let mut stream = failing_stream(Some(null_last_error));
+        stream.get_schema = Some(working_get_schema);
+
+        let err = ArrowArrayStreamReader::try_new(stream)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "C Data interface error: Cannot get next batch from input stream. Error code: {EIO}"
+            )
+        );
+    }
+
+    // A consumer wraps the release callback with its own, then chains back to
+    // the original on drop. This is the same wrap-release pattern the
+    // release/private_data accessors exist for (#9771).
+    static STREAM_WRAPPER_RAN: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    struct StreamWrapperData {
+        original_release: Option<unsafe extern "C" fn(*mut FFI_ArrowArrayStream)>,
+        original_private_data: *mut c_void,
+    }
+
+    unsafe extern "C" fn wrapping_release(stream: *mut FFI_ArrowArrayStream) {
+        use std::sync::atomic::Ordering;
+        let stream = unsafe { &mut *stream };
+        let data = unsafe { Box::from_raw(stream.private_data().cast::<StreamWrapperData>()) };
+        STREAM_WRAPPER_RAN.store(true, Ordering::SeqCst);
+        unsafe { stream.set_release(data.original_release) };
+        unsafe { stream.set_private_data(data.original_private_data) };
+        if let Some(release) = stream.release() {
+            unsafe { release(stream) };
+        }
+    }
+
+    #[test]
+    fn test_wrap_release_callback() {
+        use std::sync::atomic::Ordering;
+
+        let batch_reader = Box::new(TestRecordBatchReader::new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)])),
+            Box::new(std::iter::empty()),
+        ));
+        let mut stream = FFI_ArrowArrayStream::new(batch_reader);
+
+        let data = Box::new(StreamWrapperData {
+            original_release: stream.release(),
+            original_private_data: stream.private_data(),
+        });
+        unsafe { stream.set_release(Some(wrapping_release)) };
+        unsafe { stream.set_private_data(Box::into_raw(data).cast::<c_void>()) };
+
+        drop(stream); // runs wrapping_release, which chains to the original
+        assert!(STREAM_WRAPPER_RAN.load(Ordering::SeqCst));
     }
 }

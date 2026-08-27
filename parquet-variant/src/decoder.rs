@@ -278,8 +278,14 @@ pub(crate) fn decode_double(data: &[u8]) -> Result<f64, ArrowError> {
 /// Decodes a Date from the value section of a variant.
 pub(crate) fn decode_date(data: &[u8]) -> Result<NaiveDate, ArrowError> {
     let days_since_epoch = i32::from_le_bytes(array_from_slice(data, 0)?);
-    let value = DateTime::UNIX_EPOCH + Duration::days(i64::from(days_since_epoch));
-    Ok(value.date_naive())
+    DateTime::UNIX_EPOCH
+        .checked_add_signed(Duration::days(i64::from(days_since_epoch)))
+        .map(|value| value.date_naive())
+        .ok_or_else(|| {
+            ArrowError::CastError(format!(
+                "Could not cast `{days_since_epoch}` days into a NaiveDate"
+            ))
+        })
 }
 
 /// Decodes a TimestampMicros from the value section of a variant.
@@ -338,8 +344,8 @@ pub(crate) fn decode_timestampntz_nanos(data: &[u8]) -> Result<NaiveDateTime, Ar
 
 /// Decodes a UUID from the value section of a variant.
 pub(crate) fn decode_uuid(data: &[u8]) -> Result<Uuid, ArrowError> {
-    Uuid::from_slice(&data[0..16])
-        .map_err(|_| ArrowError::CastError(format!("Cant decode uuid from {:?}", &data[0..16])))
+    let bytes: [u8; 16] = array_from_slice(data, 0)?;
+    Ok(Uuid::from_bytes(bytes))
 }
 
 /// Decodes a Binary from the value section of a variant.
@@ -367,21 +373,22 @@ pub(crate) fn decode_short_string(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paste::paste;
 
     macro_rules! test_decoder_bounds {
         ($test_name:ident, $data:expr, $decode_fn:ident, $expected:expr) => {
-            paste! {
+            mod $test_name {
+                use super::*;
+
                 #[test]
-                fn [<$test_name _exact_length>]() {
+                fn exact_length() {
                     let result = $decode_fn(&$data).unwrap();
                     assert_eq!(result, $expected);
                 }
 
                 #[test]
-                fn [<$test_name _truncated_length>]() {
+                fn truncated_length() {
                     // Remove the last byte of data so that there is not enough to decode
-                    let truncated_data = &$data[.. $data.len() - 1];
+                    let truncated_data = &$data[..$data.len() - 1];
                     let result = $decode_fn(truncated_data);
                     assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
                 }
@@ -445,7 +452,7 @@ mod tests {
             test_float,
             [0x06, 0x2c, 0x93, 0x4e],
             decode_float,
-            1234567890.1234
+            1_234_568_000.0
         );
 
         test_decoder_bounds!(
@@ -465,6 +472,15 @@ mod tests {
             decode_date,
             NaiveDate::from_ymd_opt(2025, 4, 16).unwrap()
         );
+
+        #[test]
+        fn test_date_out_of_range() {
+            // A day count that overflows chrono's supported date range must error, not panic
+            for days in [i32::MAX, i32::MIN] {
+                let result = decode_date(&days.to_le_bytes());
+                assert!(matches!(result, Err(ArrowError::CastError(_))));
+            }
+        }
 
         test_decoder_bounds!(
             test_timestamp_micros,
@@ -530,18 +546,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_uuid() {
-        let data = [
+    test_decoder_bounds!(
+        test_uuid,
+        [
             0xf2, 0x4f, 0x9b, 0x64, 0x81, 0xfa, 0x49, 0xd1, 0xb7, 0x4e, 0x8c, 0x09, 0xa6, 0xe3,
             0x1c, 0x56,
-        ];
-        let result = decode_uuid(&data).unwrap();
-        assert_eq!(
-            Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap(),
-            result
-        );
-    }
+        ],
+        decode_uuid,
+        Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap()
+    );
 
     mod time {
         use super::*;
@@ -588,14 +601,14 @@ mod tests {
     #[test]
     fn test_short_string_exact_length() {
         let data = b"Helloo";
-        let result = decode_short_string(1 | 5 << 2, data).unwrap();
+        let result = decode_short_string(1 | (5 << 2), data).unwrap();
         assert_eq!(result.0, "Hello");
     }
 
     #[test]
     fn test_short_string_truncated_length() {
         let data = b"Hel";
-        let result = decode_short_string(1 | 5 << 2, data);
+        let result = decode_short_string(1 | (5 << 2), data);
         assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
     }
 

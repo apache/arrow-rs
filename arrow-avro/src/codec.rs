@@ -208,9 +208,9 @@ impl AvroDataType {
         resolution: Option<ResolutionInfo>,
     ) -> Self {
         Self {
-            codec,
-            metadata,
             nullability,
+            metadata,
+            codec,
             resolution,
         }
     }
@@ -218,12 +218,10 @@ impl AvroDataType {
     /// Returns an arrow [`Field`] with the given name
     pub(crate) fn field_with_name(&self, name: &str) -> Field {
         let mut nullable = self.nullability.is_some();
-        if !nullable {
-            if let Codec::Union(children, _, _) = self.codec() {
-                // If any encoded branch is `null`, mark field as nullable
-                if children.iter().any(|c| matches!(c.codec(), Codec::Null)) {
-                    nullable = true;
-                }
+        if !nullable && let Codec::Union(children, _, _) = self.codec() {
+            // If any encoded branch is `null`, mark field as nullable
+            if children.iter().any(|c| matches!(c.codec(), Codec::Null)) {
+                nullable = true;
             }
         }
         let data_type = self.codec.data_type();
@@ -282,13 +280,13 @@ impl AvroDataType {
                 }
                 out.push(cp as u8);
             }
-            if let Some(len) = expected_len {
-                if out.len() != len {
-                    return Err(ArrowError::SchemaError(format!(
-                        "Default length {} does not match expected fixed size {len}",
-                        out.len(),
-                    )));
-                }
+            if let Some(len) = expected_len
+                && out.len() != len
+            {
+                return Err(ArrowError::SchemaError(format!(
+                    "Default length {} does not match expected fixed size {len}",
+                    out.len(),
+                )));
             }
             Ok(out)
         }
@@ -602,7 +600,7 @@ impl AvroField {
     /// converted to use `Utf8View` instead of `Utf8`.
     pub(crate) fn with_utf8view(&self) -> Self {
         let mut field = self.clone();
-        if let Codec::Utf8 = field.data_type.codec {
+        if field.data_type.codec == Codec::Utf8 {
             field.data_type.codec = Codec::Utf8View;
         }
         field
@@ -931,12 +929,12 @@ impl Codec {
             }
             Self::Struct(f) => DataType::Struct(f.iter().map(|x| x.field()).collect()),
             Self::Map(value_type) => {
-                let val_field = value_type.field_with_name("value");
+                let val_field = value_type.field_with_name(Field::MAP_VALUE_FIELD_DEFAULT_NAME);
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("key", DataType::Utf8, false),
+                            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                             val_field,
                         ])),
                         false,
@@ -1091,8 +1089,7 @@ fn parse_decimal_attributes(
     }
     if precision > DECIMAL256_MAX_PRECISION as usize {
         return Err(ArrowError::ParseError(format!(
-            "Decimal precision {precision} exceeds maximum supported by Arrow ({})",
-            DECIMAL256_MAX_PRECISION
+            "Decimal precision {precision} exceeds maximum supported by Arrow ({DECIMAL256_MAX_PRECISION})"
         )));
     }
     if let Some(sz) = size {
@@ -1200,14 +1197,14 @@ impl From<&Codec> for UnionFieldKind {
 
 fn union_branch_name(dt: &AvroDataType) -> String {
     if let Some(name) = dt.metadata.get(AVRO_NAME_METADATA_KEY) {
-        if name.contains(".") {
+        if name.contains('.') {
             // Full name
-            return name.to_string();
+            return name.clone();
         }
         if let Some(ns) = dt.metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
             return format!("{ns}.{name}");
         }
-        return name.to_string();
+        return name.clone();
     }
     dt.codec.union_field_name()
 }
@@ -1362,16 +1359,16 @@ fn union_first_duplicate<'a>(
 ) -> Option<String> {
     let mut seen = HashSet::with_capacity(branches.len());
     for schema in branches {
-        if let Some(key) = branch_key_of(schema, enclosing_ns) {
-            if !seen.insert(key.clone()) {
-                let msg = match key {
-                    UnionBranchKey::Named(full) => format!("named type {full}"),
-                    UnionBranchKey::Primitive(p) => format!("primitive {}", p.as_ref()),
-                    UnionBranchKey::Array => "array".to_string(),
-                    UnionBranchKey::Map => "map".to_string(),
-                };
-                return Some(msg);
-            }
+        if let Some(key) = branch_key_of(schema, enclosing_ns)
+            && !seen.insert(key.clone())
+        {
+            let msg = match key {
+                UnionBranchKey::Named(full) => format!("named type {full}"),
+                UnionBranchKey::Primitive(p) => format!("primitive {}", p.as_ref()),
+                UnionBranchKey::Array => "array".to_string(),
+                UnionBranchKey::Map => "map".to_string(),
+            };
+            return Some(msg);
         }
     }
     None
@@ -1557,7 +1554,7 @@ impl<'a> Maker<'a> {
                                 return Err(ArrowError::ParseError(format!(
                                     "Invalid fixed size for Duration: {size}, must be 12"
                                 )));
-                            };
+                            }
                             AvroDataType {
                                 nullability: None,
                                 metadata,
@@ -1777,17 +1774,15 @@ impl<'a> Maker<'a> {
                     }
                     (None, _) => {}
                 }
-                if matches!(field.codec, Codec::Int64) {
-                    if let Some(unit) = t
+                if matches!(field.codec, Codec::Int64)
+                    && let Some(unit) = t
                         .attributes
                         .additional
                         .get("arrowTimeUnit")
                         .and_then(|v| v.as_str())
-                    {
-                        if unit == "nanosecond" {
-                            field.codec = Codec::TimestampNanos(Some(self.tz));
-                        }
-                    }
+                    && unit == "nanosecond"
+                {
+                    field.codec = Codec::TimestampNanos(Some(self.tz));
                 }
                 if !t.attributes.additional.is_empty() {
                     for (k, v) in &t.attributes.additional {
@@ -1967,7 +1962,7 @@ impl<'a> Maker<'a> {
                             first_resolution = Some((reader_index, dt));
                         }
                     }
-                };
+                }
             }
         }
         first_resolution
@@ -2247,7 +2242,7 @@ impl<'a> Maker<'a> {
                     Entry::Vacant(e) => {
                         e.insert(idx);
                     }
-                    _ => {}
+                    Entry::Occupied(_) => {}
                 }
             }
         }

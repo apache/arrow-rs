@@ -34,7 +34,7 @@ pub fn try_new_geo_stats_accumulator(
 ) -> Option<Box<dyn GeoStatsAccumulator>> {
     if !matches!(
         descr.logical_type_ref(),
-        Some(LogicalType::Geometry { .. }) | Some(LogicalType::Geography { .. })
+        Some(LogicalType::Geometry { .. } | LogicalType::Geography { .. })
     ) {
         return None;
     }
@@ -335,7 +335,7 @@ mod test {
         // and does not compute subsequent statistics
         assert!(accumulator.is_valid());
         accumulator.update_wkb(&wkb_point_xy(41.0, 42.0));
-        accumulator.update_wkb("these bytes are not WKB".as_bytes());
+        accumulator.update_wkb(b"these bytes are not WKB");
         assert!(!accumulator.is_valid());
         assert!(accumulator.finish().is_none());
 

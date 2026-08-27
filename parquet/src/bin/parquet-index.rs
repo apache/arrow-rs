@@ -25,14 +25,16 @@
 //! ```
 //! After this `parquet-index` should be available:
 //! ```
-//! parquet-index XYZ.parquet COLUMN_NAME
+//! parquet-index XYZ.parquet COLUMN_PATH
 //! ```
 //!
 //! The binary can also be built from the source code and run as follows:
 //! ```
-//! cargo run --features=cli --bin parquet-index XYZ.parquet COLUMN_NAME
+//! cargo run --features=cli --bin parquet-index XYZ.parquet COLUMN_PATH
 //!
 //! [page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+
+mod cli;
 
 use clap::Parser;
 use parquet::data_type::ByteArray;
@@ -51,7 +53,9 @@ struct Args {
     #[clap(help("Path to a parquet file"))]
     file: String,
 
-    #[clap(help("Column name to print"))]
+    #[clap(help(
+        "Dot-separated column path to get index for. Literal dots can be escaped as `\\.`"
+    ))]
     column: String,
 }
 
@@ -62,56 +66,48 @@ impl Args {
         let reader = SerializedFileReader::new_with_options(file, options)?;
 
         let schema = reader.metadata().file_metadata().schema_descr();
+        let column_path = cli::parse_column_path(&self.column).map_err(ParquetError::General)?;
         let column_idx = schema
             .columns()
             .iter()
-            .position(|x| x.name() == self.column.as_str())
+            .position(|x| x.path().parts() == column_path.as_slice())
             .ok_or_else(|| {
                 ParquetError::General(format!("Failed to find column {}", self.column))
             })?;
 
-        // Column index data for all row groups and columns
-        let column_index = reader
+        let page_index = reader
             .metadata()
-            .column_index()
-            .ok_or_else(|| ParquetError::General("Column index not found".to_string()))?;
-
-        // Offset index data for all row groups and columns
-        let offset_index = reader
-            .metadata()
-            .offset_index()
-            .ok_or_else(|| ParquetError::General("Offset index not found".to_string()))?;
+            .page_index()
+            .ok_or_else(|| ParquetError::General("Page index not found".to_string()))?;
 
         // Iterate through each row group
-        for (row_group_idx, ((column_indices, offset_indices), row_group)) in column_index
-            .iter()
-            .zip(offset_index)
-            .zip(reader.metadata().row_groups())
-            .enumerate()
-        {
+        for row_group_idx in 0..reader.metadata().num_row_groups() {
+            let row_group = reader.metadata().row_group(row_group_idx);
             println!("Row Group: {row_group_idx}");
-            let offset_index = offset_indices.get(column_idx).ok_or_else(|| {
-                ParquetError::General(format!(
-                    "No offset index for row group {row_group_idx} column chunk {column_idx}"
-                ))
-            })?;
+            let offset_index = page_index
+                .offset_index(row_group_idx, column_idx)
+                .ok_or_else(|| {
+                    ParquetError::General(format!(
+                        "No offset index for row group {row_group_idx} column chunk {column_idx}"
+                    ))
+                })?;
 
             let row_counts =
-                compute_row_counts(offset_index.page_locations.as_slice(), row_group.num_rows());
-            match &column_indices[column_idx] {
-                ColumnIndexMetaData::NONE => println!("NO INDEX"),
-                ColumnIndexMetaData::BOOLEAN(v) => {
+                compute_row_counts(offset_index.page_locations(), row_group.num_rows());
+            match page_index.column_index(row_group_idx, column_idx) {
+                None => println!("NO INDEX"),
+                Some(ColumnIndexMetaData::BOOLEAN(v)) => {
                     print_index::<bool>(v, offset_index, &row_counts)?
                 }
-                ColumnIndexMetaData::INT32(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::INT64(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::INT96(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::FLOAT(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::DOUBLE(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::BYTE_ARRAY(v) => {
+                Some(ColumnIndexMetaData::INT32(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::INT64(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::INT96(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::FLOAT(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::DOUBLE(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::BYTE_ARRAY(v)) => {
                     print_bytes_index(v, offset_index, &row_counts)?
                 }
-                ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(v) => {
+                Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(v)) => {
                     print_bytes_index(v, offset_index, &row_counts)?
                 }
             }
@@ -142,11 +138,11 @@ fn print_index<T: std::fmt::Display>(
     offset_index: &OffsetIndexMetaData,
     row_counts: &[i64],
 ) -> Result<()> {
-    if column_index.num_pages() as usize != offset_index.page_locations.len() {
+    if column_index.num_pages() as usize != offset_index.page_locations().len() {
         return Err(ParquetError::General(format!(
             "Index length mismatch, got {} and {}",
             column_index.num_pages(),
-            offset_index.page_locations.len()
+            offset_index.page_locations().len()
         )));
     }
 
@@ -158,7 +154,7 @@ fn print_index<T: std::fmt::Display>(
         .enumerate()
     {
         print!(
-            "Page {:>5} at offset {:#010x} with length {:>10} and row count {:>10}",
+            "Page {:>5} at offset {:>10} with length {:>10} and row count {:>10}",
             idx, o.offset, o.compressed_page_size, row_count
         );
         match min {
@@ -181,11 +177,11 @@ fn print_bytes_index(
     offset_index: &OffsetIndexMetaData,
     row_counts: &[i64],
 ) -> Result<()> {
-    if column_index.num_pages() as usize != offset_index.page_locations.len() {
+    if column_index.num_pages() as usize != offset_index.page_locations().len() {
         return Err(ParquetError::General(format!(
             "Index length mismatch, got {} and {}",
             column_index.num_pages(),
-            offset_index.page_locations.len()
+            offset_index.page_locations().len()
         )));
     }
 
@@ -197,7 +193,7 @@ fn print_bytes_index(
         .enumerate()
     {
         print!(
-            "Page {:>5} at offset {:#010x} with length {:>10} and row count {:>10}",
+            "Page {:>5} at offset {:>10} with length {:>10} and row count {:>10}",
             idx, o.offset, o.compressed_page_size, row_count
         );
         match min {

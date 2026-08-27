@@ -23,7 +23,7 @@ use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::arrow::parquet_column;
 use crate::basic::Type as PhysicalType;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
+use crate::file::metadata::{PageIndex, RowGroupMetaData};
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::statistics::Statistics as ParquetStatistics;
 use crate::schema::types::SchemaDescriptor;
@@ -47,7 +47,6 @@ use arrow_array::{
 use arrow_buffer::{NullBufferBuilder, i256};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use half::f16;
-use paste::paste;
 use std::sync::Arc;
 
 // Convert the bytes array to i32.
@@ -99,7 +98,7 @@ pub(crate) fn from_bytes_to_f16(b: &[u8]) -> Option<f16> {
 macro_rules! make_stats_iterator {
     ($iterator_type:ident, $func:ident, $parquet_statistics_type:path, $stat_value_type:ty) => {
         /// Maps an iterator of `ParquetStatistics` into an iterator of
-        /// `&$stat_value_type``
+        /// `&$stat_value_type`
         ///
         /// Yielded elements:
         /// * Some(stats) if valid
@@ -356,73 +355,125 @@ make_decimal_stats_iterator!(
     from_bytes_to_i256
 );
 
-/// Special macro to combine the statistics iterators for min and max using the [`mod@paste`] macro.
+/// Special macro to combine the statistics iterators for min and max.
 /// This is used to avoid repeating the same code for min and max statistics extractions
 ///
 /// Parameters:
-/// stat_type_prefix: The prefix of the statistics iterator type (e.g. `Min` or `Max`)
 /// data_type: The data type of the statistics (e.g. `DataType::Int32`)
 /// iterator: The iterator of [`ParquetStatistics`] to extract the statistics from.
 macro_rules! get_statistics {
-    ($stat_type_prefix: ident, $data_type: ident, $iterator: ident, $physical_type: ident) => {
-        paste! {
+    (Min, $data_type: ident, $iterator: ident, $physical_type: ident) => {
+        get_statistics!(
+            $data_type,
+            $iterator,
+            $physical_type,
+            MinBooleanStatsIterator,
+            MinInt32StatsIterator,
+            MinInt64StatsIterator,
+            MinFloatStatsIterator,
+            MinDoubleStatsIterator,
+            MinByteArrayStatsIterator,
+            MinFixedLenByteArrayStatsIterator,
+            MinDecimal32StatsIterator,
+            MinDecimal64StatsIterator,
+            MinDecimal128StatsIterator,
+            MinDecimal256StatsIterator,
+            min_statistics
+        )
+    };
+    (Max, $data_type: ident, $iterator: ident, $physical_type: ident) => {
+        get_statistics!(
+            $data_type,
+            $iterator,
+            $physical_type,
+            MaxBooleanStatsIterator,
+            MaxInt32StatsIterator,
+            MaxInt64StatsIterator,
+            MaxFloatStatsIterator,
+            MaxDoubleStatsIterator,
+            MaxByteArrayStatsIterator,
+            MaxFixedLenByteArrayStatsIterator,
+            MaxDecimal32StatsIterator,
+            MaxDecimal64StatsIterator,
+            MaxDecimal128StatsIterator,
+            MaxDecimal256StatsIterator,
+            max_statistics
+        )
+    };
+    (
+        $data_type: ident,
+        $iterator: ident,
+        $physical_type: ident,
+        $boolean_iter: ident,
+        $int32_iter: ident,
+        $int64_iter: ident,
+        $float_iter: ident,
+        $double_iter: ident,
+        $byte_array_iter: ident,
+        $fixed_len_byte_array_iter: ident,
+        $decimal32_iter: ident,
+        $decimal64_iter: ident,
+        $decimal128_iter: ident,
+        $decimal256_iter: ident,
+        $dictionary_statistics: ident
+    ) => {
         match $data_type {
             DataType::Boolean => Ok(Arc::new(BooleanArray::from_iter(
-                [<$stat_type_prefix BooleanStatsIterator>]::new($iterator).map(|x| x.copied()),
+                $boolean_iter::new($iterator).map(|x| x.copied()),
             ))),
             DataType::Int8 => Ok(Arc::new(Int8Array::from_iter(
-                [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
+                $int32_iter::new($iterator).map(|x| {
                     x.and_then(|x| i8::try_from(*x).ok())
                 }),
             ))),
             DataType::Int16 => Ok(Arc::new(Int16Array::from_iter(
-                [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
+                $int32_iter::new($iterator).map(|x| {
                     x.and_then(|x| i16::try_from(*x).ok())
                 }),
             ))),
             DataType::Int32 => Ok(Arc::new(Int32Array::from_iter(
-                [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| x.copied()),
+                $int32_iter::new($iterator).map(|x| x.copied()),
             ))),
             DataType::Int64 => Ok(Arc::new(Int64Array::from_iter(
-                [<$stat_type_prefix Int64StatsIterator>]::new($iterator).map(|x| x.copied()),
+                $int64_iter::new($iterator).map(|x| x.copied()),
             ))),
             DataType::UInt8 => Ok(Arc::new(UInt8Array::from_iter(
-                [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
+                $int32_iter::new($iterator).map(|x| {
                     x.and_then(|x| u8::try_from(*x).ok())
                 }),
             ))),
             DataType::UInt16 => Ok(Arc::new(UInt16Array::from_iter(
-                [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| {
+                $int32_iter::new($iterator).map(|x| {
                     x.and_then(|x| u16::try_from(*x).ok())
                 }),
             ))),
             DataType::UInt32 => Ok(Arc::new(UInt32Array::from_iter(
-                [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| x.map(|x| *x as u32)),
+                $int32_iter::new($iterator).map(|x| x.map(|x| *x as u32)),
             ))),
             DataType::UInt64 => Ok(Arc::new(UInt64Array::from_iter(
-                [<$stat_type_prefix Int64StatsIterator>]::new($iterator).map(|x| x.map(|x| *x as u64)),
+                $int64_iter::new($iterator).map(|x| x.map(|x| *x as u64)),
             ))),
             DataType::Float16 => Ok(Arc::new(Float16Array::from_iter(
-                [<$stat_type_prefix FixedLenByteArrayStatsIterator>]::new($iterator).map(|x| x.and_then(|x| {
+                $fixed_len_byte_array_iter::new($iterator).map(|x| x.and_then(|x| {
                     from_bytes_to_f16(x)
                 })),
             ))),
             DataType::Float32 => Ok(Arc::new(Float32Array::from_iter(
-                [<$stat_type_prefix FloatStatsIterator>]::new($iterator).map(|x| x.copied()),
+                $float_iter::new($iterator).map(|x| x.copied()),
             ))),
             DataType::Float64 => Ok(Arc::new(Float64Array::from_iter(
-                [<$stat_type_prefix DoubleStatsIterator>]::new($iterator).map(|x| x.copied()),
+                $double_iter::new($iterator).map(|x| x.copied()),
             ))),
             DataType::Date32 => Ok(Arc::new(Date32Array::from_iter(
-                [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| x.copied()),
+                $int32_iter::new($iterator).map(|x| x.copied()),
             ))),
             DataType::Date64 if $physical_type == Some(PhysicalType::INT32) => Ok(Arc::new(Date64Array::from_iter(
-                [<$stat_type_prefix Int32StatsIterator>]::new($iterator)
+                $int32_iter::new($iterator)
                     .map(|x| x.map(|x| i64::from(*x) * 24 * 60 * 60 * 1000))))),
             DataType::Date64 if $physical_type == Some(PhysicalType::INT64) => Ok(Arc::new(Date64Array::from_iter(
-                [<$stat_type_prefix Int64StatsIterator>]::new($iterator).map(|x| x.copied()),))),
+                $int64_iter::new($iterator).map(|x| x.copied()),))),
             DataType::Timestamp(unit, timezone) =>{
-                let iter = [<$stat_type_prefix Int64StatsIterator>]::new($iterator).map(|x| x.copied());
+                let iter = $int64_iter::new($iterator).map(|x| x.copied());
                 Ok(match unit {
                     TimeUnit::Second => Arc::new(TimestampSecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
                     TimeUnit::Millisecond => Arc::new(TimestampMillisecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
@@ -433,10 +484,10 @@ macro_rules! get_statistics {
             DataType::Time32(unit) => {
                 Ok(match unit {
                     TimeUnit::Second =>  Arc::new(Time32SecondArray::from_iter(
-                        [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| x.copied()),
+                        $int32_iter::new($iterator).map(|x| x.copied()),
                     )),
                     TimeUnit::Millisecond => Arc::new(Time32MillisecondArray::from_iter(
-                        [<$stat_type_prefix Int32StatsIterator>]::new($iterator).map(|x| x.copied()),
+                        $int32_iter::new($iterator).map(|x| x.copied()),
                     )),
                     _ => {
                         let len = $iterator.count();
@@ -448,10 +499,10 @@ macro_rules! get_statistics {
             DataType::Time64(unit) => {
                 Ok(match unit {
                     TimeUnit::Microsecond =>  Arc::new(Time64MicrosecondArray::from_iter(
-                        [<$stat_type_prefix Int64StatsIterator>]::new($iterator).map(|x| x.copied()),
+                        $int64_iter::new($iterator).map(|x| x.copied()),
                     )),
                     TimeUnit::Nanosecond => Arc::new(Time64NanosecondArray::from_iter(
-                        [<$stat_type_prefix Int64StatsIterator>]::new($iterator).map(|x| x.copied()),
+                        $int64_iter::new($iterator).map(|x| x.copied()),
                     )),
                     _ => {
                         let len = $iterator.count();
@@ -461,13 +512,13 @@ macro_rules! get_statistics {
                 })
             },
             DataType::Binary => Ok(Arc::new(BinaryArray::from_iter(
-                [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator)
+                $byte_array_iter::new($iterator)
             ))),
             DataType::LargeBinary => Ok(Arc::new(LargeBinaryArray::from_iter(
-                [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator)
+                $byte_array_iter::new($iterator)
             ))),
             DataType::Utf8 => {
-                let iterator = [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator);
+                let iterator = $byte_array_iter::new($iterator);
                 let mut builder = StringBuilder::new();
                 for x in iterator {
                     let Some(x) = x else {
@@ -485,7 +536,7 @@ macro_rules! get_statistics {
                 Ok(Arc::new(builder.finish()))
             },
             DataType::LargeUtf8 => {
-                let iterator = [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator);
+                let iterator = $byte_array_iter::new($iterator);
                 let mut builder = LargeStringBuilder::new();
                 for x in iterator {
                     let Some(x) = x else {
@@ -503,7 +554,7 @@ macro_rules! get_statistics {
                 Ok(Arc::new(builder.finish()))
             },
             DataType::FixedSizeBinary(size) => {
-                let iterator = [<$stat_type_prefix FixedLenByteArrayStatsIterator>]::new($iterator);
+                let iterator = $fixed_len_byte_array_iter::new($iterator);
                 let mut builder = FixedSizeBinaryBuilder::new(*size);
                 for x in iterator {
                     let Some(x) = x else {
@@ -523,33 +574,33 @@ macro_rules! get_statistics {
             },
             DataType::Decimal32(precision, scale) => {
                 let arr = Decimal32Array::from_iter(
-                    [<$stat_type_prefix Decimal32StatsIterator>]::new($iterator)
+                    $decimal32_iter::new($iterator)
                 ).with_precision_and_scale(*precision, *scale)?;
                 Ok(Arc::new(arr))
             },
             DataType::Decimal64(precision, scale) => {
                 let arr = Decimal64Array::from_iter(
-                    [<$stat_type_prefix Decimal64StatsIterator>]::new($iterator)
+                    $decimal64_iter::new($iterator)
                 ).with_precision_and_scale(*precision, *scale)?;
                 Ok(Arc::new(arr))
             },
             DataType::Decimal128(precision, scale) => {
                 let arr = Decimal128Array::from_iter(
-                    [<$stat_type_prefix Decimal128StatsIterator>]::new($iterator)
+                    $decimal128_iter::new($iterator)
                 ).with_precision_and_scale(*precision, *scale)?;
                 Ok(Arc::new(arr))
             },
             DataType::Decimal256(precision, scale) => {
                 let arr = Decimal256Array::from_iter(
-                    [<$stat_type_prefix Decimal256StatsIterator>]::new($iterator)
+                    $decimal256_iter::new($iterator)
                 ).with_precision_and_scale(*precision, *scale)?;
                 Ok(Arc::new(arr))
             },
             DataType::Dictionary(_, value_type) => {
-                [<$stat_type_prefix:lower _ statistics>](value_type, $iterator, $physical_type)
+                $dictionary_statistics(value_type, $iterator, $physical_type)
             },
             DataType::Utf8View => {
-                let iterator = [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator);
+                let iterator = $byte_array_iter::new($iterator);
                 let mut builder = StringViewBuilder::new();
                 for x in iterator {
                     let Some(x) = x else {
@@ -567,7 +618,7 @@ macro_rules! get_statistics {
                 Ok(Arc::new(builder.finish()))
             },
             DataType::BinaryView => {
-                let iterator = [<$stat_type_prefix ByteArrayStatsIterator>]::new($iterator);
+                let iterator = $byte_array_iter::new($iterator);
                 let mut builder = BinaryViewBuilder::new();
                 for x in iterator {
                     let Some(x) = x else {
@@ -597,22 +648,45 @@ macro_rules! get_statistics {
                 // don't know how to extract statistics, so return a null array
                 Ok(new_null_array($data_type, len))
             }
-        }}}
+        }
+    };
 }
 
 macro_rules! get_data_page_statistics {
-    ($stat_type_prefix: ident, $data_type: ident, $iterator: ident, $physical_type: ident) => {
-        {
-            let chunks: Vec<(usize, &ColumnIndexMetaData)> = $iterator.collect();
-            let capacity: usize = chunks.iter().map(|c| c.0).sum();
-            paste! {
-                match $data_type {
+    (Min, $data_type: ident, $iterator: ident, $physical_type: ident) => {
+        get_data_page_statistics!(
+            $data_type,
+            $iterator,
+            $physical_type,
+            min_values_iter,
+            min_page_statistics
+        )
+    };
+    (Max, $data_type: ident, $iterator: ident, $physical_type: ident) => {
+        get_data_page_statistics!(
+            $data_type,
+            $iterator,
+            $physical_type,
+            max_values_iter,
+            max_page_statistics
+        )
+    };
+    (
+        $data_type: ident,
+        $iterator: ident,
+        $physical_type: ident,
+        $values_iter: ident,
+        $page_statistics: ident
+    ) => {{
+        let chunks: Vec<(usize, Option<&ColumnIndexMetaData>)> = $iterator.collect();
+        let capacity: usize = chunks.iter().map(|c| c.0).sum();
+        match $data_type {
                 DataType::Boolean => {
                     let mut b = BooleanBuilder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::BOOLEAN(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                            Some(ColumnIndexMetaData::BOOLEAN(index)) => {
+                                for val in index.$values_iter() {
                                     b.append_option(val.copied());
                                 }
                             }
@@ -625,9 +699,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = UInt8Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.and_then(|&x| u8::try_from(x).ok())),
                                 );
                             }
@@ -640,9 +714,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = UInt16Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                     index.[<$stat_type_prefix:lower _values_iter>]()
+                                     index.$values_iter()
                                         .map(|val| val.and_then(|&x| u16::try_from(x).ok())),
                                 );
                             }
@@ -655,9 +729,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = UInt32Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|&x| x as u32)),
                                 );
                             }
@@ -670,9 +744,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = UInt64Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT64(index) => {
+                            Some(ColumnIndexMetaData::INT64(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|&x| x as u64)),
                                 );
                             }
@@ -685,9 +759,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = Int8Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.and_then(|&x| i8::try_from(x).ok())),
                                 );
                             }
@@ -700,9 +774,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = Int16Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.and_then(|&x| i16::try_from(x).ok())),
                                 );
                             }
@@ -715,9 +789,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = Int32Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.copied()),
                                 );
                             }
@@ -730,9 +804,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = Int64Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT64(index) => {
+                            Some(ColumnIndexMetaData::INT64(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.copied()),
                                 );
                             }
@@ -745,9 +819,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = Float16Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
+                            Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.and_then(|x| from_bytes_to_f16(x))),
                                 );
                             }
@@ -760,9 +834,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = Float32Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::FLOAT(index) => {
+                            Some(ColumnIndexMetaData::FLOAT(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.copied()),
                                 );
                             }
@@ -775,9 +849,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = Float64Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::DOUBLE(index) => {
+                            Some(ColumnIndexMetaData::DOUBLE(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.copied()),
                                 );
                             }
@@ -790,8 +864,8 @@ macro_rules! get_data_page_statistics {
                     let mut b = BinaryBuilder::with_capacity(capacity, capacity * 10);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                            Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
+                                for val in index.$values_iter() {
                                     b.append_option(val.map(|x| x.as_ref()));
                                 }
                             }
@@ -804,8 +878,8 @@ macro_rules! get_data_page_statistics {
                     let mut b = LargeBinaryBuilder::with_capacity(capacity, capacity * 10);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                            Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
+                                for val in index.$values_iter() {
                                     b.append_option(val.map(|x| x.as_ref()));
                                 }
                             }
@@ -818,8 +892,8 @@ macro_rules! get_data_page_statistics {
                     let mut b = StringBuilder::with_capacity(capacity, capacity * 10);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                            Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
+                                for val in index.$values_iter() {
                                     match val {
                                         Some(x) => match std::str::from_utf8(x.as_ref()) {
                                             Ok(s) => b.append_value(s),
@@ -838,8 +912,8 @@ macro_rules! get_data_page_statistics {
                     let mut b = LargeStringBuilder::with_capacity(capacity, capacity * 10);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                            Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
+                                for val in index.$values_iter() {
                                     match val {
                                         Some(x) => match std::str::from_utf8(x.as_ref()) {
                                             Ok(s) => b.append_value(s),
@@ -855,7 +929,7 @@ macro_rules! get_data_page_statistics {
                     Ok(Arc::new(b.finish()))
                 },
                 DataType::Dictionary(_, value_type) => {
-                    [<$stat_type_prefix:lower _ page_statistics>](value_type, chunks.into_iter(), $physical_type)
+                    $page_statistics(value_type, chunks.into_iter(), $physical_type)
                 },
                 DataType::Timestamp(unit, timezone) => {
                     match unit {
@@ -863,9 +937,9 @@ macro_rules! get_data_page_statistics {
                             let mut b = TimestampSecondBuilder::with_capacity(capacity);
                             for (len, index) in chunks {
                                 match index {
-                                    ColumnIndexMetaData::INT64(index) => {
+                                    Some(ColumnIndexMetaData::INT64(index)) => {
                                         b.extend_from_iter_option(
-                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                            index.$values_iter()
                                                 .map(|val| val.copied()),
                                         );
                                     }
@@ -878,9 +952,9 @@ macro_rules! get_data_page_statistics {
                             let mut b = TimestampMillisecondBuilder::with_capacity(capacity);
                             for (len, index) in chunks {
                                 match index {
-                                    ColumnIndexMetaData::INT64(index) => {
+                                    Some(ColumnIndexMetaData::INT64(index)) => {
                                         b.extend_from_iter_option(
-                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                            index.$values_iter()
                                                 .map(|val| val.copied()),
                                         );
                                     }
@@ -893,9 +967,9 @@ macro_rules! get_data_page_statistics {
                             let mut b = TimestampMicrosecondBuilder::with_capacity(capacity);
                             for (len, index) in chunks {
                                 match index {
-                                    ColumnIndexMetaData::INT64(index) => {
+                                    Some(ColumnIndexMetaData::INT64(index)) => {
                                         b.extend_from_iter_option(
-                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                            index.$values_iter()
                                                 .map(|val| val.copied()),
                                         );
                                     }
@@ -908,9 +982,9 @@ macro_rules! get_data_page_statistics {
                             let mut b = TimestampNanosecondBuilder::with_capacity(capacity);
                             for (len, index) in chunks {
                                 match index {
-                                    ColumnIndexMetaData::INT64(index) => {
+                                    Some(ColumnIndexMetaData::INT64(index)) => {
                                         b.extend_from_iter_option(
-                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                            index.$values_iter()
                                                 .map(|val| val.copied()),
                                         );
                                     }
@@ -925,9 +999,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = Date32Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.copied()),
                                 );
                             }
@@ -940,9 +1014,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = Date64Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|&x| (x as i64) * 24 * 60 * 60 * 1000)),
                                 );
                             }
@@ -955,9 +1029,9 @@ macro_rules! get_data_page_statistics {
                     let mut b = Date64Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT64(index) => {
+                            Some(ColumnIndexMetaData::INT64(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.copied()),
                                 );
                             }
@@ -970,27 +1044,27 @@ macro_rules! get_data_page_statistics {
                     let mut b = Decimal32Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.copied()),
                                 );
                             }
-                            ColumnIndexMetaData::INT64(index) => {
+                            Some(ColumnIndexMetaData::INT64(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.and_then(|&x| i32::try_from(x).ok())),
                                 );
                             }
-                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
+                            Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| from_bytes_to_i32(x.as_ref()))),
                                 );
                             }
-                            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
+                            Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| from_bytes_to_i32(x.as_ref()))),
                                 );
                             }
@@ -1003,27 +1077,27 @@ macro_rules! get_data_page_statistics {
                     let mut b = Decimal64Builder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| *x as i64)),
                                 );
                             }
-                            ColumnIndexMetaData::INT64(index) => {
+                            Some(ColumnIndexMetaData::INT64(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.copied()),
                                 );
                             }
-                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
+                            Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| from_bytes_to_i64(x.as_ref()))),
                                 );
                             }
-                            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
+                            Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| from_bytes_to_i64(x.as_ref()))),
                                 );
                             }
@@ -1036,27 +1110,27 @@ macro_rules! get_data_page_statistics {
                     let mut b = Decimal128Array::builder(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| *x as i128)),
                                 );
                             }
-                            ColumnIndexMetaData::INT64(index) => {
+                            Some(ColumnIndexMetaData::INT64(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| *x as i128)),
                                 );
                             }
-                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
+                            Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| from_bytes_to_i128(x.as_ref()))),
                                 );
                             }
-                            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
+                            Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| from_bytes_to_i128(x.as_ref()))),
                                 );
                             }
@@ -1069,27 +1143,27 @@ macro_rules! get_data_page_statistics {
                     let mut b = Decimal256Array::builder(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::INT32(index) => {
+                            Some(ColumnIndexMetaData::INT32(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| i256::from_i128(*x as i128))),
                                 );
                             }
-                            ColumnIndexMetaData::INT64(index) => {
+                            Some(ColumnIndexMetaData::INT64(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| i256::from_i128(*x as i128))),
                                 );
                             }
-                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
+                            Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| from_bytes_to_i256(x.as_ref()))),
                                 );
                             }
-                            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
+                            Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
                                 b.extend_from_iter_option(
-                                    index.[<$stat_type_prefix:lower _values_iter>]()
+                                    index.$values_iter()
                                         .map(|val| val.map(|x| from_bytes_to_i256(x.as_ref()))),
                                 );
                             }
@@ -1104,9 +1178,9 @@ macro_rules! get_data_page_statistics {
                             let mut b = Time32SecondBuilder::with_capacity(capacity);
                             for (len, index) in chunks {
                                 match index {
-                                    ColumnIndexMetaData::INT32(index) => {
+                                    Some(ColumnIndexMetaData::INT32(index)) => {
                                         b.extend_from_iter_option(
-                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                            index.$values_iter()
                                                 .map(|val| val.copied()),
                                         );
                                     }
@@ -1119,9 +1193,9 @@ macro_rules! get_data_page_statistics {
                             let mut b = Time32MillisecondBuilder::with_capacity(capacity);
                             for (len, index) in chunks {
                                 match index {
-                                    ColumnIndexMetaData::INT32(index) => {
+                                    Some(ColumnIndexMetaData::INT32(index)) => {
                                         b.extend_from_iter_option(
-                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                            index.$values_iter()
                                                 .map(|val| val.copied()),
                                         );
                                     }
@@ -1141,9 +1215,9 @@ macro_rules! get_data_page_statistics {
                             let mut b = Time64MicrosecondBuilder::with_capacity(capacity);
                             for (len, index) in chunks {
                                 match index {
-                                    ColumnIndexMetaData::INT64(index) => {
+                                    Some(ColumnIndexMetaData::INT64(index)) => {
                                         b.extend_from_iter_option(
-                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                            index.$values_iter()
                                                 .map(|val| val.copied()),
                                         );
                                     }
@@ -1156,9 +1230,9 @@ macro_rules! get_data_page_statistics {
                             let mut b = Time64NanosecondBuilder::with_capacity(capacity);
                             for (len, index) in chunks {
                                 match index {
-                                    ColumnIndexMetaData::INT64(index) => {
+                                    Some(ColumnIndexMetaData::INT64(index)) => {
                                         b.extend_from_iter_option(
-                                            index.[<$stat_type_prefix:lower _values_iter>]()
+                                            index.$values_iter()
                                                 .map(|val| val.copied()),
                                         );
                                     }
@@ -1176,8 +1250,8 @@ macro_rules! get_data_page_statistics {
                     let mut b = FixedSizeBinaryBuilder::with_capacity(capacity, *size);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                            Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)) => {
+                                for val in index.$values_iter() {
                                     match val {
                                         Some(v) => {
                                            if v.len() == *size as usize {
@@ -1199,8 +1273,8 @@ macro_rules! get_data_page_statistics {
                     let mut b = StringViewBuilder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                            Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
+                                for val in index.$values_iter() {
                                     match val {
                                         Some(x) => match std::str::from_utf8(x.as_ref()) {
                                             Ok(s) => b.append_value(s),
@@ -1221,8 +1295,8 @@ macro_rules! get_data_page_statistics {
                     let mut b = BinaryViewBuilder::with_capacity(capacity);
                     for (len, index) in chunks {
                         match index {
-                            ColumnIndexMetaData::BYTE_ARRAY(index) => {
-                                for val in index.[<$stat_type_prefix:lower _values_iter>]() {
+                            Some(ColumnIndexMetaData::BYTE_ARRAY(index)) => {
+                                for val in index.$values_iter() {
                                     match val {
                                         Some(v) => b.append_value(v.as_ref()),
                                         None => b.append_null(),
@@ -1254,8 +1328,7 @@ macro_rules! get_data_page_statistics {
                 },
             }
         }
-        }
-    }
+    };
 }
 /// Extracts the min statistics from an iterator of [`ParquetStatistics`] to an
 /// [`ArrayRef`]
@@ -1288,7 +1361,7 @@ pub(crate) fn min_page_statistics<'a, I>(
     physical_type: Option<PhysicalType>,
 ) -> Result<ArrayRef>
 where
-    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+    I: Iterator<Item = (usize, Option<&'a ColumnIndexMetaData>)>,
 {
     get_data_page_statistics!(Min, data_type, iterator, physical_type)
 }
@@ -1301,7 +1374,7 @@ pub(crate) fn max_page_statistics<'a, I>(
     physical_type: Option<PhysicalType>,
 ) -> Result<ArrayRef>
 where
-    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+    I: Iterator<Item = (usize, Option<&'a ColumnIndexMetaData>)>,
 {
     get_data_page_statistics!(Max, data_type, iterator, physical_type)
 }
@@ -1312,19 +1385,48 @@ where
 /// The returned Array is an [`UInt64Array`]
 pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<UInt64Array>
 where
-    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+    I: Iterator<Item = (usize, Option<&'a ColumnIndexMetaData>)>,
 {
     let chunks: Vec<_> = iterator.collect();
     let total_capacity: usize = chunks.iter().map(|(len, _)| *len).sum();
     let mut values = Vec::with_capacity(total_capacity);
     let mut nulls = NullBufferBuilder::new(total_capacity);
     for (len, index) in chunks {
-        match index.null_counts() {
-            Some(counts) => {
-                values.extend(counts.iter().map(|&x| x as u64));
+        match index {
+            Some(index) if index.null_counts().is_some() => {
+                values.extend(index.null_counts().unwrap().iter().map(|&x| x as u64));
                 nulls.append_n_non_nulls(len);
             }
-            None => {
+            _ => {
+                values.resize(values.len() + len, 0);
+                nulls.append_n_nulls(len);
+            }
+        }
+    }
+    let null_buffer = nulls.build();
+    let array = UInt64Array::new(values.into(), null_buffer);
+    Ok(array)
+}
+
+/// Extracts the NaN count statistics from an iterator
+/// of parquet page [`ColumnIndexMetaData`]'s to an [`ArrayRef`]
+///
+/// The returned Array is an [`UInt64Array`]
+pub(crate) fn nan_counts_page_statistics<'a, I>(iterator: I) -> Result<UInt64Array>
+where
+    I: Iterator<Item = (usize, Option<&'a ColumnIndexMetaData>)>,
+{
+    let chunks: Vec<_> = iterator.collect();
+    let total_capacity: usize = chunks.iter().map(|(len, _)| *len).sum();
+    let mut values = Vec::with_capacity(total_capacity);
+    let mut nulls = NullBufferBuilder::new(total_capacity);
+    for (len, index) in chunks {
+        match index {
+            Some(index) if index.nan_counts().is_some() => {
+                values.extend(index.nan_counts().unwrap().iter().map(|&x| x as u64));
+                nulls.append_n_non_nulls(len);
+            }
+            _ => {
                 values.resize(values.len() + len, 0);
                 nulls.append_n_nulls(len);
             }
@@ -1439,7 +1541,7 @@ impl<'a> StatisticsConverter<'a> {
         };
 
         let mut builder = UInt64Array::builder(10);
-        for metadata in metadatas.into_iter() {
+        for metadata in metadatas {
             let row_count = metadata.num_rows();
             let row_count: u64 = row_count.try_into().map_err(|e| {
                 arrow_err!(format!(
@@ -1686,15 +1788,58 @@ impl<'a> StatisticsConverter<'a> {
             .into_iter()
             .map(|x| x.column(parquet_index).statistics())
             .map(|s| {
-                s.and_then(|s| {
-                    if self.missing_null_counts_as_zero {
-                        Some(s.null_count_opt().unwrap_or(0))
-                    } else {
-                        s.null_count_opt()
-                    }
-                })
+                let s = s?;
+                if self.missing_null_counts_as_zero {
+                    Some(s.null_count_opt().unwrap_or(0))
+                } else {
+                    s.null_count_opt()
+                }
             });
         Ok(UInt64Array::from_iter(null_counts))
+    }
+
+    /// Extract the NaN counts from row group statistics in [`RowGroupMetaData`]
+    ///
+    /// See docs on [`Self::row_group_mins`] for details
+    pub fn row_group_nan_counts<I>(&self, metadatas: I) -> Result<UInt64Array>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let Some(parquet_index) = self.parquet_column_index else {
+            let num_row_groups = metadatas.into_iter().count();
+            return Ok(UInt64Array::from_iter(std::iter::repeat_n(
+                None,
+                num_row_groups,
+            )));
+        };
+
+        let nan_counts = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics())
+            .map(|s| s?.nan_count_opt());
+        Ok(UInt64Array::from_iter(nan_counts))
+    }
+
+    /// Extract the distinct counts from row group statistics in [`RowGroupMetaData`]
+    ///
+    /// See docs on [`Self::row_group_mins`] for details
+    pub fn row_group_distinct_counts<I>(&self, metadatas: I) -> Result<UInt64Array>
+    where
+        I: IntoIterator<Item = &'a RowGroupMetaData>,
+    {
+        let Some(parquet_index) = self.parquet_column_index else {
+            let num_row_groups = metadatas.into_iter().count();
+            return Ok(UInt64Array::from_iter(std::iter::repeat_n(
+                None,
+                num_row_groups,
+            )));
+        };
+
+        let distinct_counts = metadatas
+            .into_iter()
+            .map(|x| x.column(parquet_index).statistics())
+            .map(|s| s?.distinct_count_opt());
+        Ok(UInt64Array::from_iter(distinct_counts))
     }
 
     /// Extract the minimum values from Data Page statistics.
@@ -1702,7 +1847,7 @@ impl<'a> StatisticsConverter<'a> {
     /// In Parquet files, in addition to the Column Chunk level statistics
     /// (stored for each column for each row group) there are also
     /// optional statistics stored for each data page, as part of
-    /// the [`ParquetColumnIndex`].
+    /// the [`PageIndex`].
     ///
     /// Since a single Column Chunk is stored as one or more pages,
     /// page level statistics can prune at a finer granularity.
@@ -1713,11 +1858,7 @@ impl<'a> StatisticsConverter<'a> {
     ///
     /// # Parameters:
     ///
-    /// * `column_page_index`: The parquet column page indices, read from
-    ///   `ParquetMetaData` column_index
-    ///
-    /// * `column_offset_index`: The parquet column offset indices, read from
-    ///   `ParquetMetaData` offset_index
+    /// * `page_index`: The parquet page indices, read from `ParquetMetaData`
     ///
     /// * `row_group_indices`: The indices of the row groups, that are used to
     ///   extract the column page index and offset index on a per row group
@@ -1750,8 +1891,7 @@ impl<'a> StatisticsConverter<'a> {
     /// * the stored statistic value can not be converted to the requested type
     pub fn data_page_mins<I>(
         &self,
-        column_page_index: &ParquetColumnIndex,
-        column_offset_index: &ParquetOffsetIndex,
+        page_index: &PageIndex,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -1765,12 +1905,12 @@ impl<'a> StatisticsConverter<'a> {
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
-                &column_page_index[*rg_index][parquet_index];
-            let num_data_pages = &column_offset_index[*rg_index][parquet_index]
-                .page_locations()
-                .len();
+                page_index.column_index(*rg_index, parquet_index);
+            let num_data_pages = page_index
+                .num_data_pages(*rg_index, parquet_index)
+                .unwrap_or(0);
 
-            (*num_data_pages, column_page_index_per_row_group_per_column)
+            (num_data_pages, column_page_index_per_row_group_per_column)
         });
 
         min_page_statistics(data_type, iter, self.physical_type)
@@ -1781,8 +1921,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_maxes<I>(
         &self,
-        column_page_index: &ParquetColumnIndex,
-        column_offset_index: &ParquetOffsetIndex,
+        page_index: &PageIndex,
         row_group_indices: I,
     ) -> Result<ArrayRef>
     where
@@ -1796,12 +1935,12 @@ impl<'a> StatisticsConverter<'a> {
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
-                &column_page_index[*rg_index][parquet_index];
-            let num_data_pages = &column_offset_index[*rg_index][parquet_index]
-                .page_locations()
-                .len();
+                page_index.column_index(*rg_index, parquet_index);
+            let num_data_pages = page_index
+                .num_data_pages(*rg_index, parquet_index)
+                .unwrap_or(0);
 
-            (*num_data_pages, column_page_index_per_row_group_per_column)
+            (num_data_pages, column_page_index_per_row_group_per_column)
         });
 
         max_page_statistics(data_type, iter, self.physical_type)
@@ -1812,8 +1951,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_null_counts<I>(
         &self,
-        column_page_index: &ParquetColumnIndex,
-        column_offset_index: &ParquetOffsetIndex,
+        page_index: &PageIndex,
         row_group_indices: I,
     ) -> Result<UInt64Array>
     where
@@ -1826,14 +1964,42 @@ impl<'a> StatisticsConverter<'a> {
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
-                &column_page_index[*rg_index][parquet_index];
-            let num_data_pages = &column_offset_index[*rg_index][parquet_index]
-                .page_locations()
-                .len();
+                page_index.column_index(*rg_index, parquet_index);
+            let num_data_pages = page_index
+                .num_data_pages(*rg_index, parquet_index)
+                .unwrap_or(0);
 
-            (*num_data_pages, column_page_index_per_row_group_per_column)
+            (num_data_pages, column_page_index_per_row_group_per_column)
         });
         null_counts_page_statistics(iter)
+    }
+
+    /// Returns a [`UInt64Array`] with NaN counts for each data page.
+    ///
+    /// See docs on [`Self::data_page_mins`] for details.
+    pub fn data_page_nan_counts<I>(
+        &self,
+        page_index: &PageIndex,
+        row_group_indices: I,
+    ) -> Result<UInt64Array>
+    where
+        I: IntoIterator<Item = &'a usize>,
+    {
+        let Some(parquet_index) = self.parquet_column_index else {
+            let num_row_groups = row_group_indices.into_iter().count();
+            return Ok(UInt64Array::new_null(num_row_groups));
+        };
+
+        let iter = row_group_indices.into_iter().map(|rg_index| {
+            let column_page_index_per_row_group_per_column =
+                page_index.column_index(*rg_index, parquet_index);
+            let num_data_pages = page_index
+                .num_data_pages(*rg_index, parquet_index)
+                .unwrap_or(0);
+
+            (num_data_pages, column_page_index_per_row_group_per_column)
+        });
+        nan_counts_page_statistics(iter)
     }
 
     /// Returns a [`UInt64Array`] with row counts for each data page.
@@ -1855,7 +2021,7 @@ impl<'a> StatisticsConverter<'a> {
     /// See docs on [`Self::data_page_mins`] for details.
     pub fn data_page_row_counts<I>(
         &self,
-        column_offset_index: &ParquetOffsetIndex,
+        page_index: &PageIndex,
         row_group_metadatas: &'a [RowGroupMetaData],
         row_group_indices: I,
     ) -> Result<Option<UInt64Array>>
@@ -1872,7 +2038,10 @@ impl<'a> StatisticsConverter<'a> {
         let mut row_counts = Vec::new();
         let mut nulls = NullBufferBuilder::new(0);
         for rg_idx in row_group_indices {
-            let page_locations = &column_offset_index[*rg_idx][parquet_index].page_locations();
+            let Some(offset_index) = page_index.offset_index(*rg_idx, parquet_index) else {
+                continue;
+            };
+            let page_locations = offset_index.page_locations();
 
             let row_count_per_page = page_locations
                 .windows(2)

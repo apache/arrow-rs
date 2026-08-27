@@ -104,6 +104,14 @@
 //!     serde_json::json!({"a": 2}),
 //! );
 //! ```
+//!
+//! ## Customizing the encoder
+//!
+//! The output produced for each data type can be customized using
+//! [`WriterBuilder::with_encoder_factory`]. For example, you can override the
+//! default hex encoding of binary data to use `Base64` instead, or provide
+//! encoders for types with no built-in encoding, such as unions.
+//! See the example on [`EncoderFactory`].
 mod encoder;
 
 use std::{fmt::Debug, io::Write, sync::Arc};
@@ -1421,15 +1429,23 @@ mod tests {
     fn run_json_writer_map_with_keys(keys_array: ArrayRef) {
         let values_array = super::Int64Array::from(vec![10, 20, 30, 40, 50]);
 
-        let keys_field = Arc::new(Field::new("keys", keys_array.data_type().clone(), false));
-        let values_field = Arc::new(Field::new("values", DataType::Int64, false));
+        let keys_field = Arc::new(Field::new(
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
+            keys_array.data_type().clone(),
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            false,
+        ));
         let entry_struct = StructArray::from(vec![
             (keys_field, keys_array.clone()),
             (values_field, Arc::new(values_array) as ArrayRef),
         ]);
 
         let entries_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             entry_struct.data_type().clone(),
             false,
         ));
@@ -1513,6 +1529,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_write_multi_batches() {
         let test_file = "test/data/basic.json";
 
@@ -2302,13 +2319,12 @@ mod tests {
                 _options: &'a EncoderOptions,
             ) -> Result<Option<NullableEncoder<'a>>, ArrowError> {
                 let data_type = array.data_type();
-                let fields = match data_type {
-                    DataType::Union(fields, UnionMode::Sparse) => fields,
-                    _ => return Ok(None),
+                let DataType::Union(fields, UnionMode::Sparse) = data_type else {
+                    return Ok(None);
                 };
                 // check that the fields are supported
                 let fields = fields.iter().map(|(_, f)| f).collect::<Vec<_>>();
-                for f in fields.iter() {
+                for f in &fields {
                     match f.data_type() {
                         DataType::Null => {}
                         DataType::Int32 => {}
@@ -2595,11 +2611,7 @@ mod tests {
                 // 1. You can use information from Field to determine how to do the encoding.
                 // 2. For dictionary arrays the Field is always the outer field but the array may be the keys or values array
                 //    and thus the data type of `field` may not match the data type of `array`.
-                let padded = field
-                    .metadata()
-                    .get("padded")
-                    .map(|v| v == "true")
-                    .unwrap_or_default();
+                let padded = field.metadata().get("padded").is_some_and(|v| v == "true");
                 match (array.data_type(), padded) {
                     (DataType::Int32, true) => {
                         let array = array.as_primitive::<Int32Type>();

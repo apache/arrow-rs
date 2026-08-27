@@ -79,9 +79,9 @@ pub struct MapFieldNames {
 impl Default for MapFieldNames {
     fn default() -> Self {
         Self {
-            entry: "entries".to_string(),
-            key: "keys".to_string(),
-            value: "values".to_string(),
+            entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
+            key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
+            value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
         }
     }
 }
@@ -191,6 +191,12 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     }
 
     /// Builds the [`MapArray`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fields set with [`Self::with_keys_field`] or
+    /// [`Self::with_values_field`] do not match the data types of the key and value
+    /// builders, or if the keys contain nulls
     pub fn finish(&mut self) -> MapArray {
         let len = self.len();
         // Build the keys
@@ -204,6 +210,12 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     }
 
     /// Builds the [`MapArray`] without resetting the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fields set with [`Self::with_keys_field`] or
+    /// [`Self::with_values_field`] do not match the data types of the key and value
+    /// builders, or if the keys contain nulls
     pub fn finish_cloned(&self) -> MapArray {
         let len = self.len();
         // Build the keys
@@ -274,6 +286,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             .add_child_data(struct_array.into_data())
             .nulls(nulls);
 
+        // SAFETY: builder is constructed from valid offset buffer and struct child array maintained by the builder
         let array_data = unsafe { array_data.build_unchecked() };
 
         MapArray::from(array_data)
@@ -395,10 +408,14 @@ mod tests {
             map.data_type(),
             &DataType::Map(
                 Arc::new(Field::new(
-                    "entries",
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                     DataType::Struct(
                         vec![
-                            Arc::new(Field::new("keys", DataType::Int32, false)),
+                            Arc::new(Field::new(
+                                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                                DataType::Int32,
+                                false
+                            )),
                             value_field.clone()
                         ]
                         .into()
@@ -419,10 +436,14 @@ mod tests {
             map.data_type(),
             &DataType::Map(
                 Arc::new(Field::new(
-                    "entries",
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                     DataType::Struct(
                         vec![
-                            Arc::new(Field::new("keys", DataType::Int32, false)),
+                            Arc::new(Field::new(
+                                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                                DataType::Int32,
+                                false
+                            )),
                             value_field
                         ]
                         .into()
@@ -439,7 +460,7 @@ mod tests {
         let mut key_metadata = HashMap::new();
         key_metadata.insert("foo".to_string(), "bar".to_string());
         let key_field = Arc::new(
-            Field::new("keys", DataType::Int32, false).with_metadata(key_metadata.clone()),
+            Field::new("other_key", DataType::Int32, false).with_metadata(key_metadata.clone()),
         );
         let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
             .with_keys_field(key_field.clone());
@@ -453,14 +474,18 @@ mod tests {
             map.data_type(),
             &DataType::Map(
                 Arc::new(Field::new(
-                    "entries",
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                     DataType::Struct(
                         vec![
                             Arc::new(
-                                Field::new("keys", DataType::Int32, false)
+                                Field::new("other_key", DataType::Int32, false)
                                     .with_metadata(key_metadata)
                             ),
-                            Arc::new(Field::new("values", DataType::Int32, true))
+                            Arc::new(Field::new(
+                                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                                DataType::Int32,
+                                true
+                            ))
                         ]
                         .into()
                     ),
@@ -511,7 +536,11 @@ mod tests {
     #[should_panic(expected = "Keys field must not be nullable")]
     fn test_with_nullable_keys_field() {
         let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
-            .with_keys_field(Arc::new(Field::new("keys", DataType::Int32, true)));
+            .with_keys_field(Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )));
 
         builder.keys().append_value(1);
         builder.values().append_value(2);
@@ -524,7 +553,11 @@ mod tests {
     #[should_panic(expected = "Incorrect datatype")]
     fn test_keys_field_type_mismatch() {
         let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
-            .with_keys_field(Arc::new(Field::new("keys", DataType::Utf8, false)));
+            .with_keys_field(Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )));
 
         builder.keys().append_value(1);
         builder.values().append_value(2);

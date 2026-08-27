@@ -18,15 +18,9 @@
 //! Benchmarks for `arrow‑avro` **Decoder**
 //!
 
-extern crate apache_avro;
-extern crate arrow_avro;
-extern crate criterion;
-extern crate num_bigint;
-extern crate once_cell;
-extern crate uuid;
-
 use apache_avro::types::Value;
-use apache_avro::{Decimal, Schema as ApacheSchema, to_avro_datum};
+use apache_avro::writer::datum::GenericDatumWriter;
+use apache_avro::{Decimal, Schema as ApacheSchema};
 use arrow_avro::schema::{CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SINGLE_OBJECT_MAGIC};
 use arrow_avro::{reader::ReaderBuilder, schema::AvroSchema};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -77,9 +71,10 @@ fn encode_records_with_prefix(
     rows: impl Iterator<Item = Value>,
 ) -> Vec<u8> {
     let mut out = Vec::new();
+    let writer = GenericDatumWriter::builder(schema).build().unwrap();
     for v in rows {
         out.extend_from_slice(prefix);
-        out.extend_from_slice(&to_avro_datum(schema, v).expect("encode datum failed"));
+        out.extend(writer.write_value_to_vec(v).unwrap());
     }
     out
 }
@@ -346,6 +341,38 @@ fn gen_nested(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
     )
 }
 
+fn gen_sparse_nested(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
+        sc,
+        prefix,
+        (0..n).map(|i| {
+            let active = (i / 100) % 3;
+            let event = |slot| {
+                if slot == active {
+                    Value::Union(
+                        1,
+                        Box::new(Value::Record(vec![
+                            ("id".into(), Value::Long(i as i64)),
+                            ("name".into(), Value::String(format!("event-{i}"))),
+                            (
+                                "timestamp".into(),
+                                Value::Long(1_700_000_000_000 + i as i64),
+                            ),
+                        ])),
+                    )
+                } else {
+                    Value::Union(0, Box::new(Value::Null))
+                }
+            };
+            Value::Record(vec![
+                ("a".into(), event(0)),
+                ("b".into(), event(1)),
+                ("c".into(), event(2)),
+            ])
+        }),
+    )
+}
+
 const LARGE_BATCH: usize = 65_536;
 const SMALL_BATCH: usize = 4096;
 
@@ -417,6 +444,7 @@ const INTERVAL_SCHEMA_ENCODE: &str = r#"{"type":"record","name":"DurRec","fields
 const ENUM_SCHEMA: &str = r#"{"type":"record","name":"EnumRec","fields":[{"name":"field1","type":{"type":"enum","name":"MyEnum","symbols":["A","B","C"]}}]}"#;
 const MIX_SCHEMA: &str = r#"{"type":"record","name":"MixRec","fields":[{"name":"f1","type":"int"},{"name":"f2","type":"long"},{"name":"f3","type":"string"},{"name":"f4","type":"double"}]}"#;
 const NEST_SCHEMA: &str = r#"{"type":"record","name":"NestRec","fields":[{"name":"sub","type":{"type":"record","name":"Sub","fields":[{"name":"x","type":"int"},{"name":"y","type":"string"}]}}]}"#;
+const SPARSE_NEST_SCHEMA: &str = r#"{"type":"record","name":"SparseNestRec","fields":[{"name":"a","type":["null",{"type":"record","name":"Event","fields":[{"name":"id","type":"long"},{"name":"name","type":"string"},{"name":"timestamp","type":"long"}]}]},{"name":"b","type":["null","Event"]},{"name":"c","type":["null","Event"]}]}"#;
 
 macro_rules! dataset {
     ($name:ident, $schema_json:expr, $gen_fn:ident) => {
@@ -475,6 +503,7 @@ dataset!(INTERVAL_DATA, INTERVAL_SCHEMA_ENCODE, gen_interval);
 dataset!(ENUM_DATA, ENUM_SCHEMA, gen_enum);
 dataset!(MIX_DATA, MIX_SCHEMA, gen_mixed);
 dataset!(NEST_DATA, NEST_SCHEMA, gen_nested);
+dataset!(SPARSE_NEST_DATA, SPARSE_NEST_SCHEMA, gen_sparse_nested);
 
 fn bench_with_decoder<F>(
     c: &mut Criterion,
@@ -588,6 +617,9 @@ fn criterion_benches(c: &mut Criterion) {
         });
         bench_with_decoder(c, "Nested(Struct)", &NEST_DATA, &SIZES, || {
             new_decoder(NEST_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "SparseNested(Struct)", &SPARSE_NEST_DATA, &SIZES, || {
+            new_decoder(SPARSE_NEST_SCHEMA, batch_size, false)
         });
     }
 }

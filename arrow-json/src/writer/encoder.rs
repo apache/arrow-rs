@@ -139,10 +139,15 @@ impl EncoderOptions {
     }
 }
 
-/// A trait to create custom encoders for specific data types.
+/// Creates custom encoders for specific data types when writing JSON data.
 ///
-/// This allows overriding the default encoders for specific data types,
-/// or adding new encoders for custom data types.
+/// This trait allows customizing JSON encoding for specific data types,
+/// or adding new encoders for unsupported or custom data types.
+///
+/// You can register an implementation of this trait using
+/// [`WriterBuilder::with_encoder_factory`].
+///
+/// [`WriterBuilder::with_encoder_factory`]: crate::writer::WriterBuilder::with_encoder_factory
 ///
 /// # Examples
 ///
@@ -242,7 +247,7 @@ pub trait EncoderFactory: std::fmt::Debug + Send + Sync {
     /// Note that the type of the field may not match the type of the array: for dictionary arrays unless the top-level dictionary is handled this
     /// will be called again for the keys and values of the dictionary, at which point the field type will still be the outer dictionary type but the
     /// array will have a different type.
-    /// For example, `field`` might have the type `Dictionary(i32, Utf8)` but `array` will be `Utf8`.
+    /// For example, `field` might have the type `Dictionary(i32, Utf8)` but `array` will be `Utf8`.
     fn make_default_encoder<'a>(
         &self,
         _field: &'a FieldRef,
@@ -262,21 +267,28 @@ pub struct NullableEncoder<'a> {
 
 impl<'a> NullableEncoder<'a> {
     /// Create a new encoder with a null buffer.
+    #[inline]
     pub fn new(encoder: Box<dyn Encoder + 'a>, nulls: Option<NullBuffer>) -> Self {
         Self { encoder, nulls }
     }
 
     /// Encode the value at index `idx` to `out`.
+    #[inline]
     pub fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         self.encoder.encode(idx, out)
     }
 
     /// Returns whether the value at index `idx` is null.
+    #[inline]
     pub fn is_null(&self, idx: usize) -> bool {
-        self.nulls.as_ref().is_some_and(|nulls| nulls.is_null(idx))
+        match self.nulls {
+            Some(ref nulls) => nulls.is_null(idx),
+            None => false,
+        }
     }
 
     /// Returns whether the encoder has any nulls.
+    #[inline]
     pub fn has_nulls(&self) -> bool {
         match self.nulls {
             Some(ref nulls) => nulls.null_count() > 0,
@@ -286,6 +298,7 @@ impl<'a> NullableEncoder<'a> {
 }
 
 impl Encoder for NullableEncoder<'_> {
+    #[inline]
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         self.encoder.encode(idx, out)
     }
@@ -317,10 +330,10 @@ pub fn make_encoder<'a>(
         }};
     }
 
-    if let Some(factory) = options.encoder_factory() {
-        if let Some(encoder) = factory.make_default_encoder(field, array, options)? {
-            return Ok(encoder);
-        }
+    if let Some(factory) = options.encoder_factory()
+        && let Some(encoder) = factory.make_default_encoder(field, array, options)?
+    {
+        return Ok(encoder);
     }
 
     let nulls = array.nulls().cloned();
@@ -412,8 +425,14 @@ pub fn make_encoder<'a>(
             let array = array.as_struct();
             let encoders = fields.iter().zip(array.columns()).map(|(field, array)| {
                 let encoder = make_encoder(field, array, options)?;
-                Ok(FieldEncoder{
-                    field: field.clone(),
+
+                // For typical ASCII names, this will be the exact length (includes 2x quotes, 1x colon).
+                let mut field_name = Vec::with_capacity(field.name().len() + 3);
+                encode_string(field.name(), &mut field_name);
+                field_name.push(b':');
+
+                Ok(FieldEncoder {
+                    field_name,
                     encoder,
                 })
             }).collect::<Result<Vec<_>, ArrowError>>()?;
@@ -471,11 +490,12 @@ fn encode_binary(bytes: &[u8], out: &mut Vec<u8>) {
 }
 
 struct FieldEncoder<'a> {
-    field: FieldRef,
+    field_name: Vec<u8>,
     encoder: NullableEncoder<'a>,
 }
 
 impl FieldEncoder<'_> {
+    #[inline]
     fn is_null(&self, idx: usize) -> bool {
         self.encoder.is_null(idx)
     }
@@ -497,7 +517,7 @@ impl Encoder for StructArrayEncoder<'_> {
         // Nulls can only be dropped in explicit mode
         let drop_nulls = (self.struct_mode == StructMode::ObjectOnly) && !self.explicit_nulls;
 
-        for field_encoder in self.encoders.iter_mut() {
+        for field_encoder in &mut self.encoders {
             let is_null = field_encoder.is_null(idx);
             if is_null && drop_nulls {
                 continue;
@@ -509,8 +529,7 @@ impl Encoder for StructArrayEncoder<'_> {
             is_first = false;
 
             if self.struct_mode == StructMode::ObjectOnly {
-                encode_string(field_encoder.field.name(), out);
-                out.push(b':');
+                out.extend_from_slice(&field_encoder.field_name);
             }
 
             if is_null {

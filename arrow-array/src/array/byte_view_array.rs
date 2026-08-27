@@ -213,15 +213,15 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
         T::validate(&views, &buffers)?;
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != views.len() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}ViewArray, expected {} got {}",
-                    T::PREFIX,
-                    views.len(),
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != views.len()
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}ViewArray, expected {} got {}",
+                T::PREFIX,
+                views.len(),
+                n.len(),
+            )));
         }
 
         Ok(Self {
@@ -238,14 +238,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// # Safety
     ///
     /// Safe if [`Self::try_new`] would not error
-    pub unsafe fn new_unchecked<U>(
+    pub unsafe fn new_unchecked(
         views: ScalarBuffer<u128>,
-        buffers: U,
+        buffers: Arc<[Buffer]>,
         nulls: Option<NullBuffer>,
-    ) -> Self
-    where
-        U: Into<Arc<[Buffer]>>,
-    {
+    ) -> Self {
         if cfg!(feature = "force_validate") {
             return Self::new(views, buffers, nulls);
         }
@@ -254,7 +251,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             data_type: T::DATA_TYPE,
             phantom: Default::default(),
             views,
-            buffers: buffers.into(),
+            buffers,
             nulls,
         }
     }
@@ -300,9 +297,13 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         &self.views
     }
 
-    /// Returns the buffers storing string data
+    /// Returns the shared collection of buffers storing non-inline string or binary data.
+    ///
+    /// The returned `Arc` can be cloned to share the buffers with another array without
+    /// allocating a new collection or cloning the individual buffers. To consume this
+    /// array and take ownership of its buffers, use [`Self::into_parts`].
     #[inline]
-    pub fn data_buffers(&self) -> &[Buffer] {
+    pub fn data_buffers(&self) -> &Arc<[Buffer]> {
         &self.buffers
     }
 
@@ -357,7 +358,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     pub unsafe fn inline_value(view: &u128, len: usize) -> &[u8] {
         debug_assert!(len <= MAX_INLINE_VIEW_LEN as usize);
         unsafe {
-            std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
+            std::slice::from_raw_parts(
+                std::ptr::from_ref::<u128>(view)
+                    .cast::<u8>()
+                    .wrapping_add(4),
+                len,
+            )
         }
     }
 
@@ -459,6 +465,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: T::DATA_TYPE,
@@ -513,6 +522,19 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Note: this function does not attempt to canonicalize / deduplicate values. For this
     /// feature see  [`GenericByteViewBuilder::with_deduplicate_strings`].
     pub fn gc(&self) -> Self {
+        // A single Arrow data buffer is addressed by a `u32` offset, so no
+        // output buffer may exceed `i32::MAX` bytes. Above that the data is
+        // split across multiple buffers (the "slow path").
+        self.gc_with_max_buffer_size(i32::MAX as usize)
+    }
+
+    /// Like [`Self::gc`], but with a configurable maximum output buffer size.
+    ///
+    /// `gc` always uses `i32::MAX` (the largest a single Arrow buffer can be).
+    /// This method exists so the multi-buffer split path — which `gc` only
+    /// reaches once a column references more than 2 GiB of non-inline data —
+    /// can be exercised in tests with a small threshold and tiny inputs.
+    fn gc_with_max_buffer_size(&self, max_buffer_size: usize) -> Self {
         // 1) Read basic properties once
         let len = self.len(); // number of elements
         let nulls = self.nulls().cloned(); // reuse & clone existing null bitmap
@@ -522,7 +544,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             return unsafe {
                 GenericByteViewArray::new_unchecked(
                     self.views().clone(),
-                    vec![], // empty data blocks
+                    Arc::from([]), // empty data blocks
                     nulls,
                 )
             };
@@ -537,13 +559,13 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             return unsafe {
                 GenericByteViewArray::new_unchecked(
                     self.views().clone(),
-                    vec![], // empty data blocks
+                    Arc::from([]), // empty data blocks
                     nulls,
                 )
             };
         }
 
-        let (views_buf, data_blocks) = if total_large < i32::MAX as usize {
+        let (views_buf, data_blocks) = if total_large <= max_buffer_size {
             // fast path, the entire data fits in a single buffer
             // 3) Allocate exactly capacity for all non-inline data
             let mut data_buf = Vec::with_capacity(total_large);
@@ -556,66 +578,78 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             let data_blocks = vec![data_block];
             (views_buf, data_blocks)
         } else {
-            // slow path, need to split into multiple buffers
+            // slow path: the non-inline data does not fit in a single buffer
+            // (a buffer offset is a `u32`, so no buffer may exceed `i32::MAX`),
+            // so it must be split across several buffers.
 
+            // A contiguous run of views destined for one output buffer.
             struct GcCopyGroup {
                 total_buffer_bytes: usize,
                 total_len: usize,
             }
 
-            impl GcCopyGroup {
-                fn new(total_buffer_bytes: u32, total_len: usize) -> Self {
-                    Self {
-                        total_buffer_bytes: total_buffer_bytes as usize,
-                        total_len,
-                    }
-                }
-            }
-
-            let mut groups = Vec::new();
-            let mut current_length = 0;
+            // First pass: partition the views into contiguous groups, each of
+            // which fits within one output buffer. `total_len` counts *all*
+            // views in the group, not just the non-inline ones — this is
+            // essential for correctness, as gc must preserve the row count.
+            // Inline views reference no buffer and are copied unchanged, but
+            // they still belong to a group and must be accounted for. Recording
+            // each group's exact byte size lets the second pass size every
+            // buffer precisely, with no over-reservation or trailing waste.
+            let mut groups: Vec<GcCopyGroup> = Vec::new();
+            // Bytes accumulated for the current group. A view length is a `u32`
+            // and a single value may be larger than `max_buffer_size`, so the
+            // running sum is kept in `u64` to stay within the addressable
+            // buffer-offset space without wrapping.
+            let mut current_length: u64 = 0;
             let mut current_elements = 0;
 
             for view in self.views() {
-                let len = *view as u32;
-                if len > MAX_INLINE_VIEW_LEN {
-                    if current_length + len > i32::MAX as u32 {
-                        // Start a new group
-                        groups.push(GcCopyGroup::new(current_length, current_elements));
+                let view_len = *view as u32;
+                if view_len > MAX_INLINE_VIEW_LEN {
+                    // Seal the current group before adding this view would push
+                    // its buffer past `max_buffer_size`.
+                    if current_length + view_len as u64 > max_buffer_size as u64 {
+                        groups.push(GcCopyGroup {
+                            total_buffer_bytes: current_length as usize,
+                            total_len: current_elements,
+                        });
                         current_length = 0;
                         current_elements = 0;
                     }
-                    current_length += len;
-                    current_elements += 1;
+                    current_length += view_len as u64;
                 }
+                current_elements += 1;
             }
             if current_elements != 0 {
-                groups.push(GcCopyGroup::new(current_length, current_elements));
+                groups.push(GcCopyGroup {
+                    total_buffer_bytes: current_length as usize,
+                    total_len: current_elements,
+                });
             }
-            debug_assert!(groups.len() <= i32::MAX as usize);
+            debug_assert!(i32::try_from(groups.len()).is_ok());
 
-            // 3) Copy the buffers group by group
+            // Second pass: copy each group into an exactly-sized buffer.
             let mut views_buf = Vec::with_capacity(len);
             let mut data_blocks = Vec::with_capacity(groups.len());
-
             let mut current_view_idx = 0;
 
-            for (group_idx, gc_copy_group) in groups.iter().enumerate() {
-                let mut data_buf = Vec::with_capacity(gc_copy_group.total_buffer_bytes);
+            for (group_idx, group) in groups.iter().enumerate() {
+                let mut data_buf = Vec::with_capacity(group.total_buffer_bytes);
 
-                // Directly push views to avoid intermediate Vec allocation
-                let new_views = (current_view_idx..current_view_idx + gc_copy_group.total_len).map(
-                    |view_idx| {
-                        // safety: the view index came from iterating over valid range
+                // Directly push views to avoid an intermediate Vec allocation.
+                let new_views =
+                    (current_view_idx..current_view_idx + group.total_len).map(|view_idx| {
+                        // SAFETY: `view_idx` came from iterating a valid range
+                        // within `len`, and every view refers to valid data.
                         unsafe {
                             self.copy_view_to_buffer(view_idx, group_idx as i32, &mut data_buf)
                         }
-                    },
-                );
+                    });
                 views_buf.extend(new_views);
 
                 data_blocks.push(Buffer::from_vec(data_buf));
-                current_view_idx += gc_copy_group.total_len;
+                current_view_idx += group.total_len;
             }
             (views_buf, data_blocks)
         };
@@ -624,7 +658,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let views_scalar = ScalarBuffer::from(views_buf);
 
         // SAFETY: views_scalar, data_blocks, and nulls are correctly aligned and sized
-        unsafe { GenericByteViewArray::new_unchecked(views_scalar, data_blocks, nulls) }
+        unsafe { GenericByteViewArray::new_unchecked(views_scalar, data_blocks.into(), nulls) }
     }
 
     /// Copy the i‑th view into `data_buf` if it refers to an out‑of‑line buffer.
@@ -1190,7 +1224,7 @@ mod tests {
     use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
     use arrow_schema::DataType;
     use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::str::from_utf8;
 
     const BLOCK_SIZE: u32 = 8;
@@ -1485,7 +1519,7 @@ mod tests {
             } else {
                 // random length between 0 and twice the inline limit
                 let len = rng.random_range(0..(MAX_INLINE_VIEW_LEN * 2));
-                let s: String = "A".repeat(len as usize);
+                let s = "A".repeat(len as usize);
                 builder.append_option(Some(&s));
                 original.push(Some(s));
             }
@@ -1540,8 +1574,7 @@ mod tests {
         let total = array.total_buffer_bytes_used();
         assert!(
             total > u32::MAX as usize,
-            "Expected total non-inline bytes to exceed 4 GiB, got {}",
-            total
+            "Expected total non-inline bytes to exceed 4 GiB, got {total}"
         );
 
         // Run gc and verify correctness
@@ -1558,6 +1591,106 @@ mod tests {
         array.iter().zip(gced.iter()).for_each(|(orig, got)| {
             assert_eq!(orig, got, "Value mismatch after gc on huge array");
         });
+    }
+
+    #[test]
+    fn test_gc_slow_path_preserves_inline_views() {
+        // Regression test for a bug in the multi-buffer "slow path" of `gc()`,
+        // which `gc` only reaches once a view column references more than
+        // `i32::MAX` (~2.1 GiB) of non-inline data. That path grouped and copied
+        // only the *non-inline* views and dropped every inline (short) view,
+        // returning an array shorter than its input. GC is a pure size
+        // optimisation and must never change the row count.
+        //
+        // Rather than allocate gigabytes to hit the real threshold, drive the
+        // same code via `gc_with_max_buffer_size` with a tiny cap so a handful
+        // of bytes forces the buffer split. Inline, large, and null views are
+        // interspersed so the split lands between and around inline entries.
+        let long = "this is definitely longer than twelve bytes"; // non-inline
+        let test_data = [
+            Some("short"),      // inline
+            Some(long),         // large
+            Some("s"),          // inline
+            Some(long),         // large
+            None,               // null
+            Some(long),         // large
+            Some("also short"), // inline
+            Some(long),         // large
+            Some("tail"),       // inline
+        ];
+        let array: StringViewArray = test_data.into_iter().collect();
+
+        // Cap each output buffer at ~1.5 large values so the copy is forced to
+        // split across several buffers, exercising the slow path with no
+        // multi-GiB allocation.
+        let max_buffer_size = long.len() + long.len() / 2;
+        let gced = array.gc_with_max_buffer_size(max_buffer_size);
+
+        // The core invariant: gc preserves the row count.
+        assert_eq!(gced.len(), array.len(), "gc changed the row count");
+        // The split must actually have happened, otherwise we'd be exercising
+        // the fast path and could not catch the inline-dropping regression.
+        assert!(
+            gced.data_buffers().len() > 1,
+            "expected output split across multiple buffers, got {}",
+            gced.data_buffers().len()
+        );
+        // No output buffer may exceed the cap.
+        for buf in gced.data_buffers().iter() {
+            assert!(buf.len() <= max_buffer_size, "buffer exceeded max size");
+        }
+        // Every value (inline, large, and null) is unchanged and in order.
+        array
+            .iter()
+            .zip(gced.iter())
+            .enumerate()
+            .for_each(|(i, (a, b))| {
+                assert_eq!(a, b, "value mismatch at index {i} after gc");
+            });
+        // The result round-trips through full validation.
+        gced.to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_gc_slow_path_value_larger_than_buffer() {
+        // A single non-inline value can be larger than one output buffer (a view
+        // length is a `u32`, so a value may exceed `max_buffer_size`). Such a
+        // value cannot be split, so it occupies a buffer of its own; gc must
+        // still preserve every row and produce a valid array.
+        //
+        // The real threshold needs a multi-GiB value, so drive the same logic
+        // with a `max_buffer_size` smaller than the value length.
+        let big = "x".repeat(64); // non-inline, larger than the cap below
+        let test_data = [
+            Some("short"),      // inline
+            Some(big.as_str()), // larger than max_buffer_size
+            None,               // null
+            Some("tail"),       // inline
+            Some(big.as_str()), // larger than max_buffer_size
+        ];
+        let array: StringViewArray = test_data.into_iter().collect();
+
+        let max_buffer_size = 16; // smaller than a single `big` value
+        let gced = array.gc_with_max_buffer_size(max_buffer_size);
+
+        // Row count is preserved.
+        assert_eq!(gced.len(), array.len(), "gc changed the row count");
+        // Each oversized value lands in its own buffer, so the copy splits.
+        assert!(
+            gced.data_buffers().len() > 1,
+            "expected output split across multiple buffers, got {}",
+            gced.data_buffers().len()
+        );
+        // Every value is unchanged and in order.
+        array
+            .iter()
+            .zip(gced.iter())
+            .enumerate()
+            .for_each(|(i, (a, b))| {
+                assert_eq!(a, b, "value mismatch at index {i} after gc");
+            });
+        // The result round-trips through full validation.
+        gced.to_data().validate_full().unwrap();
     }
 
     #[test]

@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use arrow_array::builder::StringViewBuilder;
 use arrow_array::{ArrayRef, Float64Array, Int32Array, RecordBatch, StringViewArray};
+use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -28,7 +29,7 @@ use parquet::arrow::arrow_reader::{
     ParquetRecordBatchReaderBuilder, RowSelection, RowSelectionPolicy, RowSelector,
 };
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 const TOTAL_ROWS: usize = 1 << 20;
 const BATCH_SIZE: usize = 1 << 10;
@@ -36,7 +37,8 @@ const BASE_SEED: u64 = 0xA55AA55A;
 const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
 const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
 const UTF8VIEW_LENS: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
-const BENCH_MODES: &[BenchMode] = &[BenchMode::ReadSelector, BenchMode::ReadMask];
+const BENCH_MODES: &[BenchMode] = &[BenchMode::Selector, BenchMode::Mask, BenchMode::Auto];
+const BACKINGS: &[Backing] = &[Backing::Selectors, Backing::Mask];
 
 struct DataProfile {
     name: &'static str,
@@ -179,7 +181,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     for (offset, &column_count) in COLUMN_WIDTHS.iter().enumerate() {
         let parquet_data = write_parquet_batch(build_int32_columns_batch(TOTAL_ROWS, column_count));
-        let variant_label = format!("C{:02}", column_count);
+        let variant_label = format!("C{column_count:02}");
         bench_over_lengths(
             c,
             "columns",
@@ -193,7 +195,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for (offset, &len) in UTF8VIEW_LENS.iter().enumerate() {
         let batch = build_utf8view_batch_with_len(TOTAL_ROWS, len);
         let parquet_data = write_parquet_batch(batch);
-        let variant_label = format!("utf8view-L{:03}", len);
+        let variant_label = format!("utf8view-L{len:03}");
         bench_over_lengths(
             c,
             "utf8view-len",
@@ -228,22 +230,25 @@ fn bench_over_lengths(
             (stats.select_ratio * 100.0).round() as u32
         );
 
-        let bench_input = BenchInput {
-            parquet_data: parquet_data.clone(),
-            selection,
-        };
+        for &backing in BACKINGS {
+            let bench_input = BenchInput {
+                parquet_data: parquet_data.clone(),
+                selection: backing.convert(&selection),
+            };
 
-        for &mode in BENCH_MODES {
-            c.bench_with_input(
-                BenchmarkId::new(mode.label(), &suffix),
-                &bench_input,
-                |b, input| {
-                    b.iter(|| {
-                        let total = run_read(&input.parquet_data, &input.selection, mode.policy());
-                        hint::black_box(total);
-                    });
-                },
-            );
+            for &mode in BENCH_MODES {
+                c.bench_with_input(
+                    BenchmarkId::new(backing.function_name(mode), &suffix),
+                    &bench_input,
+                    |b, input| {
+                        b.iter(|| {
+                            let total =
+                                run_read(&input.parquet_data, &input.selection, mode.policy());
+                            hint::black_box(total);
+                        });
+                    },
+                );
+            }
         }
     }
 }
@@ -311,7 +316,7 @@ fn build_utf8view_batch(total_rows: usize) -> RecordBatch {
 
 fn build_utf8view_batch_with_len(total_rows: usize, len: usize) -> RecordBatch {
     let mut builder = StringViewBuilder::new();
-    let value: String = "a".repeat(len);
+    let value = "a".repeat(len);
     for _ in 0..total_rows {
         builder.append_value(&value);
     }
@@ -326,7 +331,7 @@ fn build_int32_columns_batch(total_rows: usize, num_columns: usize) -> RecordBat
     let mut fields = Vec::with_capacity(num_columns);
     let mut columns = Vec::with_capacity(num_columns);
     for idx in 0..num_columns {
-        fields.push(Field::new(format!("value{}", idx), DataType::Int32, false));
+        fields.push(Field::new(format!("value{idx}"), DataType::Int32, false));
         columns.push(base_values.clone());
     }
     let schema = Arc::new(Schema::new(fields));
@@ -448,22 +453,57 @@ fn sample_length(mean: f64, distribution: &RunDistribution, rng: &mut StdRng) ->
 
 #[derive(Clone, Copy)]
 enum BenchMode {
-    ReadSelector,
-    ReadMask,
+    Selector,
+    Mask,
+    Auto,
 }
 
 impl BenchMode {
     fn label(self) -> &'static str {
         match self {
-            BenchMode::ReadSelector => "read_selector",
-            BenchMode::ReadMask => "read_mask",
+            BenchMode::Selector => "read_selector",
+            BenchMode::Mask => "read_mask",
+            BenchMode::Auto => "read_auto",
         }
     }
 
     fn policy(self) -> RowSelectionPolicy {
         match self {
-            BenchMode::ReadSelector => RowSelectionPolicy::Selectors,
-            BenchMode::ReadMask => RowSelectionPolicy::Mask,
+            BenchMode::Selector => RowSelectionPolicy::Selectors,
+            BenchMode::Mask => RowSelectionPolicy::Mask,
+            BenchMode::Auto => RowSelectionPolicy::default(),
+        }
+    }
+}
+
+/// Which representation backs the input [`RowSelection`] handed to the reader.
+#[derive(Clone, Copy)]
+enum Backing {
+    Selectors,
+    Mask,
+}
+
+impl Backing {
+    /// Benchmark function name for this backing/mode pair. Selector-backed
+    /// inputs keep the historical names so results stay comparable with runs
+    /// from before mask-backed selections existed.
+    fn function_name(self, mode: BenchMode) -> String {
+        match self {
+            Backing::Selectors => mode.label().to_string(),
+            Backing::Mask => format!("{}_mask_backed", mode.label()),
+        }
+    }
+
+    fn convert(self, selection: &RowSelection) -> RowSelection {
+        match self {
+            Backing::Selectors => selection.clone(),
+            Backing::Mask => {
+                let mut builder = BooleanBufferBuilder::new(TOTAL_ROWS);
+                for selector in selection.iter() {
+                    builder.append_n(selector.row_count, !selector.skip);
+                }
+                RowSelection::from_boolean_buffer(builder.finish())
+            }
         }
     }
 }

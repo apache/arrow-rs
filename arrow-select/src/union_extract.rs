@@ -77,9 +77,8 @@ use std::sync::Arc;
 /// assert_eq!(*extracted, Int32Array::from(vec![Some(1), None, None, Some(3), None]));
 /// ```
 pub fn union_extract(union_array: &UnionArray, target: &str) -> Result<ArrayRef, ArrowError> {
-    let fields = match union_array.data_type() {
-        DataType::Union(fields, _) => fields,
-        _ => unreachable!(),
+    let DataType::Union(fields, _) = union_array.data_type() else {
+        unreachable!()
     };
 
     let (target_type_id, _) = fields
@@ -104,9 +103,8 @@ pub fn union_extract_by_id(
     union_array: &UnionArray,
     target_type_id: i8,
 ) -> Result<ArrayRef, ArrowError> {
-    let fields = match union_array.data_type() {
-        DataType::Union(fields, _) => fields,
-        _ => unreachable!(),
+    let DataType::Union(fields, _) = union_array.data_type() else {
+        unreachable!()
     };
 
     if fields.iter().all(|(id, _)| id != target_type_id) {
@@ -442,6 +440,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_eq_scalar() {
         //multiple all equal chunks, so it's loop and sum logic it's tested
         //multiple chunks after, so it's loop logic it's tested

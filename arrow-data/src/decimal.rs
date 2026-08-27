@@ -896,7 +896,7 @@ pub const MAX_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
     9, 99, 999, 9999, 99999, 999999, 9999999, 99999999, 999999999,
 ];
 
-/// `MIN_DECIMAL32_FOR_EACH_PRECISION[p]` holds the minimum `ialue that can
+/// `MIN_DECIMAL32_FOR_EACH_PRECISION[p]` holds the minimum value that can
 /// be stored in a [`Decimal32`] value of precision `p`.
 ///
 /// # Notes
@@ -940,8 +940,7 @@ pub fn validate_decimal32_precision(
             scale,
         );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{unscaled_value} is too large to store in a Decimal32 of precision {precision}. Max is {}",
-            unscale_max_value
+            "{unscaled_value} is too large to store in a Decimal32 of precision {precision}. Max is {unscale_max_value}"
         )))
     } else if value < MIN_DECIMAL32_FOR_EACH_PRECISION[precision as usize] {
         let unscaled_value =
@@ -952,8 +951,7 @@ pub fn validate_decimal32_precision(
             scale,
         );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{unscaled_value} is too small to store in a Decimal32 of precision {precision}. Min is {}",
-            unscale_min_value
+            "{unscaled_value} is too small to store in a Decimal32 of precision {precision}. Min is {unscale_min_value}"
         )))
     } else {
         Ok(())
@@ -995,8 +993,7 @@ pub fn validate_decimal64_precision(
             scale,
         );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{unscaled_value} is too large to store in a Decimal64 of precision {precision}. Max is {}",
-            unscaled_max_value
+            "{unscaled_value} is too large to store in a Decimal64 of precision {precision}. Max is {unscaled_max_value}"
         )))
     } else if value < MIN_DECIMAL64_FOR_EACH_PRECISION[precision as usize] {
         let unscaled_value =
@@ -1007,8 +1004,7 @@ pub fn validate_decimal64_precision(
             scale,
         );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{unscaled_value} is too small to store in a Decimal64 of precision {precision}. Min is {}",
-            unscaled_min_value
+            "{unscaled_value} is too small to store in a Decimal64 of precision {precision}. Min is {unscaled_min_value}"
         )))
     } else {
         Ok(())
@@ -1046,8 +1042,7 @@ pub fn validate_decimal_precision(value: i128, precision: u8, scale: i8) -> Resu
             scale,
         );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{unscaled_value} is too large to store in a Decimal128 of precision {precision}. Max is {}",
-            unscaled_max_value
+            "{unscaled_value} is too large to store in a Decimal128 of precision {precision}. Max is {unscaled_max_value}"
         )))
     } else if value < MIN_DECIMAL128_FOR_EACH_PRECISION[precision as usize] {
         let unscaled_value =
@@ -1058,8 +1053,7 @@ pub fn validate_decimal_precision(value: i128, precision: u8, scale: i8) -> Resu
             scale,
         );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{unscaled_value} is too small to store in a Decimal128 of precision {precision}. Min is {}",
-            unscaled_min_value
+            "{unscaled_value} is too small to store in a Decimal128 of precision {precision}. Min is {unscaled_min_value}"
         )))
     } else {
         Ok(())
@@ -1102,8 +1096,7 @@ pub fn validate_decimal256_precision(
             scale,
         );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{unscaled_value} is too large to store in a Decimal256 of precision {precision}. Max is {}",
-            unscaled_max_value
+            "{unscaled_value} is too large to store in a Decimal256 of precision {precision}. Max is {unscaled_max_value}"
         )))
     } else if value < MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize] {
         let unscaled_value =
@@ -1114,8 +1107,7 @@ pub fn validate_decimal256_precision(
             scale,
         );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{unscaled_value} is too small to store in a Decimal256 of precision {precision}. Min is {}",
-            unscaled_min_value
+            "{unscaled_value} is too small to store in a Decimal256 of precision {precision}. Min is {unscaled_min_value}"
         )))
     } else {
         Ok(())

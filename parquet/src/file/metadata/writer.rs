@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::file::metadata::thrift::FileMeta;
-use crate::file::metadata::{
-    ColumnChunkMetaData, ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData,
-};
+use crate::file::metadata::{ColumnChunkMetaData, PageIndex, RowGroupMetaData};
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor};
 use crate::{
     basic::ColumnOrder,
@@ -136,7 +134,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     /// Serialize the column indexes and transform to `Option<ParquetColumnIndex>`
-    fn finalize_column_indexes(&mut self) -> Result<Option<ParquetColumnIndex>> {
+    fn finalize_column_indexes(&mut self) -> Result<Option<Vec<Vec<Option<ColumnIndexMetaData>>>>> {
         let column_indexes = std::mem::take(&mut self.column_indexes);
 
         // Write column indexes to file
@@ -149,27 +147,15 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .as_ref()
             .is_some_and(|ci| ci.iter().all(|cii| cii.iter().all(|idx| idx.is_none())));
 
-        // transform from Option<Vec<Vec<Option<ColumnIndexMetaData>>>> to
-        // Option<Vec<Vec<ColumnIndexMetaData>>>
-        let column_indexes: Option<ParquetColumnIndex> = if all_none {
-            None
+        if all_none {
+            Ok(None)
         } else {
-            column_indexes.map(|ovvi| {
-                ovvi.into_iter()
-                    .map(|vi| {
-                        vi.into_iter()
-                            .map(|ci| ci.unwrap_or(ColumnIndexMetaData::NONE))
-                            .collect()
-                    })
-                    .collect()
-            })
-        };
-
-        Ok(column_indexes)
+            Ok(column_indexes)
+        }
     }
 
     /// Serialize the offset indexes and transform to `Option<ParquetOffsetIndex>`
-    fn finalize_offset_indexes(&mut self) -> Result<Option<ParquetOffsetIndex>> {
+    fn finalize_offset_indexes(&mut self) -> Result<Option<Vec<Vec<Option<OffsetIndexMetaData>>>>> {
         let offset_indexes = std::mem::take(&mut self.offset_indexes);
 
         // Write offset indexes to file
@@ -182,18 +168,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .as_ref()
             .is_some_and(|oi| oi.iter().all(|oii| oii.iter().all(|idx| idx.is_none())));
 
-        let offset_indexes: Option<ParquetOffsetIndex> = if all_none {
-            None
+        if all_none {
+            Ok(None)
         } else {
-            // FIXME(ets): this will panic if there's a missing index.
-            offset_indexes.map(|ovvi| {
-                ovvi.into_iter()
-                    .map(|vi| vi.into_iter().map(|oi| oi.unwrap()).collect())
-                    .collect()
-            })
-        };
-
-        Ok(offset_indexes)
+            Ok(offset_indexes)
+        }
     }
 
     /// Assembles and writes the final metadata to self.buf
@@ -205,21 +184,16 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         let offset_indexes = self.finalize_offset_indexes()?;
 
         // We only include ColumnOrder for leaf nodes.
-        // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
-        // for all leaf nodes.
-        // Even if the column has an undefined sort order, such as INTERVAL, this
-        // is still technically the defined TYPEORDER so it should still be set.
         let column_orders = self
             .schema_descr
             .columns()
             .iter()
             .map(|col| {
-                let sort_order = ColumnOrder::sort_order_for_type(
+                ColumnOrder::column_order_for_type(
                     col.logical_type_ref(),
                     col.converted_type(),
                     col.physical_type(),
-                );
-                ColumnOrder::TYPE_DEFINED_ORDER(sort_order)
+                )
             })
             .collect();
 
@@ -280,8 +254,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // to be usable for retrieving the row group statistics for example, without users
         // needing to decrypt the metadata.
         let builder = ParquetMetaDataBuilder::new(file_metadata)
-            .set_column_index(column_indexes)
-            .set_offset_index(offset_indexes);
+            .set_page_index(Some(PageIndex::new(column_indexes, offset_indexes)));
 
         Ok(match unencrypted_row_groups {
             Some(rg) => builder.set_row_groups(rg).build(),
@@ -469,8 +442,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
         let key_value_metadata = file_metadata.key_value_metadata().cloned();
 
-        let column_indexes = self.convert_column_indexes();
-        let offset_indexes = self.convert_offset_index();
+        let page_index = self.metadata.page_index().cloned();
 
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
@@ -481,12 +453,18 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             self.write_path_in_schema,
         );
 
-        if let Some(column_indexes) = column_indexes {
-            encoder = encoder.with_column_indexes(column_indexes);
-        }
+        if let Some(PageIndex {
+            column_indexes,
+            offset_indexes,
+        }) = page_index
+        {
+            if let Some(column_indexes) = column_indexes {
+                encoder = encoder.with_column_indexes(column_indexes);
+            }
 
-        if let Some(offset_indexes) = offset_indexes {
-            encoder = encoder.with_offset_indexes(offset_indexes);
+            if let Some(offset_indexes) = offset_indexes {
+                encoder = encoder.with_offset_indexes(offset_indexes);
+            }
         }
 
         if let Some(key_value_metadata) = key_value_metadata {
@@ -495,40 +473,6 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         encoder.finish()?;
 
         Ok(())
-    }
-
-    fn convert_column_indexes(&self) -> Option<Vec<Vec<Option<ColumnIndexMetaData>>>> {
-        // TODO(ets): we're converting from ParquetColumnIndex to vec<vec<option>>,
-        // but then converting back to ParquetColumnIndex in the end. need to unify this.
-        self.metadata
-            .column_index()
-            .map(|row_group_column_indexes| {
-                (0..self.metadata.row_groups().len())
-                    .map(|rg_idx| {
-                        let column_indexes = &row_group_column_indexes[rg_idx];
-                        column_indexes
-                            .iter()
-                            .map(|column_index| Some(column_index.clone()))
-                            .collect()
-                    })
-                    .collect()
-            })
-    }
-
-    fn convert_offset_index(&self) -> Option<Vec<Vec<Option<OffsetIndexMetaData>>>> {
-        self.metadata
-            .offset_index()
-            .map(|row_group_offset_indexes| {
-                (0..self.metadata.row_groups().len())
-                    .map(|rg_idx| {
-                        let offset_indexes = &row_group_offset_indexes[rg_idx];
-                        offset_indexes
-                            .iter()
-                            .map(|offset_index| Some(offset_index.clone()))
-                            .collect()
-                    })
-                    .collect()
-            })
     }
 }
 
@@ -573,8 +517,7 @@ impl MetadataObjectWriter {
 
     /// Write a column [`ColumnIndex`] in Thrift format
     ///
-    /// If `column_index` is [`ColumnIndexMetaData::NONE`] the index will not be written and
-    /// this will return `false`. Returns `true` otherwise.
+    /// Returns `true` unless there is an error.
     ///
     /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
@@ -585,14 +528,8 @@ impl MetadataObjectWriter {
         _column_idx: usize,
         sink: impl Write,
     ) -> Result<bool> {
-        match column_index {
-            // Missing indexes may also have the placeholder ColumnIndexMetaData::NONE
-            ColumnIndexMetaData::NONE => Ok(false),
-            _ => {
-                Self::write_thrift_object(column_index, sink)?;
-                Ok(true)
-            }
-        }
+        Self::write_thrift_object(column_index, sink)?;
+        Ok(true)
     }
 
     /// No-op implementation of row-group metadata encryption
@@ -670,8 +607,7 @@ impl MetadataObjectWriter {
 
     /// Write a column [`ColumnIndex`] in Thrift format, possibly encrypting it if required
     ///
-    /// If `column_index` is [`ColumnIndexMetaData::NONE`] the index will not be written and
-    /// this will return `false`. Returns `true` otherwise.
+    /// Returns `true` unless there is an error.
     ///
     /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
@@ -682,25 +618,19 @@ impl MetadataObjectWriter {
         column_idx: usize,
         sink: impl Write,
     ) -> Result<bool> {
-        match column_index {
-            // Missing indexes may also have the placeholder ColumnIndexMetaData::NONE
-            ColumnIndexMetaData::NONE => Ok(false),
-            _ => {
-                match &self.file_encryptor {
-                    Some(file_encryptor) => Self::write_thrift_object_with_encryption(
-                        column_index,
-                        sink,
-                        file_encryptor,
-                        column_chunk,
-                        ModuleType::ColumnIndex,
-                        row_group_idx,
-                        column_idx,
-                    )?,
-                    None => Self::write_thrift_object(column_index, sink)?,
-                }
-                Ok(true)
-            }
+        match &self.file_encryptor {
+            Some(file_encryptor) => Self::write_thrift_object_with_encryption(
+                column_index,
+                sink,
+                file_encryptor,
+                column_chunk,
+                ModuleType::ColumnIndex,
+                row_group_idx,
+                column_idx,
+            )?,
+            None => Self::write_thrift_object(column_index, sink)?,
         }
+        Ok(true)
     }
 
     /// If encryption is enabled and configured, encrypt row group metadata.

@@ -99,80 +99,6 @@ pub(crate) const AES_256_KEY_NAME_KEY: &[(&str, &[u8]); 9] = &[
     (AES_256_KEY_NAMES[7], AES_256_COLUMN_KEYS[7]),
 ];
 
-pub(crate) fn verify_encryption_double_test_data(
-    record_batches: Vec<RecordBatch>,
-    metadata: &ParquetMetaData,
-) {
-    let file_metadata = metadata.file_metadata();
-    assert_eq!(file_metadata.num_rows(), 100);
-    assert_eq!(file_metadata.schema_descr().num_columns(), 8);
-
-    metadata.row_groups().iter().for_each(|rg| {
-        assert_eq!(rg.num_columns(), 8);
-        assert_eq!(rg.num_rows(), 50);
-    });
-
-    let mut row_count = 0;
-    let wrap_at = 50;
-    for batch in record_batches {
-        let batch = batch;
-        row_count += batch.num_rows();
-
-        let bool_col = batch.column(0).as_boolean();
-        let time_col = batch
-            .column(1)
-            .as_primitive::<types::Time32MillisecondType>();
-        let list_col = batch.column(2).as_list::<i32>();
-        let timestamp_col = batch
-            .column(3)
-            .as_primitive::<types::TimestampNanosecondType>();
-        let f32_col = batch.column(4).as_primitive::<types::Float32Type>();
-        let f64_col = batch.column(5).as_primitive::<types::Float64Type>();
-        let binary_col = batch.column(6).as_binary::<i32>();
-        let fixed_size_binary_col = batch.column(7).as_fixed_size_binary();
-
-        for (i, x) in bool_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), i % 2 == 0);
-        }
-        for (i, x) in time_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), (i % wrap_at) as i32);
-        }
-        for (i, list_item) in list_col.iter().enumerate() {
-            let list_item = list_item.unwrap();
-            let list_item = list_item.as_primitive::<types::Int64Type>();
-            assert_eq!(list_item.len(), 2);
-            assert_eq!(
-                list_item.value(0),
-                (((i % wrap_at) * 2) * 1000000000000) as i64
-            );
-            assert_eq!(
-                list_item.value(1),
-                (((i % wrap_at) * 2 + 1) * 1000000000000) as i64
-            );
-        }
-        for x in timestamp_col.iter() {
-            assert!(x.is_some());
-        }
-        for (i, x) in f32_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), (i % wrap_at) as f32 * 1.1f32);
-        }
-        for (i, x) in f64_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), (i % wrap_at) as f64 * 1.1111111f64);
-        }
-        for (i, x) in binary_col.iter().enumerate() {
-            assert_eq!(x.is_some(), i % 2 == 0);
-            if let Some(x) = x {
-                assert_eq!(&x[0..7], b"parquet");
-            }
-        }
-        for (i, x) in fixed_size_binary_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), &[(i % wrap_at) as u8; 10]);
-        }
-    }
-
-    assert_eq!(row_count, file_metadata.num_rows() as usize);
-}
-
 /// Verifies data read from an encrypted file from the parquet-testing repository
 pub(crate) fn verify_encryption_test_data(
     record_batches: Vec<RecordBatch>,
@@ -227,7 +153,7 @@ pub(crate) fn verify_encryption_test_data(
                 ((row_index(i) * 2 + 1) * 1000000000000) as i64
             );
         }
-        for x in timestamp_col.iter() {
+        for x in timestamp_col {
             assert!(x.is_some());
         }
         for (i, x) in f32_col.iter().enumerate() {
@@ -255,23 +181,23 @@ pub(crate) fn verify_encryption_test_data(
 /// Verifies that the column and offset indexes were successfully read from an
 /// encrypted test file.
 pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
-    let offset_index = metadata.offset_index().unwrap();
+    assert!(metadata.page_index().is_some());
+    let page_index = metadata.page_index().unwrap();
+    let offset_index = page_index.offset_indexes_for_rowgroup(0).unwrap();
     // 1 row group, 8 columns
-    assert_eq!(offset_index.len(), 1);
-    assert_eq!(offset_index[0].len(), 8);
+    assert_eq!(offset_index.len(), 8);
     // Check float column, which is encrypted in the non-uniform test file
     let float_col_idx = 4;
-    let offset_index = &offset_index[0][float_col_idx];
-    assert_eq!(offset_index.page_locations.len(), 1);
-    assert!(offset_index.page_locations[0].offset > 0);
+    let offset_index = &offset_index[float_col_idx];
+    assert_eq!(offset_index.as_ref().unwrap().page_locations.len(), 1);
+    assert!(offset_index.as_ref().unwrap().page_locations[0].offset > 0);
 
-    let column_index = metadata.column_index().unwrap();
-    assert_eq!(column_index.len(), 1);
-    assert_eq!(column_index[0].len(), 8);
-    let column_index = &column_index[0][float_col_idx];
+    let column_index = page_index.column_indexes_for_rowgroup(0).unwrap();
+    assert_eq!(column_index.len(), 8);
+    let column_index = &column_index[float_col_idx];
 
     match column_index {
-        parquet::file::page_index::column_index::ColumnIndexMetaData::FLOAT(float_index) => {
+        Some(parquet::file::page_index::column_index::ColumnIndexMetaData::FLOAT(float_index)) => {
             assert_eq!(float_index.num_pages(), 1);
             assert_eq!(float_index.min_value(0), Some(&0.0f32));
             assert!(
@@ -283,7 +209,7 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
         _ => {
             panic!("Expected a float column index for column {float_col_idx}");
         }
-    };
+    }
 }
 
 pub(crate) fn read_encrypted_file(

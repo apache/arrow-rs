@@ -17,6 +17,8 @@
 
 //! Tests for [`ArrowWriter`]
 
+mod layout;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::fs::File;
@@ -110,7 +112,7 @@ fn subtract_live_bytes(size: usize) {
     });
 }
 
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = unsafe { self.inner.alloc(layout) };
@@ -176,7 +178,7 @@ fn make_batch(schema: &SchemaRef, batch_index: usize) -> RecordBatch {
     let mut fat: Vec<u8> = vec![0u8; FAT_VALUE_LEN * ROWS_PER_BATCH];
     // A cheap xorshift fill keyed by the batch index → distinct, incompressible.
     let mut state = (batch_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
-    for byte in fat.iter_mut() {
+    for byte in &mut fat {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;

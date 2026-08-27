@@ -153,20 +153,19 @@ fn assert_token(token: Option<&str>, expected: &str) -> Result<()> {
 #[inline]
 fn parse_i32(value: Option<&str>, not_found_msg: &str, parse_fail_msg: &str) -> Result<i32> {
     value
-        .ok_or_else(|| general_err!(not_found_msg))
-        .and_then(|v| v.parse::<i32>().map_err(|_| general_err!(parse_fail_msg)))
+        .ok_or_else(|| general_err!(not_found_msg))?
+        .parse::<i32>()
+        .map_err(|_| general_err!(parse_fail_msg))
 }
 
 // Utility function to parse boolean or return general error.
 #[inline]
 fn parse_bool(value: Option<&str>, not_found_msg: &str, parse_fail_msg: &str) -> Result<bool> {
     value
-        .ok_or_else(|| general_err!(not_found_msg))
-        .and_then(|v| {
-            v.to_lowercase()
-                .parse::<bool>()
-                .map_err(|_| general_err!(parse_fail_msg))
-        })
+        .ok_or_else(|| general_err!(not_found_msg))?
+        .to_lowercase()
+        .parse::<bool>()
+        .map_err(|_| general_err!(parse_fail_msg))
 }
 
 // Utility function to parse TimeUnit or return general error.
@@ -175,14 +174,13 @@ fn parse_timeunit(
     not_found_msg: &str,
     parse_fail_msg: &str,
 ) -> Result<TimeUnit> {
-    value
-        .ok_or_else(|| general_err!(not_found_msg))
-        .and_then(|v| match v.to_uppercase().as_str() {
-            "MILLIS" => Ok(TimeUnit::MILLIS),
-            "MICROS" => Ok(TimeUnit::MICROS),
-            "NANOS" => Ok(TimeUnit::NANOS),
-            _ => Err(general_err!(parse_fail_msg)),
-        })
+    let v = value.ok_or_else(|| general_err!(not_found_msg))?;
+    match v.to_uppercase().as_str() {
+        "MILLIS" => Ok(TimeUnit::MILLIS),
+        "MICROS" => Ok(TimeUnit::MICROS),
+        "NANOS" => Ok(TimeUnit::NANOS),
+        _ => Err(general_err!(parse_fail_msg)),
+    }
 }
 
 impl Parser<'_> {
@@ -245,7 +243,7 @@ impl Parser<'_> {
             .ok_or_else(|| general_err!("Expected name, found None"))?;
 
         // Parse logical or converted type if exists
-        let (logical_type, converted_type) = if let Some("(") = self.tokenizer.next() {
+        let (logical_type, converted_type) = if self.tokenizer.next() == Some("(") {
             let tpe = self
                 .tokenizer
                 .next()
@@ -269,7 +267,7 @@ impl Parser<'_> {
         };
 
         // Parse optional id
-        let id = if let Some("=") = self.tokenizer.next() {
+        let id = if self.tokenizer.next() == Some("=") {
             self.tokenizer.next().and_then(|v| v.parse::<i32>().ok())
         } else {
             self.tokenizer.backtrack();
@@ -311,8 +309,7 @@ impl Parser<'_> {
             .ok_or_else(|| general_err!("Expected name, found None"))?;
 
         // Parse converted type
-        let (logical_type, converted_type, precision, scale) = if let Some("(") =
-            self.tokenizer.next()
+        let (logical_type, converted_type, precision, scale) = if self.tokenizer.next() == Some("(")
         {
             let (mut logical, mut converted) = self
                 .tokenizer
@@ -337,13 +334,13 @@ impl Parser<'_> {
             if let Some(tpe) = &logical {
                 match tpe {
                     LogicalType::Decimal { .. } => {
-                        if let Some("(") = self.tokenizer.next() {
+                        if self.tokenizer.next() == Some("(") {
                             precision = parse_i32(
                                 self.tokenizer.next(),
                                 "Expected precision, found None",
                                 "Failed to parse precision for DECIMAL type",
                             )?;
-                            if let Some(",") = self.tokenizer.next() {
+                            if self.tokenizer.next() == Some(",") {
                                 scale = parse_i32(
                                     self.tokenizer.next(),
                                     "Expected scale, found None",
@@ -358,13 +355,13 @@ impl Parser<'_> {
                         }
                     }
                     LogicalType::Time { .. } => {
-                        if let Some("(") = self.tokenizer.next() {
+                        if self.tokenizer.next() == Some("(") {
                             let unit = parse_timeunit(
                                 self.tokenizer.next(),
                                 "Invalid timeunit found",
                                 "Failed to parse timeunit for TIME type",
                             )?;
-                            if let Some(",") = self.tokenizer.next() {
+                            if self.tokenizer.next() == Some(",") {
                                 let is_adjusted_to_u_t_c = parse_bool(
                                     self.tokenizer.next(),
                                     "Invalid boolean found",
@@ -380,13 +377,13 @@ impl Parser<'_> {
                         }
                     }
                     LogicalType::Timestamp { .. } => {
-                        if let Some("(") = self.tokenizer.next() {
+                        if self.tokenizer.next() == Some("(") {
                             let unit = parse_timeunit(
                                 self.tokenizer.next(),
                                 "Invalid timeunit found",
                                 "Failed to parse timeunit for TIMESTAMP type",
                             )?;
-                            if let Some(",") = self.tokenizer.next() {
+                            if self.tokenizer.next() == Some(",") {
                                 let is_adjusted_to_u_t_c = parse_bool(
                                     self.tokenizer.next(),
                                     "Invalid boolean found",
@@ -401,57 +398,55 @@ impl Parser<'_> {
                             }
                         }
                     }
-                    LogicalType::Integer { .. } => {
-                        if let Some("(") = self.tokenizer.next() {
-                            let bit_width = parse_i32(
-                                self.tokenizer.next(),
-                                "Invalid bit_width found",
-                                "Failed to parse bit_width for INTEGER type",
-                            )? as i8;
-                            match physical_type {
-                                PhysicalType::INT32 => match bit_width {
-                                    8 | 16 | 32 => {}
-                                    _ => {
-                                        return Err(general_err!(
-                                            "Incorrect bit width {} for INT32",
-                                            bit_width
-                                        ));
-                                    }
-                                },
-                                PhysicalType::INT64 => {
-                                    if bit_width != 64 {
-                                        return Err(general_err!(
-                                            "Incorrect bit width {} for INT64",
-                                            bit_width
-                                        ));
-                                    }
-                                }
+                    LogicalType::Integer { .. } if self.tokenizer.next() == Some("(") => {
+                        let bit_width = parse_i32(
+                            self.tokenizer.next(),
+                            "Invalid bit_width found",
+                            "Failed to parse bit_width for INTEGER type",
+                        )? as i8;
+                        match physical_type {
+                            PhysicalType::INT32 => match bit_width {
+                                8 | 16 | 32 => {}
                                 _ => {
                                     return Err(general_err!(
-                                        "Logical type Integer cannot be used with physical type {}",
-                                        physical_type
+                                        "Incorrect bit width {} for INT32",
+                                        bit_width
+                                    ));
+                                }
+                            },
+                            PhysicalType::INT64 => {
+                                if bit_width != 64 {
+                                    return Err(general_err!(
+                                        "Incorrect bit width {} for INT64",
+                                        bit_width
                                     ));
                                 }
                             }
-                            if let Some(",") = self.tokenizer.next() {
-                                let is_signed = parse_bool(
-                                    self.tokenizer.next(),
-                                    "Invalid boolean found",
-                                    "Failed to parse is_signed for INTEGER type",
-                                )?;
-                                assert_token(self.tokenizer.next(), ")")?;
-                                logical = Some(LogicalType::integer(bit_width, is_signed));
-                                converted = ConvertedType::from(logical.clone());
-                            } else {
-                                // Invalid token for unit
-                                self.tokenizer.backtrack();
+                            _ => {
+                                return Err(general_err!(
+                                    "Logical type Integer cannot be used with physical type {}",
+                                    physical_type
+                                ));
                             }
+                        }
+                        if self.tokenizer.next() == Some(",") {
+                            let is_signed = parse_bool(
+                                self.tokenizer.next(),
+                                "Invalid boolean found",
+                                "Failed to parse is_signed for INTEGER type",
+                            )?;
+                            assert_token(self.tokenizer.next(), ")")?;
+                            logical = Some(LogicalType::integer(bit_width, is_signed));
+                            converted = ConvertedType::from(logical.clone());
+                        } else {
+                            // Invalid token for unit
+                            self.tokenizer.backtrack();
                         }
                     }
                     _ => {}
                 }
             } else if converted == ConvertedType::DECIMAL {
-                if let Some("(") = self.tokenizer.next() {
+                if self.tokenizer.next() == Some("(") {
                     // Parse precision
                     precision = parse_i32(
                         self.tokenizer.next(),
@@ -460,7 +455,7 @@ impl Parser<'_> {
                     )?;
 
                     // Parse scale
-                    scale = if let Some(",") = self.tokenizer.next() {
+                    scale = if self.tokenizer.next() == Some(",") {
                         parse_i32(
                             self.tokenizer.next(),
                             "Expected scale, found None",
@@ -486,7 +481,7 @@ impl Parser<'_> {
         };
 
         // Parse optional id
-        let id = if let Some("=") = self.tokenizer.next() {
+        let id = if self.tokenizer.next() == Some("=") {
             self.tokenizer.next().and_then(|v| v.parse::<i32>().ok())
         } else {
             self.tokenizer.backtrack();

@@ -31,8 +31,8 @@ const DEFAULT_ZSTD_COMPRESSION_LEVEL: i32 = 3;
 /// compression. Also holds a [`FlatBufferBuilder`] that is reused across IPC writes.
 #[derive(Default)]
 pub struct IpcWriteContext {
-    #[expect(dead_code)]
-    pub(crate) scratch: Vec<u8>,
+    scratch: Vec<u8>,
+    reserve_scratch: bool,
     fbb: FlatBufferBuilder<'static>,
     #[cfg(feature = "zstd")]
     compressor: Option<zstd::bulk::Compressor<'static>>,
@@ -42,6 +42,23 @@ impl IpcWriteContext {
     /// Get a mutable reference to the [`FlatBufferBuilder`] that is reused across IPC writes.
     pub(crate) fn mut_fbb(&mut self) -> &mut FlatBufferBuilder<'static> {
         &mut self.fbb
+    }
+
+    /// Set whether the scratch buffer capacity should be reserved after each encode for reuse
+    /// on the next call. Set to `false` for the final batch in a sequence to avoid a
+    /// pointless allocation. by default, this is set to `false`.
+    pub fn set_reserve_scratch(&mut self, reserve: bool) {
+        self.reserve_scratch = reserve;
+    }
+    /// Reserve the scratch buffer capacity for reuse on the next call. This is a no-op if
+    /// `reserve_scratch` is set to `false`.
+    pub(crate) fn reserve_scratch_with_capacity(&mut self, additional: usize) {
+        if self.reserve_scratch {
+            self.scratch.reserve(additional);
+        }
+    }
+    pub(crate) fn scratch(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.scratch)
     }
 
     #[cfg(feature = "zstd")]
@@ -93,7 +110,7 @@ impl DecompressionContext {
     }
 }
 
-#[allow(clippy::derivable_impls)]
+#[expect(clippy::derivable_impls)]
 impl Default for DecompressionContext {
     fn default() -> Self {
         DecompressionContext {
@@ -225,7 +242,7 @@ impl CompressionCodec {
         } else if let Ok(decompressed_length) = usize::try_from(decompressed_length) {
             // decompress data using the codec
             let input_data = &input[(LENGTH_OF_PREFIX_DATA as usize)..];
-            let v = self.decompress(input_data, decompressed_length as _, context)?;
+            let v = self.decompress(input_data, decompressed_length, context)?;
             Buffer::from_vec(v)
         } else {
             return Err(ArrowError::IpcError(format!(
@@ -283,7 +300,6 @@ fn compress_lz4(input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
 }
 
 #[cfg(not(feature = "lz4"))]
-#[allow(clippy::ptr_arg)]
 fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "lz4 IPC compression requires the lz4 feature".to_string(),
@@ -299,7 +315,6 @@ fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, Arr
 }
 
 #[cfg(not(feature = "lz4"))]
-#[allow(clippy::ptr_arg)]
 fn decompress_lz4(_input: &[u8], _decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "lz4 IPC decompression requires the lz4 feature".to_string(),
@@ -313,13 +328,19 @@ fn compress_zstd(
     context: &mut IpcWriteContext,
     level: i32,
 ) -> Result<(), ArrowError> {
-    let result = context.zstd_compressor(level).compress(input)?;
-    output.extend_from_slice(&result);
+    let start = output.len();
+    output.reserve(zstd::zstd_safe::compress_bound(input.len()));
+
+    let mut cursor = std::io::Cursor::new(output);
+    cursor.set_position(start as u64);
+    context
+        .zstd_compressor(level)
+        .compress_to_buffer(input, &mut cursor)?;
+
     Ok(())
 }
 
 #[cfg(not(feature = "zstd"))]
-#[allow(clippy::ptr_arg)]
 fn compress_zstd(
     _input: &[u8],
     _output: &mut Vec<u8>,
@@ -344,7 +365,6 @@ fn decompress_zstd(
 }
 
 #[cfg(not(feature = "zstd"))]
-#[allow(clippy::ptr_arg)]
 fn decompress_zstd(
     _input: &[u8],
     _decompressed_size: usize,

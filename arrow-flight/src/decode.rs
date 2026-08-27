@@ -136,7 +136,7 @@ impl FlightRecordBatchStream {
     /// Note that this will return `None` until the entire stream is consumed.
     /// Only after calling `next()` returns `None`, might any available trailers be returned.
     pub fn trailers(&self) -> Option<MetadataMap> {
-        self.trailers.as_ref().and_then(|trailers| trailers.get())
+        self.trailers.as_ref()?.get()
     }
 
     /// Return schema for the stream, if it has been received
@@ -293,9 +293,7 @@ impl FlightDataDecoder {
                 Ok(Some(DecodedFlightData::new_schema(data, schema)))
             }
             MessageHeader::DictionaryBatch => {
-                let state = if let Some(state) = self.state.as_mut() {
-                    state
-                } else {
+                let Some(state) = self.state.as_mut() else {
                     return Err(FlightError::protocol(
                         "Received DictionaryBatch prior to Schema",
                     ));
@@ -325,9 +323,7 @@ impl FlightDataDecoder {
                 Ok(None)
             }
             MessageHeader::RecordBatch => {
-                let state = if let Some(state) = self.state.as_ref() {
-                    state
-                } else {
+                let Some(state) = self.state.as_ref() else {
                     return Err(FlightError::protocol(
                         "Received RecordBatch prior to Schema",
                     ));
@@ -341,7 +337,8 @@ impl FlightDataDecoder {
                 let buffer = {
                     // see https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding
                     // reuse the allocation if already aligned, otherwise copy into a fresh aligned buffer.
-                    if data.data_body.as_ptr() as usize % 64 == 0 {
+                    let ptr_value = data.data_body.as_ptr() as usize;
+                    if ptr_value.is_multiple_of(64) {
                         &Buffer::from(data.data_body.clone())
                     } else {
                         &Buffer::from(data.data_body.as_ref())

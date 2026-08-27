@@ -18,7 +18,9 @@
 //! [`VariantArrayBuilder`] implementation
 
 use crate::VariantArray;
-use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
+use arrow::array::builder::make_view;
+use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, StructArray};
+use arrow::buffer::Buffer;
 use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{
     BuilderSpecificState, ListBuilder, MetadataBuilder, ObjectBuilder, Variant, VariantBuilderExt,
@@ -431,7 +433,7 @@ impl<'a> VariantValueArrayBuilderExt<'a> {
     }
 }
 
-impl<'a> VariantBuilderExt for VariantValueArrayBuilderExt<'a> {
+impl VariantBuilderExt for VariantValueArrayBuilderExt<'_> {
     type State<'b>
         = ValueArrayBuilderState<'b>
     where
@@ -458,22 +460,21 @@ impl<'a> VariantBuilderExt for VariantValueArrayBuilderExt<'a> {
 }
 
 fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> BinaryViewArray {
-    // All offsets are less than or equal to the buffer length, so we can safely cast all offsets
-    // inside the loop below, as long as the buffer length fits in u32.
-    u32::try_from(buffer.len()).expect("buffer length should fit in u32");
+    // Each builder records the current buffer length after appending a row, so offsets are
+    // monotonically increasing and bounded by the final buffer length.
+    assert!(buffer.len() < u32::MAX as usize);
 
-    let mut builder = BinaryViewBuilder::with_capacity(offsets.len());
-    let block = builder.append_block(buffer.into());
-    // TODO this can be much faster if it creates the views directly during append
-    let mut start = 0;
+    let buffer = Buffer::from(buffer);
+    let mut views = Vec::with_capacity(offsets.len());
+    let mut start = 0_usize;
     for end in offsets {
-        let end = end as u32; // Safe cast: validated max offset fits in u32 above
-        builder
-            .try_append_view(block, start, end - start)
-            .expect("Failed to append view");
+        views.push(make_view(&buffer[start..end], 0, start as u32));
         start = end;
     }
-    builder.finish()
+
+    // SAFETY: `make_view` constructs every view from an in-bounds slice of buffer 0, and there
+    // are no nulls. The buffer length check above guarantees every offset fits in a `u32`.
+    unsafe { BinaryViewArray::new_unchecked(views.into(), vec![buffer].into(), None) }
 }
 
 #[cfg(test)]
@@ -501,7 +502,7 @@ mod test {
 
         // the metadata and value fields of non shredded variants should not be null
         assert!(variant_array.metadata_column().nulls().is_none());
-        assert!(variant_array.value_column().unwrap().nulls().is_none());
+        assert!(variant_array.value_column().nulls().is_none());
         let DataType::Struct(fields) = variant_array.data_type() else {
             panic!("Expected VariantArray to have Struct data type");
         };
@@ -647,7 +648,7 @@ mod test {
 
         let array2 = VariantArray::from_parts(
             array.metadata_column().clone(),
-            Some(Arc::new(value_builder.build().unwrap())),
+            Arc::new(value_builder.build().unwrap()),
             None,
             None,
         );

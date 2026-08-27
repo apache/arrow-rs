@@ -88,6 +88,7 @@ impl<'a> UnalignedBitChunk<'a> {
         }
 
         // Read into prefix and suffix as needed
+        // Safety: u64 has no invalid bit patterns so reinterpreting initialized u8 bytes as u64 is sound.
         let (prefix, mut chunks, suffix) = unsafe { buffer.align_to::<u64>() };
         assert!(
             prefix.len() < 8 && suffix.len() < 8,
@@ -157,10 +158,11 @@ impl<'a> UnalignedBitChunk<'a> {
     }
 
     /// Returns an iterator over the chunks
+    #[inline]
     pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
         self.prefix
             .into_iter()
-            .chain(self.chunks.iter().cloned())
+            .chain(self.chunks.iter().copied())
             .chain(self.suffix)
     }
 
@@ -170,9 +172,18 @@ impl<'a> UnalignedBitChunk<'a> {
     }
 }
 
+impl<'a> IntoIterator for &UnalignedBitChunk<'a> {
+    type Item = u64;
+    type IntoIter = UnalignedBitChunkIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 /// Iterator over an [`UnalignedBitChunk`]
 pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
-    std::iter::Chain<std::option::IntoIter<u64>, std::iter::Cloned<std::slice::Iter<'a, u64>>>,
+    std::iter::Chain<std::option::IntoIter<u64>, std::iter::Copied<std::slice::Iter<'a, u64>>>,
     std::option::IntoIter<u64>,
 >;
 
@@ -274,6 +285,8 @@ impl<'a> BitChunks<'a> {
             // might be one more than sizeof(u64) if the offset is in the middle of a byte
             let byte_len = ceil(bit_len + bit_offset, 8);
             // pointer to remainder bytes after all complete chunks
+            // Safety: the buffer contains `chunk_len * 8 + ceil(remainder_len + bit_offset, 8)`
+            // bytes, so offsetting by `chunk_len * 8` and reading `byte_len` bytes is in-bounds.
             let base = unsafe {
                 self.buffer
                     .as_ptr()
@@ -338,6 +351,15 @@ impl<'a> IntoIterator for BitChunks<'a> {
     }
 }
 
+impl<'a> IntoIterator for &BitChunks<'a> {
+    type Item = u64;
+    type IntoIter = BitChunkIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl Iterator for BitChunkIterator<'_> {
     type Item = u64;
 
@@ -349,11 +371,14 @@ impl Iterator for BitChunkIterator<'_> {
         }
 
         // cast to *const u64 should be fine since we are using read_unaligned below
-        #[allow(clippy::cast_ptr_alignment)]
-        let raw_data = self.buffer.as_ptr() as *const u64;
+        #[expect(clippy::cast_ptr_alignment)]
+        let raw_data = self.buffer.as_ptr().cast::<u64>();
 
         // bit-packed buffers are stored starting with the least-significant byte first
         // so when reading as u64 on a big-endian machine, the bytes need to be swapped
+        // Safety: `index < self.chunk_len` and the buffer is at least `chunk_len * 8` bytes long,
+        // so `raw_data.add(index)` is a valid in-bounds pointer; `read_unaligned` handles
+        // any pointer alignment.
         let current = unsafe { std::ptr::read_unaligned(raw_data.add(index)).to_le() };
 
         let bit_offset = self.bit_offset;
@@ -363,8 +388,10 @@ impl Iterator for BitChunkIterator<'_> {
         } else {
             // the constructor ensures that bit_offset is in 0..8
             // that means we need to read at most one additional byte to fill in the high bits
+            // Safety: the buffer has at least one byte past the last chunk (the remainder byte
+            // needed for `bit_offset > 0`), so `index + 1` is within bounds.
             let next =
-                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1) as *const u8) as u64 };
+                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1).cast::<u8>()) as u64 };
 
             (current >> bit_offset) | (next << (64 - bit_offset))
         };
@@ -556,7 +583,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::assertions_on_constants)]
     fn test_unaligned_bit_chunk_iterator() {
         let buffer = Buffer::from(&[0xFF; 5]);
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 40);
@@ -715,7 +741,7 @@ mod tests {
                 .take(mask_len)
                 .collect();
 
-            let buffer = Buffer::from_iter(bools.iter().cloned());
+            let buffer = Buffer::from_iter(bools.iter().copied());
 
             let max_offset = 64.min(mask_len);
             let offset = uusize.sample(&mut rng).checked_rem(max_offset).unwrap_or(0);

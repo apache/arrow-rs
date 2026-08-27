@@ -27,7 +27,7 @@ use parquet_variant::{
 };
 
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use uuid::Uuid;
 
 /// Returns a directory path for the parquet variant test data.
@@ -132,7 +132,7 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
             "primitive_decimal16",
             Variant::Decimal16(VariantDecimal16::try_new(1234567891234567890, 2).unwrap()),
         ),
-        ("primitive_float", Variant::Float(1234567890.1234)),
+        ("primitive_float", Variant::Float(1_234_568_000.0)),
         ("primitive_double", Variant::Double(1234567890.1234)),
         ("primitive_int8", Variant::Int8(42)),
         ("primitive_int16", Variant::Int16(1234)),
@@ -347,7 +347,71 @@ fn variant_object_builder() {
     assert_eq!(actual, expected);
 }
 
-// TODO: Add tests for object_nested and array_nested
+#[test]
+fn variant_object_nested_builder() {
+    let mut builder = VariantBuilder::new();
+
+    let mut obj = builder.new_object();
+    obj.insert("id", 1i8);
+
+    let mut observation = obj.new_object("observation");
+    observation.insert("location", "In the Volcano");
+    observation.insert("time", "12:34:56");
+    let mut value = observation.new_object("value");
+    value.insert("humidity", 456i16);
+    value.insert("temperature", 123i8);
+    value.finish();
+    observation.finish();
+
+    let mut species = obj.new_object("species");
+    species.insert("name", "lava monster");
+    species.insert("population", 6789i16);
+    species.finish();
+    obj.finish();
+
+    let (built_metadata, built_value) = builder.finish();
+    let actual = Variant::try_new(&built_metadata, &built_value).unwrap();
+    let case = Case::load("object_nested");
+    let expected = case.variant();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn variant_array_nested_builder() {
+    let mut builder = VariantBuilder::new();
+
+    let mut array = builder.new_list();
+    let mut first = array.new_object();
+    first.insert("id", 1i8);
+    let mut thing = first.new_object("thing");
+    let mut names = thing.new_list("names");
+    names.append_value("Contrarian");
+    names.append_value("Spider");
+    names.finish();
+    thing.finish();
+    first.finish();
+
+    array.append_value(());
+
+    let mut third = array.new_object();
+    third.insert("id", 2i8);
+    let mut names = third.new_list("names");
+    names.append_value("Apple");
+    names.append_value("Ray");
+    names.append_value(());
+    names.finish();
+    third.insert("type", "if");
+    third.finish();
+    array.finish();
+
+    let (built_metadata, built_value) = builder.finish();
+    let actual = Variant::try_new(&built_metadata, &built_value).unwrap();
+    let case = Case::load("array_nested");
+    let expected = case.variant();
+
+    assert_eq!(actual, expected);
+}
 
 //
 // Validation Fuzzing Tests
@@ -508,10 +572,7 @@ fn test_validation_workflow(metadata: &[u8], value: &[u8]) {
     // Step 1: Try unvalidated construction - should not panic
     let variant_result = std::panic::catch_unwind(|| Variant::new(metadata, value));
 
-    let variant = match variant_result {
-        Ok(v) => v,
-        Err(_) => return, // Construction failed, which is acceptable for corrupted data
-    };
+    let Ok(variant) = variant_result else { return };
 
     // Step 2: Try validation
     let validation_result = std::panic::catch_unwind(|| variant.clone().with_full_validation());
@@ -606,10 +667,7 @@ fn test_validation_workflow_simple(metadata: &[u8], value: &[u8]) {
     // Step 1: Try unvalidated construction - should not panic
     let variant_result = std::panic::catch_unwind(|| Variant::new(metadata, value));
 
-    let variant = match variant_result {
-        Ok(v) => v,
-        Err(_) => return, // Construction failed, which is acceptable for corrupted data
-    };
+    let Ok(variant) = variant_result else { return };
 
     // Step 2: Try validation
     let validation_result = std::panic::catch_unwind(|| variant.clone().with_full_validation());

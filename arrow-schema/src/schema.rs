@@ -15,20 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::error::ArrowError;
 use crate::field::Field;
-use crate::{DataType, FieldRef, Fields};
+use crate::{DataType, FieldRef, Fields, Metadata};
 
 /// A builder to facilitate building a [`Schema`] from iteratively from [`FieldRef`]
 #[derive(Debug, Default)]
 pub struct SchemaBuilder {
     fields: Vec<FieldRef>,
-    metadata: HashMap<String, String>,
+    metadata: Metadata,
 }
 
 impl SchemaBuilder {
@@ -78,12 +77,12 @@ impl SchemaBuilder {
     }
 
     /// Returns an immutable reference to the Map of custom metadata key-value pairs.
-    pub fn metadata(&mut self) -> &HashMap<String, String> {
+    pub fn metadata(&mut self) -> &Metadata {
         &self.metadata
     }
 
     /// Returns a mutable reference to the Map of custom metadata key-value pairs.
-    pub fn metadata_mut(&mut self) -> &mut HashMap<String, String> {
+    pub fn metadata_mut(&mut self) -> &mut Metadata {
         &mut self.metadata
     }
 
@@ -182,13 +181,13 @@ pub type SchemaRef = Arc<Schema>;
 ///
 /// Note that this information is only part of the meta-data and not part of the physical
 /// memory layout.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Schema {
     /// A sequence of fields that describe the schema.
     pub fields: Fields,
     /// A map of key-value pairs containing additional metadata.
-    pub metadata: HashMap<String, String>,
+    pub metadata: Metadata,
 }
 
 impl Schema {
@@ -196,7 +195,7 @@ impl Schema {
     pub fn empty() -> Self {
         Self {
             fields: Default::default(),
-            metadata: HashMap::new(),
+            metadata: Default::default(),
         }
     }
 
@@ -212,7 +211,7 @@ impl Schema {
     /// let schema = Schema::new(vec![field_a, field_b]);
     /// ```
     pub fn new(fields: impl Into<Fields>) -> Self {
-        Self::new_with_metadata(fields, HashMap::new())
+        Self::new_with_metadata(fields, Metadata::new())
     }
 
     /// Creates a new [`Schema`] from a sequence of [`Field`] values
@@ -222,27 +221,22 @@ impl Schema {
     ///
     /// ```
     /// # use arrow_schema::*;
-    /// # use std::collections::HashMap;
-    ///
     /// let field_a = Field::new("a", DataType::Int64, false);
     /// let field_b = Field::new("b", DataType::Boolean, false);
     ///
-    /// let mut metadata: HashMap<String, String> = HashMap::new();
-    /// metadata.insert("row_count".to_string(), "100".to_string());
-    ///
-    /// let schema = Schema::new_with_metadata(vec![field_a, field_b], metadata);
+    /// let schema = Schema::new_with_metadata(vec![field_a, field_b], [("row_count", "100")]);
     /// ```
     #[inline]
-    pub fn new_with_metadata(fields: impl Into<Fields>, metadata: HashMap<String, String>) -> Self {
+    pub fn new_with_metadata(fields: impl Into<Fields>, metadata: impl Into<Metadata>) -> Self {
         Self {
             fields: fields.into(),
-            metadata,
+            metadata: metadata.into(),
         }
     }
 
     /// Sets the metadata of this `Schema` to be `metadata` and returns self
-    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
-        self.metadata = metadata;
+    pub fn with_metadata(mut self, metadata: impl Into<Metadata>) -> Self {
+        self.metadata = metadata.into();
         self
     }
 
@@ -293,20 +287,20 @@ impl Schema {
     /// );
     /// ```
     pub fn try_merge(schemas: impl IntoIterator<Item = Self>) -> Result<Self, ArrowError> {
-        let mut out_meta = HashMap::new();
+        let mut out_meta = Metadata::new();
         let mut out_fields = SchemaBuilder::new();
         for schema in schemas {
             let Schema { metadata, fields } = schema;
 
             // merge metadata
-            for (key, value) in metadata.into_iter() {
-                if let Some(old_val) = out_meta.get(&key) {
-                    if old_val != &value {
-                        return Err(ArrowError::SchemaError(format!(
-                            "Fail to merge schema due to conflicting metadata. \
-                                         Key '{key}' has different values '{old_val}' and '{value}'"
-                        )));
-                    }
+            for (key, value) in metadata {
+                if let Some(old_val) = out_meta.get(&key)
+                    && old_val != &value
+                {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Fail to merge schema due to conflicting metadata. \
+                                     Key '{key}' has different values '{old_val}' and '{value}'"
+                    )));
                 }
                 out_meta.insert(key, value);
             }
@@ -387,7 +381,7 @@ impl Schema {
         note = "The ability to preserve dictionary IDs will be removed. With it, all functions related to it."
     )]
     pub fn fields_with_dict_id(&self, dict_id: i64) -> Vec<&Field> {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.fields
             .iter()
             .flat_map(|f| f.fields_with_dict_id(dict_id))
@@ -407,7 +401,7 @@ impl Schema {
 
     /// Returns an immutable reference to the Map of custom metadata key-value pairs.
     #[inline]
-    pub const fn metadata(&self) -> &HashMap<String, String> {
+    pub const fn metadata(&self) -> &Metadata {
         &self.metadata
     }
 
@@ -513,7 +507,7 @@ impl Schema {
             && other
                 .metadata
                 .iter()
-                .all(|(k, v1)| self.metadata.get(k).map(|v2| v1 == v2).unwrap_or_default())
+                .all(|(k, v1)| self.metadata.get(k).is_some_and(|v2| v1 == v2))
     }
 }
 
@@ -530,22 +524,6 @@ impl fmt::Display for Schema {
     }
 }
 
-// need to implement `Hash` manually because `HashMap` implement Eq but no `Hash`
-#[allow(clippy::derived_hash_with_manual_eq)]
-impl Hash for Schema {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.fields.hash(state);
-
-        // ensure deterministic key order
-        let mut keys: Vec<&String> = self.metadata.keys().collect();
-        keys.sort();
-        for k in keys {
-            k.hash(state);
-            self.metadata.get(k).expect("key valid").hash(state);
-        }
-    }
-}
-
 impl AsRef<Schema> for Schema {
     fn as_ref(&self) -> &Schema {
         self
@@ -556,6 +534,7 @@ impl AsRef<Schema> for Schema {
 mod tests {
     use crate::datatype::DataType;
     use crate::{TimeUnit, UnionMode};
+    use std::collections::HashMap;
 
     use super::*;
 
@@ -594,8 +573,7 @@ mod tests {
         assert_eq!(schema, de_schema);
 
         // ser/de with non-empty metadata
-        let schema =
-            schema.with_metadata([("key".to_owned(), "val".to_owned())].into_iter().collect());
+        let schema = schema.with_metadata([("key", "val")]);
         let json = serde_json::to_string(&schema).unwrap();
         let de_schema = serde_json::from_str(&json).unwrap();
 
@@ -705,12 +683,7 @@ mod tests {
         assert_ne!(schema2, schema4);
         assert_ne!(schema3, schema4);
 
-        let f = Field::new("c1", DataType::Utf8, false).with_metadata(
-            [("foo".to_string(), "bar".to_string())]
-                .iter()
-                .cloned()
-                .collect(),
-        );
+        let f = Field::new("c1", DataType::Utf8, false).with_metadata([("foo", "bar")]);
         let schema5 = Schema::new(vec![
             f,
             Field::new("c2", DataType::Float64, true),
@@ -743,7 +716,7 @@ mod tests {
         assert_eq!(first_name.name(), "first_name");
         assert_eq!(first_name.data_type(), &DataType::Utf8);
         assert!(!first_name.is_nullable());
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_id = first_name.dict_id();
         assert_eq!(dict_id, None);
         assert_eq!(first_name.dict_is_ordered(), None);
@@ -762,7 +735,7 @@ mod tests {
             interests.data_type(),
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
         );
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_id = interests.dict_id();
         assert_eq!(dict_id, Some(123));
         assert_eq!(interests.dict_is_ordered(), Some(true));
@@ -1204,7 +1177,7 @@ mod tests {
     fn schema_field_with_dict_id() {
         let schema = person_schema();
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let fields_dict_123: Vec<_> = schema
             .fields_with_dict_id(123)
             .iter()
@@ -1212,7 +1185,7 @@ mod tests {
             .collect();
         assert_eq!(fields_dict_123, vec!["interests"]);
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let is_empty = schema.fields_with_dict_id(456).is_empty();
         assert!(is_empty);
     }
@@ -1234,7 +1207,7 @@ mod tests {
                 ])),
                 false,
             ),
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Field::new_dict(
                 "interests",
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -1248,26 +1221,17 @@ mod tests {
     #[test]
     fn test_try_merge_field_with_metadata() {
         // 1. Different values for the same key should cause error.
-        let metadata1: HashMap<String, String> = [("foo".to_string(), "bar".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata1 = HashMap::from([("foo".to_string(), "bar".to_string())]);
         let f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata1);
 
-        let metadata2: HashMap<String, String> = [("foo".to_string(), "baz".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata2 = HashMap::from([("foo".to_string(), "baz".to_string())]);
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
         assert!(Schema::try_merge(vec![Schema::new(vec![f1]), Schema::new(vec![f2])]).is_err());
 
         // 2. None + Some
         let mut f1 = Field::new("first_name", DataType::Utf8, false);
-        let metadata2: HashMap<String, String> = [("missing".to_string(), "value".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata2 = HashMap::from([("missing".to_string(), "value".to_string())]);
         let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(metadata2);
 
         assert!(f1.try_merge(&f2).is_ok());
@@ -1275,49 +1239,24 @@ mod tests {
         assert_eq!(f1.metadata(), f2.metadata());
 
         // 3. Some + Some
-        let mut f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(
-            [("foo".to_string(), "bar".to_string())]
-                .iter()
-                .cloned()
-                .collect(),
-        );
-        let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(
-            [("foo2".to_string(), "bar2".to_string())]
-                .iter()
-                .cloned()
-                .collect(),
-        );
+        let mut f1 =
+            Field::new("first_name", DataType::Utf8, false).with_metadata([("foo", "bar")]);
+        let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata([("foo2", "bar2")]);
 
         assert!(f1.try_merge(&f2).is_ok());
         assert!(!f1.metadata().is_empty());
         assert_eq!(
-            f1.metadata().clone(),
-            [
-                ("foo".to_string(), "bar".to_string()),
-                ("foo2".to_string(), "bar2".to_string())
-            ]
-            .iter()
-            .cloned()
-            .collect()
+            f1.metadata(),
+            &Metadata::from([("foo", "bar"), ("foo2", "bar2")])
         );
 
         // 4. Some + None.
-        let mut f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(
-            [("foo".to_string(), "bar".to_string())]
-                .iter()
-                .cloned()
-                .collect(),
-        );
+        let mut f1 =
+            Field::new("first_name", DataType::Utf8, false).with_metadata([("foo", "bar")]);
         let f2 = Field::new("first_name", DataType::Utf8, false);
         assert!(f1.try_merge(&f2).is_ok());
         assert!(!f1.metadata().is_empty());
-        assert_eq!(
-            f1.metadata().clone(),
-            [("foo".to_string(), "bar".to_string())]
-                .iter()
-                .cloned()
-                .collect()
-        );
+        assert_eq!(f1.metadata(), &Metadata::from([("foo", "bar")]));
 
         // 5. None + None.
         let mut f1 = Field::new("first_name", DataType::Utf8, false);
@@ -1355,10 +1294,7 @@ mod tests {
                     // new field
                     Field::new("number", DataType::Utf8, true),
                 ],
-                [("foo".to_string(), "bar".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>(),
+                HashMap::from([("foo".to_string(), "bar".to_string())]),
             ),
         ])
         .unwrap();
@@ -1379,10 +1315,7 @@ mod tests {
                     ),
                     Field::new("number", DataType::Utf8, true),
                 ],
-                [("foo".to_string(), "bar".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>()
+                HashMap::from([("foo".to_string(), "bar".to_string())])
             )
         );
 
@@ -1437,17 +1370,11 @@ mod tests {
         let res = Schema::try_merge(vec![
             Schema::new_with_metadata(
                 vec![Field::new("first_name", DataType::Utf8, false)],
-                [("foo".to_string(), "bar".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>(),
+                HashMap::from([("foo".to_string(), "bar".to_string())]),
             ),
             Schema::new_with_metadata(
                 vec![Field::new("last_name", DataType::Utf8, false)],
-                [("foo".to_string(), "baz".to_string())]
-                    .iter()
-                    .cloned()
-                    .collect::<HashMap<String, String>>(),
+                HashMap::from([("foo".to_string(), "baz".to_string())]),
             ),
         ])
         .unwrap_err();
@@ -1491,12 +1418,12 @@ mod tests {
 
     #[test]
     fn test_schema_builder_metadata() {
-        let mut metadata = HashMap::with_capacity(1);
+        let mut metadata: HashMap<String, String> = HashMap::with_capacity(1);
         metadata.insert("key".to_string(), "value".to_string());
 
         let fields = vec![Field::new("test", DataType::Int8, true)];
         let mut builder: SchemaBuilder = Schema::new(fields).with_metadata(metadata).into();
-        builder.metadata_mut().insert("k".into(), "v".into());
+        builder.metadata_mut().insert("k", "v");
         let out = builder.finish();
         assert_eq!(out.metadata.len(), 2);
         assert_eq!(out.metadata["k"], "v");

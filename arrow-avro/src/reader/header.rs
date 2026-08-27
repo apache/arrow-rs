@@ -253,7 +253,7 @@ impl HeaderDecoder {
                     }
                 }
                 HeaderDecoderState::BlockCount => {
-                    if let Some(block_count) = self.vlq_decoder.long(&mut buf) {
+                    if let Some(block_count) = self.vlq_decoder.long(&mut buf)? {
                         match block_count.try_into() {
                             Ok(0) => {
                                 self.state = HeaderDecoderState::Sync;
@@ -271,7 +271,7 @@ impl HeaderDecoder {
                     }
                 }
                 HeaderDecoderState::BlockLen => {
-                    if self.vlq_decoder.long(&mut buf).is_some() {
+                    if self.vlq_decoder.long(&mut buf)?.is_some() {
                         self.state = HeaderDecoderState::KeyLen
                     }
                 }
@@ -301,21 +301,22 @@ impl HeaderDecoder {
                     }
                 }
                 HeaderDecoderState::KeyLen => {
-                    if let Some(len) = self.vlq_decoder.long(&mut buf) {
+                    if let Some(len) = self.vlq_decoder.long(&mut buf)? {
                         self.bytes_remaining = len as _;
                         self.state = HeaderDecoderState::Key;
                     }
                 }
                 HeaderDecoderState::ValueLen => {
-                    if let Some(len) = self.vlq_decoder.long(&mut buf) {
+                    if let Some(len) = self.vlq_decoder.long(&mut buf)? {
                         self.bytes_remaining = len as _;
                         self.state = HeaderDecoderState::Value;
                     }
                 }
                 HeaderDecoderState::Sync => {
                     let to_decode = buf.len().min(self.bytes_remaining);
-                    let write = &mut self.sync_marker[16 - to_decode..];
-                    write[..to_decode].copy_from_slice(&buf[..to_decode]);
+                    // Fill from the front: the marker may arrive split across decode() calls.
+                    let offset = 16 - self.bytes_remaining;
+                    self.sync_marker[offset..offset + to_decode].copy_from_slice(&buf[..to_decode]);
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];
                     if self.bytes_remaining == 0 {

@@ -96,6 +96,37 @@ pub type Decimal128Builder = PrimitiveBuilder<Decimal128Type>;
 pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 
 /// Builder for [`PrimitiveArray`]
+///
+/// # Performance
+///
+/// When all values are known upfront, prefer constructing a [`PrimitiveArray`] directly
+/// via [`PrimitiveArray::from`] or [`PrimitiveArray::new`] instead of using this builder.
+/// Direct construction reuses the existing allocation (zero-copy from `Vec`) and avoids
+/// the overhead of per-element bookkeeping, making it significantly faster.
+///
+/// Use [`PrimitiveBuilder`] when values must be appended **incrementally** — for example,
+/// inside a loop where the final size is not known in advance.
+///
+/// # Example
+///
+/// ```
+/// # use arrow_array::{Int32Array, Array};
+/// // Prefer this when values are known upfront (zero-copy, no per-element overhead):
+/// let array = Int32Array::from(vec![1, 2, 3]);
+/// assert_eq!(array.len(), 3);
+/// ```
+///
+/// ```
+/// # use arrow_array::builder::Int32Builder;
+/// # use arrow_array::Array;
+/// // Use the builder when appending values one-by-one:
+/// let mut builder = Int32Builder::new();
+/// for v in [1, 2, 3] {
+///     builder.append_value(v);
+/// }
+/// let array = builder.finish();
+/// assert_eq!(array.len(), 3);
+/// ```
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     values_builder: Vec<T::Native>,
@@ -234,7 +265,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         match v {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Appends a slice of type `T` into the builder
@@ -328,6 +359,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .add_buffer(std::mem::take(&mut self.values_builder).into())
             .nulls(nulls);
 
+        // SAFETY: builder is constructed from valid primitive value buffer and null buffer with matching lengths
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
     }
@@ -342,6 +374,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .add_buffer(values_buffer)
             .nulls(nulls);
 
+        // SAFETY: builder is constructed from valid primitive value buffer and null buffer with matching lengths
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
     }
@@ -359,6 +392,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Returns the current null buffer as a slice
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
+    }
+
+    /// Returns the current null buffer allocated capacity, in bytes.
+    pub fn validity_capacity(&self) -> usize {
+        self.null_buffer_builder.allocated_size()
     }
 
     /// Returns the current null buffer as a mutable slice

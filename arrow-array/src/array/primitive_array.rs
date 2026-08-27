@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::print_long_array;
-use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
+use crate::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
 use crate::temporal_conversions::{
     as_date, as_datetime, as_datetime_with_timezone, as_duration, as_time,
@@ -581,6 +581,18 @@ pub use crate::types::ArrowPrimitiveType;
 /// assert!(array.is_null(1));
 /// ```
 ///
+/// # Performance: Choosing Between `from` and [`PrimitiveBuilder`]
+///
+/// When all values are known upfront, constructing a `PrimitiveArray` directly via
+/// [`PrimitiveArray::from`] or [`PrimitiveArray::new`] is significantly faster than
+/// using [`PrimitiveBuilder`]:
+///
+/// - **`PrimitiveArray::from(vec![...])`** — zero-copy from `Vec`; no per-element
+///   bookkeeping. Prefer this whenever values are already collected.
+/// - **[`PrimitiveBuilder`]** — allocates incrementally and tracks nullability
+///   per-element. Use this only when values must be appended one-at-a-time inside a
+///   loop where the final size is not known in advance.
+///
 /// # Example: Get a `PrimitiveArray` from an [`ArrayRef`]
 /// ```
 /// # use std::sync::Arc;
@@ -636,6 +648,24 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Self::try_new(values, nulls).unwrap()
     }
 
+    /// Create a new [`PrimitiveArray`] from the provided values and nulls without validation.
+    ///
+    /// # Safety
+    /// - `values.len() == nulls.len()` if `nulls` is `Some`
+    pub unsafe fn new_unchecked(
+        values: ScalarBuffer<T::Native>,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(values, nulls);
+        }
+        Self {
+            data_type: T::DATA_TYPE,
+            values,
+            nulls,
+        }
+    }
+
     /// Create a new [`PrimitiveArray`] of the given length where all values are null
     pub fn new_null(length: usize) -> Self {
         Self {
@@ -655,14 +685,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         values: ScalarBuffer<T::Native>,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != values.len() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
-                    values.len(),
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != values.len()
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
+                values.len(),
+                n.len(),
+            )));
         }
 
         Ok(Self {
@@ -830,6 +860,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -974,9 +1007,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let len = self.len();
 
         let nulls = self.nulls().cloned();
-        let mut buffer = BufferBuilder::<O::Native>::new(len);
-        buffer.append_n_zeroed(len);
-        let slice = buffer.as_slice_mut();
+        let mut values = vec![O::Native::default(); len];
+        let slice = values.as_mut_slice();
 
         let f = |idx| {
             unsafe { *slice.get_unchecked_mut(idx) = op(self.value_unchecked(idx))? };
@@ -988,7 +1020,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             None => (0..len).try_for_each(f)?,
         }
 
-        let values = buffer.finish().into();
+        let values = values.into();
         Ok(PrimitiveArray::new(values, nulls))
     }
 
@@ -1058,9 +1090,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             None => null_builder.append_n(len, true),
         }
 
-        let mut buffer = BufferBuilder::<O::Native>::new(len);
-        buffer.append_n_zeroed(len);
-        let slice = buffer.as_slice_mut();
+        let mut values = vec![O::Native::default(); len];
+        let slice = values.as_mut_slice();
 
         let mut out_null_count = null_count;
 
@@ -1076,7 +1107,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         });
 
         let nulls = null_builder.finish();
-        let values = buffer.finish().into();
+        let values = values.into();
         let nulls = unsafe { NullBuffer::new_unchecked(nulls, out_null_count) };
         PrimitiveArray::new(values, Some(nulls))
     }
@@ -1279,6 +1310,10 @@ where
     /// A valid value is expected, thus the user should first check for validity.
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_datetime(&self, i: usize) -> Option<NaiveDateTime> {
         as_datetime::<T>(i64::from(self.value(i)))
     }
@@ -1289,6 +1324,10 @@ where
     /// the passed tz to the to-be-returned NaiveDateTime
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_datetime_with_tz(&self, i: usize, tz: Tz) -> Option<DateTime<Tz>> {
         as_datetime_with_timezone::<T>(i64::from(self.value(i)), tz)
     }
@@ -1298,6 +1337,10 @@ where
     /// If a data type cannot be converted to `NaiveDate`, a `None` is returned
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_date(&self, i: usize) -> Option<NaiveDate> {
         self.value_as_datetime(i).map(|datetime| datetime.date())
     }
@@ -1307,6 +1350,10 @@ where
     /// `Date32` and `Date64` return UTC midnight as they do not have time resolution
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_time(&self, i: usize) -> Option<NaiveTime> {
         as_time::<T>(i64::from(self.value(i)))
     }
@@ -1316,6 +1363,10 @@ where
     /// If a data type cannot be converted to `Duration`, a `None` is returned
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_duration(&self, i: usize) -> Option<Duration> {
         as_duration::<T>(i64::from(self.value(i)))
     }
