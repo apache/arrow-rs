@@ -262,24 +262,25 @@ pub(crate) fn parse_page_index(
     let mut builder = PageIndexBuilder::default();
     if column_index_policy != PageIndexPolicy::Skip {
         builder.allocate_column_indexes(num_row_groups, num_columns);
+        parse_column_index(
+            metadata,
+            column_index_policy,
+            &mut builder,
+            bytes,
+            start_offset,
+        )?;
     }
     if offset_index_policy != PageIndexPolicy::Skip {
         builder.allocate_offset_indexes(num_row_groups, num_columns);
+        parse_offset_index(
+            metadata,
+            offset_index_policy,
+            &mut builder,
+            bytes,
+            start_offset,
+        )?;
     }
-    parse_column_index(
-        metadata,
-        column_index_policy,
-        &mut builder,
-        bytes,
-        start_offset,
-    )?;
-    parse_offset_index(
-        metadata,
-        offset_index_policy,
-        &mut builder,
-        bytes,
-        start_offset,
-    )?;
+
     let page_index = builder.build();
     // if both indexes are missing from the file, return without modifying `metadata`
     if !page_index.has_column_indexes() && !page_index.has_offset_indexes() {
