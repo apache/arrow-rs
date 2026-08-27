@@ -135,6 +135,7 @@ use std::sync::Arc;
 /// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 /// [`OffsetIndex`]: crate::file::page_index::offset_index::OffsetIndexMetaData
+/// [`ColumnChunkMetaData`]: crate::file::metadata::ColumnChunkMetaData
 pub trait PageIndexProvider: Send + Sync + std::fmt::Debug {
     /// Returns `true` if offset index structures are present
     ///
@@ -437,6 +438,7 @@ impl RowGroupPageIndex {
 /// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 /// [`OffsetIndex`]: crate::file::page_index::offset_index::OffsetIndexMetaData
+/// [`ParquetMetaData`]: crate::file::metadata::ParquetMetaData
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageIndex {
     column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
@@ -517,7 +519,6 @@ impl HeapSize for PageIndex {
 /// Builder for constructing [`PageIndex`] structures
 ///
 /// It supports:
-/// - Allocating space for indexes based on [`PageIndexPolicy`]
 /// - Populating column indexes for predicate columns (for page filtering)
 /// - Populating offset indexes for projected columns (for direct I/O)
 /// - Automatic conversion of empty structures to `None` to save memory

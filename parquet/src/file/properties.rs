@@ -1142,7 +1142,7 @@ impl WriterPropertiesBuilder {
     /// specification. See [issue #7580] for more details.
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
-    /// [`PageIndex`]: crate::file::metadata::PageIndex
+    /// [`PageIndex`]: crate::file::metadata::page_index::PageIndex
     /// [`Page`]: EnabledStatistics::Page
     /// [issue #7580]: https://github.com/apache/arrow-rs/issues/7580
     pub fn set_write_page_header_statistics(mut self, value: bool) -> Self {
@@ -1420,7 +1420,7 @@ pub enum EnabledStatistics {
     /// this setting). See [`PageIndex`] for
     /// more information.
     ///
-    /// [`PageIndex`]: crate::file::metadata::PageIndex
+    /// [`PageIndex`]: crate::file::metadata::page_index::PageIndex
     Page,
 }
 
