@@ -196,6 +196,12 @@ impl BufferRetentionPlan {
             ));
         }
 
+        if range.is_empty() {
+            // Empty requests still need an entry so they are not requested forever.
+            buffers.push_range(range, data)?;
+            return Ok(());
+        }
+
         let mut overlaps = Vec::new();
         if let Some((&predecessor_start, retained_ranges)) =
             self.retained_spans.range(..=range.start).next_back()
@@ -1225,11 +1231,27 @@ mod tests {
     use super::*;
     use crate::arrow::arrow_reader::{RowSelection, RowSelector};
     use crate::file::page_index::offset_index::PageLocation;
+    use bytes::Bytes;
 
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
         assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 240);
+    }
+
+    #[test]
+    fn retention_plan_admits_empty_ranges() {
+        let mut plan = BufferRetentionPlan {
+            retained_spans: BTreeMap::new(),
+            remaining_uses: BTreeMap::new(),
+            admitted_buffers: BTreeMap::new(),
+        };
+        let mut buffers = PushBuffers::new(100);
+
+        plan.admit(&mut buffers, 0..0, Bytes::new()).unwrap();
+
+        assert!(buffers.has_range(&(0..0)));
+        assert_eq!(buffers.buffered_bytes(), 0);
     }
 
     #[test]
