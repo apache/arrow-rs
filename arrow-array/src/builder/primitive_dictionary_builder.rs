@@ -357,7 +357,7 @@ where
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Append an `Option` value into the builder repeatedly `count` times.
@@ -370,7 +370,7 @@ where
         match value {
             None => self.keys_builder.append_nulls(count),
             Some(v) => self.append_values(v, count),
-        };
+        }
     }
 
     /// Extends builder with dictionary
@@ -445,6 +445,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -461,6 +462,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -493,6 +495,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 

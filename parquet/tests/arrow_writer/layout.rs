@@ -82,23 +82,28 @@ fn do_test(test: LayoutTest) {
 
 fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
     assert_eq!(meta.row_groups().len(), layout.row_groups.len());
-    let iter = meta
-        .row_groups()
-        .iter()
-        .zip(&layout.row_groups)
-        .zip(meta.offset_index().unwrap());
 
-    for ((row_group, row_group_layout), offset_index) in iter {
+    for rg_idx in 0..meta.num_row_groups() {
+        let row_group = meta.row_group(rg_idx);
+        let row_group_layout = &layout.row_groups[rg_idx];
+        let offset_index = meta
+            .page_index()
+            .unwrap()
+            .offset_indexes_for_rowgroup(rg_idx)
+            .unwrap();
+
         // Check against offset index
         assert_eq!(offset_index.len(), row_group_layout.columns.len());
 
         for (column_index, column_layout) in offset_index.iter().zip(&row_group_layout.columns) {
             assert_eq!(
-                column_index.page_locations.len(),
+                column_index.as_ref().unwrap().page_locations.len(),
                 column_layout.pages.len(),
                 "index page count mismatch"
             );
             for (idx, (page, page_layout)) in column_index
+                .as_ref()
+                .unwrap()
                 .page_locations
                 .iter()
                 .zip(&column_layout.pages)
@@ -110,6 +115,8 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
                     "index page {idx} size mismatch"
                 );
                 let next_first_row_index = column_index
+                    .as_ref()
+                    .unwrap()
                     .page_locations
                     .get(idx + 1)
                     .map(|x| x.first_row_index)
@@ -597,9 +604,9 @@ fn test_per_column_data_page_size_limit() {
     assert_eq!(row_group.columns().len(), 2);
 
     // Get page counts from offset index
-    let offset_index = metadata.offset_index().unwrap();
-    let col_a_page_count = offset_index[0][0].page_locations.len();
-    let col_b_page_count = offset_index[0][1].page_locations.len();
+    let page_index = metadata.page_index().unwrap();
+    let col_a_page_count = page_index.offset_index(0, 0).unwrap().page_locations.len();
+    let col_b_page_count = page_index.offset_index(0, 1).unwrap().page_locations.len();
 
     // col_a should have many more pages than col_b due to smaller page size limit
     // col_a: 500 byte limit for 8000 bytes of data -> 16 pages
@@ -741,6 +748,46 @@ fn test_large_string() {
                             page_type: PageType::DATA_PAGE,
                         })
                         .collect(),
+                    dictionary_page: None,
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
+fn test_large_string_delta_byte_array_shared_prefix() {
+    // Regression for https://github.com/apache/arrow-rs/issues/10489, at the
+    // `ArrowWriter` level the report used.
+    //
+    // Same shape as `test_large_string` — 64 KiB values against a 16 KiB
+    // page limit — but `DELTA_BYTE_ARRAY` and 32 identical values. Expect a
+    // single page holding all 32 rows and about one value's worth of bytes,
+    // rather than the 32 pages and ~2 MiB `PLAIN` produces.
+    let value_size = 64 * 1024;
+    let strings: Vec<String> = (0..32).map(|_| "x".repeat(value_size)).collect();
+    let array = Arc::new(StringArray::from(strings)) as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .set_data_page_size_limit(16 * 1024)
+        .set_statistics_enabled(EnabledStatistics::None)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    pages: vec![Page {
+                        rows: 32,
+                        page_header_size: 21,
+                        compressed_size: 65696,
+                        encoding: Encoding::DELTA_BYTE_ARRAY,
+                        page_type: PageType::DATA_PAGE,
+                    }],
                     dictionary_page: None,
                 }],
             }],

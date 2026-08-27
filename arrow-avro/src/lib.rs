@@ -257,7 +257,6 @@
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![deny(clippy::allow_attributes)]
 #![warn(missing_docs)]
 
 /// Core functionality for reading Avro data into Arrow arrays

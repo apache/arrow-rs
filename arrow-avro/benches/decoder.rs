@@ -19,7 +19,8 @@
 //!
 
 use apache_avro::types::Value;
-use apache_avro::{Decimal, Schema as ApacheSchema, to_avro_datum};
+use apache_avro::writer::datum::GenericDatumWriter;
+use apache_avro::{Decimal, Schema as ApacheSchema};
 use arrow_avro::schema::{CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SINGLE_OBJECT_MAGIC};
 use arrow_avro::{reader::ReaderBuilder, schema::AvroSchema};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -70,9 +71,10 @@ fn encode_records_with_prefix(
     rows: impl Iterator<Item = Value>,
 ) -> Vec<u8> {
     let mut out = Vec::new();
+    let writer = GenericDatumWriter::builder(schema).build().unwrap();
     for v in rows {
         out.extend_from_slice(prefix);
-        out.extend_from_slice(&to_avro_datum(schema, v).expect("encode datum failed"));
+        out.extend(writer.write_value_to_vec(v).unwrap());
     }
     out
 }

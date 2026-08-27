@@ -145,11 +145,11 @@ pub(crate) fn follow_shredded_path_element(
             };
 
             let struct_array = field.as_struct_opt().ok_or_else(|| {
-                // TODO: Should we blow up? Or just end the traversal and let the normal
-                // variant pathing code sort out the mess that it must anyway be
-                // prepared to handle?
+                // Each named child of a shredded object represents a shredded Variant field,
+                // whose physical layout is a Struct containing `value` and/or `typed_value`.
                 ArrowError::InvalidArgumentError(format!(
-                    "Expected Struct array while following path, got {}",
+                    "Shredded object field '{name}' must be a Struct containing 'value' and/or \
+                     'typed_value', got {}",
                     field.data_type(),
                 ))
             })?;
@@ -283,7 +283,6 @@ fn shredded_get_path(
                 }
                 shredding_state = state;
                 path_index += 1;
-                continue;
             }
             ShreddedPathStep::Missing => {
                 let num_rows = input.len();
@@ -313,7 +312,7 @@ fn shredded_get_path(
                 );
                 return shred_basic_variant(target, path[path_index..].into(), as_field);
             }
-        };
+        }
     }
 
     // Path exhausted! Create a new `VariantArray` for the location we landed on.
@@ -1676,8 +1675,7 @@ mod test {
             error_msg
                 .contains("Cast error: Failed to extract primitive of type Null from variant Int32(32) at path VariantPath([])"),
             "Expected=[Cast error: Failed to extract primitive of type Null from variant Int32(32) at path VariantPath([])],\
-                Got error message=[{}]",
-            error_msg
+                Got error message=[{error_msg}]"
         );
     }
 
@@ -1919,6 +1917,33 @@ mod test {
         assert_eq!(result_variant.value(0), Variant::Int32(1));
         // Row 1: expect x=42
         assert_eq!(result_variant.value(1), Variant::Int32(42));
+    }
+
+    #[test]
+    fn test_malformed_shredded_object_field_reports_field_and_type() {
+        let metadata =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 2));
+        let typed_value = StructArray::try_new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(42)]))],
+            None,
+        )
+        .unwrap();
+        let array = ArrayRef::from(VariantArray::from_parts(
+            Arc::new(metadata),
+            all_null_value_column(2),
+            Some(Arc::new(typed_value)),
+            None,
+        ));
+
+        let options = GetOptions::new_with_path(VariantPath::try_from("x").unwrap());
+        let err = variant_get(&array, options).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Shredded object field 'x' must be a Struct containing \
+             'value' and/or 'typed_value', got Int32"
+        );
     }
 
     /// Test extracting shredded object field with type conversion
@@ -2261,7 +2286,7 @@ mod test {
                 println!("Nested path 'a.x' works unexpectedly!");
             }
             Err(e) => {
-                println!("Nested path 'a.x' error: {}", e);
+                println!("Nested path 'a.x' error: {e}");
                 if e.to_string().contains("Not yet implemented")
                     || e.to_string().contains("NotYetImplemented")
                 {
@@ -2404,7 +2429,7 @@ mod test {
             GetOptions::new_with_path(single_path).with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&array, options).unwrap();
 
-        println!("Single path 'x' works - result: {:?}", result);
+        println!("Single path 'x' works - result: {result:?}");
 
         // Test: Try nested path "a.x" - this is what we need to implement
         let nested_path = VariantPath::try_from("a").unwrap().join("x");
@@ -2413,7 +2438,7 @@ mod test {
             GetOptions::new_with_path(nested_path).with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&array, options).unwrap();
 
-        println!("Nested path 'a.x' result: {:?}", result);
+        println!("Nested path 'a.x' result: {result:?}");
     }
 
     #[test]

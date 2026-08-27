@@ -50,7 +50,7 @@ const DEFAULT_CAPACITY: usize = 1024;
 /// Macro to decode a decimal payload for a given width and integer type.
 macro_rules! decode_decimal {
     ($size:expr, $buf:expr, $builder:expr, $N:expr, $Int:ty) => {{
-        let bytes = read_decimal_bytes_be::<{ $N }>($buf, $size)?;
+        let bytes = read_decimal_bytes_be::<{ $N }>($buf, *$size)?;
         $builder.append_value(<$Int>::from_be_bytes(bytes));
     }};
 }
@@ -2412,17 +2412,17 @@ fn flush_primitive<T: ArrowPrimitiveType>(
 #[inline]
 fn read_decimal_bytes_be<const N: usize>(
     buf: &mut AvroCursor<'_>,
-    size: &Option<usize>,
+    size: Option<usize>,
 ) -> Result<[u8; N], AvroError> {
     match size {
-        Some(n) if *n == N => {
+        Some(n) if n == N => {
             let raw = buf.get_fixed(N)?;
             let mut arr = [0u8; N];
             arr.copy_from_slice(raw);
             Ok(arr)
         }
         Some(n) => {
-            let raw = buf.get_fixed(*n)?;
+            let raw = buf.get_fixed(n)?;
             sign_cast_to::<N>(raw)
         }
         None => {
@@ -2461,8 +2461,7 @@ fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], AvroError> {
         // Any non-sign byte in the truncated prefix indicates overflow
         if raw[..extra].iter().any(|&b| b != sign_byte) {
             return Err(AvroError::ParseError(format!(
-                "Decimal value with {} bytes cannot be represented in {} bytes without overflow",
-                len, N
+                "Decimal value with {len} bytes cannot be represented in {N} bytes without overflow"
             )));
         }
         if N > 0 {
@@ -2470,8 +2469,7 @@ fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], AvroError> {
             let sign_bit_mismatch = ((first_kept ^ sign_byte) & 0x80) != 0;
             if sign_bit_mismatch {
                 return Err(AvroError::ParseError(format!(
-                    "Decimal value with {} bytes cannot be represented in {} bytes without overflow",
-                    len, N
+                    "Decimal value with {len} bytes cannot be represented in {N} bytes without overflow"
                 )));
             }
         }
@@ -2561,7 +2559,7 @@ impl Projector {
         buf: &mut AvroCursor<'_>,
         encodings: &mut [Decoder],
     ) -> Result<(), AvroError> {
-        for field_proj in self.writer_projections.iter() {
+        for field_proj in &self.writer_projections {
             match field_proj {
                 FieldProjection::ToReader(index) => encodings[*index].decode(buf)?,
                 FieldProjection::Skip(skipper) => skipper.skip(buf)?,
@@ -2764,7 +2762,7 @@ impl Skipper {
                 Ok(())
             }
             Self::Struct(fields) => {
-                for f in fields.iter() {
+                for f in fields {
                     f.skip(buf)?
                 }
                 Ok(())
@@ -2947,7 +2945,7 @@ mod tests {
         dec.decode(&mut cur1).unwrap();
 
         let mut rec2 = encode_avro_long(1);
-        rec2.extend(encode_avro_bytes("abc".as_bytes()));
+        rec2.extend(encode_avro_bytes(b"abc"));
         let mut cur2 = AvroCursor::new(&rec2);
         dec.decode(&mut cur2).unwrap();
 
@@ -3014,7 +3012,7 @@ mod tests {
         let mut dec = Decoder::try_new(&dt).unwrap();
 
         let mut data = encode_avro_long(1);
-        data.extend(encode_avro_bytes("z".as_bytes()));
+        data.extend(encode_avro_bytes(b"z"));
         let mut cur = AvroCursor::new(&data);
         let res = dec.decode(&mut cur);
         assert!(
@@ -3200,7 +3198,7 @@ mod tests {
     fn test_schema_resolution_promotion_bytes_to_string_utf8view_enabled() {
         let mut dec = decoder_for_promotion(PrimitiveType::Bytes, PrimitiveType::String, true);
         assert!(matches!(dec, Decoder::BytesToString(_, _)));
-        let data = encode_avro_bytes("abc".as_bytes());
+        let data = encode_avro_bytes(b"abc");
         let mut cur = AvroCursor::new(&data);
         dec.decode(&mut cur).unwrap();
         let arr = dec.flush(None).unwrap();
@@ -3221,7 +3219,7 @@ mod tests {
         let a = arr.as_any().downcast_ref::<BinaryArray>().unwrap();
         assert_eq!(a.value(0), b"");
         assert_eq!(a.value(1), b"abc");
-        assert_eq!(a.value(2), "data".as_bytes());
+        assert_eq!(a.value(2), b"data");
     }
 
     #[test]
@@ -5328,7 +5326,7 @@ mod tests {
         ));
         let mut dec = Decoder::try_new(&dt).expect("decoder");
         let mut b1 = encode_avro_long(1);
-        b1.extend(encode_avro_bytes("hi".as_bytes()));
+        b1.extend(encode_avro_bytes(b"hi"));
         dec.decode(&mut AvroCursor::new(&b1)).expect("decode b1");
         let mut b0 = encode_avro_long(0);
         b0.extend(encode_avro_int(5));
@@ -5363,7 +5361,7 @@ mod tests {
             let s = Skipper::from_avro(&dt)?;
             match s {
                 Skipper::Int64 => {}
-                other => panic!("expected Int64 skipper for {:?}, got {:?}", codec, other),
+                other => panic!("expected Int64 skipper for {codec:?}, got {other:?}"),
             }
         }
         Ok(())
@@ -5388,9 +5386,7 @@ mod tests {
                 assert_eq!(
                     cursor.position(),
                     bytes.len(),
-                    "did not consume all bytes for {:?} value {}",
-                    codec,
-                    v
+                    "did not consume all bytes for {codec:?} value {v}"
                 );
             }
         }
@@ -5405,9 +5401,9 @@ mod tests {
         match &s {
             Skipper::Nullable(Nullability::NullFirst, inner) => match **inner {
                 Skipper::Int64 => {}
-                ref other => panic!("expected inner Int64, got {:?}", other),
+                ref other => panic!("expected inner Int64, got {other:?}"),
             },
-            other => panic!("expected Nullable(NullFirst, Int64), got {:?}", other),
+            other => panic!("expected Nullable(NullFirst, Int64), got {other:?}"),
         }
         {
             let buf = encode_vlq_u64(0);
@@ -5434,9 +5430,9 @@ mod tests {
         match &s {
             Skipper::Nullable(Nullability::NullSecond, inner) => match **inner {
                 Skipper::Int64 => {}
-                ref other => panic!("expected inner Int64, got {:?}", other),
+                ref other => panic!("expected inner Int64, got {other:?}"),
             },
-            other => panic!("expected Nullable(NullSecond, Int64), got {:?}", other),
+            other => panic!("expected Nullable(NullSecond, Int64), got {other:?}"),
         }
         {
             let buf = encode_vlq_u64(1);
@@ -5464,7 +5460,7 @@ mod tests {
         let s = Skipper::from_avro(&dt)?;
         match s {
             Skipper::DurationFixed12 => {}
-            other => panic!("expected DurationFixed12, got {:?}", other),
+            other => panic!("expected DurationFixed12, got {other:?}"),
         }
         let payload = vec![0u8; 12];
         let mut cursor = AvroCursor::new(&payload);

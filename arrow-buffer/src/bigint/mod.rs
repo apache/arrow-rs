@@ -240,10 +240,8 @@ impl i256 {
     /// Create an optional i256 from the provided `f64`. Returning `None`
     /// if overflow occurred
     pub fn from_f64(v: f64) -> Option<Self> {
-        BigInt::from_f64(v).and_then(|i| {
-            let (integer, overflow) = i256::from_bigint_with_overflow(i);
-            if overflow { None } else { Some(integer) }
-        })
+        let (integer, overflow) = i256::from_bigint_with_overflow(BigInt::from_f64(v)?);
+        if overflow { None } else { Some(integer) }
     }
 
     /// Create an i256 from the provided low u128 and high i128
@@ -1083,25 +1081,7 @@ define_as_primitive!(u64);
 
 impl ToPrimitive for i256 {
     fn to_i64(&self) -> Option<i64> {
-        let as_i128 = self.low as i128;
-
-        let high_negative = self.high < 0;
-        let low_negative = as_i128 < 0;
-        let high_valid = self.high == -1 || self.high == 0;
-
-        if high_negative == low_negative && high_valid {
-            let (low_bytes, high_bytes) = split_array(u128::to_le_bytes(self.low));
-            let high = i64::from_le_bytes(high_bytes);
-            let low = i64::from_le_bytes(low_bytes);
-
-            let high_negative = high < 0;
-            let low_negative = low < 0;
-            let high_valid = self.high == -1 || self.high == 0;
-
-            (high_negative == low_negative && high_valid).then_some(low)
-        } else {
-            None
-        }
+        i64::try_from(i256::to_i128(*self)?).ok()
     }
 
     fn to_f64(&self) -> Option<f64> {
@@ -1114,17 +1094,7 @@ impl ToPrimitive for i256 {
     }
 
     fn to_u64(&self) -> Option<u64> {
-        let as_i128 = self.low as i128;
-
-        let high_negative = self.high < 0;
-        let low_negative = as_i128 < 0;
-        let high_valid = self.high == -1 || self.high == 0;
-
-        if high_negative == low_negative && high_valid {
-            self.low.to_u64()
-        } else {
-            None
-        }
+        u64::try_from(i256::to_i128(*self)?).ok()
     }
 }
 
@@ -1694,6 +1664,32 @@ mod tests {
         assert!(a.to_u64().is_none());
 
         let a = i256::from_i128(i64::MIN as i128 - 1);
+        assert!(a.to_i64().is_none());
+        assert!(a.to_u64().is_none());
+
+        // values whose two 64-bit halves agree in sign but exceed i64/u64
+        // https://github.com/apache/arrow-rs/issues/10855
+        let a = i256::from_i128((1i128 << 64) + 5);
+        assert!(a.to_i64().is_none());
+        assert!(a.to_u64().is_none());
+        assert!(a.to_i32().is_none());
+        assert!(a.to_i8().is_none());
+
+        let a = i256::from_i128(-((1i128 << 64) + 5));
+        assert!(a.to_i64().is_none());
+        assert!(a.to_u64().is_none());
+        assert!(a.to_i32().is_none());
+        assert!(a.to_i8().is_none());
+
+        let a = i256::from_i128(u64::MAX as i128);
+        assert!(a.to_i64().is_none());
+        assert_eq!(a.to_u64().unwrap(), u64::MAX);
+
+        let a = i256::from_parts(5, 1);
+        assert!(a.to_i64().is_none());
+        assert!(a.to_u64().is_none());
+
+        let a = i256::from_parts(u64::MAX as u128 + 5, 0);
         assert!(a.to_i64().is_none());
         assert!(a.to_u64().is_none());
     }

@@ -234,7 +234,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         match v {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Appends a slice of type `T` into the builder
@@ -328,6 +328,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .add_buffer(std::mem::take(&mut self.values_builder).into())
             .nulls(nulls);
 
+        // SAFETY: builder is constructed from valid primitive value buffer and null buffer with matching lengths
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
     }
@@ -342,6 +343,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .add_buffer(values_buffer)
             .nulls(nulls);
 
+        // SAFETY: builder is constructed from valid primitive value buffer and null buffer with matching lengths
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
     }

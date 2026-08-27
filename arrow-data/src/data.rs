@@ -216,6 +216,8 @@ pub struct ArrayData {
     ///
     /// The offset applies to [`Self::child_data`] and [`Self::buffers`]. It
     /// does NOT apply to [`Self::nulls`].
+    ///
+    /// See [`Self::offset()`] for details and diagrams.
     offset: usize,
 
     /// The buffers that store the actual data for this array, as defined
@@ -241,13 +243,15 @@ pub struct ArrayData {
     ///
     /// If the child element also has an offset then these offsets are
     /// cumulative.
+    ///
+    /// See [`Self::child_data()`] and [`Self::offset()`] for details.
     child_data: Vec<ArrayData>,
 
     /// The null bitmap.
     ///
     /// `None` indicates all values are non-null in this array.
     ///
-    /// [`Self::offset]` does not apply to the null bitmap. While the
+    /// [`Self::offset()`] does not apply to the null bitmap. While the
     /// BooleanBuffer may be sliced (have its own offset) internally, this
     /// `NullBuffer` always represents exactly `len` elements.
     nulls: Option<NullBuffer>,
@@ -432,6 +436,11 @@ impl ArrayData {
 
     /// Returns a slice of children [`ArrayData`]. This will be non
     /// empty for type such as lists and structs.
+    ///
+    /// Note: For nested types where the parent element `i` corresponds directly
+    /// to child element `i` (such as structs), both the parent's offset and
+    /// each child's own offset apply when locating child values — see
+    /// [`Self::offset`] for details.
     pub fn child_data(&self) -> &[ArrayData] {
         &self.child_data[..]
     }
@@ -471,7 +480,57 @@ impl ArrayData {
         self.len == 0
     }
 
-    /// Returns the offset of this [`ArrayData`]
+    /// Returns the offset in elements of this [`ArrayData`]
+    ///
+    /// The offset applies to [`Self::buffers`] and [`Self::child_data`],
+    /// but does NOT apply to [`Self::nulls`], which always represents exactly
+    /// [`Self::len`] elements.
+    ///
+    /// # Offsets for Non-nested types
+    ///
+    /// For non-nested types, the offset skips leading elements in the buffers.
+    /// Logical element `i` is stored at physical position `offset + i`.
+    ///
+    /// For example, with `offset = 2` and `len = 3` the following array
+    /// represents elements `[C, D, E]`:
+    ///
+    /// ```text
+    ///                     offset: 2        len: 3
+    ///                   ◀───────────▶◀────────────────▶
+    ///                   ┌─────┬─────┬─────┬─────┬─────┬─────┐
+    ///    values buffer  │  A  │  B  │  C  │  D  │  E  │  F  │
+    ///                   └─────┴─────┴─────┴─────┴─────┴─────┘
+    ///    physical index    0     1     2     3     4     5
+    ///    logical index                 0     1     2
+    /// ```
+    ///
+    /// # Offsets for Struct types
+    ///
+    /// For [struct]s, logical element `i` of the parent corresponds directly to
+    /// element `i` of each child, with no indirection in between. Since a
+    /// struct has no buffers of its own, its offset applies to each child,
+    /// composing cumulatively with any child offset. Logical element `i` of the
+    /// struct corresponds to element `offset + i` of each child.
+    ///
+    /// For example, a struct with `offset = 2` and `len = 3` whose children
+    /// `c1` and `c2` themselves each have an offset of `1` represents the
+    /// elements `{c1: D, c2: d}`, `{c1: E, c2: e}`, `{c1: F, c2: f}`:
+    ///
+    /// ```text
+    ///                        struct offset: 2    len: 3
+    ///                          ◀───────────▶◀────────────────▶
+    ///    child offset: 1 ◀─────▶
+    ///                    ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┐
+    ///    child c1        │  A  │  B  │  C  │  D  │  E  │  F  │  G  │
+    ///                    ├─────┼─────┼─────┼─────┼─────┼─────┼─────┤
+    ///    child c2        │  a  │  b  │  c  │  d  │  e  │  f  │  g  │
+    ///                    └─────┴─────┴─────┴─────┴─────┴─────┴─────┘
+    ///    physical index     0     1     2     3     4     5     6
+    ///    child index              0     1     2     3     4     5
+    ///    struct index                         0     1     2
+    /// ```
+    ///
+    /// [struct]: https://arrow.apache.org/docs/format/Columnar.html#struct-layout
     #[inline]
     pub const fn offset(&self) -> usize {
         self.offset
@@ -529,7 +588,7 @@ impl ArrayData {
         let mut result: usize = 0;
         let layout = layout(&self.data_type);
 
-        for spec in layout.buffers.iter() {
+        for spec in &layout.buffers {
             match spec {
                 BufferSpec::FixedWidth { byte_width, .. } => {
                     // Offset buffers contain len+1 elements: one boundary per element
@@ -863,7 +922,7 @@ impl ArrayData {
             }
         }
         // align children data recursively
-        for data in self.child_data.iter_mut() {
+        for data in &mut self.child_data {
             data.align_buffers()
         }
     }
@@ -1018,7 +1077,7 @@ impl ArrayData {
                 ));
             }
             _ => {}
-        };
+        }
 
         Ok(())
     }
@@ -1465,17 +1524,14 @@ impl ArrayData {
         mask: Option<&NullBuffer>,
         child: &ArrayData,
     ) -> Result<(), ArrowError> {
-        let mask = match mask {
-            Some(mask) => mask,
-            None => {
-                return match child.null_count() {
-                    0 => Ok(()),
-                    _ => Err(ArrowError::InvalidArgumentError(format!(
-                        "non-nullable child of type {} contains nulls not present in parent {}",
-                        child.data_type, self.data_type
-                    ))),
-                };
-            }
+        let Some(mask) = mask else {
+            return match child.null_count() {
+                0 => Ok(()),
+                _ => Err(ArrowError::InvalidArgumentError(format!(
+                    "non-nullable child of type {} contains nulls not present in parent {}",
+                    child.data_type, self.data_type
+                ))),
+            };
         };
 
         match child.nulls() {
@@ -1695,7 +1751,7 @@ impl ArrayData {
         T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
         let values = self.typed_buffer::<T>(0, self.len)?;
-        let mut prev_value: i64 = 0_i64;
+        let mut prev_value = 0_i64;
         values.iter().enumerate().try_for_each(|(ix, &inp_value)| {
             let value: i64 = inp_value.try_into().map_err(|_| {
                 ArrowError::InvalidArgumentError(format!(
@@ -1720,8 +1776,7 @@ impl ArrayData {
         let len_plus_offset = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
         if prev_value.as_usize() < len_plus_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {}.",
-                len_plus_offset
+                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {len_plus_offset}."
             )));
         }
         Ok(())
@@ -1744,7 +1799,7 @@ impl ArrayData {
             (Some(a), Some(b)) if !a.inner().ptr_eq(b.inner()) => return false,
             (Some(_), None) | (None, Some(_)) => return false,
             _ => {}
-        };
+        }
 
         if !self
             .buffers
@@ -2608,7 +2663,7 @@ mod tests {
         assert!(!int_data.ptr_eq(&int_data_slice));
         assert!(!int_data_slice.ptr_eq(&int_data));
 
-        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"abcdef");
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
         let string_data = ArrayData::try_new(
             DataType::Utf8,
@@ -2687,7 +2742,7 @@ mod tests {
     #[test]
     fn test_slice_memory_size_utf8_offset_buffer_len_plus_one() {
         // 2-element array ["hello", "world"]: array len = 2, 10 bytes
-        let data_buffer = Buffer::from_slice_ref("helloworld".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"helloworld");
         // offsets need array_len+1 entries to mark the end of every string:
         //   [0, 5, 10] -> 3 i32s = 12 bytes
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 5_i32, 10_i32]);
@@ -2739,7 +2794,7 @@ mod tests {
             data.get_slice_memory_size().unwrap() - 8,
             new_data.get_slice_memory_size().unwrap()
         );
-        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"abcdef");
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
         let string_data = ArrayData::try_new(
             DataType::Utf8,
@@ -2933,7 +2988,7 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -2988,7 +3043,7 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -3047,7 +3102,7 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -3099,7 +3154,7 @@ mod tests {
                     assert_eq!(msg, "Map key field must not be nullable")
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
@@ -3153,7 +3208,7 @@ mod tests {
                     "The nullable should be set to false for the map entries field."
                 ),
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 

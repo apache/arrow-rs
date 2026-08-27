@@ -599,15 +599,13 @@ impl ExtractDatePartExt for PrimitiveArray<DurationSecondType> {
             DatePart::Hour => Ok(self.unary_opt(|d| (d / (60 * 60)).try_into().ok())),
             DatePart::Minute => Ok(self.unary_opt(|d| (d / 60).try_into().ok())),
             DatePart::Second => Ok(self.unary_opt(|d| d.try_into().ok())),
-            DatePart::Millisecond => {
-                Ok(self.unary_opt(|d| d.checked_mul(1_000).and_then(|d| d.try_into().ok())))
-            }
+            DatePart::Millisecond => Ok(self.unary_opt(|d| d.checked_mul(1_000)?.try_into().ok())),
             DatePart::Microsecond => {
-                Ok(self.unary_opt(|d| d.checked_mul(1_000_000).and_then(|d| d.try_into().ok())))
+                Ok(self.unary_opt(|d| d.checked_mul(1_000_000)?.try_into().ok()))
             }
-            DatePart::Nanosecond => Ok(
-                self.unary_opt(|d| d.checked_mul(1_000_000_000).and_then(|d| d.try_into().ok()))
-            ),
+            DatePart::Nanosecond => {
+                Ok(self.unary_opt(|d| d.checked_mul(1_000_000_000)?.try_into().ok()))
+            }
 
             DatePart::Year
             | DatePart::YearISO
@@ -636,11 +634,9 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMillisecondType> {
             DatePart::Minute => Ok(self.unary_opt(|d| (d / (1_000 * 60)).try_into().ok())),
             DatePart::Second => Ok(self.unary_opt(|d| (d / 1_000).try_into().ok())),
             DatePart::Millisecond => Ok(self.unary_opt(|d| d.try_into().ok())),
-            DatePart::Microsecond => {
-                Ok(self.unary_opt(|d| d.checked_mul(1_000).and_then(|d| d.try_into().ok())))
-            }
+            DatePart::Microsecond => Ok(self.unary_opt(|d| d.checked_mul(1_000)?.try_into().ok())),
             DatePart::Nanosecond => {
-                Ok(self.unary_opt(|d| d.checked_mul(1_000_000).and_then(|d| d.try_into().ok())))
+                Ok(self.unary_opt(|d| d.checked_mul(1_000_000)?.try_into().ok()))
             }
 
             DatePart::Year
@@ -673,9 +669,7 @@ impl ExtractDatePartExt for PrimitiveArray<DurationMicrosecondType> {
             DatePart::Second => Ok(self.unary_opt(|d| (d / 1_000_000).try_into().ok())),
             DatePart::Millisecond => Ok(self.unary_opt(|d| (d / 1_000).try_into().ok())),
             DatePart::Microsecond => Ok(self.unary_opt(|d| d.try_into().ok())),
-            DatePart::Nanosecond => {
-                Ok(self.unary_opt(|d| d.checked_mul(1_000).and_then(|d| d.try_into().ok())))
-            }
+            DatePart::Nanosecond => Ok(self.unary_opt(|d| d.checked_mul(1_000)?.try_into().ok())),
 
             DatePart::Year
             | DatePart::YearISO

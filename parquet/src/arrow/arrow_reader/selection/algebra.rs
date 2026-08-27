@@ -605,8 +605,7 @@ mod tests {
 
             let expected = RowSelection::from_filters(&[BooleanArray::from(expected_bools)]);
 
-            let total_rows: usize = expected.selectors().iter().map(|s| s.row_count).sum();
-            assert_eq!(a_len, total_rows);
+            assert_eq!(a_len, expected.total_row_count());
 
             assert_eq!(a.and_then(&b), expected);
         }

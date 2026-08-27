@@ -161,9 +161,8 @@ impl ReadPlanBuilder {
             RowSelectionPolicy::Selectors => RowSelectionStrategy::Selectors,
             RowSelectionPolicy::Mask => RowSelectionStrategy::Mask,
             RowSelectionPolicy::Auto { threshold, .. } => {
-                let selection = match self.selection.as_ref() {
-                    Some(selection) => selection,
-                    None => return RowSelectionStrategy::Selectors,
+                let Some(selection) = self.selection.as_ref() else {
+                    return RowSelectionStrategy::Selectors;
                 };
 
                 selection.auto_selection_strategy(threshold)
@@ -308,7 +307,7 @@ impl ReadPlanBuilder {
 
         let row_selection_cursor = selection
             .map(|s| build_cursor(s.trim(), selection_strategy, loaded_row_ranges))
-            .unwrap_or(RowSelectionCursor::new_all());
+            .unwrap_or_else(RowSelectionCursor::new_all);
 
         ReadPlan {
             batch_size,
@@ -634,16 +633,16 @@ mod tests {
             panic!("expected a Mask cursor");
         };
 
-        // The first chunk must end at the loaded range boundary (row 4), not
-        // continue into the unloaded gap.
+        // The first chunk stops at its final selected row instead of carrying
+        // trailing skipped rows to the loaded range boundary.
         let first = cursor.next_chunk(12).unwrap();
         assert_eq!(first.initial_skip, 0);
-        assert_eq!(first.chunk_rows, 4);
+        assert_eq!(first.chunk_rows, 1);
         assert_eq!(first.selected_rows, 1);
 
-        // The second chunk skips the gap and decodes only within [10, 12).
+        // The second chunk skips directly to the next selected row.
         let second = cursor.next_chunk(12).unwrap();
-        assert_eq!(second.initial_skip, 7);
+        assert_eq!(second.initial_skip, 10);
         assert_eq!(second.chunk_rows, 1);
         assert_eq!(second.selected_rows, 1);
         assert!(cursor.is_empty());
@@ -694,9 +693,9 @@ mod tests {
 
         // Total rows covered (selects + skips) must equal the full row group
         // so downstream offset/limit math stays in absolute-row space.
-        let total: usize = selection.iter().map(|s| s.row_count).sum();
         assert_eq!(
-            total, TOTAL_ROWS,
+            selection.total_row_count(),
+            TOTAL_ROWS,
             "selection must span the full row group, not only the prefix evaluated before the limit"
         );
     }
@@ -789,7 +788,6 @@ mod tests {
 
         assert_eq!(selection.row_count(), LIMIT);
 
-        let total: usize = selection.iter().map(|s| s.row_count).sum();
-        assert_eq!(total, TOTAL_ROWS);
+        assert_eq!(selection.total_row_count(), TOTAL_ROWS);
     }
 }

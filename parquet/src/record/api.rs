@@ -50,7 +50,7 @@ pub struct Row {
     fields: Vec<(String, Field)>,
 }
 
-#[allow(clippy::len_without_is_empty)]
+#[expect(clippy::len_without_is_empty)]
 impl Row {
     /// Constructs a `Row` from the list of `fields` and returns it.
     pub fn new(fields: Vec<(String, Field)>) -> Row {
@@ -326,7 +326,7 @@ pub struct List {
     elements: Vec<Field>,
 }
 
-#[allow(clippy::len_without_is_empty)]
+#[expect(clippy::len_without_is_empty)]
 impl List {
     /// Get the number of fields in this row
     pub fn len(&self) -> usize {
@@ -474,7 +474,7 @@ pub struct Map {
     entries: Vec<(Field, Field)>,
 }
 
-#[allow(clippy::len_without_is_empty)]
+#[expect(clippy::len_without_is_empty)]
 impl Map {
     /// Get the number of fields in this row
     pub fn len(&self) -> usize {
@@ -990,11 +990,11 @@ fn convert_time_micros_to_string(value: i64) -> String {
 }
 
 /// Helper method to convert Parquet decimal into a string.
-/// We assert that `scale >= 0` and `precision > scale`, but this will be enforced
-/// when constructing Parquet schema.
+/// We assert that `scale >= 0` and `precision >= scale`, which is enforced when
+/// constructing a Parquet schema.
 #[inline]
 fn convert_decimal_to_string(decimal: &Decimal) -> String {
-    assert!(decimal.scale() >= 0 && decimal.precision() > decimal.scale());
+    assert!(decimal.scale() >= 0 && decimal.precision() >= decimal.scale());
 
     // Specify as signed bytes to resolve sign as part of conversion.
     let num = BigInt::from_signed_bytes_be(decimal.data());
@@ -1022,7 +1022,7 @@ fn convert_decimal_to_string(decimal: &Decimal) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::many_single_char_names)]
+#[expect(clippy::many_single_char_names)]
 mod tests {
     use super::*;
 
@@ -1428,6 +1428,9 @@ mod tests {
         check_decimal(vec![0, 0, 0, 0, 1, 201, 195, 140], 18, 2, "300000.12");
         check_decimal(vec![207, 200], 10, 2, "-123.44");
         check_decimal(vec![207, 200], 10, 8, "-0.00012344");
+        check_decimal(vec![48, 57], 5, 5, "0.12345");
+        check_decimal(vec![207, 199], 5, 5, "-0.12345");
+        check_decimal(vec![45], 5, 5, "0.00045");
     }
 
     #[test]
@@ -2161,7 +2164,6 @@ mod tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::many_single_char_names)]
 mod api_tests {
     use super::{Row, make_list, make_map};
     use crate::record::Field;

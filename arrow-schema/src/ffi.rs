@@ -116,8 +116,9 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
         drop(unsafe { CString::from_raw(schema.name.cast_mut()) });
     }
     if !schema.private_data.is_null() {
-        let private_data = unsafe { Box::from_raw(schema.private_data as *mut SchemaPrivateData) };
-        for child in private_data.children.iter() {
+        let private_data =
+            unsafe { Box::from_raw(schema.private_data.cast::<SchemaPrivateData>()) };
+        for child in &private_data.children {
             drop(unsafe { Box::from_raw(*child) })
         }
         if !private_data.dictionary.is_null() {
@@ -131,17 +132,26 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
 }
 
 impl FFI_ArrowSchema {
-    /// create a new [`FFI_ArrowSchema`]. This fails if the fields'
-    /// [`DataType`] is not supported.
+    /// create a new [`FFI_ArrowSchema`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `format` contains an interior nul byte
+    /// Errors if the fields' [`DataType`] is not supported,
+    /// or if `format` contains an interior nul byte.
     pub fn try_new(
         format: &str,
         children: Vec<FFI_ArrowSchema>,
         dictionary: Option<FFI_ArrowSchema>,
     ) -> Result<Self, ArrowError> {
+        // Convert the format before leaking any of the children,
+        // so that an error here does not leak memory.
+        let format = CString::new(format).map_err(|err| {
+            ArrowError::CDataInterface(format!(
+                "Null byte at position {} not allowed in format",
+                err.nul_position()
+            ))
+        })?;
+
         let mut this = Self::empty();
 
         let children_ptr = children
@@ -150,7 +160,7 @@ impl FFI_ArrowSchema {
             .map(Box::into_raw)
             .collect::<Box<_>>();
 
-        this.format = CString::new(format).unwrap().into_raw();
+        this.format = format.into_raw();
         this.release = Some(release_schema);
         this.n_children = children_ptr.len() as i64;
 
@@ -169,7 +179,7 @@ impl FFI_ArrowSchema {
 
         this.dictionary = dictionary_ptr;
 
-        this.private_data = Box::into_raw(private_data) as *mut c_void;
+        this.private_data = Box::into_raw(private_data).cast::<c_void>();
 
         Ok(this)
     }
@@ -193,8 +203,17 @@ impl FFI_ArrowSchema {
         Ok(self)
     }
 
-    /// Add metadata to the schema
-    pub fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
+    /// Add metadata to the schema.
+    ///
+    /// # Safety
+    ///
+    /// `self` must be a schema this crate produced (e.g. via
+    /// [`FFI_ArrowSchema::try_new`] or a `TryFrom`), not one from a foreign
+    /// producer and not [`FFI_ArrowSchema::empty`]. It reinterprets
+    /// `private_data` as our own type, so any other schema is undefined
+    /// behavior. See <https://github.com/apache/arrow-rs/issues/10679> and
+    /// <https://github.com/apache/arrow-rs/issues/10286>.
+    pub unsafe fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
     where
         I: IntoIterator<Item = (S, S)>,
         S: AsRef<str>,
@@ -234,17 +253,20 @@ impl FFI_ArrowSchema {
                 metadata_serialized.extend_from_slice(value.as_ref().as_bytes());
             }
 
-            self.metadata = metadata_serialized.as_ptr() as *const c_char;
+            self.metadata = metadata_serialized.as_ptr().cast::<c_char>();
             Some(metadata_serialized)
         } else {
             self.metadata = std::ptr::null_mut();
             None
         };
 
+        // Safety: `self.private_data` was allocated as `Box<SchemaPrivateData>` by `try_new`.
+        // We take ownership temporarily with `from_raw` and put it back with `into_raw`,
+        // so there is no double-free and no other code can access `private_data` concurrently.
         unsafe {
-            let mut private_data = Box::from_raw(self.private_data as *mut SchemaPrivateData);
+            let mut private_data = Box::from_raw(self.private_data.cast::<SchemaPrivateData>());
             private_data.metadata = new_metadata;
-            self.private_data = Box::into_raw(private_data) as *mut c_void;
+            self.private_data = Box::into_raw(private_data).cast::<c_void>();
         }
 
         Ok(self)
@@ -384,6 +406,8 @@ impl FFI_ArrowSchema {
     ///
     /// This must be `Some` if the schema represents a dictionary-encoded type, `None` otherwise.
     pub fn dictionary(&self) -> Option<&Self> {
+        // Safety: per the C Data Interface spec, `self.dictionary` is either null (returns None)
+        // or a valid pointer to an `FFI_ArrowSchema` that lives at least as long as `self`.
         unsafe { self.dictionary.as_ref() }
     }
 
@@ -410,6 +434,8 @@ impl FFI_ArrowSchema {
             let buffer = self.metadata.cast::<u8>();
 
             fn next_four_bytes(buffer: *const u8, pos: &mut isize) -> [u8; 4] {
+                // Safety: the caller advances `pos` only by the number of bytes consumed,
+                // so `*pos..*pos+4` is always within the bounds of the metadata buffer.
                 let out = unsafe {
                     [
                         *buffer.offset(*pos),
@@ -423,6 +449,7 @@ impl FFI_ArrowSchema {
             }
 
             fn next_n_bytes(buffer: *const u8, pos: &mut isize, n: i32) -> &[u8] {
+                // Safety: same as `next_four_bytes`; `*pos..*pos+n` is within the metadata buffer.
                 let out = unsafe {
                     std::slice::from_raw_parts(buffer.offset(*pos), n.try_into().unwrap())
                 };
@@ -468,8 +495,11 @@ impl Drop for FFI_ArrowSchema {
     fn drop(&mut self) {
         match self.release {
             None => (),
+            // Safety: the release callback was set by the schema producer and follows the
+            // C Data Interface contract: it frees all resources associated with the schema
+            // and sets `release` to None. `self` is a valid, non-null pointer here.
             Some(release) => unsafe { release(self) },
-        };
+        }
     }
 }
 
@@ -866,10 +896,11 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
             flags |= Flags::DICTIONARY_ORDERED;
         }
 
-        FFI_ArrowSchema::try_from(field.data_type())?
+        let schema = FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
-            .with_flags(flags)?
-            .with_metadata(field.metadata())
+            .with_flags(flags)?;
+        // SAFETY: schema was just constructed by this crate.
+        unsafe { schema.with_metadata(field.metadata()) }
     }
 }
 
@@ -878,8 +909,9 @@ impl TryFrom<&Schema> for FFI_ArrowSchema {
 
     fn try_from(schema: &Schema) -> Result<Self, ArrowError> {
         let dtype = DataType::Struct(schema.fields().clone());
-        let c_schema = FFI_ArrowSchema::try_from(&dtype)?.with_metadata(&schema.metadata)?;
-        Ok(c_schema)
+        let c_schema = FFI_ArrowSchema::try_from(&dtype)?;
+        // SAFETY: c_schema was just constructed by this crate.
+        unsafe { c_schema.with_metadata(&schema.metadata) }
     }
 }
 
@@ -929,6 +961,15 @@ mod tests {
         let c_schema = FFI_ArrowSchema::try_from(&schema).unwrap();
         let restored = Schema::try_from(&c_schema).unwrap();
         assert_eq!(restored, schema);
+    }
+
+    #[test]
+    fn test_try_new_with_interior_nul_byte() {
+        let err = FFI_ArrowSchema::try_new("i\0nt", vec![], None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "C Data interface error: Null byte at position 1 not allowed in format"
+        );
     }
 
     #[test]
@@ -1064,7 +1105,8 @@ mod tests {
             .unwrap();
 
         for metadata in metadata_cases {
-            schema = schema.with_metadata(&metadata).unwrap();
+            // SAFETY: schema was constructed by this crate via try_new.
+            schema = unsafe { schema.with_metadata(&metadata) }.unwrap();
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }
@@ -1097,7 +1139,7 @@ mod tests {
 
     unsafe extern "C" fn wrapping_release(schema: *mut FFI_ArrowSchema) {
         let schema = unsafe { &mut *schema };
-        let data = unsafe { Box::from_raw(schema.private_data() as *mut WrapperData) };
+        let data = unsafe { Box::from_raw(schema.private_data().cast::<WrapperData>()) };
         WRAPPER_RAN.store(true, Ordering::SeqCst);
         // restore the originals, then let the original callback free everything
         unsafe { schema.set_release(data.original_release) };
@@ -1116,7 +1158,7 @@ mod tests {
             original_private_data: schema.private_data(),
         });
         unsafe { schema.set_release(Some(wrapping_release)) };
-        unsafe { schema.set_private_data(Box::into_raw(data) as *mut c_void) };
+        unsafe { schema.set_private_data(Box::into_raw(data).cast::<c_void>()) };
 
         drop(schema); // runs wrapping_release, which chains to the original
         assert!(WRAPPER_RAN.load(Ordering::SeqCst));

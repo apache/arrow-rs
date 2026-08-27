@@ -907,7 +907,7 @@ mod tests {
                     None => {
                         assert!(physical_array.is_null(*physical_ix))
                     }
-                };
+                }
             });
     }
     #[test]
@@ -1186,7 +1186,7 @@ mod tests {
             } else {
                 let physical_ix = run_array.get_physical_index(i);
                 assert!(typed.values().is_null(physical_ix));
-            };
+            }
         }
     }
 
