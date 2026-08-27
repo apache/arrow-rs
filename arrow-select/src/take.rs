@@ -21,7 +21,7 @@ use std::fmt::Display;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
-use arrow_array::builder::{BufferBuilder, UInt32Builder};
+use arrow_array::builder::UInt32Builder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -633,10 +633,9 @@ fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
 ) -> Result<GenericByteViewArray<T>, ArrowError> {
     let new_views = take_native(array.views(), indices);
     let new_nulls = take_nulls(array.nulls(), indices);
+    let buffers = Arc::clone(array.data_buffers());
     // Safety:  array.views was valid, and take_native copies only valid values, and verifies bounds
-    Ok(unsafe {
-        GenericByteViewArray::new_unchecked(new_views, array.data_buffers().to_vec(), new_nulls)
-    })
+    Ok(unsafe { GenericByteViewArray::new_unchecked(new_views, buffers, new_nulls) })
 }
 
 /// `take` implementation for list arrays
@@ -830,7 +829,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
         size_usize: usize,
     ) -> Buffer {
         let values_buffer = values.values().as_slice();
-        let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
+        let mut output = Vec::with_capacity(indices.len() * size_usize);
 
         if indices.null_count() == 0 {
             let array_iter = indices.values().iter().map(|idx| {
@@ -838,7 +837,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
                 &values_buffer[offset..offset + size_usize]
             });
             for slice in array_iter {
-                values_buffer_builder.append_slice(slice);
+                output.extend_from_slice(slice);
             }
         } else {
             // The indices nullability cannot be ignored here because the values buffer may contain
@@ -851,13 +850,13 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
             });
             for slice in array_iter {
                 match slice {
-                    None => values_buffer_builder.append_n(size_usize, 0),
-                    Some(slice) => values_buffer_builder.append_slice(slice),
+                    None => output.resize(output.len() + size_usize, 0),
+                    Some(slice) => output.extend_from_slice(slice),
                 }
             }
         }
 
-        values_buffer_builder.finish()
+        output.into()
     }
 }
 
@@ -1798,6 +1797,9 @@ mod tests {
         let actual = take(&array, &index, None).unwrap();
 
         assert_eq!(actual.len(), index.len());
+        let actual_buffers = actual.as_byte_view::<T>().data_buffers();
+        let input_buffers = array.data_buffers();
+        assert!(Arc::ptr_eq(actual_buffers, input_buffers));
 
         let expected = {
             // ["large payload over 12 bytes", null, "world", "large payload over 12 bytes", "lulu", null]

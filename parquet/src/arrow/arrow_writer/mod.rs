@@ -362,74 +362,92 @@ impl<W: Write + Send> ArrowWriter<W> {
             return Ok(());
         }
 
-        let in_progress = match &mut self.in_progress {
-            Some(in_progress) => in_progress,
-            x => x.insert(
-                self.row_group_writer_factory
-                    .create_row_group_writer(self.writer.flushed_row_groups().len())?,
-            ),
-        };
+        // Rows not yet handed to a row group writer. Splitting iterates here instead of
+        // recursing, so a small row group limit over a large batch cannot exhaust the stack.
+        let mut remaining = batch.clone();
 
-        if let Some(max_rows) = self.max_row_group_row_count
-            && in_progress.buffered_rows + batch.num_rows() > max_rows
-        {
-            let to_write = max_rows - in_progress.buffered_rows;
-            let a = batch.slice(0, to_write);
-            let b = batch.slice(to_write, batch.num_rows() - to_write);
-            self.write(&a)?;
-            return self.write(&b);
-        }
+        loop {
+            let in_progress = match &mut self.in_progress {
+                Some(in_progress) => in_progress,
+                x => x.insert(
+                    self.row_group_writer_factory
+                        .create_row_group_writer(self.writer.flushed_row_groups().len())?,
+                ),
+            };
+            let buffered_rows = in_progress.buffered_rows;
 
-        // Check byte limit: if we have buffered data, use measured average row size
-        // to split batch proactively before exceeding byte limit
-        if let Some(max_bytes) = self.max_row_group_bytes
-            && in_progress.buffered_rows > 0
-        {
-            let current_bytes = in_progress.get_estimated_total_bytes();
+            // Leading rows of `remaining` that still fit in the current row group, when the
+            // rest has to go to a later one.
+            let mut split_at = match self.max_row_group_row_count {
+                Some(max_rows) if buffered_rows + remaining.num_rows() > max_rows => {
+                    Some(max_rows - buffered_rows)
+                }
+                _ => None,
+            };
 
-            if current_bytes >= max_bytes {
-                self.flush()?;
-                return self.write(batch);
-            }
+            // Check byte limit: if we have buffered data, use measured average row size
+            // to split batch proactively before exceeding byte limit. Both limits apply to
+            // the same rows, so measure against whatever the row limit already trimmed
+            // `remaining` down to; otherwise the row limit would always win.
+            let candidate_rows = split_at.unwrap_or_else(|| remaining.num_rows());
 
-            if let Some(avg_row_bytes) = current_bytes
-                .checked_div(in_progress.buffered_rows)
-                .filter(|avg_row_bytes| *avg_row_bytes > 0)
+            if let Some(max_bytes) = self.max_row_group_bytes
+                && buffered_rows > 0
             {
-                // At this point, `current_bytes < max_bytes` (checked above)
-                let remaining_bytes = max_bytes - current_bytes;
-                let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+                let current_bytes = in_progress.get_estimated_total_bytes();
 
-                if batch.num_rows() > rows_that_fit {
-                    if rows_that_fit > 0 {
-                        let a = batch.slice(0, rows_that_fit);
-                        let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
-                        self.write(&a)?;
-                        return self.write(&b);
-                    } else {
-                        self.flush()?;
-                        return self.write(batch);
+                if current_bytes >= max_bytes {
+                    self.flush()?;
+                    continue;
+                }
+
+                if let Some(avg_row_bytes) = current_bytes
+                    .checked_div(buffered_rows)
+                    .filter(|avg_row_bytes| *avg_row_bytes > 0)
+                {
+                    // At this point, `current_bytes < max_bytes` (checked above)
+                    let remaining_bytes = max_bytes - current_bytes;
+                    let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+
+                    if candidate_rows > rows_that_fit {
+                        if rows_that_fit > 0 {
+                            split_at = Some(rows_that_fit);
+                        } else {
+                            self.flush()?;
+                            continue;
+                        }
                     }
                 }
             }
-        }
 
-        match self.cdc_chunkers.as_mut() {
-            Some(chunkers) => in_progress.write_with_chunkers(batch, chunkers)?,
-            None => in_progress.write(batch)?,
-        }
+            let rest = split_at.map(|to_write| {
+                let rest = remaining.slice(to_write, remaining.num_rows() - to_write);
+                remaining = remaining.slice(0, to_write);
+                rest
+            });
 
-        let should_flush = self
-            .max_row_group_row_count
-            .is_some_and(|max| in_progress.buffered_rows >= max)
-            || self
-                .max_row_group_bytes
-                .is_some_and(|max| in_progress.get_estimated_total_bytes() >= max);
+            let in_progress = self.in_progress.as_mut().unwrap();
+            match self.cdc_chunkers.as_mut() {
+                Some(chunkers) => in_progress.write_with_chunkers(&remaining, chunkers)?,
+                None => in_progress.write(&remaining)?,
+            }
 
-        if should_flush {
-            self.flush()?
+            let should_flush = self
+                .max_row_group_row_count
+                .is_some_and(|max| in_progress.buffered_rows >= max)
+                || self
+                    .max_row_group_bytes
+                    .is_some_and(|max| in_progress.get_estimated_total_bytes() >= max);
+
+            if should_flush {
+                self.flush()?
+            }
+
+            match rest {
+                Some(rest) => remaining = rest,
+                None => return Ok(()),
+            }
         }
-        Ok(())
     }
 
     /// Writes the given buf bytes to the internal buffer.
@@ -2666,6 +2684,32 @@ mod tests {
             .run();
     }
 
+    /// Test round-trip of Dictionary<UInt32, Utf8View> and
+    /// Dictionary<UInt32, BinaryView> typed columns.
+    #[test]
+    fn arrow_writer_string_view_dictionary() {
+        let raw_string_values = vec!["a", "b", "large payload over 12 bytes"];
+        let raw_binary_values = vec![
+            b"a".to_vec(),
+            b"b".to_vec(),
+            b"large payload over 12 bytes".to_vec(),
+        ];
+
+        let keys = UInt32Array::from(vec![Some(0), None, Some(2), Some(1), None]);
+
+        let string_view_values = Arc::new(StringViewArray::from(raw_string_values));
+        let string_dict: ArrayRef = Arc::new(
+            DictionaryArray::<UInt32Type>::try_new(keys.clone(), string_view_values).unwrap(),
+        );
+
+        let binary_view_values = Arc::new(BinaryViewArray::from_iter_values(raw_binary_values));
+        let binary_dict: ArrayRef =
+            Arc::new(DictionaryArray::<UInt32Type>::try_new(keys, binary_view_values).unwrap());
+
+        RoundTripTest::new(string_dict).run();
+        RoundTripTest::new(binary_dict).run();
+    }
+
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
         let decimal_field = Field::new("a", DataType::Decimal128(precision, scale), false);
         let schema = Schema::new(vec![decimal_field]);
@@ -3128,10 +3172,13 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        assert!(reader.metadata().offset_index().is_some());
-        let offset_indexes = &reader.metadata().offset_index().unwrap()[0];
-
-        let page_locations = offset_indexes[0].page_locations.clone();
+        let page_index = reader
+            .metadata()
+            .page_index()
+            .expect("page index should be present");
+        let page_locations = page_index
+            .page_locations(0, 0)
+            .expect("page locations should exist");
 
         // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
         // so we expect one dictionary encoded page and then a page per row thereafter.
@@ -3535,10 +3582,12 @@ mod tests {
                 assert!(column.column_index_length().is_some());
             }
         }
-        assert!(file_meta_data.column_index().is_some());
-        if let Some(col_indexes) = file_meta_data.column_index() {
-            for rg_idx in col_indexes {
-                for idx in rg_idx {
+        if let Some(page_index) = file_meta_data.page_index() {
+            for rg in 0..file_meta_data.num_row_groups() {
+                for col in 0..file_meta_data.row_group(rg).num_columns() {
+                    let idx = page_index
+                        .column_index(rg, col)
+                        .expect("column index should exist");
                     assert!(idx.nan_counts().is_some());
                     let ColumnIndexMetaData::DOUBLE(float_idx) = idx else {
                         panic!("expected double statistics")
@@ -3556,6 +3605,8 @@ mod tests {
                     }
                 }
             }
+        } else {
+            panic!("page index should be present");
         }
     }
 
@@ -3613,12 +3664,12 @@ mod tests {
         assert_eq!(col_stats.min_bytes_opt(), Some((-1.0f64).as_bytes()));
         assert_eq!(col_stats.max_bytes_opt(), Some(1.0f64.as_bytes()));
 
-        assert!(file_meta_data.column_index().is_some());
-        let col_idx = &file_meta_data.column_index().as_ref().unwrap()[0][0];
-        assert_eq!(col_idx.num_pages(), 4);
+        assert!(file_meta_data.page_index().is_some());
+        let col_idx = &file_meta_data.page_index().unwrap().column_index(0, 0);
+        assert_eq!(col_idx.as_ref().unwrap().num_pages(), 4);
 
         // test each page
-        let ColumnIndexMetaData::DOUBLE(float_idx) = col_idx else {
+        let Some(ColumnIndexMetaData::DOUBLE(float_idx)) = col_idx else {
             panic!("expected double statistics")
         };
 
@@ -5108,12 +5159,10 @@ mod tests {
         let bytes = Bytes::from(buf);
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(bytes, options).unwrap();
-        let index = reader.metadata().offset_index().unwrap();
+        let index = reader.metadata().page_index().unwrap();
 
-        assert_eq!(index.len(), 1);
-        assert_eq!(index[0].len(), 2); // 2 columns
-        assert_eq!(index[0][0].page_locations().len(), 1); // 1 page
-        assert_eq!(index[0][1].page_locations().len(), 1); // 1 page
+        assert_eq!(index.num_data_pages(0, 0), Some(1)); // 1 page
+        assert_eq!(index.num_data_pages(0, 1), Some(1)); // 1 page
     }
 
     #[test]
@@ -5174,21 +5223,15 @@ mod tests {
         // The column chunk for column "b" shouldn't have statistics
         assert!(b_col.statistics().is_none());
 
-        let offset_index = reader.metadata().offset_index().unwrap();
-        assert_eq!(offset_index.len(), 1); // 1 row group
-        assert_eq!(offset_index[0].len(), 2); // 2 columns
+        let page_index = reader.metadata().page_index().unwrap();
 
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1); // 1 row group
-        assert_eq!(column_index[0].len(), 2); // 2 columns
-
-        let a_idx = &column_index[0][0];
+        let a_idx = page_index.column_index(0, 0);
         assert!(
-            matches!(a_idx, ColumnIndexMetaData::BYTE_ARRAY(_)),
+            matches!(a_idx, Some(ColumnIndexMetaData::BYTE_ARRAY(_))),
             "{a_idx:?}"
         );
-        let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        let b_idx = page_index.column_index(0, 1);
+        assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
     #[test]
@@ -5249,14 +5292,12 @@ mod tests {
         // The column chunk for column "b"  shouldn't have statistics
         assert!(b_col.statistics().is_none());
 
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1); // 1 row group
-        assert_eq!(column_index[0].len(), 2); // 2 columns
+        let page_index = reader.metadata().page_index().unwrap();
 
-        let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, ColumnIndexMetaData::NONE), "{a_idx:?}");
-        let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        let a_idx = page_index.column_index(0, 0);
+        assert!(a_idx.is_none(), "{a_idx:?}");
+        let b_idx = page_index.column_index(0, 1);
+        assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
     #[test]
@@ -5801,6 +5842,34 @@ mod tests {
     }
 
     #[test]
+    // A row limit far smaller than the batch splits it many times over; the split must not
+    // consume stack proportional to the number of row groups.
+    fn test_row_group_limit_rows_only_many_splits() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(1))
+            .set_max_row_group_bytes(None)
+            .build();
+
+        let rows = 50_000;
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 1,
+                rows_per_batch: rows,
+                row_size: 4,
+            },
+            props,
+        );
+
+        let sizes = row_group_sizes(builder.metadata());
+        assert_eq!(sizes.len(), rows, "Every row should get its own row group");
+        assert_eq!(
+            sizes.iter().sum::<i64>(),
+            rows as i64,
+            "Total rows should be preserved"
+        );
+    }
+
+    #[test]
     // When only max_row_group_bytes is set, respect the byte limit
     fn test_row_group_limit_bytes_only() {
         let props = WriterProperties::builder()
@@ -5954,6 +6023,31 @@ mod tests {
 
         let total_rows: i64 = sizes.iter().sum();
         assert_eq!(total_rows, 100, "Total rows should be preserved");
+    }
+
+    #[test]
+    // Both limits can apply to the same batch: the row limit trims it to 5 rows, and the
+    // byte limit then trims those 5 down to 4.
+    fn test_row_group_limit_both_apply_to_same_batch() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(15))
+            .set_max_row_group_bytes(Some(1500))
+            .build();
+
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 2,
+                rows_per_batch: 10,
+                row_size: 100,
+            },
+            props,
+        );
+
+        assert_eq!(
+            &row_group_sizes(builder.metadata()),
+            &[14, 6],
+            "Byte limit should still apply to a batch the row limit already split"
+        );
     }
 
     #[test]

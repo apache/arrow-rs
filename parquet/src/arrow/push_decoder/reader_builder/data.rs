@@ -224,10 +224,9 @@ impl<'a> DataRequestBuilder<'a> {
 fn get_offset_index(
     parquet_metadata: &ParquetMetaData,
     row_group_idx: usize,
-) -> Option<&[OffsetIndexMetaData]> {
+) -> Option<&[Option<OffsetIndexMetaData>]> {
     parquet_metadata
-        .offset_index()
-        // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
-        .filter(|index| !index.is_empty())
-        .map(|x| x[row_group_idx].as_slice())
+        .page_index()
+        .map(|pi| pi.offset_indexes_for_rowgroup(row_group_idx))
+        .unwrap_or(None)
 }

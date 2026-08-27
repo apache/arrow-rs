@@ -449,6 +449,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -465,6 +466,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -497,6 +499,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 

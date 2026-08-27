@@ -1105,7 +1105,14 @@ impl MutableBuffer {
     /// if any of the items of the iterator is an error.
     /// Prefer this to `collect` whenever possible, as it is faster ~60% faster.
     ///
+    /// # Errors
+    ///
+    /// Returns the first error yielded by the iterator.
+    ///
     /// # Panics
+    ///
+    /// Note that unlike the [`Err`] cases, these panics are violations of the safety contract
+    /// below, and are only checks that happen to be cheap enough to keep:
     ///
     /// Panics if the iterator does not report an upper bound via `size_hint`, or if the
     /// reported length does not match the number of items produced before an error-free finish,

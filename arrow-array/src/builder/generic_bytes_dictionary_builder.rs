@@ -381,6 +381,63 @@ where
         }
     }
 
+    /// Append all values from a [`GenericByteArray`] into this builder.
+    ///
+    /// This is more efficient than calling [`Self::append`] in a loop because
+    /// it accesses the raw offset/value buffers directly and bulk-writes the
+    /// resolved keys with a single `append_slice` / `append_values` call.
+    ///
+    /// Returns an error if any new dictionary index would overflow the key type.
+    pub fn append_array(&mut self, array: &GenericByteArray<T>) -> Result<(), ArrowError> {
+        let row_count = array.len();
+        if row_count == 0 {
+            return Ok(());
+        }
+        let offsets = array.value_offsets();
+        let raw_data = array.value_data();
+
+        match array.nulls() {
+            None => {
+                let mut key_buf: Vec<K::Native> = Vec::with_capacity(row_count);
+                for row_idx in 0..row_count {
+                    key_buf.push(resolve_key::<K, T>(
+                        row_idx,
+                        offsets,
+                        raw_data,
+                        array,
+                        &mut self.dedup,
+                        &self.state,
+                        &mut self.values_builder,
+                    )?);
+                }
+                self.keys_builder.append_slice(&key_buf);
+            }
+            Some(nulls) => {
+                let mut key_buf: Vec<K::Native> = Vec::with_capacity(row_count);
+                let mut valid_buf: Vec<bool> = Vec::with_capacity(row_count);
+                for row_idx in 0..row_count {
+                    if nulls.is_null(row_idx) {
+                        key_buf.push(K::Native::usize_as(0));
+                        valid_buf.push(false);
+                    } else {
+                        key_buf.push(resolve_key::<K, T>(
+                            row_idx,
+                            offsets,
+                            raw_data,
+                            array,
+                            &mut self.dedup,
+                            &self.state,
+                            &mut self.values_builder,
+                        )?);
+                        valid_buf.push(true);
+                    }
+                }
+                self.keys_builder.append_values(&key_buf, &valid_buf);
+            }
+        }
+        Ok(())
+    }
+
     /// Extends builder with an existing dictionary array.
     ///
     /// This is the same as [`Self::extend`] but is faster as it translates
@@ -452,6 +509,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -468,6 +526,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -500,6 +559,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -518,6 +578,41 @@ impl<K: ArrowDictionaryKeyType, T: ByteArrayType, V: AsRef<T::Native>> Extend<Op
             self.append_option(v)
         }
     }
+}
+
+#[inline]
+fn resolve_key<K, T>(
+    row_idx: usize,
+    offsets: &[T::Offset],
+    raw_data: &[u8],
+    array: &GenericByteArray<T>,
+    dedup: &mut HashTable<usize>,
+    state: &ahash::RandomState,
+    storage: &mut GenericByteBuilder<T>,
+) -> Result<K::Native, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+    T: ByteArrayType,
+{
+    let start = offsets[row_idx].as_usize();
+    let end = offsets[row_idx + 1].as_usize();
+    // SAFETY: offsets are valid by GenericByteArray invariants
+    let bytes = unsafe { raw_data.get_unchecked(start..end) };
+    let hash = state.hash_one(bytes);
+    let dict_idx = *dedup
+        .entry(
+            hash,
+            |idx| bytes == get_bytes(storage, *idx),
+            |idx| state.hash_one(get_bytes(storage, *idx)),
+        )
+        .or_insert_with(|| {
+            let idx = storage.len();
+            // SAFETY: row_idx < row_count = array.len(), slot is non-null
+            storage.append_value(unsafe { array.value_unchecked(row_idx) });
+            idx
+        })
+        .get();
+    K::Native::from_usize(dict_idx).ok_or(ArrowError::DictionaryKeyOverflowError)
 }
 
 fn get_bytes<T: ByteArrayType>(values: &GenericByteBuilder<T>, idx: usize) -> &[u8] {
@@ -611,7 +706,9 @@ mod tests {
 
     use crate::array::Int8Array;
     use crate::cast::AsArray;
-    use crate::types::{Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type, Utf8Type};
+    use crate::types::{
+        BinaryType, Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type, Utf8Type,
+    };
     use crate::{ArrowPrimitiveType, BinaryArray, StringArray};
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
@@ -1110,6 +1207,78 @@ mod tests {
         assert_eq!(
             all_values,
             [Some("a"), Some("b"), Some("c"), Some("d"), Some("e"),]
+        );
+    }
+
+    #[test]
+    fn test_append_array_deduplicates_repeated_values() {
+        let input = StringArray::from(vec!["a", "b", "a", "c", "b", "a"]);
+
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
+        builder.append_array(&input).unwrap();
+        let result = builder.finish();
+
+        let mut expected_builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
+        for value in &input {
+            expected_builder.append_option(value);
+        }
+        let expected = expected_builder.finish();
+
+        assert_eq!(result.keys().values(), expected.keys().values());
+        assert_eq!(result.values().len(), 3);
+    }
+
+    #[test]
+    fn test_append_array_dedup_across_consecutive_calls() {
+        let first = StringArray::from(vec!["a", "b"]);
+        let second = StringArray::from(vec!["b", "c", "a"]);
+
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
+        builder.append_array(&first).unwrap();
+        builder.append_array(&second).unwrap();
+        let result = builder.finish();
+
+        assert_eq!(result.keys().values(), &[0, 1, 1, 2, 0]);
+        assert_eq!(result.values().len(), 3);
+    }
+
+    #[test]
+    fn test_append_array_preserves_null_positions() {
+        let input = StringArray::from(vec![Some("x"), None, Some("x"), None, Some("y")]);
+
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
+        builder.append_array(&input).unwrap();
+        let result = builder.finish();
+
+        let mut expected_builder = GenericByteDictionaryBuilder::<Int8Type, Utf8Type>::new();
+        for value in &input {
+            expected_builder.append_option(value);
+        }
+        let expected = expected_builder.finish();
+
+        assert_eq!(result.keys(), expected.keys());
+        assert_eq!(result.values().len(), 2);
+    }
+
+    #[test]
+    fn test_append_array_overflow_binary() {
+        // Int8 keys hold at most 128 distinct values (indices 0..=127).
+        // Inserting a 129th distinct entry must return DictionaryKeyOverflowError.
+        let distinct_values: Vec<Option<Vec<u8>>> = (0u16..=128)
+            .map(|n| Some(n.to_string().into_bytes()))
+            .collect();
+        let input = BinaryArray::from_opt_vec(
+            distinct_values
+                .iter()
+                .map(|v| v.as_deref())
+                .collect::<Vec<_>>(),
+        );
+
+        let mut builder = GenericByteDictionaryBuilder::<Int8Type, BinaryType>::new();
+        let result = builder.append_array(&input);
+        assert!(
+            matches!(result, Err(ArrowError::DictionaryKeyOverflowError)),
+            "expected DictionaryKeyOverflowError, got {result:?}"
         );
     }
 }
