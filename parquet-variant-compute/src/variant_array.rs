@@ -1397,9 +1397,9 @@ mod test {
 
     use super::*;
     use arrow::array::{
-        BinaryArray, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array,
-        DictionaryArray, FixedSizeBinaryArray, Int8Array, Int16Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray, RunArray,
+        BinaryArray, BinaryDictionaryBuilder, BinaryRunBuilder, BinaryViewArray, Decimal32Array,
+        Decimal64Array, Decimal128Array, FixedSizeBinaryArray, Int8Array, Int32Array, Int64Array,
+        LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray,
         StringArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
@@ -1494,19 +1494,21 @@ mod test {
         let metadata_a = metadata.value(0);
         let metadata_b = metadata.value(3);
 
-        let dictionary_values: ArrayRef = Arc::new(BinaryArray::from(vec![metadata_a, metadata_b]));
-        let dictionary: ArrayRef = Arc::new(
-            DictionaryArray::<Int8Type>::try_new(
-                Int8Array::from(vec![Some(0), Some(0), None, Some(1), Some(1)]),
-                dictionary_values,
-            )
-            .unwrap(),
-        );
+        let logical_metadata = [
+            Some(metadata_a),
+            Some(metadata_a),
+            None,
+            Some(metadata_b),
+            Some(metadata_b),
+        ];
 
-        let run_ends = Int16Array::from(vec![2, 3, 5]);
-        let run_values = BinaryArray::from(vec![Some(metadata_a), None, Some(metadata_b)]);
-        let run_end_encoded: ArrayRef =
-            Arc::new(RunArray::<Int16Type>::try_new(&run_ends, &run_values).unwrap());
+        let mut dictionary = BinaryDictionaryBuilder::<Int8Type>::new();
+        dictionary.extend(logical_metadata);
+        let dictionary: ArrayRef = Arc::new(dictionary.finish());
+
+        let mut ree = BinaryRunBuilder::<Int16Type>::new();
+        ree.extend(logical_metadata);
+        let run_end_encoded: ArrayRef = Arc::new(ree.finish());
 
         for metadata in [dictionary, run_end_encoded] {
             assert_eq!(binary_array_value(metadata.as_ref(), 2), None);
