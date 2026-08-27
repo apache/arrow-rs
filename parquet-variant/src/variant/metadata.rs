@@ -378,6 +378,61 @@ impl<'m> VariantMetadata<'m> {
         self.get(i).expect("Invalid metadata dictionary entry")
     }
 
+    /// Attempts to resolve `field_name` to its field id under the assumption that `field_name` is
+    /// itself a slice of this dictionary's value region, as is the case for every field name
+    /// obtained from [`VariantObject::field_name`] or [`Self::get`] on the same metadata instance.
+    /// Returns `None` when that assumption does not hold, so callers must be prepared to fall back
+    /// to a name-based search such as [`Self::get_entry`].
+    ///
+    /// This is much cheaper than searching by name, because a borrowed field name already encodes
+    /// its own field id: it belongs to the entry whose dictionary offset equals its distance from
+    /// the start of the value region. Finding that entry is a binary search over the
+    /// (non-decreasing) offset array, comparing integers rather than decoding and comparing
+    /// dictionary strings at every step, and it needs no string comparison to confirm the hit.
+    ///
+    /// # Correctness
+    ///
+    /// A returned field id is always verified, so this never disagrees with [`Self::get_entry`]
+    /// about which string a field id names, even for [invalid] metadata whose offsets are
+    /// arbitrary. The candidate entry is accepted only when it starts at `field_name`'s address
+    /// and has exactly `field_name`'s length, which makes the entry's bytes and `field_name`'s
+    /// bytes the same bytes. (Two live allocations cannot overlap, so an address inside our own
+    /// byte range belongs to our own bytes. In the degenerate zero-length case the two are both
+    /// empty and therefore still equal.)
+    ///
+    /// [`VariantObject::field_name`]: crate::VariantObject::field_name
+    /// [invalid]: Self#Validation
+    pub(crate) fn borrowed_field_id(&self, field_name: &str) -> Option<u32> {
+        // Addresses are compared as integers and never dereferenced, so this stays safe even when
+        // `field_name` borrows from an unrelated allocation.
+        let value_region_start = (self.bytes.as_ptr() as usize) + self.first_value_byte as usize;
+        let value_region_end = (self.bytes.as_ptr() as usize) + self.bytes.len();
+        let field_name_start = field_name.as_ptr() as usize;
+        if field_name_start < value_region_start || field_name_start >= value_region_end {
+            return None;
+        }
+        let field_name_offset = u32::try_from(field_name_start - value_region_start).ok()?;
+
+        // Hoist the offset array out of the search, so each step is just an unaligned load.
+        let offset_byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
+        let offsets = slice_from_slice(self.bytes, offset_byte_range).ok()?;
+        let offset_size = self.header.offset_size;
+        let cmp = |i| {
+            Some(
+                offset_size
+                    .unpack_u32(offsets, i)
+                    .ok()?
+                    .cmp(&field_name_offset),
+            )
+        };
+        let field_id = try_binary_search_range_by(0..self.len(), cmp)?.ok()?;
+
+        // Verify that this entry has exactly `field_name`'s bytes; see "Correctness" above.
+        let entry_end = offset_size.unpack_u32(offsets, field_id + 1).ok()?;
+        let entry_len = entry_end.checked_sub(field_name_offset)?;
+        (entry_len as usize == field_name.len()).then_some(field_id as u32)
+    }
+
     /// Attempts to retrieve a dictionary entry and its field id, returning None if the requested field
     /// name is not present. The search cost is logarithmic if [`Self::is_sorted`] and linear
     /// otherwise.
@@ -388,6 +443,11 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn get_entry(&self, field_name: &str) -> Option<(u32, &'m str)> {
+        // A field name borrowed from this dictionary resolves without any string comparisons.
+        if let Some(field_id) = self.borrowed_field_id(field_name) {
+            return Some((field_id, self.get_impl(field_id as _)));
+        }
+
         let field_id = if self.is_sorted() && self.len() > 10 {
             // Binary search is faster for a not-tiny sorted metadata dictionary
             let cmp = |i| Some(self.get_impl(i).cmp(field_name));
@@ -635,6 +695,150 @@ mod tests {
         let metadata = VariantMetadata::try_new(bytes).unwrap();
         assert_eq!(&metadata[0], "hi");
         assert_eq!(&metadata[1], "");
+    }
+
+    /// Builds a metadata dictionary containing `field_names`, in the order given.
+    fn metadata_bytes_for(field_names: &[&str]) -> Vec<u8> {
+        let mut builder = VariantBuilder::new().with_field_names(field_names.iter().copied());
+        let mut object = builder.new_object();
+        for name in field_names {
+            object.insert(name, 1i32);
+        }
+        object.finish();
+        builder.finish().0
+    }
+
+    /// Every entry of `metadata` must resolve to its own field id through the borrowed fast path,
+    /// through the general name search, and through an owned (non-borrowed) copy of the name.
+    fn assert_lookups_agree(metadata: &VariantMetadata<'_>) {
+        for i in 0..metadata.len() {
+            let borrowed = metadata.get(i).unwrap();
+            let owned = borrowed.to_string();
+
+            assert_eq!(
+                metadata.borrowed_field_id(borrowed),
+                Some(i as u32),
+                "borrowed lookup of {borrowed:?} (field id {i})"
+            );
+            assert_eq!(
+                metadata.get_entry(borrowed),
+                Some((i as u32, borrowed)),
+                "get_entry of borrowed {borrowed:?} (field id {i})"
+            );
+            assert_eq!(
+                metadata.get_entry(owned.as_str()),
+                Some((i as u32, borrowed)),
+                "get_entry of owned {borrowed:?} (field id {i})"
+            );
+            // An owned copy does not borrow from the dictionary, so it cannot take the fast path.
+            assert_eq!(metadata.borrowed_field_id(owned.as_str()), None);
+        }
+    }
+
+    #[test]
+    fn test_borrowed_field_id_sorted_dictionary() {
+        // More than 10 entries, so `get_entry` uses its binary search path.
+        let names: Vec<String> = (0..64).map(|i| format!("field_{i:03}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let bytes = metadata_bytes_for(&names);
+        let metadata = VariantMetadata::try_new(&bytes).unwrap();
+
+        assert!(metadata.is_sorted());
+        assert_eq!(metadata.len(), 64);
+        assert_lookups_agree(&metadata);
+
+        assert_eq!(metadata.get_entry("field_999"), None);
+        assert_eq!(metadata.borrowed_field_id("field_999"), None);
+    }
+
+    #[test]
+    fn test_borrowed_field_id_unsorted_dictionary() {
+        let bytes = metadata_bytes_for(&["zebra", "apple", "mango", "kiwi"]);
+        let metadata = VariantMetadata::try_new(&bytes).unwrap();
+
+        assert!(!metadata.is_sorted());
+        assert_eq!(metadata.len(), 4);
+        assert_lookups_agree(&metadata);
+    }
+
+    #[test]
+    fn test_borrowed_field_id_ignores_names_from_another_dictionary() {
+        let this_bytes = metadata_bytes_for(&["alpha", "beta", "gamma"]);
+        let this = VariantMetadata::try_new(&this_bytes).unwrap();
+
+        // A different dictionary that shares some names, with different field ids for them.
+        let other_bytes = metadata_bytes_for(&["delta", "gamma", "beta", "alpha"]);
+        let other = VariantMetadata::try_new(&other_bytes).unwrap();
+
+        for i in 0..other.len() {
+            let name = other.get(i).unwrap();
+            // A copy that borrows from neither dictionary, to compare results against.
+            let unborrowed_name: String = name.chars().collect();
+            // The name borrows from `other`, so `this` must not take the fast path for it...
+            assert_eq!(this.borrowed_field_id(name), None);
+            // ...and the general search must still return `this`'s own field id for that name.
+            assert_eq!(this.get_entry(name), this.get_entry(&unborrowed_name));
+        }
+
+        assert_eq!(this.get_entry(other.get(3).unwrap()), Some((0, "alpha")));
+        assert_eq!(this.get_entry(other.get(0).unwrap()), None);
+    }
+
+    #[test]
+    fn test_borrowed_field_id_rejects_substring_of_an_entry() {
+        // Dictionary ["x", "yy"], stored as the bytes "xyy". A slice of entry 1 that starts one
+        // byte into the value region shares its start offset with entry 1 without being equal to
+        // it, which the fast path must detect rather than reporting a bogus field id.
+        let bytes = &[
+            0b0000_0001, // header: offset_size_minus_one=0, ordered=0, version=1
+            2,           // dictionary_size
+            0x00,
+            0x01,
+            0x03,
+            b'x',
+            b'y',
+            b'y',
+        ];
+        let metadata = VariantMetadata::try_new(bytes).unwrap();
+        assert_eq!(metadata.get(0).unwrap(), "x");
+        assert_eq!(metadata.get(1).unwrap(), "yy");
+
+        let prefix_of_entry_1 = &metadata.get(1).unwrap()[..1];
+        assert_eq!(prefix_of_entry_1, "y");
+        assert_eq!(metadata.borrowed_field_id(prefix_of_entry_1), None);
+        assert_eq!(metadata.get_entry(prefix_of_entry_1), None);
+
+        // A slice that starts inside an entry, at an offset no entry starts at, is also rejected.
+        let suffix_of_entry_1 = &metadata.get(1).unwrap()[1..];
+        assert_eq!(metadata.borrowed_field_id(suffix_of_entry_1), None);
+    }
+
+    #[test]
+    fn test_borrowed_field_id_with_empty_field_name() {
+        let bytes = &[
+            0b0000_0001, // header: offset_size_minus_one=0, ordered=0, version=1
+            2,           // dictionary_size
+            0x00,
+            0x02,
+            0x02, // an unsorted dict may hold an empty string anywhere
+            b'h',
+            b'i',
+        ];
+        let metadata = VariantMetadata::try_new(bytes).unwrap();
+        assert_eq!(metadata.get(0).unwrap(), "hi");
+        assert_eq!(metadata.get(1).unwrap(), "");
+
+        // Whether or not the empty entry takes the fast path, both lookups must agree.
+        assert_eq!(
+            metadata.get_entry(metadata.get(0).unwrap()),
+            Some((0, "hi"))
+        );
+        assert_eq!(metadata.get_entry(metadata.get(1).unwrap()), Some((1, "")));
+        assert_eq!(metadata.get_entry(""), Some((1, "")));
+        assert_eq!(
+            metadata.borrowed_field_id(metadata.get(0).unwrap()),
+            Some(0)
+        );
     }
 
     #[test]
