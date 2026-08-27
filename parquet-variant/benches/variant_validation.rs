@@ -229,7 +229,7 @@ fn bench_object_get_by_name(c: &mut Criterion) {
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let object = variant.as_object().unwrap();
-        // Always look up the last key, the worst case for a linear scan.
+// Always look up the last generated key.
         let needle = names.last().unwrap().as_str();
         group.bench_function(BenchmarkId::from_parameter(n), |b| {
             b.iter(|| std::hint::black_box(object.get(std::hint::black_box(needle))));
