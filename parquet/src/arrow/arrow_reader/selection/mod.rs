@@ -883,7 +883,7 @@ impl FromIterator<RowSelection> for RowSelection {
 mod tests {
     use super::*;
     use rand::rngs::StdRng;
-    use rand::{RngExt, SeedableRng};
+    use rand::{Rng, SeedableRng};
 
     const MAX_RANDOM_ROWS: usize = 65_536;
     const THRESHOLDS: &[usize] = &[0, 1, 8, 16, 31, 32, 33, 64];
