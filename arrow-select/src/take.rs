@@ -569,7 +569,8 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
                     if (value_byte >> ((src_idx + value_bit_offset) & 7)) & 1 != 0 {
                         bit_util::set_bit_raw(value_out_ptr, out_pos);
                     }
-                    let validity_byte = *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3); // byte containing validity bit
+                    let validity_byte =
+                        *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3); // byte containing validity bit
                     if (validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1 != 0 {
                         bit_util::set_bit_raw(validity_out_ptr, out_pos);
                     }
@@ -597,12 +598,15 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
                 let mut packed_validity = 0u8;
                 for bit_pos in 0..8usize {
                     // SAFETY: bit_base + bit_pos < len
-                    let src_idx =
-                        unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
-                    let value_byte = unsafe { *value_data_ptr.add((src_idx + value_bit_offset) >> 3) }; // byte containing value bit
-                    let validity_byte = unsafe { *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3) }; // byte containing validity bit
-                    packed_values |= ((value_byte >> ((src_idx + value_bit_offset) & 7)) & 1) << bit_pos; // extract value bit, place at position `bit_pos`
-                    packed_validity |= ((validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1) << bit_pos; // extract validity bit, place at position `bit_pos`
+                    let src_idx = unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
+                    let value_byte =
+                        unsafe { *value_data_ptr.add((src_idx + value_bit_offset) >> 3) }; // byte containing value bit
+                    let validity_byte =
+                        unsafe { *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3) }; // byte containing validity bit
+                    packed_values |=
+                        ((value_byte >> ((src_idx + value_bit_offset) & 7)) & 1) << bit_pos; // extract value bit, place at position `bit_pos`
+                    packed_validity |=
+                        ((validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1) << bit_pos; // extract validity bit, place at position `bit_pos`
                 }
                 *value_out_byte = packed_values;
                 *validity_out_byte = packed_validity;
@@ -613,12 +617,15 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
                 let mut packed_validity = 0u8;
                 for bit_pos in 0..(len - bit_base) {
                     // SAFETY: bit_base + bit_pos < len
-                    let src_idx =
-                        unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
-                    let value_byte = unsafe { *value_data_ptr.add((src_idx + value_bit_offset) >> 3) }; // byte containing value bit
-                    let validity_byte = unsafe { *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3) }; // byte containing validity bit
-                    packed_values |= ((value_byte >> ((src_idx + value_bit_offset) & 7)) & 1) << bit_pos; // extract value bit, place at position `bit_pos`
-                    packed_validity |= ((validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1) << bit_pos; // extract validity bit, place at position `bit_pos`
+                    let src_idx = unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
+                    let value_byte =
+                        unsafe { *value_data_ptr.add((src_idx + value_bit_offset) >> 3) }; // byte containing value bit
+                    let validity_byte =
+                        unsafe { *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3) }; // byte containing validity bit
+                    packed_values |=
+                        ((value_byte >> ((src_idx + value_bit_offset) & 7)) & 1) << bit_pos; // extract value bit, place at position `bit_pos`
+                    packed_validity |=
+                        ((validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1) << bit_pos; // extract validity bit, place at position `bit_pos`
                 }
                 value_out_slice[full_bytes] = packed_values;
                 validity_out_slice[full_bytes] = packed_validity;
@@ -1279,12 +1286,7 @@ pub fn take_record_batch(
     record_batch: &RecordBatch,
     indices: &dyn Array,
 ) -> Result<RecordBatch, ArrowError> {
-    let columns = record_batch
-        .columns()
-        .iter()
-        .map(|c| take(c, indices, None))
-        .collect::<Result<Vec<_>, _>>()?;
-    RecordBatch::try_new(record_batch.schema(), columns)
+    unsafe { take_record_batch_unchecked(record_batch, indices) }
 }
 
 /// Take rows by index from [`RecordBatch`], returning a new [`RecordBatch`], without bounds
