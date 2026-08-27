@@ -24,7 +24,9 @@ use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use crate::file::properties::{
+    EnabledStatistics, ResolvedColumnProperties, WriterProperties, WriterVersion,
+};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
@@ -129,16 +131,16 @@ enum FallbackEncoderImpl {
 }
 
 impl FallbackEncoder {
-    /// Create the fallback encoder for the given [`ColumnDescPtr`] and [`WriterProperties`]
-    fn new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
+    /// Create the fallback encoder for the given [`WriterProperties`] and the
+    /// column settings already resolved from them
+    fn new(props: &WriterProperties, column_props: &ResolvedColumnProperties) -> Result<Self> {
         // Set either main encoder or fallback encoder.
-        let encoding =
-            props
-                .encoding(descr.path())
-                .unwrap_or_else(|| match props.writer_version() {
-                    WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
-                    WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
-                });
+        let encoding = column_props
+            .encoding
+            .unwrap_or_else(|| match props.writer_version() {
+                WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
+                WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
+            });
 
         let encoder = match encoding {
             Encoding::PLAIN => FallbackEncoderImpl::Plain { buffer: vec![] },
@@ -435,19 +437,21 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         Some(sbbf)
     }
 
-    fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
+    fn try_new(
+        descr: &ColumnDescPtr,
+        props: &WriterProperties,
+        column_props: &ResolvedColumnProperties,
+    ) -> Result<Self>
     where
         Self: Sized,
     {
-        let dictionary = props
-            .dictionary_enabled(descr.path())
-            .then(DictEncoder::default);
+        let dictionary = column_props.dictionary_enabled.then(DictEncoder::default);
 
-        let fallback = FallbackEncoder::new(descr, props)?;
+        let fallback = FallbackEncoder::new(props, column_props)?;
 
-        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(props, descr)?;
+        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(column_props)?;
 
-        let statistics_enabled = props.statistics_enabled(descr.path());
+        let statistics_enabled = column_props.statistics_enabled;
 
         let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 

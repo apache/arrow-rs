@@ -306,11 +306,7 @@ impl WriterProperties {
     ///
     /// Note: this is a best effort limit based on the write batch size.
     pub fn column_data_page_size_limit(&self, col: &ColumnPath) -> usize {
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.data_page_size_limit())
-            .or_else(|| self.default_column_properties.data_page_size_limit())
-            .unwrap_or(DEFAULT_PAGE_SIZE)
+        resolve_data_page_size_limit(self.column_override(col), &self.default_column_properties)
     }
 
     /// Returns dictionary page size limit.
@@ -326,11 +322,10 @@ impl WriterProperties {
 
     /// Returns dictionary page size limit for a specific column.
     pub fn column_dictionary_page_size_limit(&self, col: &ColumnPath) -> usize {
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.dictionary_page_size_limit())
-            .or_else(|| self.default_column_properties.dictionary_page_size_limit())
-            .unwrap_or(DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT)
+        resolve_dictionary_page_size_limit(
+            self.column_override(col),
+            &self.default_column_properties,
+        )
     }
 
     /// Returns the maximum page row count
@@ -473,14 +468,10 @@ impl WriterProperties {
     ///
     /// Takes precedence over [`Self::data_page_v2_compression_ratio_threshold`].
     pub fn column_data_page_v2_compression_ratio_threshold(&self, col: &ColumnPath) -> f64 {
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.data_page_v2_compression_ratio_threshold())
-            .or_else(|| {
-                self.default_column_properties
-                    .data_page_v2_compression_ratio_threshold()
-            })
-            .unwrap_or(DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD)
+        resolve_data_page_v2_compression_ratio_threshold(
+            self.column_override(col),
+            &self.default_column_properties,
+        )
     }
 
     /// Returns encoding for a data page, when dictionary encoding is enabled.
@@ -510,43 +501,28 @@ impl WriterProperties {
     /// If encoding is not set, then column writer will choose the best encoding
     /// based on the column type.
     pub fn encoding(&self, col: &ColumnPath) -> Option<Encoding> {
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.encoding())
-            .or_else(|| self.default_column_properties.encoding())
+        resolve_encoding(self.column_override(col), &self.default_column_properties)
     }
 
     /// Returns compression codec for a column.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_column_compression`]
     pub fn compression(&self, col: &ColumnPath) -> Compression {
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.compression())
-            .or_else(|| self.default_column_properties.compression())
-            .unwrap_or(DEFAULT_COMPRESSION)
+        resolve_compression(self.column_override(col), &self.default_column_properties)
     }
 
     /// Returns `true` if dictionary encoding is enabled for a column.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_dictionary_enabled`]
     pub fn dictionary_enabled(&self, col: &ColumnPath) -> bool {
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.dictionary_enabled())
-            .or_else(|| self.default_column_properties.dictionary_enabled())
-            .unwrap_or(DEFAULT_DICTIONARY_ENABLED)
+        resolve_dictionary_enabled(self.column_override(col), &self.default_column_properties)
     }
 
     /// Returns which statistics are written for a column.
     ///
     /// For more details see [`WriterPropertiesBuilder::set_statistics_enabled`]
     pub fn statistics_enabled(&self, col: &ColumnPath) -> EnabledStatistics {
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.statistics_enabled())
-            .or_else(|| self.default_column_properties.statistics_enabled())
-            .unwrap_or(DEFAULT_STATISTICS_ENABLED)
+        resolve_statistics_enabled(self.column_override(col), &self.default_column_properties)
     }
 
     /// Returns `true` if [`Statistics`] are to be written to the page header for a column.
@@ -555,14 +531,10 @@ impl WriterProperties {
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
     pub fn write_page_header_statistics(&self, col: &ColumnPath) -> bool {
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.write_page_header_statistics())
-            .or_else(|| {
-                self.default_column_properties
-                    .write_page_header_statistics()
-            })
-            .unwrap_or(DEFAULT_WRITE_PAGE_HEADER_STATISTICS)
+        resolve_write_page_header_statistics(
+            self.column_override(col),
+            &self.default_column_properties,
+        )
     }
 
     /// Returns the [`BloomFilterProperties`] for the given column
@@ -571,10 +543,41 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_column_bloom_filter_enabled`]
     pub fn bloom_filter_properties(&self, col: &ColumnPath) -> Option<&BloomFilterProperties> {
-        self.column_properties
-            .get(col)
-            .and_then(|c| c.bloom_filter_properties())
-            .or_else(|| self.default_column_properties.bloom_filter_properties())
+        resolve_bloom_filter_properties(self.column_override(col), &self.default_column_properties)
+    }
+
+    /// Returns the per-column override entry for `col`, if any.
+    ///
+    /// This is the only place the per-column map is searched. Searching it hashes
+    /// `col`, which is a `Vec<String>`, so callers that need more than one setting
+    /// should go through [`Self::resolve_column_properties`] rather than call
+    /// several single-setting accessors.
+    #[inline]
+    fn column_override(&self, col: &ColumnPath) -> Option<&ColumnProperties> {
+        self.column_properties.get(col)
+    }
+
+    /// Resolves every per-column writer setting for `col` with a single search of
+    /// the per-column override map.
+    ///
+    /// A column writer needs most of these settings, and needs some of them again
+    /// on every batch and every page, so it resolves them once when it is created
+    /// and reads the result from then on.
+    pub(crate) fn resolve_column_properties(&self, col: &ColumnPath) -> ResolvedColumnProperties {
+        let column = self.column_override(col);
+        let default = &self.default_column_properties;
+        ResolvedColumnProperties {
+            encoding: resolve_encoding(column, default),
+            compression: resolve_compression(column, default),
+            dictionary_enabled: resolve_dictionary_enabled(column, default),
+            statistics_enabled: resolve_statistics_enabled(column, default),
+            write_page_header_statistics: resolve_write_page_header_statistics(column, default),
+            data_page_size_limit: resolve_data_page_size_limit(column, default),
+            dictionary_page_size_limit: resolve_dictionary_page_size_limit(column, default),
+            data_page_v2_compression_ratio_threshold:
+                resolve_data_page_v2_compression_ratio_threshold(column, default),
+            bloom_filter_properties: resolve_bloom_filter_properties(column, default).cloned(),
+        }
     }
 
     /// Return file encryption properties
@@ -1805,6 +1808,128 @@ impl ColumnProperties {
     }
 }
 
+/// Every per-column writer setting for one leaf column, resolved against the
+/// per-column overrides and the file-wide defaults.
+///
+/// Built by [`WriterProperties::resolve_column_properties`].
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ResolvedColumnProperties {
+    /// See [`WriterProperties::encoding`].
+    pub(crate) encoding: Option<Encoding>,
+    /// See [`WriterProperties::compression`].
+    pub(crate) compression: Compression,
+    /// See [`WriterProperties::dictionary_enabled`].
+    pub(crate) dictionary_enabled: bool,
+    /// See [`WriterProperties::statistics_enabled`].
+    pub(crate) statistics_enabled: EnabledStatistics,
+    /// See [`WriterProperties::write_page_header_statistics`].
+    pub(crate) write_page_header_statistics: bool,
+    /// See [`WriterProperties::column_data_page_size_limit`].
+    pub(crate) data_page_size_limit: usize,
+    /// See [`WriterProperties::column_dictionary_page_size_limit`].
+    pub(crate) dictionary_page_size_limit: usize,
+    /// See [`WriterProperties::column_data_page_v2_compression_ratio_threshold`].
+    pub(crate) data_page_v2_compression_ratio_threshold: f64,
+    /// See [`WriterProperties::bloom_filter_properties`].
+    pub(crate) bloom_filter_properties: Option<BloomFilterProperties>,
+}
+
+/// Returns the setting read by `get` for `column` if it sets one, otherwise the
+/// setting on `default`.
+///
+/// `column` is the per-column override entry, if the column has one.
+#[inline]
+fn column_or_default<T>(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+    get: impl Fn(&ColumnProperties) -> Option<T>,
+) -> Option<T> {
+    column.and_then(&get).or_else(|| get(default))
+}
+
+fn resolve_encoding(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> Option<Encoding> {
+    column_or_default(column, default, ColumnProperties::encoding)
+}
+
+fn resolve_compression(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> Compression {
+    column_or_default(column, default, ColumnProperties::compression).unwrap_or(DEFAULT_COMPRESSION)
+}
+
+fn resolve_dictionary_enabled(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> bool {
+    column_or_default(column, default, ColumnProperties::dictionary_enabled)
+        .unwrap_or(DEFAULT_DICTIONARY_ENABLED)
+}
+
+fn resolve_statistics_enabled(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> EnabledStatistics {
+    column_or_default(column, default, ColumnProperties::statistics_enabled)
+        .unwrap_or(DEFAULT_STATISTICS_ENABLED)
+}
+
+fn resolve_write_page_header_statistics(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> bool {
+    column_or_default(
+        column,
+        default,
+        ColumnProperties::write_page_header_statistics,
+    )
+    .unwrap_or(DEFAULT_WRITE_PAGE_HEADER_STATISTICS)
+}
+
+fn resolve_data_page_size_limit(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> usize {
+    column_or_default(column, default, ColumnProperties::data_page_size_limit)
+        .unwrap_or(DEFAULT_PAGE_SIZE)
+}
+
+fn resolve_dictionary_page_size_limit(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> usize {
+    column_or_default(
+        column,
+        default,
+        ColumnProperties::dictionary_page_size_limit,
+    )
+    .unwrap_or(DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT)
+}
+
+fn resolve_data_page_v2_compression_ratio_threshold(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> f64 {
+    column_or_default(
+        column,
+        default,
+        ColumnProperties::data_page_v2_compression_ratio_threshold,
+    )
+    .unwrap_or(DEFAULT_DATA_PAGE_V2_COMPRESSION_RATIO_THRESHOLD)
+}
+
+fn resolve_bloom_filter_properties<'a>(
+    column: Option<&'a ColumnProperties>,
+    default: &'a ColumnProperties,
+) -> Option<&'a BloomFilterProperties> {
+    column
+        .and_then(ColumnProperties::bloom_filter_properties)
+        .or_else(|| default.bloom_filter_properties())
+}
+
 /// Reference counted reader properties.
 pub type ReaderPropertiesPtr = Arc<ReaderProperties>;
 
@@ -1934,6 +2059,85 @@ mod tests {
     fn test_writer_version() {
         assert_eq!(WriterVersion::PARQUET_1_0.as_num(), 1);
         assert_eq!(WriterVersion::PARQUET_2_0.as_num(), 2);
+    }
+
+    /// Every setting resolved in one pass must equal what the individual
+    /// per-column accessors return, for a column that overrides settings, a
+    /// column that inherits them, and settings left at their defaults.
+    #[test]
+    fn test_resolve_column_properties_matches_individual_accessors() {
+        let overridden = ColumnPath::from("overridden");
+        let inherited = ColumnPath::from("inherited");
+
+        let props = WriterProperties::builder()
+            .set_encoding(Encoding::DELTA_BINARY_PACKED)
+            .set_compression(Compression::SNAPPY)
+            .set_dictionary_enabled(false)
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .set_write_page_header_statistics(false)
+            .set_data_page_size_limit(1111)
+            .set_dictionary_page_size_limit(2222)
+            .set_data_page_v2_compression_ratio_threshold(0.25)
+            .set_bloom_filter_enabled(true)
+            .set_column_encoding(overridden.clone(), Encoding::PLAIN)
+            .set_column_compression(overridden.clone(), Compression::UNCOMPRESSED)
+            .set_column_dictionary_enabled(overridden.clone(), true)
+            .set_column_statistics_enabled(overridden.clone(), EnabledStatistics::Page)
+            .set_column_write_page_header_statistics(overridden.clone(), true)
+            .set_column_data_page_size_limit(overridden.clone(), 3333)
+            .set_column_dictionary_page_size_limit(overridden.clone(), 4444)
+            .set_column_data_page_v2_compression_ratio_threshold(overridden.clone(), 0.75)
+            .set_column_bloom_filter_fpp(overridden.clone(), 0.5)
+            .build();
+
+        // A column with no overrides at all, on properties that are themselves
+        // entirely default.
+        let bare = WriterProperties::builder().build();
+
+        for (props, col) in [
+            (&props, &overridden),
+            (&props, &inherited),
+            (&bare, &inherited),
+        ] {
+            let resolved = props.resolve_column_properties(col);
+            assert_eq!(resolved.encoding, props.encoding(col), "{col:?}");
+            assert_eq!(resolved.compression, props.compression(col), "{col:?}");
+            assert_eq!(
+                resolved.dictionary_enabled,
+                props.dictionary_enabled(col),
+                "{col:?}"
+            );
+            assert_eq!(
+                resolved.statistics_enabled,
+                props.statistics_enabled(col),
+                "{col:?}"
+            );
+            assert_eq!(
+                resolved.write_page_header_statistics,
+                props.write_page_header_statistics(col),
+                "{col:?}"
+            );
+            assert_eq!(
+                resolved.data_page_size_limit,
+                props.column_data_page_size_limit(col),
+                "{col:?}"
+            );
+            assert_eq!(
+                resolved.dictionary_page_size_limit,
+                props.column_dictionary_page_size_limit(col),
+                "{col:?}"
+            );
+            assert_eq!(
+                resolved.data_page_v2_compression_ratio_threshold,
+                props.column_data_page_v2_compression_ratio_threshold(col),
+                "{col:?}"
+            );
+            assert_eq!(
+                resolved.bloom_filter_properties.as_ref(),
+                props.bloom_filter_properties(col),
+                "{col:?}"
+            );
+        }
     }
 
     #[test]
