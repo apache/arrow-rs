@@ -65,7 +65,7 @@ use crate::parse::{
     string_to_datetime,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{ArrowNativeType, OffsetBuffer, i256};
+use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, i256};
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
@@ -2832,7 +2832,7 @@ where
     let str_values_buf = data.buffers()[1].clone();
     let offsets = data.buffers()[0].typed_data::<FROM::Offset>();
 
-    let mut offset_builder = BufferBuilder::<TO::Offset>::new(offsets.len());
+    let mut cast_offsets = Vec::<TO::Offset>::with_capacity(offsets.len());
     offsets
         .iter()
         .try_for_each::<_, Result<_, ArrowError>>(|offset| {
@@ -2846,11 +2846,11 @@ where
                         TO::PREFIX
                     ))
                 })?;
-            offset_builder.append(offset);
+            cast_offsets.push(offset);
             Ok(())
         })?;
 
-    let offset_buffer = offset_builder.finish();
+    let offset_buffer = Buffer::from_vec(cast_offsets);
 
     let dtype = TO::DATA_TYPE;
 
@@ -4089,6 +4089,34 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Int8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        // overflow test: values whose low 64 bits fit the target type
+        // https://github.com/apache/arrow-rs/issues/10855
+        let value_array: Vec<Option<i256>> = vec![Some(i256::from_i128((1i128 << 64) + 5))];
+        let array = create_decimal256_array(value_array, 76, 0).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!(
+            "Cast error: value of 18446744073709551621 is out of range Int64".to_string(),
+            casted_array.unwrap_err().to_string()
+        );
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
             &CastOptions {
                 safe: true,
                 format_options: FormatOptions::default(),

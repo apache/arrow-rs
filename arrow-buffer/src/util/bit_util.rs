@@ -664,6 +664,8 @@ impl<'a> U64UnalignedSlice<'a> {
         // make the last pointer invalid, we handle the first element outside the loop
         // and then advance the pointer at the start of the loop
         // making sure that the iterator is not empty
+        // Safety: `self.len > 0` (checked above) and the pointer has not been advanced yet,
+        // so it is valid for reads and writes.
         unsafe {
             // I hope the function get inlined and the compiler remove the dead right parameter
             self.apply_bin_op(0, &mut |left, _| map(left));
@@ -794,6 +796,9 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
         // without calling `to_byte_slice` for each element,
         // which is correct for all ArrowNativeType implementations including u64.
         let src = rem.as_ptr();
+        // Safety: `rem` has length `remainder_bytes`, `start_remainder_mut_slice` has length
+        // `remainder_bytes`, and the two slices are non-overlapping (rem is derived from a
+        // local `to_le_bytes()` call; start_remainder_mut_slice is the caller's mutable buffer).
         unsafe {
             std::ptr::copy_nonoverlapping(
                 src,
