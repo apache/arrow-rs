@@ -521,6 +521,7 @@ impl HeapSize for PageIndex {
 /// - Populating column indexes for predicate columns (for page filtering)
 /// - Populating offset indexes for projected columns (for direct I/O)
 /// - Automatic conversion of empty structures to `None` to save memory
+#[derive(Default)]
 pub struct PageIndexBuilder {
     column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
     offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
@@ -534,10 +535,7 @@ impl PageIndexBuilder {
     ///
     /// # Type Parameters
     /// * `T` - The type of index this is to be, either `ColumnIndexMetaData` or `OffsetIndexMetaData`
-    pub(crate) fn empty_index<T>(
-        num_row_groups: usize,
-        num_columns: usize,
-    ) -> Option<Vec<Vec<Option<T>>>> {
+    fn empty_index<T>(num_row_groups: usize, num_columns: usize) -> Option<Vec<Vec<Option<T>>>> {
         Some(
             (0..num_row_groups)
                 .map(|_| {
@@ -561,17 +559,6 @@ impl PageIndexBuilder {
         }
     }
 
-    /// Creates a new [`PageIndexBuilder`] with the provided column and offset indexes
-    pub(crate) fn new_from_parts(
-        column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
-        offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
-    ) -> Self {
-        Self {
-            column_indexes,
-            offset_indexes,
-        }
-    }
-
     /// Creates a new [`PageIndexBuilder`] from an existing [`PageIndex`]
     ///
     /// This takes ownership of the index structures from the provided [`PageIndex`],
@@ -581,6 +568,24 @@ impl PageIndexBuilder {
             column_indexes: page_index.column_indexes,
             offset_indexes: page_index.offset_indexes,
         }
+    }
+
+    /// Allocate storage for the column indexes
+    ///
+    /// This can be used to add an empty column index to a builder that lacks one (
+    /// either a `Default` builder, or one converted from a [`PageIndex`] that lacks
+    /// the column indexes).
+    pub fn allocate_column_index(&mut self, num_row_groups: usize, num_columns: usize) {
+        self.column_indexes = Self::empty_index(num_row_groups, num_columns);
+    }
+
+    /// Allocate storage for the offset indexes
+    ///
+    /// This can be used to add an empty offset index to a builder that lacks one (
+    /// either a `Default` builder, or one converted from a [`PageIndex`] that lacks
+    /// the offset indexes).
+    pub fn allocate_offset_index(&mut self, num_row_groups: usize, num_columns: usize) {
+        self.offset_indexes = Self::empty_index(num_row_groups, num_columns);
     }
 
     /// Sets the column index for a specific row group and column

@@ -259,15 +259,13 @@ pub(crate) fn parse_page_index(
     }
     let num_row_groups = metadata.num_row_groups();
     let num_columns = metadata.file_metadata().schema_descr().num_columns();
-    let column_index = match column_index_policy {
-        PageIndexPolicy::Skip => None,
-        _ => PageIndexBuilder::empty_index(num_row_groups, num_columns),
-    };
-    let offset_index = match offset_index_policy {
-        PageIndexPolicy::Skip => None,
-        _ => PageIndexBuilder::empty_index(num_row_groups, num_columns),
-    };
-    let mut builder = PageIndexBuilder::new_from_parts(column_index, offset_index);
+    let mut builder = PageIndexBuilder::default();
+    if column_index_policy != PageIndexPolicy::Skip {
+        builder.allocate_column_index(num_row_groups, num_columns);
+    }
+    if offset_index_policy != PageIndexPolicy::Skip {
+        builder.allocate_offset_index(num_row_groups, num_columns);
+    }
     parse_column_index(
         metadata,
         column_index_policy,
