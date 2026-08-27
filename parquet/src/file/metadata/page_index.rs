@@ -570,21 +570,27 @@ impl PageIndexBuilder {
         }
     }
 
-    /// Allocate storage for the column indexes
+    /// Allocates space for column indexes
     ///
-    /// This can be used to add an empty column index to a builder that lacks one (
-    /// either a `Default` builder, or one converted from a [`PageIndex`] that lacks
-    /// the column indexes).
-    pub fn allocate_column_index(&mut self, num_row_groups: usize, num_columns: usize) {
+    /// This allocates an empty index structure for the specified number of row groups and columns.
+    /// All index entries are initialized to `None` and can be populated using
+    /// [`put_column_index`](Self::put_column_index).
+    ///
+    /// This can be used to add column index storage to a builder that lacks one
+    /// (either a `Default` builder, or one created from a [`PageIndex`] without column indexes).
+    pub fn allocate_column_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
         self.column_indexes = Self::empty_index(num_row_groups, num_columns);
     }
 
-    /// Allocate storage for the offset indexes
+    /// Allocates space for offset indexes
     ///
-    /// This can be used to add an empty offset index to a builder that lacks one (
-    /// either a `Default` builder, or one converted from a [`PageIndex`] that lacks
-    /// the offset indexes).
-    pub fn allocate_offset_index(&mut self, num_row_groups: usize, num_columns: usize) {
+    /// This allocates an empty index structure for the specified number of row groups and columns.
+    /// All index entries are initialized to `None` and can be populated using
+    /// [`put_offset_index`](Self::put_offset_index).
+    ///
+    /// This can be used to add offset index storage to a builder that lacks one
+    /// (either a `Default` builder, or one created from a [`PageIndex`] without offset indexes).
+    pub fn allocate_offset_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
         self.offset_indexes = Self::empty_index(num_row_groups, num_columns);
     }
 

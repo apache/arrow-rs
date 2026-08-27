@@ -261,10 +261,10 @@ pub(crate) fn parse_page_index(
     let num_columns = metadata.file_metadata().schema_descr().num_columns();
     let mut builder = PageIndexBuilder::default();
     if column_index_policy != PageIndexPolicy::Skip {
-        builder.allocate_column_index(num_row_groups, num_columns);
+        builder.allocate_column_indexes(num_row_groups, num_columns);
     }
     if offset_index_policy != PageIndexPolicy::Skip {
-        builder.allocate_offset_index(num_row_groups, num_columns);
+        builder.allocate_offset_indexes(num_row_groups, num_columns);
     }
     parse_column_index(
         metadata,
