@@ -827,6 +827,46 @@ mod tests {
     }
 
     #[test]
+    fn test_slice_struct_data_with_existing_offset() {
+        // Slicing a struct whose `ArrayData` *already* carries a non-zero
+        // offset over full-length children (how the C data interface hands us
+        // a sliced struct). The cumulative offset must end up on the children
+        // only: if any of it were left on the parent, `From<ArrayData> for
+        // StructArray` would apply it a second time to already-windowed
+        // children.
+        let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(x.clone())],
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        );
+
+        let offset_data = struct_array
+            .to_data()
+            .into_builder()
+            .offset(1)
+            .len(5)
+            .nulls(Some(NullBuffer::from(vec![true, true, false, true, true])))
+            .build()
+            .unwrap();
+
+        let sliced = offset_data.slice(1, 3);
+        // The cumulative offset (1 + 1) lands on the child; the parent's own
+        // offset is reset to 0 so nothing re-applies it.
+        assert_eq!(sliced.offset(), 0);
+        assert_eq!(sliced.len(), 3);
+        assert_eq!(sliced.child_data()[0].offset(), 2);
+        assert_eq!(sliced.child_data()[0].len(), 3);
+
+        let arr = make_array(sliced);
+        assert_eq!(
+            arr.as_struct().column(0).as_primitive::<Int32Type>(),
+            &x.slice(2, 3)
+        );
+        assert_eq!(arr.as_struct(), &struct_array.slice(2, 3));
+    }
+
+    #[test]
     #[should_panic(expected = "assertion failed: end <= self.len()")]
     fn test_struct_array_from_data_with_offset_and_length_error() {
         let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);

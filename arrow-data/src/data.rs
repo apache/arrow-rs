@@ -696,28 +696,34 @@ impl ArrayData {
         assert!(end <= self.len());
 
         if let DataType::Struct(_) = self.data_type() {
-            assert!(
-                self.buffers.is_empty(),
-                "StructArrays should not contain buffers"
-            );
-            // A struct's offset windows its child data (and null buffer), so
-            // the slice is applied by pushing `offset` down into the children
-            // rather than by also adding it to the parent's own offset. Doing
-            // both would double-count the offset (see #7595): the parent offset
-            // would then window children that have already been windowed. We
-            // therefore keep `self.offset` unchanged and let the cumulative
-            // child offsets carry the new slice.
+            // As documented on [`Self::offset`], a struct has no buffers of its
+            // own and its offset composes with each child's offset: logical
+            // element `i` is element `self.offset + i` of every child.
+            //
+            // The slice must therefore be applied exactly once. Previously it
+            // was applied twice - pushed down into the children *and* added to
+            // the parent's own offset - so rebuilding the sliced data (e.g. via
+            // `make_array` / `From<ArrayData> for StructArray`, which re-windows
+            // each child by the parent offset) windowed the children a second
+            // time and panicked with `(offset + length) <= self.len()`
+            // (#7595, #7750).
+            //
+            // Push the whole cumulative offset into the children and reset the
+            // parent's offset to 0, so that the children carry the window and
+            // nothing re-applies it.
+            let child_offset = self.offset + offset;
             ArrayData {
                 data_type: self.data_type().clone(),
                 len: length,
-                offset: self.offset,
-                buffers: vec![],
-                // Slice child data, to propagate offsets down to them
+                offset: 0,
+                buffers: self.buffers.clone(),
                 child_data: self
                     .child_data()
                     .iter()
-                    .map(|data| data.slice(offset, length))
+                    .map(|data| data.slice(child_offset, length))
                     .collect(),
+                // The offset does not apply to `nulls`, which always covers
+                // exactly `len` elements, so it is sliced by `offset`.
                 nulls: self.nulls.as_ref().map(|x| x.slice(offset, length)),
             }
         } else {
