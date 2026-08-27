@@ -680,7 +680,7 @@ async fn test_int_64() {
     .run();
 }
 
-#[cfg_attr(all(miri, target_os = "macos"), ignore)] // kqueue unsupported by Miri on MacOS
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_int_32() {
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
@@ -1438,7 +1438,7 @@ async fn test_time32_second_diff_rg_sizes() {
     .run();
 }
 
-#[cfg_attr(all(miri, target_os = "macos"), ignore)] // kqueue unsupported by Miri on MacOS
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_time32_millisecond_diff_rg_sizes() {
     let reader = TestReader {
@@ -2040,7 +2040,7 @@ async fn test_decimal64() {
     }
     .run();
 }
-#[cfg_attr(all(miri, target_os = "macos"), ignore)] // kqueue unsupported by Miri on MacOS
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_decimal128() {
     // This creates a parquet file of 1 column "decimal128_col" with decimal data type and precision 9, scale 2
