@@ -1553,7 +1553,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i256() {
         let candidates = [
             i256::ZERO,
@@ -1616,7 +1616,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i256_fuzz() {
         let mut rng = rng();
 
@@ -1819,7 +1819,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // conversion to float isn't accurate under miri
     fn test_decimal256_to_f64_typical_values() {
         let v = i256::from_i128(42_i128);
         assert_eq!(v.to_f64().unwrap(), 42.0);

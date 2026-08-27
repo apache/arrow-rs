@@ -5200,7 +5200,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_test() {
         let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..100 {

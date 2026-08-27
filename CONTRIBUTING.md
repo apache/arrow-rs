@@ -166,6 +166,38 @@ parquet files run the following from the top-level `arrow-rs` directory:
 cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
 ```
 
+## Miri
+
+Run tests under [`Miri`](https://github.com/rust-lang/miri) like so, assuming
+[`cargo-nextest`](https://nexte.st/) is available:
+
+```sh
+# Run all tests
+MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri nextest run
+# Run specific tests
+MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri nextest run -p arrow-buffer --lib bigint
+```
+
+The whole suite will take a long time to run so it's suggested to run individual
+suites/tests when required.
+
+Add a `cfg_attr` to tests in cases where the test should be ignored by Miri:
+
+```rust
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test123() {}
+```
+
+Ensuring to annotate with a comment why the test is being ignored. Common cases
+are:
+
+- Takes too long
+  - Threshold is if it takes longer than 1 minute
+- Zstd code unsupported by Miri
+- Inline assembly unsupported by Miri
+- Any other operation thats unsupported by Miri
+
 ## Breaking Changes
 
 Our [release schedule] allows breaking API changes only in major releases.
