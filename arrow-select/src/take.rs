@@ -456,6 +456,42 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
     }
 }
 
+/// Read the bit at `src_bit_idx` from `src` and, if it is set, write a `1` to `dst_bit_idx`
+/// in `dst`. Leaves `dst_bit_idx` unchanged (zero) when the source bit is unset.
+///
+/// ```text
+/// src = 0b00100000  (bit 5 is set)
+/// copy_bit_if_set(src, 5, dst, 2)  →  dst bit 2 becomes 1
+/// ```
+///
+/// # Safety
+/// - `src` must be valid for reads up to byte `src_bit_idx / 8`.
+/// - `dst` must be valid for writes up to byte `dst_bit_idx / 8`.
+#[inline(always)]
+unsafe fn copy_bit_if_set(src: *const u8, src_bit_idx: usize, dst: *mut u8, dst_bit_idx: usize) {
+    unsafe {
+        if bit_util::get_bit_raw(src, src_bit_idx) {
+            bit_util::set_bit_raw(dst, dst_bit_idx);
+        }
+    }
+}
+
+/// Read the bit at `bit_idx` from `src` and return it shifted to `out_pos`, ready to be
+/// OR'd into an output byte accumulator.
+///
+/// ```text
+/// src = 0b10100000  (bit 5 is set)
+/// pack_bit(src, 5, 2)  →  0b00000100   (bit from position 5, placed at position 2)
+/// ```
+///
+/// # Safety
+/// `src` must be valid for reads up to byte `bit_idx / 8`.
+#[inline(always)]
+unsafe fn pack_bit(src: *const u8, bit_idx: usize, out_pos: usize) -> u8 {
+    let byte = unsafe { *src.add(bit_idx >> 3) }; // byte containing bit `bit_idx`
+    ((byte >> (bit_idx & 7)) & 1) << out_pos // extract the bit, shift to output position
+}
+
 #[inline(never)]
 fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
     values: &BooleanBuffer,
@@ -478,11 +514,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                     unsafe { indices.value_unchecked(valid_idx) }.as_usize()
                 } + src_offset;
                 // SAFETY: src_idx bounded by take's prior bounds check
-                unsafe {
-                    if bit_util::get_bit_raw(src_ptr, src_idx) {
-                        bit_util::set_bit_raw(out_ptr, valid_idx);
-                    }
-                }
+                unsafe { copy_bit_if_set(src_ptr, src_idx, out_ptr, valid_idx) };
             });
             BooleanBuffer::new(Buffer::from(output), 0, len)
         }
@@ -493,9 +525,9 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
             let out_slice = output.as_mut_slice();
             let full_bytes = len / 8;
 
-            for (byte_idx, out_slot) in out_slice.iter_mut().enumerate().take(full_bytes) {
+            for (byte_idx, out_byte) in out_slice.iter_mut().enumerate().take(full_bytes) {
                 let base = byte_idx * 8;
-                let mut out_byte = 0u8;
+                let mut byte = 0u8;
                 for bit in 0..8usize {
                     let src_idx = if CHECKED {
                         indices.value(base + bit).as_usize()
@@ -504,15 +536,13 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
                     // SAFETY: src_idx bounded by take's prior bounds check
-                    let src_byte = unsafe { *src_ptr.add(src_idx >> 3) }; // byte containing bit src_idx
-                    out_byte |= ((src_byte >> (src_idx & 7)) & 1) << bit; // extract that bit, place it at position `bit`
+                    byte |= unsafe { pack_bit(src_ptr, src_idx, bit) };
                 }
-                *out_slot = out_byte;
+                *out_byte = byte;
             }
-            // Handle remaining bits when len is not a multiple of 8.
             if full_bytes < out_bytes {
                 let base = full_bytes * 8;
-                let mut out_byte = 0u8;
+                let mut byte = 0u8;
                 for bit in 0..(len - base) {
                     let src_idx = if CHECKED {
                         indices.value(base + bit).as_usize()
@@ -521,10 +551,9 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
                     // SAFETY: src_idx bounded by take's prior bounds check
-                    let src_byte = unsafe { *src_ptr.add(src_idx >> 3) }; // byte containing bit src_idx
-                    out_byte |= ((src_byte >> (src_idx & 7)) & 1) << bit; // extract that bit, place it at position `bit`
+                    byte |= unsafe { pack_bit(src_ptr, src_idx, bit) };
                 }
-                out_slice[full_bytes] = out_byte;
+                out_slice[full_bytes] = byte;
             }
             BooleanBuffer::new(Buffer::from(output), 0, len)
         }
@@ -557,16 +586,20 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
             for out_pos in index_nulls.valid_indices() {
                 // SAFETY: out_pos < len from the validity bitmap
                 let src_idx = unsafe { indices.value_unchecked(out_pos) }.as_usize();
+                // SAFETY: src_idx + offsets bounded by take's prior bounds check
                 unsafe {
-                    let value_byte = *value_data_ptr.add((src_idx + value_bit_offset) >> 3); // byte containing value bit
-                    if (value_byte >> ((src_idx + value_bit_offset) & 7)) & 1 != 0 {
-                        bit_util::set_bit_raw(value_out_ptr, out_pos);
-                    }
-                    let validity_byte =
-                        *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3); // byte containing validity bit
-                    if (validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1 != 0 {
-                        bit_util::set_bit_raw(validity_out_ptr, out_pos);
-                    }
+                    copy_bit_if_set(
+                        value_data_ptr,
+                        src_idx + value_bit_offset,
+                        value_out_ptr,
+                        out_pos,
+                    );
+                    copy_bit_if_set(
+                        validity_data_ptr,
+                        src_idx + validity_bit_offset,
+                        validity_out_ptr,
+                        out_pos,
+                    );
                 }
             }
         }
@@ -587,14 +620,12 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
                 for bit_pos in 0..8usize {
                     // SAFETY: bit_base + bit_pos < len
                     let src_idx = unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
-                    let value_byte =
-                        unsafe { *value_data_ptr.add((src_idx + value_bit_offset) >> 3) }; // byte containing value bit
-                    let validity_byte =
-                        unsafe { *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3) }; // byte containing validity bit
+                    // SAFETY: src_idx + offsets bounded by take's prior bounds check
                     packed_values |=
-                        ((value_byte >> ((src_idx + value_bit_offset) & 7)) & 1) << bit_pos; // extract value bit, place at position `bit_pos`
-                    packed_validity |=
-                        ((validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1) << bit_pos; // extract validity bit, place at position `bit_pos`
+                        unsafe { pack_bit(value_data_ptr, src_idx + value_bit_offset, bit_pos) };
+                    packed_validity |= unsafe {
+                        pack_bit(validity_data_ptr, src_idx + validity_bit_offset, bit_pos)
+                    };
                 }
                 *value_out_byte = packed_values;
                 *validity_out_byte = packed_validity;
@@ -607,14 +638,12 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
                 for bit_pos in 0..(len - bit_base) {
                     // SAFETY: bit_base + bit_pos < len
                     let src_idx = unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
-                    let value_byte =
-                        unsafe { *value_data_ptr.add((src_idx + value_bit_offset) >> 3) }; // byte containing value bit
-                    let validity_byte =
-                        unsafe { *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3) }; // byte containing validity bit
+                    // SAFETY: src_idx + offsets bounded by take's prior bounds check
                     packed_values |=
-                        ((value_byte >> ((src_idx + value_bit_offset) & 7)) & 1) << bit_pos; // extract value bit, place at position `bit_pos`
-                    packed_validity |=
-                        ((validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1) << bit_pos; // extract validity bit, place at position `bit_pos`
+                        unsafe { pack_bit(value_data_ptr, src_idx + value_bit_offset, bit_pos) };
+                    packed_validity |= unsafe {
+                        pack_bit(validity_data_ptr, src_idx + validity_bit_offset, bit_pos)
+                    };
                 }
                 value_out_slice[full_bytes] = packed_values;
                 validity_out_slice[full_bytes] = packed_validity;
