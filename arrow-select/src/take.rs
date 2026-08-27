@@ -30,7 +30,7 @@ use arrow_buffer::{
     ScalarBuffer, bit_util,
 };
 use arrow_cmp::make_comparator;
-use arrow_data::transform::MutableArrayData;
+use arrow_data::{ArrayData, transform::MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, SortOptions, UnionMode};
 
 use num_traits::Zero;
@@ -766,31 +766,82 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
     indices: &PrimitiveArray<IndexType>,
     length: <UInt32Type as ArrowPrimitiveType>::Native,
 ) -> Result<FixedSizeListArray, ArrowError> {
-    let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
-    let taken = take_impl::<UInt32Type, CHECKED>(values.values().as_ref(), &list_indices)?;
+    let field = values.value_field();
+    let child = values.values();
+    let nulls = take_nulls::<_, CHECKED>(values.nulls(), indices);
 
-    // determine null count and null buffer, which are a function of `values` and `indices`
-    let num_bytes = bit_util::ceil(indices.len(), 8);
-    let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-    let null_slice = null_buf.as_slice_mut();
+    // Fast path: primitive child with no nulls  copy row-sized byte blocks directly,
+    let taken_child = if child.null_count() == 0
+        && let Some(element_size) = child.data_type().primitive_width()
+    {
+        take_fixed_size_list_primitive(
+            child,
+            indices,
+            length as usize,
+            element_size,
+            nulls.as_ref(),
+        )
+    } else {
+        let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
+        take_impl::<UInt32Type, CHECKED>(child.as_ref(), &list_indices)?
+    };
 
-    for i in 0..indices.len() {
-        let index = indices
-            .value(i)
-            .to_usize()
-            .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-        if !indices.is_valid(i) || values.is_null(index) {
-            bit_util::unset_bit(null_slice, i);
+    FixedSizeListArray::try_new(field.clone(), length as i32, taken_child, nulls)
+}
+
+#[inline(never)]
+fn take_fixed_size_list_primitive<IndexType: ArrowPrimitiveType>(
+    child: &ArrayRef,
+    indices: &PrimitiveArray<IndexType>,
+    list_size: usize,
+    element_size: usize,
+    taken_row_nulls: Option<&NullBuffer>,
+) -> ArrayRef {
+    let row_bytes = list_size * element_size;
+    let child_data = child.to_data();
+    let src = child_data.buffers()[0].as_slice();
+    let child_byte_offset = child_data.offset() * element_size;
+
+    debug_assert!(
+        indices.len().checked_mul(row_bytes).is_some(),
+        "take_fixed_size_list_primitive: output buffer size overflows usize"
+    );
+    let out_len = indices.len() * list_size;
+
+    let mut out = MutableBuffer::from_len_zeroed(indices.len() * row_bytes);
+    let out_slice = out.as_slice_mut();
+
+    if indices.null_count() == 0 {
+        for (out_row, index) in indices.values().iter().enumerate() {
+            let src_start = child_byte_offset + index.as_usize() * row_bytes;
+            out_slice[out_row * row_bytes..(out_row + 1) * row_bytes]
+                .copy_from_slice(&src[src_start..src_start + row_bytes]);
+        }
+    } else {
+        for (out_row, index) in indices.values().iter().enumerate() {
+            if indices.is_valid(out_row) {
+                let src_start = child_byte_offset + index.as_usize() * row_bytes;
+                out_slice[out_row * row_bytes..(out_row + 1) * row_bytes]
+                    .copy_from_slice(&src[src_start..src_start + row_bytes]);
+            }
         }
     }
+    // Expand the per-row null bitmap to per-element: each null row produces `list_size` null elements.
+    let child_null_buf = taken_row_nulls.map(|n| n.expand(list_size).buffer().clone());
 
-    let field = match values.data_type() {
-        DataType::FixedSizeList(field, _) => field.clone(),
-        d => unreachable!("take_fixed_size_list called with non-fixed-size-list data type {d}"),
+    // SAFETY:
+    // - The data buffer has `indices.len() * row_bytes` bytes = `out_len` elements of a
+    //   primitive type, matching `.len(out_len)`.
+    // - The null buffer (when present) is `ceil(out_len, 8)` bytes via `from_len_zeroed`.
+    // - The data type is primitive: exactly one data buffer, no children required.
+    let array_data = unsafe {
+        ArrayData::builder(child.data_type().clone())
+            .len(out_len)
+            .add_buffer(out.into())
+            .null_bit_buffer(child_null_buf)
+            .build_unchecked()
     };
-    let nulls = NullBuffer::from_unsliced_buffer(null_buf, indices.len());
-
-    FixedSizeListArray::try_new(field, length as i32, taken, nulls)
+    make_array(array_data)
 }
 
 /// The take kernel implementation for `FixedSizeBinaryArray`.
