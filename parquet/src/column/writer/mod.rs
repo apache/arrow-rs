@@ -48,7 +48,7 @@ use crate::file::properties::{
     EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
 };
 use crate::file::statistics::{Statistics, ValueStatistics};
-use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
+use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor, ColumnPath};
 
 mod byte_budget_chunker;
 pub(crate) mod encoder;
@@ -1892,13 +1892,14 @@ fn fallback_encoding(kind: Type, props: &WriterProperties) -> Encoding {
 }
 
 /// Returns true if dictionary is supported for column writer, false otherwise.
-fn has_dictionary_support(kind: Type, props: &WriterProperties) -> bool {
+fn has_dictionary_support(kind: Type, props: &WriterProperties, path: &ColumnPath) -> bool {
     match (kind, props.writer_version()) {
         // Booleans do not support dict encoding and should use a fallback encoding.
         (Type::BOOLEAN, _) => false,
-        // Dictionary encoding was not enabled in PARQUET 1.0
-        (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_1_0) => false,
-        (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_2_0) => true,
+        // Preserve the PARQUET_1_0 default, but honor an explicit opt-in.
+        (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_1_0) => {
+            props.dictionary_enabled_setting(path) == Some(true)
+        }
         _ => true,
     }
 }
@@ -2461,14 +2462,36 @@ mod tests {
 
     #[test]
     fn test_column_writer_default_encoding_support_fixed_len_byte_array() {
+        let default_props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .build();
+        let meta = column_write_and_get_metadata::<FixedLenByteArrayType>(
+            default_props,
+            &[ByteArray::from(vec![1u8]).into()],
+        );
+        assert_eq!(meta.dictionary_page_offset(), None);
+
         check_encoding_write_support::<FixedLenByteArrayType>(
             WriterVersion::PARQUET_1_0,
             true,
             &[ByteArray::from(vec![1u8]).into()],
-            None,
-            &[Encoding::PLAIN, Encoding::RLE],
-            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
+            Some(0),
+            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
+        let column_props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_column_dictionary_enabled(ColumnPath::from("col"), true)
+            .build();
+        let meta = column_write_and_get_metadata::<FixedLenByteArrayType>(
+            column_props,
+            &[ByteArray::from(vec![1u8]).into()],
+        );
+        assert_eq!(meta.dictionary_page_offset(), Some(0));
         check_encoding_write_support::<FixedLenByteArrayType>(
             WriterVersion::PARQUET_1_0,
             false,
