@@ -19,7 +19,8 @@ use crate::array::print_long_array;
 use crate::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
 use crate::temporal_conversions::{
-    as_date, as_datetime, as_datetime_with_timezone, as_duration, as_time,
+    as_datetime, as_datetime_with_data_type, as_datetime_with_timezone,
+    as_datetime_with_timezone_and_data_type, as_duration, as_time, as_time_with_data_type,
 };
 use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
@@ -1360,73 +1361,97 @@ where
     }
 }
 
+/// Writes the `Debug` representation of a single temporal value (converted to
+/// `i64`) of the given [`DataType`] to `f`
+///
+/// This function is deliberately not generic over [`ArrowPrimitiveType`]: it
+/// only depends on the runtime [`DataType`], and keeping it non-generic means
+/// it is compiled once rather than once for each of the ~32 primitive types
+/// (see [#10889])
+///
+/// [#10889]: https://github.com/apache/arrow-rs/issues/10889
+fn write_temporal_value(
+    f: &mut std::fmt::Formatter,
+    data_type: &DataType,
+    v: i64,
+) -> std::fmt::Result {
+    match data_type {
+        DataType::Date32 | DataType::Date64 => {
+            match as_datetime_with_data_type(data_type, v).map(|datetime| datetime.date()) {
+                Some(date) => write!(f, "{date:?}"),
+                None => {
+                    write!(
+                        f,
+                        "Cast error: Failed to convert {v} to temporal for {data_type}"
+                    )
+                }
+            }
+        }
+        DataType::Time32(_) | DataType::Time64(_) => match as_time_with_data_type(data_type, v) {
+            Some(time) => write!(f, "{time:?}"),
+            None => {
+                write!(
+                    f,
+                    "Cast error: Failed to convert {v} to temporal for {data_type}"
+                )
+            }
+        },
+        DataType::Timestamp(_, tz_string_opt) => {
+            match tz_string_opt {
+                // for Timestamp with TimeZone
+                Some(tz_string) => {
+                    match tz_string.parse::<Tz>() {
+                        // if the time zone is valid, construct a DateTime<Tz> and format it as rfc3339
+                        Ok(tz) => match as_datetime_with_timezone_and_data_type(data_type, v, tz) {
+                            Some(datetime) => write!(f, "{}", datetime.to_rfc3339()),
+                            None => write!(
+                                f,
+                                "Cast error: Failed to convert {v} to timestamp for {data_type}"
+                            ),
+                        },
+                        // if the time zone is invalid, shows NaiveDateTime with an error message
+                        Err(_) => match as_datetime_with_data_type(data_type, v) {
+                            Some(datetime) => {
+                                write!(f, "{datetime:?} (Unknown Time Zone '{tz_string}')")
+                            }
+                            None => write!(
+                                f,
+                                "Cast error: Failed to convert {v} to timestamp for {data_type}"
+                            ),
+                        },
+                    }
+                }
+                // for Timestamp without TimeZone
+                None => match as_datetime_with_data_type(data_type, v) {
+                    Some(datetime) => write!(f, "{datetime:?}"),
+                    None => write!(
+                        f,
+                        "Cast error: Failed to convert {v} to timestamp for {data_type}"
+                    ),
+                },
+            }
+        }
+        _ => unreachable!("write_temporal_value called with non-temporal type {data_type}"),
+    }
+}
+
 impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let data_type = self.data_type();
 
         write!(f, "PrimitiveArray<{data_type}>\n[\n")?;
-        print_long_array(self, f, |array, index, f| match data_type {
-            DataType::Date32 | DataType::Date64 => {
-                let v = self.value(index).to_i64().unwrap();
-                match as_date::<T>(v) {
-                    Some(date) => write!(f, "{date:?}"),
-                    None => {
-                        write!(
-                            f,
-                            "Cast error: Failed to convert {v} to temporal for {data_type}"
-                        )
-                    }
-                }
+        // Keep the per-value closure as small as possible: temporal formatting
+        // is dispatched to the non-generic `write_temporal_value` so it is not
+        // instantiated for every primitive type (see #10889)
+        print_long_array(self, f, &mut |index, f| match data_type {
+            DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _) => {
+                write_temporal_value(f, data_type, self.value(index).to_i64().unwrap())
             }
-            DataType::Time32(_) | DataType::Time64(_) => {
-                let v = self.value(index).to_i64().unwrap();
-                match as_time::<T>(v) {
-                    Some(time) => write!(f, "{time:?}"),
-                    None => {
-                        write!(
-                            f,
-                            "Cast error: Failed to convert {v} to temporal for {data_type}"
-                        )
-                    }
-                }
-            }
-            DataType::Timestamp(_, tz_string_opt) => {
-                let v = self.value(index).to_i64().unwrap();
-                match tz_string_opt {
-                    // for Timestamp with TimeZone
-                    Some(tz_string) => {
-                        match tz_string.parse::<Tz>() {
-                            // if the time zone is valid, construct a DateTime<Tz> and format it as rfc3339
-                            Ok(tz) => match as_datetime_with_timezone::<T>(v, tz) {
-                                Some(datetime) => write!(f, "{}", datetime.to_rfc3339()),
-                                None => write!(
-                                    f,
-                                    "Cast error: Failed to convert {v} to timestamp for {data_type}"
-                                ),
-                            },
-                            // if the time zone is invalid, shows NaiveDateTime with an error message
-                            Err(_) => match as_datetime::<T>(v) {
-                                Some(datetime) => {
-                                    write!(f, "{datetime:?} (Unknown Time Zone '{tz_string}')")
-                                }
-                                None => write!(
-                                    f,
-                                    "Cast error: Failed to convert {v} to timestamp for {data_type}"
-                                ),
-                            },
-                        }
-                    }
-                    // for Timestamp without TimeZone
-                    None => match as_datetime::<T>(v) {
-                        Some(datetime) => write!(f, "{datetime:?}"),
-                        None => write!(
-                            f,
-                            "Cast error: Failed to convert {v} to timestamp for {data_type}"
-                        ),
-                    },
-                }
-            }
-            _ => std::fmt::Debug::fmt(&array.value(index), f),
+            _ => std::fmt::Debug::fmt(&self.value(index), f),
         })?;
         write!(f, "]")
     }

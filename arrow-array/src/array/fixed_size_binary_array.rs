@@ -812,8 +812,8 @@ impl<const N: usize> TryFrom<Vec<&[u8; N]>> for FixedSizeBinaryArray {
 impl std::fmt::Debug for FixedSizeBinaryArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "FixedSizeBinaryArray<{}>\n[\n", self.value_length())?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }

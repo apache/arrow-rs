@@ -571,7 +571,7 @@ impl std::fmt::Debug for StructArray {
         writeln!(f, "StructArray")?;
         writeln!(f, "-- validity:")?;
         writeln!(f, "[")?;
-        print_long_array(self, f, |_array, _index, f| write!(f, "valid"))?;
+        print_long_array(self, f, &mut |_index, f| write!(f, "valid"))?;
         writeln!(f, "]\n[")?;
         for (child_index, name) in self.column_names().iter().enumerate() {
             let column = self.column(child_index);
