@@ -17,7 +17,7 @@
 
 use criterion::*;
 
-use parquet_variant::{Variant, VariantBuilder};
+use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
 
 fn generate_large_object() -> (Vec<u8>, Vec<u8>) {
     // 256 elements (keys: 000-255) - each element is an object of 256 elements (240-495) - each
@@ -98,6 +98,34 @@ fn generate_large_nested_list() -> (Vec<u8>, Vec<u8>) {
     variant_builder.finish()
 }
 
+/// Short, ASCII field names, in the style of telemetry / log attribute keys.
+fn field_names(n: usize) -> Vec<String> {
+    const SUFFIXES: [&str; 8] = [
+        "id",
+        "name",
+        "count",
+        "status",
+        "region",
+        "duration_ms",
+        "user_agent",
+        "retry",
+    ];
+    (0..n)
+        .map(|i| format!("attr_{}_{}", SUFFIXES[i % SUFFIXES.len()], i))
+        .collect()
+}
+
+/// One object whose keys are `names`, plus small integer values.
+fn generate_object_with_field_names(names: &[String]) -> (Vec<u8>, Vec<u8>) {
+    let mut variant_builder = VariantBuilder::new();
+    let mut object_builder = variant_builder.new_object();
+    for (i, name) in names.iter().enumerate() {
+        object_builder.insert(name.as_str(), Variant::Int32(i as i32));
+    }
+    object_builder.finish();
+    variant_builder.finish()
+}
+
 // Generates a large object and performs full validation
 fn bench_validate_large_object(c: &mut Criterion) {
     let (metadata, value) = generate_large_object();
@@ -126,11 +154,99 @@ fn bench_validate_large_nested_list(c: &mut Criterion) {
     });
 }
 
+// The benchmarks below read field names back out of already-validated metadata, the path that
+// runs once per object field access. Validation is paid once, outside the measured loop.
+
+fn bench_metadata_iter(c: &mut Criterion) {
+    let mut group = c.benchmark_group("metadata_iter");
+    for n in [8usize, 32, 128] {
+        let names = field_names(n);
+        let (metadata, _value) = generate_object_with_field_names(&names);
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::from_parameter(n), |b| {
+            b.iter(|| {
+                let mut acc = 0usize;
+                for name in metadata.iter() {
+                    acc += std::hint::black_box(name).len();
+                }
+                std::hint::black_box(acc)
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_object_field_name(c: &mut Criterion) {
+    let mut group = c.benchmark_group("object_field_name");
+    for n in [8usize, 32, 128] {
+        let names = field_names(n);
+        let (metadata, value) = generate_object_with_field_names(&names);
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
+        let object = variant.as_object().unwrap();
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::from_parameter(n), |b| {
+            b.iter(|| {
+                let mut acc = 0usize;
+                for i in 0..n {
+                    acc += std::hint::black_box(object.field_name(i).unwrap()).len();
+                }
+                std::hint::black_box(acc)
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_object_iter(c: &mut Criterion) {
+    let mut group = c.benchmark_group("object_iter");
+    for n in [8usize, 32, 128] {
+        let names = field_names(n);
+        let (metadata, value) = generate_object_with_field_names(&names);
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
+        let object = variant.as_object().unwrap();
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::from_parameter(n), |b| {
+            b.iter(|| {
+                let mut acc = 0usize;
+                for (name, _value) in object.iter() {
+                    acc += std::hint::black_box(name).len();
+                }
+                std::hint::black_box(acc)
+            });
+        });
+    }
+    group.finish();
+}
+
+fn bench_object_get_by_name(c: &mut Criterion) {
+    let mut group = c.benchmark_group("object_get_by_name");
+    for n in [8usize, 32, 128] {
+        let names = field_names(n);
+        let (metadata, value) = generate_object_with_field_names(&names);
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
+        let object = variant.as_object().unwrap();
+        // Always look up the last key, the worst case for a linear scan.
+        let needle = names.last().unwrap().as_str();
+        group.bench_function(BenchmarkId::from_parameter(n), |b| {
+            b.iter(|| std::hint::black_box(object.get(std::hint::black_box(needle))));
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_validate_large_object,
     bench_validate_complex_object,
-    bench_validate_large_nested_list
+    bench_validate_large_nested_list,
+    bench_metadata_iter,
+    bench_object_field_name,
+    bench_object_iter,
+    bench_object_get_by_name,
 );
 
 criterion_main!(benches);

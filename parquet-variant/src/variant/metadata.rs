@@ -377,17 +377,10 @@ impl<'m> VariantMetadata<'m> {
         let value_bytes =
             slice_from_slice_at_offset(self.bytes, self.first_value_byte as _, byte_range)?;
 
-        // Belt and braces: in debug builds (which is how the proptest suite in
-        // `tests/proptest.rs` runs) re-check the invariant the unchecked conversion relies on,
-        // so a future change that breaks it fails a test instead of causing undefined behavior.
         debug_assert!(std::str::from_utf8(value_bytes).is_ok());
 
-        // SAFETY: `validated` is set only by `with_full_validation`, which proves that
-        // `self.bytes[self.first_value_byte..]` is valid UTF-8 and that every adjacent pair of
-        // dictionary offsets delimits a range of it that is in bounds, non-decreasing, and lands
-        // on character boundaries. `get_offset` reads that same offset array and bounds checks
-        // `i + 1` against it, so `byte_range` is one of the ranges validation already checked.
-        // `self.bytes` is assigned once, during construction, and never reassigned afterwards.
+        // SAFETY: `validated` is set only by `with_full_validation`, which proved that every
+        // dictionary entry, including this one, is valid UTF-8.
         Ok(unsafe { str::from_utf8_unchecked(value_bytes) })
     }
 
