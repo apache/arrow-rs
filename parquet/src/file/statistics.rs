@@ -705,15 +705,66 @@ impl<T: AsBytes> ValueStatistics<T> {
 
 impl<T: ParquetValueType> fmt::Display for ValueStatistics<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Erase the value type and dispatch to a non-generic helper, so the
+        // formatting machinery is compiled once instead of once per
+        // ParquetValueType (only `min` / `max` actually depend on `T`)
+        self.type_erased().display(f)
+    }
+}
+
+impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // See `Display`: dispatch to a non-generic helper
+        self.type_erased().debug(f)
+    }
+}
+
+impl<T: ParquetValueType> ValueStatistics<T> {
+    /// Return `self` with `min` / `max` behind trait objects, for use by
+    /// non-generic code such as the [`fmt::Display`] and [`fmt::Debug`] impls
+    fn type_erased(&self) -> ErasedValueStatistics<'_> {
+        ErasedValueStatistics {
+            min: self.min.as_ref().map(|v| v as _),
+            max: self.max.as_ref().map(|v| v as _),
+            distinct_count: self.distinct_count,
+            null_count: self.null_count,
+            is_min_max_deprecated: self.is_min_max_deprecated,
+            is_min_max_backwards_compatible: self.is_min_max_backwards_compatible,
+            is_max_value_exact: self.is_max_value_exact,
+            is_min_value_exact: self.is_min_value_exact,
+        }
+    }
+}
+
+/// [`ValueStatistics`] with the value type erased, so formatting can be
+/// compiled once rather than once per [`ParquetValueType`]
+struct ErasedValueStatistics<'a> {
+    min: Option<&'a dyn ParquetValueFormat>,
+    max: Option<&'a dyn ParquetValueFormat>,
+    distinct_count: Option<u64>,
+    null_count: Option<u64>,
+    is_min_max_deprecated: bool,
+    is_min_max_backwards_compatible: bool,
+    is_max_value_exact: bool,
+    is_min_value_exact: bool,
+}
+
+/// Helper trait to allow a single trait object to be formatted with both
+/// [`fmt::Display`] and [`fmt::Debug`]
+trait ParquetValueFormat: fmt::Display + fmt::Debug {}
+impl<T: fmt::Display + fmt::Debug> ParquetValueFormat for T {}
+
+impl ErasedValueStatistics<'_> {
+    fn display(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{{")?;
         write!(f, "min: ")?;
         match self.min {
-            Some(ref value) => write!(f, "{value}")?,
+            Some(value) => write!(f, "{value}")?,
             None => write!(f, "N/A")?,
         }
         write!(f, ", max: ")?;
         match self.max {
-            Some(ref value) => write!(f, "{value}")?,
+            Some(value) => write!(f, "{value}")?,
             None => write!(f, "N/A")?,
         }
         write!(f, ", distinct_count: ")?;
@@ -731,10 +782,8 @@ impl<T: ParquetValueType> fmt::Display for ValueStatistics<T> {
         write!(f, ", min_value_exact: {}", self.is_min_value_exact)?;
         write!(f, "}}")
     }
-}
 
-impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn debug(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
             "{{min: {:?}, max: {:?}, distinct_count: {:?}, null_count: {:?}, \
