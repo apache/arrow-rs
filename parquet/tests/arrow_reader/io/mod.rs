@@ -53,10 +53,11 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::data_type::AsBytes;
 use parquet::file::FOOTER_SIZE;
+use parquet::file::metadata::PageIndexPolicy;
 #[cfg(feature = "async")]
 use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::file::metadata::page_index::PageIndexProvider;
 use parquet::file::metadata::{FooterTail, ParquetMetaData};
-use parquet::file::metadata::{PageIndexPolicy, PageIndexProvider};
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::SchemaDescriptor;

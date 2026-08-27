@@ -31,7 +31,8 @@ use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
-use crate::file::metadata::{ParquetMetaData, RowGroupPageIndex};
+use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
 use data::DataRequest;
@@ -946,7 +947,8 @@ fn loaded_row_ranges_for_projection(
 mod tests {
     use super::*;
     use crate::arrow::arrow_reader::{RowSelection, RowSelector};
-    use crate::file::metadata::{PageIndexBuilder, PageIndexPolicy, PageIndexProvider};
+    use crate::file::metadata::PageIndexPolicy;
+    use crate::file::metadata::page_index::{PageIndexBuilder, PageIndexProvider};
     use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 
     #[test]

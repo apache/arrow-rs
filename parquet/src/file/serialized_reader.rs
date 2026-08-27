@@ -25,6 +25,7 @@ use crate::compression::{Codec, create_codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::offset_index::PageLocation;
 use crate::file::statistics;

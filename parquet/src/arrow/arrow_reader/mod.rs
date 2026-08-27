@@ -1811,9 +1811,8 @@ pub(crate) mod tests {
         FixedLenByteArrayType, FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
-    use crate::file::metadata::{
-        PageIndexPolicy, ParquetMetaData, ParquetStatisticsPolicy, RowGroupPageIndex,
-    };
+    use crate::file::metadata::page_index::RowGroupPageIndex;
+    use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetStatisticsPolicy};
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
     use crate::schema::parser::parse_message_type;

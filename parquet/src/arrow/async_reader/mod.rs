@@ -967,8 +967,9 @@ mod tests {
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::virtual_type::RowNumber;
     use crate::arrow::{ArrowWriter, AsyncArrowWriter, ProjectionMask};
+    use crate::file::metadata::PageIndexPolicy;
     use crate::file::metadata::ParquetMetaDataReader;
-    use crate::file::metadata::{PageIndex, PageIndexPolicy};
+    use crate::file::metadata::page_index::PageIndex;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;

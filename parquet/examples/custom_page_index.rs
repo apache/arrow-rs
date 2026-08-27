@@ -28,9 +28,8 @@
 use bytes::Bytes;
 use parquet::DecodeResult;
 use parquet::errors::{ParquetError, Result};
-use parquet::file::metadata::{
-    PageIndexPolicy, PageIndexProvider, ParquetMetaData, ParquetMetaDataPushDecoder,
-};
+use parquet::file::metadata::page_index::PageIndexProvider;
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder};
 use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 use std::collections::HashMap;

@@ -23,10 +23,10 @@
 use std::sync::Arc;
 
 use crate::errors::ParquetError;
+use crate::file::metadata::page_index::{PageIndexBuilder, PageIndexProvider};
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{
-    ColumnChunkMetaData, PageIndexBuilder, PageIndexPolicy, PageIndexProvider, ParquetMetaData,
-    ParquetMetaDataOptions,
+    ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
 };
 
 use crate::file::page_index::column_index::ColumnIndexMetaData;
