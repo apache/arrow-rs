@@ -88,9 +88,15 @@ macro_rules! downcast_op {
                 DataType::LargeUtf8 => {
                     downcast_dict_op!(key, LargeStringArray, $array, $op$(, $arg)*)
                 }
+                DataType::Utf8View => {
+                    downcast_dict_op!(key, StringViewArray, $array, $op$(, $arg)*)
+                }
                 DataType::Binary => downcast_dict_op!(key, BinaryArray, $array, $op$(, $arg)*),
                 DataType::LargeBinary => {
                     downcast_dict_op!(key, LargeBinaryArray, $array, $op$(, $arg)*)
+                }
+                DataType::BinaryView => {
+                    downcast_dict_op!(key, BinaryViewArray, $array, $op$(, $arg)*)
                 }
                 DataType::FixedSizeBinary(_) => {
                     downcast_dict_op!(key, FixedSizeBinaryArray, $array, $op$(, $arg)*)
@@ -565,6 +571,14 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
     fn has_dictionary(&self) -> bool {
         self.dict_encoder.is_some()
+    }
+
+    fn compresses_against_previous_value(&self) -> bool {
+        // While dictionary encoding is active the data page holds RLE
+        // indices, which carry no cross-value state; only the DELTA_BYTE_ARRAY
+        // fallback shares prefixes with the preceding value.
+        self.dict_encoder.is_none()
+            && matches!(self.fallback.encoder, FallbackEncoderImpl::Delta { .. })
     }
 
     fn estimated_memory_size(&self) -> usize {

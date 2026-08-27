@@ -659,15 +659,7 @@ where
             ArrowError::ComputeError("Internal Error: Cannot cast to GenericByteArray".to_string())
         })?;
     let mut b = GenericByteDictionaryBuilder::<K, T>::with_capacity(values.len(), 1024, 1024);
-
-    // copy each element one at a time
-    for i in 0..values.len() {
-        if values.is_null(i) {
-            b.append_null();
-        } else {
-            b.append(values.value(i))?;
-        }
-    }
+    b.append_array(values)?;
     Ok(Arc::new(b.finish()))
 }
 

@@ -3604,7 +3604,7 @@ mod tests {
         let array = unsafe {
             StringViewArray::new_unchecked(
                 binary_view_array.views().clone(),
-                binary_view_array.data_buffers().to_vec(),
+                Arc::clone(binary_view_array.data_buffers()),
                 binary_view_array.nulls().cloned(),
             )
         };
