@@ -2675,6 +2675,32 @@ mod tests {
             .run();
     }
 
+    /// Test round-trip of Dictionary<UInt32, Utf8View> and
+    /// Dictionary<UInt32, BinaryView> typed columns.
+    #[test]
+    fn arrow_writer_string_view_dictionary() {
+        let raw_string_values = vec!["a", "b", "large payload over 12 bytes"];
+        let raw_binary_values = vec![
+            b"a".to_vec(),
+            b"b".to_vec(),
+            b"large payload over 12 bytes".to_vec(),
+        ];
+
+        let keys = UInt32Array::from(vec![Some(0), None, Some(2), Some(1), None]);
+
+        let string_view_values = Arc::new(StringViewArray::from(raw_string_values));
+        let string_dict: ArrayRef = Arc::new(
+            DictionaryArray::<UInt32Type>::try_new(keys.clone(), string_view_values).unwrap(),
+        );
+
+        let binary_view_values = Arc::new(BinaryViewArray::from_iter_values(raw_binary_values));
+        let binary_dict: ArrayRef =
+            Arc::new(DictionaryArray::<UInt32Type>::try_new(keys, binary_view_values).unwrap());
+
+        RoundTripTest::new(string_dict).run();
+        RoundTripTest::new(binary_dict).run();
+    }
+
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
         let decimal_field = Field::new("a", DataType::Decimal128(precision, scale), false);
         let schema = Schema::new(vec![decimal_field]);
