@@ -947,7 +947,6 @@ fn loaded_row_ranges_for_projection(
 mod tests {
     use super::*;
     use crate::arrow::arrow_reader::{RowSelection, RowSelector};
-    use crate::file::metadata::PageIndexPolicy;
     use crate::file::metadata::page_index::{PageIndexBuilder, PageIndexProvider};
     use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 
@@ -959,12 +958,7 @@ mod tests {
 
     #[test]
     fn test_loaded_row_ranges_intersect_column_page_boundaries() {
-        let mut page_index = PageIndexBuilder::new_with_policy(
-            1,
-            2,
-            &PageIndexPolicy::Skip,
-            &PageIndexPolicy::Required,
-        );
+        let mut page_index = PageIndexBuilder::new(1, 2);
         let column = |first_rows: &[i64]| OffsetIndexMetaData {
             page_locations: first_rows
                 .iter()
@@ -1002,12 +996,7 @@ mod tests {
 
     #[test]
     fn test_auto_keeps_mask_when_page_pruning_skips_pages() {
-        let mut page_index = PageIndexBuilder::new_with_policy(
-            1,
-            1,
-            &PageIndexPolicy::Skip,
-            &PageIndexPolicy::Required,
-        );
+        let mut page_index = PageIndexBuilder::new(1, 1);
         page_index.put_offset_index(
             OffsetIndexMetaData {
                 page_locations: [0, 2, 4, 6, 8, 10]

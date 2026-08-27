@@ -17,7 +17,7 @@
 
 //! Page Index structures for efficient page-level skipping
 
-use crate::file::metadata::{memory::HeapSize, reader::PageIndexPolicy};
+use crate::file::metadata::memory::HeapSize;
 use crate::file::page_index::{
     column_index::ColumnIndexMetaData,
     offset_index::{OffsetIndexMetaData, PageLocation},
@@ -534,7 +534,10 @@ impl PageIndexBuilder {
     ///
     /// # Type Parameters
     /// * `T` - The type of index this is to be, either `ColumnIndexMetaData` or `OffsetIndexMetaData`
-    fn empty_index<T>(num_row_groups: usize, num_columns: usize) -> Option<Vec<Vec<Option<T>>>> {
+    pub(crate) fn empty_index<T>(
+        num_row_groups: usize,
+        num_columns: usize,
+    ) -> Option<Vec<Vec<Option<T>>>> {
         Some(
             (0..num_row_groups)
                 .map(|_| {
@@ -558,35 +561,11 @@ impl PageIndexBuilder {
         }
     }
 
-    /// Creates a new [`PageIndexBuilder`] with selective allocation based on policies
-    ///
-    /// This allows fine-grained control over which indexes are allocated:
-    /// - [`PageIndexPolicy::Skip`]: No allocation, the index structure is set to `None`
-    /// - [`PageIndexPolicy::Optional`] or [`PageIndexPolicy::Required`]: Allocates empty index structure
-    ///
-    /// This is more memory-efficient than [`new`](Self::new) when only one type of index is needed.
-    ///
-    /// # Arguments
-    /// * `num_row_groups` - Number of row groups in the file
-    /// * `num_columns` - Number of columns in the schema
-    /// * `column_index_policy` - Policy for column index allocation
-    /// * `offset_index_policy` - Policy for offset index allocation
-    pub fn new_with_policy(
-        num_row_groups: usize,
-        num_columns: usize,
-        column_index_policy: &PageIndexPolicy,
-        offset_index_policy: &PageIndexPolicy,
+    /// Creates a new [`PageIndexBuilder`] with the provided column and offset indexes
+    pub(crate) fn new_from_parts(
+        column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
+        offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
     ) -> Self {
-        let column_indexes = match column_index_policy {
-            PageIndexPolicy::Skip => None,
-            _ => Self::empty_index(num_row_groups, num_columns),
-        };
-
-        let offset_indexes = match offset_index_policy {
-            PageIndexPolicy::Skip => None,
-            _ => Self::empty_index(num_row_groups, num_columns),
-        };
-
         Self {
             column_indexes,
             offset_indexes,

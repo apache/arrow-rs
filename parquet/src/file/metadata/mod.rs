@@ -2206,23 +2206,9 @@ mod tests {
 
     #[test]
     fn test_page_index_builder_skip_policy() {
-        use crate::file::metadata::reader::PageIndexPolicy;
+        let mut builder = PageIndexBuilder::new(1, 1);
 
-        // Create builder with column indexes skipped
-        let mut builder = PageIndexBuilder::new_with_policy(
-            1,
-            1,
-            &PageIndexPolicy::Skip,
-            &PageIndexPolicy::Optional,
-        );
-
-        // Try to add a column index - should be silently ignored
-        let mut col_idx_builder = ColumnIndexBuilder::new(Type::INT32);
-        col_idx_builder.append(false, vec![1, 0, 0, 0], vec![100, 0, 0, 0], 10, None);
-        let col_idx = col_idx_builder.build().unwrap();
-        builder.put_column_index(col_idx, 0, 0);
-
-        // Add an offset index - should work
+        // Add an offset index
         let mut offset_idx_builder = OffsetIndexBuilder::new();
         offset_idx_builder.append_row_count(50);
         offset_idx_builder.append_offset_and_size(1000, 500);
