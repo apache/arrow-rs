@@ -20,6 +20,10 @@
 use crate::bit_chunk_iterator::BitChunks;
 
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
+///
+/// # Panics
+///
+/// Panics if rounding `num` up overflows `usize`
 #[inline]
 pub fn round_upto_multiple_of_64(num: usize) -> usize {
     num.checked_next_multiple_of(64)
@@ -28,6 +32,10 @@ pub fn round_upto_multiple_of_64(num: usize) -> usize {
 
 /// Returns the nearest multiple of `factor` that is `>=` than `num`. Here `factor` must
 /// be a power of 2.
+///
+/// # Panics
+///
+/// Panics if rounding `num` up overflows `usize`
 pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
     debug_assert!(factor > 0 && factor.is_power_of_two());
     num.checked_add(factor - 1)
@@ -36,6 +44,10 @@ pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
 }
 
 /// Returns whether bit at position `i` in `data` is set or not
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn get_bit(data: &[u8], i: usize) -> bool {
     data[i / 8] & (1 << (i % 8)) != 0
@@ -53,6 +65,10 @@ pub unsafe fn get_bit_raw(data: *const u8, i: usize) -> bool {
 }
 
 /// Sets bit at position `i` for `data` to 1
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn set_bit(data: &mut [u8], i: usize) {
     data[i / 8] |= 1 << (i % 8);
@@ -72,6 +88,10 @@ pub unsafe fn set_bit_raw(data: *mut u8, i: usize) {
 }
 
 /// Sets bit at position `i` for `data` to 0
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn unset_bit(data: &mut [u8], i: usize) {
     data[i / 8] &= !(1 << (i % 8));
@@ -239,7 +259,7 @@ pub fn apply_bitwise_binary_op<F>(
             let right_byte_offset = right_offset_in_bits / 8;
 
             // Read the same amount of bits from the right buffer
-            let right_first_byte: u8 = crate::util::bit_util::read_up_to_byte_from_offset(
+            let right_first_byte = crate::util::bit_util::read_up_to_byte_from_offset(
                 &right.as_ref()[right_byte_offset..],
                 bits_to_next_byte,
                 // Right bit offset
@@ -554,7 +574,7 @@ impl<'a> U64UnalignedSlice<'a> {
         assert!(u64_len_in_bytes <= left_buffer_mut.len());
         let (bytes_for_u64, remainder) = left_buffer_mut.split_at_mut(u64_len_in_bytes);
 
-        let ptr = bytes_for_u64.as_mut_ptr() as *mut u64;
+        let ptr = bytes_for_u64.as_mut_ptr().cast::<u64>();
 
         let this = Self {
             ptr,
@@ -644,6 +664,8 @@ impl<'a> U64UnalignedSlice<'a> {
         // make the last pointer invalid, we handle the first element outside the loop
         // and then advance the pointer at the start of the loop
         // making sure that the iterator is not empty
+        // Safety: `self.len > 0` (checked above) and the pointer has not been advanced yet,
+        // so it is valid for reads and writes.
         unsafe {
             // I hope the function get inlined and the compiler remove the dead right parameter
             self.apply_bin_op(0, &mut |left, _| map(left));
@@ -774,6 +796,9 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
         // without calling `to_byte_slice` for each element,
         // which is correct for all ArrowNativeType implementations including u64.
         let src = rem.as_ptr();
+        // Safety: `rem` has length `remainder_bytes`, `start_remainder_mut_slice` has length
+        // `remainder_bytes`, and the two slices are non-overlapping (rem is derived from a
+        // local `to_le_bytes()` call; start_remainder_mut_slice is the caller's mutable buffer).
         unsafe {
             std::ptr::copy_nonoverlapping(
                 src,
@@ -1146,8 +1171,7 @@ mod tests {
 
         assert_eq!(
             result, expected,
-            "Failed with left_offset={}, right_offset={}, len={}",
-            left_offset_in_bits, right_offset_in_bits, len_in_bits
+            "Failed with left_offset={left_offset_in_bits}, right_offset={right_offset_in_bits}, len={len_in_bits}"
         );
 
         assert_bits_outside_range_preserved(
@@ -1156,8 +1180,7 @@ mod tests {
             left_offset_in_bits,
             len_in_bits,
             &format!(
-                "left_offset={}, right_offset={}, len={}",
-                left_offset_in_bits, right_offset_in_bits, len_in_bits
+                "left_offset={left_offset_in_bits}, right_offset={right_offset_in_bits}, len={len_in_bits}"
             ),
         );
     }
@@ -1179,9 +1202,7 @@ mod tests {
             assert_eq!(
                 get_bit(before, i),
                 get_bit(after, i),
-                "bit {} outside the requested range was modified ({})",
-                i,
-                context
+                "bit {i} outside the requested range was modified ({context})"
             );
         }
     }
@@ -1217,8 +1238,7 @@ mod tests {
 
         assert_eq!(
             result, expected,
-            "Failed with offset={}, len={}",
-            offset_in_bits, len_in_bits
+            "Failed with offset={offset_in_bits}, len={len_in_bits}"
         );
 
         assert_bits_outside_range_preserved(
@@ -1226,7 +1246,7 @@ mod tests {
             buffer.as_slice(),
             offset_in_bits,
             len_in_bits,
-            &format!("offset={}, len={}", offset_in_bits, len_in_bits),
+            &format!("offset={offset_in_bits}, len={len_in_bits}"),
         );
     }
 

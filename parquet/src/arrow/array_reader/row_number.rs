@@ -85,8 +85,7 @@ impl RowNumberReader {
 
                 let offset = ordinal_to_offset.get(&ordinal).ok_or_else(|| {
                     ParquetError::General(format!(
-                        "Row group with ordinal {} not found in metadata",
-                        ordinal
+                        "Row group with ordinal {ordinal} not found in metadata"
                     ))
                 })?;
 

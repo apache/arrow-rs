@@ -17,8 +17,8 @@
 
 use bytes::Bytes;
 
-use crate::encodings::rle::RleDecoder;
-use crate::errors::Result;
+use crate::encodings::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
+use crate::errors::{ParquetError, Result};
 
 /// Decoder for `Encoding::RLE_DICTIONARY` indices
 pub struct DictIndexDecoder {
@@ -43,7 +43,14 @@ impl DictIndexDecoder {
     /// Create a new [`DictIndexDecoder`] with the provided data page, the number of levels
     /// associated with this data page, and the number of non-null values (if known)
     pub fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Result<Self> {
-        let bit_width = data[0];
+        let bit_width = *data
+            .first()
+            .ok_or_else(|| general_err!("dictionary index page is empty"))?;
+        if bit_width > MAX_RLE_DICTIONARY_BIT_WIDTH {
+            return Err(general_err!(
+                "Invalid or corrupted RLE bit width {bit_width}. Max allowed is {MAX_RLE_DICTIONARY_BIT_WIDTH}"
+            ));
+        }
         let mut decoder = RleDecoder::new(bit_width);
         decoder.set_data(data.slice(1..))?;
 
@@ -117,5 +124,33 @@ impl DictIndexDecoder {
             }
         }
         Ok(values_skip)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dict_index_decoder_empty_data() {
+        let Err(err) = DictIndexDecoder::new(Bytes::new(), 0, None) else {
+            panic!("expected error");
+        };
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: dictionary index page is empty"
+        );
+    }
+
+    #[test]
+    fn test_dict_index_decoder_invalid_bit_width() {
+        let data = Bytes::from_static(&[33, 0, 0, 0]);
+        let Err(err) = DictIndexDecoder::new(data, 1, None) else {
+            panic!("expected error");
+        };
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid or corrupted RLE bit width 33. Max allowed is 32"
+        );
     }
 }

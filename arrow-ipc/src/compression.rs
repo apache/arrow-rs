@@ -110,7 +110,7 @@ impl DecompressionContext {
     }
 }
 
-#[allow(clippy::derivable_impls)]
+#[expect(clippy::derivable_impls)]
 impl Default for DecompressionContext {
     fn default() -> Self {
         DecompressionContext {
@@ -300,7 +300,6 @@ fn compress_lz4(input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
 }
 
 #[cfg(not(feature = "lz4"))]
-#[allow(clippy::ptr_arg)]
 fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "lz4 IPC compression requires the lz4 feature".to_string(),
@@ -316,7 +315,6 @@ fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, Arr
 }
 
 #[cfg(not(feature = "lz4"))]
-#[allow(clippy::ptr_arg)]
 fn decompress_lz4(_input: &[u8], _decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "lz4 IPC decompression requires the lz4 feature".to_string(),
@@ -330,13 +328,19 @@ fn compress_zstd(
     context: &mut IpcWriteContext,
     level: i32,
 ) -> Result<(), ArrowError> {
-    let result = context.zstd_compressor(level).compress(input)?;
-    output.extend_from_slice(&result);
+    let start = output.len();
+    output.reserve(zstd::zstd_safe::compress_bound(input.len()));
+
+    let mut cursor = std::io::Cursor::new(output);
+    cursor.set_position(start as u64);
+    context
+        .zstd_compressor(level)
+        .compress_to_buffer(input, &mut cursor)?;
+
     Ok(())
 }
 
 #[cfg(not(feature = "zstd"))]
-#[allow(clippy::ptr_arg)]
 fn compress_zstd(
     _input: &[u8],
     _output: &mut Vec<u8>,
@@ -361,7 +365,6 @@ fn decompress_zstd(
 }
 
 #[cfg(not(feature = "zstd"))]
-#[allow(clippy::ptr_arg)]
 fn decompress_zstd(
     _input: &[u8],
     _decompressed_size: usize,

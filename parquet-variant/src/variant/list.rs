@@ -18,7 +18,7 @@ use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
 };
-use crate::variant::{Variant, VariantMetadata};
+use crate::variant::{MAX_NESTING_DEPTH, Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
 
@@ -145,6 +145,14 @@ impl<'m, 'v> VariantList<'m, 'v> {
         Self::try_new_with_shallow_validation(metadata, value)?.with_full_validation()
     }
 
+    /// Interprets `metadata` and `value` as a variant list, performing only basic
+    /// (constant-cost) [validation].
+    ///
+    /// # Panics
+    ///
+    /// Panics if basic validation fails. Use [`Self::try_new`] for a fallible version.
+    ///
+    /// [validation]: Self#Validation
     pub fn new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
         Self::try_new_with_shallow_validation(metadata, value).expect("Invalid variant list value")
     }
@@ -208,9 +216,25 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
     /// Performs a full [validation] of this variant array and returns the result.
     ///
+    /// Values nested more than [`MAX_NESTING_DEPTH`] deep are rejected.
+    ///
     /// [validation]: Self#Validation
-    pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
+    pub fn with_full_validation(self) -> Result<Self, ArrowError> {
+        self.with_full_validation_at_depth(0)
+    }
+
+    // Same as [`Self::with_full_validation`], tracking how deeply validation has recursed.
+    pub(crate) fn with_full_validation_at_depth(
+        mut self,
+        depth: usize,
+    ) -> Result<Self, ArrowError> {
         if !self.validated {
+            if depth >= MAX_NESTING_DEPTH {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Variant nesting depth exceeds the maximum of {MAX_NESTING_DEPTH}"
+                )));
+            }
+
             // Validate the metadata dictionary first, if not already validated, because we pass it
             // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.with_full_validation()?;
@@ -231,7 +255,11 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
             for next_offset in offset_iter {
                 let value_bytes = slice_from_slice(value_buffer, current_offset..next_offset)?;
-                Variant::try_new_with_metadata(self.metadata.clone(), value_bytes)?;
+                Variant::try_new_with_metadata_at_depth(
+                    self.metadata.clone(),
+                    value_bytes,
+                    depth + 1,
+                )?;
                 current_offset = next_offset;
             }
 
@@ -250,7 +278,11 @@ impl<'m, 'v> VariantList<'m, 'v> {
         self.len() == 0
     }
 
-    /// Returns element by index in `0..self.len()`, if any. May panic if this list is [invalid].
+    /// Returns element by index in `0..self.len()`, if any.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this list is [invalid]. Use [`Self::try_get`] for a fallible version.
     ///
     /// [invalid]: Self#Validation
     pub fn get(&self, index: usize) -> Option<Variant<'m, 'v>> {
@@ -280,6 +312,11 @@ impl<'m, 'v> VariantList<'m, 'v> {
     /// [`Self::iter_try`] to avoid panics due to invalid data.
     ///
     /// [unvalidated]: Self#Validation
+    ///
+    /// # Panics
+    ///
+    /// Panics if the underlying bytes are invalid. Use [`Self::iter_try`] for a
+    /// fallible version.
     pub fn iter(&self) -> impl Iterator<Item = Variant<'m, 'v>> + '_ {
         self.iter_try_with_shallow_validation()
             .map(|result| result.expect("Invalid variant list entry"))
@@ -310,7 +347,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
 //
 // Instead of comparing the raw bytes of 2 variant lists, this implementation recursively
 // checks whether their elements are equal.
-impl<'m, 'v> PartialEq for VariantList<'m, 'v> {
+impl PartialEq for VariantList<'_, '_> {
     fn eq(&self, other: &Self) -> bool {
         if self.num_elements != other.num_elements {
             return false;
@@ -725,6 +762,36 @@ mod tests {
         assert_eq!(object.get("list1").unwrap(), object.get("list2").unwrap());
         // Check that list1 and list3 are not equal
         assert_ne!(object.get("list1").unwrap(), object.get("list3").unwrap());
+    }
+
+    /// return the value bytes for `depth` single-element lists nested around a null
+    fn make_nested_lists(depth: usize) -> Vec<u8> {
+        let mut value = vec![0u8]; // null primitive
+        for _ in 0..depth {
+            // header: array basic type, 4-byte offsets, then num_elements=1 and two offsets
+            let mut outer = vec![0x0F, 1];
+            outer.extend_from_slice(&0u32.to_le_bytes());
+            outer.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            outer.append(&mut value);
+            value = outer;
+        }
+        value
+    }
+
+    #[test]
+    fn test_variant_list_nesting_depth_limit() {
+        let metadata = [0x01, 0, 0]; // empty dictionary
+
+        let value = make_nested_lists(MAX_NESTING_DEPTH);
+        Variant::try_new(&metadata, &value).unwrap();
+
+        // One level deeper would recurse past the limit -- previously a stack overflow
+        let value = make_nested_lists(MAX_NESTING_DEPTH + 1);
+        let err = Variant::try_new(&metadata, &value).unwrap_err();
+        assert!(
+            err.to_string().contains("nesting depth exceeds"),
+            "unexpected error: {err}"
+        );
     }
 
     /// return metadata/value for a simple variant list with values in a range

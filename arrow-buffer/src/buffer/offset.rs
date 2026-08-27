@@ -95,6 +95,10 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     }
 
     /// Create a new [`OffsetBuffer`] containing `len + 1` `0` values
+    ///
+    /// # Panics
+    ///
+    /// Panics if `(len + 1) * size_of::<O>()` overflows `usize`
     pub fn new_zeroed(len: usize) -> Self {
         let len_bytes = len
             .checked_add(1)
@@ -227,6 +231,10 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     }
 
     /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         Self(self.0.slice(offset, len.saturating_add(1)))
     }
@@ -330,7 +338,9 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// Subtract `rhs` from all offsets
     /// This will try to reuse the existing allocation as much as possible
     ///
-    /// Panics: this will panic if `rhs` > the first offset or if `rhs` will lead to overflow (when `rhs` is negative)
+    /// # Panics
+    ///
+    /// Panics if `rhs` > the first offset or if `rhs` will lead to overflow (when `rhs` is negative)
     ///
     /// # Example
     ///
@@ -371,7 +381,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         let shifted_offsets: Vec<O> = match self.into_inner().into_inner().into_vec() {
             // If we can reuse the buffer, update in place
             Ok(mut v) => {
-                for offset in v.iter_mut() {
+                for offset in &mut v {
                     *offset = *offset - rhs;
                 }
                 v

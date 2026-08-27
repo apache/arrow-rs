@@ -212,7 +212,7 @@ pub(crate) enum VariantToShreddedVariantRowBuilder<'a> {
     Object(VariantToShreddedObjectVariantRowBuilder<'a>),
 }
 
-impl<'a> VariantToShreddedVariantRowBuilder<'a> {
+impl VariantToShreddedVariantRowBuilder<'_> {
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
@@ -597,7 +597,7 @@ impl ShreddedSchemaBuilder {
     {
         let path: VariantPath<'a> = path
             .try_into()
-            .map_err(|e| ArrowError::InvalidArgumentError(format!("{:?}", e)))?;
+            .map_err(|e| ArrowError::InvalidArgumentError(format!("{e:?}")))?;
         self.root.insert_path(&path, field.into_shredding_field())?;
         Ok(self)
     }
@@ -650,11 +650,11 @@ impl VariantSchemaNode {
                 // Ensure this node is a Struct node
                 let children = match self {
                     Self::Struct(children) => children,
-                    _ => {
+                    Self::Leaf(_) | Self::List(_) => {
                         *self = Self::Struct(BTreeMap::new());
                         match self {
                             Self::Struct(children) => children,
-                            _ => unreachable!(),
+                            Self::Leaf(_) | Self::List(_) => unreachable!(),
                         }
                     }
                 };
@@ -1528,9 +1528,7 @@ mod tests {
             let err = shred_variant(&input, &data_type).unwrap_err();
             assert!(
                 matches!(err, ArrowError::InvalidArgumentError(_)),
-                "expected InvalidArgumentError for {:?}, got {:?}",
-                data_type,
-                err
+                "expected InvalidArgumentError for {data_type:?}, got {err:?}"
             );
         }
     }
@@ -2122,7 +2120,7 @@ mod tests {
                 None => {
                     assert!(result.is_null(i));
                 }
-            };
+            }
         };
 
         // Row 0: Fully shredded - both fields shred successfully
@@ -2869,8 +2867,7 @@ mod tests {
                 // For primitive shredding, at least one should be null
                 assert!(
                     value_is_null || typed_value_is_null,
-                    "Row {}: both value and typed_value are non-null for primitive shredding",
-                    i
+                    "Row {i}: both value and typed_value are non-null for primitive shredding"
                 );
             }
         }
@@ -3200,7 +3197,7 @@ mod tests {
         array_builder.append_value(Variant::Double(6f64));
         array_builder.append_value(Variant::BooleanTrue);
         array_builder.append_value(Variant::BooleanFalse);
-        array_builder.append_value(Variant::Binary("helow".as_bytes()));
+        array_builder.append_value(Variant::Binary(b"helow"));
         array_builder.append_value(Variant::String("hello"));
         array_builder.append_value(Variant::ShortString(
             ShortString::try_from("world").unwrap(),

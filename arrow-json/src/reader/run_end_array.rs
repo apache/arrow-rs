@@ -33,6 +33,7 @@ use crate::reader::{ArrayDecoder, DecoderContext};
 pub struct RunEndEncodedArrayDecoder<R> {
     data_type: DataType,
     decoder: Box<dyn ArrayDecoder>,
+    values_nullable: bool,
     phantom: PhantomData<R>,
 }
 
@@ -42,18 +43,16 @@ impl<R: RunEndIndexType> RunEndEncodedArrayDecoder<R> {
         data_type: &DataType,
         is_nullable: bool,
     ) -> Result<Self, ArrowError> {
-        let values_field = match data_type {
-            DataType::RunEndEncoded(_, v) => v,
-            _ => unreachable!(),
+        let DataType::RunEndEncoded(_, values_field) = data_type else {
+            unreachable!()
         };
-        let decoder = ctx.make_decoder(
-            values_field.data_type(),
-            values_field.is_nullable() || is_nullable,
-        )?;
+        let values_nullable = values_field.is_nullable() && is_nullable;
+        let decoder = ctx.make_decoder(values_field.data_type(), values_nullable)?;
 
         Ok(Self {
             data_type: data_type.clone(),
             decoder,
+            values_nullable,
             phantom: Default::default(),
         })
     }
@@ -67,6 +66,11 @@ impl<R: RunEndIndexType + Send> ArrayDecoder for RunEndEncodedArrayDecoder<R> {
         }
 
         let flat_array = self.decoder.decode(tape, pos)?;
+        if !self.values_nullable && flat_array.logical_null_count() != 0 {
+            return Err(ArrowError::JsonError(
+                "Encountered nulls in non-nullable values of RunEndEncoded".to_string(),
+            ));
+        }
 
         let partitions = partition(from_ref(&flat_array))?;
         let size = partitions.len();

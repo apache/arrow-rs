@@ -178,7 +178,7 @@ enum MetadataField {
 
 struct MetadataFieldVisitor;
 
-impl<'de> Visitor<'de> for MetadataFieldVisitor {
+impl Visitor<'_> for MetadataFieldVisitor {
     type Value = MetadataField;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
