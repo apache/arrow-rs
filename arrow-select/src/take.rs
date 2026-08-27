@@ -495,7 +495,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
             let out_slice = output.as_slice_mut();
             let full_bytes = len / 8;
 
-            for byte_idx in 0..full_bytes {
+            for (byte_idx, out_byte) in out_slice.iter_mut().enumerate().take(full_bytes) {
                 let base = byte_idx * 8;
                 let mut byte = 0u8;
                 for bit in 0..8usize {
@@ -506,10 +506,10 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
                     // SAFETY: src_idx bounded by take's prior bounds check
-                    let raw = unsafe { *src_ptr.add(src_idx >> 3) };
-                    byte |= ((raw >> (src_idx & 7)) & 1) << bit;
+                    let raw = unsafe { *src_ptr.add(src_idx >> 3) }; // byte containing bit src_idx
+                    byte |= ((raw >> (src_idx & 7)) & 1) << bit; // extract that bit, place it at position `bit`
                 }
-                out_slice[byte_idx] = byte;
+                *out_byte = byte;
             }
             if full_bytes < out_bytes {
                 let base = full_bytes * 8;
@@ -522,8 +522,8 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
                     // SAFETY: src_idx bounded by take's prior bounds check
-                    let raw = unsafe { *src_ptr.add(src_idx >> 3) };
-                    byte |= ((raw >> (src_idx & 7)) & 1) << bit;
+                    let raw = unsafe { *src_ptr.add(src_idx >> 3) }; // byte containing bit src_idx
+                    byte |= ((raw >> (src_idx & 7)) & 1) << bit; // extract that bit, place it at position `bit`
                 }
                 out_slice[full_bytes] = byte;
             }
@@ -541,36 +541,37 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
     indices: &PrimitiveArray<I>,
 ) -> (BooleanBuffer, Option<NullBuffer>) {
     let len = indices.len();
-    let val_offset = values.offset();
-    let null_offset = validity.offset();
-    let val_ptr = values.values().as_ptr();
-    let null_ptr = validity.values().as_ptr();
+    let value_bit_offset = values.offset();
+    let validity_bit_offset = validity.offset();
+    let value_data_ptr = values.values().as_ptr();
+    let validity_data_ptr = validity.values().as_ptr();
     let out_bytes = len.div_ceil(8);
 
-    let mut val_buf = MutableBuffer::with_capacity(out_bytes);
-    let mut null_buf = MutableBuffer::with_capacity(out_bytes);
+    let mut value_out = MutableBuffer::with_capacity(out_bytes);
+    let mut validity_out = MutableBuffer::with_capacity(out_bytes);
 
     match indices.nulls().filter(|n| n.null_count() > 0) {
         Some(index_nulls) => {
             // SAFETY: every byte is written (fill) before reading
             unsafe {
-                val_buf.set_len(out_bytes);
-                null_buf.set_len(out_bytes)
+                value_out.set_len(out_bytes);
+                validity_out.set_len(out_bytes)
             };
-            val_buf.as_slice_mut().fill(0);
-            null_buf.as_slice_mut().fill(0);
-            let vp = val_buf.as_mut_ptr();
-            let np = null_buf.as_mut_ptr();
-            for i in index_nulls.valid_indices() {
-                let src_idx = unsafe { indices.value_unchecked(i) }.as_usize();
+            value_out.as_slice_mut().fill(0);
+            validity_out.as_slice_mut().fill(0);
+            let value_out_ptr = value_out.as_mut_ptr();
+            let validity_out_ptr = validity_out.as_mut_ptr();
+            for out_pos in index_nulls.valid_indices() {
+                // SAFETY: out_pos < len from the validity bitmap
+                let src_idx = unsafe { indices.value_unchecked(out_pos) }.as_usize();
                 unsafe {
-                    let v = *val_ptr.add((src_idx + val_offset) >> 3);
-                    if (v >> ((src_idx + val_offset) & 7)) & 1 != 0 {
-                        bit_util::set_bit_raw(vp, i);
+                    let value_byte = *value_data_ptr.add((src_idx + value_bit_offset) >> 3); // byte containing value bit
+                    if (value_byte >> ((src_idx + value_bit_offset) & 7)) & 1 != 0 {
+                        bit_util::set_bit_raw(value_out_ptr, out_pos);
                     }
-                    let n = *null_ptr.add((src_idx + null_offset) >> 3);
-                    if (n >> ((src_idx + null_offset) & 7)) & 1 != 0 {
-                        bit_util::set_bit_raw(np, i);
+                    let validity_byte = *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3); // byte containing validity bit
+                    if (validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1 != 0 {
+                        bit_util::set_bit_raw(validity_out_ptr, out_pos);
                     }
                 }
             }
@@ -578,47 +579,56 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
         None => {
             // SAFETY: every byte is written below before BooleanBuffer reads it
             unsafe {
-                val_buf.set_len(out_bytes);
-                null_buf.set_len(out_bytes)
+                value_out.set_len(out_bytes);
+                validity_out.set_len(out_bytes)
             };
-            let val_slice = val_buf.as_slice_mut();
-            let null_slice = null_buf.as_slice_mut();
+            let value_out_slice = value_out.as_slice_mut();
+            let validity_out_slice = validity_out.as_slice_mut();
             let full_bytes = len / 8;
 
-            for byte_idx in 0..full_bytes {
-                let base = byte_idx * 8;
-                let mut v_byte = 0u8;
-                let mut n_byte = 0u8;
-                for bit in 0..8usize {
-                    let src_idx = unsafe { indices.value_unchecked(base + bit) }.as_usize();
-                    let v = unsafe { *val_ptr.add((src_idx + val_offset) >> 3) };
-                    let n = unsafe { *null_ptr.add((src_idx + null_offset) >> 3) };
-                    v_byte |= ((v >> ((src_idx + val_offset) & 7)) & 1) << bit;
-                    n_byte |= ((n >> ((src_idx + null_offset) & 7)) & 1) << bit;
+            for (byte_idx, (value_out_byte, validity_out_byte)) in value_out_slice
+                .iter_mut()
+                .zip(validity_out_slice.iter_mut())
+                .enumerate()
+                .take(full_bytes)
+            {
+                let bit_base = byte_idx * 8;
+                let mut packed_values = 0u8;
+                let mut packed_validity = 0u8;
+                for bit_pos in 0..8usize {
+                    // SAFETY: bit_base + bit_pos < len
+                    let src_idx =
+                        unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
+                    let value_byte = unsafe { *value_data_ptr.add((src_idx + value_bit_offset) >> 3) }; // byte containing value bit
+                    let validity_byte = unsafe { *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3) }; // byte containing validity bit
+                    packed_values |= ((value_byte >> ((src_idx + value_bit_offset) & 7)) & 1) << bit_pos; // extract value bit, place at position `bit_pos`
+                    packed_validity |= ((validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1) << bit_pos; // extract validity bit, place at position `bit_pos`
                 }
-                val_slice[byte_idx] = v_byte;
-                null_slice[byte_idx] = n_byte;
+                *value_out_byte = packed_values;
+                *validity_out_byte = packed_validity;
             }
             if full_bytes < out_bytes {
-                let base = full_bytes * 8;
-                let mut v_byte = 0u8;
-                let mut n_byte = 0u8;
-                for bit in 0..(len - base) {
-                    let src_idx = unsafe { indices.value_unchecked(base + bit) }.as_usize();
-                    let v = unsafe { *val_ptr.add((src_idx + val_offset) >> 3) };
-                    let n = unsafe { *null_ptr.add((src_idx + null_offset) >> 3) };
-                    v_byte |= ((v >> ((src_idx + val_offset) & 7)) & 1) << bit;
-                    n_byte |= ((n >> ((src_idx + null_offset) & 7)) & 1) << bit;
+                let bit_base = full_bytes * 8;
+                let mut packed_values = 0u8;
+                let mut packed_validity = 0u8;
+                for bit_pos in 0..(len - bit_base) {
+                    // SAFETY: bit_base + bit_pos < len
+                    let src_idx =
+                        unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
+                    let value_byte = unsafe { *value_data_ptr.add((src_idx + value_bit_offset) >> 3) }; // byte containing value bit
+                    let validity_byte = unsafe { *validity_data_ptr.add((src_idx + validity_bit_offset) >> 3) }; // byte containing validity bit
+                    packed_values |= ((value_byte >> ((src_idx + value_bit_offset) & 7)) & 1) << bit_pos; // extract value bit, place at position `bit_pos`
+                    packed_validity |= ((validity_byte >> ((src_idx + validity_bit_offset) & 7)) & 1) << bit_pos; // extract validity bit, place at position `bit_pos`
                 }
-                val_slice[full_bytes] = v_byte;
-                null_slice[full_bytes] = n_byte;
+                value_out_slice[full_bytes] = packed_values;
+                validity_out_slice[full_bytes] = packed_validity;
             }
         }
     }
 
-    let val_out = BooleanBuffer::new(val_buf.into(), 0, len);
-    let null_out = NullBuffer::from_unsliced_buffer(null_buf, len);
-    (val_out, null_out)
+    let value_buf_out = BooleanBuffer::new(value_out.into(), 0, len);
+    let validity_buf_out = NullBuffer::from_unsliced_buffer(validity_out, len);
+    (value_buf_out, validity_buf_out)
 }
 
 /// `take` implementation for boolean arrays
@@ -629,8 +639,7 @@ fn take_boolean<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
     let bits = array.values();
     match array.nulls().filter(|n| n.null_count() > 0) {
         Some(array_nulls) => {
-            let (val_buf, null_buf) =
-                take_bits_with_validity(bits, array_nulls.inner(), indices);
+            let (val_buf, null_buf) = take_bits_with_validity(bits, array_nulls.inner(), indices);
             BooleanArray::new(val_buf, null_buf)
         }
         None => {
