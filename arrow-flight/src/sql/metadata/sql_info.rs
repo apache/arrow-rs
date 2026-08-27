@@ -179,11 +179,11 @@ static UNION_TYPE: Lazy<DataType> = Lazy::new(|| {
             "int32_to_int32_list_map",
             DataType::Map(
                 Arc::new(Field::new(
-                    "entries",
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                     DataType::Struct(Fields::from(vec![
-                        Field::new("keys", DataType::Int32, false),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
                         Field::new(
-                            "values",
+                            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
                             DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                             true,
                         ),
@@ -356,7 +356,7 @@ impl SqlInfoDataBuilder {
         let mut name_builder = UInt32Builder::new();
         let mut value_builder = SqlInfoUnionBuilder::new();
 
-        let mut names: Vec<_> = self.infos.keys().cloned().collect();
+        let mut names: Vec<_> = self.infos.keys().copied().collect();
         names.sort_unstable();
 
         for key in names {

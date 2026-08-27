@@ -228,8 +228,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
     /// Creates new row group from this file writer.
     ///
-    /// Note: Parquet files are limited to at most 2^15 row groups in a file; and row groups must
-    /// be written sequentially.
+    /// Note: Parquet files are limited to at most 2^31 row groups in a file. If encryption is
+    /// enabled, this is reduced to 2^15, and row groups must be written sequentially.
     ///
     /// Every time the next row group is requested, the previous row group must
     /// be finalised and closed using the [`SerializedRowGroupWriter::close`]
@@ -238,13 +238,24 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.assert_previous_writer_closed()?;
         let ordinal = self.row_group_index;
 
-        let ordinal: i16 = ordinal.try_into().map_err(|_| {
+        // Thrift cannot encode lists with more than i32::MAX elements
+        let ordinal: i32 = ordinal.try_into().map_err(|_| {
             ParquetError::General(format!(
                 "Parquet does not support more than {} row groups per file (currently: {})",
-                i16::MAX,
+                i32::MAX,
                 ordinal
             ))
         })?;
+
+        // If encryption is enabled, the max is 32767
+        #[cfg(feature = "encryption")]
+        if self.file_encryptor.is_some() && ordinal > i16::MAX as i32 {
+            return Err(ParquetError::General(format!(
+                "Parquet with encryption does not support more than {} row groups per file (currently: {})",
+                i16::MAX,
+                ordinal
+            )));
+        }
 
         self.row_group_index = self
             .row_group_index
@@ -270,7 +281,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                     write_bloom_filters(buf, row_bloom_filters, &mut metadata)?
                 }
                 BloomFilterPosition::End => (),
-            };
+            }
             row_groups.push(metadata);
             Ok(())
         };
@@ -472,7 +483,7 @@ fn write_bloom_filters<W: Write + Send>(
     // iter each column
     // write bloom filter to the file
 
-    let row_group_idx: u16 = row_group
+    let row_group_idx: u32 = row_group
         .ordinal()
         .expect("Missing row group ordinal")
         .try_into()
@@ -525,7 +536,7 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     bloom_filters: Vec<Option<Sbbf>>,
     column_indexes: Vec<Option<ColumnIndexMetaData>>,
     offset_indexes: Vec<Option<OffsetIndexMetaData>>,
-    row_group_index: i16,
+    row_group_index: i32,
     file_offset: i64,
     on_close: Option<OnCloseRowGroup<'a, W>>,
     #[cfg(feature = "encryption")]
@@ -545,7 +556,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         schema_descr: SchemaDescPtr,
         properties: WriterPropertiesPtr,
         buf: &'a mut TrackedWrite<W>,
-        row_group_index: i16,
+        row_group_index: i32,
         on_close: Option<OnCloseRowGroup<'a, W>>,
     ) -> Self {
         let num_columns = schema_descr.num_columns();
@@ -915,7 +926,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         page_writer: SerializedPageWriter<'b, W>,
     ) -> Result<SerializedPageWriter<'b, W>> {
         let page_encryptor = PageEncryptor::create_if_column_encrypted(
-            &context.file_encryptor,
+            context.file_encryptor.as_ref(),
             context.row_group_index,
             context.column_index,
             &column.path().string(),
@@ -1043,7 +1054,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 }
 
 #[cfg(feature = "encryption")]
-impl<'a, W: Write> SerializedPageWriter<'a, W> {
+impl<W: Write> SerializedPageWriter<'_, W> {
     /// Set the encryptor to use to encrypt page data
     fn with_page_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
         self.page_encryptor = page_encryptor;
@@ -1056,20 +1067,26 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
 
     fn page_encryptor_and_sink_mut(
         &mut self,
-    ) -> Option<(&mut PageEncryptor, &mut &'a mut TrackedWrite<W>)> {
-        self.page_encryptor.as_mut().map(|pe| (pe, &mut self.sink))
+    ) -> Option<(&mut PageEncryptor, &mut TrackedWrite<W>)> {
+        self.page_encryptor.as_mut().map(|pe| (pe, &mut *self.sink))
     }
 }
 
+// These mirror the signatures of the encryption-enabled versions above, so that the
+// callers do not need a `cfg` of their own.
 #[cfg(not(feature = "encryption"))]
-impl<'a, W: Write> SerializedPageWriter<'a, W> {
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "mirrors the encryption-enabled signatures"
+)]
+impl<W: Write> SerializedPageWriter<'_, W> {
     fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
         None
     }
 
     fn page_encryptor_and_sink_mut(
         &mut self,
-    ) -> Option<(&mut PageEncryptor, &mut &'a mut TrackedWrite<W>)> {
+    ) -> Option<(&mut PageEncryptor, &mut TrackedWrite<W>)> {
         None
     }
 }
@@ -1097,10 +1114,10 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
         spec.num_values = page.num_values();
 
-        if let Some(page_encryptor) = self.page_encryptor_mut() {
-            if page.compressed_page().is_data_page() {
-                page_encryptor.increment_page();
-            }
+        if let Some(page_encryptor) = self.page_encryptor_mut()
+            && page.compressed_page().is_data_page()
+        {
+            page_encryptor.increment_page();
         }
         Ok(spec)
     }
@@ -1149,7 +1166,7 @@ mod tests {
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
-    use crate::data_type::{BoolType, ByteArrayType, Int32Type};
+    use crate::data_type::{BoolType, ByteArrayType, Int32Type, Int96, Int96Type};
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -1303,6 +1320,16 @@ mod tests {
                             .build()
                             .unwrap(),
                     ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col5", Type::FLOAT)
+                            .build()
+                            .unwrap(),
+                    ),
+                    Arc::new(
+                        types::Type::primitive_type_builder("col6", Type::DOUBLE)
+                            .build()
+                            .unwrap(),
+                    ),
                 ])
                 .build()
                 .unwrap(),
@@ -1321,9 +1348,13 @@ mod tests {
             // INTERVAL
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
             // Float16
-            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
             // String
             ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED),
+            // FLOAT
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
+            // DOUBLE
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
         ];
         let actual = reader.metadata().file_metadata().column_orders();
 
@@ -1363,7 +1394,6 @@ mod tests {
                 .metadata()
                 .file_metadata()
                 .key_value_metadata()
-                .to_owned()
                 .unwrap()
                 .len(),
             1
@@ -1406,7 +1436,6 @@ mod tests {
                 .metadata()
                 .file_metadata()
                 .key_value_metadata()
-                .to_owned()
                 .unwrap()
                 .len(),
             1
@@ -1799,7 +1828,7 @@ mod tests {
             let last_group = row_group_writer.close().unwrap();
             let flushed = file_writer.flushed_row_groups();
             assert_eq!(flushed.len(), idx + 1);
-            assert_eq!(Some(idx as i16), last_group.ordinal());
+            assert_eq!(Some(idx as i32), last_group.ordinal());
             assert_eq!(Some(row_group_file_offset as i64), last_group.file_offset());
             assert_eq!(&flushed[idx], last_group.as_ref());
         }
@@ -2163,18 +2192,13 @@ mod tests {
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(Bytes::from(file), options).unwrap();
 
-        let offset_index = reader.metadata().offset_index().unwrap();
-        assert_eq!(offset_index.len(), 1); // 1 row group
-        assert_eq!(offset_index[0].len(), 2); // 2 columns
-
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1); // 1 row group
-        assert_eq!(column_index[0].len(), 2); // 2 column
-
-        let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, ColumnIndexMetaData::INT32(_)), "{a_idx:?}");
-        let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        let a_idx = reader.metadata().page_index().unwrap().column_index(0, 0);
+        assert!(
+            matches!(a_idx, Some(ColumnIndexMetaData::INT32(_))),
+            "{a_idx:?}"
+        );
+        let b_idx = reader.metadata().page_index().unwrap().column_index(0, 1);
+        assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
     #[test]
@@ -2250,27 +2274,31 @@ mod tests {
         );
 
         // check histogram in column index as well
-        assert!(reader.metadata().column_index().is_some());
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1);
-        assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][0] {
-            assert_eq!(index.num_pages(), 1);
-            index
-        } else {
-            unreachable!()
-        };
+        assert!(reader.metadata().page_index().is_some());
+        let page_index = reader.metadata().page_index().unwrap();
+        let col_idx =
+            if let Some(ColumnIndexMetaData::BYTE_ARRAY(index)) = page_index.column_index(0, 0) {
+                assert_eq!(index.num_pages(), 1);
+                index
+            } else {
+                unreachable!()
+            };
 
         assert!(col_idx.repetition_level_histogram(0).is_none());
         assert!(col_idx.definition_level_histogram(0).is_some());
         check_def_hist(col_idx.definition_level_histogram(0).unwrap());
 
-        assert!(reader.metadata().offset_index().is_some());
-        let offset_index = reader.metadata().offset_index().unwrap();
-        assert_eq!(offset_index.len(), 1);
-        assert_eq!(offset_index[0].len(), 1);
-        assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_some());
-        let page_sizes = offset_index[0][0]
+        assert!(page_index.offset_index(0, 0).is_some());
+        assert!(
+            page_index
+                .offset_index(0, 0)
+                .unwrap()
+                .unencoded_byte_array_data_bytes
+                .is_some()
+        );
+        let page_sizes = page_index
+            .offset_index(0, 0)
+            .unwrap()
             .unencoded_byte_array_data_bytes
             .as_ref()
             .unwrap();
@@ -2278,6 +2306,7 @@ mod tests {
         assert_eq!(page_sizes[0], unenc_size);
     }
 
+    #[cfg(feature = "encryption")]
     #[test]
     fn test_too_many_rowgroups() {
         let message_type = "
@@ -2287,10 +2316,17 @@ mod tests {
         ";
         let schema = Arc::new(parse_message_type(message_type).unwrap());
         let file: File = tempfile::tempfile().unwrap();
+
+        const AES_128_FOOTER_KEY: &[u8; 16] = b"0123456789012345"; // 128bit/16
+        let footer_key = AES_128_FOOTER_KEY;
+        let file_encryption_properties = FileEncryptionProperties::builder(footer_key.to_vec())
+            .build()
+            .unwrap();
         let props = Arc::new(
             WriterProperties::builder()
                 .set_statistics_enabled(EnabledStatistics::None)
                 .set_max_row_group_row_count(Some(1))
+                .with_file_encryption_properties(file_encryption_properties)
                 .build(),
         );
         let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
@@ -2308,12 +2344,48 @@ mod tests {
                     assert_eq!(i, 0x8000);
                     assert_eq!(
                         e.to_string(),
-                        "Parquet error: Parquet does not support more than 32767 row groups per file (currently: 32768)"
+                        "Parquet error: Parquet with encryption does not support more than 32767 row groups per file (currently: 32768)"
                     );
                 }
             }
         }
         writer.close().unwrap();
+    }
+
+    #[test]
+    fn test_32k_rowgroups() {
+        let message_type = "
+            message test_schema {
+                REQUIRED BYTE_ARRAY a (UTF8);
+            }
+        ";
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+        let file: File = tempfile::tempfile().unwrap();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::None)
+                .set_max_row_group_row_count(Some(1))
+                .build(),
+        );
+        let mut writer = SerializedFileWriter::new(&file, schema, props).unwrap();
+
+        // Create 32k + 1 empty rowgroups. No row group ordinals should be written (but we can't
+        // test for that).
+        for _ in 0..0x8001 {
+            let mut row_group_writer = writer.next_row_group().unwrap();
+            let col_writer = row_group_writer.next_column().unwrap().unwrap();
+            col_writer.close().unwrap();
+            row_group_writer.close().unwrap();
+        }
+        writer.close().unwrap();
+
+        // Parse the written metadata and check that ordinals were replaced.
+        let reader = SerializedFileReader::new(file).unwrap();
+        let metadata = reader.metadata();
+
+        for (i, rg) in metadata.row_groups().iter().enumerate() {
+            assert_eq!(i as i32, rg.ordinal().unwrap());
+        }
     }
 
     #[test]
@@ -2400,12 +2472,17 @@ mod tests {
         check_def_hist(column.definition_level_histogram().unwrap().values());
         check_rep_hist(column.repetition_level_histogram().unwrap().values());
 
+        assert!(
+            reader
+                .metadata()
+                .page_index()
+                .is_some_and(PageIndex::is_complete)
+        );
+        let page_index = reader.metadata().page_index().unwrap();
+
         // check histogram in column index as well
-        assert!(reader.metadata().column_index().is_some());
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1);
-        assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let ColumnIndexMetaData::INT32(index) = &column_index[0][0] {
+        let col_idx = if let Some(ColumnIndexMetaData::INT32(index)) = page_index.column_index(0, 0)
+        {
             assert_eq!(index.num_pages(), 1);
             index
         } else {
@@ -2415,11 +2492,13 @@ mod tests {
         check_def_hist(col_idx.definition_level_histogram(0).unwrap());
         check_rep_hist(col_idx.repetition_level_histogram(0).unwrap());
 
-        assert!(reader.metadata().offset_index().is_some());
-        let offset_index = reader.metadata().offset_index().unwrap();
-        assert_eq!(offset_index.len(), 1);
-        assert_eq!(offset_index[0].len(), 1);
-        assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_none());
+        assert!(
+            page_index
+                .offset_index(0, 0)
+                .unwrap()
+                .unencoded_byte_array_data_bytes
+                .is_none()
+        );
     }
 
     #[test]
@@ -2531,7 +2610,7 @@ mod tests {
             match iter.next() {
                 Some(row) => check_row(row),
                 None => break,
-            };
+            }
             start += 1;
         }
     }
@@ -2581,16 +2660,24 @@ mod tests {
         let output = Vec::<u8>::new();
         let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
 
-        let column_indexes = metadata.column_index();
-        let offset_indexes = metadata.offset_index();
+        let page_index = metadata.page_index();
 
         for (rg_idx, rg) in metadata.row_groups().iter().enumerate() {
-            let rg_column_indexes = column_indexes.and_then(|ci| ci.get(rg_idx));
-            let rg_offset_indexes = offset_indexes.and_then(|oi| oi.get(rg_idx));
+            let rg_column_indexes =
+                page_index.and_then(|pi| pi.column_indexes_for_rowgroup(rg_idx));
+            let rg_offset_indexes =
+                page_index.and_then(|pi| pi.offset_indexes_for_rowgroup(rg_idx));
             let mut rg_out = writer.next_row_group().unwrap();
             for (col_idx, column) in rg.columns().iter().enumerate() {
-                let column_index = rg_column_indexes.and_then(|row| row.get(col_idx)).cloned();
-                let offset_index = rg_offset_indexes.and_then(|row| row.get(col_idx)).cloned();
+                let column_index = rg_column_indexes.and_then(|row| {
+                    let c = row.get(col_idx)?;
+                    c.clone()
+                });
+                let offset_index = rg_offset_indexes.and_then(|row| {
+                    let o = row.get(col_idx)?;
+                    o.clone()
+                });
+
                 let result = ColumnCloseResult {
                     bytes_written: column.compressed_size() as _,
                     rows_written: rg.num_rows() as _,
@@ -2604,5 +2691,84 @@ mod tests {
             rg_out.close().unwrap();
         }
         writer.close().unwrap();
+    }
+
+    #[test]
+    fn test_int96_interop() {
+        // this file has an INT96 column. rewrite it with min/max statistics sorted per
+        // recent changes to the spec. (see https://github.com/apache/parquet-format/pull/584)
+        let file = get_test_file("int96_timestamp_order.parquet");
+        let read_opts = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, read_opts).unwrap();
+        let file_metadata = reader.metadata().file_metadata();
+        let schema = file_metadata.schema_descr().root_schema_ptr();
+
+        // helper function to extract Int96 min/max from column metadata and the column index
+        fn retrieve_stats(metadata: &ParquetMetaData) -> (&[u8], &[u8], &Int96, &Int96) {
+            // sanity check that the proper column order is specified
+            let column_orders = metadata
+                .file_metadata()
+                .column_orders()
+                .expect("column_orders is missing");
+            assert_eq!(column_orders[0], ColumnOrder::INT96_TIMESTAMP_ORDER);
+
+            let stats = metadata
+                .row_group(0)
+                .column(0)
+                .statistics()
+                .expect("statistics missing");
+            let min = stats.min_bytes_opt().expect("min stats missing");
+            let max = stats.max_bytes_opt().expect("max stats missing");
+
+            assert!(
+                metadata
+                    .page_index()
+                    .is_some_and(|pi| pi.has_column_indexes())
+            );
+            let Some(ColumnIndexMetaData::INT96(col0)) =
+                metadata.page_index().unwrap().column_index(0, 0)
+            else {
+                panic!("expected INT96 stats")
+            };
+            let col_min = col0.min_value(0).expect("ColumnIndex min not present");
+            let col_max = col0.max_value(0).expect("ColumnIndex max not present");
+
+            (min, max, col_min, col_max)
+        }
+
+        // save read stats for later
+        let (exp_min, exp_max, exp_col_min, exp_col_max) = retrieve_stats(reader.metadata());
+
+        // write file back out again
+        let props = Arc::new(WriterProperties::builder().build());
+        let output = Vec::<u8>::new();
+        let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
+
+        let mut rg_out = writer.next_row_group().unwrap();
+        let rg_in = reader.get_row_group(0).unwrap();
+
+        // int96 is column 0
+        let col_in = rg_in.get_column_reader(0).unwrap();
+        let mut typed_in = get_typed_column_reader::<Int96Type>(col_in);
+
+        let mut values = Vec::new();
+        typed_in.read_records(4, None, None, &mut values).unwrap();
+
+        let mut col_out = rg_out.next_column().unwrap().unwrap();
+        col_out
+            .typed::<Int96Type>()
+            .write_batch(&values, None, None)
+            .unwrap();
+        col_out.close().unwrap();
+        rg_out.close().unwrap();
+
+        let new_metadata = writer.close().unwrap();
+
+        // check that new stats match the original stats
+        let (new_min, new_max, new_col_min, new_col_max) = retrieve_stats(&new_metadata);
+        assert_eq!(new_min, exp_min);
+        assert_eq!(new_max, exp_max);
+        assert_eq!(new_col_min, exp_col_min);
+        assert_eq!(new_col_max, exp_col_max);
     }
 }

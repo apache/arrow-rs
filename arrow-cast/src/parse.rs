@@ -664,7 +664,7 @@ fn parse_date(string: &str) -> Option<NaiveDate> {
         return string_to_datetime(&Utc, string)
             .map(|dt| dt.date_naive())
             .ok();
-    };
+    }
     let mut digits = [0; 10];
     let mut mask = 0;
 
@@ -809,7 +809,7 @@ fn parse_e_notation<T: DecimalType>(
     let base = T::Native::usize_as(10);
 
     // e has a plus sign
-    let mut pos_shift_direction: bool = true;
+    let mut pos_shift_direction = true;
 
     // skip to the exponent index directly or just after any processed fractionals
     let mut bs = s.as_bytes().iter().skip(index + fractionals as usize);
@@ -835,7 +835,7 @@ fn parse_e_notation<T: DecimalType>(
                     "can't parse the string value {s} to decimal"
                 )));
             }
-        };
+        }
     }
 
     // parse the exponent itself
@@ -1840,7 +1840,7 @@ mod tests {
         for case in cases {
             let v = date32_to_datetime(Date32Type::parse(case).unwrap()).unwrap();
             let expected = NaiveDate::parse_from_str(case, "%Y-%m-%d")
-                .or(NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
+                .or_else(|_| NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
                 .unwrap();
             assert_eq!(v.date(), expected);
         }

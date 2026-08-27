@@ -46,7 +46,6 @@ arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
 parquet-geospatial = { workspace = true, optional = true }
 parquet-variant = { workspace = true, optional = true }
-parquet-variant-json = { workspace = true, optional = true }
 parquet-variant-compute = { workspace = true, optional = true }
 
 object_store = { workspace = true, optional = true, features = ["tokio"] }
@@ -90,7 +89,7 @@ serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
 arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs", "sync"] }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { workspace = true, features = ["azure", "fs"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
@@ -132,7 +131,7 @@ flate2-rust_backend = ["flate2/rust_backend"]
 # Enable flate2's zlib-rs backend
 flate2-zlib-rs = ["flate2/zlib-rs"]
 # Enable parquet variant support
-variant_experimental = ["arrow", "parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
+variant_experimental = ["arrow", "parquet-variant", "parquet-variant-compute"]
 # Enable geospatial support
 geospatial = ["parquet-geospatial"]
 # Alias for typo. TODO: Remove in future major version bump.
@@ -165,10 +164,6 @@ required-features = ["arrow", "async"]
 path = "./examples/object_store.rs"
 
 [[test]]
-name = "arrow_writer_layout"
-required-features = ["arrow"]
-
-[[test]]
 name = "arrow_reader"
 required-features = ["arrow"]
 path = "./tests/arrow_reader/mod.rs"
@@ -176,7 +171,12 @@ path = "./tests/arrow_reader/mod.rs"
 [[test]]
 name = "arrow_writer"
 required-features = ["arrow"]
-path = "./tests/arrow_writer.rs"
+path = "./tests/arrow_writer/mod.rs"
+
+[[test]]
+name = "ieee754_nan_interop"
+required-features = ["arrow"]
+path = "./tests/ieee754_nan_interop.rs"
 
 [[test]]
 name = "encryption"
@@ -223,6 +223,11 @@ required-features = ["cli"]
 [[bin]]
 name = "parquet-index"
 required-features = ["cli"]
+
+[[bench]]
+name = "writer_page_windows"
+required-features = ["arrow"]
+harness = false
 
 [[bench]]
 name = "arrow_writer"
@@ -275,6 +280,11 @@ required-features = ["experimental", "default"]
 harness = false
 
 [[bench]]
+name = "bit_packing"
+required-features = ["experimental", "default"]
+harness = false
+
+[[bench]]
 name = "metadata"
 harness = false
 
@@ -314,3 +324,6 @@ harness = false
 
 [lib]
 bench = false
+
+[lints]
+workspace = true

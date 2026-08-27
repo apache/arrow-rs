@@ -615,8 +615,8 @@ impl LevelInfoBuilder {
         nulls: Option<&NullBuffer>,
         range: Range<usize>,
     ) {
-        let offsets = &offsets[range.start..range.end];
-        let sizes = &sizes[range.start..range.end];
+        let offsets = &offsets[range.clone()];
+        let sizes = &sizes[range.clone()];
 
         let write_non_null_slice =
             |child: &mut LevelInfoBuilder, start_idx: usize, end_idx: usize| {
@@ -848,11 +848,12 @@ impl LevelInfoBuilder {
         let len = range.end - range.start;
 
         // Fast path: entire leaf array is null
-        if let Some(nulls) = &info.logical_nulls {
-            if !matches!(info.def_levels, LevelData::Absent) && nulls.null_count() == nulls.len() {
-                info.extend_uniform_levels(info.max_def_level - 1, info.max_rep_level, len);
-                return;
-            }
+        if let Some(nulls) = &info.logical_nulls
+            && !matches!(info.def_levels, LevelData::Absent)
+            && nulls.null_count() == nulls.len()
+        {
+            info.extend_uniform_levels(info.max_def_level - 1, info.max_rep_level, len);
+            return;
         }
 
         if matches!(info.def_levels, LevelData::Absent) {
@@ -1908,13 +1909,17 @@ mod tests {
         {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
         "#;
         let entries_struct_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
         ]));
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Arc::new(Field::new("entries", entries_struct_type, false)),
+                Arc::new(Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    entries_struct_type,
+                    false,
+                )),
                 false,
             ),
             // not nullable, so the keys have max level = 1
@@ -2157,12 +2162,12 @@ mod tests {
         let list_field = Field::new("col", list_type, true);
 
         let expected = vec![
-            r#""#.to_string(),
-            r#""#.to_string(),
-            r#"[]"#.to_string(),
-            r#"[{list: [3, ], integers: }]"#.to_string(),
-            r#"[, {list: , integers: 5}]"#.to_string(),
-            r#"[]"#.to_string(),
+            String::new(),
+            String::new(),
+            "[]".to_string(),
+            "[{list: [3, ], integers: }]".to_string(),
+            "[, {list: , integers: 5}]".to_string(),
+            "[]".to_string(),
         ];
 
         let actual: Vec<_> = (0..6)

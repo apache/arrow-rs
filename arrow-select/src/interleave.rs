@@ -310,7 +310,7 @@ fn interleave_views<T: ByteViewType>(
     let mut offsets = Vec::with_capacity(interleaved.arrays.len() + 1);
     offsets.push(0);
     let mut total_buffers = 0;
-    for a in interleaved.arrays.iter() {
+    for a in &interleaved.arrays {
         total_buffers += a.data_buffers().len();
         offsets.push(total_buffers);
     }
@@ -340,7 +340,7 @@ fn interleave_views<T: ByteViewType>(
         .collect();
 
     let array = unsafe {
-        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers, interleaved.nulls)
+        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers.into(), interleaved.nulls)
     };
     Ok(Arc::new(array))
 }
@@ -768,7 +768,7 @@ fn interleave_fallback(
 ) -> Result<ArrayRef, ArrowError> {
     let arrays: Vec<_> = values.iter().map(|x| x.to_data()).collect();
     let arrays: Vec<_> = arrays.iter().collect();
-    let mut array_data = MutableArrayData::new(arrays, false, indices.len());
+    let mut array_data = MutableArrayData::try_new(arrays, false, indices.len())?;
 
     let mut cur_array = indices[0].0;
     let mut start_row_idx = indices[0].1;
@@ -1956,7 +1956,7 @@ mod tests {
     #[test]
     fn test_interleave_run_end_encoded_empty_runs() {
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend([1].into_iter().map(Some));
+        builder.extend(std::iter::once(Some(1)));
         let a = builder.finish();
 
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
@@ -2034,6 +2034,50 @@ mod tests {
     }
 
     #[test]
+    fn test_interleave_string_view_dictionary_overflow_returns_err() {
+        // interleaving dictionaries which results in overflowing the key type should
+        // surface an error not a panic
+        let values_a: StringViewArray = (0..200).map(|i| Some(format!("a{i}"))).collect();
+        let keys_a = UInt8Array::from_iter_values(0..200);
+        let dict_a = DictionaryArray::<UInt8Type>::new(keys_a, Arc::new(values_a));
+
+        let values_b: StringViewArray = (0..200).map(|i| Some(format!("b{i}"))).collect();
+        let keys_b = UInt8Array::from_iter_values(0..200);
+        let dict_b = DictionaryArray::<UInt8Type>::new(keys_b, Arc::new(values_b));
+
+        let indices: Vec<_> = (0..200).flat_map(|i| [(0, i), (1, i)]).collect();
+
+        let err = interleave(&[&dict_a, &dict_b], &indices).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
+    }
+
+    #[test]
+    fn test_interleave_nested_dictionary_overflow_returns_err() {
+        // same as above, but with the dictionary nested inside a FixedSizeList
+        let field = Arc::new(arrow_schema::Field::new(
+            "item",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8View)),
+            false,
+        ));
+
+        let values_a: StringViewArray = (0..200).map(|i| Some(format!("a{i}"))).collect();
+        let keys_a = UInt8Array::from_iter_values(0..200);
+        let dict_a = DictionaryArray::<UInt8Type>::new(keys_a, Arc::new(values_a));
+        let list_a = FixedSizeListArray::new(field.clone(), 1, Arc::new(dict_a), None);
+
+        let values_b: StringViewArray = (0..200).map(|i| Some(format!("b{i}"))).collect();
+        let keys_b = UInt8Array::from_iter_values(0..200);
+        let dict_b = DictionaryArray::<UInt8Type>::new(keys_b, Arc::new(values_b));
+        let list_b = FixedSizeListArray::new(field, 1, Arc::new(dict_b), None);
+
+        let indices: Vec<_> = (0..200).flat_map(|i| [(0, i), (1, i)]).collect();
+
+        let err = interleave(&[&list_a, &list_b], &indices).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_interleave_bytes_offset_overflow() {
         let indices: Vec<(usize, usize)> = vec![(0, 0); (i32::MAX >> 4) as usize];
         let text = ('a'..='z').collect::<String>();
@@ -2045,6 +2089,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_interleave_list_offset_overflow() {
         // Build a ListArray<i32> with a single row containing many elements
         let mut builder = GenericListBuilder::<i32, _>::new(Int32Builder::new());

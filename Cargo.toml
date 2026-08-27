@@ -32,6 +32,7 @@ members = [
     "arrow-integration-testing",
     "arrow-ipc",
     "arrow-json",
+    "arrow-cmp",
     "arrow-ord",
     "arrow-pyarrow",
     "arrow-row",
@@ -47,15 +48,11 @@ members = [
     "parquet_derive_test",
 ]
 
-# Enable the version 2 feature resolver, which avoids unifying features for targets that are not being built
-#
-# Critically this prevents dev-dependencies from enabling features even when not building a target that
-# uses dev-dependencies, e.g. the library crate. This in turn ensures that we can catch invalid feature
-# flag combinations that would otherwise only surface in dependent crates
-#
-# Reference - https://doc.rust-lang.org/nightly/cargo/reference/features.html#feature-resolver-version-2
-#
-resolver = "2"
+# This is the default for edition 2024 but we must manually specify it for virtual
+# workspaces.
+# - https://github.com/rust-lang/cargo/issues/10112
+# - https://github.com/rust-lang/cargo/issues/10587
+resolver = "3"
 
 exclude = [
     # arrow-pyarrow-testing is excluded because it requires a Python interpreter with the pyarrow package installed,
@@ -68,7 +65,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "59.1.0"
+version = "59.2.0"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -82,29 +79,30 @@ include = [
     "NOTICE.txt",
 ]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
-arrow = { version = "59.1.0", path = "./arrow", default-features = false }
-arrow-arith = { version = "59.1.0", path = "./arrow-arith" }
-arrow-array = { version = "59.1.0", path = "./arrow-array" }
-arrow-buffer = { version = "59.1.0", path = "./arrow-buffer" }
-arrow-cast = { version = "59.1.0", path = "./arrow-cast" }
-arrow-csv = { version = "59.1.0", path = "./arrow-csv" }
-arrow-data = { version = "59.1.0", path = "./arrow-data" }
-arrow-ipc = { version = "59.1.0", path = "./arrow-ipc" }
-arrow-json = { version = "59.1.0", path = "./arrow-json" }
-arrow-ord = { version = "59.1.0", path = "./arrow-ord" }
-arrow-pyarrow = { version = "59.1.0", path = "./arrow-pyarrow" }
-arrow-row = { version = "59.1.0", path = "./arrow-row" }
-arrow-schema = { version = "59.1.0", path = "./arrow-schema" }
-arrow-select = { version = "59.1.0", path = "./arrow-select" }
-arrow-string = { version = "59.1.0", path = "./arrow-string" }
-parquet = { version = "59.1.0", path = "./parquet", default-features = false }
-parquet-geospatial = { version = "59.1.0", path = "./parquet-geospatial" }
-parquet-variant = { version = "59.1.0", path = "./parquet-variant" }
-parquet-variant-json = { version = "59.1.0", path = "./parquet-variant-json" }
-parquet-variant-compute = { version = "59.1.0", path = "./parquet-variant-compute" }
+arrow = { version = "59.2.0", path = "./arrow", default-features = false }
+arrow-arith = { version = "59.2.0", path = "./arrow-arith" }
+arrow-array = { version = "59.2.0", path = "./arrow-array" }
+arrow-buffer = { version = "59.2.0", path = "./arrow-buffer" }
+arrow-cast = { version = "59.2.0", path = "./arrow-cast" }
+arrow-csv = { version = "59.2.0", path = "./arrow-csv" }
+arrow-data = { version = "59.2.0", path = "./arrow-data" }
+arrow-ipc = { version = "59.2.0", path = "./arrow-ipc" }
+arrow-json = { version = "59.2.0", path = "./arrow-json" }
+arrow-cmp = { version = "59.2.0", path = "./arrow-cmp" }
+arrow-ord = { version = "59.2.0", path = "./arrow-ord" }
+arrow-pyarrow = { version = "59.2.0", path = "./arrow-pyarrow" }
+arrow-row = { version = "59.2.0", path = "./arrow-row" }
+arrow-schema = { version = "59.2.0", path = "./arrow-schema" }
+arrow-select = { version = "59.2.0", path = "./arrow-select" }
+arrow-string = { version = "59.2.0", path = "./arrow-string" }
+parquet = { version = "59.2.0", path = "./parquet", default-features = false }
+parquet-geospatial = { version = "59.2.0", path = "./parquet-geospatial" }
+parquet-variant = { version = "59.2.0", path = "./parquet-variant" }
+parquet-variant-json = { version = "59.2.0", path = "./parquet-variant-json" }
+parquet-variant-compute = { version = "59.2.0", path = "./parquet-variant-compute" }
 
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
 
@@ -112,9 +110,167 @@ criterion = { version = "0.8.0", default-features = false }
 
 insta = { version = "1.46.3", default-features = false }
 
-object_store = { version = "0.13.2", default-features = false }
+object_store = { version = "0.14.1", default-features = false }
 
 simdutf8 = { version = "0.1.5", default-features = false }
+
+# Lints that are shared by every crate in the workspace.
+#
+# Each member crate opts in with:
+#
+#   [lints]
+#   workspace = true
+#
+# Only lints that are `allow` by default are worth listing here; the lints that clippy
+# enables by default are already enforced by CI (`cargo clippy ... -- -D warnings`).
+#
+# Keep the lists sorted.
+[workspace.lints.rust]
+explicit_outlives_requirements = "warn"
+future_incompatible = { level = "warn", priority = -1 }
+nonstandard_style = { level = "warn", priority = -1 }
+rust_2018_idioms = { level = "warn", priority = -1 }
+rust_2021_prelude_collisions = "warn"
+semicolon_in_expressions_from_macros = "warn"
+trivial_numeric_casts = "warn"
+unexpected_cfgs = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
+
+# Deliberately left off: all the noise of spelling out elided lifetimes and
+# redundant qualifications, without catching anything that matters.
+# `elided_lifetimes_in_paths` is part of `rust_2018_idioms`, so it has to be
+# turned off explicitly; the other two are `allow` by default and are listed
+# only to record the decision.
+elided_lifetimes_in_paths = "allow" # ~600 violations in ~100 files
+trivial_casts = "allow"             # ~2000 violations
+unused_qualifications = "allow"     # ~2000 violations
+
+[workspace.lints.rustdoc]
+all = { level = "warn", priority = -1 }
+broken_intra_doc_links = "warn"
+missing_crate_level_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Extra lints on top of `all` and `pedantic`, mostly from the `restriction` and
+# `nursery` groups:
+allow_attributes = "warn"
+as_ptr_cast_mut = "warn"
+branches_sharing_code = "warn"
+clear_with_drain = "warn"
+coerce_container_to_any = "warn"
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+default_union_representation = "warn"
+disallowed_script_idents = "warn"
+doc_include_without_cfg = "warn"
+empty_enum_variants_with_brackets = "warn"
+equatable_if_let = "warn"
+exit = "warn"
+float_cmp_const = "warn"
+fn_to_numeric_cast_any = "warn"
+imprecise_flops = "warn"
+infinite_loop = "warn"
+iter_on_empty_collections = "warn"
+iter_on_single_items = "warn"
+iter_with_drain = "warn"
+large_include_file = "warn"
+large_stack_frames = "warn"
+literal_string_with_formatting_args = "warn"
+lossy_float_literal = "warn"
+mutex_integer = "warn"
+needless_pass_by_ref_mut = "warn"
+needless_type_cast = "warn"
+negative_feature_names = "warn"
+non_zero_suggestions = "warn"
+nonstandard_macro_braces = "warn"
+or_fun_call = "warn"
+path_buf_push_overwrite = "warn"
+pathbuf_init_then_push = "warn"
+precedence_bits = "warn"
+pub_without_shorthand = "warn"
+rc_mutex = "warn"
+redundant_type_annotations = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+return_and_then = "warn"
+set_contains_or_insert = "warn"
+single_option_map = "warn"
+string_lit_as_bytes = "warn"
+string_lit_chars_any = "warn"
+suspicious_xor_used_as_pow = "warn"
+todo = "warn"
+trailing_empty_array = "warn"
+trait_duplication_in_bounds = "warn"
+tuple_array_conversions = "warn"
+uninhabited_references = "warn"
+unnecessary_safety_doc = "warn"
+unnecessary_self_imports = "warn"
+unnecessary_struct_initialization = "warn"
+unused_peekable = "warn"
+unused_rounding = "warn"
+useless_let_if_seq = "warn"
+verbose_file_reads = "warn"
+wildcard_dependencies = "warn"
+
+# Lints in `pedantic` that we currently allow.
+# Some of these we should consider enabling in the future.
+# Counts come from `cargo clippy --all-features --all-targets`.
+borrow_as_ptr = "allow"                      # ~9 violations in ~1 file
+cast_lossless = "allow"                      # ~640 violations in ~100 files
+cast_possible_truncation = "allow"           # ~890 violations in ~190 files
+cast_possible_wrap = "allow"                 # ~570 violations in ~120 files
+cast_precision_loss = "allow"                # ~130 violations in ~33 files
+cast_ptr_alignment = "allow"                 # ~3 violations in ~3 files
+cast_sign_loss = "allow"                     # ~590 violations in ~150 files
+default_trait_access = "allow"               # ~210 violations in ~68 files
+doc_markdown = "allow"                       # ~2300 violations in ~290 files
+enum_glob_use = "allow"                      # ~65 violations in ~22 files
+float_cmp = "allow"                          # ~180 violations in ~2 files
+from_iter_instead_of_collect = "allow"       # ~200 violations in ~53 files
+if_not_else = "allow"                        # ~57 violations in ~39 files
+ignore_without_reason = "allow"              # ~16 violations in ~2 files
+implicit_hasher = "allow"                    # ~9 violations in ~4 files
+inline_always = "allow"                      # ~30 violations in ~17 files
+items_after_statements = "allow"             # ~130 violations in ~41 files
+manual_assert = "allow"                      # ~20 violations in ~12 files
+manual_assert_eq = "allow"                   # ~29 violations in ~10 files
+many_single_char_names = "allow"             # ~8 violations in ~5 files
+map_unwrap_or = "allow"                      # ~76 violations in ~40 files
+match_bool = "allow"                         # ~100 violations in ~49 files
+match_same_arms = "allow"                    # ~140 violations in ~49 files
+missing_errors_doc = "allow"                 # ~670 violations in ~170 files
+missing_fields_in_debug = "allow"            # ~14 violations in ~12 files
+missing_panics_doc = "allow"                 # ~140 violations in ~79 files
+must_use_candidate = "allow"                 # ~1700 violations in ~200 files
+needless_bitwise_bool = "allow"              # ~5 violations in ~3 files
+needless_for_each = "allow"                  # ~67 violations in ~28 files
+needless_pass_by_value = "allow"             # ~260 violations in ~110 files
+non_std_lazy_statics = "allow"               # ~56 violations in ~10 files
+range_plus_one = "allow"                     # ~17 violations in ~13 files
+redundant_closure_for_method_calls = "allow" # ~310 violations in ~130 files
+redundant_else = "allow"                     # ~23 violations in ~16 files
+return_self_not_must_use = "allow"           # ~470 violations in ~91 files
+semicolon_if_nothing_returned = "allow"      # ~1300 violations in ~250 files
+similar_names = "allow"                      # ~150 violations in ~43 files
+single_match_else = "allow"                  # ~63 violations in ~49 files
+struct_excessive_bools = "allow"             # ~4 violations in ~3 files
+struct_field_names = "allow"                 # ~18 violations in ~13 files
+too_many_lines = "allow"                     # ~220 violations in ~110 files
+trivially_copy_pass_by_ref = "allow"         # ~42 violations in ~17 files
+unicode_not_nfc = "allow"                    # ~13 violations in ~1 file
+unnecessary_debug_formatting = "allow"       # ~23 violations in ~7 files
+unnecessary_wraps = "allow"                  # ~64 violations in ~39 files
+unreadable_literal = "allow"                 # ~4100 violations in ~120 files
+unused_self = "allow"                        # ~31 violations in ~20 files
+used_underscore_binding = "allow"            # ~15 violations in ~3 files
+used_underscore_items = "allow"              # ~120 violations in ~17 files
+verbose_bit_mask = "allow"                   # 1 violation in 1 file
+wildcard_imports = "allow"                   # ~230 violations in ~130 files
 
 # release inherited profile keeping debug information and symbols
 # for mem/cpu profiling

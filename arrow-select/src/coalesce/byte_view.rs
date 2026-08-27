@@ -207,7 +207,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                 if byte_view.length > MAX_INLINE_VIEW_LEN {
                     // Small views (<=12 bytes) are inlined, so only need to update large views
                     byte_view.buffer_index += starting_buffer;
-                };
+                }
                 byte_view.as_u128()
             });
 
@@ -405,7 +405,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             self.nulls.append_buffer(&nulls);
         } else {
             self.nulls.append_n_non_nulls(len);
-        };
+        }
 
         let buffers = s.data_buffers();
         // SAFETY: copy_rows is called with ranges derived from the source array.
@@ -462,6 +462,8 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         filter: &FilterPredicate,
     ) -> Result<(), ArrowError> {
         let s = source.as_byte_view::<B>();
+        // The source views reference no external buffers, so they must all be
+        // inline and we can copy just the nulls and views.
         if s.data_buffers().is_empty() {
             self.ensure_capacity();
             self.append_nulls_by_filter(filter, s.nulls());
@@ -469,7 +471,9 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             return Ok(());
         }
 
-        // Match the filter kernel: filter views/nulls, but reuse data buffers.
+        // The views reference external buffers, so match the filter kernel:
+        // filter the views/nulls, but reuse the source's data buffers rather
+        // than copying the referenced string data.
         let filtered = filter.filter(source.as_ref())?;
         let filtered = filtered.as_byte_view::<B>();
 
@@ -497,8 +501,9 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 
         // Safety: we created valid views and buffers above and the
         // input arrays had value data and nulls
-        let new_array =
-            unsafe { GenericByteViewArray::<B>::new_unchecked(views.into(), buffers, nulls) };
+        let new_array = unsafe {
+            GenericByteViewArray::<B>::new_unchecked(views.into(), buffers.into(), nulls)
+        };
         Ok(Arc::new(new_array))
     }
 

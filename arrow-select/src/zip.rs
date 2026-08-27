@@ -473,10 +473,11 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
     /// return an output array that has
     /// `value` in all locations where predicate is true
     /// `null` otherwise
+    #[expect(clippy::type_complexity)]
     fn get_scalar_and_null_buffer_for_single_non_nullable(
         predicate: BooleanBuffer,
         value: &[u8],
-    ) -> (Buffer, OffsetBuffer<T::Offset>, Option<NullBuffer>) {
+    ) -> Result<(Buffer, OffsetBuffer<T::Offset>, Option<NullBuffer>), ArrowError> {
         let value_length = value.len();
 
         let number_of_true = predicate.count_set_bits();
@@ -486,13 +487,13 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
             // All values are null
             let nulls = NullBuffer::new_null(predicate.len());
 
-            return (
+            return Ok((
                 // Empty bytes
                 Buffer::from(&[]),
                 // All nulls so all lengths are 0
                 OffsetBuffer::<T::Offset>::new_zeroed(predicate.len()),
                 Some(nulls),
-            );
+            ));
         }
 
         let offsets = OffsetBuffer::<T::Offset>::from_lengths(
@@ -500,7 +501,9 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         );
 
         let mut bytes = MutableBuffer::with_capacity(0);
-        bytes.repeat_slice_n_times(value, number_of_true);
+        bytes
+            .try_repeat_slice_n_times(value, number_of_true)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
         let bytes = Buffer::from(bytes);
 
@@ -508,7 +511,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         // If a value is false we need the FALSY and the null buffer will have 0 (meaning null)
         let nulls = NullBuffer::new(predicate);
 
-        (bytes, offsets, Some(nulls))
+        Ok((bytes, offsets, Some(nulls)))
     }
 
     /// Create a [`Buffer`] where `value` slice is repeated `number_of_values` times
@@ -516,41 +519,36 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
     fn get_bytes_and_offset_for_all_same_value(
         number_of_values: usize,
         value: &[u8],
-    ) -> (Buffer, OffsetBuffer<T::Offset>) {
+    ) -> Result<(Buffer, OffsetBuffer<T::Offset>), ArrowError> {
         let value_length = value.len();
 
         let offsets =
             OffsetBuffer::<T::Offset>::from_repeated_length(value_length, number_of_values);
 
         let mut bytes = MutableBuffer::with_capacity(0);
-        bytes.repeat_slice_n_times(value, number_of_values);
+        bytes
+            .try_repeat_slice_n_times(value, number_of_values)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         let bytes = Buffer::from(bytes);
 
-        (bytes, offsets)
+        Ok((bytes, offsets))
     }
 
     fn create_output_on_non_nulls(
         predicate: &BooleanBuffer,
         truthy_val: &[u8],
         falsy_val: &[u8],
-    ) -> (Buffer, OffsetBuffer<<T as ByteArrayType>::Offset>) {
+    ) -> Result<(Buffer, OffsetBuffer<<T as ByteArrayType>::Offset>), ArrowError> {
         let true_count = predicate.count_set_bits();
 
         match true_count {
             0 => {
                 // All values are falsy
-
-                let (bytes, offsets) =
-                    Self::get_bytes_and_offset_for_all_same_value(predicate.len(), falsy_val);
-
-                return (bytes, offsets);
+                return Self::get_bytes_and_offset_for_all_same_value(predicate.len(), falsy_val);
             }
             n if n == predicate.len() => {
                 // All values are truthy
-                let (bytes, offsets) =
-                    Self::get_bytes_and_offset_for_all_same_value(predicate.len(), truthy_val);
-
-                return (bytes, offsets);
+                return Self::get_bytes_and_offset_for_all_same_value(predicate.len(), truthy_val);
             }
 
             _ => {
@@ -569,12 +567,14 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         let truthy_len = truthy_val.len();
         let falsy_len = falsy_val.len();
 
-        SlicesIterator::from(predicate).for_each(|(start, end)| {
+        SlicesIterator::from(predicate).try_for_each(|(start, end)| -> Result<(), ArrowError> {
             // the gap needs to be filled with falsy values
             if start > filled {
                 let false_repeat_count = start - filled;
                 // Push false value `repeat_count` times
-                mutable.repeat_slice_n_times(falsy_val, false_repeat_count);
+                mutable
+                    .try_repeat_slice_n_times(falsy_val, false_repeat_count)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
                 for _ in 0..false_repeat_count {
                     offset_buffer_builder.push_length(falsy_len)
@@ -583,25 +583,30 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
 
             let true_repeat_count = end - start;
             // fill with truthy values
-            mutable.repeat_slice_n_times(truthy_val, true_repeat_count);
+            mutable
+                .try_repeat_slice_n_times(truthy_val, true_repeat_count)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
             for _ in 0..true_repeat_count {
                 offset_buffer_builder.push_length(truthy_len)
             }
             filled = end;
-        });
+            Ok(())
+        })?;
         // the remaining part is falsy
         if filled < predicate.len() {
             let false_repeat_count = predicate.len() - filled;
             // Copy the first item from the 'falsy' array into the output buffer.
-            mutable.repeat_slice_n_times(falsy_val, false_repeat_count);
+            mutable
+                .try_repeat_slice_n_times(falsy_val, false_repeat_count)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
             for _ in 0..false_repeat_count {
                 offset_buffer_builder.push_length(falsy_len)
             }
         }
 
-        (mutable.into(), offset_buffer_builder.finish())
+        Ok((mutable.into(), offset_buffer_builder.finish()))
     }
 }
 
@@ -615,12 +620,12 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
             match (self.truthy.as_deref(), self.falsy.as_deref()) {
                 (Some(truthy_val), Some(falsy_val)) => {
                     let (bytes, offsets) =
-                        Self::create_output_on_non_nulls(&predicate, truthy_val, falsy_val);
+                        Self::create_output_on_non_nulls(&predicate, truthy_val, falsy_val)?;
 
                     (bytes, offsets, None)
                 }
                 (Some(truthy_val), None) => {
-                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, truthy_val)
+                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, truthy_val)?
                 }
                 (None, Some(falsy_val)) => {
                     // Flipping the boolean buffer as we want the opposite of the TRUE case
@@ -628,7 +633,7 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
                     // if the condition is true we want null so we need to NOT the value so we get 0 (meaning null)
                     // if the condition is false we want the FALSE value so we need to NOT the value so we get 1 (meaning not null)
                     let predicate = predicate.not();
-                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, falsy_val)
+                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, falsy_val)?
                 }
                 (None, None) => {
                     // All values are null
@@ -725,6 +730,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         (bytes.into(), buffers, Some(nulls))
     }
 
+    #[expect(clippy::type_complexity)]
     fn get_views_for_non_nullable(
         predicate: BooleanBuffer,
         result_len: usize,
@@ -732,16 +738,16 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         truthy_buffers: Arc<[Buffer]>,
         falsy_view: u128,
         falsy_buffers: Arc<[Buffer]>,
-    ) -> (ScalarBuffer<u128>, Arc<[Buffer]>, Option<NullBuffer>) {
+    ) -> Result<(ScalarBuffer<u128>, Arc<[Buffer]>, Option<NullBuffer>), ArrowError> {
         let true_count = predicate.count_set_bits();
         match true_count {
             0 => {
                 // all values are falsy
-                (vec![falsy_view; result_len].into(), falsy_buffers, None)
+                Ok((vec![falsy_view; result_len].into(), falsy_buffers, None))
             }
             n if n == predicate.len() => {
                 // all values are truthy
-                (vec![truthy_view; result_len].into(), truthy_buffers, None)
+                Ok((vec![truthy_view; result_len].into(), truthy_buffers, None))
             }
             _ => {
                 let true_count = predicate.count_set_bits();
@@ -766,24 +772,38 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                 let mut mutable = MutableBuffer::new(total_number_of_bytes);
                 let mut filled = 0;
 
-                SlicesIterator::from(&predicate).for_each(|(start, end)| {
-                    if start > filled {
-                        let false_repeat_count = start - filled;
+                SlicesIterator::from(&predicate).try_for_each(
+                    |(start, end)| -> Result<(), ArrowError> {
+                        if start > filled {
+                            let false_repeat_count = start - filled;
+                            mutable
+                                .try_repeat_slice_n_times(
+                                    view_falsy.to_byte_slice(),
+                                    false_repeat_count,
+                                )
+                                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                        }
+                        let true_repeat_count = end - start;
                         mutable
-                            .repeat_slice_n_times(view_falsy.to_byte_slice(), false_repeat_count);
-                    }
-                    let true_repeat_count = end - start;
-                    mutable.repeat_slice_n_times(truthy_view.to_byte_slice(), true_repeat_count);
-                    filled = end;
-                });
+                            .try_repeat_slice_n_times(
+                                truthy_view.to_byte_slice(),
+                                true_repeat_count,
+                            )
+                            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                        filled = end;
+                        Ok(())
+                    },
+                )?;
 
                 if filled < predicate.len() {
                     let false_repeat_count = predicate.len() - filled;
-                    mutable.repeat_slice_n_times(view_falsy.to_byte_slice(), false_repeat_count);
+                    mutable
+                        .try_repeat_slice_n_times(view_falsy.to_byte_slice(), false_repeat_count)
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 }
 
                 let bytes = Buffer::from(mutable);
-                (bytes.into(), buffers.into(), None)
+                Ok((bytes.into(), buffers.into(), None))
             }
         }
     }
@@ -812,7 +832,7 @@ impl<T: ByteViewType> ZipImpl for ByteViewScalarImpl<T> {
                 Arc::clone(&self.truthy_buffers),
                 falsy,
                 Arc::clone(&self.falsy_buffers),
-            ),
+            )?,
             (Some(truthy), None) => Self::get_views_for_single_non_nullable(
                 predicate,
                 truthy,

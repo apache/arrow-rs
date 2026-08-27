@@ -324,7 +324,7 @@ impl<'a> Parser<'a> {
                             &format!("Expected None, Some, or a timezone string, got {tok:?}"),
                         ));
                     }
-                };
+                }
                 self.expect_token(Token::RParen)?;
             }
             // No timezone (e.g `Timestamp(ns)`)
@@ -353,7 +353,7 @@ impl<'a> Parser<'a> {
                     &format!("Time32 time unit must be 's' or 'ms', got '{time_unit}'"),
                 ));
             }
-        };
+        }
         self.expect_token(Token::RParen)?;
         Ok(DataType::Time32(time_unit))
     }
@@ -370,7 +370,7 @@ impl<'a> Parser<'a> {
                     &format!("Time64 time unit must be 'µs' or 'ns', got '{time_unit}'"),
                 ));
             }
-        };
+        }
         self.expect_token(Token::RParen)?;
         Ok(DataType::Time64(time_unit))
     }
@@ -512,7 +512,7 @@ impl<'a> Parser<'a> {
             let field = self.parse_field()?;
             fields.push(Arc::new(field));
             match self.next_token()? {
-                Token::Comma => continue,
+                Token::Comma => {}
                 Token::RParen => break,
                 tok => {
                     return Err(make_error(
@@ -863,7 +863,6 @@ impl Iterator for Tokenizer<'_> {
                 ' ' => {
                     // skip whitespace
                     self.next_char();
-                    continue;
                 }
                 '"' => {
                     return Some(self.parse_quoted_string(QuoteType::Double));
@@ -1209,9 +1208,9 @@ mod test {
             DataType::Map(
                 Arc::new(Field::new_map(
                     "nested_map",
-                    "entries",
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Int32, true),
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                     false,
                     true,
                 )),
@@ -1429,7 +1428,7 @@ mod test {
                     ),
                 ])),
             ),
-            (r#"Struct()"#, Struct(Fields::empty())),
+            (r"Struct()", Struct(Fields::empty())),
             (
                 "FixedSizeList(4, Int64)",
                 FixedSizeList(Arc::new(Field::new_list_field(Int64, true)), 4),
@@ -1461,12 +1460,12 @@ mod test {
             ("", "Error finding next token"),
             ("null", "Unsupported type 'null'"),
             ("Nu", "Unsupported type 'Nu'"),
-            (r#"Timestamp(ns, +00:00)"#, "Error unknown token: +00"),
+            (r"Timestamp(ns, +00:00)", "Error unknown token: +00"),
             (
                 r#"Timestamp(ns, "+00:00)"#,
                 r#"Unterminated string at: "+00:00)"#,
             ),
-            (r#"Timestamp(ns, "")"#, r#"empty strings aren't allowed"#),
+            (r#"Timestamp(ns, "")"#, r"empty strings aren't allowed"),
             (
                 r#"Timestamp(ns, "+00:00"")"#,
                 r#"Parser error: Unterminated string at: ")"#,

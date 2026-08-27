@@ -29,6 +29,8 @@ pub use base64::prelude::*;
 
 /// Base64 encode each element of `array` with the provided [`Engine`]
 ///
+/// # Panics
+///
 /// Panics if the `Engine` emits output that is not valid UTF-8. A correct
 /// `Engine` never does, but it is a safe trait so a misbehaving impl could;
 /// validating keeps the returned [`GenericStringArray`] sound (#10284).
@@ -70,7 +72,7 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
     offsets.push(O::usize_as(0));
     let mut offset = 0;
 
-    for v in array.iter() {
+    for v in array {
         if let Some(v) = v {
             let len = engine.decode_slice(v, &mut buffer[offset..]).unwrap();
             // This cannot overflow as `len` is less than `v.len()` and `a` is valid
@@ -89,7 +91,7 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
 mod tests {
     use super::*;
     use arrow_array::BinaryArray;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
 
     fn test_engine<E: Engine>(e: &E, a: &BinaryArray) {
         let encoded = b64_encode(e, a);
@@ -103,6 +105,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_b64() {
         let mut rng = rng();
         let len = rng.random_range(1024..1050);
@@ -149,7 +152,7 @@ mod tests {
             output_buf: &mut [u8],
         ) -> Result<usize, base64::EncodeSliceError> {
             let len = BASE64_STANDARD.encode_slice(input, output_buf)?;
-            for b in output_buf[..len].iter_mut() {
+            for b in &mut output_buf[..len] {
                 *b = 0xFF; // invalid UTF-8, but correct length
             }
             Ok(len)

@@ -216,6 +216,8 @@ pub struct ArrayData {
     ///
     /// The offset applies to [`Self::child_data`] and [`Self::buffers`]. It
     /// does NOT apply to [`Self::nulls`].
+    ///
+    /// See [`Self::offset()`] for details and diagrams.
     offset: usize,
 
     /// The buffers that store the actual data for this array, as defined
@@ -241,13 +243,15 @@ pub struct ArrayData {
     ///
     /// If the child element also has an offset then these offsets are
     /// cumulative.
+    ///
+    /// See [`Self::child_data()`] and [`Self::offset()`] for details.
     child_data: Vec<ArrayData>,
 
     /// The null bitmap.
     ///
     /// `None` indicates all values are non-null in this array.
     ///
-    /// [`Self::offset]` does not apply to the null bitmap. While the
+    /// [`Self::offset()`] does not apply to the null bitmap. While the
     /// BooleanBuffer may be sliced (have its own offset) internally, this
     /// `NullBuffer` always represents exactly `len` elements.
     nulls: Option<NullBuffer>,
@@ -432,6 +436,11 @@ impl ArrayData {
 
     /// Returns a slice of children [`ArrayData`]. This will be non
     /// empty for type such as lists and structs.
+    ///
+    /// Note: For nested types where the parent element `i` corresponds directly
+    /// to child element `i` (such as structs), both the parent's offset and
+    /// each child's own offset apply when locating child values — see
+    /// [`Self::offset`] for details.
     pub fn child_data(&self) -> &[ArrayData] {
         &self.child_data[..]
     }
@@ -471,7 +480,57 @@ impl ArrayData {
         self.len == 0
     }
 
-    /// Returns the offset of this [`ArrayData`]
+    /// Returns the offset in elements of this [`ArrayData`]
+    ///
+    /// The offset applies to [`Self::buffers`] and [`Self::child_data`],
+    /// but does NOT apply to [`Self::nulls`], which always represents exactly
+    /// [`Self::len`] elements.
+    ///
+    /// # Offsets for Non-nested types
+    ///
+    /// For non-nested types, the offset skips leading elements in the buffers.
+    /// Logical element `i` is stored at physical position `offset + i`.
+    ///
+    /// For example, with `offset = 2` and `len = 3` the following array
+    /// represents elements `[C, D, E]`:
+    ///
+    /// ```text
+    ///                     offset: 2        len: 3
+    ///                   ◀───────────▶◀────────────────▶
+    ///                   ┌─────┬─────┬─────┬─────┬─────┬─────┐
+    ///    values buffer  │  A  │  B  │  C  │  D  │  E  │  F  │
+    ///                   └─────┴─────┴─────┴─────┴─────┴─────┘
+    ///    physical index    0     1     2     3     4     5
+    ///    logical index                 0     1     2
+    /// ```
+    ///
+    /// # Offsets for Struct types
+    ///
+    /// For [struct]s, logical element `i` of the parent corresponds directly to
+    /// element `i` of each child, with no indirection in between. Since a
+    /// struct has no buffers of its own, its offset applies to each child,
+    /// composing cumulatively with any child offset. Logical element `i` of the
+    /// struct corresponds to element `offset + i` of each child.
+    ///
+    /// For example, a struct with `offset = 2` and `len = 3` whose children
+    /// `c1` and `c2` themselves each have an offset of `1` represents the
+    /// elements `{c1: D, c2: d}`, `{c1: E, c2: e}`, `{c1: F, c2: f}`:
+    ///
+    /// ```text
+    ///                        struct offset: 2    len: 3
+    ///                          ◀───────────▶◀────────────────▶
+    ///    child offset: 1 ◀─────▶
+    ///                    ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┐
+    ///    child c1        │  A  │  B  │  C  │  D  │  E  │  F  │  G  │
+    ///                    ├─────┼─────┼─────┼─────┼─────┼─────┼─────┤
+    ///    child c2        │  a  │  b  │  c  │  d  │  e  │  f  │  g  │
+    ///                    └─────┴─────┴─────┴─────┴─────┴─────┴─────┘
+    ///    physical index     0     1     2     3     4     5     6
+    ///    child index              0     1     2     3     4     5
+    ///    struct index                         0     1     2
+    /// ```
+    ///
+    /// [struct]: https://arrow.apache.org/docs/format/Columnar.html#struct-layout
     #[inline]
     pub const fn offset(&self) -> usize {
         self.offset
@@ -516,7 +575,9 @@ impl ArrayData {
     ///
     /// This is approximately the number of bytes if a new
     /// [`ArrayData`] was formed by creating new [`Buffer`]s with
-    /// exactly the data needed.
+    /// exactly the data needed. For variadic layouts, this includes the full
+    /// capacity of every variadic buffer retained by a zero-copy slice, without
+    /// inspecting which buffers or ranges are referenced by the slice.
     ///
     /// For example, a [`DataType::Int64`] with `100` elements,
     /// [`Self::get_slice_memory_size`] would return `100 * 8 = 800`. If
@@ -527,7 +588,7 @@ impl ArrayData {
         let mut result: usize = 0;
         let layout = layout(&self.data_type);
 
-        for spec in layout.buffers.iter() {
+        for spec in &layout.buffers {
             match spec {
                 BufferSpec::FixedWidth { byte_width, .. } => {
                     // Offset buffers contain len+1 elements: one boundary per element
@@ -575,6 +636,13 @@ impl ArrayData {
                 BufferSpec::AlwaysNull => {
                     // Nothing to do
                 }
+            }
+        }
+
+        if layout.variadic {
+            // Slicing view arrays retains all variadic data buffers unchanged.
+            for buffer in self.buffers.iter().skip(layout.buffers.len()) {
+                result += buffer.capacity();
             }
         }
 
@@ -847,14 +915,14 @@ impl ArrayData {
     pub fn align_buffers(&mut self) {
         let layout = layout(&self.data_type);
         for (buffer, spec) in self.buffers.iter_mut().zip(&layout.buffers) {
-            if let BufferSpec::FixedWidth { alignment, .. } = spec {
-                if buffer.as_ptr().align_offset(*alignment) != 0 {
-                    *buffer = Buffer::from_slice_ref(buffer.as_ref());
-                }
+            if let BufferSpec::FixedWidth { alignment, .. } = spec
+                && buffer.as_ptr().align_offset(*alignment) != 0
+            {
+                *buffer = Buffer::from_slice_ref(buffer.as_ref());
             }
         }
         // align children data recursively
-        for data in self.child_data.iter_mut() {
+        for data in &mut self.child_data {
             data.align_buffers()
         }
     }
@@ -1009,7 +1077,7 @@ impl ArrayData {
                 ));
             }
             _ => {}
-        };
+        }
 
         Ok(())
     }
@@ -1456,17 +1524,14 @@ impl ArrayData {
         mask: Option<&NullBuffer>,
         child: &ArrayData,
     ) -> Result<(), ArrowError> {
-        let mask = match mask {
-            Some(mask) => mask,
-            None => {
-                return match child.null_count() {
-                    0 => Ok(()),
-                    _ => Err(ArrowError::InvalidArgumentError(format!(
-                        "non-nullable child of type {} contains nulls not present in parent {}",
-                        child.data_type, self.data_type
-                    ))),
-                };
-            }
+        let Some(mask) = mask else {
+            return match child.null_count() {
+                0 => Ok(()),
+                _ => Err(ArrowError::InvalidArgumentError(format!(
+                    "non-nullable child of type {} contains nulls not present in parent {}",
+                    child.data_type, self.data_type
+                ))),
+            };
         };
 
         match child.nulls() {
@@ -1686,7 +1751,7 @@ impl ArrayData {
         T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
         let values = self.typed_buffer::<T>(0, self.len)?;
-        let mut prev_value: i64 = 0_i64;
+        let mut prev_value = 0_i64;
         values.iter().enumerate().try_for_each(|(ix, &inp_value)| {
             let value: i64 = inp_value.try_into().map_err(|_| {
                 ArrowError::InvalidArgumentError(format!(
@@ -1711,8 +1776,7 @@ impl ArrayData {
         let len_plus_offset = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
         if prev_value.as_usize() < len_plus_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {}.",
-                len_plus_offset
+                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {len_plus_offset}."
             )));
         }
         Ok(())
@@ -1735,7 +1799,7 @@ impl ArrayData {
             (Some(a), Some(b)) if !a.inner().ptr_eq(b.inner()) => return false,
             (Some(_), None) | (None, Some(_)) => return false,
             _ => {}
-        };
+        }
 
         if !self
             .buffers
@@ -2007,7 +2071,6 @@ pub enum BufferSpec {
     BitMap,
     /// Buffer is always null. Unused currently in Rust implementation,
     /// (used in C++ for Union type)
-    #[allow(dead_code)]
     AlwaysNull,
 }
 
@@ -2127,7 +2190,6 @@ impl ArrayDataBuilder {
     }
 
     #[inline]
-    #[allow(clippy::len_without_is_empty)]
     /// Sets the length of the [ArrayData]
     pub const fn len(mut self, n: usize) -> Self {
         self.len = n;
@@ -2213,7 +2275,7 @@ impl ArrayDataBuilder {
 
     /// Creates an `ArrayData`, consuming `self`
     ///
-    /// # Safety
+    /// # Undefined behavior
     ///
     /// By default the underlying buffers are checked to ensure they are valid
     /// Arrow data. However, if the [`Self::skip_validation`] flag has been set
@@ -2344,6 +2406,7 @@ pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ByteView;
     use arrow_buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
 
@@ -2590,7 +2653,6 @@ mod tests {
         assert!(!int_data.ptr_eq(&float_data));
         assert!(int_data.ptr_eq(&int_data));
 
-        #[allow(clippy::redundant_clone)]
         let int_data_clone = int_data.clone();
         assert_eq!(int_data, int_data_clone);
         assert!(int_data.ptr_eq(&int_data_clone));
@@ -2601,7 +2663,7 @@ mod tests {
         assert!(!int_data.ptr_eq(&int_data_slice));
         assert!(!int_data_slice.ptr_eq(&int_data));
 
-        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"abcdef");
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
         let string_data = ArrayData::try_new(
             DataType::Utf8,
@@ -2618,7 +2680,6 @@ mod tests {
 
         assert!(string_data.ptr_eq(&string_data));
 
-        #[allow(clippy::redundant_clone)]
         let string_data_cloned = string_data.clone();
         assert!(string_data_cloned.ptr_eq(&string_data));
         assert!(string_data.ptr_eq(&string_data_cloned));
@@ -2629,9 +2690,59 @@ mod tests {
     }
 
     #[test]
+    fn test_slice_memory_size_view_payload_buffers() {
+        for data_type in [DataType::Utf8View, DataType::BinaryView] {
+            let inline_only = ArrayData::builder(data_type.clone())
+                .len(2)
+                .add_buffer(Buffer::from_vec(vec![0_u128; 2]))
+                .build()
+                .unwrap();
+            assert_eq!(
+                inline_only.get_slice_memory_size().unwrap(),
+                2 * mem::size_of::<u128>()
+            );
+
+            let mut first_payload = Vec::with_capacity(32);
+            first_payload.extend_from_slice(b"first payload");
+            let first_view =
+                ByteView::new(first_payload.len().try_into().unwrap(), &first_payload[..4])
+                    .as_u128();
+            let first_payload = Buffer::from_vec(first_payload);
+            assert!(first_payload.capacity() > first_payload.len());
+            let first_payload_capacity = first_payload.capacity();
+
+            let mut second_payload = Vec::with_capacity(64);
+            second_payload.extend_from_slice(b"second payload");
+            let second_view = ByteView::new(
+                second_payload.len().try_into().unwrap(),
+                &second_payload[..4],
+            )
+            .with_buffer_index(1)
+            .as_u128();
+            let second_payload = Buffer::from_vec(second_payload);
+            assert!(second_payload.capacity() > second_payload.len());
+            let second_payload_capacity = second_payload.capacity();
+
+            let data = ArrayData::builder(data_type)
+                .len(3)
+                .add_buffer(Buffer::from_vec(vec![first_view, 0_u128, second_view]))
+                .add_buffer(first_payload)
+                .add_buffer(second_payload)
+                .build()
+                .unwrap();
+            let sliced = data.slice(1, 1);
+
+            assert_eq!(
+                sliced.get_slice_memory_size().unwrap(),
+                mem::size_of::<u128>() + first_payload_capacity + second_payload_capacity
+            );
+        }
+    }
+
+    #[test]
     fn test_slice_memory_size_utf8_offset_buffer_len_plus_one() {
         // 2-element array ["hello", "world"]: array len = 2, 10 bytes
-        let data_buffer = Buffer::from_slice_ref("helloworld".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"helloworld");
         // offsets need array_len+1 entries to mark the end of every string:
         //   [0, 5, 10] -> 3 i32s = 12 bytes
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 5_i32, 10_i32]);
@@ -2683,7 +2794,7 @@ mod tests {
             data.get_slice_memory_size().unwrap() - 8,
             new_data.get_slice_memory_size().unwrap()
         );
-        let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
+        let data_buffer = Buffer::from_slice_ref(b"abcdef");
         let offsets_buffer = Buffer::from_slice_ref([0_i32, 2_i32, 2_i32, 5_i32]);
         let string_data = ArrayData::try_new(
             DataType::Utf8,
@@ -2877,14 +2988,14 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
     #[test]
     fn should_fail_validation_when_having_map_entries_only_have_1_field() {
         let struct_data_type = DataType::Struct(Fields::from(vec![Field::new(
-            "key",
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
             DataType::Int32,
             false,
         )]));
@@ -2901,7 +3012,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new("entries", struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -2924,15 +3043,15 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
     #[test]
     fn should_fail_validation_when_having_map_entries_have_3_fields() {
         let struct_data_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Int32, false),
-            Field::new("values", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
             Field::new("other", DataType::Int32, true),
         ]));
 
@@ -2952,7 +3071,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new("entries", struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -2975,15 +3102,15 @@ mod tests {
                     )
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
     #[test]
     fn should_fail_validation_when_having_nullable_map_keys() {
         let struct_data_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Int32, true),
-            Field::new("values", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, true),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
         ]));
 
         let key_array_data = valid_non_nullable_int32_array_data(2);
@@ -2999,7 +3126,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new("entries", struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -3019,15 +3154,15 @@ mod tests {
                     assert_eq!(msg, "Map key field must not be nullable")
                 }
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
     #[test]
     fn should_fail_validation_when_having_entries_is_nullable_for_map() {
         let struct_data_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Int32, false),
-            Field::new("values", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
         ]));
 
         let key_array_data = valid_non_nullable_int32_array_data(2);
@@ -3044,7 +3179,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new("entries", struct_data_type, true).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    true,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -3065,15 +3208,15 @@ mod tests {
                     "The nullable should be set to false for the map entries field."
                 ),
                 _ => panic!("unexpected error type {array_data_err}"),
-            };
+            }
         }
     }
 
     #[test]
     fn should_allow_to_create_map_from_data() {
         let struct_data_type = DataType::Struct(Fields::from(vec![
-            Field::new("key", DataType::Int32, false),
-            Field::new("values", DataType::Utf8, true),
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
         ]));
 
         let key_array_data = valid_non_nullable_int32_array_data(2);
@@ -3089,7 +3232,15 @@ mod tests {
         };
 
         let results = test_both_builder_and_array_data(
-            DataType::Map(Field::new("entries", struct_data_type, false).into(), false),
+            DataType::Map(
+                Field::new(
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    struct_data_type,
+                    false,
+                )
+                .into(),
+                false,
+            ),
             1,
             None,
             0,
@@ -3135,10 +3286,10 @@ mod tests {
     fn empty_and_null_map_array_should_pass_validation() {
         let dt = DataType::Map(
             Field::new(
-                "entries",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Int32, false),
-                    Field::new("values", DataType::Utf8, true),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Int32, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
                 ])),
                 false,
             )

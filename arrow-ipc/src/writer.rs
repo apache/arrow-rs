@@ -120,7 +120,7 @@ enum IpcBodySink<'a> {
     /// Accumulate pre-encoded buffer segments for deferred zero-copy streaming.
     Collect(&'a mut Vec<EncodedBuffer>),
 }
-impl<'a> IpcBodySink<'a> {
+impl IpcBodySink<'_> {
     /// Writes the encoded buffer to the sink.
     pub fn write(&mut self, pad_len: usize, buffer: EncodedBuffer) {
         match self {
@@ -237,7 +237,7 @@ trait IpcMessageSinkExt: IpcMessageSink {
         write_options: &IpcWriteOptions,
     ) -> Result<(usize, usize), ArrowError> {
         let arrow_data_len = encoded.arrow_data.len();
-        if arrow_data_len % usize::from(write_options.alignment) != 0 {
+        if !arrow_data_len.is_multiple_of(usize::from(write_options.alignment)) {
             return Err(ArrowError::MemoryError(
                 "Arrow data not aligned".to_string(),
             ));
@@ -451,7 +451,7 @@ impl IpcWriteOptions {
     #[cfg(feature = "zstd")]
     fn check_zstd_level(self, level: i32) -> Result<Self, ArrowError> {
         let range = zstd::compression_level_range();
-        if !range.contains(&(level as zstd::zstd_safe::CompressionLevel)) {
+        if !range.contains(&level) {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "ZSTD compression level must be between {} and {}, got {}",
                 range.start(),
@@ -483,7 +483,6 @@ impl IpcWriteOptions {
             | crate::MetadataVersion::V3 => Err(ArrowError::InvalidArgumentError(
                 "Writing IPC metadata version 3 and lower not supported".to_string(),
             )),
-            #[allow(deprecated)]
             crate::MetadataVersion::V4 => Ok(Self {
                 alignment,
                 write_legacy_ipc_format,
@@ -762,7 +761,7 @@ impl IpcDataGenerator {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn encode_dictionaries<I: Iterator<Item = i64>>(
         &self,
         field: &Field,
@@ -1373,7 +1372,6 @@ impl DictionaryTracker {
     /// is true, an error will be generated if an update to an
     /// existing dictionary is attempted.
     pub fn new(error_on_replacement: bool) -> Self {
-        #[allow(deprecated)]
         Self {
             written: HashMap::new(),
             dict_ids: Vec::new(),
@@ -1608,7 +1606,7 @@ pub struct FileWriter<W> {
     /// Keeps track of dictionaries that have been written
     dictionary_tracker: DictionaryTracker,
     /// User level customized metadata
-    custom_metadata: HashMap<String, String>,
+    custom_metadata: Metadata,
 
     data_gen: IpcDataGenerator,
 
@@ -1631,7 +1629,7 @@ impl<W: Write> FileWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
+    /// An [`Err`] may be returned if writing the header to the writer fails.
     pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
@@ -1643,7 +1641,7 @@ impl<W: Write> FileWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
+    /// An [`Err`] may be returned if writing the header to the writer fails.
     pub fn try_new_with_options(
         mut writer: W,
         schema: &Schema,
@@ -1674,7 +1672,7 @@ impl<W: Write> FileWriter<W> {
             record_blocks: vec![],
             finished: false,
             dictionary_tracker,
-            custom_metadata: HashMap::new(),
+            custom_metadata: Default::default(),
             data_gen,
             ipc_write_context: IpcWriteContext::default(),
         })
@@ -1801,7 +1799,7 @@ impl<W: Write> FileWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if an error occurs while finishing the StreamWriter
+    /// An [`Err`] may be returned if an error occurs while finishing the StreamWriter
     /// or while flushing the writer.
     pub fn into_inner(mut self) -> Result<W, ArrowError> {
         if !self.finished {
@@ -2043,7 +2041,7 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
+    /// An [`Err`] may be returned if writing the header to the writer fails.
     pub fn try_new(writer: W, schema: &Schema) -> Result<Self, ArrowError> {
         let write_options = IpcWriteOptions::default();
         Self::try_new_with_options(writer, schema, write_options)
@@ -2053,7 +2051,7 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if writing the header to the writer fails.
+    /// An [`Err`] may be returned if writing the header to the writer fails.
     pub fn try_new_with_options(
         mut writer: W,
         schema: &Schema,
@@ -2143,7 +2141,7 @@ impl<W: Write> StreamWriter<W> {
     ///
     /// # Errors
     ///
-    /// An ['Err'](Result::Err) may be returned if an error occurs while finishing the StreamWriter
+    /// An [`Err`] may be returned if an error occurs while finishing the StreamWriter
     /// or while flushing the writer.
     ///
     /// # Example
@@ -2275,18 +2273,19 @@ fn reencode_offsets<O: OffsetSizeTrait>(
 /// In particular, this handles re-encoding the offsets if they don't start at `0`,
 /// slicing the values buffer as appropriate. This helps reduce the encoded
 /// size of sliced arrays, as values that have been sliced away are not encoded
-fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Buffer) {
+/// Returns the offsets and values buffers, in that order.
+fn get_byte_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> [Buffer; 2] {
     if data.is_empty() {
         // As per specification, offsets buffer has N+1 elements.
         // So an empty array should still be encoded with a single 0 offset.
         let mut offsets = MutableBuffer::new(size_of::<O>());
         offsets.extend_from_slice(O::usize_as(0).to_byte_slice());
-        return (offsets.into(), MutableBuffer::new(0).into());
+        return [offsets.into(), MutableBuffer::new(0).into()];
     }
 
     let (offsets, original_start_offset, len) = reencode_offsets::<O>(&data.buffers()[0], data);
     let values = data.buffers()[1].slice_with_length(original_start_offset, len);
-    (offsets, values)
+    [offsets, values]
 }
 
 /// Similar logic as [`get_byte_array_buffers()`] but slices the child array instead
@@ -2409,8 +2408,7 @@ fn write_array_data(
 
     let data_type = array_data.data_type();
     if matches!(data_type, DataType::Binary | DataType::Utf8) {
-        let (offsets, values) = get_byte_array_buffers::<i32>(array_data);
-        for buffer in [offsets, values] {
+        for buffer in get_byte_array_buffers::<i32>(array_data) {
             offset = encode_sink_buffer(
                 buffer,
                 meta,
@@ -2451,8 +2449,7 @@ fn write_array_data(
             )?;
         }
     } else if matches!(data_type, DataType::LargeBinary | DataType::LargeUtf8) {
-        let (offsets, values) = get_byte_array_buffers::<i64>(array_data);
-        for buffer in [offsets, values] {
+        for buffer in get_byte_array_buffers::<i64>(array_data) {
             offset = encode_sink_buffer(
                 buffer,
                 meta,
@@ -2772,7 +2769,7 @@ mod tests {
     use arrow_buffer::ScalarBuffer;
 
     use crate::MetadataVersion;
-    use crate::convert::fb_to_schema;
+    use crate::convert::try_fb_to_schema;
     use crate::reader::*;
     use crate::root_as_footer;
 
@@ -3089,7 +3086,7 @@ mod tests {
     #[test]
     fn test_empty_utf8_ipc_writes_nonempty_offsets_buffer() {
         let name = StringArray::from(Vec::<String>::new());
-        let (offsets, values) = get_byte_array_buffers::<i32>(&name.to_data());
+        let [offsets, values] = get_byte_array_buffers::<i32>(&name.to_data());
 
         assert_eq!(name.len(), 0);
         assert_eq!(
@@ -3103,7 +3100,7 @@ mod tests {
     #[test]
     fn test_empty_large_utf8_ipc_writes_nonempty_offsets_buffer() {
         let name = LargeStringArray::from(Vec::<String>::new());
-        let (offsets, values) = get_byte_array_buffers::<i64>(&name.to_data());
+        let [offsets, values] = get_byte_array_buffers::<i64>(&name.to_data());
 
         assert_eq!(name.len(), 0);
         assert_eq!(
@@ -3210,9 +3207,9 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dctfield = Field::new_dict("dict", array.data_type().clone(), false, 0, false);
-        let union_fields = [(0, Arc::new(dctfield))].into_iter().collect();
+        let union_fields = std::iter::once((0, Arc::new(dctfield))).collect();
 
         let types = [0, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
         let offsets = [0, 1, 2].into_iter().collect::<ScalarBuffer<i32>>();
@@ -3256,7 +3253,7 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dctfield = Arc::new(Field::new_dict(
             "dict",
             array.data_type().clone(),
@@ -3402,6 +3399,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn truncate_ipc_record_batch() {
         fn create_batch(rows: usize) -> RecordBatch {
             let schema = Schema::new(vec![
@@ -3601,6 +3599,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_large_slice_string() {
         let strings: Vec<_> = (0..8000)
             .map(|i| {
@@ -3616,6 +3615,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_large_slice_string_list() {
         let mut ls = ListBuilder::new(StringBuilder::new());
 
@@ -3638,6 +3638,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_large_slice_string_list_of_lists() {
         // The reason for the special test is to verify reencode_offsets which looks both at
         // the starting offset and the data offset.  So need a dataset where the starting_offset
@@ -3832,9 +3833,9 @@ mod tests {
 
         for i in 0..100_000 {
             for value in [
-                format!("value{}", i),
-                format!("value{}", i),
-                format!("value{}", i),
+                format!("value{i}"),
+                format!("value{i}"),
+                format!("value{i}"),
             ] {
                 ls.values().append_value(&value);
             }
@@ -3849,9 +3850,9 @@ mod tests {
 
         for i in 0..100_000 {
             for value in [
-                format!("value{}", i),
-                format!("value{}", i),
-                format!("value{}", i),
+                format!("value{i}"),
+                format!("value{i}"),
+                format!("value{i}"),
             ] {
                 ls.values().append_value(&value);
             }
@@ -3926,6 +3927,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn reencode_offsets_when_first_offset_is_not_zero() {
         let original_list = generate_list_data::<i32>();
         let original_data = original_list.into_data();
@@ -3980,6 +3982,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_lists() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::List(Arc::new(val_inner)), false);
@@ -3992,6 +3995,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_empty_list() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::List(Arc::new(val_inner)), false);
@@ -4007,6 +4011,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_large_lists() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
@@ -4021,6 +4026,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_large_lists_non_zero_offset() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
@@ -4032,6 +4038,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_large_lists_string_non_zero_offset() {
         let val_inner = Field::new_list_field(DataType::Utf8, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
@@ -4043,6 +4050,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_large_list_string_view_non_zero_offset() {
         let val_inner = Field::new_list_field(DataType::Utf8View, true);
         let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
@@ -4064,6 +4072,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_nested_lists() {
         let inner_int = Arc::new(Field::new_list_field(DataType::UInt32, true));
         let inner_list_field = Arc::new(Field::new_list_field(DataType::List(inner_int), true));
@@ -4077,6 +4086,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_nested_lists_starting_at_zero() {
         let inner_int = Arc::new(Field::new("item", DataType::UInt32, true));
         let inner_list_field = Arc::new(Field::new("item", DataType::List(inner_int), true));
@@ -4090,10 +4100,26 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_map_array() {
-        let keys = Arc::new(Field::new("keys", DataType::UInt32, false));
-        let values = Arc::new(Field::new("values", DataType::UInt32, true));
-        let map_field = Field::new_map("map", "entries", keys, values, false, true);
+        let keys = Arc::new(Field::new(
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
+            DataType::UInt32,
+            false,
+        ));
+        let values = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::UInt32,
+            true,
+        ));
+        let map_field = Field::new_map(
+            "map",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            keys,
+            values,
+            false,
+            true,
+        );
         let schema = Arc::new(Schema::new(vec![map_field]));
 
         let values = Arc::new(generate_map_array_data());
@@ -4120,6 +4146,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_list_view_arrays() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_field = Field::new("val", DataType::ListView(Arc::new(val_inner)), true);
@@ -4133,6 +4160,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_large_list_view_arrays() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
         let val_field = Field::new("val", DataType::LargeListView(Arc::new(val_inner)), true);
@@ -4146,6 +4174,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn check_sliced_list_view_array() {
         let inner = Field::new_list_field(DataType::UInt32, true);
         let field = Field::new("val", DataType::ListView(Arc::new(inner)), true);
@@ -4162,6 +4191,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn check_sliced_large_list_view_array() {
         let inner = Field::new_list_field(DataType::UInt32, true);
         let field = Field::new("val", DataType::LargeListView(Arc::new(inner)), true);
@@ -4201,6 +4231,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn encode_nested_list_views() {
         let inner_int = Arc::new(Field::new_list_field(DataType::UInt32, true));
         let inner_list_field = Arc::new(Field::new_list_field(DataType::ListView(inner_int), true));
@@ -4252,7 +4283,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_list_view_of_dict() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::ListView(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4267,7 +4298,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_large_list_view_of_dict() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::LargeListView(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4282,7 +4313,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_sliced_list_view_of_dict() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::ListView(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4332,7 +4363,7 @@ mod tests {
         let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
         let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_field = Arc::new(Field::new_dict(
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4376,7 +4407,7 @@ mod tests {
         let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
         let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_field = Arc::new(Field::new_dict(
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4423,19 +4454,19 @@ mod tests {
 
         let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let entries_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(
                 vec![
                     Field::new_dict(
-                        "key",
+                        Field::MAP_KEY_FIELD_DEFAULT_NAME,
                         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                         false,
                         1,
                         false,
                     ),
-                    Field::new("value", DataType::Int32, true),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 ]
                 .into(),
             ),
@@ -4445,14 +4476,18 @@ mod tests {
         let entries = StructArray::from(vec![
             (
                 Arc::new(Field::new(
-                    "key",
+                    Field::MAP_KEY_FIELD_DEFAULT_NAME,
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     false,
                 )),
                 Arc::new(dict_keys) as ArrayRef,
             ),
             (
-                Arc::new(Field::new("value", DataType::Int32, true)),
+                Arc::new(Field::new(
+                    Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    true,
+                )),
                 Arc::new(values) as ArrayRef,
             ),
         ]);
@@ -4491,14 +4526,14 @@ mod tests {
         let value_keys = Int32Array::from_iter_values([0, 1, 2, 0, 1, 0]);
         let dict_values = DictionaryArray::new(value_keys, Arc::new(value_values));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let entries_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(
                 vec![
-                    Field::new("key", DataType::Utf8, false),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
                     Field::new_dict(
-                        "value",
+                        Field::MAP_VALUE_FIELD_DEFAULT_NAME,
                         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                         true,
                         2,
@@ -4512,12 +4547,16 @@ mod tests {
 
         let entries = StructArray::from(vec![
             (
-                Arc::new(Field::new("key", DataType::Utf8, false)),
+                Arc::new(Field::new(
+                    Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    false,
+                )),
                 Arc::new(keys) as ArrayRef,
             ),
             (
                 Arc::new(Field::new(
-                    "value",
+                    Field::MAP_VALUE_FIELD_DEFAULT_NAME,
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     true,
                 )),
@@ -4582,14 +4621,14 @@ mod tests {
 
             let out: Vec<u8> = writer.into_inner().unwrap();
 
-            let buffer = Buffer::from_vec(out);
+            let buffer = Buffer::from_slice_ref(out);
             let trailer_start = buffer.len() - 10;
             let footer_len =
                 read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
             let footer =
                 root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
 
-            let schema = fb_to_schema(footer.schema().unwrap());
+            let schema = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 
             // Importantly we set `require_alignment`, checking that 16-byte alignment is sufficient
             // for `read_record_batch` later on to read the data in a zero-copy manner.
@@ -4637,11 +4676,11 @@ mod tests {
 
         let out: Vec<u8> = writer.into_inner().unwrap();
 
-        let buffer = Buffer::from_vec(out);
+        let buffer = Buffer::from_slice_ref(out);
         let trailer_start = buffer.len() - 10;
         let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
         let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
-        let schema = fb_to_schema(footer.schema().unwrap());
+        let schema = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 
         // Importantly we set `require_alignment`, otherwise the error later is suppressed due to copying
         // to an aligned buffer in `ArrayDataBuilder.build_aligned`.

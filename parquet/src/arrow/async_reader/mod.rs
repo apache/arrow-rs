@@ -53,12 +53,15 @@ pub use metadata::*;
 mod spawn;
 pub use spawn::SpawnedReader;
 
+/// Re-exported so [`ParquetRecordBatchStreamBuilder::with_row_group_selections`]
+/// can be used without importing from another module.
+pub use crate::arrow::arrow_reader::RowGroupSelection;
+
 #[cfg(feature = "object_store")]
 mod store;
 
 use crate::DecodeResult;
 use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder, PushDecoderInput};
-#[allow(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -168,7 +171,7 @@ pub trait AsyncFileReader: Send {
         async move {
             let mut result = Vec::with_capacity(ranges.len());
 
-            for range in ranges.into_iter() {
+            for range in ranges {
                 let data = self.get_bytes(range).await?;
                 result.push(data);
             }
@@ -644,6 +647,29 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         Ok(Some(Sbbf::new(&bitset)))
     }
 
+    /// Select row groups and rows using row-group-local coordinates.
+    ///
+    /// Entries are decoded in the supplied order, omitted row groups are
+    /// skipped, and a `None` selection reads the whole row group. This is
+    /// mutually exclusive with [`ArrowReaderBuilder::with_row_groups`] and
+    /// [`ArrowReaderBuilder::with_row_selection`]; combining them returns an
+    /// error from [`Self::build`].
+    ///
+    /// See [`ParquetPushDecoderBuilder::with_row_group_selections`] for the
+    /// full semantics and a worked example. This builder supports the same API
+    /// because the async stream is implemented using the push decoder; the
+    /// synchronous reader does not support row-group-local selections.
+    ///
+    /// [`ParquetPushDecoderBuilder::with_row_group_selections`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::with_row_group_selections
+    pub fn with_row_group_selections(
+        mut self,
+        row_group_selections: Vec<RowGroupSelection>,
+    ) -> Self {
+        self.row_group_plan
+            .set_row_group_selections(row_group_selections);
+        self
+    }
+
     /// Build a new [`ParquetRecordBatchStream`]
     ///
     /// See examples on [`ParquetRecordBatchStreamBuilder::new`]
@@ -654,10 +680,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             schema,
             fields,
             batch_size,
-            row_groups,
+            row_group_plan,
             projection,
             filter,
-            selection,
             row_selection_policy: selection_strategy,
             limit,
             offset,
@@ -680,10 +705,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             fields,
             projection,
             filter,
-            selection,
+            row_group_plan,
             row_selection_policy: selection_strategy,
             batch_size,
-            row_groups,
             limit,
             offset,
             metrics,
@@ -835,7 +859,7 @@ where
                     match self.decoder.try_next_reader()? {
                         DecodeResult::NeedsData(ranges) => {
                             self.request_state = RequestState::begin_request(input, ranges);
-                            continue; // poll again (as the input might be ready immediately)
+                            // Will loop again: the input might be ready immediately.
                         }
                         DecodeResult::Data(reader) => {
                             self.request_state = RequestState::None { input };
@@ -849,7 +873,7 @@ where
                     // Push the requested data to the decoder and try again
                     self.decoder.push_ranges(ranges, data)?;
                     self.request_state = RequestState::None { input };
-                    continue; // try and decode on next iteration
+                    // Will try and decode on the next iteration.
                 }
                 RequestState::Done => {
                     self.request_state = RequestState::Done;
@@ -897,7 +921,7 @@ where
                     match self.decoder.try_decode()? {
                         DecodeResult::NeedsData(ranges) => {
                             self.request_state = RequestState::begin_request(input, ranges);
-                            continue; // poll again (as the input might be ready immediately)
+                            // Will loop again: the input might be ready immediately.
                         }
                         DecodeResult::Data(batch) => {
                             self.request_state = RequestState::None { input };
@@ -916,7 +940,7 @@ where
                         // Push the requested data to the decoder
                         self.decoder.push_ranges(ranges, data)?;
                         self.request_state = RequestState::None { input };
-                        continue; // next iteration will try to decode the next batch
+                        // The next iteration will try to decode the next batch.
                     }
                     Poll::Pending => {
                         self.request_state = RequestState::Outstanding { ranges, future };
@@ -943,8 +967,8 @@ mod tests {
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::virtual_type::RowNumber;
     use crate::arrow::{ArrowWriter, AsyncArrowWriter, ProjectionMask};
-    use crate::file::metadata::PageIndexPolicy;
     use crate::file::metadata::ParquetMetaDataReader;
+    use crate::file::metadata::{PageIndex, PageIndexPolicy};
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;
@@ -957,7 +981,7 @@ mod tests {
     };
     use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tempfile::tempfile;
@@ -1054,6 +1078,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_async_reader_row_group_local_selections() {
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(Int32Array::from_iter_values(0..6)) as ArrayRef,
+        )])
+        .unwrap();
+        let mut data = Vec::new();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut data, batch.schema(), Some(properties)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let stream = ParquetRecordBatchStreamBuilder::new(TestReader::new(data.into()))
+            .await
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(1, Some(RowSelection::from(vec![RowSelector::select(1)]))),
+                RowGroupSelection::new(
+                    0,
+                    Some(RowSelection::from(vec![
+                        RowSelector::skip(1),
+                        RowSelector::select(2),
+                    ])),
+                ),
+            ])
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(
+            batches[0].column(0).as_primitive::<Int32Type>().values(),
+            &[3]
+        );
+        assert_eq!(
+            batches[1].column(0).as_primitive::<Int32Type>().values(),
+            &[1, 2]
+        );
+    }
+
+    #[tokio::test]
     async fn test_async_reader_with_next_row_group() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_plain.parquet");
@@ -1127,25 +1194,23 @@ mod tests {
         let metadata_with_index = builder.metadata();
         assert_eq!(metadata_with_index.num_row_groups(), 1);
 
-        // Check offset indexes are present for all columns
-        let offset_index = metadata_with_index.offset_index().unwrap();
-        let column_index = metadata_with_index.column_index().unwrap();
-
-        assert_eq!(offset_index.len(), metadata_with_index.num_row_groups());
-        assert_eq!(column_index.len(), metadata_with_index.num_row_groups());
-
+        // Check offset indexes are present for all columns of all row groups
+        let page_index = metadata_with_index.page_index().unwrap();
+        let num_rowgroups = metadata_with_index.num_row_groups();
         let num_columns = metadata_with_index
             .file_metadata()
             .schema_descr()
             .num_columns();
-
-        // Check page indexes are present for all columns
-        offset_index
-            .iter()
-            .for_each(|x| assert_eq!(x.len(), num_columns));
-        column_index
-            .iter()
-            .for_each(|x| assert_eq!(x.len(), num_columns));
+        for rgidx in 0..num_rowgroups {
+            let column_index = page_index.column_indexes_for_rowgroup(rgidx);
+            let offset_index = page_index.offset_indexes_for_rowgroup(rgidx);
+            assert!(column_index.is_some_and(|ci| ci.len() == num_columns));
+            assert!(offset_index.is_some_and(|oi| oi.len() == num_columns));
+            // some column indexes are not defined, but all offset indexes should be
+            for colidx in 0..num_columns {
+                assert!(page_index.offset_index(rgidx, colidx).is_some());
+            }
+        }
 
         let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![1, 2]);
         let stream = builder
@@ -1715,7 +1780,8 @@ mod tests {
             .await
             .unwrap();
 
-        metadata.set_offset_index(Some(vec![]));
+        let page_index = PageIndex::new(None, Some(vec![]));
+        metadata.set_page_index(Some(page_index));
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =

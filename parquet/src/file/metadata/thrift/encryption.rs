@@ -163,10 +163,30 @@ fn row_group_from_encrypted_thrift(
                 }
             };
 
+            // The ordinal is part of the AAD for encrypted column metadata.
+            // It can be missing here only for files with *mixed* row-group
+            // ordinals, which decode leaves untouched — fail cleanly rather
+            // than panic (see `ensure_row_group_ordinals`).
+            let rg_ordinal = rg.ordinal.ok_or_else(|| {
+                general_err!(
+                    "Row group ordinal is required to decrypt column metadata for \
+                     column '{}', but the file's row-group ordinals are inconsistent",
+                    d.path().string()
+                )
+            })?;
+            // Reject a negative ordinal cleanly rather than sign-extending it into
+            // a bogus AAD via `as usize`.
+            let rg_ordinal = usize::try_from(rg_ordinal).map_err(|_| {
+                general_err!(
+                    "Row group ordinal {rg_ordinal} is invalid (must be non-negative) \
+                     for decrypting column metadata for column '{}'",
+                    d.path().string()
+                )
+            })?;
             let column_aad = crate::encryption::modules::create_module_aad(
                 decryptor.file_aad(),
                 crate::encryption::modules::ModuleType::ColumnMetaData,
-                rg.ordinal.unwrap() as usize,
+                rg_ordinal,
                 i,
                 None,
             )?;
@@ -238,7 +258,7 @@ pub(crate) fn parquet_metadata_with_encryption(
                     .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
             let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
                 EncryptionAlgorithm::AES_GCM_V1(algo) => algo.supply_aad_prefix,
-                _ => Some(false),
+                EncryptionAlgorithm::AES_GCM_CTR_V1(_) => Some(false),
             }
             .unwrap_or(false);
             if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
@@ -278,8 +298,7 @@ pub(crate) fn parquet_metadata_with_encryption(
     let ParquetMetaData {
         mut file_metadata,
         row_groups,
-        column_index: _,
-        offset_index: _,
+        page_index: _,
         file_decryptor: _,
     } = parquet_meta;
 
@@ -330,9 +349,8 @@ fn get_file_decryptor(
             let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
                 aad_prefix.clone()
             } else {
-                algo.aad_prefix.map(|v| v.to_vec()).unwrap_or_default()
+                algo.aad_prefix.unwrap_or_default()
             };
-            let aad_file_unique = aad_file_unique.to_vec();
 
             FileDecryptor::new(
                 file_decryption_properties,

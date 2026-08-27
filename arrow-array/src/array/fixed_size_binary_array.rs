@@ -143,6 +143,9 @@ impl FixedSizeBinaryArray {
     }
 
     /// Create a new [`Scalar`] from `value`
+    ///
+    /// # Panics
+    /// Panics if `value.as_ref().len() > i32::MAX`
     pub fn new_scalar(value: impl AsRef<[u8]>) -> Scalar<Self> {
         let v = value.as_ref();
         let value_length =
@@ -173,8 +176,29 @@ impl FixedSizeBinaryArray {
         })?;
 
         let len = match values.len().checked_div(value_size) {
-            Some(len) => len,
-            None => nulls.as_ref().map(|n| n.len()).unwrap_or(0),
+            Some(len) => {
+                if let Some(n) = nulls.as_ref()
+                    && n.len() != len
+                {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
+                        len,
+                        n.len(),
+                    )));
+                }
+
+                len
+            }
+            None => {
+                if !values.is_empty() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Buffer cannot have non-zero length if the value length is zero".to_owned(),
+                    ));
+                }
+
+                // If the value length is zero, try to determine the length from the null buffer
+                nulls.as_ref().map(|n| n.len()).unwrap_or(0)
+            }
         };
 
         Self::try_new_with_len(value_length, values, nulls, len)
@@ -204,14 +228,14 @@ impl FixedSizeBinaryArray {
             ))
         })?;
 
-        if let Some(nulls) = &nulls {
-            if nulls.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
-                    len,
-                    nulls.len(),
-                )));
-            }
+        if let Some(nulls) = &nulls
+            && nulls.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for FixedSizeBinaryArray, expected {} got {}",
+                len,
+                nulls.len(),
+            )));
         }
 
         if value_size != 0 && values.len() / value_size != len {
@@ -352,6 +376,9 @@ impl FixedSizeBinaryArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,
@@ -436,7 +463,9 @@ impl FixedSizeBinaryArray {
                     // sufficient capacity in the underlying mutable buffer for
                     // the data.
                     if let Some(capacity) = iter_size_hint.checked_mul(len) {
-                        buffer.reserve(capacity);
+                        buffer
+                            .try_reserve(capacity)
+                            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                     }
                     let prepend_zeros = slice.len().checked_mul(prepend).ok_or_else(|| {
                         ArrowError::InvalidArgumentError(format!(
@@ -444,12 +473,18 @@ impl FixedSizeBinaryArray {
                             slice.len()
                         ))
                     })?;
-                    buffer.extend_zeros(prepend_zeros);
+                    buffer
+                        .try_extend_zeros(prepend_zeros)
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 }
                 bit_util::set_bit(null_buf.as_slice_mut(), len);
-                buffer.extend_from_slice(slice);
+                buffer
+                    .try_extend_from_slice(slice)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             } else if let Some(size) = value_size {
-                buffer.extend_zeros(size);
+                buffer
+                    .try_extend_zeros(size)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             } else {
                 prepend += 1;
             }
@@ -611,11 +646,15 @@ impl FixedSizeBinaryArray {
                 let len = slice.len();
                 value_size = Some(len);
                 if let Some(capacity) = iter_size_hint.checked_mul(len) {
-                    buffer.reserve(capacity);
+                    buffer
+                        .try_reserve(capacity)
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 }
             }
 
-            buffer.extend_from_slice(slice);
+            buffer
+                .try_extend_from_slice(slice)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
             len += 1;
 
@@ -658,9 +697,8 @@ impl From<ArrayData> for FixedSizeBinaryArray {
             1,
             "FixedSizeBinaryArray data should contain 1 buffer only (values)"
         );
-        let value_length = match data_type {
-            DataType::FixedSizeBinary(len) => len,
-            _ => panic!("Expected data type to be FixedSizeBinary"),
+        let DataType::FixedSizeBinary(value_length) = data_type else {
+            panic!("Expected data type to be FixedSizeBinary")
         };
 
         let value_size = value_length
@@ -673,9 +711,9 @@ impl From<ArrayData> for FixedSizeBinaryArray {
 
         Self {
             data_type,
+            value_data,
             nulls,
             len,
-            value_data,
             value_size,
         }
     }
@@ -737,7 +775,7 @@ impl TryFrom<Vec<Option<&[u8]>>> for FixedSizeBinaryArray {
     type Error = ArrowError;
 
     fn try_from(v: Vec<Option<&[u8]>>) -> Result<Self, Self::Error> {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Self::try_from_sparse_iter(v.into_iter())
     }
 }
@@ -754,13 +792,12 @@ impl<const N: usize> TryFrom<Vec<Option<&[u8; N]>>> for FixedSizeBinaryArray {
     type Error = ArrowError;
 
     fn try_from(v: Vec<Option<&[u8; N]>>) -> Result<Self, Self::Error> {
-        N.try_into()
-            .map_err(|_| {
-                ArrowError::InvalidArgumentError(format!(
-                    "FixedSizeBinaryArray value length exceeds i32, got {N}"
-                ))
-            })
-            .and_then(|x| Self::try_from_sparse_iter_with_size(v.into_iter(), x))
+        let size = N.try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "FixedSizeBinaryArray value length exceeds i32, got {N}"
+            ))
+        })?;
+        Self::try_from_sparse_iter_with_size(v.into_iter(), size)
     }
 }
 
@@ -1044,7 +1081,7 @@ mod tests {
     fn test_all_none_fixed_size_binary_array_from_sparse_iter() {
         let none_option: Option<[u8; 32]> = None;
         let input_arg = vec![none_option, none_option, none_option];
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
         assert_eq!(0, arr.value_length());
         assert_eq!(3, arr.len())
@@ -1059,7 +1096,7 @@ mod tests {
             None,
             Some(vec![13, 14]),
         ];
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.iter().cloned()).unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len());
@@ -1082,7 +1119,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_array_from_vec() {
-        let values = vec!["one".as_bytes(), b"two", b"six", b"ten"];
+        let values = vec![b"one".as_slice(), b"two", b"six", b"ten"];
         let array = FixedSizeBinaryArray::try_from(values).unwrap();
         assert_eq!(array.len(), 4);
         assert_eq!(array.null_count(), 0);
@@ -1099,14 +1136,14 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_array_from_vec_incorrect_length() {
-        let values = vec!["one".as_bytes(), b"two", b"three", b"four"];
+        let values = vec![b"one".as_slice(), b"two", b"three", b"four"];
         assert!(FixedSizeBinaryArray::try_from(values).is_err());
     }
 
     #[test]
     fn test_fixed_size_binary_array_from_opt_vec() {
         let values = vec![
-            Some("one".as_bytes()),
+            Some(b"one".as_slice()),
             Some(b"two"),
             None,
             Some(b"six"),
@@ -1128,7 +1165,7 @@ mod tests {
     #[test]
     fn test_fixed_size_binary_array_from_opt_vec_incorrect_length() {
         let values = vec![
-            Some("one".as_bytes()),
+            Some(b"one".as_slice()),
             Some(b"two"),
             None,
             Some(b"three"),
@@ -1169,7 +1206,7 @@ mod tests {
         expected = "Trying to access an element at index 4 from a FixedSizeBinaryArray of length 3"
     )]
     fn test_fixed_size_binary_array_get_value_index_out_of_bound() {
-        let values = vec![Some("one".as_bytes()), Some(b"two"), None];
+        let values = vec![Some(b"one".as_slice()), Some(b"two"), None];
         let array = FixedSizeBinaryArray::try_from(values).unwrap();
 
         array.value(4);

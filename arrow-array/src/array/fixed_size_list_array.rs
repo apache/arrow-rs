@@ -201,7 +201,7 @@ impl FixedSizeListArray {
 
             Self::try_new_with_length(field, size, values, nulls, len)
         } else {
-            if values.len() % s != 0 {
+            if !values.len().is_multiple_of(s) {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Incorrect length of values buffer for FixedSizeListArray, \
                      expected a multiple of {s} got {}",
@@ -212,15 +212,15 @@ impl FixedSizeListArray {
             let len = values.len() / s;
 
             // Check that the null buffer length is correct (if it exists).
-            if let Some(null_buffer) = &nulls {
-                if s * null_buffer.len() != values.len() {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Incorrect length of values buffer for FixedSizeListArray, \
+            if let Some(null_buffer) = &nulls
+                && s * null_buffer.len() != values.len()
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Incorrect length of values buffer for FixedSizeListArray, \
                             expected {} got {}",
-                        s * null_buffer.len(),
-                        values.len(),
-                    )));
-                }
+                    s * null_buffer.len(),
+                    values.len(),
+                )));
             }
 
             Self::try_new_with_length(field, size, values, nulls, len)
@@ -253,13 +253,13 @@ impl FixedSizeListArray {
             ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
         })?;
 
-        if let Some(null_buffer) = &nulls {
-            if null_buffer.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Invalid null buffer for FixedSizeListArray, expected {len} found {}",
-                    null_buffer.len()
-                )));
-            }
+        if let Some(null_buffer) = &nulls
+            && null_buffer.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid null buffer for FixedSizeListArray, expected {len} found {}",
+                null_buffer.len()
+            )));
         }
 
         if s == 0 && !values.is_empty() {
@@ -290,8 +290,7 @@ impl FixedSizeListArray {
             let nulls_valid = field.is_nullable()
                 || nulls
                     .as_ref()
-                    .map(|n| n.expand(size as _).contains(&a))
-                    .unwrap_or_default()
+                    .is_some_and(|n| n.expand(size as _).contains(&a))
                 || (nulls.is_none() && a.null_count() == 0);
 
             if !nulls_valid {
@@ -333,11 +332,18 @@ impl FixedSizeListArray {
 
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (FieldRef, i32, ArrayRef, Option<NullBuffer>) {
-        let f = match self.data_type {
-            DataType::FixedSizeList(f, _) => f,
-            _ => unreachable!(),
+        let DataType::FixedSizeList(f, _) = self.data_type else {
+            unreachable!()
         };
         (f, self.value_length, self.values, self.nulls)
+    }
+
+    /// The field that describes the values of this list.
+    pub fn value_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::FixedSizeList(f, _) => f,
+            _ => unreachable!(),
+        }
     }
 
     /// Returns a reference to the values of this list.
@@ -384,6 +390,9 @@ impl FixedSizeListArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,
@@ -449,6 +458,15 @@ impl FixedSizeListArray {
 
     /// constructs a new iterator
     pub fn iter(&self) -> FixedSizeListIter<'_> {
+        FixedSizeListIter::new(self)
+    }
+}
+
+impl<'a> IntoIterator for &'a FixedSizeListArray {
+    type Item = Option<ArrayRef>;
+    type IntoIter = FixedSizeListIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
         FixedSizeListIter::new(self)
     }
 }

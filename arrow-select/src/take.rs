@@ -21,7 +21,7 @@ use std::fmt::Display;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
-use arrow_array::builder::{BufferBuilder, UInt32Builder};
+use arrow_array::builder::UInt32Builder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -29,8 +29,9 @@ use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, RunEndBuffer,
     ScalarBuffer, bit_util,
 };
+use arrow_cmp::make_comparator;
 use arrow_data::transform::MutableArrayData;
-use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
+use arrow_schema::{ArrowError, DataType, FieldRef, SortOptions, UnionMode};
 
 use num_traits::Zero;
 
@@ -62,7 +63,7 @@ use num_traits::Zero;
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
 /// * An index is out of bounds and `options` is set to check bounds.
 ///
-/// # Safety
+/// # Panics
 ///
 /// When `options` is not set to check bounds, taking indexes after `len` will panic.
 ///
@@ -131,7 +132,7 @@ pub fn take(
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
 /// * An index is out of bounds and `options` is set to check bounds.
 ///
-/// # Safety
+/// # Panics
 ///
 /// When `options` is not set to check bounds, taking indexes after `len` will panic.
 ///
@@ -170,15 +171,12 @@ fn check_bounds<T: ArrowPrimitiveType>(
 where
     T::Native: Display,
 {
-    let len = match T::Native::from_usize(len) {
-        Some(len) => len,
-        None => {
-            if T::DATA_TYPE.is_integer() {
-                // the biggest representable value for T::Native is lower than len, e.g: u8::MAX < 512, no need to check bounds
-                return Ok(());
-            } else {
-                return Err(ArrowError::ComputeError("Cast to usize failed".to_string()));
-            }
+    let Some(len) = T::Native::from_usize(len) else {
+        if T::DATA_TYPE.is_integer() {
+            // the biggest representable value for T::Native is lower than len, e.g: u8::MAX < 512, no need to check bounds
+            return Ok(());
+        } else {
+            return Err(ArrowError::ComputeError("Cast to usize failed".to_string()));
         }
     };
 
@@ -598,7 +596,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
 
             let mut offset = 0;
 
-            for (start, end) in source_ranges.into_iter() {
+            for (start, end) in source_ranges {
                 let value_len = end - start;
                 // SAFETY: caller guarantees each (start, end) is in-bounds of `src`.
                 // `dst` asserted above to include the required capacity.
@@ -616,7 +614,7 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType>(
             // so the loop above wrote exactly `capacity` bytes.
             unsafe { values.set_len(capacity) };
         }
-    };
+    }
 
     // SAFETY: offsets are monotonically increasing and in-bounds of `values`,
     // and `nulls` (if present) has length == `indices.len()`.
@@ -635,10 +633,9 @@ fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType>(
 ) -> Result<GenericByteViewArray<T>, ArrowError> {
     let new_views = take_native(array.views(), indices);
     let new_nulls = take_nulls(array.nulls(), indices);
+    let buffers = Arc::clone(array.data_buffers());
     // Safety:  array.views was valid, and take_native copies only valid values, and verifies bounds
-    Ok(unsafe {
-        GenericByteViewArray::new_unchecked(new_views, array.data_buffers().to_vec(), new_nulls)
-    })
+    Ok(unsafe { GenericByteViewArray::new_unchecked(new_views, buffers, new_nulls) })
 }
 
 /// `take` implementation for list arrays
@@ -709,7 +706,7 @@ where
                 indices.len() - last_filled,
             ));
         }
-    };
+    }
 
     assert_eq!(
         new_offsets.len(),
@@ -807,7 +804,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
     size: i32,
 ) -> Result<FixedSizeBinaryArray, ArrowError> {
     let size_usize = usize::try_from(size).map_err(|_| {
-        ArrowError::InvalidArgumentError(format!("Cannot convert size '{}' to usize", size))
+        ArrowError::InvalidArgumentError(format!("Cannot convert size '{size}' to usize"))
     })?;
 
     let result_buffer = match size_usize {
@@ -832,7 +829,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
         size_usize: usize,
     ) -> Buffer {
         let values_buffer = values.values().as_slice();
-        let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
+        let mut output = Vec::with_capacity(indices.len() * size_usize);
 
         if indices.null_count() == 0 {
             let array_iter = indices.values().iter().map(|idx| {
@@ -840,7 +837,7 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
                 &values_buffer[offset..offset + size_usize]
             });
             for slice in array_iter {
-                values_buffer_builder.append_slice(slice);
+                output.extend_from_slice(slice);
             }
         } else {
             // The indices nullability cannot be ignored here because the values buffer may contain
@@ -853,13 +850,13 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
             });
             for slice in array_iter {
                 match slice {
-                    None => values_buffer_builder.append_n(size_usize, 0),
-                    Some(slice) => values_buffer_builder.append_slice(slice),
+                    None => output.resize(output.len() + size_usize, 0),
+                    Some(slice) => output.extend_from_slice(slice),
                 }
             }
         }
 
-        values_buffer_builder.finish()
+        output.into()
     }
 }
 
@@ -954,32 +951,37 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     // get physical indices for the input logical indices
     let physical_indices = run_array.get_physical_indices(logical_indices.values())?;
 
-    // Run encode the physical indices into new_run_ends_builder
+    // Run encode the physical indices into new_run_ends
     // Keep track of the physical indices to take in take_value_indices
     // `unwrap` is used in this function because the unwrapped values are bounded by the corresponding `::Native`.
-    let mut new_run_ends_builder = BufferBuilder::<T::Native>::new(1);
-    let mut take_value_indices = BufferBuilder::<I::Native>::new(1);
+    let mut new_run_ends = Vec::with_capacity(1);
+    let mut take_value_indices = Vec::with_capacity(1);
+
+    let values_cmp = make_comparator(
+        run_array.values().as_ref(),
+        run_array.values().as_ref(),
+        SortOptions::default(),
+    )?;
+
     for ix in 1..physical_indices.len() {
-        if physical_indices[ix] != physical_indices[ix - 1] {
-            take_value_indices.append(I::Native::from_usize(physical_indices[ix - 1]).unwrap());
-            new_run_ends_builder.append(T::Native::from_usize(ix).unwrap());
+        let prev_idx = physical_indices[ix - 1];
+        let cur_idx = physical_indices[ix];
+        let is_new_run = cur_idx != prev_idx && values_cmp(cur_idx, prev_idx).is_ne();
+        if is_new_run {
+            take_value_indices.push(I::Native::from_usize(prev_idx).unwrap());
+            new_run_ends.push(T::Native::from_usize(ix).unwrap());
         }
     }
     take_value_indices
-        .append(I::Native::from_usize(physical_indices[physical_indices.len() - 1]).unwrap());
-    new_run_ends_builder.append(T::Native::from_usize(physical_indices.len()).unwrap());
+        .push(I::Native::from_usize(physical_indices[physical_indices.len() - 1]).unwrap());
+    new_run_ends.push(T::Native::from_usize(physical_indices.len()).unwrap());
 
     // SAFETY: run-ends are strictly increasing with last value == logical length.
     let run_ends = unsafe {
-        RunEndBuffer::new_unchecked(
-            ScalarBuffer::from(new_run_ends_builder.finish()),
-            0,
-            physical_indices.len(),
-        )
+        RunEndBuffer::new_unchecked(ScalarBuffer::from(new_run_ends), 0, physical_indices.len())
     };
 
-    let take_value_indices =
-        PrimitiveArray::<I>::new(ScalarBuffer::from(take_value_indices.finish()), None);
+    let take_value_indices = PrimitiveArray::<I>::new(ScalarBuffer::from(take_value_indices), None);
 
     let new_values = take(run_array.values(), &take_value_indices, None)?;
 
@@ -1795,6 +1797,9 @@ mod tests {
         let actual = take(&array, &index, None).unwrap();
 
         assert_eq!(actual.len(), index.len());
+        let actual_buffers = actual.as_byte_view::<T>().data_buffers();
+        let input_buffers = array.data_buffers();
+        assert!(Arc::ptr_eq(actual_buffers, input_buffers));
 
         let expected = {
             // ["large payload over 12 bytes", null, "world", "large payload over 12 bytes", "lulu", null]
@@ -2612,11 +2617,16 @@ mod tests {
         let take_out = take_run(&run_array, &take_indices).unwrap();
 
         assert_eq!(take_out.len(), 7);
-        assert_eq!(take_out.run_ends().len(), 7);
-        assert_eq!(take_out.run_ends().values(), &[1_i32, 3, 4, 5, 7]);
+        // adjacent identical values are merged: [2,2,2,2,2,1,1] -> 2 runs
+        assert_eq!(
+            take_out.run_ends().values().len(),
+            2,
+            "expected two physical runs"
+        );
+        assert_eq!(take_out.run_ends().values(), &[5_i32, 7]);
 
         let take_out_values = take_out.values().as_primitive::<Int32Type>();
-        assert_eq!(take_out_values.values(), &[2, 2, 2, 2, 1]);
+        assert_eq!(take_out_values.values(), &[2, 1]);
     }
 
     #[test]
@@ -2633,6 +2643,14 @@ mod tests {
 
         let result = take_run(&run_array, &take_indices).unwrap();
         let result = result.downcast::<Int32Array>().unwrap();
+
+        // [3, 5, 5, 3, 4] -> 4 physical runs (no adjacent duplicates to merge)
+        assert_eq!(
+            result.run_ends().values().len(),
+            4,
+            "expected four physical runs"
+        );
+        assert_eq!(result.run_ends().values(), &[1_i32, 3, 4, 5]);
 
         let expected = vec![3, 5, 5, 3, 4];
         let actual = result.into_iter().flatten().collect::<Vec<_>>();
@@ -2914,5 +2932,103 @@ mod tests {
             .expect("result should be a RunArray");
         assert_eq!(run_result.run_ends().len(), 0);
         assert_eq!(run_result.values().len(), 0);
+    }
+
+    #[test]
+    fn test_take_run_end_encoded_merges_identical_runs() {
+        // https://github.com/apache/arrow-rs/issues/7710
+        // Indices [0,1,4,5] select from [1,1,0,0,1,1] — the 0s are skipped,
+        // so the output should be a single run of 1s, not two.
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 1, 0, 0, 1, 1].into_iter().map(Some));
+        let ree = builder.finish();
+
+        let indexes = Int32Array::from_iter_values(vec![0, 1, 4, 5]);
+        let result = take(&ree, &indexes, None).unwrap();
+        let result = result
+            .as_run::<Int32Type>()
+            .downcast::<Int32Array>()
+            .unwrap();
+
+        // Verify physical layout: all four logical values collapse into one run.
+        assert_eq!(
+            result.run_ends().values().len(),
+            1,
+            "expected a single physical run"
+        );
+        assert_eq!(result.run_ends().values(), &[4_i32]);
+
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(actual, vec![1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn test_take_run_end_encoded_merges_identical_string_runs() {
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.extend(
+            ["bob", "bob", "alice", "alice", "bob", "bob"]
+                .into_iter()
+                .map(Some),
+        );
+        let ree = builder.finish();
+
+        let indexes = Int32Array::from_iter_values(vec![0, 1, 4, 5]);
+        let result = take(&ree, &indexes, None).unwrap();
+        let result = result
+            .as_run::<Int32Type>()
+            .downcast::<StringArray>()
+            .unwrap();
+
+        // Verify physical layout: all four logical values collapse into one run.
+        assert_eq!(
+            result.run_ends().values().len(),
+            1,
+            "expected a single physical run"
+        );
+        assert_eq!(result.run_ends().values(), &[4_i32]);
+
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(actual, vec!["bob", "bob", "bob", "bob"]);
+    }
+
+    #[test]
+    fn test_take_run_end_encoded_mixed_runs() {
+        // Validates that runs are merged whether the same logical value comes
+        // from the same physical index (repeated indices) or distinct physical indices.
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.extend(
+            ["bob", "bob", "alice", "alice", "bob", "bob", "eve", "eve"]
+                .into_iter()
+                .map(Some),
+        );
+        let ree = builder.finish();
+
+        // [bob,bob,bob,bob,bob,alice,alice,alice,eve,eve,eve]
+        let indexes = Int32Array::from_iter_values(vec![0, 0, 1, 4, 5, 2, 3, 2, 6, 7, 6]);
+        let result = take(&ree, &indexes, None).unwrap();
+        let result = result
+            .as_run::<Int32Type>()
+            .downcast::<StringArray>()
+            .unwrap();
+
+        // Verify physical layout: 11 logical values across exactly 3 physical runs.
+
+        println!("run_ends_raw: {:?}", result.run_ends());
+        println!("run_ends: {:?}", result.run_ends().values());
+        println!("values : {:?}", result.values());
+        assert_eq!(
+            result.run_ends().values().len(),
+            3,
+            "expected three physical runs"
+        );
+        assert_eq!(result.run_ends().values(), &[5_i32, 8, 11]);
+
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                "bob", "bob", "bob", "bob", "bob", "alice", "alice", "alice", "eve", "eve", "eve"
+            ]
+        );
     }
 }
