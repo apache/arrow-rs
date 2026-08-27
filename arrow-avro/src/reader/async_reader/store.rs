@@ -133,6 +133,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bytes_preserves_object_store_error_source() {
         let store = Arc::new(InMemory::new());
+        #[expect(deprecated)]
         let mut reader = AvroObjectReader::new(store, Path::from("missing.avro"));
         let err = reader.get_bytes(0..10).await.unwrap_err();
         assert!(
@@ -147,6 +148,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_bytes_on_runtime_preserves_object_store_error_source() {
         let store = Arc::new(InMemory::new());
+        #[expect(deprecated)]
         let mut reader = AvroObjectReader::new(store, Path::from("missing.avro"))
             .with_runtime(Handle::current());
         let err = reader.get_bytes(0..10).await.unwrap_err();
