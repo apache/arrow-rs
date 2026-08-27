@@ -583,15 +583,13 @@ pub use crate::types::ArrowPrimitiveType;
 ///
 /// # Performance: Choosing Between `from` and [`PrimitiveBuilder`]
 ///
-/// When all values are known upfront, constructing a `PrimitiveArray` directly via
-/// [`PrimitiveArray::from`] or [`PrimitiveArray::new`] is significantly faster than
-/// using [`PrimitiveBuilder`]:
-///
-/// - **`PrimitiveArray::from(vec![...])`** — zero-copy from `Vec`; no per-element
-///   bookkeeping. Prefer this whenever values are already collected.
-/// - **[`PrimitiveBuilder`]** — allocates incrementally and tracks nullability
-///   per-element. Use this only when values must be appended one-at-a-time inside a
-///   loop where the final size is not known in advance.
+/// Rust's `Vec` is highly optimized, and Arrow's conversion from `Vec` to
+/// `PrimitiveArray` is zero-copy. Prefer [`PrimitiveArray::from`] or
+/// [`PrimitiveArray::new`] whenever values are already in a `Vec` or can be collected
+/// into one. [`PrimitiveBuilder`] is backed by a `Vec` and a `NullBufferBuilder`
+/// internally, so it offers no performance advantage. Use it when the array may
+/// contain nulls whose positions aren't known upfront, since it keeps values and the
+/// null bitmask in sync automatically.
 ///
 /// # Example: Get a `PrimitiveArray` from an [`ArrayRef`]
 /// ```
