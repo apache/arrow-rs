@@ -462,27 +462,151 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
     indices: &PrimitiveArray<I>,
 ) -> BooleanBuffer {
     let len = indices.len();
+    let src_offset = values.offset();
+    let src_ptr = values.values().as_ptr();
+    let out_bytes = len.div_ceil(8);
 
     match indices.nulls().filter(|n| n.null_count() > 0) {
         Some(nulls) => {
-            let mut output_buffer = MutableBuffer::new_null(len);
-            let output_slice = output_buffer.as_slice_mut();
-            nulls.valid_indices().for_each(|idx| {
-                // SAFETY: idx is a valid index in indices.nulls() --> idx<indices.len()
-                if unsafe { values.value(indices.value_unchecked(idx).as_usize()) } {
-                    // SAFETY: MutableBuffer was created with space for indices.len() bit, and idx < indices.len()
-                    unsafe { bit_util::set_bit_raw(output_slice.as_mut_ptr(), idx) };
+            let mut output = MutableBuffer::new_null(len);
+            let out_ptr = output.as_mut_ptr();
+            nulls.valid_indices().for_each(|i| {
+                // SAFETY: i < len from the validity bitmap
+                let src_idx = unsafe { indices.value_unchecked(i) }.as_usize() + src_offset;
+                // SAFETY: src_idx bounded by take's prior bounds check
+                unsafe {
+                    if bit_util::get_bit_raw(src_ptr, src_idx) {
+                        bit_util::set_bit_raw(out_ptr, i);
+                    }
                 }
             });
-            BooleanBuffer::new(output_buffer.into(), 0, len)
+            BooleanBuffer::new(output.into(), 0, len)
         }
         None => {
-            BooleanBuffer::collect_bool(len, |idx: usize| {
-                // SAFETY: idx<indices.len()
-                values.value(unsafe { indices.value_unchecked(idx).as_usize() })
-            })
+            // Build the output byte-by-byte with an 8-element inner loop so the
+            // compiler can fully unroll it and issue the 8 source loads in parallel.
+            let mut output = MutableBuffer::with_capacity(out_bytes);
+            // SAFETY: every byte is written before BooleanBuffer reads it
+            unsafe { output.set_len(out_bytes) };
+            let out_slice = output.as_slice_mut();
+            let full_bytes = len / 8;
+
+            for byte_idx in 0..full_bytes {
+                let base = byte_idx * 8;
+                let mut byte = 0u8;
+                for bit in 0..8usize {
+                    // SAFETY: base + bit < len
+                    let src_idx =
+                        unsafe { indices.value_unchecked(base + bit) }.as_usize() + src_offset;
+                    // SAFETY: src_idx bounded by take's prior bounds check
+                    let raw = unsafe { *src_ptr.add(src_idx >> 3) };
+                    byte |= ((raw >> (src_idx & 7)) & 1) << bit;
+                }
+                out_slice[byte_idx] = byte;
+            }
+            if full_bytes < out_bytes {
+                let base = full_bytes * 8;
+                let mut byte = 0u8;
+                for bit in 0..(len - base) {
+                    let src_idx =
+                        unsafe { indices.value_unchecked(base + bit) }.as_usize() + src_offset;
+                    let raw = unsafe { *src_ptr.add(src_idx >> 3) };
+                    byte |= ((raw >> (src_idx & 7)) & 1) << bit;
+                }
+                out_slice[full_bytes] = byte;
+            }
+            BooleanBuffer::new(output.into(), 0, len)
         }
     }
+}
+
+/// Gather value bits and validity bits from two boolean buffers in a single pass.
+/// Used when the values array itself has nulls, avoiding two separate `take_bits` calls.
+#[inline(never)]
+fn take_bits_with_validity<I: ArrowPrimitiveType>(
+    values: &BooleanBuffer,
+    validity: &BooleanBuffer,
+    indices: &PrimitiveArray<I>,
+) -> (BooleanBuffer, Option<NullBuffer>) {
+    let len = indices.len();
+    let val_offset = values.offset();
+    let null_offset = validity.offset();
+    let val_ptr = values.values().as_ptr();
+    let null_ptr = validity.values().as_ptr();
+    let out_bytes = len.div_ceil(8);
+
+    let mut val_buf = MutableBuffer::with_capacity(out_bytes);
+    let mut null_buf = MutableBuffer::with_capacity(out_bytes);
+
+    match indices.nulls().filter(|n| n.null_count() > 0) {
+        Some(index_nulls) => {
+            // SAFETY: every byte is written (fill) before reading
+            unsafe {
+                val_buf.set_len(out_bytes);
+                null_buf.set_len(out_bytes)
+            };
+            val_buf.as_slice_mut().fill(0);
+            null_buf.as_slice_mut().fill(0);
+            let vp = val_buf.as_mut_ptr();
+            let np = null_buf.as_mut_ptr();
+            for i in index_nulls.valid_indices() {
+                let src_idx = unsafe { indices.value_unchecked(i) }.as_usize();
+                unsafe {
+                    let v = *val_ptr.add((src_idx + val_offset) >> 3);
+                    if (v >> ((src_idx + val_offset) & 7)) & 1 != 0 {
+                        bit_util::set_bit_raw(vp, i);
+                    }
+                    let n = *null_ptr.add((src_idx + null_offset) >> 3);
+                    if (n >> ((src_idx + null_offset) & 7)) & 1 != 0 {
+                        bit_util::set_bit_raw(np, i);
+                    }
+                }
+            }
+        }
+        None => {
+            // SAFETY: every byte is written below before BooleanBuffer reads it
+            unsafe {
+                val_buf.set_len(out_bytes);
+                null_buf.set_len(out_bytes)
+            };
+            let val_slice = val_buf.as_slice_mut();
+            let null_slice = null_buf.as_slice_mut();
+            let full_bytes = len / 8;
+
+            for byte_idx in 0..full_bytes {
+                let base = byte_idx * 8;
+                let mut v_byte = 0u8;
+                let mut n_byte = 0u8;
+                for bit in 0..8usize {
+                    let src_idx = unsafe { indices.value_unchecked(base + bit) }.as_usize();
+                    let v = unsafe { *val_ptr.add((src_idx + val_offset) >> 3) };
+                    let n = unsafe { *null_ptr.add((src_idx + null_offset) >> 3) };
+                    v_byte |= ((v >> ((src_idx + val_offset) & 7)) & 1) << bit;
+                    n_byte |= ((n >> ((src_idx + null_offset) & 7)) & 1) << bit;
+                }
+                val_slice[byte_idx] = v_byte;
+                null_slice[byte_idx] = n_byte;
+            }
+            if full_bytes < out_bytes {
+                let base = full_bytes * 8;
+                let mut v_byte = 0u8;
+                let mut n_byte = 0u8;
+                for bit in 0..(len - base) {
+                    let src_idx = unsafe { indices.value_unchecked(base + bit) }.as_usize();
+                    let v = unsafe { *val_ptr.add((src_idx + val_offset) >> 3) };
+                    let n = unsafe { *null_ptr.add((src_idx + null_offset) >> 3) };
+                    v_byte |= ((v >> ((src_idx + val_offset) & 7)) & 1) << bit;
+                    n_byte |= ((n >> ((src_idx + null_offset) & 7)) & 1) << bit;
+                }
+                val_slice[full_bytes] = v_byte;
+                null_slice[full_bytes] = n_byte;
+            }
+        }
+    }
+
+    let val_out = BooleanBuffer::new(val_buf.into(), 0, len);
+    let null_out = NullBuffer::from_unsliced_buffer(null_buf, len);
+    (val_out, null_out)
 }
 
 /// `take` implementation for boolean arrays
@@ -490,9 +614,18 @@ fn take_boolean<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
     values: &BooleanArray,
     indices: &PrimitiveArray<IndexType>,
 ) -> BooleanArray {
-    let val_buf = take_bits::<_, CHECKED>(values.values(), indices);
-    let null_buf = take_nulls::<_, CHECKED>(values.nulls(), indices);
-    BooleanArray::new(val_buf, null_buf)
+    match values.nulls().filter(|n| n.null_count() > 0) {
+        Some(value_nulls) => {
+            let (val_buf, null_buf) =
+                take_bits_with_validity(values.values(), value_nulls.inner(), indices);
+            BooleanArray::new(val_buf, null_buf)
+        }
+        None => {
+            let val_buf = take_bits::<_, CHECKED>(values.values(), indices);
+            let null_buf = take_nulls::<_, CHECKED>(None, indices);
+            BooleanArray::new(val_buf, null_buf)
+        }
+    }
 }
 
 /// `take` implementation for string arrays
