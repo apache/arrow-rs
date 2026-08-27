@@ -243,15 +243,27 @@ impl RowSelection {
     /// selector and mask backing.
     #[inline]
     pub(crate) fn auto_selection_strategy(&self, threshold: usize) -> RowSelectionStrategy {
-        let (total_rows, effective_count) = match &self.inner {
+        match &self.inner {
             RowSelectionInner::Selectors(selectors) => {
-                selectors.iter().fold((0usize, 0usize), |(rows, count), s| {
-                    if s.row_count > 0 {
-                        (rows + s.row_count, count + 1)
-                    } else {
-                        (rows, count)
-                    }
-                })
+                let (total_rows, run_count) =
+                    selectors
+                        .iter()
+                        .fold((0usize, 0usize), |(rows, count), selector| {
+                            if selector.row_count > 0 {
+                                (rows + selector.row_count, count + 1)
+                            } else {
+                                (rows, count)
+                            }
+                        });
+
+                if run_count == 0
+                    || auto_min_mask_runs(total_rows, threshold)
+                        .is_some_and(|min_runs| run_count >= min_runs)
+                {
+                    RowSelectionStrategy::Mask
+                } else {
+                    RowSelectionStrategy::Selectors
+                }
             }
             RowSelectionInner::Mask(mask) => {
                 let mask = mask.mask();
@@ -261,34 +273,13 @@ impl RowSelection {
                     return RowSelectionStrategy::Mask;
                 }
 
-                // A mask is preferred when:
-                //
-                // total_rows < run_count * threshold
-                //
-                // Therefore only scan until the first run count that can make
-                // the inequality true. Fragmented masks normally reach this
-                // boundary near the start instead of enumerating every run.
-                let min_mask_runs = total_rows
-                    .checked_div(threshold)
-                    .and_then(|max_selector_runs| max_selector_runs.checked_add(1));
-
-                return match min_mask_runs {
+                match auto_min_mask_runs(total_rows, threshold) {
                     Some(min_runs) if mask_has_at_least_runs(mask, min_runs) => {
                         RowSelectionStrategy::Mask
                     }
                     _ => RowSelectionStrategy::Selectors,
-                };
+                }
             }
-        };
-
-        if effective_count == 0 {
-            return RowSelectionStrategy::Mask;
-        }
-
-        if total_rows < effective_count.saturating_mul(threshold) {
-            RowSelectionStrategy::Mask
-        } else {
-            RowSelectionStrategy::Selectors
         }
     }
 
@@ -323,9 +314,13 @@ impl RowSelection {
         Self::from_consecutive_ranges(iter, total_rows)
     }
 
-    /// Builds a selection using the same run-count threshold as
-    /// [`RowSelectionPolicy::Auto`], but stops materializing selectors as soon
-    /// as the final mask strategy is known.
+    /// Builds a selection equivalent to [`Self::from_filters`] whose backing
+    /// matches [`RowSelectionPolicy::Auto`]. Selector materialization stops as
+    /// soon as the final mask strategy is known.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the [`BooleanArray`] contain nulls.
     pub(crate) fn from_filters_auto(filters: &[BooleanArray], threshold: usize) -> Self {
         let total_rows = filters.iter().map(|filter| filter.len()).sum::<usize>();
 
@@ -335,62 +330,30 @@ impl RowSelection {
             return Self::from_boolean_buffer(BooleanBuffer::new_unset(0));
         }
 
-        // Auto selects Mask when:
-        //
-        // total_rows < run_count * threshold
-        //
-        // For a non-zero threshold, the first run count that can satisfy this
-        // inequality is floor(total_rows / threshold) + 1. A checked overflow
-        // means no attainable run count can select Mask.
-        let mask_run_limit = total_rows
-            .checked_div(threshold)
-            .and_then(|count| count.checked_add(1));
+        let Some(min_mask_runs) = auto_min_mask_runs(total_rows, threshold) else {
+            return Self::from_filters(filters);
+        };
 
-        let mut selectors = Vec::new();
-        let mut next_offset = 0usize;
-        let mut last_end = 0usize;
+        match selectors_below_run_limit(filters, total_rows, min_mask_runs) {
+            Some(selectors) => Self::from_selectors(selectors),
+            None => Self::from_filters_mask(filters),
+        }
+    }
 
-        for filter in filters {
-            assert_eq!(filter.null_count(), 0);
-            let offset = next_offset;
-            next_offset = next_offset.checked_add(filter.len()).unwrap();
-
-            for (start, end) in SlicesIterator::new(filter) {
-                let start = start.checked_add(offset).unwrap();
-                let end = end.checked_add(offset).unwrap();
-
-                if start > last_end
-                    && append_auto_selector(
-                        &mut selectors,
-                        RowSelector::skip(start - last_end),
-                        mask_run_limit,
-                    )
-                {
-                    return Self::from_boolean_buffer(filters_to_boolean_buffer(filters));
-                }
-
-                if append_auto_selector(
-                    &mut selectors,
-                    RowSelector::select(end - start),
-                    mask_run_limit,
-                ) {
-                    return Self::from_boolean_buffer(filters_to_boolean_buffer(filters));
-                }
-                last_end = end;
+    /// Creates a mask-backed [`RowSelection`] from predicate filters.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the [`BooleanArray`] contain nulls.
+    pub(crate) fn from_filters_mask(filters: &[BooleanArray]) -> Self {
+        let mask = match filters {
+            [filter] => {
+                assert_eq!(filter.null_count(), 0);
+                filter.values().clone()
             }
-        }
-
-        if last_end != total_rows
-            && append_auto_selector(
-                &mut selectors,
-                RowSelector::skip(total_rows - last_end),
-                mask_run_limit,
-            )
-        {
-            return Self::from_boolean_buffer(filters_to_boolean_buffer(filters));
-        }
-
-        Self::from_selectors(selectors)
+            _ => filters_to_boolean_buffer(filters),
+        };
+        Self::from_boolean_buffer(mask)
     }
 
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
@@ -736,15 +699,74 @@ impl RowSelection {
     }
 }
 
-/// Append a selector while maintaining the normalized selector invariants.
-/// Returns `true` once the Auto mask run limit has been reached.
-fn append_auto_selector(
-    selectors: &mut Vec<RowSelector>,
-    selector: RowSelector,
-    mask_run_limit: Option<usize>,
-) -> bool {
+/// Returns the minimum normalized run count for which Auto prefers a mask.
+///
+/// This matches `total_rows < run_count.saturating_mul(threshold)`. For totals
+/// below `usize::MAX`, the first matching run count is
+/// `floor(total_rows / threshold) + 1`. `None` means no attainable run count
+/// can select a mask for a non-empty selection.
+#[inline]
+fn auto_min_mask_runs(total_rows: usize, threshold: usize) -> Option<usize> {
+    // The strict comparison against a saturated product cannot succeed when
+    // the left-hand side is already usize::MAX.
+    if total_rows == usize::MAX {
+        return None;
+    }
+
+    let min_runs = total_rows.checked_div(threshold)?.checked_add(1)?;
+    (min_runs <= total_rows).then_some(min_runs)
+}
+
+/// Builds normalized selectors while their run count remains below
+/// `min_mask_runs`. Returning `None` drops the partial selector allocation
+/// before the caller constructs a mask.
+fn selectors_below_run_limit(
+    filters: &[BooleanArray],
+    total_rows: usize,
+    min_mask_runs: usize,
+) -> Option<Vec<RowSelector>> {
+    let mut selectors = Vec::new();
+    let mut next_offset = 0usize;
+    let mut last_end = 0usize;
+
+    for filter in filters {
+        assert_eq!(filter.null_count(), 0);
+        let offset = next_offset;
+        next_offset = next_offset.checked_add(filter.len()).unwrap();
+
+        for (start, end) in SlicesIterator::new(filter) {
+            let start = start.checked_add(offset).unwrap();
+            let end = end.checked_add(offset).unwrap();
+
+            if start > last_end {
+                append_normalized_selector(&mut selectors, RowSelector::skip(start - last_end));
+                if selectors.len() >= min_mask_runs {
+                    return None;
+                }
+            }
+
+            append_normalized_selector(&mut selectors, RowSelector::select(end - start));
+            if selectors.len() >= min_mask_runs {
+                return None;
+            }
+            last_end = end;
+        }
+    }
+
+    if last_end != total_rows {
+        append_normalized_selector(&mut selectors, RowSelector::skip(total_rows - last_end));
+        if selectors.len() >= min_mask_runs {
+            return None;
+        }
+    }
+
+    Some(selectors)
+}
+
+/// Appends a selector while maintaining the normalized selector invariants.
+fn append_normalized_selector(selectors: &mut Vec<RowSelector>, selector: RowSelector) {
     if selector.row_count == 0 {
-        return false;
+        return;
     }
 
     match selectors.last_mut() {
@@ -753,11 +775,9 @@ fn append_auto_selector(
         }
         _ => selectors.push(selector),
     }
-
-    mask_run_limit.is_some_and(|limit| selectors.len() >= limit)
 }
 
-pub(crate) fn filters_to_boolean_buffer(filters: &[BooleanArray]) -> BooleanBuffer {
+fn filters_to_boolean_buffer(filters: &[BooleanArray]) -> BooleanBuffer {
     let total_rows = filters.iter().map(|filter| filter.len()).sum();
     let mut builder = BooleanBufferBuilder::new(total_rows);
     for filter in filters {
@@ -868,6 +888,31 @@ mod tests {
     const MAX_RANDOM_ROWS: usize = 65_536;
     const THRESHOLDS: &[usize] = &[0, 1, 8, 16, 31, 32, 33, 64];
     const SELECTIVITIES: &[usize] = &[0, 1, 5, 15, 50, 90, 99, 100];
+    const FILTER_SHAPES: &[FilterShape] = &[
+        FilterShape::Isolated,
+        FilterShape::Runs,
+        FilterShape::Random,
+        FilterShape::Clustered,
+    ];
+
+    #[derive(Clone, Copy, Debug)]
+    enum FilterShape {
+        Isolated,
+        Runs,
+        Random,
+        Clustered,
+    }
+
+    #[test]
+    fn auto_min_mask_runs_matches_policy_boundaries() {
+        assert_eq!(auto_min_mask_runs(0, 32), None);
+        assert_eq!(auto_min_mask_runs(64, 0), None);
+        assert_eq!(auto_min_mask_runs(64, 1), None);
+        assert_eq!(auto_min_mask_runs(64, 32), Some(3));
+        assert_eq!(auto_min_mask_runs(64, 64), Some(2));
+        assert_eq!(auto_min_mask_runs(64, 65), Some(1));
+        assert_eq!(auto_min_mask_runs(usize::MAX, usize::MAX), None);
+    }
 
     #[test]
     fn auto_construction_preserves_global_runs_and_threshold_boundary() {
@@ -901,19 +946,40 @@ mod tests {
     }
 
     #[test]
+    fn auto_construction_edge_row_counts() {
+        for rows in [0, 1, 7, 8, 31, 32, 33, MAX_RANDOM_ROWS] {
+            let masks = [
+                ("all skipped", BooleanBuffer::new_unset(rows)),
+                ("all selected", BooleanBuffer::new_set(rows)),
+                (
+                    "alternating",
+                    BooleanBuffer::from_iter((0..rows).map(|row| row % 2 == 0)),
+                ),
+                ("short runs", run_mask(rows, 3, 5)),
+            ];
+
+            for (shape, mask) in masks {
+                let mask = with_bit_offset(mask, 5);
+                let filters = split_evenly(&mask, rows.div_ceil(3).max(1));
+
+                for &threshold in THRESHOLDS {
+                    let context = format!("rows={rows} shape={shape} threshold={threshold}");
+                    assert_auto_equivalent(&filters, threshold, &context);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn auto_construction_randomized_equivalence() {
         let mut rng = StdRng::seed_from_u64(0x1077_6000_5eed);
-        let edge_rows = [0, 1, 7, 8, 31, 32, 33, MAX_RANDOM_ROWS];
         let mut case_idx = 0usize;
 
         for &threshold in THRESHOLDS {
             for &selectivity in SELECTIVITIES {
-                for shape in 0..4 {
+                for &shape in FILTER_SHAPES {
                     for with_offset in [false, true] {
-                        let rows = edge_rows
-                            .get(case_idx)
-                            .copied()
-                            .unwrap_or_else(|| rng.random_range(0..=MAX_RANDOM_ROWS));
+                        let rows = rng.random_range(0..=MAX_RANDOM_ROWS);
                         let mask = random_shape(&mut rng, rows, selectivity, shape);
                         let bit_offset = if with_offset {
                             rng.random_range(1..=63)
@@ -924,7 +990,7 @@ mod tests {
                         let filter_count = rng.random_range(1..=32);
                         let filters = random_split(&mut rng, &mask, filter_count);
                         let context = format!(
-                            "case={case_idx} rows={rows} selectivity={selectivity} shape={shape} \
+                            "case={case_idx} rows={rows} selectivity={selectivity} shape={shape:?} \
                              filters={filter_count} threshold={threshold} bit_offset={bit_offset}"
                         );
 
@@ -973,7 +1039,7 @@ mod tests {
         rng: &mut StdRng,
         rows: usize,
         selectivity: usize,
-        shape: usize,
+        shape: FilterShape,
     ) -> BooleanBuffer {
         if selectivity == 0 {
             return BooleanBuffer::new_unset(rows);
@@ -983,16 +1049,15 @@ mod tests {
         }
 
         match shape {
-            0 => isolated_mask(rows, selectivity),
-            1 => {
+            FilterShape::Isolated => isolated_mask(rows, selectivity),
+            FilterShape::Runs => {
                 let scale = rng.random_range(1..=8);
                 run_mask(rows, selectivity * scale, (100 - selectivity) * scale)
             }
-            2 => BooleanBuffer::from_iter(
+            FilterShape::Random => BooleanBuffer::from_iter(
                 (0..rows).map(|_| rng.random_bool(selectivity as f64 / 100.0)),
             ),
-            3 => one_cluster_mask(rng, rows, selectivity),
-            _ => unreachable!(),
+            FilterShape::Clustered => one_cluster_mask(rng, rows, selectivity),
         }
     }
 
