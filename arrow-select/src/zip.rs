@@ -149,7 +149,7 @@ fn count_true_runs(mask: &BooleanBuffer) -> usize {
     let mut slices = 0;
     let mut previous = 0;
     for chunk in mask.bit_chunks().iter_padded() {
-        let starts = chunk & !(chunk << 1 | previous);
+        let starts = chunk & !((chunk << 1) | previous);
         slices += starts.count_ones() as usize;
         previous = chunk >> 63;
     }
