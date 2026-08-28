@@ -581,6 +581,18 @@ pub use crate::types::ArrowPrimitiveType;
 /// assert!(array.is_null(1));
 /// ```
 ///
+/// # Performance: Choosing Between `from` and [`PrimitiveBuilder`]
+///
+/// When all values are known upfront, constructing a `PrimitiveArray` directly via
+/// [`PrimitiveArray::from`] or [`PrimitiveArray::new`] is significantly faster than
+/// using [`PrimitiveBuilder`]:
+///
+/// - **`PrimitiveArray::from(vec![...])`** — zero-copy from `Vec`; no per-element
+///   bookkeeping. Prefer this whenever values are already collected.
+/// - **[`PrimitiveBuilder`]** — allocates incrementally and tracks nullability
+///   per-element. Use this only when values must be appended one-at-a-time inside a
+///   loop where the final size is not known in advance.
+///
 /// # Example: Get a `PrimitiveArray` from an [`ArrayRef`]
 /// ```
 /// # use std::sync::Arc;

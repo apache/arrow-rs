@@ -18,8 +18,9 @@
 //! Convert data to / from the [Apache Arrow] memory format and [Apache Avro].
 //!
 //! This crate provides:
-//! - a [`reader`] that decodes Avro (Object Container Files, Avro Single‑Object encoding,
-//!   and Confluent Schema Registry wire format) into Arrow `RecordBatch`es,
+//! - a [`reader`] that decodes Avro (Object Container Files, unframed binary datums,
+//!   Avro Single‑Object encoding, and Confluent Schema Registry wire format) into Arrow
+//!   `RecordBatch`es,
 //! - and a [`writer`] that encodes Arrow `RecordBatch`es into Avro (OCF or SOE).
 //!
 //! If you’re new to Arrow or Avro, see:
@@ -61,6 +62,45 @@
 //! let mut r = ReaderBuilder::new().build(Cursor::new(bytes))?;
 //! let out = r.next().unwrap()?;
 //! assert_eq!(out.num_rows(), 3);
+//! # Ok(()) }
+//! ```
+//!
+//! ## Quickstart: unframed Avro datums *(runnable)*
+//!
+//! Kafka messages and other transports can contain bare Avro records without an OCF header,
+//! single-object prefix, or schema-registry framing. When the writer schema is already known,
+//! register it, select its fingerprint and [`reader::DecoderMode::UnframedDatum`], and call
+//! [`reader::Decoder::decode`] once per record. The returned byte count also supports
+//! consecutive datums in one buffer.
+//!
+//! ```
+//! use arrow_array::{Array, Int64Array};
+//! use arrow_avro::reader::{DecoderMode, ReaderBuilder};
+//! use arrow_avro::schema::{AvroSchema, SchemaStore};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let schema = AvroSchema::new(
+//!     r#"{"type":"record","name":"Event","fields":[{"name":"id","type":"long"}]}"#
+//!         .to_string(),
+//! );
+//! let mut store = SchemaStore::new();
+//! let fingerprint = store.register(schema)?;
+//! let mut decoder = ReaderBuilder::new()
+//!     .with_writer_schema_store(store)
+//!     .with_active_fingerprint(fingerprint)
+//!     .with_decoder_mode(DecoderMode::UnframedDatum)
+//!     .build_decoder()?;
+//!
+//! // Two consecutive records, {id: 7} and {id: 42}, in Avro zigzag encoding.
+//! let mut remaining: &[u8] = &[0x0e, 0x54];
+//! while !remaining.is_empty() {
+//!     let consumed = decoder.decode(remaining)?;
+//!     remaining = &remaining[consumed..];
+//! }
+//!
+//! let batch = decoder.flush()?.expect("decoded records");
+//! let ids = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+//! assert_eq!(ids.values(), &[7, 42]);
 //! # Ok(()) }
 //! ```
 //!
@@ -163,7 +203,7 @@
 //!
 //! ### Modules
 //!
-//! - [`reader`]: read Avro (OCF, SOE, Confluent) into Arrow `RecordBatch`es.
+//! - [`reader`]: read Avro (OCF, unframed datums, SOE, Confluent) into Arrow `RecordBatch`es.
 //!   - With the `async` feature: [`AsyncAvroFileReader`] for async streaming reads,
 //!     from any [`AsyncFileReader`] source including cloud object storage.
 //! - [`writer`]: write Arrow `RecordBatch`es as Avro (OCF, SOE, Confluent, Apicurio).
