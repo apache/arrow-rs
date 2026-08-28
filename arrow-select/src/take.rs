@@ -510,7 +510,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let src_idx = if CHECKED {
                     indices.value(valid_idx).as_usize()
                 } else {
-                    // SAFETY: valid_idx < len from the validity bitmap
+                    // SAFETY: valid_idx < len (validity bitmap); caller guarantees index values are in bounds when CHECKED=false
                     unsafe { indices.value_unchecked(valid_idx) }.as_usize()
                 } + src_offset;
                 // SAFETY: src_idx bounded by take's prior bounds check
@@ -532,7 +532,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                     let src_idx = if CHECKED {
                         indices.value(base + bit).as_usize()
                     } else {
-                        // SAFETY: base + bit < len
+                        // SAFETY: base + bit < len (loop bound); caller guarantees index values are in bounds when CHECKED=false
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
                     // SAFETY: src_idx bounded by take's prior bounds check
@@ -548,7 +548,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                     let src_idx = if CHECKED {
                         indices.value(base + bit).as_usize()
                     } else {
-                        // SAFETY: base + bit < len
+                        // SAFETY: base + bit < len (loop bound); caller guarantees index values are in bounds when CHECKED=false
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
                     // SAFETY: src_idx bounded by take's prior bounds check
@@ -585,13 +585,13 @@ fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
             let value_out_ptr = value_out.as_mut_ptr();
             let validity_out_ptr = validity_out.as_mut_ptr();
             for out_pos in index_nulls.valid_indices() {
-                // SAFETY: out_pos < len from the validity bitmap
                 let src_idx = if CHECKED {
                     indices.value(out_pos).as_usize()
                 } else {
+                    // SAFETY: out_pos < len (validity bitmap); caller guarantees index values are in bounds when CHECKED=false
                     unsafe { indices.value_unchecked(out_pos) }.as_usize()
                 };
-                // SAFETY: src_idx + offsets bounded by take's prior bounds check
+                // SAFETY: src_idx < values.len(); check_bounds ensures this when CHECKED, caller guarantees it otherwise
                 unsafe {
                     copy_bit_if_set(
                         value_data_ptr,
@@ -625,7 +625,7 @@ fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
                 for bit_pos in 0..8usize {
                     // SAFETY: bit_base + bit_pos < len
                     let src_idx = unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
-                    // SAFETY: src_idx + offsets bounded by take's prior bounds check
+                    // SAFETY: src_idx < values.len(); check_bounds ensures this when CHECKED, caller guarantees it otherwise
                     packed_values |=
                         unsafe { pack_bit(value_data_ptr, src_idx + value_bit_offset, bit_pos) };
                     packed_validity |= unsafe {
@@ -643,7 +643,7 @@ fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
                 for bit_pos in 0..(len - bit_base) {
                     // SAFETY: bit_base + bit_pos < len
                     let src_idx = unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
-                    // SAFETY: src_idx + offsets bounded by take's prior bounds check
+                    // SAFETY: src_idx < values.len(); check_bounds ensures this when CHECKED, caller guarantees it otherwise
                     packed_values |=
                         unsafe { pack_bit(value_data_ptr, src_idx + value_bit_offset, bit_pos) };
                     packed_validity |= unsafe {
