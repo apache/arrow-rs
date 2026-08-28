@@ -581,6 +581,16 @@ pub use crate::types::ArrowPrimitiveType;
 /// assert!(array.is_null(1));
 /// ```
 ///
+/// # Performance: Choosing Between `from` and [`PrimitiveBuilder`]
+///
+/// Rust's `Vec` is highly optimized, and Arrow's conversion from `Vec` to
+/// `PrimitiveArray` is zero-copy. Prefer [`PrimitiveArray::from`] or
+/// [`PrimitiveArray::new`] whenever values are already in a `Vec` or can be collected
+/// into one. [`PrimitiveBuilder`] is backed by a `Vec` and a `NullBufferBuilder`
+/// internally, so it offers no performance advantage. Use it when the array may
+/// contain nulls whose positions aren't known upfront, since it keeps values and the
+/// null bitmask in sync automatically.
+///
 /// # Example: Get a `PrimitiveArray` from an [`ArrayRef`]
 /// ```
 /// # use std::sync::Arc;
