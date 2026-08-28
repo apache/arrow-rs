@@ -189,7 +189,7 @@ Add a `cfg_attr` to tests in cases where the test should be ignored by Miri:
 fn test123() {}
 ```
 
-Ensuring to annotate with a comment why the test is being ignored. Common cases
+Please ensure you include a comment why the test is being ignored. Common cases
 are:
 
 - Takes too long
