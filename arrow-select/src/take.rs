@@ -540,6 +540,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                 }
                 *out_byte = byte;
             }
+            // Handle remaining bits when len is not a multiple of 8.
             if full_bytes < out_bytes {
                 let base = full_bytes * 8;
                 let mut byte = 0u8;
@@ -563,7 +564,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
 /// Gather value bits and validity bits from two boolean buffers in a single pass.
 /// Used when the values array itself has nulls, avoiding two separate `take_bits` calls.
 #[inline(never)]
-fn take_bits_with_validity<I: ArrowPrimitiveType>(
+fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
     values: &BooleanBuffer,
     validity: &BooleanBuffer,
     indices: &PrimitiveArray<I>,
@@ -585,7 +586,11 @@ fn take_bits_with_validity<I: ArrowPrimitiveType>(
             let validity_out_ptr = validity_out.as_mut_ptr();
             for out_pos in index_nulls.valid_indices() {
                 // SAFETY: out_pos < len from the validity bitmap
-                let src_idx = unsafe { indices.value_unchecked(out_pos) }.as_usize();
+                let src_idx = if CHECKED {
+                    indices.value(out_pos).as_usize()
+                } else {
+                    unsafe { indices.value_unchecked(out_pos) }.as_usize()
+                };
                 // SAFETY: src_idx + offsets bounded by take's prior bounds check
                 unsafe {
                     copy_bit_if_set(
@@ -664,7 +669,7 @@ fn take_boolean<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
     let bits = array.values();
     match array.nulls().filter(|n| n.null_count() > 0) {
         Some(array_nulls) => {
-            let (val_buf, null_buf) = take_bits_with_validity(bits, array_nulls.inner(), indices);
+            let (val_buf, null_buf) = take_bits_with_validity::<_, CHECKED>(bits, array_nulls.inner(), indices);
             BooleanArray::new(val_buf, null_buf)
         }
         None => {
