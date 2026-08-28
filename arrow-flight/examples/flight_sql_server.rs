@@ -734,8 +734,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<ActionCancelQueryResult, Status> {
         Err(Status::unimplemented("Implement do_action_cancel_query"))
     }
-
-    async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
 }
 
 /// This example shows how to run a FlightSql server
