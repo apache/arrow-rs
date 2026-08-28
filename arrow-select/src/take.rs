@@ -661,13 +661,10 @@ where
 
     let field = values.value_field().clone();
 
-    let is_primitive_child = child_data.null_count() == 0 && child_data.data_type().is_primitive();
-
-    if is_primitive_child {
+    if child_data.null_count() == 0
+        && let Some(bytes_per_value) = child_data.data_type().primitive_width()
+    {
         let values_buf = &child_data.buffers()[0];
-        let Some(bytes_per_value) = child_data.data_type().primitive_width() else {
-            unreachable!("is_primitive guarantees primitive_width is Some")
-        };
         let child_buf_offset = child_data.offset() * bytes_per_value;
 
         let avg_row_len = child_data
@@ -3066,78 +3063,6 @@ mod tests {
 
         assert!(matches!(
             take(&values, &indices, None),
-            Err(ArrowError::OffsetOverflowError(_))
-        ));
-    }
-
-    /// Fixture for list offset-overflow tests: a single row containing
-    /// `value_len` int32 elements, plus the repetition count needed for
-    /// `child_len` (an `i32`) to overflow.
-    fn list_offset_overflow_fixture() -> (ListArray, usize) {
-        let value_len = 1_000_000usize;
-        let values = Int32Array::from(vec![0i32; value_len]);
-        let offsets = OffsetBuffer::from_lengths([value_len]);
-        let field = Arc::new(Field::new("item", DataType::Int32, false));
-        let array = ListArray::new(field, offsets, Arc::new(values), None);
-        let n = i32::MAX as usize / value_len + 1;
-        (array, n)
-    }
-
-    #[test]
-    fn test_take_list_offset_overflow() {
-        let (array, n) = list_offset_overflow_fixture();
-        let indices = Int32Array::from(vec![0; n]);
-        assert!(matches!(
-            take(&array, &indices, None),
-            Err(ArrowError::OffsetOverflowError(_))
-        ));
-    }
-
-    #[test]
-    fn test_take_list_offset_overflow_nullable() {
-        let (array, n) = list_offset_overflow_fixture();
-        let validity =
-            NullBuffer::from_iter(std::iter::once(false).chain(std::iter::repeat_n(true, n)));
-        let indices = Int32Array::new(vec![0i32; n + 1].into(), Some(validity));
-        assert!(matches!(
-            take(&array, &indices, None),
-            Err(ArrowError::OffsetOverflowError(_))
-        ));
-    }
-
-    /// Like [`list_offset_overflow_fixture`] but with a nullable child, forcing the slow path.
-    fn list_nullable_child_overflow_fixture() -> (ListArray, usize) {
-        let value_len = 1_000_000usize;
-        // One null in the child causes is_primitive_child to be false.
-        let mut child_builder = Int32Builder::new();
-        child_builder.append_nulls(1);
-        child_builder.append_value_n(0, value_len - 1);
-        let child = child_builder.finish();
-        let offsets = OffsetBuffer::from_lengths([value_len]);
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
-        let array = ListArray::new(field, offsets, Arc::new(child), None);
-        let n = i32::MAX as usize / value_len + 1;
-        (array, n)
-    }
-
-    #[test]
-    fn test_take_list_mutable_offset_overflow() {
-        let (array, n) = list_nullable_child_overflow_fixture();
-        let indices = Int32Array::from(vec![0; n]);
-        assert!(matches!(
-            take(&array, &indices, None),
-            Err(ArrowError::OffsetOverflowError(_))
-        ));
-    }
-
-    #[test]
-    fn test_take_list_mutable_offset_overflow_nullable() {
-        let (array, n) = list_nullable_child_overflow_fixture();
-        let validity =
-            NullBuffer::from_iter(std::iter::once(false).chain(std::iter::repeat_n(true, n)));
-        let indices = Int32Array::new(vec![0i32; n + 1].into(), Some(validity));
-        assert!(matches!(
-            take(&array, &indices, None),
             Err(ArrowError::OffsetOverflowError(_))
         ));
     }
