@@ -87,6 +87,9 @@ pub struct CachedArrayReader {
     local_cache: HashMap<BatchID, ArrayRef>,
     /// Statistics to report on the Cache behavior
     metrics: ArrowReaderMetrics,
+    /// Exclusive upper bound of the batch ids already removed from the shared
+    /// cache by [`Self::cleanup_consumed_batches`].
+    cleaned_up_to: usize,
 }
 
 impl CachedArrayReader {
@@ -111,6 +114,7 @@ impl CachedArrayReader {
             role,
             local_cache: HashMap::new(),
             metrics,
+            cleaned_up_to: 0,
         }
     }
 
@@ -168,23 +172,34 @@ impl CachedArrayReader {
 
     /// Remove batches from cache that have been completely consumed
     /// This is only called for Consumer role readers
-    fn cleanup_consumed_batches(&self) {
+    fn cleanup_consumed_batches(&mut self) {
         let current_batch_id = self.get_batch_id_from_position(self.outer_position);
 
         // Remove batches that are at least one batch behind the current position
         // This ensures we don't remove batches that might still be needed for the current batch
         // We can safely remove batch_id if current_batch_id > batch_id + 1
-        if current_batch_id.val > 1 {
-            let mut cache = self.shared_cache.write().unwrap();
-            for batch_id_to_remove in 0..(current_batch_id.val - 1) {
-                cache.remove(
-                    self.column_idx,
-                    BatchID {
-                        val: batch_id_to_remove,
-                    },
-                );
-            }
+        if current_batch_id.val <= 1 {
+            return;
         }
+        let end = current_batch_id.val - 1;
+        // Everything below `cleaned_up_to` was removed by an earlier call.
+        // Rescanning from 0 each time made this quadratic in the number of
+        // batches in the row group, and took the shared cache's write lock on
+        // every `consume_batch` even when there was nothing left to remove.
+        if end <= self.cleaned_up_to {
+            return;
+        }
+        let mut cache = self.shared_cache.write().unwrap();
+        for batch_id_to_remove in self.cleaned_up_to..end {
+            cache.remove(
+                self.column_idx,
+                BatchID {
+                    val: batch_id_to_remove,
+                },
+            );
+        }
+        drop(cache);
+        self.cleaned_up_to = end;
     }
 }
 
