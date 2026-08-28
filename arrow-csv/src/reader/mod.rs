@@ -269,6 +269,16 @@ impl InferredDataType {
     }
 }
 
+/// Defines how to handle CSV rows with more fields than the schema
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExtraFields {
+    /// Return an error when extra fields are encountered (default)
+    #[default]
+    Error,
+    /// Ignore trailing fields beyond the schema's width
+    Ignore,
+}
+
 /// The format specification for the CSV file
 #[derive(Debug, Clone, Default)]
 pub struct Format {
@@ -281,6 +291,7 @@ pub struct Format {
     comment: Option<u8>,
     null_regex: NullRegex,
     truncated_rows: bool,
+    extra_fields: ExtraFields,
 }
 
 impl Format {
@@ -348,6 +359,16 @@ impl Format {
     /// will still return an error.
     pub fn with_truncated_rows(mut self, allow: bool) -> Self {
         self.truncated_rows = allow;
+        self
+    }
+
+    /// Whether to ignore extra fields when parsing.
+    ///
+    /// By default this is set to `ExtraFields::Error` and will error if the CSV rows have more
+    /// columns than expected. When set to `ExtraFields::Ignore` then it will allow records with
+    /// more than the expected number of columns and ignore the extra fields.
+    pub fn with_extra_fields(mut self, extra_fields: ExtraFields) -> Self {
+        self.extra_fields = extra_fields;
         self
     }
 
@@ -1326,6 +1347,12 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set the behavior for CSV rows with more fields than the schema
+    pub fn with_extra_fields(mut self, extra_fields: ExtraFields) -> Self {
+        self.format.extra_fields = extra_fields;
+        self
+    }
+
     /// Create a new `Reader` from a non-buffered reader
     ///
     /// If `R: BufRead` consider using [`Self::build_buffered`] to avoid unnecessary additional
@@ -1355,6 +1382,7 @@ impl ReaderBuilder {
             delimiter,
             self.schema.fields().len(),
             self.format.truncated_rows,
+            self.format.extra_fields,
         );
 
         let header = self.format.header as usize;
@@ -2645,6 +2673,132 @@ mod tests {
         assert!(c.value(1));
         assert!(c.value(2));
         assert!(c.is_null(3));
+    }
+
+    #[test]
+    fn test_extra_fields_ignore() {
+        let data = "a,b\n1,2,3,4\n5,6\n7,8,9";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let mut reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_extra_fields(ExtraFields::Ignore)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 2);
+
+        let col_a = batch.column(0).as_primitive::<Int32Type>();
+        assert_eq!(col_a.value(0), 1);
+        assert_eq!(col_a.value(1), 5);
+        assert_eq!(col_a.value(2), 7);
+
+        let col_b = batch.column(1).as_primitive::<Int32Type>();
+        assert_eq!(col_b.value(0), 2);
+        assert_eq!(col_b.value(1), 6);
+        assert_eq!(col_b.value(2), 8);
+    }
+
+    #[test]
+    fn test_extra_fields_default_errors() {
+        let data = "a,b\n1,2,3\n4,5";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        // No with_extra_fields called (should default to Error)
+        let mut reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let result = reader.next();
+        assert!(match result {
+            Some(Err(ArrowError::CsvError(e))) => e.contains("got more than"),
+            _ => false,
+        });
+    }
+
+    #[test]
+    fn test_extra_fields_error() {
+        let data = "a,b\n1,2,3\n4,5";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let mut reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_extra_fields(ExtraFields::Error)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let result = reader.next();
+        assert!(match result {
+            Some(Err(ArrowError::CsvError(e))) => e.contains("got more than"),
+            _ => false,
+        });
+    }
+
+    #[test]
+    fn test_extra_fields_quoted() {
+        // Quoted extra field with commas and newlines
+        let data = "a,b\n1,2,\"3,4,5\n6\",7\n8,9";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let mut reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_extra_fields(ExtraFields::Ignore)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+
+        let col_a = batch.column(0).as_primitive::<Int32Type>();
+        assert_eq!(col_a.value(0), 1);
+        assert_eq!(col_a.value(1), 8);
+    }
+
+    #[test]
+    fn test_extra_fields_across_chunk_boundary() {
+        // We create an extra field that is very long, and use a small BufReader
+        // to force it to cross chunk boundaries multiple times while skipping.
+        let data =
+            "a,b\n1,2,this_is_a_very_long_extra_field_that_will_cross_chunk_boundaries\n3,4\n";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        // BufReader with only 16 bytes capacity
+        let buf_reader = std::io::BufReader::with_capacity(16, Cursor::new(data));
+
+        let mut reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_extra_fields(ExtraFields::Ignore)
+            .build_buffered(buf_reader)
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+
+        let col_a = batch.column(0).as_primitive::<Int32Type>();
+        assert_eq!(col_a.value(0), 1);
+        assert_eq!(col_a.value(1), 3);
+
+        let col_b = batch.column(1).as_primitive::<Int32Type>();
+        assert_eq!(col_b.value(0), 2);
+        assert_eq!(col_b.value(1), 4);
     }
 
     #[test]
