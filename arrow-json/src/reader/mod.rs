@@ -755,7 +755,8 @@ pub trait ArrayDecoder: Send {
     /// Decode elements from `tape` starting at the indexes contained in `pos`
     ///
     /// `pos` contains one tape index per output row, so the returned array must have
-    /// exactly `pos.len()` elements. A row's value may be [`TapeElement::Null`].
+    /// exactly `pos.len()` elements and the field's data type. A row's value may be
+    /// [`TapeElement::Null`].
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError>;
 }
 
@@ -869,8 +870,9 @@ pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
     /// for this field. Calling `make_decoder` with the field this was invoked with
     /// recurses back here and loops.
     ///
-    /// `is_nullable` folds in ancestor nullability, so it may be `true` even when
-    /// `field.is_nullable()` is not.
+    /// `is_nullable` folds in ancestor nullability, so it may differ from
+    /// `field.is_nullable()` in either direction: a nullable struct widens its
+    /// children, while a run-end encoded array narrows its values.
     ///
     /// [extension types]: https://arrow.apache.org/docs/format/Columnar.html#extension-types
     fn make_default_decoder(
@@ -880,6 +882,34 @@ pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
         _is_nullable: bool,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         Ok(None)
+    }
+}
+
+/// Validates the output of a [`DecoderFactory`] decoder before it reaches the arrays
+/// built from it, some of which are constructed without further checks.
+struct CheckedDecoder {
+    inner: Box<dyn ArrayDecoder>,
+    data_type: DataType,
+}
+
+impl ArrayDecoder for CheckedDecoder {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+        let array = self.inner.decode(tape, pos)?;
+        if array.data_type() != &self.data_type {
+            return Err(ArrowError::JsonError(format!(
+                "custom decoder returned {} for a field of type {}",
+                array.data_type(),
+                self.data_type
+            )));
+        }
+        if array.len() != pos.len() {
+            return Err(ArrowError::JsonError(format!(
+                "custom decoder returned {} values for {} rows",
+                array.len(),
+                pos.len()
+            )));
+        }
+        Ok(array)
     }
 }
 
@@ -960,7 +990,10 @@ fn make_decoder(
     if let Some(factory) = ctx.decoder_factory()
         && let Some(decoder) = factory.make_default_decoder(ctx, field, is_nullable)?
     {
-        return Ok(decoder);
+        return Ok(Box::new(CheckedDecoder {
+            inner: decoder,
+            data_type: field.data_type().clone(),
+        }));
     }
 
     make_builtin_decoder(ctx, field, is_nullable)
@@ -4073,42 +4106,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_decoder_factory_overrides_primitive() {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        let buf = r#"{"a": "hello"}
-        {"a": null}
-        {"a": "hi"}
-        "#;
-
-        let batch = ReaderBuilder::new(schema)
-            .with_decoder_factory(Arc::new(StringLenDecoderFactory))
-            .build(Cursor::new(buf.as_bytes()))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap();
-
-        let col = batch.column(0).as_primitive::<Int32Type>();
-        assert_eq!(col.len(), 3);
-        assert_eq!(col.value(0), 5);
-        assert!(col.is_null(1));
-        assert_eq!(col.value(2), 2);
-    }
-
     /// Consulted at every depth; declined types still use the default decoders.
     #[test]
-    fn test_decoder_factory_overrides_nested_and_delegates_siblings() {
+    fn test_decoder_factory_overrides_at_every_depth() {
         let inner = Fields::from(vec![
             Field::new("overridden", DataType::Int32, true),
             Field::new("untouched", DataType::Utf8, true),
         ]);
         let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
             Field::new("s", DataType::Struct(inner), true),
             Field::new_list("l", Field::new("item", DataType::Int32, true), true),
         ]));
 
-        let buf = r#"{"s": {"overridden": "abcd", "untouched": "kept"}, "l": ["xyz", "z"]}
+        let buf = r#"{"a": "hello", "s": {"overridden": "abcd", "untouched": "kept"}, "l": ["xyz", "z"]}
+        {"a": null, "s": null, "l": []}
         "#;
 
         let batch = ReaderBuilder::new(schema)
@@ -4119,15 +4131,19 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // Overridden inside a struct; its sibling decoded normally
-        let s = batch.column(0).as_struct();
+        // Top level, including a null row
+        let a = batch.column(0).as_primitive::<Int32Type>();
+        assert_eq!(a.value(0), 5);
+        assert!(a.is_null(1));
+
+        // Inside a struct; its sibling decoded normally
+        let s = batch.column(1).as_struct();
         assert_eq!(s.column(0).as_primitive::<Int32Type>().value(0), 4);
         assert_eq!(s.column(1).as_string::<i32>().value(0), "kept");
 
-        // Reached via the default list decoder's `make_decoder` call
-        let l = batch.column(1).as_list::<i32>();
-        let values = l.values().as_primitive::<Int32Type>();
-        assert_eq!(values.values(), &[3, 1]);
+        // Inside a list, reached via the default list decoder
+        let values = batch.column(2).as_list::<i32>().values();
+        assert_eq!(values.as_primitive::<Int32Type>().values(), &[3, 1]);
     }
 
     /// Declining everything must be indistinguishable from no factory at all.
@@ -4303,45 +4319,64 @@ mod tests {
         assert_eq!(batch.column(1).as_primitive::<Int32Type>().value(0), 7);
     }
 
-    /// A factory may delegate via `make_decoder` for a *different* field.
+    /// A custom decoder's output is not trusted: the arrays built from it are
+    /// constructed without further validation, so a mismatch must be caught here.
     #[test]
-    fn test_decoder_factory_can_delegate_to_default() {
-        /// Overrides `Utf8`, handing the work to the `Utf8View` decoder
-        #[derive(Debug)]
-        struct DelegatingFactory;
+    fn test_decoder_factory_output_is_validated() {
+        /// Returns either the wrong data type or the wrong number of rows
+        struct Bad {
+            wrong_type: bool,
+        }
 
-        impl DecoderFactory for DelegatingFactory {
+        impl ArrayDecoder for Bad {
+            fn decode(&mut self, _tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+                Ok(match self.wrong_type {
+                    true => Arc::new(StringViewArray::from(vec!["x"; pos.len()])) as ArrayRef,
+                    false => Arc::new(StringArray::from(Vec::<&str>::new())),
+                })
+            }
+        }
+
+        #[derive(Debug)]
+        struct BadFactory {
+            wrong_type: bool,
+        }
+
+        impl DecoderFactory for BadFactory {
             fn make_default_decoder(
                 &self,
-                ctx: &DecoderContext,
+                _ctx: &DecoderContext,
                 field: &FieldRef,
-                is_nullable: bool,
+                _is_nullable: bool,
             ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
                 match field.data_type() {
-                    // A *different* type, so this doesn't recurse back here
-                    DataType::Utf8 => {
-                        let view =
-                            Arc::new(field.as_ref().clone().with_data_type(DataType::Utf8View));
-                        Ok(Some(ctx.make_decoder(&view, is_nullable)?))
-                    }
+                    DataType::Utf8 => Ok(Some(Box::new(Bad {
+                        wrong_type: self.wrong_type,
+                    }))),
                     _ => Ok(None),
                 }
             }
         }
 
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
-        let buf = r#"{"a": "hello"}
-        "#;
+        let read = |wrong_type: bool| {
+            let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
+            ReaderBuilder::new(schema)
+                .with_decoder_factory(Arc::new(BadFactory { wrong_type }))
+                .build(Cursor::new(br#"{"s": "hello"}"#.as_slice()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+        };
 
-        let batch = ReaderBuilder::new(schema)
-            .with_decoder_factory(Arc::new(DelegatingFactory))
-            .build(Cursor::new(buf.as_bytes()))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap();
+        let err = read(true);
+        assert!(
+            err.contains("returned Utf8View for a field of type Utf8"),
+            "{err}"
+        );
 
-        // The `Utf8View` decoder ran in place of the `Utf8` one
-        assert_eq!(batch.column(0).as_string_view().value(0), "hello");
+        let err = read(false);
+        assert!(err.contains("returned 0 values for 1 rows"), "{err}");
     }
 }
