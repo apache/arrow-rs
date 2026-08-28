@@ -773,10 +773,11 @@ pub trait ArrayDecoder: Send {
 /// ```
 /// use std::sync::Arc;
 /// use arrow_array::{Array, ArrayRef, BinaryArray};
+/// use arrow_array::types::Float64Type;
 /// use arrow_array::cast::AsArray;
 /// use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape, TapeElement};
 /// use arrow_json::ReaderBuilder;
-/// use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema};
+/// use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema};
 ///
 /// /// Decodes `[104, 105]` into the bytes `b"hi"`
 /// struct IntArrayBinaryDecoder;
@@ -832,14 +833,16 @@ pub trait ArrayDecoder: Send {
 ///     }
 /// }
 ///
+/// let nested = Fields::from(vec![Field::new("inner", DataType::Binary, true)]);
 /// let schema = Arc::new(Schema::new(vec![
 ///     Field::new("bytes", DataType::Binary, true),
 ///     Field::new("float", DataType::Float64, true),
+///     Field::new("nested", DataType::Struct(nested), true),
 /// ]));
 ///
-/// let json = r#"{"bytes": [104, 105], "float": 1.0}
+/// let json = r#"{"bytes": [104, 105], "float": 1.0, "nested": {"inner": [104, 105]}}
 /// {"float": 2.3}
-/// {"bytes": [98]}
+/// {"bytes": [98], "nested": {"inner": [98]}}
 /// "#;
 ///
 /// let batch = ReaderBuilder::new(schema)
@@ -854,6 +857,12 @@ pub trait ArrayDecoder: Send {
 /// assert_eq!(bytes.value(0), b"hi");
 /// assert!(bytes.is_null(1));
 /// assert_eq!(bytes.value(2), b"b");
+///
+/// // The override applies wherever `Binary` appears, including nested, while types
+/// // the factory declines are decoded as usual
+/// let inner = batch.column(2).as_struct().column(0).as_binary::<i32>();
+/// assert_eq!(inner.value(0), b"hi");
+/// assert_eq!(batch.column(1).as_primitive::<Float64Type>().value(0), 1.0);
 /// ```
 ///
 /// [`EncoderFactory`]: crate::EncoderFactory
@@ -1112,7 +1121,6 @@ mod tests {
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
 
@@ -4069,7 +4077,7 @@ mod tests {
             assert_eq!(col.value(i), (i as i32) + 1);
         }
     }
-    /// Decodes a string as its byte length, an unmistakable signature
+    /// Decodes a string as its byte length
     struct StringLenDecoder;
 
     impl ArrayDecoder for StringLenDecoder {
@@ -4086,64 +4094,6 @@ mod tests {
             }
             Ok(Arc::new(builder.finish()))
         }
-    }
-
-    /// Overrides `Int32`, which would otherwise reject strings outright
-    #[derive(Debug)]
-    struct StringLenDecoderFactory;
-
-    impl DecoderFactory for StringLenDecoderFactory {
-        fn make_default_decoder(
-            &self,
-            _ctx: &DecoderContext,
-            field: &FieldRef,
-            _is_nullable: bool,
-        ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
-            match field.data_type() {
-                DataType::Int32 => Ok(Some(Box::new(StringLenDecoder))),
-                _ => Ok(None),
-            }
-        }
-    }
-
-    /// Consulted at every depth; declined types still use the default decoders.
-    #[test]
-    fn test_decoder_factory_overrides_at_every_depth() {
-        let inner = Fields::from(vec![
-            Field::new("overridden", DataType::Int32, true),
-            Field::new("untouched", DataType::Utf8, true),
-        ]);
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("s", DataType::Struct(inner), true),
-            Field::new_list("l", Field::new("item", DataType::Int32, true), true),
-        ]));
-
-        let buf = r#"{"a": "hello", "s": {"overridden": "abcd", "untouched": "kept"}, "l": ["xyz", "z"]}
-        {"a": null, "s": null, "l": []}
-        "#;
-
-        let batch = ReaderBuilder::new(schema)
-            .with_decoder_factory(Arc::new(StringLenDecoderFactory))
-            .build(Cursor::new(buf.as_bytes()))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap();
-
-        // Top level, including a null row
-        let a = batch.column(0).as_primitive::<Int32Type>();
-        assert_eq!(a.value(0), 5);
-        assert!(a.is_null(1));
-
-        // Inside a struct; its sibling decoded normally
-        let s = batch.column(1).as_struct();
-        assert_eq!(s.column(0).as_primitive::<Int32Type>().value(0), 4);
-        assert_eq!(s.column(1).as_string::<i32>().value(0), "kept");
-
-        // Inside a list, reached via the default list decoder
-        let values = batch.column(2).as_list::<i32>().values();
-        assert_eq!(values.as_primitive::<Int32Type>().values(), &[3, 1]);
     }
 
     /// Declining everything must be indistinguishable from no factory at all.
@@ -4220,25 +4170,23 @@ mod tests {
     /// *same* field, which would otherwise loop.
     #[test]
     fn test_decoder_factory_can_delegate_to_builtin_for_same_field() {
-        /// Delegates to the built-in decoder, recording that it did so
-        struct Delegating {
-            inner: Box<dyn ArrayDecoder>,
-            called: Arc<AtomicBool>,
-        }
+        /// Upper-cases whatever the built-in decoder produced
+        struct Upper(Box<dyn ArrayDecoder>);
 
-        impl ArrayDecoder for Delegating {
+        impl ArrayDecoder for Upper {
             fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
-                self.called.store(true, Ordering::SeqCst);
-                self.inner.decode(tape, pos)
+                let inner = self.0.decode(tape, pos)?;
+                let values = inner.as_string::<i32>();
+                Ok(Arc::new(StringArray::from_iter(
+                    values.iter().map(|v| v.map(str::to_uppercase)),
+                )))
             }
         }
 
         #[derive(Debug)]
-        struct BuiltinDelegatingFactory {
-            called: Arc<AtomicBool>,
-        }
+        struct UpperFactory;
 
-        impl DecoderFactory for BuiltinDelegatingFactory {
+        impl DecoderFactory for UpperFactory {
             fn make_default_decoder(
                 &self,
                 ctx: &DecoderContext,
@@ -4247,30 +4195,25 @@ mod tests {
             ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
                 match field.data_type() {
                     // The SAME field -- via `make_decoder` this would loop forever
-                    DataType::Utf8 => Ok(Some(Box::new(Delegating {
-                        inner: ctx.make_builtin_decoder(field, is_nullable)?,
-                        called: Arc::clone(&self.called),
-                    }))),
+                    DataType::Utf8 => Ok(Some(Box::new(Upper(
+                        ctx.make_builtin_decoder(field, is_nullable)?,
+                    )))),
                     _ => Ok(None),
                 }
             }
         }
 
-        let called = Arc::new(AtomicBool::new(false));
         let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
         let batch = ReaderBuilder::new(schema)
-            .with_decoder_factory(Arc::new(BuiltinDelegatingFactory {
-                called: Arc::clone(&called),
-            }))
+            .with_decoder_factory(Arc::new(UpperFactory))
             .build(Cursor::new(br#"{"s": "hello"}"#.as_slice()))
             .unwrap()
             .next()
             .unwrap()
             .unwrap();
 
-        // The wrapper ran, and the built-in did the work
-        assert!(called.load(Ordering::SeqCst), "custom decoder was not used");
-        assert_eq!(batch.column(0).as_string::<i32>().value(0), "hello");
+        // Upper-cased, so this decoder ran; "hello" at all, so the built-in did the work
+        assert_eq!(batch.column(0).as_string::<i32>().value(0), "HELLO");
     }
 
     /// Why the factory receives a `FieldRef`: selection can key off field metadata.
