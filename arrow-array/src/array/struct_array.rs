@@ -737,10 +737,8 @@ mod tests {
 
     #[test]
     fn test_struct_array_data_slice() {
-        // Slicing a struct's `ArrayData` and then rebuilding an array from it
-        // must window the children exactly once. Previously the offset was
-        // applied both to the parent's `offset` and to the (already sliced)
-        // children, so `make_array` re-applied it and panicked (#7595, #7750).
+        // Slicing a struct's `ArrayData` and rebuilding an array from it has to
+        // apply the offset to the children exactly once (#7595, #7750).
         let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
         let struct_array = StructArray::new(
             Fields::from(vec![Field::new("x", DataType::Int32, true)]),
@@ -798,7 +796,7 @@ mod tests {
     #[test]
     fn test_make_array_sliced_struct_data() {
         // Exact reproducer from #7750: `make_array` on a sliced struct's
-        // `ArrayData` used to panic with `(offset + length) <= self.len()`.
+        // `ArrayData`.
         let strings: ArrayRef = Arc::new(StringArray::from(vec![
             Some("joe"),
             None,
@@ -828,12 +826,11 @@ mod tests {
 
     #[test]
     fn test_slice_struct_data_with_existing_offset() {
-        // Slicing a struct whose `ArrayData` *already* carries a non-zero
-        // offset over full-length children (how the C data interface hands us
-        // a sliced struct). The cumulative offset must end up on the children
-        // only: if any of it were left on the parent, `From<ArrayData> for
-        // StructArray` would apply it a second time to already-windowed
-        // children.
+        // Slicing a struct whose `ArrayData` already carries a non-zero offset
+        // over full-length children, which is how the C data interface hands us
+        // a sliced struct. The cumulative offset has to end up on the children
+        // only: anything left on the parent gets applied a second time by
+        // `From<ArrayData> for StructArray`.
         let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
         let struct_array = StructArray::new(
             Fields::from(vec![Field::new("x", DataType::Int32, true)]),

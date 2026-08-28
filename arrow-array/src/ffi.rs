@@ -1208,8 +1208,8 @@ mod tests_to_then_from_ffi {
         //   # c: length=5 offset=1 n_children=1
         //   # c.children[0][0]: length=6 offset=0
         //
-        // Slicing what we import from that used to panic, because the parent's
-        // offset was applied twice (#7595).
+        // Slicing what we import from that has to apply the parent's offset
+        // once (#7595).
         let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
         let struct_array = StructArray::new(
             Fields::from(vec![Field::new("x", DataType::Int32, true)]),

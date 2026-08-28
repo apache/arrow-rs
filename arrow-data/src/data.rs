@@ -696,21 +696,10 @@ impl ArrayData {
         assert!(end <= self.len());
 
         if let DataType::Struct(_) = self.data_type() {
-            // As documented on [`Self::offset`], a struct has no buffers of its
-            // own and its offset composes with each child's offset: logical
-            // element `i` is element `self.offset + i` of every child.
-            //
-            // The slice must therefore be applied exactly once. Previously it
-            // was applied twice - pushed down into the children *and* added to
-            // the parent's own offset - so rebuilding the sliced data (e.g. via
-            // `make_array` / `From<ArrayData> for StructArray`, which re-windows
-            // each child by the parent offset) windowed the children a second
-            // time and panicked with `(offset + length) <= self.len()`
-            // (#7595, #7750).
-            //
-            // Push the whole cumulative offset into the children and reset the
-            // parent's offset to 0, so that the children carry the window and
-            // nothing re-applies it.
+            // A struct has no buffers of its own, and reading child element `i`
+            // combines this array's offset with the child's own offset. Applying
+            // the slice to both would count it twice, so the cumulative offset
+            // goes to the children and this array's offset is reset to 0.
             let child_offset = self.offset + offset;
             ArrayData {
                 data_type: self.data_type().clone(),
@@ -722,8 +711,8 @@ impl ArrayData {
                     .iter()
                     .map(|data| data.slice(child_offset, length))
                     .collect(),
-                // The offset does not apply to `nulls`, which always covers
-                // exactly `len` elements, so it is sliced by `offset`.
+                // `nulls` belongs to this array rather than to the children, so
+                // it is sliced by `offset` alone.
                 nulls: self.nulls.as_ref().map(|x| x.slice(offset, length)),
             }
         } else {
