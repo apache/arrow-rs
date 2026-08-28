@@ -671,15 +671,10 @@ where
             .len()
             .checked_div(values.len().max(1))
             .unwrap_or(0);
-        // Cap initial allocation to the maximum representable output length.
-        // `child_len` is bounded by `OffsetType::Native::MAX_OFFSET`, so pre-allocating
-        // more than that is unnecessary
-        let max_output_bytes = OffsetType::Native::MAX_OFFSET.saturating_mul(bytes_per_value);
         let mut dst_buf = MutableBuffer::new(
             avg_row_len
                 .saturating_mul(indices.len())
-                .saturating_mul(bytes_per_value)
-                .min(max_output_bytes),
+                .saturating_mul(bytes_per_value),
         );
 
         let mut child_len = OffsetType::Native::zero();
