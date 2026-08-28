@@ -461,7 +461,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         }
         Ok((
             self.value_builder.build()?,
-            Arc::new(builder.build()),
+            Arc::new(builder.build()?),
             self.nulls.finish(),
         ))
     }

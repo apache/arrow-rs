@@ -17,7 +17,7 @@
 
 use crate::{ArrayRef, StructArray};
 use arrow_buffer::NullBuffer;
-use arrow_schema::{Field, FieldRef, Fields};
+use arrow_schema::{ArrowError, Field, FieldRef, Fields};
 use std::sync::Arc;
 
 /// Builds a [`StructArray`] from completed child arrays.
@@ -37,7 +37,8 @@ use std::sync::Arc;
 /// let array = StructArrayBuilder::new()
 ///     .with_field("name", names, false)
 ///     .with_field("value", values, false)
-///     .build();
+///     .build()
+///     .unwrap();
 ///
 /// assert_eq!(array.len(), 2);
 /// ```
@@ -88,12 +89,12 @@ impl StructArrayBuilder {
 
     /// Builds the [`StructArray`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the fields, child arrays, or null buffer have incompatible
-    /// data types or lengths.
-    pub fn build(self) -> StructArray {
-        StructArray::new(Fields::from(self.fields), self.arrays, self.nulls)
+    /// Returns an error if the fields, child arrays, or null buffer have
+    /// incompatible data types or lengths.
+    pub fn build(self) -> Result<StructArray, ArrowError> {
+        StructArray::try_new(Fields::from(self.fields), self.arrays, self.nulls)
     }
 }
 
@@ -117,7 +118,8 @@ mod tests {
             .with_field("name", names, false)
             .with_field_ref(value_field, values)
             .with_nulls(nulls.clone())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(array.len(), 2);
         assert_eq!(array.column_names(), &["name", "value"]);
@@ -126,29 +128,35 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Incorrect array length for StructArray field \\\"value\\\", expected 2 got 1"
-    )]
-    fn build_panics_on_mismatched_child_lengths() {
+    fn build_errors_on_mismatched_child_lengths() {
         let names = Arc::new(StringArray::from(vec!["one", "two"])) as ArrayRef;
         let values = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
 
-        StructArrayBuilder::new()
+        let err = StructArrayBuilder::new()
             .with_field("name", names, false)
             .with_field("value", values, false)
-            .build();
+            .build()
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect array length for StructArray field \"value\", expected 2 got 1"
+        );
     }
 
     #[test]
-    #[should_panic(
-        expected = "Incorrect datatype for StructArray field \\\"value\\\", expected Int64 got Int32"
-    )]
-    fn build_panics_on_mismatched_field_data_type() {
+    fn build_errors_on_mismatched_field_data_type() {
         let value_field = Arc::new(Field::new("value", DataType::Int64, false));
         let values = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
 
-        StructArrayBuilder::new()
+        let err = StructArrayBuilder::new()
             .with_field_ref(value_field, values)
-            .build();
+            .build()
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect datatype for StructArray field \"value\", expected Int64 got Int32"
+        );
     }
 }

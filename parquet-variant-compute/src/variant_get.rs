@@ -3781,7 +3781,8 @@ mod test {
         let outer_typed_value = StructArrayBuilder::new()
             .with_field("inner", ArrayRef::from(inner), false)
             .with_nulls(outer_typed_value_nulls)
-            .build();
+            .build()
+            .unwrap();
 
         let outer =
             ShreddedVariantFieldArray::perfectly_shredded(Arc::new(outer_typed_value) as ArrayRef);
@@ -3795,7 +3796,8 @@ mod test {
         let typed_value = StructArrayBuilder::new()
             .with_field("outer", ArrayRef::from(outer), false)
             .with_nulls(typed_value_nulls)
-            .build();
+            .build()
+            .unwrap();
 
         // Build final VariantArray with top-level nulls
         let metadata_array =
@@ -3867,7 +3869,8 @@ mod test {
         // Create main typed_value struct (only contains shredded fields)
         let typed_value_struct = StructArrayBuilder::new()
             .with_field("x", ArrayRef::from(x_field_shredded), false)
-            .build();
+            .build()
+            .unwrap();
 
         // Build VariantArray with both value and typed_value (PartiallyShredded)
         // Top-level null is encoded in the main StructArray's null mask

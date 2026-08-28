@@ -418,7 +418,7 @@ impl VariantArray {
         }
 
         Self {
-            inner: builder.build(),
+            inner: builder.build().unwrap(),
             metadata,
             shredding_state: ShreddingState::new(value, typed_value),
         }
@@ -834,7 +834,7 @@ impl ShreddedVariantFieldArray {
         }
 
         Self {
-            inner: builder.build(),
+            inner: builder.build().unwrap(),
             shredding_state: ShreddingState::new(value, typed_value),
         }
     }
@@ -1391,7 +1391,8 @@ mod test {
         let struct_array = StructArrayBuilder::new()
             .with_field("metadata", Arc::new(metadata), false)
             .with_field("typed_value", typed_value, true)
-            .build();
+            .build()
+            .unwrap();
         assert!(struct_array.column_by_name("value").is_none());
 
         let variant_array = VariantArray::try_new(&struct_array).unwrap();
@@ -1532,6 +1533,7 @@ mod test {
             .with_field("value", value, true)
             .with_field("typed_value", typed_value, true)
             .build()
+            .unwrap()
     }
 
     #[test]
@@ -1555,10 +1557,12 @@ mod test {
         let leaf = FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n([0u8; 16], 1)).unwrap();
         let inner = StructArrayBuilder::new()
             .with_field("typed_value", Arc::new(leaf), true)
-            .build();
+            .build()
+            .unwrap();
         let object = StructArrayBuilder::new()
             .with_field("id", Arc::new(inner), false)
-            .build();
+            .build()
+            .unwrap();
         let input = make_variant_struct_with_typed_value(Arc::new(object));
 
         // typed_value (struct) -> id (struct) -> typed_value (the FixedSizeBinary(16) UUID leaf).
