@@ -659,16 +659,15 @@ where
     let mut dst_offsets = Vec::with_capacity(indices.len() + 1);
     dst_offsets.push(OffsetType::Native::zero());
 
-    let field = match values.data_type() {
-        DataType::List(fld) | DataType::LargeList(fld) => fld.clone(),
-        dtype => unreachable!("take_list called with non-list data type {dtype}"),
-    };
+    let field = values.value_field().clone();
 
     let is_primitive_child = child_data.null_count() == 0 && child_data.data_type().is_primitive();
 
     if is_primitive_child {
         let values_buf = &child_data.buffers()[0];
-        let bytes_per_value = child_data.data_type().primitive_width().unwrap_or(0);
+        let Some(bytes_per_value) = child_data.data_type().primitive_width() else {
+            unreachable!("is_primitive guarantees primitive_width is Some")
+        };
         let child_buf_offset = child_data.offset() * bytes_per_value;
 
         let avg_row_len = child_data
@@ -706,7 +705,8 @@ where
                     let row = if CHECKED {
                         indices.value(vidx).as_usize()
                     } else {
-                        // SAFETY: `vidx` comes from validity bitmap over `indices`, so in-bounds.
+                        // SAFETY: !CHECKED means the caller guarantees all indices are valid;
+                        // `vidx` is further bounded by the validity bitmap of `indices`.
                         unsafe { indices.value_unchecked(vidx) }.as_usize()
                     };
                     let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
@@ -775,7 +775,8 @@ where
                 let row = if CHECKED {
                     indices.value(i).as_usize()
                 } else {
-                    // SAFETY: `i` comes from validity bitmap over `indices`, so in-bounds.
+                    // SAFETY: !CHECKED means the caller guarantees all indices are valid;
+                    // `i` is further bounded by the validity bitmap of `indices`.
                     unsafe { indices.value_unchecked(i) }.as_usize()
                 };
                 mutable.try_extend(
