@@ -778,6 +778,8 @@ pub trait ArrayDecoder: Send {
 /// use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape, TapeElement};
 /// use arrow_json::ReaderBuilder;
 /// use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema};
+/// use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
+/// use arrow_array::StringArray;
 ///
 /// /// Decodes `[104, 105]` into the bytes `b"hi"`
 /// struct IntArrayBinaryDecoder;
@@ -814,17 +816,38 @@ pub trait ArrayDecoder: Send {
 ///     }
 /// }
 ///
+/// /// Upper-cases whatever the reader's own decoder produced
+/// struct ShoutDecoder(Box<dyn ArrayDecoder>);
+///
+/// impl ArrayDecoder for ShoutDecoder {
+///     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+///         let inner = self.0.decode(tape, pos)?;
+///         let values = inner.as_string::<i32>();
+///         Ok(Arc::new(StringArray::from_iter(
+///             values.iter().map(|v| v.map(str::to_uppercase)),
+///         )))
+///     }
+/// }
+///
 /// #[derive(Debug)]
 /// struct IntArrayBinaryDecoderFactory;
 ///
 /// impl DecoderFactory for IntArrayBinaryDecoderFactory {
 ///     fn make_default_decoder(
 ///         &self,
-///         _ctx: &DecoderContext,
+///         ctx: &DecoderContext,
 ///         field: &FieldRef,
-///         _is_nullable: bool,
+///         is_nullable: bool,
 ///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
-///         // `field.metadata()` is also available, e.g. for extension types
+///         // Selection can key off metadata, e.g. to recognise an extension type, and
+///         // build on the reader's own decoder for the very same field
+///         if field.metadata().get(EXTENSION_TYPE_NAME_KEY).map(String::as_str)
+///             == Some("apache.shout")
+///         {
+///             let inner = ctx.make_builtin_decoder(field, is_nullable)?;
+///             return Ok(Some(Box::new(ShoutDecoder(inner))));
+///         }
+///
 ///         match field.data_type() {
 ///             DataType::Binary => Ok(Some(Box::new(IntArrayBinaryDecoder))),
 ///             // Returning `None` uses the reader's default decoder
@@ -838,9 +861,11 @@ pub trait ArrayDecoder: Send {
 ///     Field::new("bytes", DataType::Binary, true),
 ///     Field::new("float", DataType::Float64, true),
 ///     Field::new("nested", DataType::Struct(nested), true),
+///     Field::new("shout", DataType::Utf8, true)
+///         .with_metadata([(EXTENSION_TYPE_NAME_KEY, "apache.shout")]),
 /// ]));
 ///
-/// let json = r#"{"bytes": [104, 105], "float": 1.0, "nested": {"inner": [104, 105]}}
+/// let json = r#"{"bytes": [104, 105], "float": 1.0, "nested": {"inner": [104, 105]}, "shout": "hi"}
 /// {"float": 2.3}
 /// {"bytes": [98], "nested": {"inner": [98]}}
 /// "#;
@@ -863,6 +888,9 @@ pub trait ArrayDecoder: Send {
 /// let inner = batch.column(2).as_struct().column(0).as_binary::<i32>();
 /// assert_eq!(inner.value(0), b"hi");
 /// assert_eq!(batch.column(1).as_primitive::<Float64Type>().value(0), 1.0);
+///
+/// // Dispatched on metadata, and decoded by the reader's own `Utf8` decoder
+/// assert_eq!(batch.column(3).as_string::<i32>().value(0), "HI");
 /// ```
 ///
 /// [`EncoderFactory`]: crate::EncoderFactory
@@ -1115,7 +1143,6 @@ mod tests {
     };
     use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
-    use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
     use arrow_schema::{Field, Fields};
     use serde_json::json;
     use std::fs::File;
@@ -4077,24 +4104,6 @@ mod tests {
             assert_eq!(col.value(i), (i as i32) + 1);
         }
     }
-    /// Decodes a string as its byte length
-    struct StringLenDecoder;
-
-    impl ArrayDecoder for StringLenDecoder {
-        fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
-            let mut builder = Int32Array::builder(pos.len());
-            for p in pos {
-                match tape.get(*p) {
-                    TapeElement::String(idx) => {
-                        builder.append_value(tape.get_string(idx).len() as i32)
-                    }
-                    TapeElement::Null => builder.append_null(),
-                    _ => return Err(tape.error(*p, "string")),
-                }
-            }
-            Ok(Arc::new(builder.finish()))
-        }
-    }
 
     /// Declining everything must be indistinguishable from no factory at all.
     #[test]
@@ -4164,102 +4173,6 @@ mod tests {
                 "{expected:?} missing from {by_name:?}"
             );
         }
-    }
-
-    /// `make_builtin_decoder` serves the case `make_decoder` cannot: delegating for the
-    /// *same* field, which would otherwise loop.
-    #[test]
-    fn test_decoder_factory_can_delegate_to_builtin_for_same_field() {
-        /// Upper-cases whatever the built-in decoder produced
-        struct Upper(Box<dyn ArrayDecoder>);
-
-        impl ArrayDecoder for Upper {
-            fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
-                let inner = self.0.decode(tape, pos)?;
-                let values = inner.as_string::<i32>();
-                Ok(Arc::new(StringArray::from_iter(
-                    values.iter().map(|v| v.map(str::to_uppercase)),
-                )))
-            }
-        }
-
-        #[derive(Debug)]
-        struct UpperFactory;
-
-        impl DecoderFactory for UpperFactory {
-            fn make_default_decoder(
-                &self,
-                ctx: &DecoderContext,
-                field: &FieldRef,
-                is_nullable: bool,
-            ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
-                match field.data_type() {
-                    // The SAME field -- via `make_decoder` this would loop forever
-                    DataType::Utf8 => Ok(Some(Box::new(Upper(
-                        ctx.make_builtin_decoder(field, is_nullable)?,
-                    )))),
-                    _ => Ok(None),
-                }
-            }
-        }
-
-        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
-        let batch = ReaderBuilder::new(schema)
-            .with_decoder_factory(Arc::new(UpperFactory))
-            .build(Cursor::new(br#"{"s": "hello"}"#.as_slice()))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap();
-
-        // Upper-cased, so this decoder ran; "hello" at all, so the built-in did the work
-        assert_eq!(batch.column(0).as_string::<i32>().value(0), "HELLO");
-    }
-
-    /// Why the factory receives a `FieldRef`: selection can key off field metadata.
-    #[test]
-    fn test_decoder_factory_can_dispatch_on_field_metadata() {
-        #[derive(Debug)]
-        struct ExtensionFactory;
-
-        impl DecoderFactory for ExtensionFactory {
-            fn make_default_decoder(
-                &self,
-                _ctx: &DecoderContext,
-                field: &FieldRef,
-                _is_nullable: bool,
-            ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
-                // Two fields share a data type; only the annotated one is overridden
-                match field.metadata().get(EXTENSION_TYPE_NAME_KEY) {
-                    Some(name) if name == "mycompany.strlen" => {
-                        Ok(Some(Box::new(StringLenDecoder)))
-                    }
-                    _ => Ok(None),
-                }
-            }
-        }
-
-        let tagged = Field::new("tagged", DataType::Int32, true)
-            .with_metadata([(EXTENSION_TYPE_NAME_KEY, "mycompany.strlen")]);
-        let schema = Arc::new(Schema::new(vec![
-            tagged,
-            Field::new("plain", DataType::Int32, true),
-        ]));
-
-        let batch = ReaderBuilder::new(schema)
-            .with_decoder_factory(Arc::new(ExtensionFactory))
-            .build(Cursor::new(
-                br#"{"tagged": "hello", "plain": 7}"#.as_slice(),
-            ))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap();
-
-        // Overridden
-        assert_eq!(batch.column(0).as_primitive::<Int32Type>().value(0), 5);
-        // Same type, no metadata
-        assert_eq!(batch.column(1).as_primitive::<Int32Type>().value(0), 7);
     }
 
     /// A custom decoder's output is not trusted: the arrays built from it are
