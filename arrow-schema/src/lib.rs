@@ -187,11 +187,11 @@ impl ops::Not for SortOptions {
 /// two [`DataType`]s for [semantic equality](DataType::semantic_equality).
 ///
 /// Plain [`PartialEq`] on [`DataType`] requires an exact match of every nested
-/// field, including its name, nullability, and metadata. `EquivlenceGauge` lets
+/// field, including its name, nullability, and metadata. `EquivalenceGauge` lets
 /// callers relax those checks, e.g. to treat `List<item: Int32>` and
 /// `List<element: Int32>` as equivalent by setting `check_field_name` to `false`.
 #[derive(Clone, Debug)]
-pub struct EquivlenceGauge {
+pub struct EquivalenceGauge {
     /// If `true`, nested fields must have the same nullability to be considered equal.
     pub check_nullibility: bool,
     /// If `true`, nested fields must have the same name to be considered equal.
@@ -202,7 +202,7 @@ pub struct EquivlenceGauge {
 
 /// Compares two [`DataType`]s for semantic equality, according to the rules
 /// configured by `depth`. See [`DataType::semantic_equality`] for details.
-pub fn equal_datatypes(dt: &DataType, other: &DataType, depth: &EquivlenceGauge) -> bool {
+pub fn equal_datatypes(dt: &DataType, other: &DataType, depth: &EquivalenceGauge) -> bool {
     dt.semantic_equality(other, depth)
 }
 

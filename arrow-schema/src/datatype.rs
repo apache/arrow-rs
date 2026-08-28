@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{ArrowError, EquivlenceGauge, Field, FieldRef, Fields, UnionFields};
+use crate::{ArrowError, EquivalenceGauge, Field, FieldRef, Fields, UnionFields};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -878,9 +878,9 @@ impl DataType {
     /// # Example
     /// ```
     /// use std::sync::Arc;
-    /// use arrow_schema::{DataType, EquivlenceGauge, Field};
+    /// use arrow_schema::{DataType, EquivalenceGauge, Field};
     ///
-    /// let ignore_names = EquivlenceGauge {
+    /// let ignore_names = EquivalenceGauge {
     ///     check_nullibility: true,
     ///     check_field_name: false,
     ///     check_metadata: true,
@@ -892,8 +892,8 @@ impl DataType {
     /// assert_ne!(a, b);
     /// assert!(a.semantic_equality(&b, &ignore_names));
     /// ```
-    pub fn semantic_equality(&self, other: &DataType, gauge: &EquivlenceGauge) -> bool {
-        fn fields_eq(a: &Field, b: &Field, gauge: &EquivlenceGauge) -> bool {
+    pub fn semantic_equality(&self, other: &DataType, gauge: &EquivalenceGauge) -> bool {
+        fn fields_eq(a: &Field, b: &Field, gauge: &EquivalenceGauge) -> bool {
             (!gauge.check_field_name || a.name() == b.name())
                 && (!gauge.check_nullibility || a.is_nullable() == b.is_nullable())
                 && (!gauge.check_metadata || a.metadata() == b.metadata())
@@ -904,9 +904,7 @@ impl DataType {
             (DataType::List(a), DataType::List(b))
             | (DataType::ListView(a), DataType::ListView(b))
             | (DataType::LargeList(a), DataType::LargeList(b))
-            | (DataType::LargeListView(a), DataType::LargeListView(b)) => {
-                fields_eq(a, b, gauge)
-            }
+            | (DataType::LargeListView(a), DataType::LargeListView(b)) => fields_eq(a, b, gauge),
             (DataType::FixedSizeList(a, size_a), DataType::FixedSizeList(b, size_b)) => {
                 size_a == size_b && fields_eq(a, b, gauge)
             }
@@ -1356,12 +1354,12 @@ mod tests {
 
     #[test]
     fn test_semantic_equality_ignores_field_name() {
-        let strict = EquivlenceGauge {
+        let strict = EquivalenceGauge {
             check_nullibility: true,
             check_field_name: true,
             check_metadata: true,
         };
-        let ignore_names = EquivlenceGauge {
+        let ignore_names = EquivalenceGauge {
             check_field_name: false,
             ..strict.clone()
         };
@@ -1386,12 +1384,12 @@ mod tests {
         ]));
         let b = DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)]));
 
-        let strict = EquivlenceGauge {
+        let strict = EquivalenceGauge {
             check_nullibility: true,
             check_field_name: true,
             check_metadata: true,
         };
-        let lenient = EquivlenceGauge {
+        let lenient = EquivalenceGauge {
             check_nullibility: false,
             check_field_name: true,
             check_metadata: false,
@@ -1403,7 +1401,7 @@ mod tests {
 
     #[test]
     fn test_semantic_equality_recurses_into_nested_types() {
-        let gauge = EquivlenceGauge {
+        let gauge = EquivalenceGauge {
             check_nullibility: true,
             check_field_name: false,
             check_metadata: true,
