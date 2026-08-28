@@ -669,7 +669,8 @@ fn take_boolean<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
     let bits = array.values();
     match array.nulls().filter(|n| n.null_count() > 0) {
         Some(array_nulls) => {
-            let (val_buf, null_buf) = take_bits_with_validity::<_, CHECKED>(bits, array_nulls.inner(), indices);
+            let (val_buf, null_buf) =
+                take_bits_with_validity::<_, CHECKED>(bits, array_nulls.inner(), indices);
             BooleanArray::new(val_buf, null_buf)
         }
         None => {
