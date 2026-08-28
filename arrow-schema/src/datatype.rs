@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::{ArrowError, EquivlenceGauge, Field, FieldRef, Fields, UnionFields};
 use std::str::FromStr;
 use std::sync::Arc;
-
-use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 
 /// Datatypes supported by this implementation of Apache Arrow.
 ///
@@ -864,6 +863,78 @@ impl DataType {
     pub fn new_fixed_size_list(data_type: DataType, size: i32, nullable: bool) -> Self {
         DataType::FixedSizeList(Arc::new(Field::new_list_field(data_type, nullable)), size)
     }
+    /// Compares this [`DataType`] with `other` for semantic equality, according
+    /// to the rules configured by `gauge`.
+    ///
+    /// Unlike the derived [`PartialEq`], this recursively compares nested
+    /// [`Field`]s (e.g. the element field of a [`DataType::List`], or the
+    /// fields of a [`DataType::Struct`]) while letting the caller ignore
+    /// aspects of those fields that don't matter for their use case, such as
+    /// field names, nullability, or metadata. This is useful when comparing
+    /// data types that describe logically-compatible data but were built
+    /// with different conventions, e.g. a `List` whose inner field is named
+    /// `"item"` vs. one named `"element"`.
+    ///
+    /// # Example
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow_schema::{DataType, EquivlenceGauge, Field};
+    ///
+    /// let ignore_names = EquivlenceGauge {
+    ///     check_nullibility: true,
+    ///     check_field_name: false,
+    ///     check_metadata: true,
+    /// };
+    ///
+    /// let a = DataType::new_list(DataType::Int32, true);
+    /// let b = DataType::List(Arc::new(Field::new("element", DataType::Int32, true)));
+    ///
+    /// assert_ne!(a, b);
+    /// assert!(a.semantic_equality(&b, &ignore_names));
+    /// ```
+    pub fn semantic_equality(&self, other: &DataType, gauge: &EquivlenceGauge) -> bool {
+        fn fields_eq(a: &Field, b: &Field, gauge: &EquivlenceGauge) -> bool {
+            (!gauge.check_field_name || a.name() == b.name())
+                && (!gauge.check_nullibility || a.is_nullable() == b.is_nullable())
+                && (!gauge.check_metadata || a.metadata() == b.metadata())
+                && a.data_type().semantic_equality(b.data_type(), gauge)
+        }
+
+        match (self, other) {
+            (DataType::List(a), DataType::List(b))
+            | (DataType::ListView(a), DataType::ListView(b))
+            | (DataType::LargeList(a), DataType::LargeList(b))
+            | (DataType::LargeListView(a), DataType::LargeListView(b)) => {
+                fields_eq(a, b, gauge)
+            }
+            (DataType::FixedSizeList(a, size_a), DataType::FixedSizeList(b, size_b)) => {
+                size_a == size_b && fields_eq(a, b, gauge)
+            }
+            (DataType::Struct(a), DataType::Struct(b)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(fa, fb)| fields_eq(fa, fb, gauge))
+            }
+            (DataType::Union(a, mode_a), DataType::Union(b, mode_b)) => {
+                mode_a == mode_b
+                    && a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|((id_a, fa), (id_b, fb))| id_a == id_b && fields_eq(fa, fb, gauge))
+            }
+            (DataType::Map(a, sorted_a), DataType::Map(b, sorted_b)) => {
+                sorted_a == sorted_b && fields_eq(a, b, gauge)
+            }
+            (DataType::Dictionary(key_a, val_a), DataType::Dictionary(key_b, val_b)) => {
+                key_a.semantic_equality(key_b, gauge) && val_a.semantic_equality(val_b, gauge)
+            }
+            (DataType::RunEndEncoded(re_a, val_a), DataType::RunEndEncoded(re_b, val_b)) => {
+                fields_eq(re_a, re_b, gauge) && fields_eq(val_a, val_b, gauge)
+            }
+            _ => self == other,
+        }
+    }
 }
 
 /// The maximum precision for [DataType::Decimal32] values
@@ -1281,5 +1352,78 @@ mod tests {
             },
         )
         ");
+    }
+
+    #[test]
+    fn test_semantic_equality_ignores_field_name() {
+        let strict = EquivlenceGauge {
+            check_nullibility: true,
+            check_field_name: true,
+            check_metadata: true,
+        };
+        let ignore_names = EquivlenceGauge {
+            check_field_name: false,
+            ..strict.clone()
+        };
+
+        let item = DataType::new_list(DataType::Int32, true);
+        let element = DataType::List(Arc::new(Field::new("element", DataType::Int32, true)));
+
+        assert_ne!(item, element);
+        assert!(!item.semantic_equality(&element, &strict));
+        assert!(item.semantic_equality(&element, &ignore_names));
+    }
+
+    #[test]
+    fn test_semantic_equality_ignores_nullability_and_metadata() {
+        use std::collections::HashMap;
+
+        let mut metadata = HashMap::new();
+        metadata.insert("k".to_string(), "v".to_string());
+
+        let a = DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int32, false).with_metadata(metadata.clone()),
+        ]));
+        let b = DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)]));
+
+        let strict = EquivlenceGauge {
+            check_nullibility: true,
+            check_field_name: true,
+            check_metadata: true,
+        };
+        let lenient = EquivlenceGauge {
+            check_nullibility: false,
+            check_field_name: true,
+            check_metadata: false,
+        };
+
+        assert!(!a.semantic_equality(&b, &strict));
+        assert!(a.semantic_equality(&b, &lenient));
+    }
+
+    #[test]
+    fn test_semantic_equality_recurses_into_nested_types() {
+        let gauge = EquivlenceGauge {
+            check_nullibility: true,
+            check_field_name: false,
+            check_metadata: true,
+        };
+
+        let a = DataType::new_list(
+            DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, true)])),
+            true,
+        );
+        let matching = DataType::List(Arc::new(Field::new(
+            "element",
+            DataType::Struct(Fields::from(vec![Field::new("y", DataType::Int32, true)])),
+            true,
+        )));
+        let mismatched = DataType::new_list(
+            DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int64, true)])),
+            true,
+        );
+
+        assert!(a.semantic_equality(&matching, &gauge));
+        assert!(!a.semantic_equality(&mismatched, &gauge));
     }
 }
