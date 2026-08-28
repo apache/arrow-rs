@@ -758,13 +758,17 @@ where
                     src_offsets[row].as_usize(),
                     src_offsets[row + 1].as_usize(),
                 )?;
-                dst_offsets.push(OffsetType::Native::from_usize(mutable.len()).unwrap());
+                dst_offsets.push(
+                    OffsetType::Native::from_usize(mutable.len())
+                        .ok_or_else(|| ArrowError::OffsetOverflowError(mutable.len()))?,
+                );
             }
         }
         Some(valid) => {
             let mut last = 0;
             for i in valid.valid_indices() {
-                let current = OffsetType::Native::from_usize(mutable.len()).unwrap();
+                let current = OffsetType::Native::from_usize(mutable.len())
+                    .ok_or_else(|| ArrowError::OffsetOverflowError(mutable.len()))?;
                 if last < i {
                     dst_offsets.extend(std::iter::repeat_n(current, i - last));
                 }
@@ -779,11 +783,15 @@ where
                     src_offsets[row].as_usize(),
                     src_offsets[row + 1].as_usize(),
                 )?;
-                dst_offsets.push(OffsetType::Native::from_usize(mutable.len()).unwrap());
+                dst_offsets.push(
+                    OffsetType::Native::from_usize(mutable.len())
+                        .ok_or_else(|| ArrowError::OffsetOverflowError(mutable.len()))?,
+                );
                 last = i + 1;
             }
             // Filling offsets for null values at the end
-            let final_offset = OffsetType::Native::from_usize(mutable.len()).unwrap();
+            let final_offset = OffsetType::Native::from_usize(mutable.len())
+                .ok_or_else(|| ArrowError::OffsetOverflowError(mutable.len()))?;
             dst_offsets.extend(std::iter::repeat_n(final_offset, indices.len() - last));
         }
     }
@@ -3082,6 +3090,43 @@ mod tests {
     #[test]
     fn test_take_list_offset_overflow_nullable() {
         let (array, n) = list_offset_overflow_fixture();
+        let validity =
+            NullBuffer::from_iter(std::iter::once(false).chain(std::iter::repeat_n(true, n)));
+        let indices = Int32Array::new(vec![0i32; n + 1].into(), Some(validity));
+        assert!(matches!(
+            take(&array, &indices, None),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
+    }
+
+    /// Like [`list_offset_overflow_fixture`] but with a nullable child, forcing the slow path.
+    fn list_nullable_child_overflow_fixture() -> (ListArray, usize) {
+        let value_len = 1_000_000usize;
+        // One null in the child causes is_primitive_child to be false.
+        let mut child_builder = Int32Builder::new();
+        child_builder.append_nulls(1);
+        child_builder.append_value_n(0, value_len - 1);
+        let child = child_builder.finish();
+        let offsets = OffsetBuffer::from_lengths([value_len]);
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let array = ListArray::new(field, offsets, Arc::new(child), None);
+        let n = i32::MAX as usize / value_len + 1;
+        (array, n)
+    }
+
+    #[test]
+    fn test_take_list_mutable_offset_overflow() {
+        let (array, n) = list_nullable_child_overflow_fixture();
+        let indices = Int32Array::from(vec![0; n]);
+        assert!(matches!(
+            take(&array, &indices, None),
+            Err(ArrowError::OffsetOverflowError(_))
+        ));
+    }
+
+    #[test]
+    fn test_take_list_mutable_offset_overflow_nullable() {
+        let (array, n) = list_nullable_child_overflow_fixture();
         let validity =
             NullBuffer::from_iter(std::iter::once(false).chain(std::iter::repeat_n(true, n)));
         let indices = Int32Array::new(vec![0i32; n + 1].into(), Some(validity));
