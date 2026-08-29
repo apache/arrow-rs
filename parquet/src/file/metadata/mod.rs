@@ -368,12 +368,12 @@ impl ParquetMetaDataBuilder {
         self
     }
 
-    /// Returns the current column index from the builder, replacing it with `None`
+    /// Returns the current [`PageIndexProvider`] from the builder, replacing it with `None`
     pub fn take_page_index(&mut self) -> Option<Arc<dyn PageIndexProvider>> {
         std::mem::take(&mut self.0.page_index)
     }
 
-    /// Return a reference to the current column index, if any
+    /// Return a reference to the current [`PageIndexProvider`], if any
     pub fn page_index(&self) -> Option<&dyn PageIndexProvider> {
         self.0.page_index.as_ref().map(|arc| arc.as_ref())
     }
