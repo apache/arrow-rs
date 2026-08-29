@@ -1611,7 +1611,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function: mktime
     fn string_to_timestamp_no_timezone() {
         // This test is designed to succeed in regardless of the local
         // timezone the test machine is running. Thus it is still
