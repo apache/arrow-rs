@@ -169,6 +169,10 @@ fn mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
         ("99pct_true", create_boolean_array(len, 0.0, 0.99)),
         ("90pct_true", create_boolean_array(len, 0.0, 0.9)),
         ("50pct_true", create_boolean_array(len, 0.0, 0.5)),
+        (
+            "true_then_false",
+            BooleanArray::from_iter((0..len).map(|i| i < len / 2)),
+        ),
         ("10pct_true", create_boolean_array(len, 0.0, 0.1)),
         ("1pct_true", create_boolean_array(len, 0.0, 0.01)),
         ("all_false", create_boolean_array(len, 0.0, 0.0)),

@@ -306,7 +306,7 @@ pub fn field_to_json(field: &Field) -> serde_json::Value {
         _ => vec![],
     };
 
-    match field.data_type() {
+    let mut json = match field.data_type() {
         DataType::Dictionary(index_type, value_type) => {
             #[expect(deprecated)]
             let dict_id = field.dict_id().unwrap();
@@ -328,7 +328,17 @@ pub fn field_to_json(field: &Field) -> serde_json::Value {
             "type": data_type_to_json(field.data_type()),
             "children": children
         }),
+    };
+
+    if !field.metadata().is_empty() {
+        json["metadata"] = field
+            .metadata()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
     }
+
+    json
 }
 
 #[cfg(test)]

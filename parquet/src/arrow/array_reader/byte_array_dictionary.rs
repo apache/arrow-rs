@@ -17,8 +17,12 @@
 
 use std::any::Any;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait, new_empty_array};
+use arrow_array::cast::AsArray;
+use arrow_array::{
+    Array, ArrayRef, BinaryViewArray, OffsetSizeTrait, StringViewArray, new_empty_array,
+};
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
@@ -50,9 +54,9 @@ macro_rules! make_reader {
                     if let Some(threshold) = $padding_threshold {
                         reader.set_padding_threshold(threshold);
                     }
-                    Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::new(
+                    Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::try_new(
                         $pages, $data_type, reader,
-                    )))
+                    )?))
                 }
             )+
             _ => Err(general_err!(
@@ -93,21 +97,21 @@ pub fn make_byte_array_dictionary_reader(
         ArrowType::Dictionary(key_type, value_type) => {
             make_reader! {
                 (pages, column_desc, data_type, batch_size, padding_threshold) => match (key_type.as_ref(), value_type.as_ref()) {
-                    (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u8, i32),
+                    (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u8, i32),
                     (ArrowType::UInt8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u8, i64),
-                    (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i8, i32),
+                    (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i8, i32),
                     (ArrowType::Int8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i8, i64),
-                    (ArrowType::UInt16, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u16, i32),
+                    (ArrowType::UInt16, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u16, i32),
                     (ArrowType::UInt16, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u16, i64),
-                    (ArrowType::Int16, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i16, i32),
+                    (ArrowType::Int16, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i16, i32),
                     (ArrowType::Int16, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i16, i64),
-                    (ArrowType::UInt32, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u32, i32),
+                    (ArrowType::UInt32, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u32, i32),
                     (ArrowType::UInt32, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u32, i64),
-                    (ArrowType::Int32, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i32, i32),
+                    (ArrowType::Int32, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i32, i32),
                     (ArrowType::Int32, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i32, i64),
-                    (ArrowType::UInt64, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u64, i32),
+                    (ArrowType::UInt64, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u64, i32),
                     (ArrowType::UInt64, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u64, i64),
-                    (ArrowType::Int64, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i64, i32),
+                    (ArrowType::Int64, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i64, i32),
                     (ArrowType::Int64, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i64, i64),
                 }
             }
@@ -119,11 +123,41 @@ pub fn make_byte_array_dictionary_reader(
     }
 }
 
+/// Convert a dictionary-typed array with string or binary typed values
+/// to one with string or binary view typed values.
+fn convert_values_to_view(array: ArrayRef, to_type: &ArrowType) -> Result<ArrayRef> {
+    let ArrowType::Dictionary(_, to_value_type) = to_type else {
+        return Err(general_err!(
+            "Cannot convert {} dictionary values to non-dictionary type {}",
+            array.data_type(),
+            to_type
+        ));
+    };
+
+    let array = array.as_any_dictionary();
+    let values = array.values();
+
+    let new_values: ArrayRef = match to_value_type.as_ref() {
+        ArrowType::Utf8View => Arc::new(StringViewArray::from(values.as_string::<i32>())),
+        ArrowType::BinaryView => Arc::new(BinaryViewArray::from(values.as_binary::<i32>())),
+        other => {
+            return Err(general_err!(
+                "Cannot convert dictionary values to {}",
+                other
+            ));
+        }
+    };
+
+    Ok(array.with_values(new_values))
+}
+
 /// An [`ArrayReader`] for dictionary encoded variable length byte arrays
 ///
 /// Will attempt to preserve any dictionary encoding present in the parquet data
 struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     data_type: ArrowType,
+    /// Type used by the dictionary buffer when it is different from the output data type.
+    buffer_type: Option<ArrowType>,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
@@ -137,19 +171,39 @@ where
     K: FromBitpacked + Ord + ArrowNativeType,
     V: OffsetSizeTrait,
 {
-    fn new(
+    fn try_new(
         pages: Box<dyn PageIterator>,
         data_type: ArrowType,
         record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let ArrowType::Dictionary(key_type, value_type) = &data_type else {
+            return Err(general_err!(
+                "Expected dictionary type, found {:?}",
+                data_type
+            ));
+        };
+
+        let buffer_type = match value_type.as_ref() {
+            ArrowType::Utf8View => Some(ArrowType::Dictionary(
+                key_type.clone(),
+                Box::new(ArrowType::Utf8),
+            )),
+            ArrowType::BinaryView => Some(ArrowType::Dictionary(
+                key_type.clone(),
+                Box::new(ArrowType::Binary),
+            )),
+            _ => None,
+        };
+
+        Ok(Self {
             data_type,
+            buffer_type,
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
             record_reader,
             hash_scratch: MutableBuffer::new(0),
-        }
+        })
     }
 }
 
@@ -184,7 +238,16 @@ where
 
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_compact_bitmap();
-        let array = buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?;
+
+        let array = match &self.buffer_type {
+            None => buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?,
+            Some(buffer_type) => {
+                let buffer_array =
+                    buffer.into_array(null_buffer, buffer_type, &mut self.hash_scratch)?;
+                convert_values_to_view(buffer_array, &self.data_type)?
+            }
+        };
+
         self.record_reader.reset();
 
         Ok(array)

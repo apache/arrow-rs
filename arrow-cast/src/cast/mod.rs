@@ -65,7 +65,7 @@ use crate::parse::{
     string_to_datetime,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{ArrowNativeType, OffsetBuffer, i256};
+use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, i256};
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
@@ -2832,7 +2832,7 @@ where
     let str_values_buf = data.buffers()[1].clone();
     let offsets = data.buffers()[0].typed_data::<FROM::Offset>();
 
-    let mut offset_builder = BufferBuilder::<TO::Offset>::new(offsets.len());
+    let mut cast_offsets = Vec::<TO::Offset>::with_capacity(offsets.len());
     offsets
         .iter()
         .try_for_each::<_, Result<_, ArrowError>>(|offset| {
@@ -2846,11 +2846,11 @@ where
                         TO::PREFIX
                     ))
                 })?;
-            offset_builder.append(offset);
+            cast_offsets.push(offset);
             Ok(())
         })?;
 
-    let offset_buffer = offset_builder.finish();
+    let offset_buffer = Buffer::from_vec(cast_offsets);
 
     let dtype = TO::DATA_TYPE;
 
@@ -4089,6 +4089,34 @@ mod tests {
         let casted_array = cast_with_options(
             &array,
             &DataType::Int8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        // overflow test: values whose low 64 bits fit the target type
+        // https://github.com/apache/arrow-rs/issues/10855
+        let value_array: Vec<Option<i256>> = vec![Some(i256::from_i128((1i128 << 64) + 5))];
+        let array = create_decimal256_array(value_array, 76, 0).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!(
+            "Cast error: value of 18446744073709551621 is out of range Int64".to_string(),
+            casted_array.unwrap_err().to_string()
+        );
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
             &CastOptions {
                 safe: true,
                 format_options: FormatOptions::default(),
@@ -11915,6 +11943,19 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_out_of_precision_decimal_to_string() {
+        // Decimal values are not validated against their type's declared
+        // precision by default. Check that out-of-precision values are rendered
+        // in full when cast to strings, rather than truncated to the declared
+        // precision (https://github.com/apache/arrow-rs/issues/10866)
+        let array = create_decimal128_array(vec![Some(123456789), Some(-123456789)], 7, 3).unwrap();
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_string::<i32>();
+        assert_eq!("123456.789", c.value(0));
+        assert_eq!("-123456.789", c.value(1));
+    }
+
+    #[test]
     fn test_cast_decimal_to_string() {
         assert!(can_cast_types(
             &DataType::Decimal32(9, 4),
@@ -11942,9 +11983,7 @@ mod tests {
                 assert_eq!("-3123.456", c.value(3));
                 assert_eq!("0.000", c.value(4));
                 assert_eq!("0.123", c.value(5));
-                assert_eq!("1234.567", c.value(6));
-                assert_eq!("-1234.567", c.value(7));
-                assert!(c.is_null(8));
+                assert!(c.is_null(6));
             };
         }
 
@@ -11975,8 +12014,6 @@ mod tests {
             Some(-3123456),
             Some(0),
             Some(123),
-            Some(123456789),
-            Some(-123456789),
             None,
         ];
         let array64: Vec<Option<i64>> = array32.iter().map(|num| num.map(|x| x as i64)).collect();

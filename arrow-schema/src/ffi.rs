@@ -203,8 +203,17 @@ impl FFI_ArrowSchema {
         Ok(self)
     }
 
-    /// Add metadata to the schema
-    pub fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
+    /// Add metadata to the schema.
+    ///
+    /// # Safety
+    ///
+    /// `self` must be a schema this crate produced (e.g. via
+    /// [`FFI_ArrowSchema::try_new`] or a `TryFrom`), not one from a foreign
+    /// producer and not [`FFI_ArrowSchema::empty`]. It reinterprets
+    /// `private_data` as our own type, so any other schema is undefined
+    /// behavior. See <https://github.com/apache/arrow-rs/issues/10679> and
+    /// <https://github.com/apache/arrow-rs/issues/10286>.
+    pub unsafe fn with_metadata<I, S>(mut self, metadata: I) -> Result<Self, ArrowError>
     where
         I: IntoIterator<Item = (S, S)>,
         S: AsRef<str>,
@@ -251,6 +260,9 @@ impl FFI_ArrowSchema {
             None
         };
 
+        // Safety: `self.private_data` was allocated as `Box<SchemaPrivateData>` by `try_new`.
+        // We take ownership temporarily with `from_raw` and put it back with `into_raw`,
+        // so there is no double-free and no other code can access `private_data` concurrently.
         unsafe {
             let mut private_data = Box::from_raw(self.private_data.cast::<SchemaPrivateData>());
             private_data.metadata = new_metadata;
@@ -394,6 +406,8 @@ impl FFI_ArrowSchema {
     ///
     /// This must be `Some` if the schema represents a dictionary-encoded type, `None` otherwise.
     pub fn dictionary(&self) -> Option<&Self> {
+        // Safety: per the C Data Interface spec, `self.dictionary` is either null (returns None)
+        // or a valid pointer to an `FFI_ArrowSchema` that lives at least as long as `self`.
         unsafe { self.dictionary.as_ref() }
     }
 
@@ -420,6 +434,8 @@ impl FFI_ArrowSchema {
             let buffer = self.metadata.cast::<u8>();
 
             fn next_four_bytes(buffer: *const u8, pos: &mut isize) -> [u8; 4] {
+                // Safety: the caller advances `pos` only by the number of bytes consumed,
+                // so `*pos..*pos+4` is always within the bounds of the metadata buffer.
                 let out = unsafe {
                     [
                         *buffer.offset(*pos),
@@ -433,6 +449,7 @@ impl FFI_ArrowSchema {
             }
 
             fn next_n_bytes(buffer: *const u8, pos: &mut isize, n: i32) -> &[u8] {
+                // Safety: same as `next_four_bytes`; `*pos..*pos+n` is within the metadata buffer.
                 let out = unsafe {
                     std::slice::from_raw_parts(buffer.offset(*pos), n.try_into().unwrap())
                 };
@@ -478,6 +495,9 @@ impl Drop for FFI_ArrowSchema {
     fn drop(&mut self) {
         match self.release {
             None => (),
+            // Safety: the release callback was set by the schema producer and follows the
+            // C Data Interface contract: it frees all resources associated with the schema
+            // and sets `release` to None. `self` is a valid, non-null pointer here.
             Some(release) => unsafe { release(self) },
         }
     }
@@ -876,10 +896,11 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
             flags |= Flags::DICTIONARY_ORDERED;
         }
 
-        FFI_ArrowSchema::try_from(field.data_type())?
+        let schema = FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
-            .with_flags(flags)?
-            .with_metadata(field.metadata())
+            .with_flags(flags)?;
+        // SAFETY: schema was just constructed by this crate.
+        unsafe { schema.with_metadata(field.metadata()) }
     }
 }
 
@@ -888,8 +909,9 @@ impl TryFrom<&Schema> for FFI_ArrowSchema {
 
     fn try_from(schema: &Schema) -> Result<Self, ArrowError> {
         let dtype = DataType::Struct(schema.fields().clone());
-        let c_schema = FFI_ArrowSchema::try_from(&dtype)?.with_metadata(&schema.metadata)?;
-        Ok(c_schema)
+        let c_schema = FFI_ArrowSchema::try_from(&dtype)?;
+        // SAFETY: c_schema was just constructed by this crate.
+        unsafe { c_schema.with_metadata(&schema.metadata) }
     }
 }
 
@@ -1083,7 +1105,8 @@ mod tests {
             .unwrap();
 
         for metadata in metadata_cases {
-            schema = schema.with_metadata(&metadata).unwrap();
+            // SAFETY: schema was constructed by this crate via try_new.
+            schema = unsafe { schema.with_metadata(&metadata) }.unwrap();
             let field = Field::try_from(&schema).unwrap();
             assert_eq!(field.metadata(), &metadata);
         }

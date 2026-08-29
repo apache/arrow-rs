@@ -35,6 +35,7 @@ static KNOWN_FILES: &[&str] = &[
     "ARROW-GH-45185.parquet",
     "ARROW-GH-47662.parquet",
     "README.md",
+    "variants",
 ];
 
 /// Returns the path to 'parquet-testing/bad_data'
