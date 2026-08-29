@@ -99,33 +99,44 @@ pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 ///
 /// # Performance
 ///
-/// When all values are known upfront, prefer constructing a [`PrimitiveArray`] directly
-/// via [`PrimitiveArray::from`] or [`PrimitiveArray::new`] instead of using this builder.
-/// Direct construction reuses the existing allocation (zero-copy from `Vec`) and avoids
-/// the overhead of per-element bookkeeping, making it significantly faster.
-///
-/// Use [`PrimitiveBuilder`] when values must be appended **incrementally** — for example,
-/// inside a loop where the final size is not known in advance.
-///
-/// # Example
+/// Rust's `Vec` is highly optimized, and Arrow's conversion from `Vec` to
+/// [`PrimitiveArray`] is zero-copy — the array reuses the same underlying allocation
+/// without any data being copied. If your values are already in a `Vec`, or can be
+/// collected into one, prefer constructing a [`PrimitiveArray`] directly:
 ///
 /// ```
 /// # use arrow_array::{Int32Array, Array};
-/// // Prefer this when values are known upfront (zero-copy, no per-element overhead):
+/// // Zero-copy: the array reuses the Vec's allocation
 /// let array = Int32Array::from(vec![1, 2, 3]);
 /// assert_eq!(array.len(), 3);
 /// ```
 ///
+/// Internally, [`PrimitiveBuilder`] is itself backed by a `Vec<T::Native>` and a
+/// [`NullBufferBuilder`], so using one does not unlock any additional performance —
+/// it is simply a convenience wrapper for incremental construction.
+///
+/// # When to use [`PrimitiveBuilder`]
+///
+/// Prefer the builder when your array **may contain nulls but you don't know their
+/// positions upfront**. Managing a `Vec<T>` and a [`NullBufferBuilder`] in parallel
+/// by hand is error-prone; the builder keeps them in sync automatically as you call
+/// [`append_value`](PrimitiveBuilder::append_value) and
+/// [`append_null`](PrimitiveBuilder::append_null).
+///
 /// ```
 /// # use arrow_array::builder::Int32Builder;
 /// # use arrow_array::Array;
-/// // Use the builder when appending values one-by-one:
 /// let mut builder = Int32Builder::new();
-/// for v in [1, 2, 3] {
-///     builder.append_value(v);
+/// for (i, v) in [1, 2, 3].iter().enumerate() {
+///     if i == 1 {
+///         builder.append_null();
+///     } else {
+///         builder.append_value(*v);
+///     }
 /// }
 /// let array = builder.finish();
 /// assert_eq!(array.len(), 3);
+/// assert!(array.is_null(1));
 /// ```
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {

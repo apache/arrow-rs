@@ -30,10 +30,10 @@ use arrow_buffer::{
     ScalarBuffer, bit_util,
 };
 use arrow_cmp::make_comparator;
-use arrow_data::transform::MutableArrayData;
+use arrow_data::{ArrayData, transform::MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, SortOptions, UnionMode};
 
-use num_traits::Zero;
+use num_traits::{CheckedAdd, Zero};
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///
@@ -652,76 +652,153 @@ where
     OffsetType::Native: OffsetSizeTrait,
     PrimitiveArray<OffsetType>: From<Vec<OffsetType::Native>>,
 {
-    let list_offsets = values.value_offsets();
+    let src_offsets = values.value_offsets();
     let child_data = values.values().to_data();
     let nulls = take_nulls::<_, CHECKED>(values.nulls(), indices);
 
-    let mut new_offsets = Vec::with_capacity(indices.len() + 1);
-    new_offsets.push(OffsetType::Native::zero());
+    let mut dst_offsets = Vec::with_capacity(indices.len() + 1);
+    dst_offsets.push(OffsetType::Native::zero());
 
-    let use_nulls = child_data.null_count() > 0;
+    let field = values.value_field().clone();
+
+    if child_data.null_count() == 0
+        && let Some(bytes_per_value) = child_data.data_type().primitive_width()
+    {
+        let values_buf = &child_data.buffers()[0];
+        let child_buf_offset = child_data.offset() * bytes_per_value;
+
+        let avg_row_len = child_data
+            .len()
+            .checked_div(values.len().max(1))
+            .unwrap_or(0);
+        let mut dst_buf = MutableBuffer::new(
+            avg_row_len
+                .saturating_mul(indices.len())
+                .saturating_mul(bytes_per_value),
+        );
+
+        let mut child_len = OffsetType::Native::zero();
+
+        match nulls.as_ref().filter(|n| n.null_count() > 0) {
+            None => {
+                for &idx in indices.values() {
+                    let row = idx.as_usize();
+                    let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
+                    let end = child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value;
+                    dst_buf.extend_from_slice(&values_buf[start..end]);
+                    child_len = child_len
+                        .checked_add(&(src_offsets[row + 1] - src_offsets[row]))
+                        .ok_or_else(|| ArrowError::OffsetOverflowError(child_len.as_usize()))?;
+                    dst_offsets.push(child_len);
+                }
+            }
+            Some(valid) => {
+                let mut prev = 0;
+                for vidx in valid.valid_indices() {
+                    // Fill offsets for null values between the two valid indices.
+                    if prev < vidx {
+                        dst_offsets.extend(std::iter::repeat_n(child_len, vidx - prev));
+                    }
+                    let row = if CHECKED {
+                        indices.value(vidx).as_usize()
+                    } else {
+                        // SAFETY: !CHECKED means the caller guarantees all indices are valid;
+                        // `vidx` is further bounded by the validity bitmap of `indices`.
+                        unsafe { indices.value_unchecked(vidx) }.as_usize()
+                    };
+                    let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
+                    let end = child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value;
+                    dst_buf.extend_from_slice(&values_buf[start..end]);
+                    child_len = child_len
+                        .checked_add(&(src_offsets[row + 1] - src_offsets[row]))
+                        .ok_or_else(|| ArrowError::OffsetOverflowError(child_len.as_usize()))?;
+                    dst_offsets.push(child_len);
+                    prev = vidx + 1;
+                }
+                dst_offsets.extend(std::iter::repeat_n(child_len, indices.len() - prev));
+            }
+        }
+
+        debug_assert_eq!(
+            dst_offsets.len(),
+            indices.len() + 1,
+            "New offsets was filled under/over the expected capacity"
+        );
+
+        // Safety: data_type, len, and buffer are all derived from the already-validated
+        // source child_data, so re-validation is unnecessary.
+        let child = make_array(unsafe {
+            ArrayData::builder(child_data.data_type().clone())
+                .len(child_len.as_usize())
+                .add_buffer(dst_buf.into())
+                .build_unchecked()
+        });
+        // SAFETY: `dst_offsets` is constructed to be monotonically increasing above.
+        let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(dst_offsets)) };
+        return GenericListArray::<OffsetType::Native>::try_new(field, offsets, child, nulls);
+    }
 
     let capacity = child_data
         .len()
         .checked_div(values.len())
-        .map(|v| v * indices.len())
+        .map(|avg| avg * indices.len())
         .unwrap_or_default();
-
-    let mut array_data = MutableArrayData::new(vec![&child_data], use_nulls, capacity);
+    let mut mutable =
+        MutableArrayData::new(vec![&child_data], child_data.null_count() > 0, capacity);
 
     match nulls.as_ref().filter(|n| n.null_count() > 0) {
         None => {
-            for index in indices.values() {
-                let ix = index.as_usize();
-                let start = list_offsets[ix].as_usize();
-                let end = list_offsets[ix + 1].as_usize();
-                array_data.try_extend(0, start, end)?;
-                new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
+            for idx in indices.values() {
+                let row = idx.as_usize();
+                mutable.try_extend(
+                    0,
+                    src_offsets[row].as_usize(),
+                    src_offsets[row + 1].as_usize(),
+                )?;
+                dst_offsets.push(
+                    OffsetType::Native::from_usize(mutable.len())
+                        .ok_or_else(|| ArrowError::OffsetOverflowError(mutable.len()))?,
+                );
             }
         }
-        Some(output_nulls) => {
-            assert_eq!(output_nulls.len(), indices.len());
-
-            let mut last_filled = 0;
-            for i in output_nulls.valid_indices() {
-                let current = OffsetType::Native::from_usize(array_data.len()).unwrap();
-                // Filling offsets for the null values between the two valid indices
-                if last_filled < i {
-                    new_offsets.extend(std::iter::repeat_n(current, i - last_filled));
+        Some(valid) => {
+            let mut last = 0;
+            for i in valid.valid_indices() {
+                let current = OffsetType::Native::from_usize(mutable.len())
+                    .ok_or_else(|| ArrowError::OffsetOverflowError(mutable.len()))?;
+                if last < i {
+                    dst_offsets.extend(std::iter::repeat_n(current, i - last));
                 }
-
-                // SAFETY: `i` comes from validity bitmap over `indices`, so in-bounds.
-                let ix = unsafe { indices.value_unchecked(i) }.as_usize();
-                let start = list_offsets[ix].as_usize();
-                let end = list_offsets[ix + 1].as_usize();
-                array_data.try_extend(0, start, end)?;
-                new_offsets.push(OffsetType::Native::from_usize(array_data.len()).unwrap());
-                last_filled = i + 1;
+                let row = if CHECKED {
+                    indices.value(i).as_usize()
+                } else {
+                    // SAFETY: !CHECKED means the caller guarantees all indices are valid;
+                    // `i` is further bounded by the validity bitmap of `indices`.
+                    unsafe { indices.value_unchecked(i) }.as_usize()
+                };
+                mutable.try_extend(
+                    0,
+                    src_offsets[row].as_usize(),
+                    src_offsets[row + 1].as_usize(),
+                )?;
+                dst_offsets.push(
+                    OffsetType::Native::from_usize(mutable.len())
+                        .ok_or_else(|| ArrowError::OffsetOverflowError(mutable.len()))?,
+                );
+                last = i + 1;
             }
-
             // Filling offsets for null values at the end
-            let final_offset = OffsetType::Native::from_usize(array_data.len()).unwrap();
-            new_offsets.extend(std::iter::repeat_n(
-                final_offset,
-                indices.len() - last_filled,
-            ));
+            let final_offset = OffsetType::Native::from_usize(mutable.len())
+                .ok_or_else(|| ArrowError::OffsetOverflowError(mutable.len()))?;
+            dst_offsets.extend(std::iter::repeat_n(final_offset, indices.len() - last));
         }
     }
 
-    assert_eq!(
-        new_offsets.len(),
-        indices.len() + 1,
-        "New offsets was filled under/over the expected capacity"
-    );
+    debug_assert_eq!(dst_offsets.len(), indices.len() + 1);
 
-    let field = match values.data_type() {
-        DataType::List(field) | DataType::LargeList(field) => field.clone(),
-        d => unreachable!("take_list called with non-list data type {d}"),
-    };
-    // SAFETY: `new_offsets` is constructed to be monotonically increasing above
-    let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(new_offsets)) };
-    let child = make_array(array_data.freeze());
-
+    // SAFETY: `dst_offsets` is constructed to be monotonically increasing above
+    let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(dst_offsets)) };
+    let child = make_array(mutable.freeze());
     GenericListArray::<OffsetType::Native>::try_new(field, offsets, child, nulls)
 }
 
@@ -766,31 +843,82 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
     indices: &PrimitiveArray<IndexType>,
     length: <UInt32Type as ArrowPrimitiveType>::Native,
 ) -> Result<FixedSizeListArray, ArrowError> {
-    let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
-    let taken = take_impl::<UInt32Type, CHECKED>(values.values().as_ref(), &list_indices)?;
+    let field = values.value_field();
+    let child = values.values();
+    let nulls = take_nulls::<_, CHECKED>(values.nulls(), indices);
 
-    // determine null count and null buffer, which are a function of `values` and `indices`
-    let num_bytes = bit_util::ceil(indices.len(), 8);
-    let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-    let null_slice = null_buf.as_slice_mut();
+    // Fast path: primitive child with no nulls  copy row-sized byte blocks directly,
+    let taken_child = if child.null_count() == 0
+        && let Some(element_size) = child.data_type().primitive_width()
+    {
+        take_fixed_size_list_primitive(
+            child,
+            indices,
+            length as usize,
+            element_size,
+            nulls.as_ref(),
+        )
+    } else {
+        let list_indices = take_value_indices_from_fixed_size_list(values, indices, length)?;
+        take_impl::<UInt32Type, CHECKED>(child.as_ref(), &list_indices)?
+    };
 
-    for i in 0..indices.len() {
-        let index = indices
-            .value(i)
-            .to_usize()
-            .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-        if !indices.is_valid(i) || values.is_null(index) {
-            bit_util::unset_bit(null_slice, i);
+    FixedSizeListArray::try_new(field.clone(), length as i32, taken_child, nulls)
+}
+
+#[inline(never)]
+fn take_fixed_size_list_primitive<IndexType: ArrowPrimitiveType>(
+    child: &ArrayRef,
+    indices: &PrimitiveArray<IndexType>,
+    list_size: usize,
+    element_size: usize,
+    taken_row_nulls: Option<&NullBuffer>,
+) -> ArrayRef {
+    let row_bytes = list_size * element_size;
+    let child_data = child.to_data();
+    let src = child_data.buffers()[0].as_slice();
+    let child_byte_offset = child_data.offset() * element_size;
+
+    debug_assert!(
+        indices.len().checked_mul(row_bytes).is_some(),
+        "take_fixed_size_list_primitive: output buffer size overflows usize"
+    );
+    let out_len = indices.len() * list_size;
+
+    let mut out = MutableBuffer::from_len_zeroed(indices.len() * row_bytes);
+    let out_slice = out.as_slice_mut();
+
+    if indices.null_count() == 0 {
+        for (out_row, index) in indices.values().iter().enumerate() {
+            let src_start = child_byte_offset + index.as_usize() * row_bytes;
+            out_slice[out_row * row_bytes..(out_row + 1) * row_bytes]
+                .copy_from_slice(&src[src_start..src_start + row_bytes]);
+        }
+    } else {
+        for (out_row, index) in indices.values().iter().enumerate() {
+            if indices.is_valid(out_row) {
+                let src_start = child_byte_offset + index.as_usize() * row_bytes;
+                out_slice[out_row * row_bytes..(out_row + 1) * row_bytes]
+                    .copy_from_slice(&src[src_start..src_start + row_bytes]);
+            }
         }
     }
+    // Expand the per-row null bitmap to per-element: each null row produces `list_size` null elements.
+    let child_null_buf = taken_row_nulls.map(|n| n.expand(list_size).buffer().clone());
 
-    let field = match values.data_type() {
-        DataType::FixedSizeList(field, _) => field.clone(),
-        d => unreachable!("take_fixed_size_list called with non-fixed-size-list data type {d}"),
+    // SAFETY:
+    // - The data buffer has `indices.len() * row_bytes` bytes = `out_len` elements of a
+    //   primitive type, matching `.len(out_len)`.
+    // - The null buffer (when present) is `ceil(out_len, 8)` bytes via `expand(list_size).buffer()`.
+    // - Primitive types have exactly one value buffer.
+    let array_data = unsafe {
+        ArrayData::builder(child.data_type().clone())
+            .len(out_len)
+            .add_buffer(out.into())
+            .null_bit_buffer(child_null_buf)
+            .build_unchecked()
     };
-    let nulls = NullBuffer::from_unsliced_buffer(null_buf, indices.len());
-
-    FixedSizeListArray::try_new(field, length as i32, taken, nulls)
+    make_array(array_data)
 }
 
 /// The take kernel implementation for `FixedSizeBinaryArray`.
@@ -2090,6 +2218,29 @@ mod tests {
     }
 
     #[test]
+    // Fast path (primitive child, no child nulls) with null indices — verifies offset backfill for null slots.
+    fn test_take_list_primitive_child_null_indices() {
+        // Row sizes deliberately vary (1, 3, 2) so the test exercises
+        // non-uniform offset arithmetic, not just uniform stride.
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1)]),
+            Some(vec![Some(2), Some(3), Some(4)]),
+            Some(vec![Some(5), Some(6)]),
+        ]);
+        let indices = Int32Array::from(vec![Some(2), None, Some(0), Some(1)]);
+        let result = take(&list, &indices, None).unwrap();
+        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(5), Some(6)]),
+            None,
+            Some(vec![Some(1)]),
+            Some(vec![Some(2), Some(3), Some(4)]),
+        ]);
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
     fn test_take_list() {
         test_take_list!(i32, List, ListArray);
     }
@@ -3032,5 +3183,35 @@ mod tests {
                 "bob", "bob", "bob", "bob", "bob", "alice", "alice", "alice", "eve", "eve", "eve"
             ]
         );
+    }
+
+    // parent null rows on FixedSizeList must propagate to child elements.
+    #[test]
+    fn test_take_fixed_size_list_parent_nulls() {
+        let list = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            vec![
+                Some(vec![Some(1), Some(2)]),
+                None,
+                Some(vec![Some(5), Some(6)]),
+            ],
+            2,
+        );
+
+        let indices = UInt32Array::from(vec![2, 1, 0]);
+        let result = take(&list, &indices, None).unwrap();
+        let result = result.as_fixed_size_list();
+
+        assert_eq!(result.len(), 3);
+        assert!(result.is_valid(0));
+        assert!(result.is_null(1));
+        assert!(result.is_valid(2));
+
+        let child = result.values().as_primitive::<Int32Type>();
+        assert_eq!(child.value(0), 5);
+        assert_eq!(child.value(1), 6);
+        assert!(child.is_null(2));
+        assert!(child.is_null(3));
+        assert_eq!(child.value(4), 1);
+        assert_eq!(child.value(5), 2);
     }
 }
