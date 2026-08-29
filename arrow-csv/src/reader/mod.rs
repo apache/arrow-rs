@@ -436,7 +436,7 @@ impl Format {
     fn build_reader<R: Read>(&self, reader: R) -> csv::Reader<R> {
         let mut builder = csv::ReaderBuilder::new();
         builder.has_headers(self.header);
-        builder.flexible(self.truncated_rows);
+        builder.flexible(self.truncated_rows || self.extra_fields == ExtraFields::Ignore);
 
         if let Some(c) = self.delimiter {
             builder.delimiter(c);
@@ -2720,7 +2720,7 @@ mod tests {
 
         let result = reader.next();
         assert!(match result {
-            Some(Err(ArrowError::CsvError(e))) => e.contains("got more than"),
+            Some(Err(ArrowError::CsvError(e))) => e.contains("got 3"),
             _ => false,
         });
     }
@@ -2741,7 +2741,7 @@ mod tests {
 
         let result = reader.next();
         assert!(match result {
-            Some(Err(ArrowError::CsvError(e))) => e.contains("got more than"),
+            Some(Err(ArrowError::CsvError(e))) => e.contains("got 3"),
             _ => false,
         });
     }
@@ -2799,6 +2799,30 @@ mod tests {
         let col_b = batch.column(1).as_primitive::<Int32Type>();
         assert_eq!(col_b.value(0), 2);
         assert_eq!(col_b.value(1), 4);
+    }
+
+    #[test]
+    fn test_infer_schema_with_extra_fields_ignore() {
+        let data = "a,b\n1,2,3\n4,5\n";
+        let format = Format::default()
+            .with_header(true)
+            .with_extra_fields(ExtraFields::Ignore);
+        let (schema, count) = format.infer_schema(Cursor::new(data), None).unwrap();
+        assert_eq!(schema.fields().len(), 2);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_infer_schema_with_extra_fields_error() {
+        let data = "a,b\n1,2,3\n4,5\n";
+        let format = Format::default()
+            .with_header(true)
+            .with_extra_fields(ExtraFields::Error);
+        let err = format.infer_schema(Cursor::new(data), None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Expected 2 records, found 3 records")
+        );
     }
 
     #[test]

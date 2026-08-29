@@ -118,29 +118,8 @@ impl RecordDecoder {
 
         // Resume skipping extra fields if we were in the middle of it from a previous chunk
         if self.skipping_extra_fields {
-            let mut dummy_data = [0u8; 128];
-            let mut dummy_ends = [0usize; 1];
-            loop {
-                let (res, b_read, _, _) = self.delimiter.read_record(
-                    &input[input_offset..],
-                    &mut dummy_data,
-                    &mut dummy_ends,
-                );
-                input_offset += b_read;
-                match res {
-                    ReadRecordResult::Record => {
-                        self.skipping_extra_fields = false;
-                        read += 1;
-                        self.current_field = 0;
-                        self.line_number += 1;
-                        self.num_rows += 1;
-                        break;
-                    }
-                    ReadRecordResult::OutputFull | ReadRecordResult::OutputEndsFull => {}
-                    ReadRecordResult::End | ReadRecordResult::InputEmpty => {
-                        return Ok((read, input_offset));
-                    }
-                }
+            if !self.skip_extra_fields(input, &mut input_offset, &mut read) {
+                return Ok((read, input_offset));
             }
             if read == to_read || input.len() == input_offset {
                 return Ok((read, input_offset));
@@ -160,7 +139,12 @@ impl RecordDecoder {
 
             // Try to read a record
             loop {
-                let ends_bound = self.offsets_len + (self.num_columns - self.current_field);
+                let ends_bound = match self.extra_fields {
+                    ExtraFields::Ignore => {
+                        self.offsets_len + (self.num_columns - self.current_field)
+                    }
+                    ExtraFields::Error => self.offsets.len(),
+                };
                 let (result, bytes_read, bytes_written, end_positions) =
                     self.delimiter.read_record(
                         &input[input_offset..],
@@ -190,30 +174,8 @@ impl RecordDecoder {
                             }
                             ExtraFields::Ignore => {
                                 self.skipping_extra_fields = true;
-                                let mut dummy_data = [0u8; 128];
-                                let mut dummy_ends = [0usize; 1];
-                                loop {
-                                    let (res, b_read, _, _) = self.delimiter.read_record(
-                                        &input[input_offset..],
-                                        &mut dummy_data,
-                                        &mut dummy_ends,
-                                    );
-                                    input_offset += b_read;
-                                    match res {
-                                        ReadRecordResult::Record => {
-                                            self.skipping_extra_fields = false;
-                                            read += 1;
-                                            self.current_field = 0;
-                                            self.line_number += 1;
-                                            self.num_rows += 1;
-                                            break;
-                                        }
-                                        ReadRecordResult::OutputFull
-                                        | ReadRecordResult::OutputEndsFull => {}
-                                        ReadRecordResult::End | ReadRecordResult::InputEmpty => {
-                                            return Ok((read, input_offset));
-                                        }
-                                    }
+                                if !self.skip_extra_fields(input, &mut input_offset, &mut read) {
+                                    return Ok((read, input_offset));
                                 }
 
                                 if read == to_read || input.len() == input_offset {
@@ -257,6 +219,39 @@ impl RecordDecoder {
                             return Ok((read, input_offset));
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// Skips extra fields for the current record, returning `true` if it finished skipping
+    fn skip_extra_fields(
+        &mut self,
+        input: &[u8],
+        input_offset: &mut usize,
+        read: &mut usize,
+    ) -> bool {
+        let mut dummy_data = [0u8; 128];
+        let mut dummy_ends = [0usize; 1];
+        loop {
+            let (res, b_read, _, _) = self.delimiter.read_record(
+                &input[*input_offset..],
+                &mut dummy_data,
+                &mut dummy_ends,
+            );
+            *input_offset += b_read;
+            match res {
+                ReadRecordResult::Record => {
+                    self.skipping_extra_fields = false;
+                    *read += 1;
+                    self.current_field = 0;
+                    self.line_number += 1;
+                    self.num_rows += 1;
+                    return true;
+                }
+                ReadRecordResult::OutputFull | ReadRecordResult::OutputEndsFull => {}
+                ReadRecordResult::End | ReadRecordResult::InputEmpty => {
+                    return false;
                 }
             }
         }
