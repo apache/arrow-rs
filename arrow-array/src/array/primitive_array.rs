@@ -1207,12 +1207,29 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
 impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
     fn from(array: PrimitiveArray<T>) -> Self {
-        let builder = ArrayDataBuilder::new(array.data_type)
-            .len(array.values.len())
-            .nulls(array.nulls)
-            .buffers(vec![array.values.into_inner()]);
+        /// Converts the parts of a `PrimitiveArray` into [`ArrayData`].
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        ///
+        /// # Safety
+        /// The parts must come from a valid `PrimitiveArray`
+        unsafe fn inner(
+            data_type: DataType,
+            len: usize,
+            values: Buffer,
+            nulls: Option<NullBuffer>,
+        ) -> ArrayData {
+            let builder = ArrayDataBuilder::new(data_type)
+                .len(len)
+                .nulls(nulls)
+                .buffers(vec![values]);
 
-        unsafe { builder.build_unchecked() }
+            // SAFETY: arguments are valid, per contract
+            unsafe { builder.build_unchecked() }
+        }
+        let len = array.values.len();
+        // SAFETY: the parts come from a valid PrimitiveArray
+        unsafe { inner(array.data_type, len, array.values.into_inner(), array.nulls) }
     }
 }
 
