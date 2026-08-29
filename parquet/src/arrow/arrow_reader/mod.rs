@@ -1590,6 +1590,17 @@ fn read_mask_batch(
             ));
         }
         if read != mask_chunk.chunk_rows {
+            if array_reader.stopped_for_capacity() {
+                // The mask has already been built for `chunk_rows` rows and the
+                // cursor has moved past them, so a shorter read cannot be
+                // reconciled here.
+                // https://github.com/apache/arrow-rs/issues/7973
+                return Err(general_err!(
+                    "cannot split a batch under a row filter: a byte array column exceeded                      the 2GB limit of 32 bit offsets after {} of {} rows. Read this column                      as LargeUtf8, LargeBinary or a view type, or reduce the batch size",
+                    read,
+                    mask_chunk.chunk_rows
+                ));
+            }
             return Err(general_err!(
                 "insufficient rows read from array reader - expected {}, got {}",
                 mask_chunk.chunk_rows,
@@ -1692,7 +1703,19 @@ impl ParquetRecordBatchReader {
                     };
                     match self.array_reader.read_records(to_read)? {
                         0 => break,
-                        rec => read_records += rec,
+                        rec => {
+                            read_records += rec;
+                            if rec < to_read && self.array_reader.stopped_for_capacity() {
+                                // The reader stopped part way through this
+                                // selector because the output could not hold
+                                // more, so hand the rows it did not read back
+                                // to the cursor and emit a shorter batch.
+                                // https://github.com/apache/arrow-rs/issues/7973
+                                selectors_cursor
+                                    .return_selector(RowSelector::select(to_read - rec));
+                                break;
+                            }
+                        }
                     }
                 }
             }

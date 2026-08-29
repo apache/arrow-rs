@@ -106,6 +106,19 @@ pub trait ArrayReader: Send {
     /// pages is exhausted.
     fn read_records(&mut self, batch_size: usize) -> Result<usize>;
 
+    /// Returns true if the last call to [`ArrayReader::read_records`] returned
+    /// fewer records than requested because the output array could not
+    /// represent more of them, rather than because the column was exhausted.
+    ///
+    /// The motivating case is a `StringArray` or `BinaryArray` whose 32 bit
+    /// offsets cannot address more than `i32::MAX` bytes of values, see
+    /// <https://github.com/apache/arrow-rs/issues/7973>.
+    ///
+    /// Callers that assume a short read means end of column must check this.
+    fn stopped_for_capacity(&self) -> bool {
+        false
+    }
+
     /// Consume all currently stored buffer data
     /// into an arrow array and return it.
     fn consume_batch(&mut self) -> Result<ArrayRef>;
@@ -207,6 +220,15 @@ where
 
         let records_read_once = record_reader.read_records(records_to_read)?;
         records_read += records_read_once;
+
+        // The values buffer cannot accept more data in this batch, e.g. a 32
+        // bit offset buffer that is about to overflow. Emit a short batch
+        // rather than treating this as an exhausted column chunk, which would
+        // advance the page iterator and silently drop the rest of the chunk.
+        // https://github.com/apache/arrow-rs/issues/7973
+        if record_reader.stopped_for_capacity() {
+            break;
+        }
 
         // Record reader exhausted
         if records_read_once < records_to_read {

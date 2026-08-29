@@ -98,6 +98,14 @@ impl DictIndexDecoder {
         Ok(values_read)
     }
 
+    /// Returns the maximum number of values this decoder can still produce
+    ///
+    /// This is a maximum as the null count is not always known, e.g. value data
+    /// from a v1 data page
+    pub fn remaining(&self) -> usize {
+        self.max_remaining_values
+    }
+
     /// Skip up to `to_skip` values, returning the number of values skipped
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
         let to_skip = to_skip.min(self.max_remaining_values);
