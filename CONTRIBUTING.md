@@ -176,6 +176,8 @@ Run tests under [`Miri`](https://github.com/rust-lang/miri) like so, assuming
 MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run
 # Run specific tests
 MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer --lib bigint
+# Run specific crate
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer
 ```
 
 The whole suite will take a long time to run so it's suggested to run individual
