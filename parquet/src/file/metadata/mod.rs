@@ -1350,7 +1350,8 @@ impl ColumnChunkMetaData {
     /// Returns the range for the column index, if any.
     ///
     /// The range is `[column_index_offset, column_index_offset + column_index_length)`,
-    /// where the offset is relative to the start of the file.
+    /// where the offset is relative to the start of the Parquet file in which the index
+    /// resides.
     pub fn column_index_range(&self) -> Option<Range<u64>> {
         let offset = u64::try_from(self.column_index_offset?).ok()?;
         let length = u64::try_from(self.column_index_length?).ok()?;
@@ -1370,7 +1371,8 @@ impl ColumnChunkMetaData {
     /// Returns the range for the offset index, if any.
     ///
     /// The range is `[offset_index_offset, offset_index_offset + offset_index_length)`,
-    /// where the offset is relative to the start of the file.
+    /// where the offset is relative to the start of the Parquet file in which the index
+    /// resides.
     pub fn offset_index_range(&self) -> Option<Range<u64>> {
         let offset = u64::try_from(self.offset_index_offset?).ok()?;
         let length = u64::try_from(self.offset_index_length?).ok()?;
