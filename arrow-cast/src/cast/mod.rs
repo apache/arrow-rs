@@ -1818,32 +1818,48 @@ pub fn cast_with_options(
                 .unary::<_, Time64NanosecondType>(|x| x as i64 * (NANOSECONDS / MILLISECONDS)),
         )),
 
-        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
-            array
+        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => {
+            let array = array
                 .as_primitive::<Time64MicrosecondType>()
-                .unary::<_, Time32SecondType>(|x| (x / MICROSECONDS) as i32),
-        )),
-        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            array
+                .unary::<_, Int64Type>(|x| x / MICROSECONDS);
+            let array = cast_with_options(&array, &Int32, cast_options)?;
+            cast_reinterpret_arrays::<Int32Type, Time32SecondType>(array.as_ref())
+        }
+        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Millisecond)) => {
+            let array = array
                 .as_primitive::<Time64MicrosecondType>()
-                .unary::<_, Time32MillisecondType>(|x| (x / (MICROSECONDS / MILLISECONDS)) as i32),
-        )),
-        (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
-            array
-                .as_primitive::<Time64MicrosecondType>()
-                .unary::<_, Time64NanosecondType>(|x| x * (NANOSECONDS / MICROSECONDS)),
-        )),
+                .unary::<_, Int64Type>(|x| x / (MICROSECONDS / MILLISECONDS));
+            let array = cast_with_options(&array, &Int32, cast_options)?;
+            cast_reinterpret_arrays::<Int32Type, Time32MillisecondType>(array.as_ref())
+        }
+        (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => {
+            let array = array.as_primitive::<Time64MicrosecondType>();
+            let result = if cast_options.safe {
+                array.unary_opt::<_, Time64NanosecondType>(|x| {
+                    x.checked_mul(NANOSECONDS / MICROSECONDS)
+                })
+            } else {
+                array.try_unary::<_, Time64NanosecondType, _>(|x| {
+                    x.mul_checked(NANOSECONDS / MICROSECONDS)
+                })?
+            };
+            Ok(Arc::new(result))
+        }
 
-        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
-            array
+        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => {
+            let array = array
                 .as_primitive::<Time64NanosecondType>()
-                .unary::<_, Time32SecondType>(|x| (x / NANOSECONDS) as i32),
-        )),
-        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            array
+                .unary::<_, Int64Type>(|x| x / NANOSECONDS);
+            let array = cast_with_options(&array, &Int32, cast_options)?;
+            cast_reinterpret_arrays::<Int32Type, Time32SecondType>(array.as_ref())
+        }
+        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Millisecond)) => {
+            let array = array
                 .as_primitive::<Time64NanosecondType>()
-                .unary::<_, Time32MillisecondType>(|x| (x / (NANOSECONDS / MILLISECONDS)) as i32),
-        )),
+                .unary::<_, Int64Type>(|x| x / (NANOSECONDS / MILLISECONDS));
+            let array = cast_with_options(&array, &Int32, cast_options)?;
+            cast_reinterpret_arrays::<Int32Type, Time32MillisecondType>(array.as_ref())
+        }
         (Time64(TimeUnit::Nanosecond), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
             array
                 .as_primitive::<Time64NanosecondType>()
@@ -2181,14 +2197,14 @@ pub fn cast_with_options(
         (Date64, Timestamp(TimeUnit::Microsecond, _)) => {
             let array = array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampMicrosecondType>(|x| x * (MICROSECONDS / MILLISECONDS));
+                .reinterpret_cast::<TimestampMillisecondType>();
 
             cast_with_options(&array, to_type, cast_options)
         }
         (Date64, Timestamp(TimeUnit::Nanosecond, _)) => {
             let array = array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampNanosecondType>(|x| x * (NANOSECONDS / MILLISECONDS));
+                .reinterpret_cast::<TimestampMillisecondType>();
 
             cast_with_options(&array, to_type, cast_options)
         }
@@ -14199,6 +14215,48 @@ mod tests {
         let err = cast_with_options(&array, &DataType::Time32(TimeUnit::Millisecond), &options)
             .unwrap_err();
         assert!(err.to_string().contains("Overflow"), "{err}");
+    }
+
+    fn assert_temporal_overflow_is_safe(array: &dyn Array, to_type: &DataType) {
+        let result = cast(array, to_type).unwrap();
+        assert_eq!(result.null_count(), array.len());
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        assert!(cast_with_options(array, to_type, &options).is_err());
+    }
+
+    #[test]
+    fn test_cast_time64_overflow() {
+        let microseconds = Time64MicrosecondArray::from(vec![i64::MIN, i64::MAX]);
+        for to_type in [
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time32(TimeUnit::Millisecond),
+            DataType::Time64(TimeUnit::Nanosecond),
+        ] {
+            assert_temporal_overflow_is_safe(&microseconds, &to_type);
+        }
+
+        let nanoseconds = Time64NanosecondArray::from(vec![i64::MIN, i64::MAX]);
+        for to_type in [
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time32(TimeUnit::Millisecond),
+        ] {
+            assert_temporal_overflow_is_safe(&nanoseconds, &to_type);
+        }
+    }
+
+    #[test]
+    fn test_cast_date64_to_timestamp_overflow() {
+        let array = Date64Array::from(vec![i64::MIN, i64::MAX]);
+        for to_type in [
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ] {
+            assert_temporal_overflow_is_safe(&array, &to_type);
+        }
     }
 
     #[test]
