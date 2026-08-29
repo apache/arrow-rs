@@ -469,14 +469,17 @@ impl IpcWriteOptions {
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
     ) -> Result<Self, ArrowError> {
-        let is_alignment_valid =
-            alignment == 8 || alignment == 16 || alignment == 32 || alignment == 64;
-        if !is_alignment_valid {
-            return Err(ArrowError::InvalidArgumentError(
-                "Alignment should be 8, 16, 32, or 64.".to_string(),
-            ));
-        }
-        let alignment: u8 = u8::try_from(alignment).expect("range already checked");
+        let alignment: u8 = match alignment {
+            8 => 8,
+            16 => 16,
+            32 => 32,
+            64 => 64,
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Alignment should be 8, 16, 32, or 64.".to_string(),
+                ));
+            }
+        };
         match metadata_version {
             crate::MetadataVersion::V1
             | crate::MetadataVersion::V2

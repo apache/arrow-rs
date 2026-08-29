@@ -356,11 +356,8 @@ impl SqlInfoDataBuilder {
         let mut name_builder = UInt32Builder::new();
         let mut value_builder = SqlInfoUnionBuilder::new();
 
-        let mut names: Vec<_> = self.infos.keys().copied().collect();
-        names.sort_unstable();
-
-        for key in names {
-            let (name, value) = self.infos.get_key_value(&key).unwrap();
+        // `infos` is a `BTreeMap`, so it iterates in sorted order already
+        for (name, value) in &self.infos {
             name_builder.append_value(*name);
             value_builder.append_value(value)?
         }
