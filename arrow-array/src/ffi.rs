@@ -474,7 +474,12 @@ impl ImportedArrowArray<'_> {
                 length * (bits / 8)
             }
             (DataType::Utf8 | DataType::Binary, 2) => {
-                if self.array.is_empty() {
+                // A zero-length array at offset 0 needs no offsets at all, and the C Data
+                // Interface lets the producer pass a null pointer for a buffer whose size
+                // would be 0, so the offset buffer must not be dereferenced here. At a
+                // non-zero offset the producer has to supply `offset + length + 1` offsets,
+                // so the buffer is present and the values length is read from it below.
+                if self.array.is_empty() && self.array.offset() == 0 {
                     return Ok(0);
                 }
 
@@ -485,12 +490,13 @@ impl ImportedArrowArray<'_> {
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i32>();
                 // Safety: `len` is the byte length of the offset buffer; dividing by `size_of::<i32>()`
-                // gives the number of i32 elements. The `- 1` is safe because the array is non-empty
-                // (checked above), so the offset buffer has at least one element.
+                // gives the number of i32 elements. The `- 1` is safe because `len + offset` is at
+                // least 1 here (checked above), so the offset buffer has at least two elements.
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
             (DataType::LargeUtf8 | DataType::LargeBinary, 2) => {
-                if self.array.is_empty() {
+                // See the note on the `Utf8` / `Binary` arm above.
+                if self.array.is_empty() && self.array.offset() == 0 {
                     return Ok(0);
                 }
 
@@ -1693,6 +1699,54 @@ mod tests_from_ffi {
         assert_eq!(data_buf_len, 0);
 
         test_round_trip(&imported_array.consume()?)
+    }
+
+    /// A zero-length `Utf8` / `Binary` array at a non-zero offset must survive a
+    /// round trip: the length of the values buffer has to come from the last offset
+    /// of the window, as it already does for non-empty arrays, rather than being
+    /// short-circuited to 0 on the length alone.
+    ///
+    /// <https://github.com/apache/arrow-rs/issues/10910>
+    #[test]
+    fn test_zero_length_bytes_at_non_zero_offset() -> Result<()> {
+        // "x", "aa", "bb", viewed as zero elements starting at `offset`.
+        let small = Buffer::from_slice_ref([0i32, 1, 3, 5]);
+        let large = Buffer::from_slice_ref([0i64, 1, 3, 5]);
+        let values = Buffer::from(b"xaabb".as_slice());
+
+        for (data_type, offsets) in [
+            (DataType::Utf8, &small),
+            (DataType::Binary, &small),
+            (DataType::LargeUtf8, &large),
+            (DataType::LargeBinary, &large),
+        ] {
+            for offset in 0..4 {
+                let data = ArrayData::try_new(
+                    data_type.clone(),
+                    0,
+                    None,
+                    offset,
+                    vec![offsets.clone(), values.clone()],
+                    vec![],
+                )?;
+
+                let array = FFI_ArrowArray::new(&data);
+                let schema = FFI_ArrowSchema::try_from(&data_type)?;
+                let imported = unsafe { from_ffi(array, &schema) }?;
+
+                // `from_ffi` builds the `ArrayData` with `new_unchecked`, so an
+                // inconsistency only surfaces once something validates it.
+                imported.validate_full()?;
+                assert_eq!(imported.len(), 0);
+                assert_eq!(imported, data);
+
+                // The values buffer is sized from the last offset of the window,
+                // not short-circuited to 0.
+                assert_eq!(imported.buffers()[1].len(), [0, 1, 3, 5][offset]);
+            }
+        }
+
+        Ok(())
     }
 
     fn roundtrip_string_array(array: StringArray) -> StringArray {
