@@ -647,32 +647,9 @@ mod tests_to_then_from_ffi {
     }
     // case with nulls is tested in the docs, through the example on this module.
 
-    #[test]
-    fn test_decimal128_under_aligned_round_trip() -> Result<()> {
-        // 8-byte-aligned i128 buffer: legal over the C Data Interface, but
-        // under-aligned for arrow-rs. Carried as `FixedSizeBinary(16)` (1-byte
-        // alignment) so the fixture stays valid under `force_validate`, then
-        // imported as `Decimal128`, which must realign it.
-        let aligned = Buffer::from_vec(vec![0_i128, 1_i128, 2_i128]);
-        let under_aligned = aligned.slice(8);
-        assert_eq!(under_aligned.as_ptr().align_offset(8), 0);
-        assert_ne!(under_aligned.as_ptr().align_offset(16), 0);
-
-        let data = ArrayData::builder(DataType::FixedSizeBinary(16))
-            .len(2)
-            .add_buffer(under_aligned)
-            .build()?;
-
-        let array = FFI_ArrowArray::new(&data);
-        let imported = unsafe { from_ffi_and_data_type(array, DataType::Decimal128(10, 2)) }?;
-        let array = Decimal128Array::from(imported);
-
-        // [0i128, 1, 2] sliced 8 bytes in yields `1 << 64` and `2 << 64`.
-        assert_eq!(array.len(), 2);
-        assert_eq!(array.value(0), 1_i128 << 64);
-        assert_eq!(array.value(1), 2_i128 << 64);
-        Ok(())
-    }
+    // The under-aligned `Decimal128` import (#10034) is tested in
+    // `arrow/tests/ffi.rs`. It needs `arrow-data/force_validate`, and this
+    // crate's `force_validate` does not reach `arrow-data`.
 
     #[test]
     fn test_null_count_handling() {
