@@ -905,7 +905,13 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
         take_impl::<UInt32Type, CHECKED>(child.as_ref(), &list_indices)?
     };
 
-    FixedSizeListArray::try_new(field.clone(), length as i32, taken_child, nulls)
+    FixedSizeListArray::try_new_with_length(
+        field.clone(),
+        length as i32,
+        taken_child,
+        nulls,
+        indices.len(),
+    )
 }
 
 #[inline(never)]
@@ -3402,5 +3408,22 @@ mod tests {
         assert!(child.is_null(3));
         assert_eq!(child.value(4), 1);
         assert_eq!(child.value(5), 2);
+    }
+
+    #[test]
+    fn test_take_zero_sized_fixed_size_list() {
+        let input = FixedSizeListArray::try_new_with_length(
+            Field::new_list_field(DataType::Int32, true).into(),
+            0,
+            Arc::new(Int32Array::new_null(0)),
+            None,
+            3,
+        )
+        .unwrap();
+
+        let indices = UInt32Array::from(vec![2, 0]);
+        let result = take(&input, &indices, None).unwrap();
+
+        assert_eq!(result.len(), 2);
     }
 }
