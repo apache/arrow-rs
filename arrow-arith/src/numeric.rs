@@ -971,8 +971,7 @@ fn date_op<T: DateOp>(
 /// Used when scaling `l` would overflow `T::Native`, which it does well before the quotient
 /// does.
 ///
-/// Runs on magnitudes and restores the sign last, so it truncates toward zero like the
-/// direct path.
+/// Runs on magnitudes and restores the sign last, so it truncates toward zero.
 fn scaled_div<T: DecimalType>(
     l: T::Native,
     r: T::Native,
