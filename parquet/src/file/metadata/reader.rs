@@ -875,6 +875,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_try_parse() {
         let file = get_test_file("alltypes_tiny_pages.parquet");
         let len = file.len();

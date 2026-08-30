@@ -295,10 +295,8 @@ impl<T: ByteArrayType> GenericByteArray<T> {
 
     /// Returns true if all data within this array is ASCII
     pub fn is_ascii(&self) -> bool {
-        let offsets = self.value_offsets();
-        let start = offsets.first().unwrap();
-        let end = offsets.last().unwrap();
-        self.value_data()[start.as_usize()..end.as_usize()].is_ascii()
+        let offsets = &self.value_offsets;
+        self.value_data()[offsets.first().as_usize()..offsets.last().as_usize()].is_ascii()
     }
 
     /// Returns the offset values in the offsets buffer
@@ -467,8 +465,8 @@ impl<T: ByteArrayType> GenericByteArray<T> {
 impl<T: ByteArrayType> std::fmt::Debug for GenericByteArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}{}Array\n[\n", T::Offset::PREFIX, T::PREFIX)?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }

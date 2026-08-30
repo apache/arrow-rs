@@ -146,7 +146,7 @@ fn test_cast_timestamp_with_timezone_daylight_3() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // running forever
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_can_cast_types() {
     // this function attempts to ensure that can_cast_types stays
     // in sync with cast.  It simply tries all combinations of
