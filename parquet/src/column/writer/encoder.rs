@@ -204,19 +204,78 @@ pub trait ColumnValueEncoder {
     fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>>;
 }
 
+/// The dictionary encoding state of a column chunk.
+///
+/// A chunk that falls back part-way through keeps its dictionary encoder for a
+/// little longer, but only as the source of the ids it has already buffered:
+/// it takes no further values and its dictionary will never be written. That
+/// is a state of its own, so that "is the dictionary still live?" is a single
+/// match rather than a flag that has to be consulted alongside an `Option`.
+pub(crate) enum DictionaryState<D> {
+    /// Values written to the chunk are dictionary encoded.
+    Active(D),
+    /// The chunk has fallen back and the dictionary is abandoned; the encoder
+    /// survives only until the ids buffered for the in-progress data page have
+    /// been re-encoded through the fallback encoder.
+    Draining(D),
+    /// No dictionary: either never enabled for this chunk, or abandoned and
+    /// fully drained.
+    Absent,
+}
+
+impl<D> DictionaryState<D> {
+    /// The dictionary encoder, while it is still encoding values.
+    ///
+    /// Returns `None` once the chunk has fallen back, even though the encoder
+    /// may still hold ids waiting to be re-encoded.
+    pub(crate) fn active(&self) -> Option<&D> {
+        match self {
+            Self::Active(encoder) => Some(encoder),
+            Self::Draining(_) | Self::Absent => None,
+        }
+    }
+
+    /// Mutable counterpart of [`Self::active`].
+    pub(crate) fn active_mut(&mut self) -> Option<&mut D> {
+        match self {
+            Self::Active(encoder) => Some(encoder),
+            Self::Draining(_) | Self::Absent => None,
+        }
+    }
+
+    /// Abandons the dictionary for the rest of the chunk, returning the
+    /// encoder holding the ids buffered for the in-progress data page.
+    ///
+    /// Returns `None` if there is nothing left to re-encode, either because
+    /// the buffer has already been drained or because the chunk was never
+    /// dictionary encoded.
+    pub(crate) fn abandon(&mut self) -> Option<&mut D> {
+        *self = match std::mem::replace(self, Self::Absent) {
+            Self::Active(encoder) | Self::Draining(encoder) => Self::Draining(encoder),
+            Self::Absent => Self::Absent,
+        };
+        match self {
+            Self::Draining(encoder) => Some(encoder),
+            Self::Active(_) | Self::Absent => None,
+        }
+    }
+
+    /// Drops the dictionary encoder, taking it if its dictionary page is still
+    /// to be written.
+    ///
+    /// An abandoned dictionary is referenced by nothing and is discarded along
+    /// with any ids that were never drained.
+    pub(crate) fn take_for_dict_page(&mut self) -> Option<D> {
+        match std::mem::replace(self, Self::Absent) {
+            Self::Active(encoder) => Some(encoder),
+            Self::Draining(_) | Self::Absent => None,
+        }
+    }
+}
+
 pub struct ColumnValueEncoderImpl<T: DataType> {
     encoder: Box<dyn Encoder<T>>,
-    dict_encoder: Option<DictEncoder<T>>,
-    /// Set by [`ColumnValueEncoder::fall_back_from_dictionary`] once this
-    /// chunk has abandoned dictionary encoding for good.
-    ///
-    /// While it is set, `dict_encoder` is no longer an encoder: it is only the
-    /// source of the buffered ids still to be re-encoded through `encoder`,
-    /// and is dropped as soon as they are drained. Everything that asks about
-    /// the dictionary goes through [`Self::active_dict_encoder`] so that the
-    /// chunk behaves from this point on as if it had never been dictionary
-    /// encoded.
-    dictionary_abandoned: bool,
+    dict_encoder: DictionaryState<DictEncoder<T>>,
     descr: ColumnDescPtr,
     num_values: usize,
     statistics_enabled: EnabledStatistics,
@@ -264,26 +323,10 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             }
         }
 
-        match self.active_dict_encoder_mut() {
+        match self.dict_encoder.active_mut() {
             Some(encoder) => encoder.put(slice),
             _ => self.encoder.put(slice),
         }
-    }
-
-    /// The dictionary encoder, while it is still encoding values.
-    ///
-    /// Returns `None` once the chunk has fallen back, even though
-    /// `dict_encoder` may still hold ids waiting to be re-encoded.
-    fn active_dict_encoder(&self) -> Option<&DictEncoder<T>> {
-        self.dict_encoder
-            .as_ref()
-            .filter(|_| !self.dictionary_abandoned)
-    }
-
-    /// Mutable counterpart of [`Self::active_dict_encoder`].
-    fn active_dict_encoder_mut(&mut self) -> Option<&mut DictEncoder<T>> {
-        let abandoned = self.dictionary_abandoned;
-        self.dict_encoder.as_mut().filter(|_| !abandoned)
     }
 }
 
@@ -301,7 +344,10 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
         let dict_supported = props.dictionary_enabled(descr.path())
             && has_dictionary_support(T::get_physical_type(), props);
-        let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
+        let dict_encoder = match dict_supported {
+            true => DictionaryState::Active(DictEncoder::new(descr.clone())),
+            false => DictionaryState::Absent,
+        };
 
         // Set either main encoder or fallback encoder.
         let encoder = get_encoder(
@@ -320,7 +366,6 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         Ok(Self {
             encoder,
             dict_encoder,
-            dictionary_abandoned: false,
             descr: descr.clone(),
             num_values: 0,
             statistics_enabled,
@@ -392,13 +437,13 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn has_dictionary(&self) -> bool {
-        self.active_dict_encoder().is_some()
+        self.dict_encoder.active().is_some()
     }
 
     fn compresses_against_previous_value(&self) -> bool {
         // While dictionary encoding is active `self.encoder` is unused: the
         // data page holds RLE indices, which carry no cross-value state.
-        self.active_dict_encoder().is_none()
+        self.dict_encoder.active().is_none()
             && self.encoder.encoding() == Encoding::DELTA_BYTE_ARRAY
     }
 
@@ -406,7 +451,8 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         let encoder_size = self.encoder.estimated_memory_size();
 
         let dict_encoder_size = self
-            .active_dict_encoder()
+            .dict_encoder
+            .active()
             .map(|encoder| encoder.estimated_memory_size())
             .unwrap_or_default();
 
@@ -420,24 +466,20 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
-        Some(self.active_dict_encoder()?.dict_encoded_size())
+        Some(self.dict_encoder.active()?.dict_encoded_size())
     }
 
     fn estimated_data_page_size(&self) -> usize {
-        match self.active_dict_encoder() {
+        match self.dict_encoder.active() {
             Some(encoder) => encoder.estimated_data_encoded_size(),
             _ => self.encoder.estimated_data_encoded_size(),
         }
     }
 
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {
-        if self.dictionary_abandoned {
-            // The chunk fell back before any data page referenced the
-            // dictionary, so there is no dictionary page to write.
-            self.dict_encoder = None;
-            return Ok(None);
-        }
-        let Some(encoder) = self.dict_encoder.take() else {
+        // An abandoned dictionary yields no page: the chunk fell back before any
+        // data page referenced it.
+        let Some(encoder) = self.dict_encoder.take_for_dict_page() else {
             return Ok(None);
         };
         if self.num_values != 0 {
@@ -456,8 +498,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn fall_back_from_dictionary(&mut self, max_values: usize) -> Result<usize> {
-        self.dictionary_abandoned = true;
-        let Some(dict_encoder) = self.dict_encoder.as_mut() else {
+        let Some(dict_encoder) = self.dict_encoder.abandon() else {
             return Ok(0);
         };
 
@@ -465,16 +506,17 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         // when these values were first written, so the re-encoded values
         // deliberately bypass `write_slice`.
         let values = dict_encoder.drain_buffered_values(max_values);
+        let drained = dict_encoder.num_buffered_values() == 0;
         self.encoder.put(&values)?;
 
-        if dict_encoder.num_buffered_values() == 0 {
-            self.dict_encoder = None;
+        if drained {
+            self.dict_encoder = DictionaryState::Absent;
         }
         Ok(values.len())
     }
 
     fn flush_data_page(&mut self) -> Result<DataPageValues<T::T>> {
-        let (buf, encoding) = match self.active_dict_encoder_mut() {
+        let (buf, encoding) = match self.dict_encoder.active_mut() {
             Some(encoder) => (encoder.write_indices()?, Encoding::RLE_DICTIONARY),
             _ => (self.encoder.flush_buffer()?, self.encoder.encoding()),
         };
