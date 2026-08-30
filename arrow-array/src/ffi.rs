@@ -474,14 +474,14 @@ impl ImportedArrowArray<'_> {
                 length * (bits / 8)
             }
             (DataType::Utf8 | DataType::Binary, 2) => {
-                // For a zero-length array at offset 0 the sole offset describes no data,
-                // and producers do put an arbitrary value there -- see
-                // `test_empty_string_with_non_zero_offset`, whose lone offset is 123 over
-                // an empty values buffer -- so it must not be used as a length. Once the
-                // array offset is non-zero, the offsets up to and including `offset`
-                // describe real preceding elements whose bytes the values buffer still
-                // has to cover, so the length is read from the buffer as it is for a
-                // non-empty array.
+                // We can short circuit for empty arrays with offset 0 since we know
+                // the values buffer must also be empty, and the single offset present
+                // in the offsets buffer can be an arbitrary value from the producer.
+                //
+                // If the array is empty yet has a non-zero offset, the C data interface
+                // guarantees there are `length + offset` values encoded in the buffer,
+                // so we must find the real size of the values buffer from the offsets
+                // buffer.
                 if self.array.is_empty() && self.array.offset() == 0 {
                     return Ok(0);
                 }
@@ -492,10 +492,9 @@ impl ImportedArrowArray<'_> {
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i32>();
-                // Safety: `len` is the *byte* length of the offset buffer, computed above as
-                // `(length + 1) * size_of::<i32>()`, so `len / size_of::<i32>()` is its element
-                // count. Reaching here implies `length >= 1` (an empty array at offset 0 returned
-                // above), hence at least two elements and no underflow on the `- 1`.
+                // Safety: `len` is the byte length of the offset buffer; dividing by `size_of::<i32>()`
+                // gives the number of i32 elements. The `- 1` is safe because the offset buffer
+                // is always non-empty.
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
             (DataType::LargeUtf8 | DataType::LargeBinary, 2) => {
