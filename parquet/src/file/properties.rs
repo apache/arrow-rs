@@ -38,6 +38,8 @@ pub const DEFAULT_COMPRESSION: Compression = Compression::UNCOMPRESSED;
 pub const DEFAULT_DICTIONARY_ENABLED: bool = true;
 /// Default value for [`WriterProperties::dictionary_page_size_limit`]
 pub const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
+/// Default value for [`WriterProperties::dictionary_fallback`]
+pub const DEFAULT_DICTIONARY_FALLBACK: DictionaryFallback = DictionaryFallback::OnPageSizeLimit;
 /// Default value for [`WriterProperties::data_page_row_count_limit`]
 pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 /// Default value for [`WriterProperties::statistics_enabled`]
@@ -331,6 +333,26 @@ impl WriterProperties {
             .and_then(|c| c.dictionary_page_size_limit())
             .or_else(|| self.default_column_properties.dictionary_page_size_limit())
             .unwrap_or(DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT)
+    }
+
+    /// Returns the default dictionary fallback policy.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_dictionary_fallback`]
+    pub fn dictionary_fallback(&self) -> DictionaryFallback {
+        self.default_column_properties
+            .dictionary_fallback()
+            .unwrap_or(DEFAULT_DICTIONARY_FALLBACK)
+    }
+
+    /// Returns the dictionary fallback policy for a specific column.
+    ///
+    /// Takes precedence over [`Self::dictionary_fallback`].
+    pub fn column_dictionary_fallback(&self, col: &ColumnPath) -> DictionaryFallback {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.dictionary_fallback())
+            .or_else(|| self.default_column_properties.dictionary_fallback())
+            .unwrap_or(DEFAULT_DICTIONARY_FALLBACK)
     }
 
     /// Returns the maximum page row count
@@ -1099,6 +1121,22 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets the default [`DictionaryFallback`] policy for all columns (defaults to
+    /// [`DictionaryFallback::OnPageSizeLimit`] via [`DEFAULT_DICTIONARY_FALLBACK`]).
+    ///
+    /// This controls when the writer gives up on dictionary encoding for a
+    /// column chunk and switches to the column's fallback encoding.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the policy is [`DictionaryFallback::WhenProfitable`] with a
+    /// `worth_ratio` that is not finite or is not strictly positive.
+    pub fn set_dictionary_fallback(mut self, value: DictionaryFallback) -> Self {
+        self.default_column_properties
+            .set_dictionary_fallback(value);
+        self
+    }
+
     /// Sets best effort maximum size of a data page in bytes (defaults to `1024 * 1024`
     /// via [`DEFAULT_PAGE_SIZE`]).
     ///
@@ -1252,6 +1290,23 @@ impl WriterPropertiesBuilder {
     pub fn set_column_dictionary_page_size_limit(mut self, col: ColumnPath, value: usize) -> Self {
         self.get_mut_props(col)
             .set_dictionary_page_size_limit(value);
+        self
+    }
+
+    /// Sets the [`DictionaryFallback`] policy for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_dictionary_fallback`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the policy is [`DictionaryFallback::WhenProfitable`] with a
+    /// `worth_ratio` that is not finite or is not strictly positive.
+    pub fn set_column_dictionary_fallback(
+        mut self,
+        col: ColumnPath,
+        value: DictionaryFallback,
+    ) -> Self {
+        self.get_mut_props(col).set_dictionary_fallback(value);
         self
     }
 
@@ -1443,6 +1498,55 @@ impl Default for EnabledStatistics {
     }
 }
 
+/// Controls when dictionary encoding falls back to the column's fallback encoding.
+///
+/// While dictionary encoding is enabled for a column, the writer buffers a
+/// dictionary of the distinct values seen so far. This policy decides when the
+/// writer gives up on dictionary encoding for the remainder of the column chunk
+/// and switches to the fallback encoding (e.g. `PLAIN`, or a delta encoding
+/// with [`WriterVersion::PARQUET_2_0`]).
+///
+/// This enum is `#[non_exhaustive]`: additional policies may be added in the
+/// future.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum DictionaryFallback {
+    /// Fall back as soon as the dictionary page exceeds
+    /// [`WriterProperties::dictionary_page_size_limit`].
+    ///
+    /// This is the default, and the historical behavior of this crate.
+    OnPageSizeLimit,
+    /// Keep the dictionary past [`WriterProperties::dictionary_page_size_limit`]
+    /// (which acts as a grace floor) while the dictionary page stays smaller
+    /// than `worth_ratio` times the PLAIN-encoded size of the values appended
+    /// so far, falling back unconditionally at `max_dictionary_page_size`.
+    ///
+    /// This helps columns with large but highly repetitive values, where a
+    /// handful of distinct values overflows the page size limit even though
+    /// the dictionary is deduplicating many times its size. A `worth_ratio`
+    /// of `0.1` and a `max_dictionary_page_size` of 64 MiB are reasonable
+    /// starting points.
+    ///
+    /// PLAIN size is a pessimistic upper bound for the fallback encoding's
+    /// size; the exact profitability estimate may be refined in the future
+    /// without changing this API.
+    WhenProfitable {
+        /// Maximum ratio of dictionary page size to the PLAIN-encoded size of
+        /// the values appended so far. Must be finite and greater than zero.
+        worth_ratio: f64,
+        /// Hard cap on the dictionary page size, in bytes; the writer always
+        /// falls back at this size. Bounds the memory a reader needs to
+        /// materialize the dictionary page.
+        max_dictionary_page_size: usize,
+    },
+}
+
+impl Default for DictionaryFallback {
+    fn default() -> Self {
+        DEFAULT_DICTIONARY_FALLBACK
+    }
+}
+
 /// Controls the bloom filter to be computed by the writer.
 ///
 /// The bloom filter is initially sized for `ndv` distinct values at the given `fpp`, then
@@ -1629,6 +1733,7 @@ struct ColumnProperties {
     data_page_size_limit: Option<usize>,
     dictionary_page_size_limit: Option<usize>,
     dictionary_enabled: Option<bool>,
+    dictionary_fallback: Option<DictionaryFallback>,
     statistics_enabled: Option<EnabledStatistics>,
     write_page_header_statistics: Option<bool>,
     /// bloom filter related properties
@@ -1673,6 +1778,22 @@ impl ColumnProperties {
     /// Sets dictionary page size limit for this column.
     fn set_dictionary_page_size_limit(&mut self, value: usize) {
         self.dictionary_page_size_limit = Some(value);
+    }
+
+    /// Sets the dictionary fallback policy for this column.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the policy is [`DictionaryFallback::WhenProfitable`] with a
+    /// `worth_ratio` that is not finite or is not strictly positive.
+    fn set_dictionary_fallback(&mut self, value: DictionaryFallback) {
+        if let DictionaryFallback::WhenProfitable { worth_ratio, .. } = value {
+            assert!(
+                worth_ratio.is_finite() && worth_ratio > 0.0,
+                "worth_ratio must be a positive finite number, got {worth_ratio}"
+            );
+        }
+        self.dictionary_fallback = Some(value);
     }
 
     /// Sets the statistics level for this column.
@@ -1763,6 +1884,11 @@ impl ColumnProperties {
     /// Returns optional dictionary page size limit for this column.
     fn dictionary_page_size_limit(&self) -> Option<usize> {
         self.dictionary_page_size_limit
+    }
+
+    /// Returns optional dictionary fallback policy for this column.
+    fn dictionary_fallback(&self) -> Option<DictionaryFallback> {
+        self.dictionary_fallback
     }
 
     /// Returns optional data page size limit for this column.
@@ -1963,6 +2089,11 @@ mod tests {
             props.dictionary_enabled(&ColumnPath::from("col")),
             DEFAULT_DICTIONARY_ENABLED
         );
+        assert_eq!(props.dictionary_fallback(), DEFAULT_DICTIONARY_FALLBACK);
+        assert_eq!(
+            props.column_dictionary_fallback(&ColumnPath::from("col")),
+            DEFAULT_DICTIONARY_FALLBACK
+        );
         assert_eq!(
             props.statistics_enabled(&ColumnPath::from("col")),
             DEFAULT_STATISTICS_ENABLED
@@ -1972,6 +2103,50 @@ mod tests {
                 .bloom_filter_properties(&ColumnPath::from("col"))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn test_writer_properties_dictionary_fallback() {
+        let when_profitable = DictionaryFallback::WhenProfitable {
+            worth_ratio: 0.1,
+            max_dictionary_page_size: 64 * 1024 * 1024,
+        };
+        let props = WriterProperties::builder()
+            .set_dictionary_fallback(when_profitable)
+            .set_column_dictionary_fallback(
+                ColumnPath::from("col"),
+                DictionaryFallback::OnPageSizeLimit,
+            )
+            .build();
+        assert_eq!(props.dictionary_fallback(), when_profitable);
+        assert_eq!(
+            props.column_dictionary_fallback(&ColumnPath::from("other")),
+            when_profitable
+        );
+        assert_eq!(
+            props.column_dictionary_fallback(&ColumnPath::from("col")),
+            DictionaryFallback::OnPageSizeLimit
+        );
+
+        // survives the round trip through into_builder
+        let props = props.into_builder().build();
+        assert_eq!(
+            props.column_dictionary_fallback(&ColumnPath::from("col")),
+            DictionaryFallback::OnPageSizeLimit
+        );
+        assert_eq!(
+            props.column_dictionary_fallback(&ColumnPath::from("other")),
+            when_profitable
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "worth_ratio must be a positive finite number")]
+    fn test_writer_properties_dictionary_fallback_invalid_ratio() {
+        WriterProperties::builder().set_dictionary_fallback(DictionaryFallback::WhenProfitable {
+            worth_ratio: 0.0,
+            max_dictionary_page_size: 64 * 1024 * 1024,
+        });
     }
 
     #[test]
