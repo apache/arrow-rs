@@ -878,9 +878,9 @@ impl DataType {
     /// # Example
     /// ```
     /// use std::sync::Arc;
-    /// use arrow_schema::{DataType, EquivalenceGauge, Field};
+    /// use arrow_schema::{DataType, SemanticEqualityOptions, Field};
     ///
-    /// let ignore_names = EquivalenceGauge {
+    /// let ignore_names = SemanticEqualityOptions {
     ///     check_nullibility: true,
     ///     check_field_name: false,
     ///     check_metadata: true,
