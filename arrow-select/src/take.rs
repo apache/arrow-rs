@@ -513,7 +513,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                     // SAFETY: valid_idx < len (validity bitmap); caller guarantees index values are in bounds when CHECKED=false
                     unsafe { indices.value_unchecked(valid_idx) }.as_usize()
                 } + src_offset;
-                // SAFETY: src_idx bounded by take's prior bounds check
+                // SAFETY: src_idx is in bounds; indices.value() guarantees it when CHECKED=true, caller guarantees it when CHECKED=false
                 unsafe { copy_bit_if_set(src_ptr, src_idx, out_ptr, valid_idx) };
             });
             BooleanBuffer::new(Buffer::from(output), 0, len)
@@ -535,7 +535,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                         // SAFETY: base + bit < len (loop bound); caller guarantees index values are in bounds when CHECKED=false
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
-                    // SAFETY: src_idx bounded by take's prior bounds check
+                    // SAFETY: src_idx is in bounds; indices.value() guarantees it when CHECKED=true, caller guarantees it when CHECKED=false
                     byte |= unsafe { pack_bit(src_ptr, src_idx, bit) };
                 }
                 *out_byte = byte;
@@ -551,7 +551,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                         // SAFETY: base + bit < len (loop bound); caller guarantees index values are in bounds when CHECKED=false
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
-                    // SAFETY: src_idx bounded by take's prior bounds check
+                    // SAFETY: src_idx is in bounds; indices.value() guarantees it when CHECKED=true, caller guarantees it when CHECKED=false
                     byte |= unsafe { pack_bit(src_ptr, src_idx, bit) };
                 }
                 out_slice[full_bytes] = byte;
@@ -591,7 +591,7 @@ fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
                     // SAFETY: out_pos < len (validity bitmap); caller guarantees index values are in bounds when CHECKED=false
                     unsafe { indices.value_unchecked(out_pos) }.as_usize()
                 };
-                // SAFETY: src_idx < values.len(); check_bounds ensures this when CHECKED, caller guarantees it otherwise
+                // SAFETY: src_idx < values.len();
                 unsafe {
                     copy_bit_if_set(
                         value_data_ptr,
