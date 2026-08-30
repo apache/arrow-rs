@@ -144,6 +144,11 @@ required-features = ["arrow", "async"]
 path = "./examples/external_metadata.rs"
 
 [[example]]
+name = "chunk_probe_writer"
+required-features = ["arrow"]
+path = "./examples/chunk_probe_writer.rs"
+
+[[example]]
 name = "read_parquet"
 required-features = ["arrow"]
 path = "./examples/read_parquet.rs"
