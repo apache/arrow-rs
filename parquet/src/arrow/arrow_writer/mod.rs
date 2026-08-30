@@ -4352,13 +4352,96 @@ mod tests {
         );
     }
 
+    /// The data pages of the first column of the first row group, as
+    /// `(encoding, num_values, encoded page size)`.
+    fn column_data_pages(data: &Bytes) -> Vec<(Encoding, u32, usize)> {
+        let mut metadata = ParquetMetaDataReader::new();
+        metadata.try_parse(data).unwrap();
+        let metadata = metadata.finish().unwrap();
+        let row_group = metadata.row_group(0);
+        let num_rows = row_group.num_rows() as usize;
+        let mut reader =
+            SerializedPageReader::new(Arc::new(data.clone()), row_group.column(0), num_rows, None)
+                .unwrap();
+
+        let mut pages = vec![];
+        while let Some(page) = reader.get_next_page().unwrap() {
+            match page {
+                Page::DictionaryPage { .. } => {}
+                Page::DataPage {
+                    buf,
+                    num_values,
+                    encoding,
+                    ..
+                }
+                | Page::DataPageV2 {
+                    buf,
+                    num_values,
+                    encoding,
+                    ..
+                } => pages.push((encoding, num_values, buf.len())),
+            }
+        }
+        pages
+    }
+
+    #[test]
+    fn arrow_writer_dict_fallback_bounds_reencoded_page_size() {
+        // While dictionary encoding is active the in-progress data page holds
+        // only small RLE indices, so it can buffer a great many large values
+        // without ever reaching the data page size limit. Re-encoding that
+        // buffer on fallback turns those indices back into the values
+        // themselves, which for large values is orders of magnitude more
+        // bytes. The fallback therefore drains the buffer in increments and
+        // seals a page whenever the limit is reached, instead of emitting the
+        // whole buffer as one page far above the configured limit.
+        const DATA_PAGE_SIZE_LIMIT: usize = 4 * 1024;
+        const VALUE_LEN: usize = 1024;
+
+        // Distinct values, so the dictionary grows until it spills, but few
+        // enough indices that the dictionary-encoded page stays well under
+        // the data page size limit until then.
+        let values: Vec<String> = (0..1024)
+            .map(|i| format!("{i:06}").repeat(VALUE_LEN / 6))
+            .collect();
+        let array = Arc::new(StringArray::from_iter_values(&values)) as ArrayRef;
+        let batch = RecordBatch::try_from_iter_with_nullable([("col", array, false)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_data_page_size_limit(DATA_PAGE_SIZE_LIMIT)
+            .build();
+
+        // Validates the values roundtrip, across the fallback point included.
+        let data = roundtrip_opts(&batch, props);
+
+        let pages = column_data_pages(&data);
+        assert!(
+            pages.len() > 1,
+            "expected the re-encoded values to be split across pages: {pages:?}"
+        );
+        // A page is sealed once it reaches the limit, so the value that takes
+        // it there is written in full: allow one value of slack.
+        let max_page_size = DATA_PAGE_SIZE_LIMIT + 2 * VALUE_LEN;
+        for (encoding, num_values, size) in &pages {
+            assert!(
+                *size <= max_page_size,
+                "page of {size} bytes ({num_values} values, {encoding}) exceeds \
+                 {max_page_size}: {pages:?}"
+            );
+        }
+    }
+
     #[test]
     fn arrow_writer_dict_fallback_after_data_page_keeps_dictionary() {
-        // Flush dictionary-encoded data pages every 32 rows, so that when the
-        // dictionary overflows its size limit part-way through the chunk,
-        // pages referencing it have already been written: the dictionary page
-        // must then still be written, while the remainder of the chunk uses
-        // the fallback encoding.
+        // Once a dictionary-encoded data page has been written the dictionary
+        // page has to be written too, and every value it already covers is
+        // paid for whether or not later values use it. Re-encoding the
+        // buffered ids would then pay for them a second time, so the buffer is
+        // sealed as one more dictionary-encoded page instead and only the
+        // values after the fallback use the fallback encoding.
+        const ROWS_PER_PAGE: usize = 96;
+
         let values: Vec<String> = (0..1024).map(|i| format!("value-{i:04}")).collect();
         let array = Arc::new(StringArray::from_iter_values(&values)) as ArrayRef;
         let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
@@ -4366,23 +4449,47 @@ mod tests {
         let props = WriterProperties::builder()
             .set_writer_version(WriterVersion::PARQUET_1_0)
             .set_dictionary_page_size_limit(4096)
-            .set_data_page_row_count_limit(32)
+            .set_data_page_row_count_limit(ROWS_PER_PAGE)
             .set_write_batch_size(32)
             .build();
 
-        let file = roundtrip_opts(&batch, props);
+        let data = roundtrip_opts(&batch, props);
 
-        let reader = SerializedFileReader::new(file).unwrap();
-        let column = reader.metadata().row_group(0).column(0);
-        assert!(column.dictionary_page_offset().is_some());
-        let mask = column.page_encoding_stats_mask().unwrap();
+        let mut metadata = ParquetMetaDataReader::new();
+        metadata.try_parse(&data).unwrap();
+        let column_meta = metadata.finish().unwrap().row_group(0).column(0).clone();
+        assert!(column_meta.dictionary_page_offset().is_some());
+
+        let pages = column_data_pages(&data);
+        let dictionary_pages = pages
+            .iter()
+            .filter(|(encoding, ..)| *encoding == Encoding::RLE_DICTIONARY)
+            .count();
         assert!(
-            mask.is_set(Encoding::RLE_DICTIONARY),
-            "expected dictionary-encoded pages before the fallback: {mask:?}"
+            dictionary_pages > 0,
+            "expected dictionary-encoded pages before the fallback: {pages:?}"
         );
         assert!(
-            mask.is_set(Encoding::PLAIN),
-            "expected plain pages after the fallback: {mask:?}"
+            pages.len() > dictionary_pages,
+            "expected fallback-encoded pages after the fallback: {pages:?}"
+        );
+
+        // The dictionary-encoded pages come first and are contiguous.
+        assert!(
+            pages[dictionary_pages..]
+                .iter()
+                .all(|(encoding, ..)| *encoding == Encoding::PLAIN),
+            "expected every page after the fallback to be plain: {pages:?}"
+        );
+
+        // The values buffered when the dictionary spilled were sealed as one
+        // last dictionary-encoded page, which the row count limit had not yet
+        // filled. Had they been re-encoded instead, every dictionary-encoded
+        // page would be a full one.
+        let (_, last_dict_page_values, _) = pages[dictionary_pages - 1];
+        assert!(
+            (last_dict_page_values as usize) < ROWS_PER_PAGE,
+            "expected the fallback to seal a partial dictionary-encoded page: {pages:?}"
         );
     }
 

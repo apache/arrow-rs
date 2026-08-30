@@ -149,19 +149,25 @@ impl<T: DataType> DictEncoder<T> {
         self.indices.push(self.interner.intern(value));
     }
 
-    /// Returns the values buffered for the in-progress data page, resolving
-    /// dictionary ids back to their values, and clears the buffer.
+    /// Number of values buffered for the in-progress data page.
+    pub fn num_buffered_values(&self) -> usize {
+        self.indices.len()
+    }
+
+    /// Removes up to `max_values` of the values buffered for the in-progress
+    /// data page, resolving their dictionary ids back to values.
     ///
     /// Used on dictionary fallback to re-encode the buffered values with the
-    /// fallback encoder.
-    pub fn take_buffered_values(&mut self) -> Vec<T::T> {
+    /// fallback encoder, a bounded number at a time so that the caller can
+    /// keep the re-encoded data pages within the configured size limit.
+    pub fn drain_buffered_values(&mut self, max_values: usize) -> Vec<T::T> {
+        let num_values = max_values.min(self.indices.len());
         let uniques = &self.interner.storage().uniques;
-        let values = self
-            .indices
+        let values = self.indices[..num_values]
             .iter()
             .map(|&i| uniques[i as usize].clone())
             .collect();
-        self.indices.clear();
+        self.indices.drain(..num_values);
         values
     }
 

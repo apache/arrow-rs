@@ -428,18 +428,40 @@ impl DictEncoder {
 pub struct ByteArrayEncoder {
     fallback: FallbackEncoder,
     dict_encoder: Option<DictEncoder>,
-    /// A dictionary encoder retained by
-    /// [`ColumnValueEncoder::fall_back_from_dictionary`] so that
-    /// [`ColumnValueEncoder::flush_dict_page`] can still produce the dictionary
-    /// page required by already flushed dictionary-encoded data pages. It no
-    /// longer receives values.
-    retired_dict_encoder: Option<DictEncoder>,
+    /// Set by [`ColumnValueEncoder::fall_back_from_dictionary`] once this
+    /// chunk has abandoned dictionary encoding for good.
+    ///
+    /// While it is set, `dict_encoder` is no longer an encoder: it is only the
+    /// source of the buffered ids still to be re-encoded through `fallback`,
+    /// and is dropped as soon as they are drained. Everything that asks about
+    /// the dictionary goes through [`Self::active_dict_encoder`] so that the
+    /// chunk behaves from this point on as if it had never been dictionary
+    /// encoded.
+    dictionary_abandoned: bool,
     statistics_enabled: EnabledStatistics,
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
     bloom_filter: Option<Sbbf>,
     bloom_filter_target_fpp: f64,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
+}
+
+impl ByteArrayEncoder {
+    /// The dictionary encoder, while it is still encoding values.
+    ///
+    /// Returns `None` once the chunk has fallen back, even though
+    /// `dict_encoder` may still hold ids waiting to be re-encoded.
+    fn active_dict_encoder(&self) -> Option<&DictEncoder> {
+        self.dict_encoder
+            .as_ref()
+            .filter(|_| !self.dictionary_abandoned)
+    }
+
+    /// Mutable counterpart of [`Self::active_dict_encoder`].
+    fn active_dict_encoder_mut(&mut self) -> Option<&mut DictEncoder> {
+        let abandoned = self.dictionary_abandoned;
+        self.dict_encoder.as_mut().filter(|_| !abandoned)
+    }
 }
 
 impl ColumnValueEncoder for ByteArrayEncoder {
@@ -473,7 +495,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             bloom_filter,
             bloom_filter_target_fpp,
             dict_encoder: dictionary,
-            retired_dict_encoder: None,
+            dictionary_abandoned: false,
             min_value: None,
             max_value: None,
             geo_stats_accumulator,
@@ -574,26 +596,26 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn num_values(&self) -> usize {
-        match &self.dict_encoder {
+        match self.active_dict_encoder() {
             Some(encoder) => encoder.indices.len(),
             None => self.fallback.num_values,
         }
     }
 
     fn has_dictionary(&self) -> bool {
-        self.dict_encoder.is_some()
+        self.active_dict_encoder().is_some()
     }
 
     fn compresses_against_previous_value(&self) -> bool {
         // While dictionary encoding is active the data page holds RLE
         // indices, which carry no cross-value state; only the DELTA_BYTE_ARRAY
         // fallback shares prefixes with the preceding value.
-        self.dict_encoder.is_none()
+        self.active_dict_encoder().is_none()
             && matches!(self.fallback.encoder, FallbackEncoderImpl::Delta { .. })
     }
 
     fn estimated_memory_size(&self) -> usize {
-        let encoder_size = match &self.dict_encoder {
+        let encoder_size = match self.active_dict_encoder() {
             Some(encoder) => encoder.estimated_memory_size(),
             // For the FallbackEncoder, these unflushed bytes are already encoded.
             // Therefore, the size should be the same as estimated_data_page_size.
@@ -613,7 +635,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
-        Some(self.dict_encoder.as_ref()?.estimated_dict_page_size())
+        Some(self.active_dict_encoder()?.estimated_dict_page_size())
     }
 
     /// Returns an estimate of the data page size in bytes
@@ -621,57 +643,62 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     /// This includes:
     /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_page_size(&self) -> usize {
-        match &self.dict_encoder {
+        match self.active_dict_encoder() {
             Some(encoder) => encoder.estimated_data_page_size(),
             None => self.fallback.estimated_data_page_size(),
         }
     }
 
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {
-        let encoder = match self.dict_encoder.take() {
+        if self.dictionary_abandoned {
+            // The chunk fell back before any data page referenced the
+            // dictionary, so there is no dictionary page to write.
+            self.dict_encoder = None;
+            return Ok(None);
+        }
+        match self.dict_encoder.take() {
             Some(encoder) => {
                 if !encoder.indices.is_empty() {
                     return Err(general_err!(
                         "Must flush data pages before flushing dictionary"
                     ));
                 }
-                encoder
+                Ok(Some(encoder.flush_dict_page()))
             }
-            // A dictionary retained by `fall_back_from_dictionary`: its
-            // buffered indices were re-encoded through the fallback encoder
-            // when the fallback happened.
-            None => match self.retired_dict_encoder.take() {
-                Some(encoder) => encoder,
-                None => return Ok(None),
-            },
-        };
-
-        Ok(Some(encoder.flush_dict_page()))
+            None => Ok(None),
+        }
     }
 
-    fn fall_back_from_dictionary(&mut self, retain_dictionary: bool) -> Result<()> {
-        if let Some(mut dict_encoder) = self.dict_encoder.take() {
-            // Statistics, bloom filter and variable length bytes were all
-            // updated when these values were first written; `encode_all`
-            // re-counts `variable_length_bytes` in the fallback encoder, so
-            // reset the dictionary's per-page count to match.
-            let storage = dict_encoder.interner.storage();
-            self.fallback
-                .encode_all(dict_encoder.indices.iter().map(|&idx| storage.get(idx)));
-            dict_encoder.indices.clear();
-            dict_encoder.variable_length_bytes = 0;
-            if retain_dictionary {
-                self.retired_dict_encoder = Some(dict_encoder);
-            }
+    fn fall_back_from_dictionary(&mut self, max_values: usize) -> Result<usize> {
+        self.dictionary_abandoned = true;
+        let Some(dict_encoder) = self.dict_encoder.as_mut() else {
+            return Ok(0);
+        };
+
+        let num_values = max_values.min(dict_encoder.indices.len());
+        // Statistics, bloom filter and variable length bytes were all updated
+        // when these values were first written; `encode_all` re-counts
+        // `variable_length_bytes` in the fallback encoder, so the dictionary's
+        // own per-page count is simply discarded with it below.
+        let storage = dict_encoder.interner.storage();
+        self.fallback.encode_all(
+            dict_encoder.indices[..num_values]
+                .iter()
+                .map(|&idx| storage.get(idx)),
+        );
+        dict_encoder.indices.drain(..num_values);
+
+        if dict_encoder.indices.is_empty() {
+            self.dict_encoder = None;
         }
-        Ok(())
+        Ok(num_values)
     }
 
     fn flush_data_page(&mut self) -> Result<DataPageValues<ByteArray>> {
         let min_value = self.min_value.take();
         let max_value = self.max_value.take();
 
-        match &mut self.dict_encoder {
+        match self.active_dict_encoder_mut() {
             Some(encoder) => Ok(encoder.flush_data_page(min_value, max_value)),
             _ => self.fallback.flush_data_page(min_value, max_value),
         }
@@ -718,7 +745,7 @@ where
         }
     }
 
-    match &mut encoder.dict_encoder {
+    match encoder.active_dict_encoder_mut() {
         Some(dict_encoder) => dict_encoder.encode(values, indices),
         None => encoder.fallback.encode(values, indices),
     }

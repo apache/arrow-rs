@@ -173,19 +173,23 @@ pub trait ColumnValueEncoder {
     /// are any pending page values
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>>;
 
-    /// Falls back from dictionary encoding to the fallback encoding for the
-    /// remainder of this column chunk: any values buffered for the in-progress
-    /// data page (currently held as dictionary ids) are re-encoded through the
-    /// fallback encoder, and subsequent writes will not be dictionary encoded.
+    /// Abandons dictionary encoding for the remainder of this column chunk,
+    /// re-encoding at most `max_values` of the values buffered for the
+    /// in-progress data page (currently held as dictionary ids) through the
+    /// fallback encoder.
     ///
-    /// If `retain_dictionary` is true the dictionary itself is kept, so that a
-    /// subsequent call to [`Self::flush_dict_page`] can produce the dictionary
-    /// page required by dictionary-encoded data pages that were already
-    /// flushed. Otherwise the dictionary is discarded and
-    /// [`Self::flush_dict_page`] will return `None`.
+    /// The dictionary is discarded, so from the first call onwards
+    /// [`Self::has_dictionary`] is false, further writes go to the fallback
+    /// encoder, and [`Self::flush_dict_page`] returns `None`. This is only
+    /// correct when no dictionary-encoded data page has been flushed for the
+    /// chunk; a caller with such pages must keep the dictionary and seal the
+    /// buffered ids as one more dictionary-encoded page instead.
     ///
-    /// Does nothing if no dictionary encoder is active.
-    fn fall_back_from_dictionary(&mut self, retain_dictionary: bool) -> Result<()>;
+    /// Returns the number of values re-encoded by this call, which is zero
+    /// once the buffer is drained. Re-encoding a page's worth of ids can
+    /// produce far more bytes than they occupied, so the caller drains the
+    /// buffer in increments and may seal a data page between them.
+    fn fall_back_from_dictionary(&mut self, max_values: usize) -> Result<usize>;
 
     /// Flush the next data page for this column chunk
     fn flush_data_page(&mut self) -> Result<DataPageValues<Self::T>>;
@@ -203,11 +207,16 @@ pub trait ColumnValueEncoder {
 pub struct ColumnValueEncoderImpl<T: DataType> {
     encoder: Box<dyn Encoder<T>>,
     dict_encoder: Option<DictEncoder<T>>,
-    /// A dictionary encoder retained by [`Self::fall_back_from_dictionary`] so
-    /// that [`Self::flush_dict_page`] can still produce the dictionary page
-    /// required by already flushed dictionary-encoded data pages. It no longer
-    /// receives values.
-    retired_dict_encoder: Option<DictEncoder<T>>,
+    /// Set by [`ColumnValueEncoder::fall_back_from_dictionary`] once this
+    /// chunk has abandoned dictionary encoding for good.
+    ///
+    /// While it is set, `dict_encoder` is no longer an encoder: it is only the
+    /// source of the buffered ids still to be re-encoded through `encoder`,
+    /// and is dropped as soon as they are drained. Everything that asks about
+    /// the dictionary goes through [`Self::active_dict_encoder`] so that the
+    /// chunk behaves from this point on as if it had never been dictionary
+    /// encoded.
+    dictionary_abandoned: bool,
     descr: ColumnDescPtr,
     num_values: usize,
     statistics_enabled: EnabledStatistics,
@@ -255,10 +264,26 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             }
         }
 
-        match &mut self.dict_encoder {
+        match self.active_dict_encoder_mut() {
             Some(encoder) => encoder.put(slice),
             _ => self.encoder.put(slice),
         }
+    }
+
+    /// The dictionary encoder, while it is still encoding values.
+    ///
+    /// Returns `None` once the chunk has fallen back, even though
+    /// `dict_encoder` may still hold ids waiting to be re-encoded.
+    fn active_dict_encoder(&self) -> Option<&DictEncoder<T>> {
+        self.dict_encoder
+            .as_ref()
+            .filter(|_| !self.dictionary_abandoned)
+    }
+
+    /// Mutable counterpart of [`Self::active_dict_encoder`].
+    fn active_dict_encoder_mut(&mut self) -> Option<&mut DictEncoder<T>> {
+        let abandoned = self.dictionary_abandoned;
+        self.dict_encoder.as_mut().filter(|_| !abandoned)
     }
 }
 
@@ -295,7 +320,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         Ok(Self {
             encoder,
             dict_encoder,
-            retired_dict_encoder: None,
+            dictionary_abandoned: false,
             descr: descr.clone(),
             num_values: 0,
             statistics_enabled,
@@ -367,21 +392,21 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn has_dictionary(&self) -> bool {
-        self.dict_encoder.is_some()
+        self.active_dict_encoder().is_some()
     }
 
     fn compresses_against_previous_value(&self) -> bool {
         // While dictionary encoding is active `self.encoder` is unused: the
         // data page holds RLE indices, which carry no cross-value state.
-        self.dict_encoder.is_none() && self.encoder.encoding() == Encoding::DELTA_BYTE_ARRAY
+        self.active_dict_encoder().is_none()
+            && self.encoder.encoding() == Encoding::DELTA_BYTE_ARRAY
     }
 
     fn estimated_memory_size(&self) -> usize {
         let encoder_size = self.encoder.estimated_memory_size();
 
         let dict_encoder_size = self
-            .dict_encoder
-            .as_ref()
+            .active_dict_encoder()
             .map(|encoder| encoder.estimated_memory_size())
             .unwrap_or_default();
 
@@ -395,34 +420,31 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
-        Some(self.dict_encoder.as_ref()?.dict_encoded_size())
+        Some(self.active_dict_encoder()?.dict_encoded_size())
     }
 
     fn estimated_data_page_size(&self) -> usize {
-        match &self.dict_encoder {
+        match self.active_dict_encoder() {
             Some(encoder) => encoder.estimated_data_encoded_size(),
             _ => self.encoder.estimated_data_encoded_size(),
         }
     }
 
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {
-        let encoder = match self.dict_encoder.take() {
-            Some(encoder) => {
-                if self.num_values != 0 {
-                    return Err(general_err!(
-                        "Must flush data pages before flushing dictionary"
-                    ));
-                }
-                encoder
-            }
-            // A dictionary retained by `fall_back_from_dictionary`: the values
-            // buffered when the fallback happened were re-encoded through the
-            // fallback encoder, so pending page values are fine here.
-            None => match self.retired_dict_encoder.take() {
-                Some(encoder) => encoder,
-                None => return Ok(None),
-            },
+        if self.dictionary_abandoned {
+            // The chunk fell back before any data page referenced the
+            // dictionary, so there is no dictionary page to write.
+            self.dict_encoder = None;
+            return Ok(None);
+        }
+        let Some(encoder) = self.dict_encoder.take() else {
+            return Ok(None);
         };
+        if self.num_values != 0 {
+            return Err(general_err!(
+                "Must flush data pages before flushing dictionary"
+            ));
+        }
 
         let buf = encoder.write_dict()?;
 
@@ -433,21 +455,26 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         }))
     }
 
-    fn fall_back_from_dictionary(&mut self, retain_dictionary: bool) -> Result<()> {
-        if let Some(mut dict_encoder) = self.dict_encoder.take() {
-            // Statistics, bloom filter and variable length bytes were all
-            // updated when these values were first written, so the re-encoded
-            // values deliberately bypass `write_slice`.
-            self.encoder.put(&dict_encoder.take_buffered_values())?;
-            if retain_dictionary {
-                self.retired_dict_encoder = Some(dict_encoder);
-            }
+    fn fall_back_from_dictionary(&mut self, max_values: usize) -> Result<usize> {
+        self.dictionary_abandoned = true;
+        let Some(dict_encoder) = self.dict_encoder.as_mut() else {
+            return Ok(0);
+        };
+
+        // Statistics, bloom filter and variable length bytes were all updated
+        // when these values were first written, so the re-encoded values
+        // deliberately bypass `write_slice`.
+        let values = dict_encoder.drain_buffered_values(max_values);
+        self.encoder.put(&values)?;
+
+        if dict_encoder.num_buffered_values() == 0 {
+            self.dict_encoder = None;
         }
-        Ok(())
+        Ok(values.len())
     }
 
     fn flush_data_page(&mut self) -> Result<DataPageValues<T::T>> {
-        let (buf, encoding) = match &mut self.dict_encoder {
+        let (buf, encoding) = match self.active_dict_encoder_mut() {
             Some(encoder) => (encoder.write_indices()?, Encoding::RLE_DICTIONARY),
             _ => (self.encoder.flush_buffer()?, self.encoder.encoding()),
         };

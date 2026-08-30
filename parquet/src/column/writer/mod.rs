@@ -452,6 +452,17 @@ impl LevelDataRef<'_> {
 /// Typed column writer for a primitive column.
 pub type ColumnWriterImpl<'a, T> = GenericColumnWriter<'a, ColumnValueEncoderImpl<T>>;
 
+/// Upper bound on the number of values re-encoded between data page size
+/// checks when falling back from dictionary encoding.
+///
+/// The buffered dictionary ids can expand by orders of magnitude once they are
+/// re-encoded, so the fallback drains them in increments rather than in one go,
+/// leaving the writer free to seal a page in between and keep the re-encoded
+/// pages within the configured data page size limit. Increments are sized from
+/// the bytes the previous one produced; this only caps that estimate, so that
+/// tiny values do not turn one page into a single enormous increment.
+const FALLBACK_REENCODE_BATCH_SIZE: usize = 1024;
+
 /// Generic column writer for a primitive Parquet column
 pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // Column writer properties
@@ -1137,30 +1148,83 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     /// Performs dictionary fallback.
     ///
-    /// The values buffered for the in-progress data page are dictionary ids;
-    /// they are re-encoded through the fallback encoder (together with the
-    /// dictionary they resolve to) rather than flushed as one more
-    /// dictionary-encoded page, and remain buffered. This matches
-    /// parquet-java's `FallbackValuesWriter`.
+    /// If any dictionary-encoded data page has already been produced for this
+    /// chunk then those pages reference the dictionary, so the dictionary page
+    /// is written and stays worth its bytes. The buffered ids are sealed as
+    /// one last dictionary-encoded page and the dictionary page is written
+    /// ahead of the data pages that were buffered awaiting it.
     ///
-    /// If dictionary-encoded data pages have already been produced for this
-    /// chunk they reference the dictionary, so the dictionary page must still
-    /// be written, ahead of any data pages buffered while awaiting it.
-    /// Otherwise no dictionary page is written at all and the whole chunk uses
-    /// the fallback encoding.
+    /// Otherwise nothing references the dictionary yet, and writing it would
+    /// only serve the ids still buffered for the in-progress page. Those
+    /// values are re-encoded through the fallback encoder instead and the
+    /// dictionary is dropped, so the whole chunk ends up in a single encoding
+    /// and pays for the values once. This matches parquet-java's
+    /// `FallbackValuesWriter`.
     fn dict_fallback(&mut self) -> Result<()> {
         // At this point we know that we need to fall back.
-        let retain_dictionary = self.has_dictionary_encoded_data_pages;
-        self.encoder.fall_back_from_dictionary(retain_dictionary)?;
-        if retain_dictionary {
+        if self.has_dictionary_encoded_data_pages {
+            if self.page_metrics.num_buffered_values > 0 {
+                self.add_data_page()?;
+            }
             self.write_dictionary_page()?;
-            while let Some(page) = self.data_pages.pop_front() {
-                self.write_data_page(page)?;
+            self.flush_data_pages()?;
+            return Ok(());
+        }
+
+        // Sealing a page part-way through the re-encode means splitting the
+        // levels already buffered for it, which the streaming level encoders
+        // cannot do. A column with no repetition or definition levels has no
+        // level buffer and exactly one row per value, so any value boundary is
+        // a valid page boundary; anything else has to re-encode the whole
+        // buffer into one page.
+        let splittable = self.descr.max_def_level() == 0 && self.descr.max_rep_level() == 0;
+        if !splittable {
+            self.encoder.fall_back_from_dictionary(usize::MAX)?;
+        } else {
+            // The buffered values are re-attributed to pages increment by
+            // increment below. With no levels there is one row per value and
+            // no nulls, so a page's counts are just how many it re-encoded.
+            self.page_metrics.num_buffered_values = 0;
+            self.page_metrics.num_buffered_rows = 0;
+
+            // Each increment is sized from the bytes the previous one
+            // produced, so that a page is sealed close to the limit whatever
+            // the values are worth: a fixed number of values would overshoot
+            // by a whole increment of large ones. The first increment is a
+            // single value, which is what makes an estimate available at all.
+            let page_size_limit = self.props.column_data_page_size_limit(self.descr.path());
+            // Bytes the re-encoded values have contributed to the page so far.
+            // Nothing reached the fallback encoder before now, so it starts at
+            // zero and returns there every time a page is sealed.
+            let mut page_size = 0;
+            let mut batch = 1;
+            loop {
+                let num_values = self.encoder.fall_back_from_dictionary(batch)?;
+                if num_values == 0 {
+                    break;
+                }
+                self.page_metrics.num_buffered_values += num_values as u32;
+                self.page_metrics.num_buffered_rows += num_values as u32;
+
+                let size = self.encoder.estimated_data_page_size();
+                let bytes_per_value = size.saturating_sub(page_size).div_ceil(num_values).max(1);
+                page_size = size;
+
+                if self.should_add_data_page() {
+                    self.add_data_page()?;
+                    page_size = self.encoder.estimated_data_page_size();
+                }
+
+                batch = page_size_limit
+                    .saturating_sub(page_size)
+                    .div_ceil(bytes_per_value)
+                    .clamp(1, FALLBACK_REENCODE_BATCH_SIZE);
             }
         }
-        // The dictionary ids held only a fraction of the page size budget; the
-        // same values re-encoded with the fallback encoding may already exceed
-        // it.
+
+        // The dictionary ids held only a fraction of the page size budget, so
+        // the values re-encoded into whatever is left buffered here may
+        // already exceed it.
         if self.should_add_data_page() {
             self.add_data_page()?;
         }
