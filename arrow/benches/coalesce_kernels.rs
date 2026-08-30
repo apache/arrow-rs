@@ -789,7 +789,6 @@ impl SliceBenchmarkBuilder<'_> {
     }
 }
 
-/// Push slices of the source batches through a `BatchCoalescer`.
 fn push_slices(source_batches: Arc<[RecordBatch]>, chunk_rows: usize, schema: SchemaRef) {
     let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), chunk_rows);
 
