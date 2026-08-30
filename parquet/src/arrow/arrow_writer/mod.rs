@@ -5596,15 +5596,33 @@ mod tests {
     /// values seen so far at `1 / repeats`, independent of how the writer
     /// slices the batch internally
     fn repetitive_string_batch(pool_size: usize, value_len: usize, repeats: usize) -> RecordBatch {
-        let pool: Vec<String> = (0..pool_size)
+        let pool = string_pool(pool_size, value_len);
+        string_batch(pool_size * repeats, |i| &pool[i / repeats])
+    }
+
+    /// As [`repetitive_string_batch`], but cycling the pool rather than
+    /// ordering it into runs: every distinct value is seen before any value
+    /// repeats, so the dictionary is as large as the data it has deduplicated
+    /// by the time it reaches the dictionary page size limit
+    fn interleaved_string_batch(pool_size: usize, value_len: usize, repeats: usize) -> RecordBatch {
+        let pool = string_pool(pool_size, value_len);
+        string_batch(pool_size * repeats, |i| &pool[i % pool_size])
+    }
+
+    /// `pool_size` distinct strings of `value_len` bytes each
+    fn string_pool(pool_size: usize, value_len: usize) -> Vec<String> {
+        (0..pool_size)
             .map(|i| {
                 let mut v = format!("value-{i:06}-").repeat(value_len / 8 + 1);
                 v.truncate(value_len);
                 v
             })
-            .collect();
-        let array =
-            StringArray::from_iter_values((0..pool_size * repeats).map(|i| &pool[i / repeats]));
+            .collect()
+    }
+
+    /// A single non-nullable `Utf8` column of `len` values drawn by `value`
+    fn string_batch<'a>(len: usize, value: impl Fn(usize) -> &'a str) -> RecordBatch {
+        let array = StringArray::from_iter_values((0..len).map(value));
         let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
         RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
     }
@@ -5667,9 +5685,13 @@ mod tests {
 
         assert_eq!(default_data, explicit_data);
 
-        // the dictionary overflowed the 64 KiB limit, so the writer fell back
-        let (num_dict, num_fallback) = count_dict_and_fallback_pages(&default_metadata);
-        assert!(num_dict > 0, "expected dictionary encoded pages");
+        // The dictionary overflowed the 64 KiB limit, so the writer fell back.
+        // Only the presence of fallback-encoded pages is asserted: whether any
+        // dictionary-encoded page survives the fallback is up to the writer,
+        // which may re-encode the values buffered at that point rather than
+        // seal them as one more dictionary-encoded page. What this policy
+        // controls is *when* the fallback happens, not what it does.
+        let (_, num_fallback) = count_dict_and_fallback_pages(&default_metadata);
         assert!(num_fallback > 0, "expected fallback encoded pages");
     }
 
@@ -5740,6 +5762,37 @@ mod tests {
 
         let (_, num_fallback) = count_dict_and_fallback_pages(&metadata);
         assert!(num_fallback > 0, "expected fallback encoded pages");
+    }
+
+    #[test]
+    fn test_dictionary_fallback_when_profitable_interleaved_matches_default() {
+        // Profitability is judged against the values appended so far, so the
+        // same pool of values can decide either way depending on the order it
+        // arrives in. Cycled, every distinct value is seen before any repeat,
+        // so when the dictionary reaches the page size limit it has
+        // deduplicated barely more than its own size and `WhenProfitable`
+        // falls back exactly where the default policy does. The identical
+        // pool ordered into runs keeps its dictionary instead, in
+        // `test_dictionary_fallback_when_profitable_keeps_dictionary`.
+        let batch = interleaved_string_batch(64, 2048, 32);
+
+        let default_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .build();
+        let profitable_props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(64 * 1024)
+            .set_dictionary_fallback(DictionaryFallback::WhenProfitable {
+                worth_ratio: 0.1,
+                max_dictionary_page_size: 64 * 1024 * 1024,
+            })
+            .build();
+
+        let (default_data, default_metadata) = write_batch_with_props(&batch, default_props);
+        let (profitable_data, _) = write_batch_with_props(&batch, profitable_props);
+
+        let (_, num_fallback) = count_dict_and_fallback_pages(&default_metadata);
+        assert!(num_fallback > 0, "expected fallback encoded pages");
+        assert_eq!(default_data, profitable_data);
     }
 
     #[test]
