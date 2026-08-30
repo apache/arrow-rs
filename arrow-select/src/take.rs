@@ -26,12 +26,12 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, RunEndBuffer,
-    ScalarBuffer, bit_util,
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, NullBufferBuilder,
+    OffsetBuffer, RunEndBuffer, ScalarBuffer, bit_util,
 };
 use arrow_cmp::make_comparator;
 use arrow_data::{ArrayData, transform::MutableArrayData};
-use arrow_schema::{ArrowError, DataType, FieldRef, SortOptions, UnionMode};
+use arrow_schema::{ArrowError, DataType, FieldRef, SortOptions, UnionFields, UnionMode};
 
 use num_traits::{CheckedAdd, Zero};
 
@@ -334,7 +334,7 @@ fn take_impl<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
         DataType::Union(fields, UnionMode::Sparse) => {
             let mut children = Vec::with_capacity(fields.len());
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
-            let type_ids = take_native(values.type_ids(), indices);
+            let type_ids = take_union_type_ids(fields, values.type_ids(), indices)?;
             for (type_id, _field) in fields.iter() {
                 let values = values.child(type_id);
                 let values = take_impl::<_, CHECKED>(values, indices)?;
@@ -346,7 +346,10 @@ fn take_impl<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
         DataType::Union(fields, UnionMode::Dense) => {
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
 
-            let type_ids = <PrimitiveArray<Int8Type>>::try_new(take_native(values.type_ids(), indices), None)?;
+            let type_ids = PrimitiveArray::<Int8Type>::try_new(
+                take_union_type_ids(fields, values.type_ids(), indices)?,
+                None,
+            )?;
             // Keep index nulls so `take` of each child writes a null instead of
             // reading child offset 0 (the default `take_native` fills in).
             let offsets = <PrimitiveArray<Int32Type>>::try_new(
@@ -387,6 +390,40 @@ fn take_impl<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
         }
         t => unimplemented!("Take not supported for data type {:?}", t)
     }
+}
+
+/// Takes union type ids, substituting a valid type id for null take indices.
+///
+/// Union arrays do not have a top-level null bitmap. A null is represented by selecting an
+/// arbitrary valid child type id with a null value in that child. In particular, a null index
+/// cannot fall back to type id `0`, as unions are not required to have such a child.
+fn take_union_type_ids<IndexType: ArrowPrimitiveType>(
+    fields: &UnionFields,
+    type_ids: &ScalarBuffer<i8>,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<ScalarBuffer<i8>, ArrowError> {
+    let taken_type_ids = take_native(type_ids, indices);
+    if indices.null_count() == 0 {
+        return Ok(taken_type_ids);
+    }
+
+    let null_type_id = fields
+        .iter()
+        .next()
+        .map(|(type_id, _)| type_id)
+        .ok_or_else(|| ArrowError::ComputeError("Cannot take from an empty union".into()))?;
+    let type_ids = indices
+        .iter()
+        .zip(&taken_type_ids)
+        .map(|(index, &type_id)| {
+            if index.is_some() {
+                type_id
+            } else {
+                null_type_id
+            }
+        })
+        .collect::<ScalarBuffer<_>>();
+    Ok(type_ids)
 }
 
 /// Options that define how `take` should behave
@@ -1090,7 +1127,7 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     // `unwrap` is used in this function because the unwrapped values are bounded by the corresponding `::Native`.
     let mut new_run_ends = Vec::with_capacity(1);
     let mut take_value_indices = Vec::with_capacity(1);
-    let mut take_value_is_valid = Vec::with_capacity(1);
+    let mut take_value_is_valid = NullBufferBuilder::new(1);
 
     let values_cmp = make_comparator(
         run_array.values().as_ref(),
@@ -1101,14 +1138,20 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     for ix in 1..physical_indices.len() {
         let prev_idx = physical_indices[ix - 1];
         let cur_idx = physical_indices[ix];
-        if is_new_run_take(prev_idx, cur_idx, &values_cmp) {
-            push_run_take_index::<I>(&mut take_value_indices, &mut take_value_is_valid, prev_idx);
+        if is_new_run_take(run_array.values().as_ref(), prev_idx, cur_idx, &values_cmp) {
+            push_run_take_index::<I>(
+                &mut take_value_indices,
+                &mut take_value_is_valid,
+                run_array.values().as_ref(),
+                prev_idx,
+            );
             new_run_ends.push(T::Native::from_usize(ix).unwrap());
         }
     }
     push_run_take_index::<I>(
         &mut take_value_indices,
         &mut take_value_is_valid,
+        run_array.values().as_ref(),
         physical_indices[physical_indices.len() - 1],
     );
     new_run_ends.push(T::Native::from_usize(physical_indices.len()).unwrap());
@@ -1118,11 +1161,7 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
         RunEndBuffer::new_unchecked(ScalarBuffer::from(new_run_ends), 0, physical_indices.len())
     };
 
-    let nulls = if take_value_is_valid.iter().all(|&v| v) {
-        None
-    } else {
-        Some(NullBuffer::from_iter(take_value_is_valid))
-    };
+    let nulls = take_value_is_valid.finish();
     let take_value_indices =
         PrimitiveArray::<I>::new(ScalarBuffer::from(take_value_indices), nulls);
 
@@ -1169,30 +1208,38 @@ fn physical_indices_for_take<T: RunEndIndexType, I: ArrowPrimitiveType>(
 }
 
 fn is_new_run_take(
+    values: &dyn Array,
     prev_idx: Option<usize>,
     cur_idx: Option<usize>,
     values_cmp: &arrow_cmp::DynComparator,
 ) -> bool {
-    match (prev_idx, cur_idx) {
-        (None, None) => false,
-        (Some(prev), Some(cur)) => prev != cur && values_cmp(cur, prev).is_ne(),
+    let prev_valid = prev_idx.is_some_and(|idx| values.is_valid(idx));
+    let cur_valid = cur_idx.is_some_and(|idx| values.is_valid(idx));
+    match (prev_valid, cur_valid) {
+        (false, false) => false,
+        (true, true) => {
+            let prev = prev_idx.unwrap();
+            let cur = cur_idx.unwrap();
+            prev != cur && values_cmp(cur, prev).is_ne()
+        }
         _ => true,
     }
 }
 
 fn push_run_take_index<I: ArrowPrimitiveType>(
     take_value_indices: &mut Vec<I::Native>,
-    take_value_is_valid: &mut Vec<bool>,
+    take_value_is_valid: &mut NullBufferBuilder,
+    values: &dyn Array,
     physical: Option<usize>,
 ) {
-    match physical {
+    match physical.filter(|&idx| values.is_valid(idx)) {
         Some(idx) => {
             take_value_indices.push(I::Native::from_usize(idx).unwrap());
-            take_value_is_valid.push(true);
+            take_value_is_valid.append_non_null();
         }
         None => {
             take_value_indices.push(I::Native::default());
-            take_value_is_valid.push(false);
+            take_value_is_valid.append_null();
         }
     }
 }
@@ -2859,34 +2906,18 @@ mod tests {
 
     #[test]
     fn test_take_runs_null_indices() {
-        // [10, 10, 99, 1, 1, 1]; a null index must not become logical index 0.
+        // A null index must not become logical index 0, and null indices must merge with
+        // consecutive runs whose values are already null.
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend([10, 10, 99, 1, 1, 1].into_iter().map(Some));
+        builder.extend([Some(10), Some(10), None, None, Some(99)]);
         let run_array = builder.finish();
 
-        let indices = Int32Array::from(vec![Some(0), None, Some(2)]);
-        let taken = take(&run_array, &indices, None).unwrap();
-        let logical: Vec<Option<i32>> = taken
-            .as_run::<Int32Type>()
-            .downcast::<Int32Array>()
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(logical, vec![Some(10), None, Some(99)]);
-
-        let primitive = Int32Array::from(vec![10, 10, 99, 1, 1, 1]);
-        let primitive_taken = take(&primitive, &indices, None).unwrap();
-        let primitive_logical: Vec<Option<i32>> =
-            primitive_taken.as_primitive::<Int32Type>().iter().collect();
-        assert_eq!(logical, primitive_logical);
-
-        // Consecutive nulls merge into one null run.
-        let indices = Int32Array::from(vec![Some(0), None, None, Some(2)]);
+        let indices = Int32Array::from(vec![Some(0), None, Some(2), Some(3), Some(4)]);
         let taken = take(&run_array, &indices, None).unwrap();
         let run = taken.as_run::<Int32Type>();
         let logical: Vec<Option<i32>> = run.downcast::<Int32Array>().unwrap().into_iter().collect();
-        assert_eq!(logical, vec![Some(10), None, None, Some(99)]);
-        assert_eq!(run.run_ends().values(), &[1_i32, 3, 4]);
+        assert_eq!(logical, vec![Some(10), None, None, None, Some(99)]);
+        assert_eq!(run.run_ends().values(), &[1_i32, 4, 5]);
     }
 
     #[test]
@@ -3101,24 +3132,31 @@ mod tests {
 
     #[test]
     fn test_take_union_dense_null_indices() {
-        // Dense [1, 2, 3]; a null index must not become child offset 0.
-        let fields = UnionFields::from_fields(vec![Field::new("i", DataType::Int32, true)]);
+        // Dense [1, 2, 3]; a null index must not become child offset 0. Use a non-zero
+        // type id to verify null indices don't use the invalid default type id 0.
+        let fields =
+            UnionFields::try_new(vec![5], vec![Field::new("i", DataType::Int32, true)]).unwrap();
         let dense = UnionArray::try_new(
             fields.clone(),
-            ScalarBuffer::from(vec![0_i8, 0, 0]),
+            ScalarBuffer::from(vec![5_i8, 5, 5]),
             Some(ScalarBuffer::from(vec![0_i32, 1, 2])),
             vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
         )
         .unwrap();
         let sparse = UnionArray::try_new(
             fields,
-            ScalarBuffer::from(vec![0_i8, 0, 0]),
+            ScalarBuffer::from(vec![5_i8, 5, 5]),
             None,
             vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
         )
         .unwrap();
 
-        let indices = UInt32Array::from(vec![Some(0), None, Some(2)]);
+        // Use an out-of-bounds backing value for the null index to exercise `take_native`'s
+        // default type id path. A union need not have a child with type id 0.
+        let indices = UInt32Array::new(
+            ScalarBuffer::from(vec![0_u32, 99, 2]),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
         let dense_taken = take(&dense, &indices, None).unwrap();
         let sparse_taken = take(&sparse, &indices, None).unwrap();
         let dense_logical = union_i32_logical(dense_taken.as_any().downcast_ref().unwrap());
