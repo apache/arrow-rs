@@ -251,6 +251,19 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses the next double-quoted string
+    fn parse_quoted_string(&mut self, context: &str) -> ArrowResult<String> {
+        let token = self.next_token()?;
+        if let Token::DoubleQuotedString(s) = token {
+            Ok(s)
+        } else {
+            Err(make_error(
+                self.val,
+                &format!("expected double quoted string for {context}, got '{token}'"),
+            ))
+        }
+    }
+
     /// Parses the next integer value
     fn parse_i64(&mut self, context: &str) -> ArrowResult<i64> {
         match self.next_token()? {
@@ -600,30 +613,29 @@ impl<'a> Parser<'a> {
     /// Parses the next RunEndEncoded (called after `RunEndEncoded` has been consumed).
     ///
     /// Compact form (default field names): `RunEndEncoded(Int32, non-null Utf8)`
-    /// Verbose form (custom field names):  `RunEndEncoded('re': Int32, 'v': non-null Utf8)`
+    /// Verbose form (custom field names):  `RunEndEncoded("re": Int32, "v": non-null Utf8)`
     fn parse_run_end_encoded(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
 
-        // Distinguish compact from verbose by peeking: verbose starts with a single-quoted name.
+        // Distinguish compact from verbose by peeking: verbose starts with a double-quoted name.
         let verbose = matches!(
             self.tokenizer.peek(),
-            Some(Ok(Token::SingleQuotedString(_)))
+            Some(Ok(Token::DoubleQuotedString(_)))
         );
 
         let (run_ends, values) = if verbose {
             let run_ends = self.parse_ree_verbose_field()?;
             self.expect_token(Token::Comma)?;
             let values = self.parse_ree_verbose_field()?;
-            (run_ends, values)
+            (run_ends.with_nullable(false), values)
         } else {
-            let re_nullable = self.parse_opt_nullable();
             let re_type = self.parse_next_type()?;
             self.expect_token(Token::Comma)?;
             let v_nullable = self.parse_opt_nullable();
             let v_type = self.parse_next_type()?;
             (
-                Field::new("run_ends", re_type, re_nullable),
-                Field::new("values", v_type, v_nullable),
+                Field::new(Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME, re_type, false),
+                Field::new(Field::REE_VALUES_FIELD_DEFAULT_NAME, v_type, v_nullable),
             )
         };
 
@@ -634,9 +646,9 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    /// Parses `'name': [non-null] Type` used in the verbose REE form.
+    /// Parses `"name": [non-null] Type` used in the verbose REE form.
     fn parse_ree_verbose_field(&mut self) -> ArrowResult<Field> {
-        let name = self.parse_single_quoted_string("RunEndEncoded field")?;
+        let name = self.parse_quoted_string("RunEndEncoded field")?;
         self.expect_token(Token::Colon)?;
         let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
@@ -1249,17 +1261,17 @@ mod test {
                 true,
             ),
             DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", DataType::UInt32, true)),
+                Arc::new(Field::new("run_ends", DataType::UInt32, false)),
                 Arc::new(Field::new("values", DataType::Int32, true)),
             ),
             DataType::RunEndEncoded(
                 Arc::new(Field::new(
                     "run_ends",
                     DataType::RunEndEncoded(
-                        Arc::new(Field::new("run_ends", DataType::UInt32, true)),
+                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
                         Arc::new(Field::new("values", DataType::Int32, true)),
                     ),
-                    true,
+                    false,
                 )),
                 Arc::new(Field::new("values", DataType::Int32, true)),
             ),
@@ -1268,22 +1280,22 @@ mod test {
                 Arc::new(Field::new(
                     "run_ends",
                     DataType::RunEndEncoded(
-                        Arc::new(Field::new("run_ends", DataType::UInt32, true)),
+                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
                         Arc::new(Field::new("values", DataType::Int32, true)),
                     ),
-                    true,
+                    false,
                 )),
-                Arc::new(Field::new("named_values", DataType::Int32, true)),
+                Arc::new(Field::new("named_values", DataType::Int32, false)),
             ),
-            // verbose form with non-null values
+            // verbose form with non-null inner values
             DataType::RunEndEncoded(
                 Arc::new(Field::new(
                     "run_ends",
                     DataType::RunEndEncoded(
-                        Arc::new(Field::new("run_ends", DataType::UInt32, true)),
-                        Arc::new(Field::new("values", DataType::Int32, true)),
+                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
+                        Arc::new(Field::new("values", DataType::Int32, false)),
                     ),
-                    true,
+                    false,
                 )),
                 Arc::new(Field::new("named_values", DataType::Int32, false)),
             ),
