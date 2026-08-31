@@ -266,7 +266,7 @@ fn add_benchmark(c: &mut Criterion) {
         c,
         &GenerateBytes::<GenericStringType<i32>> {
             description: "strings (3..20)".to_string(),
-            range_length: 3..10,
+            range_length: 3..20,
             _marker: std::marker::PhantomData,
         },
     );
@@ -275,7 +275,7 @@ fn add_benchmark(c: &mut Criterion) {
         c,
         &GenerateStringView {
             description: "string_views size (3..20)".to_string(),
-            range: 3..10,
+            range: 3..20,
             _marker: std::marker::PhantomData,
         },
     );
