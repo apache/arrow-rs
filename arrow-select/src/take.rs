@@ -96,13 +96,9 @@ pub fn take(
         indices => {
             let indices = indices.to_indices();
             if options.check_bounds {
-                // Pre-verify all index values once: take_impl can skip safe accessor overhead.
                 check_bounds(values.len(), &indices)?;
-                take_impl::<_, false>(values, &indices)
-            } else {
-                // No pre-check: take_impl uses safe accessors that panic on OOB instead of UB.
-                take_impl::<_, true>(values, &indices)
             }
+            take_impl::<_, true>(values, &indices)
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
