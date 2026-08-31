@@ -27,8 +27,10 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer, bit_util}
 use std::cmp::Ordering;
 use std::iter::Peekable;
 
-const AND_THEN_DENSE_MASK_MIN_LEN: usize = 512;
-const AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION: usize = 20;
+// The benchmark sweep crosses over at 4K rows when the outer mask keeps 75%
+// and the inner mask keeps 1%; denser masks and inner masks benefit more.
+const AND_THEN_DENSE_MASK_MIN_LEN: usize = 4096;
+const AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION: usize = 4;
 
 /// Applies `second` to the rows selected by `first`, both selector-backed.
 pub(super) fn and_then_row_selections(
@@ -830,7 +832,7 @@ mod tests {
 
     #[test]
     fn test_dense_mask_and_then_mask_with_offsets() {
-        for outer_stride in [100, 20] {
+        for outer_stride in [100, 20, 4] {
             let len = 10_000;
             let outer_offset = 3;
             let outer = BooleanBuffer::from_iter(
