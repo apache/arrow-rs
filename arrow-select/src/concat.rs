@@ -1709,6 +1709,124 @@ mod tests {
     }
 
     #[test]
+    fn concat_string_view_dictionary_merges_duplicate_values() {
+        // Two independently-built `Dictionary<UInt8, Utf8View>` arrays holding the
+        // same 200 distinct values. Naively concatenating their dictionaries yields
+        // 400 entries, which overflows the u8 key range, but the distinct values do
+        // fit -- so the values must be merged and deduplicated instead. This mirrors
+        // a `Dictionary<UInt16, Utf8View>` column read in several partitions, each
+        // building its own dictionary, and then combined.
+        let dict = |offset: usize| {
+            let values: StringViewArray = (0..200).map(|i| Some(format!("v{i}"))).collect();
+            let keys = UInt8Array::from_iter_values((0..200).map(|i| (i + offset) as u8 % 200));
+            DictionaryArray::<UInt8Type>::new(keys, Arc::new(values))
+        };
+        let (a, b) = (dict(0), dict(7));
+
+        let combined = concat(&[&a, &b]).unwrap();
+        let combined = combined.as_dictionary::<UInt8Type>();
+
+        assert_eq!(combined.len(), 400);
+        assert_eq!(combined.values().data_type(), &DataType::Utf8View);
+        assert!(combined.values().len() < 400);
+
+        let values = combined.values().as_string_view();
+        let actual: Vec<_> = combined
+            .keys()
+            .values()
+            .iter()
+            .map(|k| values.value(*k as usize))
+            .collect();
+        let expected: Vec<_> = [&a, &b]
+            .iter()
+            .flat_map(|d| {
+                let v = d.values().as_string_view();
+                d.keys()
+                    .values()
+                    .iter()
+                    .map(|k| v.value(*k as usize))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn concat_binary_view_dictionary_merges_duplicate_values() {
+        // Same as `concat_string_view_dictionary_merges_duplicate_values`, for the
+        // other view-typed dictionary value layout.
+        let dict = || {
+            let values: BinaryViewArray = (0..200u32)
+                .map(|i| Some(i.to_le_bytes().to_vec()))
+                .collect();
+            let keys = UInt8Array::from_iter_values(0..200);
+            DictionaryArray::<UInt8Type>::new(keys, Arc::new(values))
+        };
+
+        let combined = concat(&[&dict(), &dict()]).unwrap();
+        let combined = combined.as_dictionary::<UInt8Type>();
+
+        assert_eq!(combined.len(), 400);
+        assert_eq!(combined.values().data_type(), &DataType::BinaryView);
+        assert!(combined.values().len() < 400);
+
+        let values = combined.values().as_binary_view();
+        let actual: Vec<_> = combined
+            .keys()
+            .values()
+            .iter()
+            .map(|k| values.value(*k as usize))
+            .collect();
+        let expected: Vec<_> = (0..2)
+            .flat_map(|_| (0..200u32).map(|i| i.to_le_bytes().to_vec()))
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn concat_dictionary_merges_values_of_many_arrays() {
+        // Four dictionaries over the same 200 distinct values. Concatenating
+        // their values would need 800 keys, well past the u8 key range, so this
+        // only succeeds if the merge deduplicates them.
+        let dicts: Vec<_> = (0..4)
+            .map(|d| {
+                let values: StringArray = (0..200).map(|i| Some(format!("v{i}"))).collect();
+                let keys = UInt8Array::from_iter_values((0..200).map(|i| (i + d * 17) as u8 % 200));
+                DictionaryArray::<UInt8Type>::new(keys, Arc::new(values))
+            })
+            .collect();
+        let refs: Vec<&dyn Array> = dicts.iter().map(|d| d as &dyn Array).collect();
+
+        let combined = concat(&refs).unwrap();
+        let combined = combined.as_dictionary::<UInt8Type>();
+
+        assert_eq!(combined.len(), 800);
+        // Every key is addressable; how far below 200 the merge gets depends on
+        // whether the best-effort interner sufficed or the exact retry ran
+        assert!(u8::try_from(combined.values().len()).is_ok());
+
+        let values = combined.values().as_string::<i32>();
+        let actual: Vec<_> = combined
+            .keys()
+            .values()
+            .iter()
+            .map(|k| values.value(*k as usize))
+            .collect();
+        let expected: Vec<_> = dicts
+            .iter()
+            .flat_map(|d| {
+                let v = d.values().as_string::<i32>();
+                d.keys()
+                    .values()
+                    .iter()
+                    .map(|k| v.value(*k as usize))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn concat_dictionary_list_array_simple() {
         let scalars = [
             create_single_row_list_of_dict(vec![Some("a")]),

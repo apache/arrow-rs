@@ -1552,6 +1552,46 @@ mod tests {
     }
 
     #[test]
+    fn test_interleave_string_view_dictionary_merges_duplicate_values() {
+        // Two independently-built `Dictionary<UInt8, Utf8View>` arrays holding the
+        // same 200 distinct values. Naively concatenating their dictionaries yields
+        // 400 entries, which overflows the u8 key range, but the distinct values do
+        // fit -- so the values must be merged and deduplicated instead.
+        let dict = |offset: usize| {
+            let values: StringViewArray = (0..200).map(|i| Some(format!("v{i}"))).collect();
+            let keys = UInt8Array::from_iter_values((0..200).map(|i| (i + offset) as u8 % 200));
+            DictionaryArray::<UInt8Type>::new(keys, Arc::new(values))
+        };
+        let (a, b) = (dict(0), dict(7));
+        let indices: Vec<_> = (0..200).flat_map(|i| [(0, i), (1, i)]).collect();
+
+        let merged = interleave(&[&a, &b], &indices).unwrap();
+        let merged = merged.as_dictionary::<UInt8Type>();
+
+        assert_eq!(merged.len(), 400);
+        assert_eq!(merged.values().data_type(), &DataType::Utf8View);
+        assert!(merged.values().len() < 400);
+
+        let values = merged.values().as_string_view();
+        let actual: Vec<_> = merged
+            .keys()
+            .values()
+            .iter()
+            .map(|k| values.value(*k as usize))
+            .collect();
+        let expected: Vec<_> = indices
+            .iter()
+            .map(|(array_idx, row)| {
+                let d = [&a, &b][*array_idx];
+                d.values()
+                    .as_string_view()
+                    .value(d.keys().value(*row) as usize)
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_interleave_views() {
         let values = StringArray::from_iter_values([
             "hello",
