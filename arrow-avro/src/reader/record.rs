@@ -242,27 +242,21 @@ enum Decoder {
     Int64ToFloat32(Vec<f32>),
     Int64ToFloat64(Vec<f64>),
     Float32ToFloat64(Vec<f64>),
-    BytesToString(OffsetBufferBuilder<i32>, Vec<u8>),
-    StringToBytes(OffsetBufferBuilder<i32>, Vec<u8>),
-    Binary(OffsetBufferBuilder<i32>, Vec<u8>),
+    BytesToString(Vec<i32>, Vec<u8>),
+    StringToBytes(Vec<i32>, Vec<u8>),
+    Binary(Vec<i32>, Vec<u8>),
     /// String data encoded as UTF-8 bytes, mapped to Arrow's StringArray
-    String(OffsetBufferBuilder<i32>, Vec<u8>),
+    String(Vec<i32>, Vec<u8>),
     /// String data encoded as UTF-8 bytes, but mapped to Arrow's StringViewArray
-    StringView(OffsetBufferBuilder<i32>, Vec<u8>),
-    Array(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
+    StringView(Vec<i32>, Vec<u8>),
+    Array(FieldRef, Vec<i32>, Box<Decoder>),
     Record(
         Fields,
         Vec<Decoder>,
         Vec<Option<AvroLiteral>>,
         Option<Projector>,
     ),
-    Map(
-        FieldRef,
-        OffsetBufferBuilder<i32>,
-        OffsetBufferBuilder<i32>,
-        Vec<u8>,
-        Box<Decoder>,
-    ),
+    Map(FieldRef, Vec<i32>, Vec<i32>, Vec<u8>, Box<Decoder>),
     Fixed(i32, Vec<u8>),
     Enum(Vec<i32>, Arc<[String]>, Option<EnumResolution>),
     Duration(IntervalMonthDayNanoBuilder),
@@ -356,32 +350,23 @@ impl Decoder {
             (Codec::Float64, Some(Promotion::FloatToDouble)) => {
                 Self::Float32ToFloat64(Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            (Codec::Utf8 | Codec::Utf8View, Some(Promotion::BytesToString)) => Self::BytesToString(
-                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                Vec::with_capacity(DEFAULT_CAPACITY),
-            ),
-            (Codec::Binary, Some(Promotion::StringToBytes)) => Self::StringToBytes(
-                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                Vec::with_capacity(DEFAULT_CAPACITY),
-            ),
+            (Codec::Utf8 | Codec::Utf8View, Some(Promotion::BytesToString)) => {
+                Self::BytesToString(new_offsets(), Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            (Codec::Binary, Some(Promotion::StringToBytes)) => {
+                Self::StringToBytes(new_offsets(), Vec::with_capacity(DEFAULT_CAPACITY))
+            }
             (Codec::Null, _) => Self::Null(0),
             (Codec::Boolean, _) => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
             (Codec::Int32, _) => Self::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Int64, _) => Self::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Float32, _) => Self::Float32(Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Float64, _) => Self::Float64(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (Codec::Binary, _) => Self::Binary(
-                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                Vec::with_capacity(DEFAULT_CAPACITY),
-            ),
-            (Codec::Utf8, _) => Self::String(
-                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                Vec::with_capacity(DEFAULT_CAPACITY),
-            ),
-            (Codec::Utf8View, _) => Self::StringView(
-                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                Vec::with_capacity(DEFAULT_CAPACITY),
-            ),
+            (Codec::Binary, _) => Self::Binary(new_offsets(), Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::Utf8, _) => Self::String(new_offsets(), Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::Utf8View, _) => {
+                Self::StringView(new_offsets(), Vec::with_capacity(DEFAULT_CAPACITY))
+            }
             (Codec::Date32, _) => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::TimeMillis, _) => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::TimeMicros, _) => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
@@ -498,7 +483,7 @@ impl Decoder {
                 let decoder = Self::try_new(item)?;
                 Self::Array(
                     Arc::new(item.field_with_name("item")),
-                    OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                    new_offsets(),
                     Box::new(decoder),
                 )
             }
@@ -553,8 +538,8 @@ impl Decoder {
                 let val_dec = Self::try_new(child)?;
                 Self::Map(
                     map_field,
-                    OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                    OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                    new_offsets(),
+                    new_offsets(),
                     Vec::with_capacity(DEFAULT_CAPACITY),
                     Box::new(val_dec),
                 )
@@ -733,9 +718,9 @@ impl Decoder {
             | Self::Array(_, offsets, _)
             | Self::Map(_, _, offsets, _, _) => {
                 offsets.reserve(count);
-                for _ in 0..count {
-                    offsets.push_length(0);
-                }
+                let offset = *offsets.last().expect("offsets cannot be empty");
+                let new_len = offsets.len().checked_add(count).expect("overflow");
+                offsets.resize(new_len, offset);
             }
             Self::Record(_, children, _, _) => {
                 for child in children {
@@ -1046,8 +1031,8 @@ impl Decoder {
             },
             Self::Binary(offsets, values) | Self::StringToBytes(offsets, values) => match lit {
                 AvroLiteral::Bytes(b) => {
-                    offsets.push_length(b.len());
                     values.extend_from_slice(b);
+                    push_offset(offsets, values.len());
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -1059,8 +1044,8 @@ impl Decoder {
             | Self::StringView(offsets, values) => match lit {
                 AvroLiteral::String(s) => {
                     let b = s.as_bytes();
-                    offsets.push_length(b.len());
                     values.extend_from_slice(b);
+                    push_offset(offsets, values.len());
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -1134,7 +1119,7 @@ impl Decoder {
             },
             Self::Array(_, offsets, inner) => match lit {
                 AvroLiteral::Array(items) => {
-                    offsets.push_length(items.len());
+                    push_length(offsets, items.len());
                     for item in items {
                         inner.append_default(item)?;
                     }
@@ -1146,11 +1131,11 @@ impl Decoder {
             },
             Self::Map(_, koff, moff, kdata, valdec) => match lit {
                 AvroLiteral::Map(entries) => {
-                    moff.push_length(entries.len());
+                    push_length(moff, entries.len());
                     for (k, v) in entries {
                         let kb = k.as_bytes();
-                        koff.push_length(kb.len());
                         kdata.extend_from_slice(kb);
+                        push_offset(koff, kdata.len());
                         valdec.append_default(v)?;
                     }
                     Ok(())
@@ -1322,8 +1307,8 @@ impl Decoder {
             | Self::String(offsets, values)
             | Self::StringView(offsets, values) => {
                 let data = buf.get_bytes()?;
-                offsets.push_length(data.len());
                 values.extend_from_slice(data);
+                push_offset(offsets, values.len());
             }
             Self::Uuid(values) => {
                 let s_bytes = buf.get_bytes()?;
@@ -1336,7 +1321,7 @@ impl Decoder {
             }
             Self::Array(_, off, encoding) => {
                 let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
-                off.push_length(total_items);
+                push_length(off, total_items);
             }
             Self::Record(_, encodings, _, None) => {
                 for encoding in encodings {
@@ -1349,11 +1334,11 @@ impl Decoder {
             Self::Map(_, koff, moff, kdata, valdec) => {
                 let newly_added = read_blocks(buf, |cur| {
                     let kb = cur.get_bytes()?;
-                    koff.push_length(kb.len());
                     kdata.extend_from_slice(kb);
+                    push_offset(koff, kdata.len());
                     valdec.decode(cur)
                 })?;
-                moff.push_length(newly_added);
+                push_length(moff, newly_added);
             }
             Self::Fixed(sz, accum) => {
                 let fx = buf.get_fixed(*sz as usize)?;
@@ -1462,8 +1447,8 @@ impl Decoder {
             Promotion::StringToBytes => match self {
                 Self::Binary(offsets, values) | Self::StringToBytes(offsets, values) => {
                     let data = buf.get_bytes()?;
-                    offsets.push_length(data.len());
                     values.extend_from_slice(data);
+                    push_offset(offsets, values.len());
                     Ok(())
                 }
                 other => Err(AvroError::ParseError(format!(
@@ -1476,8 +1461,8 @@ impl Decoder {
                 | Self::StringView(offsets, values)
                 | Self::BytesToString(offsets, values) => {
                     let data = buf.get_bytes()?;
-                    offsets.push_length(data.len());
                     values.extend_from_slice(data);
+                    push_offset(offsets, values.len());
                     Ok(())
                 }
                 other => Err(AvroError::ParseError(format!(
@@ -2397,8 +2382,32 @@ fn flush_values<T>(values: &mut Vec<T>) -> Vec<T> {
 }
 
 #[inline]
-fn flush_offsets(offsets: &mut OffsetBufferBuilder<i32>) -> OffsetBuffer<i32> {
-    std::mem::replace(offsets, OffsetBufferBuilder::new(DEFAULT_CAPACITY)).finish()
+fn new_offsets() -> Vec<i32> {
+    let mut offsets = Vec::with_capacity(DEFAULT_CAPACITY + 1);
+    offsets.push(0);
+    offsets
+}
+
+#[inline]
+fn push_offset(offsets: &mut Vec<i32>, offset: usize) {
+    let offset = i32::try_from(offset).expect("overflow");
+    debug_assert!(offset >= *offsets.last().expect("offsets cannot be empty"));
+    offsets.push(offset);
+}
+
+#[inline]
+fn push_length(offsets: &mut Vec<i32>, length: usize) {
+    let length = i32::try_from(length).expect("overflow");
+    let last = *offsets.last().expect("offsets cannot be empty");
+    offsets.push(last.checked_add(length).expect("overflow"));
+}
+
+#[inline]
+fn flush_offsets(offsets: &mut Vec<i32>) -> OffsetBuffer<i32> {
+    let offsets = std::mem::replace(offsets, new_offsets());
+    // SAFETY: `new_offsets` initializes the vector with zero, and offsets are
+    // only appended through the helpers above or repeated by `append_nulls`.
+    unsafe { OffsetBuffer::new_unchecked(offsets.into()) }
 }
 
 #[inline]
@@ -4276,9 +4285,7 @@ mod tests {
             let enc = match dt {
                 DataType::Int32 => Decoder::Int32(Vec::new()),
                 DataType::Int64 => Decoder::Int64(Vec::new()),
-                DataType::Utf8 => {
-                    Decoder::String(OffsetBufferBuilder::new(DEFAULT_CAPACITY), Vec::new())
-                }
+                DataType::Utf8 => Decoder::String(new_offsets(), Vec::new()),
                 other => panic!("Unsupported test reader field type: {other:?}"),
             };
             encodings.push(enc);
@@ -4661,10 +4668,9 @@ mod tests {
             let enc = match dt {
                 DataType::Int32 => Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
                 DataType::Int64 => Decoder::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
-                DataType::Utf8 => Decoder::String(
-                    OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                    Vec::with_capacity(DEFAULT_CAPACITY),
-                ),
+                DataType::Utf8 => {
+                    Decoder::String(new_offsets(), Vec::with_capacity(DEFAULT_CAPACITY))
+                }
                 other => panic!("Unsupported test field type in helper: {other:?}"),
             };
             encodings.push(enc);
@@ -4890,30 +4896,21 @@ mod tests {
 
     #[test]
     fn test_default_append_string_and_bytes() {
-        let mut d_str = Decoder::String(
-            OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-            Vec::with_capacity(DEFAULT_CAPACITY),
-        );
+        let mut d_str = Decoder::String(new_offsets(), Vec::with_capacity(DEFAULT_CAPACITY));
         d_str
             .append_default(&AvroLiteral::String("hi".into()))
             .unwrap();
         let s_arr = d_str.flush(None).unwrap();
         let arr = s_arr.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(arr.value(0), "hi");
-        let mut d_bytes = Decoder::Binary(
-            OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-            Vec::with_capacity(DEFAULT_CAPACITY),
-        );
+        let mut d_bytes = Decoder::Binary(new_offsets(), Vec::with_capacity(DEFAULT_CAPACITY));
         d_bytes
             .append_default(&AvroLiteral::Bytes(vec![1, 2, 3]))
             .unwrap();
         let b_arr = d_bytes.flush(None).unwrap();
         let barr = b_arr.as_any().downcast_ref::<BinaryArray>().unwrap();
         assert_eq!(barr.value(0), &[1, 2, 3]);
-        let mut d_str_err = Decoder::String(
-            OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-            Vec::with_capacity(DEFAULT_CAPACITY),
-        );
+        let mut d_str_err = Decoder::String(new_offsets(), Vec::with_capacity(DEFAULT_CAPACITY));
         let err = d_str_err
             .append_default(&AvroLiteral::Bytes(vec![0x61, 0x62]))
             .unwrap_err();
@@ -5240,10 +5237,7 @@ mod tests {
                 nullability: Nullability::NullSecond,
                 resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
-            Decoder::String(
-                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                Vec::with_capacity(DEFAULT_CAPACITY),
-            ),
+            Decoder::String(new_offsets(), Vec::with_capacity(DEFAULT_CAPACITY)),
         ));
         encoders.push(enc_a);
         encoders.push(enc_b);
