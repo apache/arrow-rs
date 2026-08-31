@@ -185,7 +185,7 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
     let parser = TimestampParser::new(bytes);
     let date = parser.date().ok_or_else(|| err("error parsing date"))?;
     if bytes.len() == 10 {
-        let datetime = date.and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+        let datetime = date.and_time(NaiveTime::MIN);
         return timezone
             .from_local_datetime(&datetime)
             .single()
@@ -1611,7 +1611,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function: mktime
     fn string_to_timestamp_no_timezone() {
         // This test is designed to succeed in regardless of the local
         // timezone the test machine is running. Thus it is still

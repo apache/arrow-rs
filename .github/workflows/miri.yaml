@@ -48,6 +48,7 @@ on:
       - arrow-schema/**
       - arrow-select/**
       - arrow-string/**
+      - parquet/**
 
 permissions:
   contents: read
@@ -57,8 +58,9 @@ jobs:
     name: MIRI
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4, 5, 6]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -69,11 +71,11 @@ jobs:
           rustup override set nightly
           cargo miri setup
       - name: Set up nextest
-        uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a  # v2.86.6
+        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc  # v2.86.7
         with:
           tool: nextest
       - name: Run Miri Checks
         env:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
-        run: bash .github/workflows/miri.sh ${{ matrix.partition }} 6
+        run: bash .github/workflows/miri.sh ${{ matrix.partition }} 12

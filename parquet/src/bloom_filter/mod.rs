@@ -405,8 +405,9 @@ impl Sbbf {
             .chunks_exact(4 * 8)
             .map(|chunk| {
                 let mut block = Block::ZERO;
-                for (i, word) in chunk.chunks_exact(4).enumerate() {
-                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
+                let (words, _remainder) = chunk.as_chunks::<4>();
+                for (i, word) in words.iter().enumerate() {
+                    block[i] = u32::from_le_bytes(*word);
                 }
                 block
             })
@@ -771,6 +772,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_mask_set_quick_check() {
         for i in 0..1_000_000 {
             let result = Block::mask(i);
@@ -779,6 +781,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_block_insert_and_check() {
         for i in 0..1_000_000 {
             let mut block = Block::ZERO;
@@ -788,6 +791,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_sbbf_insert_and_check() {
         let mut sbbf = Sbbf(vec![Block::ZERO; 1_000]);
         for i in 0..1_000_000 {
@@ -1030,6 +1034,7 @@ mod tests {
     /// Combined: every hash sets the *same bits* in the *same destination
     /// block* whether you fold or build fresh → filters are bit-identical.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_sbbf_folded_equals_fresh() {
         let values = (0..5000).map(|i| format!("elem_{i}")).collect::<Vec<_>>();
         let hashes = values
@@ -1127,6 +1132,7 @@ mod tests {
     /// At each intermediate size we build a fresh filter and assert
     /// bit-equality, confirming the lemma composes across folds.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_multi_step_fold() {
         let values = (0..3000).map(|i| format!("x_{i}")).collect::<Vec<_>>();
 
@@ -1156,6 +1162,7 @@ mod tests {
     ///
     /// compare the final size after folding against the theoretical optimal size
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_fold_size_vs_optimal_fixed_size() {
         for (ndv, target_fpp) in [
             (1000, 0.05),
@@ -1190,6 +1197,7 @@ mod tests {
     /// we measure fpp empirically by probing with values that were never inserted
     /// and counting how many are incorrectly marked as present
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_folded_fpp_matches_fresh_fpp() {
         let ndv = 2000;
         let num_probes = 50_000;
