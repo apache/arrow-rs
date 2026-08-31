@@ -717,9 +717,12 @@ impl Decoder {
             | Self::StringToBytes(offsets, _)
             | Self::Array(_, offsets, _)
             | Self::Map(_, _, offsets, _, _) => {
-                offsets.reserve(count);
-                let offset = *offsets.last().expect("offsets cannot be empty");
-                let new_len = offsets.len().checked_add(count).expect("overflow");
+                let offset = *offsets
+                    .last()
+                    .ok_or_else(|| AvroError::ParseError("Offsets cannot be empty".to_string()))?;
+                let new_len = offsets.len().checked_add(count).ok_or_else(|| {
+                    AvroError::ParseError("Offset buffer length overflow".to_string())
+                })?;
                 offsets.resize(new_len, offset);
             }
             Self::Record(_, children, _, _) => {
@@ -1032,7 +1035,7 @@ impl Decoder {
             Self::Binary(offsets, values) | Self::StringToBytes(offsets, values) => match lit {
                 AvroLiteral::Bytes(b) => {
                     values.extend_from_slice(b);
-                    push_offset(offsets, values.len());
+                    push_offset(offsets, values.len())?;
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -1045,7 +1048,7 @@ impl Decoder {
                 AvroLiteral::String(s) => {
                     let b = s.as_bytes();
                     values.extend_from_slice(b);
-                    push_offset(offsets, values.len());
+                    push_offset(offsets, values.len())?;
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -1119,7 +1122,7 @@ impl Decoder {
             },
             Self::Array(_, offsets, inner) => match lit {
                 AvroLiteral::Array(items) => {
-                    push_length(offsets, items.len());
+                    push_length(offsets, items.len())?;
                     for item in items {
                         inner.append_default(item)?;
                     }
@@ -1131,11 +1134,11 @@ impl Decoder {
             },
             Self::Map(_, koff, moff, kdata, valdec) => match lit {
                 AvroLiteral::Map(entries) => {
-                    push_length(moff, entries.len());
+                    push_length(moff, entries.len())?;
                     for (k, v) in entries {
                         let kb = k.as_bytes();
                         kdata.extend_from_slice(kb);
-                        push_offset(koff, kdata.len());
+                        push_offset(koff, kdata.len())?;
                         valdec.append_default(v)?;
                     }
                     Ok(())
@@ -1308,7 +1311,7 @@ impl Decoder {
             | Self::StringView(offsets, values) => {
                 let data = buf.get_bytes()?;
                 values.extend_from_slice(data);
-                push_offset(offsets, values.len());
+                push_offset(offsets, values.len())?;
             }
             Self::Uuid(values) => {
                 let s_bytes = buf.get_bytes()?;
@@ -1321,7 +1324,7 @@ impl Decoder {
             }
             Self::Array(_, off, encoding) => {
                 let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
-                push_length(off, total_items);
+                push_length(off, total_items)?;
             }
             Self::Record(_, encodings, _, None) => {
                 for encoding in encodings {
@@ -1335,10 +1338,10 @@ impl Decoder {
                 let newly_added = read_blocks(buf, |cur| {
                     let kb = cur.get_bytes()?;
                     kdata.extend_from_slice(kb);
-                    push_offset(koff, kdata.len());
+                    push_offset(koff, kdata.len())?;
                     valdec.decode(cur)
                 })?;
-                push_length(moff, newly_added);
+                push_length(moff, newly_added)?;
             }
             Self::Fixed(sz, accum) => {
                 let fx = buf.get_fixed(*sz as usize)?;
@@ -1448,7 +1451,7 @@ impl Decoder {
                 Self::Binary(offsets, values) | Self::StringToBytes(offsets, values) => {
                     let data = buf.get_bytes()?;
                     values.extend_from_slice(data);
-                    push_offset(offsets, values.len());
+                    push_offset(offsets, values.len())?;
                     Ok(())
                 }
                 other => Err(AvroError::ParseError(format!(
@@ -1462,7 +1465,7 @@ impl Decoder {
                 | Self::BytesToString(offsets, values) => {
                     let data = buf.get_bytes()?;
                     values.extend_from_slice(data);
-                    push_offset(offsets, values.len());
+                    push_offset(offsets, values.len())?;
                     Ok(())
                 }
                 other => Err(AvroError::ParseError(format!(
@@ -2389,17 +2392,26 @@ fn new_offsets() -> Vec<i32> {
 }
 
 #[inline]
-fn push_offset(offsets: &mut Vec<i32>, offset: usize) {
-    let offset = i32::try_from(offset).expect("overflow");
+fn push_offset(offsets: &mut Vec<i32>, offset: usize) -> Result<(), AvroError> {
+    let offset =
+        i32::try_from(offset).map_err(|_| AvroError::ParseError("Offset overflow".to_string()))?;
     debug_assert!(offset >= *offsets.last().expect("offsets cannot be empty"));
     offsets.push(offset);
+    Ok(())
 }
 
 #[inline]
-fn push_length(offsets: &mut Vec<i32>, length: usize) {
-    let length = i32::try_from(length).expect("overflow");
-    let last = *offsets.last().expect("offsets cannot be empty");
-    offsets.push(last.checked_add(length).expect("overflow"));
+fn push_length(offsets: &mut Vec<i32>, length: usize) -> Result<(), AvroError> {
+    let length =
+        i32::try_from(length).map_err(|_| AvroError::ParseError("Offset overflow".to_string()))?;
+    let last = *offsets
+        .last()
+        .ok_or_else(|| AvroError::ParseError("Offsets cannot be empty".to_string()))?;
+    let offset = last
+        .checked_add(length)
+        .ok_or_else(|| AvroError::ParseError("Offset overflow".to_string()))?;
+    offsets.push(offset);
+    Ok(())
 }
 
 #[inline]
@@ -4892,6 +4904,17 @@ mod tests {
         let arr64 = d_f64.flush(None).unwrap();
         let b = arr64.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(b.value(0), 2.25);
+    }
+
+    #[test]
+    fn test_offset_overflow_errors() {
+        let mut offsets = new_offsets();
+        let err = push_offset(&mut offsets, i32::MAX as usize + 1).unwrap_err();
+        assert!(matches!(err, AvroError::ParseError(msg) if msg == "Offset overflow"));
+
+        let mut offsets = vec![0, i32::MAX];
+        let err = push_length(&mut offsets, 1).unwrap_err();
+        assert!(matches!(err, AvroError::ParseError(msg) if msg == "Offset overflow"));
     }
 
     #[test]
