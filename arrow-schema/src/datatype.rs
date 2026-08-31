@@ -881,7 +881,7 @@ impl DataType {
     /// use arrow_schema::{DataType, SemanticEqualityOptions, Field};
     ///
     /// let ignore_names = SemanticEqualityOptions {
-    ///     check_nullibility: true,
+    ///     check_nullability: true,
     ///     check_field_name: false,
     ///     check_metadata: true,
     /// };
