@@ -28,7 +28,7 @@ use arrow::datatypes::{
     Decimal256Type, DecimalType, format_decimal_str,
 };
 use arrow::error::{ArrowError, Result};
-use arrow::util::display::{CompiledTimeFormat, lexical_to_string, write_timestamp};
+use arrow::util::display::{CompiledTimeFormat, FormatResult, lexical_to_string, write_timestamp};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use half::f16;
 use num_traits::NumCast;
@@ -710,6 +710,17 @@ pub(crate) fn variant_to_boolean(variant: &Variant<'_, '_>, shred: bool) -> Opti
     }
 }
 
+fn write_utc_timestamp_with_default_format(
+    f: &mut dyn Write,
+    naive: NaiveDateTime,
+) -> FormatResult {
+    write_timestamp(
+        f,
+        naive,
+        "+00:00".parse().ok(),
+        &CompiledTimeFormat::Default,
+    )
+}
 // convert a variant to an owned string.
 pub(crate) fn variant_to_string(variant: &Variant<'_, '_>) -> Option<String> {
     match variant {
@@ -759,32 +770,22 @@ pub(crate) fn variant_to_string(variant: &Variant<'_, '_>) -> Option<String> {
         }
         Variant::TimestampMicros(t) => {
             let mut out = String::new();
-            let _ = write_timestamp(
-                &mut out,
-                t.naive_utc(),
-                "+00:00".parse().ok(),
-                &CompiledTimeFormat::Default,
-            );
+            let _ = write_utc_timestamp_with_default_format(&mut out, t.naive_utc());
             Some(out)
         }
         Variant::TimestampNtzMicros(t) => {
             let mut out = String::new();
-            let _ = write_timestamp(&mut out, *t, None, &CompiledTimeFormat::Default);
+            let _ = write_utc_timestamp_with_default_format(&mut out, *t);
             Some(out)
         }
         Variant::TimestampNanos(t) => {
             let mut out = String::new();
-            let _ = write_timestamp(
-                &mut out,
-                t.naive_utc(),
-                "+00:00".parse().ok(),
-                &CompiledTimeFormat::Default,
-            );
+            let _ = write_utc_timestamp_with_default_format(&mut out, t.naive_utc());
             Some(out)
         }
         Variant::TimestampNtzNanos(t) => {
             let mut out = String::new();
-            let _ = write_timestamp(&mut out, *t, None, &CompiledTimeFormat::Default);
+            let _ = write_utc_timestamp_with_default_format(&mut out, *t);
             Some(out)
         }
         Variant::Uuid(u) => Some(u.to_string()),
@@ -887,7 +888,7 @@ pub(crate) use primitive_conversion_single_value;
 mod tests {
     use crate::type_conversion::variant_to_string;
     use arrow::array::{
-        Array, BooleanArray, Date32Array, Int32Builder, ListBuilder, StringArray,
+        Array, AsArray, BooleanArray, Date32Array, Int32Builder, ListBuilder, StringArray,
         Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
     };
     use arrow::compute::cast;
@@ -901,7 +902,7 @@ mod tests {
         // boolean -> string
         let boolean_array = BooleanArray::from(vec![Some(true), Some(false)]);
         let cast_array = cast(&boolean_array, &DataType::Utf8).unwrap();
-        let boolean_utf8_array = cast_array.as_any().downcast_ref::<StringArray>().unwrap();
+        let boolean_utf8_array = cast_array.as_string::<i32>();
         let expected_array = vec![
             variant_to_string(&Variant::BooleanTrue),
             variant_to_string(&Variant::BooleanFalse),
