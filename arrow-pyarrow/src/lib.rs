@@ -321,7 +321,7 @@ impl ToPyArrow for Schema {
 /// The caller must ensure the data produced by the Python object upholds the invariants
 /// required by [`ArrayData`]. Prefer [`FromPyArrow::from_pyarrow_bound`] for `ArrayData`, which
 /// validates the result before returning it.
-unsafe fn from_pyarrow_bound_unsafe(value: &Bound<PyAny>) -> PyResult<ArrayData> {
+pub unsafe fn from_pyarrow_bound_unsafe(value: &Bound<PyAny>) -> PyResult<ArrayData> {
     // Newer versions of PyArrow as well as other libraries with Arrow data implement this
     // method, so prefer it over _export_to_c.
     // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
