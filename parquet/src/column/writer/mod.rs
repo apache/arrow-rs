@@ -1399,6 +1399,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Adds data page.
     /// Data page is either buffered in case of dictionary encoding or written directly.
     pub(crate) fn add_data_page(&mut self) -> Result<()> {
+        // Nothing has been buffered since the last flush, so there is no page to write.
+        // Returning early keeps zero-value data pages out of the file, and avoids flushing
+        // encoders that build their state lazily on the first value: `RleValueEncoder`
+        // creates its inner encoder in `put`, so flushing before any `put` would panic.
+        if self.page_metrics.num_buffered_values == 0 {
+            return Ok(());
+        }
+
         // Extract encoded values
         let values_data = self.encoder.flush_data_page()?;
 
