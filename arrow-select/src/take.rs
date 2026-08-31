@@ -94,11 +94,15 @@ pub fn take(
     let options = options.unwrap_or_default();
     downcast_integer_array!(
         indices => {
-            if options.check_bounds {
-                check_bounds(values.len(), indices)?;
-            }
             let indices = indices.to_indices();
-            take_impl::<_, true>(values, &indices)
+            if options.check_bounds {
+                // Pre-verify all index values once: take_impl can skip safe accessor overhead.
+                check_bounds(values.len(), &indices)?;
+                take_impl::<_, false>(values, &indices)
+            } else {
+                // No pre-check: take_impl uses safe accessors that panic on OOB instead of UB.
+                take_impl::<_, true>(values, &indices)
+            }
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
@@ -507,17 +511,21 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
             let mut output = vec![0u8; out_bytes];
             let out_ptr = output.as_mut_ptr();
             index_nulls.valid_indices().for_each(|valid_idx| {
-                let src_idx = if CHECKED {
+                let index_val = if CHECKED {
                     indices.value(valid_idx).as_usize()
                 } else {
-                    // SAFETY: valid_idx < index_nulls.len() == indices.len(), guaranteed by valid_indices().
+                    // SAFETY: valid_idx < indices.len(), guaranteed by valid_indices().
                     unsafe { indices.value_unchecked(valid_idx) }.as_usize()
-                } + src_offset;
-                // SAFETY: src_idx = index_value + src_offset is a valid bit position in the
-                // values buffer. When CHECKED=true, check_bounds verified every index value is
-                // < values.len() before this function was called. When CHECKED=false, the caller
-                // upholds that invariant.
-                unsafe { copy_bit_if_set(src_ptr, src_idx, out_ptr, valid_idx) };
+                };
+                if CHECKED {
+                    if values.value(index_val) {
+                        // SAFETY: valid_idx < indices.len() = len, output buffer holds len bits.
+                        unsafe { bit_util::set_bit_raw(out_ptr, valid_idx) };
+                    }
+                } else {
+                    // SAFETY: caller guarantees index_val < values.len().
+                    unsafe { copy_bit_if_set(src_ptr, index_val + src_offset, out_ptr, valid_idx) };
+                }
             });
             BooleanBuffer::new(Buffer::from(output), 0, len)
         }
@@ -532,18 +540,15 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let base = byte_idx * 8;
                 let mut byte = 0u8;
                 for bit in 0..8usize {
-                    let src_idx = if CHECKED {
-                        indices.value(base + bit).as_usize()
+                    // SAFETY: base + bit < full_bytes * 8 <= len, so base + bit is a valid
+                    // position in the indices array.
+                    let index_val = unsafe { indices.value_unchecked(base + bit) }.as_usize();
+                    if CHECKED {
+                        byte |= (values.value(index_val) as u8) << bit;
                     } else {
-                        // SAFETY: base + bit < full_bytes * 8 <= len, so base + bit is a valid
-                        // position in the indices array.
-                        unsafe { indices.value_unchecked(base + bit) }.as_usize()
-                    } + src_offset;
-                    // SAFETY: src_idx = index_value + src_offset is a valid bit position in the
-                    // values buffer. When CHECKED=true, check_bounds verified every index value is
-                    // < values.len() before this function was called. When CHECKED=false, the caller
-                    // upholds that invariant.
-                    byte |= unsafe { pack_bit(src_ptr, src_idx, bit) };
+                        // SAFETY: caller guarantees index_val < values.len().
+                        byte |= unsafe { pack_bit(src_ptr, index_val + src_offset, bit) };
+                    }
                 }
                 *out_byte = byte;
             }
@@ -552,18 +557,15 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let base = full_bytes * 8;
                 let mut byte = 0u8;
                 for bit in 0..(len - base) {
-                    let src_idx = if CHECKED {
-                        indices.value(base + bit).as_usize()
+                    // SAFETY: base + bit < len (remainder loop bound), so base + bit is a
+                    // valid position in the indices array.
+                    let index_val = unsafe { indices.value_unchecked(base + bit) }.as_usize();
+                    if CHECKED {
+                        byte |= (values.value(index_val) as u8) << bit;
                     } else {
-                        // SAFETY: base + bit < len (remainder loop bound), so base + bit is a
-                        // valid position in the indices array.
-                        unsafe { indices.value_unchecked(base + bit) }.as_usize()
-                    } + src_offset;
-                    // SAFETY: src_idx = index_value + src_offset is a valid bit position in the
-                    // values buffer. When CHECKED=true, check_bounds verified every index value is
-                    // < values.len() before this function was called. When CHECKED=false, the caller
-                    // upholds that invariant.
-                    byte |= unsafe { pack_bit(src_ptr, src_idx, bit) };
+                        // SAFETY: caller guarantees index_val < values.len().
+                        byte |= unsafe { pack_bit(src_ptr, index_val + src_offset, bit) };
+                    }
                 }
                 out_slice[full_bytes] = byte;
             }
@@ -592,30 +594,40 @@ fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
 
     match indices.nulls().filter(|nulls| nulls.null_count() > 0) {
         Some(index_nulls) => {
-            // Vec is pre-zeroed; only set bits for valid indices via raw pointer.
             let value_out_ptr = value_out.as_mut_ptr();
             let validity_out_ptr = validity_out.as_mut_ptr();
             for out_pos in index_nulls.valid_indices() {
                 let src_idx = if CHECKED {
                     indices.value(out_pos).as_usize()
                 } else {
-                    // SAFETY: out_pos < len (validity bitmap); caller guarantees index values are in bounds when CHECKED=false
+                    // SAFETY: out_pos < indices.len(), guaranteed by valid_indices().
                     unsafe { indices.value_unchecked(out_pos) }.as_usize()
                 };
-                // SAFETY: src_idx < values.len();
-                unsafe {
-                    copy_bit_if_set(
-                        value_data_ptr,
-                        src_idx + value_bit_offset,
-                        value_out_ptr,
-                        out_pos,
-                    );
-                    copy_bit_if_set(
-                        validity_data_ptr,
-                        src_idx + validity_bit_offset,
-                        validity_out_ptr,
-                        out_pos,
-                    );
+                if CHECKED {
+                    if values.value(src_idx) {
+                        // SAFETY: out_pos < indices.len() = len, output buffer holds len bits.
+                        unsafe { bit_util::set_bit_raw(value_out_ptr, out_pos) };
+                    }
+                    if validity.value(src_idx) {
+                        // SAFETY: out_pos < indices.len() = len, output buffer holds len bits.
+                        unsafe { bit_util::set_bit_raw(validity_out_ptr, out_pos) };
+                    }
+                } else {
+                    // SAFETY: caller guarantees src_idx < values.len().
+                    unsafe {
+                        copy_bit_if_set(
+                            value_data_ptr,
+                            src_idx + value_bit_offset,
+                            value_out_ptr,
+                            out_pos,
+                        );
+                        copy_bit_if_set(
+                            validity_data_ptr,
+                            src_idx + validity_bit_offset,
+                            validity_out_ptr,
+                            out_pos,
+                        );
+                    }
                 }
             }
         }
@@ -634,14 +646,24 @@ fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let mut packed_values = 0u8;
                 let mut packed_validity = 0u8;
                 for bit_pos in 0..8usize {
-                    // SAFETY: bit_base + bit_pos < len
-                    let src_idx = unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
-                    // SAFETY: src_idx < values.len(); check_bounds ensures this when CHECKED, caller guarantees it otherwise
-                    packed_values |=
-                        unsafe { pack_bit(value_data_ptr, src_idx + value_bit_offset, bit_pos) };
-                    packed_validity |= unsafe {
-                        pack_bit(validity_data_ptr, src_idx + validity_bit_offset, bit_pos)
+                    let src_idx = if CHECKED {
+                        indices.value(bit_base + bit_pos).as_usize()
+                    } else {
+                        // SAFETY: bit_base + bit_pos < full_bytes * 8 <= len.
+                        unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize()
                     };
+                    if CHECKED {
+                        packed_values |= (values.value(src_idx) as u8) << bit_pos;
+                        packed_validity |= (validity.value(src_idx) as u8) << bit_pos;
+                    } else {
+                        // SAFETY: caller guarantees src_idx < values.len().
+                        packed_values |= unsafe {
+                            pack_bit(value_data_ptr, src_idx + value_bit_offset, bit_pos)
+                        };
+                        packed_validity |= unsafe {
+                            pack_bit(validity_data_ptr, src_idx + validity_bit_offset, bit_pos)
+                        };
+                    }
                 }
                 *value_out_byte = packed_values;
                 *validity_out_byte = packed_validity;
@@ -652,14 +674,24 @@ fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let mut packed_values = 0u8;
                 let mut packed_validity = 0u8;
                 for bit_pos in 0..(len - bit_base) {
-                    // SAFETY: bit_base + bit_pos < len
-                    let src_idx = unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
-                    // SAFETY: src_idx < values.len(); check_bounds ensures this when CHECKED, caller guarantees it otherwise
-                    packed_values |=
-                        unsafe { pack_bit(value_data_ptr, src_idx + value_bit_offset, bit_pos) };
-                    packed_validity |= unsafe {
-                        pack_bit(validity_data_ptr, src_idx + validity_bit_offset, bit_pos)
+                    let src_idx = if CHECKED {
+                        indices.value(bit_base + bit_pos).as_usize()
+                    } else {
+                        // SAFETY: bit_base + bit_pos < len (remainder loop bound).
+                        unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize()
                     };
+                    if CHECKED {
+                        packed_values |= (values.value(src_idx) as u8) << bit_pos;
+                        packed_validity |= (validity.value(src_idx) as u8) << bit_pos;
+                    } else {
+                        // SAFETY: caller guarantees src_idx < values.len().
+                        packed_values |= unsafe {
+                            pack_bit(value_data_ptr, src_idx + value_bit_offset, bit_pos)
+                        };
+                        packed_validity |= unsafe {
+                            pack_bit(validity_data_ptr, src_idx + validity_bit_offset, bit_pos)
+                        };
+                    }
                 }
                 value_out_slice[full_bytes] = packed_values;
                 validity_out_slice[full_bytes] = packed_validity;
@@ -1983,6 +2015,14 @@ mod tests {
         let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
         let expected = BooleanArray::from(vec![Some(false), None, None, Some(false)]);
         assert_eq!(result, &expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: idx < self.bit_len")]
+    fn test_take_bool_oob_no_check_bounds_panics() {
+        let array = BooleanArray::from(vec![true, false, true]);
+        let indices = Int32Array::from(vec![0, 1, 10]);
+        take(&array, &indices, None).unwrap();
     }
 
     fn _test_take_string<'a, K>()
