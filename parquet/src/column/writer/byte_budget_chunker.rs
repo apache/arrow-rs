@@ -20,7 +20,7 @@
 use crate::basic::Type;
 use crate::column::writer::LevelDataRef;
 use crate::column::writer::encoder::ColumnValueEncoder;
-use crate::file::properties::WriterProperties;
+use crate::file::properties::ResolvedColumnProperties;
 use crate::schema::types::ColumnDescriptor;
 
 /// Picks byte-budget-aware mini-batch sizes for one column.
@@ -61,11 +61,11 @@ impl ByteBudgetChunker {
     #[inline]
     pub(crate) fn new(
         descr: &ColumnDescriptor,
-        props: &WriterProperties,
+        column_props: &ResolvedColumnProperties,
         base_batch_size: usize,
     ) -> Self {
-        let page_byte_limit = props.column_data_page_size_limit(descr.path());
-        let dict_page_byte_limit = props.column_dictionary_page_size_limit(descr.path());
+        let page_byte_limit = column_props.data_page_size_limit;
+        let dict_page_byte_limit = column_props.dictionary_page_size_limit;
         let static_bytes_per_value = match descr.physical_type() {
             Type::BOOLEAN => Some(1),
             Type::INT32 | Type::FLOAT => Some(std::mem::size_of::<i32>()),
