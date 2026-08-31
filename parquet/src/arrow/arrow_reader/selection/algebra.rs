@@ -27,6 +27,9 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer, bit_util}
 use std::cmp::Ordering;
 use std::iter::Peekable;
 
+const AND_THEN_DENSE_MASK_MIN_LEN: usize = 512;
+const AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION: usize = 20;
+
 /// Applies `second` to the rows selected by `first`, both selector-backed.
 pub(super) fn and_then_row_selections(
     first: &[RowSelector],
@@ -397,12 +400,25 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
         Ordering::Equal => {}
     }
 
+    if selected_count == mask.len() {
+        return other.clone();
+    }
+
     let other_true_count = other.count_set_bits();
     if other_true_count == 0 {
         return BooleanBuffer::new_unset(mask.len());
     }
     if other_true_count == selected_count {
         return mask.clone();
+    }
+
+    if mask.len() >= AND_THEN_DENSE_MASK_MIN_LEN
+        && mask.len() - selected_count
+            <= mask
+                .len()
+                .div_ceil(AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION)
+    {
+        return and_then_dense_masks(mask, other);
     }
 
     let mut builder = BooleanBufferBuilder::new(mask.len());
@@ -428,6 +444,90 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     }
 
     builder.finish()
+}
+
+/// Expands `other` into the set positions of a dense `mask`, processing one
+/// output word at a time. This is the inverse operation of bitmap compression.
+fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
+    let mut other_chunks = other.bit_chunks().iter_padded();
+    let mut other_remaining = other.len();
+    let mut pending = 0_u128;
+    let mut pending_len = 0;
+    let mut output = MutableBuffer::with_capacity(mask.len().div_ceil(8));
+
+    for mask_word in mask
+        .bit_chunks()
+        .iter_padded()
+        .take(mask.len().div_ceil(64))
+    {
+        let selected = mask_word.count_ones() as usize;
+        while pending_len < selected {
+            let chunk = other_chunks
+                .next()
+                .expect("validated other length matches selected row count");
+            let chunk_len = other_remaining.min(64);
+            pending |= (chunk as u128) << pending_len;
+            pending_len += chunk_len;
+            other_remaining -= chunk_len;
+        }
+
+        let values = pending as u64;
+        output.extend_from_slice(&deposit_u64(values, mask_word).to_le_bytes());
+        pending >>= selected;
+        pending_len -= selected;
+    }
+
+    debug_assert_eq!(other_remaining, 0);
+    debug_assert_eq!(pending_len, 0);
+    output.truncate(mask.len().div_ceil(8));
+    BooleanBuffer::new(output.into(), 0, mask.len())
+}
+
+/// Deposits the least-significant bits of `values` into the set positions of `mask`.
+#[inline]
+fn deposit_u64(mut values: u64, mask: u64) -> u64 {
+    if mask == u64::MAX {
+        return values;
+    }
+
+    if mask.count_ones() == 63 {
+        let dropped = (!mask).trailing_zeros();
+        let lower_mask = ((1_u128 << dropped) - 1) as u64;
+        return (values & lower_mask) | ((values & !lower_mask) << 1);
+    }
+
+    let mut output = 0;
+    for byte_offset in (0..64).step_by(8) {
+        let byte_mask = (mask >> byte_offset) as u8;
+        let selected = byte_mask.count_ones() as usize;
+        output |= (deposit_u8(values as u8, byte_mask, selected) as u64) << byte_offset;
+        values >>= selected;
+    }
+    output
+}
+
+#[inline]
+fn deposit_u8(values: u8, mask: u8, selected: usize) -> u8 {
+    if selected == 8 {
+        return values;
+    }
+
+    if selected == 7 {
+        let dropped = (!mask).trailing_zeros();
+        let lower_mask = ((1_u16 << dropped) - 1) as u8;
+        return (values & lower_mask) | ((values & !lower_mask) << 1);
+    }
+
+    let mut output = 0;
+    let mut input_idx = 0;
+    let mut remaining = mask;
+    while remaining != 0 {
+        let output_idx = remaining.trailing_zeros();
+        output |= ((values >> input_idx) & 1) << output_idx;
+        input_idx += 1;
+        remaining &= remaining - 1;
+    }
+    output
 }
 
 #[cfg(test)]
@@ -726,6 +826,57 @@ mod tests {
             actual_bits,
             vec![false, false, true, false, false, false, true, false]
         );
+    }
+
+    #[test]
+    fn test_dense_mask_and_then_mask_with_offsets() {
+        for outer_stride in [100, 20] {
+            let len = 10_000;
+            let outer_offset = 3;
+            let outer = BooleanBuffer::from_iter(
+                (0..len + outer_offset).map(|i| (i + 1) % outer_stride != 0),
+            )
+            .slice(outer_offset, len);
+
+            let inner_offset = 5;
+            let inner_len = outer.count_set_bits();
+            let inner =
+                BooleanBuffer::from_iter((0..inner_len + inner_offset).map(|i| (i + 2) % 97 != 0))
+                    .slice(inner_offset, inner_len);
+
+            let mut inner_idx = 0;
+            let expected = BooleanBuffer::from_iter((0..len).map(|i| {
+                if !outer.value(i) {
+                    return false;
+                }
+                let value = inner.value(inner_idx);
+                inner_idx += 1;
+                value
+            }));
+
+            let outer = RowSelection::from_boolean_buffer(outer);
+            let inner = RowSelection::from_boolean_buffer(inner);
+            let actual = outer.and_then(&inner);
+            assert_eq!(actual.as_mask().unwrap(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_deposit_u8() {
+        for mask in u8::MIN..=u8::MAX {
+            let selected = mask.count_ones() as usize;
+            for values in u8::MIN..=u8::MAX {
+                let mut expected = 0;
+                let mut input_idx = 0;
+                for output_idx in 0..8 {
+                    if mask & (1 << output_idx) != 0 {
+                        expected |= ((values >> input_idx) & 1) << output_idx;
+                        input_idx += 1;
+                    }
+                }
+                assert_eq!(deposit_u8(values, mask, selected), expected);
+            }
+        }
     }
 
     #[test]
