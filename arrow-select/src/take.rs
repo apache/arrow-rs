@@ -510,7 +510,7 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let src_idx = if CHECKED {
                     indices.value(valid_idx).as_usize()
                 } else {
-                    // SAFETY: valid_idx < indices.len() (valid_indices() guarantee).
+                    // SAFETY: valid_idx < index_nulls.len() == indices.len(), guaranteed by valid_indices().
                     unsafe { indices.value_unchecked(valid_idx) }.as_usize()
                 } + src_offset;
                 // SAFETY: src_idx = index_value + src_offset is a valid bit position in the
