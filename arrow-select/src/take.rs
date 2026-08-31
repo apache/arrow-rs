@@ -214,6 +214,13 @@ fn take_impl<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ArrayRef, ArrowError> {
     if indices.is_empty() {
+        if let DataType::Union(fields, _) = values.data_type()
+            && fields.is_empty()
+        {
+            // `new_empty_array` cannot construct a union with no fields, but an existing empty
+            // union can be sliced without materializing a child array.
+            return Ok(values.slice(0, 0));
+        }
         return Ok(new_empty_array(values.data_type()));
     }
     downcast_primitive_array! {
@@ -402,16 +409,20 @@ fn take_union_type_ids<IndexType: ArrowPrimitiveType>(
     type_ids: &ScalarBuffer<i8>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ScalarBuffer<i8>, ArrowError> {
-    let taken_type_ids = take_native(type_ids, indices);
     if indices.null_count() == 0 {
-        return Ok(taken_type_ids);
+        return Ok(take_native(type_ids, indices));
     }
 
     let null_type_id = fields
         .iter()
         .next()
         .map(|(type_id, _)| type_id)
-        .ok_or_else(|| ArrowError::ComputeError("Cannot take from an empty union".into()))?;
+        .ok_or_else(|| {
+            ArrowError::ComputeError(
+                "Cannot take from a union with zero fields when indices contains nulls".into(),
+            )
+        })?;
+    let taken_type_ids = take_native(type_ids, indices);
     let type_ids = indices
         .iter()
         .zip(&taken_type_ids)
@@ -1145,21 +1156,19 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
         let prev_idx = physical_indices[ix - 1];
         let cur_idx = physical_indices[ix];
         if is_new_run_take(run_array.values().as_ref(), prev_idx, cur_idx, &values_cmp) {
-            push_run_take_index::<I>(
-                &mut take_value_indices,
-                &mut take_value_is_valid,
-                run_array.values().as_ref(),
-                prev_idx,
-            );
+            // Safe unwrap since physical indices came from a valid run array.
+            let index = I::Native::from_usize(prev_idx.unwrap_or_default()).unwrap();
+            take_value_indices.push(index);
+            take_value_is_valid
+                .append(prev_idx.is_some_and(|idx| run_array.values().is_valid(idx)));
             new_run_ends.push(T::Native::from_usize(ix).unwrap());
         }
     }
-    push_run_take_index::<I>(
-        &mut take_value_indices,
-        &mut take_value_is_valid,
-        run_array.values().as_ref(),
-        physical_indices[physical_indices.len() - 1],
-    );
+    let last = physical_indices[physical_indices.len() - 1];
+    // Safe unwrap since physical indices came from a valid run array.
+    let index = I::Native::from_usize(last.unwrap_or_default()).unwrap();
+    take_value_indices.push(index);
+    take_value_is_valid.append(last.is_some_and(|idx| run_array.values().is_valid(idx)));
     new_run_ends.push(T::Native::from_usize(physical_indices.len()).unwrap());
 
     // SAFETY: run-ends are strictly increasing with last value == logical length.
@@ -1229,24 +1238,6 @@ fn is_new_run_take(
             prev != cur && values_cmp(cur, prev).is_ne()
         }
         _ => true,
-    }
-}
-
-fn push_run_take_index<I: ArrowPrimitiveType>(
-    take_value_indices: &mut Vec<I::Native>,
-    take_value_is_valid: &mut NullBufferBuilder,
-    values: &dyn Array,
-    physical: Option<usize>,
-) {
-    match physical.filter(|&idx| values.is_valid(idx)) {
-        Some(idx) => {
-            take_value_indices.push(I::Native::from_usize(idx).unwrap());
-            take_value_is_valid.append_non_null();
-        }
-        None => {
-            take_value_indices.push(I::Native::default());
-            take_value_is_valid.append_null();
-        }
     }
 }
 
@@ -3170,6 +3161,62 @@ mod tests {
 
         assert_eq!(dense_logical, vec![Some(1), None, Some(3)]);
         assert_eq!(dense_logical, sparse_logical);
+    }
+
+    #[test]
+    fn test_take_empty_union_without_null_indices() {
+        let fields = UnionFields::try_new(vec![], Vec::<Field>::new()).unwrap();
+        let indices = UInt32Array::from(Vec::<u32>::new());
+
+        let sparse = UnionArray::try_new(
+            fields.clone(),
+            ScalarBuffer::<i8>::from(vec![]),
+            None,
+            vec![],
+        )
+        .unwrap();
+        let dense = UnionArray::try_new(
+            fields,
+            ScalarBuffer::<i8>::from(vec![]),
+            Some(ScalarBuffer::<i32>::from(vec![])),
+            vec![],
+        )
+        .unwrap();
+
+        for values in [&sparse, &dense] {
+            let taken = take(values, &indices, None).unwrap();
+            assert_eq!(taken.len(), 0);
+            assert_eq!(taken.data_type(), values.data_type());
+        }
+    }
+
+    #[test]
+    fn test_take_empty_union_with_null_indices() {
+        let fields = UnionFields::try_new(vec![], Vec::<Field>::new()).unwrap();
+        let indices = UInt32Array::from(vec![None]);
+
+        let sparse = UnionArray::try_new(
+            fields.clone(),
+            ScalarBuffer::<i8>::from(vec![]),
+            None,
+            vec![],
+        )
+        .unwrap();
+        let dense = UnionArray::try_new(
+            fields,
+            ScalarBuffer::<i8>::from(vec![]),
+            Some(ScalarBuffer::<i32>::from(vec![])),
+            vec![],
+        )
+        .unwrap();
+
+        for values in [&sparse, &dense] {
+            let error = take(values, &indices, None).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Compute error: Cannot take from a union with zero fields when indices contains nulls"
+            );
+        }
     }
 
     #[test]
