@@ -932,6 +932,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_file_reader_rows_nonnullable() {
         let rows = test_file_reader_rows("nonnullable.impala.parquet", None).unwrap();
         let expected_rows = vec![row![
@@ -977,6 +978,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_file_reader_rows_nullable() {
         let rows = test_file_reader_rows("nullable.impala.parquet", None).unwrap();
         let expected_rows = vec![
