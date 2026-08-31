@@ -1935,10 +1935,11 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
         return (first_a as i8) > (first_b as i8);
     }
 
-    // When the lengths are unequal and the numbers are of the same
-    // sign we need to do comparison by sign extending the shorter
-    // value first, and once we get to equal sized arrays, lexicographical
-    // unsigned comparison of everything but the first byte is sufficient.
+    // When the lengths are unequal and the numbers are of the same sign,
+    // sign-extend the shorter value: if any of the longer value's extra
+    // leading bytes differs from the sign-extension byte it has the larger
+    // magnitude, and otherwise those bytes are redundant and the aligned
+    // equal-length tails decide via unsigned lexicographical comparison.
 
     let extension: u8 = if (first_a as i8) < 0 { 0xFF } else { 0 };
 
@@ -1958,7 +1959,8 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
         }
     }
 
-    (a[1..]) > (b[1..])
+    let tail_length = a_length.min(b_length);
+    (a[a_length - tail_length..]) > (b[b_length - tail_length..])
 }
 
 /// Truncate a UTF-8 slice to the longest prefix that is still a valid UTF-8 string,
@@ -2592,6 +2594,42 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_byte_array_min_max_unequal_lengths() {
+        // Byte-array decimal min/max with values of different encoded lengths
+        // https://github.com/apache/arrow-rs/issues/10860
+        let page_writer = get_test_page_writer();
+        let props = Default::default();
+        let mut writer = get_test_decimals_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+        writer
+            .write_batch(
+                &[
+                    ByteArray::from(vec![0u8, 255u8]),      // 255
+                    ByteArray::from(vec![0u8, 128u8, 0u8]), // 32768
+                    ByteArray::from(vec![255u8, 127u8]),    // -129
+                    ByteArray::from(vec![128u8]),           // -128
+                ],
+                None,
+                None,
+            )
+            .unwrap();
+        let metadata = writer.close().unwrap().metadata;
+        let stats = metadata.statistics().expect("metadata missing statistics");
+        let Statistics::ByteArray(stats) = stats else {
+            panic!("expecting Statistics::ByteArray");
+        };
+        // -129
+        assert_eq!(
+            stats.min_opt().unwrap(),
+            &ByteArray::from(vec![255u8, 127u8])
+        );
+        // 32768
+        assert_eq!(
+            stats.max_opt().unwrap(),
+            &ByteArray::from(vec![0u8, 128u8, 0u8])
+        );
+    }
+
+    #[test]
     fn test_column_writer_uint32_converted_type_min_max() {
         let page_writer = get_test_page_writer();
         let props = Default::default();
@@ -2812,6 +2850,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_column_writer_small_write_batch_size() {
         for i in &[1usize, 2, 5, 10, 11, 1023] {
             let props = WriterProperties::builder().set_write_batch_size(*i).build();
@@ -3688,6 +3727,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_column_writer_check_float16_min_max() {
         let input = [
             -f16::ONE,
@@ -3712,6 +3752,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_column_writer_check_float16_nan_middle() {
         let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
             .into_iter()
@@ -3729,6 +3770,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_float16_statistics_nan_middle() {
         let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
             .into_iter()
@@ -3746,6 +3788,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_float16_statistics_nan_start() {
         let input = [f16::NAN, f16::ONE, f16::ONE + f16::ONE]
             .into_iter()
@@ -4031,6 +4074,46 @@ mod tests {
         assert!(compare_greater_byte_array_decimals(
             &[0u8,],
             &[255u8, 35u8, 0u8, 0u8,],
+        ),);
+
+        // Unequal lengths where the longer value's extra leading bytes are all
+        // sign extension, so the aligned tails decide.
+        // https://github.com/apache/arrow-rs/issues/10860
+
+        // 32768 > 255
+        assert!(compare_greater_byte_array_decimals(
+            &[0u8, 128u8, 0u8,],
+            &[0u8, 255u8,],
+        ),);
+        assert!(!compare_greater_byte_array_decimals(
+            &[0u8, 255u8,],
+            &[0u8, 128u8, 0u8,],
+        ),);
+        // -128 > -129
+        assert!(compare_greater_byte_array_decimals(
+            &[128u8,],
+            &[255u8, 127u8,],
+        ),);
+        assert!(!compare_greater_byte_array_decimals(
+            &[255u8, 127u8,],
+            &[128u8,],
+        ),);
+        // -128 > -256
+        assert!(compare_greater_byte_array_decimals(
+            &[128u8,],
+            &[255u8, 0u8,],
+        ),);
+        // 10 (with a redundant leading zero) > 5
+        assert!(compare_greater_byte_array_decimals(&[0u8, 10u8,], &[5u8,],),);
+        assert!(compare_greater_byte_array_decimals(&[10u8,], &[0u8, 5u8,],),);
+        // equal values of different lengths are not greater in either direction
+        assert!(!compare_greater_byte_array_decimals(
+            &[255u8, 128u8,],
+            &[128u8,],
+        ),);
+        assert!(!compare_greater_byte_array_decimals(
+            &[128u8,],
+            &[255u8, 128u8,],
         ),);
     }
 

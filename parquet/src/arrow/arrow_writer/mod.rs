@@ -2224,6 +2224,7 @@ mod tests {
     /// no offset index to rebuild). Spans multiple data pages so the
     /// dictionary-first reordering is exercised.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn dictionary_column_round_trips_with_offset_index_disabled() {
         let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, true)]));
 
@@ -2405,6 +2406,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_non_null() {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
@@ -2415,6 +2417,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list() {
         // define schema
         let schema = Schema::new(vec![Field::new(
@@ -2450,6 +2453,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_non_null() {
         // define schema
         let schema = Schema::new(vec![Field::new(
@@ -2484,6 +2488,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2508,6 +2513,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view_non_null() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2532,6 +2538,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view_out_of_order() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2556,6 +2563,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_large_list_view() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2580,6 +2588,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view_with_struct() {
         // Test ListView containing Struct: ListView<Struct<Int32, Utf8>>
         let struct_fields = Fields::from(vec![
@@ -2620,6 +2629,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_binary() {
         let raw_string_values = vec!["foo", "bar", "baz", "quux"];
         let raw_binary_values = [
@@ -2643,6 +2653,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_binary_view() {
         let raw_string_values = vec!["foo", "bar", "large payload over 12 bytes", "lulu"];
         let raw_binary_values = vec![
@@ -2664,6 +2675,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_binary_view_long_value() {
         // There is special case validation for long values (greater than 128)
         // 128 encodes as 0x80 0x00 0x00 0x00 in little endian, which should
@@ -2738,6 +2750,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_complex() {
         // define schema
         let struct_field_d = Arc::new(Field::new("d", DataType::Float64, true));
@@ -3190,6 +3203,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn arrow_writer_float_nans() {
         let f16_field = Field::new("a", DataType::Float16, false);
         let f32_field = Field::new("b", DataType::Float32, false);
@@ -3524,11 +3538,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn all_null_primitive_single_column() {
         let values = Arc::new(Int32Array::from(vec![None; SMALL_SIZE]));
         RoundTripTest::new(values).run();
     }
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn null_single_column() {
         let values = Arc::new(NullArray::new(SMALL_SIZE));
         RoundTripTest::new(values).run();
@@ -3536,6 +3552,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn bool_single_column() {
         required_and_optional::<BooleanArray, _>(
             [true, false].iter().cycle().copied().take(SMALL_SIZE),
@@ -3543,6 +3560,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn bool_large_single_column() {
         let values = Arc::new(
             [None, Some(true), Some(false)]
@@ -3697,51 +3715,61 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i8_single_column() {
         required_and_optional::<Int8Array, _>(0..SMALL_SIZE as i8);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i16_single_column() {
         required_and_optional::<Int16Array, _>(0..SMALL_SIZE as i16);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i32_single_column() {
         required_and_optional::<Int32Array, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i64_single_column() {
         required_and_optional::<Int64Array, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u8_single_column() {
         required_and_optional::<UInt8Array, _>(0..SMALL_SIZE as u8);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u16_single_column() {
         required_and_optional::<UInt16Array, _>(0..SMALL_SIZE as u16);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u32_single_column() {
         required_and_optional::<UInt32Array, _>(0..SMALL_SIZE as u32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u64_single_column() {
         required_and_optional::<UInt64Array, _>(0..SMALL_SIZE as u64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn f32_single_column() {
         required_and_optional::<Float32Array, _>((0..SMALL_SIZE).map(|i| i as f32));
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn f64_single_column() {
         required_and_optional::<Float64Array, _>((0..SMALL_SIZE).map(|i| i as f64));
     }
@@ -3751,6 +3779,7 @@ mod tests {
     // RoundTripTest manually instead of calling required_and_optional for these tests.
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn timestamp_second_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampSecondArray::from(raw_values));
@@ -3759,6 +3788,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn timestamp_millisecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMillisecondArray::from(raw_values));
@@ -3767,6 +3797,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn timestamp_microsecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMicrosecondArray::from(raw_values));
@@ -3775,6 +3806,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn timestamp_nanosecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampNanosecondArray::from(raw_values));
@@ -3783,11 +3815,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn date32_single_column() {
         required_and_optional::<Date32Array, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn date64_single_column() {
         // Date64 must be a multiple of 86400000, see ARROW-10925
         required_and_optional::<Date64Array, _>(
@@ -3796,51 +3830,61 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn time32_second_single_column() {
         required_and_optional::<Time32SecondArray, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn time32_millisecond_single_column() {
         required_and_optional::<Time32MillisecondArray, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn time64_microsecond_single_column() {
         required_and_optional::<Time64MicrosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn time64_nanosecond_single_column() {
         required_and_optional::<Time64NanosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn duration_second_single_column() {
         required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn duration_millisecond_single_column() {
         required_and_optional::<DurationMillisecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn duration_microsecond_single_column() {
         required_and_optional::<DurationMicrosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn duration_nanosecond_single_column() {
         required_and_optional::<DurationNanosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn interval_year_month_single_column() {
         required_and_optional::<IntervalYearMonthArray, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn interval_day_time_single_column() {
         required_and_optional::<IntervalDayTimeArray, _>(vec![
             IntervalDayTime::new(0, 1),
@@ -3864,6 +3908,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn binary_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
         let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
@@ -3874,6 +3919,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn binary_view_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
         let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
@@ -3884,6 +3930,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i32_column_bloom_filter_at_end() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
         let files = RoundTripTest::new(array)
@@ -3901,6 +3948,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i32_column_bloom_filter() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
         let files = RoundTripTest::new(array)
@@ -3921,6 +3969,7 @@ mod tests {
     /// A large NDV means a larger initial filter that gets folded down;
     /// a small NDV means a smaller initial filter.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i32_column_bloom_filter_fixed_ndv() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
 
@@ -3954,6 +4003,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn binary_column_bloom_filter() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
         let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
@@ -3974,6 +4024,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn empty_string_null_column_bloom_filter() {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
@@ -3994,6 +4045,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn large_binary_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
         let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
@@ -4004,6 +4056,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fixed_size_binary_single_column() {
         let mut builder = FixedSizeBinaryBuilder::new(4);
         builder.append_value(b"0123").unwrap();
@@ -4016,6 +4069,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn string_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
@@ -4024,6 +4078,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn large_string_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
@@ -4032,6 +4087,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn string_view_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
@@ -4075,6 +4131,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
@@ -4098,6 +4155,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn large_list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets = arrow::buffer::Buffer::from([0i64, 1, 3, 3, 6, 10].to_byte_slice());
@@ -4123,6 +4181,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn list_nested_nulls() {
         use arrow::datatypes::Int32Type;
         let data = vec![
@@ -4142,6 +4201,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn list_utf8_view_selective_padding_roundtrip() {
         let item = Arc::new(Field::new_list_field(DataType::Utf8View, true));
         let mut builder = ListBuilder::new(StringViewBuilder::new()).with_field(item);
@@ -4159,6 +4219,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn struct_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let struct_field_a = Arc::new(Field::new("f", DataType::Int32, false));
@@ -4223,6 +4284,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fallback_flush_data_page() {
         //tests if the Fallback::flush_data_page clears all buffers correctly
         let raw_values: Vec<_> = (0..MEDIUM_SIZE).map(|i| i.to_string()).collect();
@@ -4265,6 +4327,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_string_dictionary() {
         // define schema
         #[expect(deprecated)]
@@ -4518,6 +4581,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_primitive_dictionary() {
         // define schema
         #[expect(deprecated)]
@@ -4541,6 +4605,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_decimal32_dictionary() {
         let integers = vec![12345, 56789, 34567];
 
@@ -4562,6 +4627,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_decimal64_dictionary() {
         let integers = vec![12345, 56789, 34567];
 
@@ -4583,6 +4649,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_decimal128_dictionary() {
         let integers = vec![12345, 56789, 34567];
 
@@ -4604,6 +4671,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_decimal256_dictionary() {
         let integers = vec![
             i256::from_i128(12345),
@@ -4629,6 +4697,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_string_dictionary_unsigned_index() {
         // define schema
         #[expect(deprecated)]
@@ -4650,6 +4719,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u32_min_max() {
         // check values roundtrip through parquet
         let src = [
@@ -4696,6 +4766,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u64_min_max() {
         // check values roundtrip through parquet
         let src = [
@@ -4742,6 +4813,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn statistics_null_counts_only_nulls() {
         // check that null-count statistics for "only NULL"-columns are correct
         let values = Arc::new(UInt64Array::from(vec![None, None]));
@@ -4761,6 +4833,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_list_of_struct_roundtrip() {
         // define schema
         let int_field = Field::new("a", DataType::Int32, true);
@@ -5602,6 +5675,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_different_dict_page_size_limit() {
         let array = Arc::new(Int64Array::from_iter(0..1024 * 1024));
         let schema = Arc::new(Schema::new(vec![
@@ -5640,6 +5714,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_arrow_writer_granular_mode_roundtrip() {
         // Granular mode subdivides chunks and writes more pages than the
         // default batched path. Make sure the data we write back is
@@ -5842,6 +5917,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     // A row limit far smaller than the batch splits it many times over; the split must not
     // consume stack proportional to the number of row groups.
     fn test_row_group_limit_rows_only_many_splits() {
@@ -6283,6 +6359,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_number_distinct_values_exact_count() {
         // 50 distinct Int32 values repeated across 100k rows, with every 7th row null.
         // Nulls must not be counted as a distinct value.
