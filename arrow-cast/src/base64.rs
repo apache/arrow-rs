@@ -43,7 +43,7 @@ pub fn b64_encode<E: Engine, O: OffsetSizeTrait>(
         encoded_len(len, engine.config().encode_padding()).unwrap()
     });
     let offsets = OffsetBuffer::<O>::from_lengths(lengths);
-    let buffer_len = offsets.last().unwrap().as_usize();
+    let buffer_len = offsets.last().as_usize();
     let mut buffer = vec![0_u8; buffer_len];
     let mut offset = 0;
 
