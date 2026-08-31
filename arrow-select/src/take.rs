@@ -510,10 +510,13 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let src_idx = if CHECKED {
                     indices.value(valid_idx).as_usize()
                 } else {
-                    // SAFETY: valid_idx < len (validity bitmap); caller guarantees index values are in bounds when CHECKED=false
+                    // SAFETY: valid_idx < indices.len() (valid_indices() guarantee).
                     unsafe { indices.value_unchecked(valid_idx) }.as_usize()
                 } + src_offset;
-                // SAFETY: src_idx is in bounds; indices.value() guarantees it when CHECKED=true, caller guarantees it when CHECKED=false
+                // SAFETY: src_idx = index_value + src_offset is a valid bit position in the
+                // values buffer. When CHECKED=true, check_bounds verified every index value is
+                // < values.len() before this function was called. When CHECKED=false, the caller
+                // upholds that invariant.
                 unsafe { copy_bit_if_set(src_ptr, src_idx, out_ptr, valid_idx) };
             });
             BooleanBuffer::new(Buffer::from(output), 0, len)
@@ -532,10 +535,14 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                     let src_idx = if CHECKED {
                         indices.value(base + bit).as_usize()
                     } else {
-                        // SAFETY: base + bit < len (loop bound); caller guarantees index values are in bounds when CHECKED=false
+                        // SAFETY: base + bit < full_bytes * 8 <= len, so base + bit is a valid
+                        // position in the indices array.
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
-                    // SAFETY: src_idx is in bounds; indices.value() guarantees it when CHECKED=true, caller guarantees it when CHECKED=false
+                    // SAFETY: src_idx = index_value + src_offset is a valid bit position in the
+                    // values buffer. When CHECKED=true, check_bounds verified every index value is
+                    // < values.len() before this function was called. When CHECKED=false, the caller
+                    // upholds that invariant.
                     byte |= unsafe { pack_bit(src_ptr, src_idx, bit) };
                 }
                 *out_byte = byte;
@@ -548,10 +555,14 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
                     let src_idx = if CHECKED {
                         indices.value(base + bit).as_usize()
                     } else {
-                        // SAFETY: base + bit < len (loop bound); caller guarantees index values are in bounds when CHECKED=false
+                        // SAFETY: base + bit < len (remainder loop bound), so base + bit is a
+                        // valid position in the indices array.
                         unsafe { indices.value_unchecked(base + bit) }.as_usize()
                     } + src_offset;
-                    // SAFETY: src_idx is in bounds; indices.value() guarantees it when CHECKED=true, caller guarantees it when CHECKED=false
+                    // SAFETY: src_idx = index_value + src_offset is a valid bit position in the
+                    // values buffer. When CHECKED=true, check_bounds verified every index value is
+                    // < values.len() before this function was called. When CHECKED=false, the caller
+                    // upholds that invariant.
                     byte |= unsafe { pack_bit(src_ptr, src_idx, bit) };
                 }
                 out_slice[full_bytes] = byte;
