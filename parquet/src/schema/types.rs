@@ -666,7 +666,7 @@ impl<'a> GroupTypeBuilder<'a> {
 
     /// Creates a new `GroupType` instance from the gathered attributes.
     pub fn build(self) -> Result<Type> {
-        if let Some(LogicalType::File) = &self.logical_type {
+        if matches!(&self.logical_type, Some(LogicalType::File)) {
             validate_file_type_fields(self.name, &self.fields)?;
         }
         let mut basic_info = BasicTypeInfo {
