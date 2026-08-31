@@ -193,7 +193,7 @@ impl ops::Not for SortOptions {
 #[derive(Clone, Debug, Default)]
 pub struct SemanticEqualityOptions {
     /// If `true`, nested fields must have the same nullability to be considered equal.
-    pub check_nullibility: bool,
+    pub check_nullability: bool,
     /// If `true`, nested fields must have the same name to be considered equal.
     pub check_field_name: bool,
     /// If `true`, nested fields must have the same metadata to be considered equal.

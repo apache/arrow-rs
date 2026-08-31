@@ -893,11 +893,11 @@ impl DataType {
     /// assert!(a.semantic_equality(&b, &ignore_names));
     /// ```
     pub fn semantic_equality(&self, other: &DataType, options: &SemanticEqualityOptions) -> bool {
-        fn fields_eq(a: &Field, b: &Field, gauge: &SemanticEqualityOptions) -> bool {
-            (!gauge.check_field_name || a.name() == b.name())
-                && (!gauge.check_nullibility || a.is_nullable() == b.is_nullable())
-                && (!gauge.check_metadata || a.metadata() == b.metadata())
-                && a.data_type().semantic_equality(b.data_type(), gauge)
+        fn fields_eq(a: &Field, b: &Field, options: &SemanticEqualityOptions) -> bool {
+            (!options.check_field_name || a.name() == b.name())
+                && (!options.check_nullability || a.is_nullable() == b.is_nullable())
+                && (!options.check_metadata || a.metadata() == b.metadata())
+                && a.data_type().semantic_equality(b.data_type(), options)
         }
 
         match (self, other) {
@@ -1355,7 +1355,7 @@ mod tests {
     #[test]
     fn test_semantic_equality_ignores_field_name() {
         let strict = SemanticEqualityOptions {
-            check_nullibility: true,
+            check_nullability: true,
             check_field_name: true,
             check_metadata: true,
         };
@@ -1385,12 +1385,12 @@ mod tests {
         let b = DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)]));
 
         let strict = SemanticEqualityOptions {
-            check_nullibility: true,
+            check_nullability: true,
             check_field_name: true,
             check_metadata: true,
         };
         let lenient = SemanticEqualityOptions {
-            check_nullibility: false,
+            check_nullability: false,
             check_field_name: true,
             check_metadata: false,
         };
@@ -1402,7 +1402,7 @@ mod tests {
     #[test]
     fn test_semantic_equality_recurses_into_nested_types() {
         let gauge = SemanticEqualityOptions {
-            check_nullibility: true,
+            check_nullability: true,
             check_field_name: false,
             check_metadata: true,
         };
