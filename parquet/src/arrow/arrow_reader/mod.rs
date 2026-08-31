@@ -1378,65 +1378,21 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
-            let parquet_schema = reader.metadata.file_metadata().schema_descr();
-            let has_fusable_group = filter.predicates.len() > 1
-                && limit.is_none()
-                && filter.predicates.windows(2).any(|pair| {
-                    pair[0].projection() == pair[1].projection()
-                        && should_fuse_same_projection(pair[0].projection(), parquet_schema)
-                });
-
-            if !has_fusable_group {
-                // Preserve the existing singleton hot path when there is
-                // nothing to fuse.
-                for predicate in &mut filter.predicates {
-                    if !plan_builder.selects_any() {
-                        break;
-                    }
-
-                    let mut cache_projection = predicate.projection().clone();
-                    cache_projection.intersect(&projection);
-
-                    let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
-                        .with_batch_size(batch_size)
-                        .with_parquet_metadata(&reader.metadata)
-                        .build_array_reader(fields.as_deref(), predicate.projection())?;
-                    plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+            for predicate in &mut filter.predicates {
+                // break early if we have ruled out all rows
+                if !plan_builder.selects_any() {
+                    break;
                 }
-            } else {
-                let mut predicate_idx = 0;
-                while predicate_idx < filter.predicates.len() {
-                    if !plan_builder.selects_any() {
-                        break;
-                    }
 
-                    let projection = filter.predicates[predicate_idx].projection().clone();
-                    let mut group_end = predicate_idx + 1;
-                    while group_end < filter.predicates.len()
-                        && filter.predicates[group_end].projection() == &projection
-                    {
-                        group_end += 1;
-                    }
-                    if !should_fuse_same_projection(&projection, parquet_schema) {
-                        group_end = predicate_idx + 1;
-                    }
-                    let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
-                        .with_batch_size(batch_size)
-                        .with_parquet_metadata(&reader.metadata)
-                        .build_array_reader(fields.as_deref(), &projection)?;
-                    if group_end == predicate_idx + 1 {
-                        plan_builder = plan_builder.with_predicate(
-                            array_reader,
-                            filter.predicates[predicate_idx].as_mut(),
-                        )?;
-                    } else {
-                        plan_builder = plan_builder.with_same_projection_predicates(
-                            array_reader,
-                            &mut filter.predicates[predicate_idx..group_end],
-                        )?;
-                    }
-                    predicate_idx = group_end;
-                }
+                let mut cache_projection = predicate.projection().clone();
+                cache_projection.intersect(&projection);
+
+                let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                    .with_batch_size(batch_size)
+                    .with_parquet_metadata(&reader.metadata)
+                    .build_array_reader(fields.as_deref(), predicate.projection())?;
+
+                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
         }
 
