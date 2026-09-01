@@ -264,7 +264,6 @@ unnecessary_debug_formatting = "allow"       # ~23 violations in ~7 files
 unnecessary_wraps = "allow"                  # ~64 violations in ~39 files
 unreadable_literal = "allow"                 # ~4100 violations in ~120 files
 unused_self = "allow"                        # ~31 violations in ~20 files
-used_underscore_binding = "allow"            # ~15 violations in ~3 files
 used_underscore_items = "allow"              # ~120 violations in ~17 files
 verbose_bit_mask = "allow"                   # 1 violation in 1 file
 wildcard_imports = "allow"                   # ~230 violations in ~130 files
