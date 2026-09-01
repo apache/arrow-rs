@@ -244,7 +244,7 @@ impl BitPacking for bool {
 
     #[inline]
     fn pack_batch(input: &[Self], output: &mut [u8], num_bits: usize) {
-        assert!(num_bits == 1);
+        assert_eq!(num_bits, 1);
         // Safety: bool is a single byte that is guaranteed to be 0 or 1, so it
         // can always be read as a u8.
         let input: &[u8] =
