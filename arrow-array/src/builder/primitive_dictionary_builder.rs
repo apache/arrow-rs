@@ -197,6 +197,7 @@ where
     /// let keys = dictionary_array.keys();
     ///
     /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
+    /// ```
     pub fn try_new_from_builder<K2>(
         mut source: PrimitiveDictionaryBuilder<K2, V>,
     ) -> Result<Self, ArrowError>
