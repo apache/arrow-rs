@@ -3347,6 +3347,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long under Miri (adds ~1 hour to CI)
     fn test_parse_decimal_matches_bigint_reference() {
         use num_bigint::BigInt;
         use rand::rngs::StdRng;
