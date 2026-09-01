@@ -745,7 +745,7 @@ impl Field {
     pub fn with_dict_is_ordered(mut self, dict_is_ordered: bool) -> Self {
         if matches!(self.data_type, DataType::Dictionary(_, _)) {
             self.dict_is_ordered = dict_is_ordered;
-        };
+        }
         self
     }
 
@@ -1058,7 +1058,7 @@ mod test {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
+    #[cfg_attr(miri, ignore)] // fork is not supported
     fn test_debug_format_field() {
         // Make sure the `Debug` formatting of `Field` is readable and not too long
         insta::assert_debug_snapshot!(Field::new("item", DataType::UInt8, false), @r"

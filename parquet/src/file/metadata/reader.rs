@@ -64,8 +64,7 @@ use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 ///     .with_page_index_policy(PageIndexPolicy::Required);
 /// reader.try_parse(&file).unwrap();
 /// let metadata = reader.finish().unwrap();
-/// assert!(metadata.column_index().is_some());
-/// assert!(metadata.offset_index().is_some());
+/// assert!(metadata.page_index().is_some());
 /// ```
 #[derive(Default, Debug)]
 pub struct ParquetMetaDataReader {
@@ -291,16 +290,16 @@ impl ParquetMetaDataReader {
             Err(ParquetError::NeedMoreData(needed)) => {
                 // If reader is the same length as `file_size` then presumably there is no more to
                 // read, so return an EOF error.
-                if file_size == reader.len() || needed as u64 > file_size {
-                    return Err(eof_err!(
+                return if file_size == reader.len() || needed as u64 > file_size {
+                    Err(eof_err!(
                         "Parquet file too small. Size is {} but need {}",
                         file_size,
                         needed
-                    ));
+                    ))
                 } else {
                     // Ask for a larger buffer
-                    return Err(ParquetError::NeedMoreData(needed));
-                }
+                    Err(ParquetError::NeedMoreData(needed))
+                };
             }
             Err(e) => return Err(e),
         };
@@ -356,16 +355,16 @@ impl ParquetMetaDataReader {
         let file_range = file_size.saturating_sub(reader.len())..file_size;
         if !(file_range.contains(&range.start) && file_range.contains(&range.end)) {
             // Requested range starts beyond EOF
-            if range.end > file_size {
-                return Err(eof_err!(
+            return if range.end > file_size {
+                Err(eof_err!(
                     "Parquet file too small. Range {range:?} is beyond file bounds {file_size}",
-                ));
+                ))
             } else {
                 // Ask for a larger buffer
-                return Err(ParquetError::NeedMoreData(
+                Err(ParquetError::NeedMoreData(
                     (file_size - range.start).try_into()?,
-                ));
-            }
+                ))
+            };
         }
 
         // Perform extra sanity check to make sure `range` and the footer metadata don't
@@ -804,7 +803,6 @@ impl ParquetMetaDataReader {
 
 /// The bounds needed to read page indexes
 // this is an internal enum, so it is ok to allow differences in enum size
-#[allow(clippy::large_enum_variant)]
 enum NeedsIndexData {
     /// no additional data is needed (e.g. the indexes weren't requested)
     No(ParquetMetaData),
@@ -843,6 +841,7 @@ fn parse_index_data(push_decoder: &mut ParquetMetaDataPushDecoder) -> Result<Par
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file::metadata::PageIndex;
     use crate::file::reader::Length;
     use crate::util::test_common::file_util::get_test_file;
     use std::ops::Range;
@@ -876,6 +875,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_try_parse() {
         let file = get_test_file("alltypes_tiny_pages.parquet");
         let len = file.len();
@@ -892,22 +892,19 @@ mod tests {
         let bytes = bytes_for_range(0..len);
         reader.try_parse(&bytes).unwrap();
         let metadata = reader.finish().unwrap();
-        assert!(metadata.column_index.is_some());
-        assert!(metadata.offset_index.is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
 
         // read more than enough of file
         let bytes = bytes_for_range(320000..len);
         reader.try_parse_sized(&bytes, len).unwrap();
         let metadata = reader.finish().unwrap();
-        assert!(metadata.column_index.is_some());
-        assert!(metadata.offset_index.is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
 
         // exactly enough
         let bytes = bytes_for_range(323583..len);
         reader.try_parse_sized(&bytes, len).unwrap();
         let metadata = reader.finish().unwrap();
-        assert!(metadata.column_index.is_some());
-        assert!(metadata.offset_index.is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
 
         // not enough for page index
         let bytes = bytes_for_range(323584..len);
@@ -918,11 +915,10 @@ mod tests {
                 let bytes = bytes_for_range(len - needed as u64..len);
                 reader.try_parse_sized(&bytes, len).unwrap();
                 let metadata = reader.finish().unwrap();
-                assert!(metadata.column_index.is_some());
-                assert!(metadata.offset_index.is_some());
+                assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
             }
             _ => panic!("unexpected error"),
-        };
+        }
 
         // not enough for file metadata, but keep trying until page indexes are read
         let mut reader =
@@ -942,8 +938,7 @@ mod tests {
             }
         }
         let metadata = reader.finish().unwrap();
-        assert!(metadata.column_index.is_some());
-        assert!(metadata.offset_index.is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
 
         // not enough for page index but lie about file size
         let bytes = bytes_for_range(323584..len);
@@ -965,7 +960,7 @@ mod tests {
                 reader.finish().unwrap();
             }
             _ => panic!("unexpected error"),
-        };
+        }
 
         // not enough for file metadata but use try_parse()
         let reader_result = reader.try_parse(&bytes).unwrap_err();
@@ -1011,6 +1006,7 @@ mod async_tests {
     use tempfile::NamedTempFile;
 
     use crate::arrow::ArrowWriter;
+    use crate::file::metadata::PageIndex;
     use crate::file::properties::WriterProperties;
     use crate::file::reader::Length;
     use crate::util::test_common::file_util::get_test_file;
@@ -1247,7 +1243,7 @@ mod async_tests {
 
         let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
 
-        let key_code: &[u8] = "0123456789012345".as_bytes();
+        let key_code: &[u8] = b"0123456789012345";
         let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
             .build()
             .unwrap();
@@ -1277,7 +1273,7 @@ mod async_tests {
         loader.try_load(f, len).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 3);
         let metadata = loader.finish().unwrap();
-        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
 
         // Prefetch just footer exactly
         fetch_count.store(0, Ordering::SeqCst);
@@ -1288,7 +1284,7 @@ mod async_tests {
         loader.try_load(f, len).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
         let metadata = loader.finish().unwrap();
-        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
 
         // Prefetch more than footer but not enough
         fetch_count.store(0, Ordering::SeqCst);
@@ -1299,7 +1295,7 @@ mod async_tests {
         loader.try_load(f, len).await.unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 2);
         let metadata = loader.finish().unwrap();
-        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
 
         // Prefetch exactly enough
         fetch_count.store(0, Ordering::SeqCst);
@@ -1311,7 +1307,7 @@ mod async_tests {
             .await
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
-        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
 
         // Prefetch more than enough but less than the entire file
         fetch_count.store(0, Ordering::SeqCst);
@@ -1323,7 +1319,7 @@ mod async_tests {
             .await
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
-        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
 
         // Prefetch the entire file
         fetch_count.store(0, Ordering::SeqCst);
@@ -1335,7 +1331,7 @@ mod async_tests {
             .await
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
-        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
 
         // Prefetch more than the entire file
         fetch_count.store(0, Ordering::SeqCst);
@@ -1347,7 +1343,7 @@ mod async_tests {
             .await
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
-        assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
     }
 
     fn write_parquet_file(offset_index_disabled: bool) -> Result<NamedTempFile> {

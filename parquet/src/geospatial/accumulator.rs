@@ -116,6 +116,13 @@ pub trait GeoStatsAccumulator: Send {
 pub struct DefaultGeoStatsAccumulatorFactory {}
 
 impl GeoStatsAccumulatorFactory for DefaultGeoStatsAccumulatorFactory {
+    #[cfg_attr(
+        feature = "geospatial",
+        expect(
+            clippy::used_underscore_binding,
+            reason = "`_descr` is only read when the `geospatial` feature is on"
+        )
+    )]
     fn new_accumulator(&self, _descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator> {
         #[cfg(feature = "geospatial")]
         if let Some(crate::basic::LogicalType::Geometry { .. }) = _descr.logical_type_ref() {
@@ -335,7 +342,7 @@ mod test {
         // and does not compute subsequent statistics
         assert!(accumulator.is_valid());
         accumulator.update_wkb(&wkb_point_xy(41.0, 42.0));
-        accumulator.update_wkb("these bytes are not WKB".as_bytes());
+        accumulator.update_wkb(b"these bytes are not WKB");
         assert!(!accumulator.is_valid());
         assert!(accumulator.finish().is_none());
 

@@ -582,9 +582,8 @@ impl<'a> ArrayReaderBuilder<'a> {
     fn build_struct_reader(&self, args: ReaderArgs<'_>) -> Result<Option<Box<dyn ArrayReader>>> {
         let field = args.field;
         let padding_threshold = args.padding_threshold;
-        let arrow_fields = match &field.arrow_type {
-            DataType::Struct(children) => children,
-            _ => unreachable!(),
+        let DataType::Struct(arrow_fields) = &field.arrow_type else {
+            unreachable!()
         };
         let children = field.children().unwrap();
         assert_eq!(arrow_fields.len(), children.len());

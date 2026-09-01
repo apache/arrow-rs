@@ -15,6 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// The methods below mirror the signatures of the real `PageEncryptor`, so that the
+// callers do not need a `cfg` of their own.
+#![expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "mirrors the encryption-enabled `PageEncryptor`"
+)]
+
 use crate::column::page::CompressedPage;
 use crate::errors::Result;
 use crate::file::metadata::thrift::PageHeader;

@@ -132,7 +132,7 @@ enum EncodingArgs {
     ByteStreamSplit,
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl From<EncodingArgs> for Encoding {
     fn from(value: EncodingArgs) -> Self {
         match value {

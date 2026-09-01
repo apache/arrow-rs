@@ -146,8 +146,32 @@ pub(crate) trait CompressionLevel<T: std::fmt::Display + std::cmp::PartialOrd> {
 /// Given the compression type `codec`, returns a codec used to compress and decompress
 /// bytes for the compression type.
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
+#[cfg_attr(
+    any(feature = "lz4", test),
+    expect(
+        clippy::used_underscore_binding,
+        reason = "`_options` is only read when the `lz4` feature is on"
+    )
+)]
 pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<Box<dyn Codec>>> {
-    #[allow(unreachable_code, unused_variables)]
+    #[cfg_attr(
+        any(
+            test,
+            feature = "brotli",
+            feature = "flate2",
+            feature = "lz4",
+            feature = "snap",
+            feature = "zstd"
+        ),
+        expect(unreachable_code)
+    )]
+    #[cfg_attr(
+        all(
+            not(test),
+            not(all(feature = "brotli", feature = "flate2", feature = "zstd"))
+        ),
+        expect(unused_variables)
+    )]
     match codec {
         CodecType::BROTLI(level) => {
             #[cfg(any(feature = "brotli", test))]
@@ -194,7 +218,7 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
             ))
         }
         CodecType::UNCOMPRESSED => Ok(None),
-        _ => Err(nyi_err!("The codec type {} is not supported yet", codec)),
+        CodecType::LZO => Err(nyi_err!("The codec type {} is not supported yet", codec)),
     }
 }
 
@@ -546,7 +570,7 @@ mod zstd_codec {
                         .flatten()
                         .map(|size| size as usize)
                 })
-                .unwrap_or(input_buf.len().saturating_mul(4));
+                .unwrap_or_else(|| input_buf.len().saturating_mul(4));
             output_buf.reserve(len);
 
             let mut cursor = Cursor::new(output_buf);
@@ -627,13 +651,10 @@ mod lz4_raw_codec {
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let offset = output_buf.len();
-            let required_len = match uncompress_size {
-                Some(uncompress_size) => uncompress_size,
-                None => {
-                    return Err(ParquetError::General(
-                        "LZ4RawCodec unsupported without uncompress_size".into(),
-                    ));
-                }
+            let Some(required_len) = uncompress_size else {
+                return Err(ParquetError::General(
+                    "LZ4RawCodec unsupported without uncompress_size".into(),
+                ));
             };
             output_buf.resize(offset + required_len, 0);
             match lz4_flex::block::decompress_into(input_buf, &mut output_buf[offset..]) {
@@ -766,13 +787,10 @@ mod lz4_hadoop_codec {
             uncompress_size: Option<usize>,
         ) -> Result<usize> {
             let output_len = output_buf.len();
-            let required_len = match uncompress_size {
-                Some(n) => n,
-                None => {
-                    return Err(ParquetError::General(
-                        "LZ4HadoopCodec unsupported without uncompress_size".into(),
-                    ));
-                }
+            let Some(required_len) = uncompress_size else {
+                return Err(ParquetError::General(
+                    "LZ4HadoopCodec unsupported without uncompress_size".into(),
+                ));
             };
             output_buf.resize(output_len + required_len, 0);
             match try_decompress_hadoop(input_buf, &mut output_buf[output_len..]) {
@@ -905,12 +923,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_snappy() {
         test_codec_with_size(CodecType::SNAPPY);
         test_codec_without_size(CodecType::SNAPPY);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_gzip() {
         for level in GzipLevel::MINIMUM_LEVEL..=GzipLevel::MAXIMUM_LEVEL {
             let level = GzipLevel::try_new(level).unwrap();
@@ -920,6 +940,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_brotli() {
         for level in BrotliLevel::MINIMUM_LEVEL..=BrotliLevel::MAXIMUM_LEVEL {
             let level = BrotliLevel::try_new(level).unwrap();
@@ -929,16 +950,17 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_lz4() {
         test_codec_with_size(CodecType::LZ4);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Zstd calls native C functions unsupported by Miri
     fn test_codec_zstd() {
         // since ZstdLevel::MINIMUM_LEVEL is a large negative number, we test a smaller range
-        for level in [ZstdLevel::MINIMUM_LEVEL]
-            .into_iter()
-            .chain(-100..=ZstdLevel::MAXIMUM_LEVEL)
+        for level in
+            std::iter::once(ZstdLevel::MINIMUM_LEVEL).chain(-100..=ZstdLevel::MAXIMUM_LEVEL)
         {
             let level = ZstdLevel::try_new(level).unwrap();
             test_codec_with_size(CodecType::ZSTD(level));
@@ -947,6 +969,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_codec_lz4_raw() {
         test_codec_with_size(CodecType::LZ4_RAW);
     }

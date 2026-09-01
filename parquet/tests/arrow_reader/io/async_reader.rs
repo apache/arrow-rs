@@ -328,8 +328,7 @@ async fn async_builder(
             .as_ref()
             .clone()
             .into_builder()
-            .set_column_index(None)
-            .set_offset_index(None)
+            .set_page_index(None)
             .build();
         Arc::new(metadata)
     };

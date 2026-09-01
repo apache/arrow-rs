@@ -43,7 +43,7 @@ pub fn b64_encode<E: Engine, O: OffsetSizeTrait>(
         encoded_len(len, engine.config().encode_padding()).unwrap()
     });
     let offsets = OffsetBuffer::<O>::from_lengths(lengths);
-    let buffer_len = offsets.last().unwrap().as_usize();
+    let buffer_len = offsets.last().as_usize();
     let mut buffer = vec![0_u8; buffer_len];
     let mut offset = 0;
 
@@ -61,6 +61,10 @@ pub fn b64_encode<E: Engine, O: OffsetSizeTrait>(
 }
 
 /// Base64 decode each element of `array` with the provided [`Engine`]
+///
+/// # Errors
+///
+/// Returns an error if a value is not valid base64 for `engine`.
 pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
     engine: &E,
     array: &GenericBinaryArray<O>,
@@ -72,9 +76,13 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
     offsets.push(O::usize_as(0));
     let mut offset = 0;
 
-    for v in array.iter() {
+    for v in array {
         if let Some(v) = v {
-            let len = engine.decode_slice(v, &mut buffer[offset..]).unwrap();
+            let len = engine
+                .decode_slice(v, &mut buffer[offset..])
+                .map_err(|err| {
+                    ArrowError::InvalidArgumentError(format!("Failed to decode base64: {err}"))
+                })?;
             // This cannot overflow as `len` is less than `v.len()` and `a` is valid
             offset += len;
         }
@@ -120,6 +128,15 @@ mod tests {
         test_engine(&BASE64_STANDARD_NO_PAD, &data);
     }
 
+    #[test]
+    fn test_b64_decode_invalid_input() {
+        let data: BinaryArray = vec![Some(b"!!!not base64!!!".to_vec())]
+            .into_iter()
+            .collect();
+        let err = b64_decode(&BASE64_STANDARD, &data).unwrap_err().to_string();
+        assert!(err.contains("Failed to decode base64"), "{err}");
+    }
+
     /// Safe-Rust `Engine` that writes invalid UTF-8 into the encode buffer
     /// (#10284). `b64_encode` must reject it rather than build an unsound
     /// `StringArray`.
@@ -152,7 +169,7 @@ mod tests {
             output_buf: &mut [u8],
         ) -> Result<usize, base64::EncodeSliceError> {
             let len = BASE64_STANDARD.encode_slice(input, output_buf)?;
-            for b in output_buf[..len].iter_mut() {
+            for b in &mut output_buf[..len] {
                 *b = 0xFF; // invalid UTF-8, but correct length
             }
             Ok(len)

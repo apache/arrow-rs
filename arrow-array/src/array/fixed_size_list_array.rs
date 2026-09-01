@@ -332,9 +332,8 @@ impl FixedSizeListArray {
 
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (FieldRef, i32, ArrayRef, Option<NullBuffer>) {
-        let f = match self.data_type {
-            DataType::FixedSizeList(f, _) => f,
-            _ => unreachable!(),
+        let DataType::FixedSizeList(f, _) = self.data_type else {
+            unreachable!()
         };
         (f, self.value_length, self.values, self.nulls)
     }
@@ -459,6 +458,15 @@ impl FixedSizeListArray {
 
     /// constructs a new iterator
     pub fn iter(&self) -> FixedSizeListIter<'_> {
+        FixedSizeListIter::new(self)
+    }
+}
+
+impl<'a> IntoIterator for &'a FixedSizeListArray {
+    type Item = Option<ArrayRef>;
+    type IntoIter = FixedSizeListIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
         FixedSizeListIter::new(self)
     }
 }
@@ -601,8 +609,8 @@ impl ArrayAccessor for FixedSizeListArray {
 impl std::fmt::Debug for FixedSizeListArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "FixedSizeListArray<{}>\n[\n", self.value_length())?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }

@@ -77,9 +77,8 @@ use std::sync::Arc;
 /// assert_eq!(*extracted, Int32Array::from(vec![Some(1), None, None, Some(3), None]));
 /// ```
 pub fn union_extract(union_array: &UnionArray, target: &str) -> Result<ArrayRef, ArrowError> {
-    let fields = match union_array.data_type() {
-        DataType::Union(fields, _) => fields,
-        _ => unreachable!(),
+    let DataType::Union(fields, _) = union_array.data_type() else {
+        unreachable!()
     };
 
     let (target_type_id, _) = fields
@@ -104,9 +103,8 @@ pub fn union_extract_by_id(
     union_array: &UnionArray,
     target_type_id: i8,
 ) -> Result<ArrayRef, ArrowError> {
-    let fields = match union_array.data_type() {
-        DataType::Union(fields, _) => fields,
-        _ => unreachable!(),
+    let DataType::Union(fields, _) = union_array.data_type() else {
+        unreachable!()
     };
 
     if fields.iter().all(|(id, _)| id != target_type_id) {
@@ -356,9 +354,8 @@ fn eq_scalar_inner(chunk_size: usize, type_ids: &[i8], target: i8) -> BoolValue 
 
         if false_bits == type_ids.len() {
             return BoolValue::Scalar(false);
-        } else {
-            (false_bits, false)
         }
+        (false_bits, false)
     } else {
         (true_bits, true)
     };

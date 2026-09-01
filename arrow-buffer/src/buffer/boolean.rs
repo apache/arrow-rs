@@ -182,6 +182,7 @@ impl BooleanBuffer {
     /// }
     /// // However, underlying buffer has (ignored) bits set outside the requested range
     /// assert_eq!(result.values(), &[0b11001100u8, 0b10111010, 0, 0, 0, 0, 0, 0]);
+    /// ```
     pub fn from_bits(src: impl AsRef<[u8]>, offset_in_bits: usize, len_in_bits: usize) -> Self {
         Self::from_bitwise_unary_op(src, offset_in_bits, len_in_bits, |a| a)
     }
@@ -255,7 +256,7 @@ impl BooleanBuffer {
                 let suffix = read_u64(suffix);
                 let result_u64s: Vec<u64> = aligned_u64s
                     .iter()
-                    .cloned()
+                    .copied()
                     .chain(std::iter::once(suffix))
                     .map(&mut op)
                     .collect();
@@ -375,11 +376,11 @@ impl BooleanBuffer {
                 ([], left_suf, [], right_suf) => {
                     let left_iter = left_u64s
                         .iter()
-                        .cloned()
+                        .copied()
                         .chain((!left_suf.is_empty()).then(|| read_u64(left_suf)));
                     let right_iter = right_u64s
                         .iter()
-                        .cloned()
+                        .copied()
                         .chain((!right_suf.is_empty()).then(|| read_u64(right_suf)));
                     let result_u64s: Vec<u64> =
                         left_iter.zip(right_iter).map(|(l, r)| op(l, r)).collect();
@@ -1248,7 +1249,7 @@ mod tests {
         assert_eq!(builder.as_slice().len(), bit_util::ceil(builder.len(), 8));
         let finished = builder.finish();
         for (i, v) in bools.into_iter().chain(std::iter::once(true)).enumerate() {
-            assert_eq!(finished.value(i), v, "at index {}", i);
+            assert_eq!(finished.value(i), v, "at index {i}");
         }
     }
 

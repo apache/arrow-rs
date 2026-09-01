@@ -177,6 +177,42 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         Self(ScalarBuffer::from(offsets))
     }
 
+    /// The first offset, i.e. the start of the first range.
+    ///
+    /// An [`OffsetBuffer`] is never empty, so this always returns an offset.
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_lengths([1, 3, 5]);
+    /// assert_eq!(offsets.first(), 0);
+    /// assert_eq!(OffsetBuffer::<i32>::new_empty().first(), 0);
+    /// ```
+    #[inline]
+    pub fn first(&self) -> O {
+        self.0
+            .first()
+            .copied()
+            .expect("An `OffsetBuffer` is never empty")
+    }
+
+    /// The last offset, i.e. the end of the last range.
+    ///
+    /// An [`OffsetBuffer`] is never empty, so this always returns an offset.
+    ///
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_lengths([1, 3, 5]);
+    /// assert_eq!(offsets.last(), 9);
+    /// assert_eq!(OffsetBuffer::<i32>::new_empty().last(), 0);
+    /// ```
+    #[inline]
+    pub fn last(&self) -> O {
+        self.0
+            .last()
+            .copied()
+            .expect("An `OffsetBuffer` is never empty")
+    }
+
     /// Get an Iterator over the lengths of this [`OffsetBuffer`]
     ///
     /// ```
@@ -381,7 +417,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         let shifted_offsets: Vec<O> = match self.into_inner().into_inner().into_vec() {
             // If we can reuse the buffer, update in place
             Ok(mut v) => {
-                for offset in v.iter_mut() {
+                for offset in &mut v {
                     *offset = *offset - rhs;
                 }
                 v

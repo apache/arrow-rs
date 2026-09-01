@@ -438,7 +438,7 @@ impl Buffer {
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
             Deallocation::Standard(l) => l,
-            _ => return Err(self), // Custom allocation
+            Deallocation::Custom(..) => return Err(self),
         };
 
         if self.ptr != self.data.as_ptr() {
@@ -457,7 +457,7 @@ impl Buffer {
 
         Arc::try_unwrap(self.data)
             .map(|bytes| unsafe {
-                let ptr = bytes.ptr().as_ptr() as _;
+                let ptr = bytes.ptr().as_ptr().cast();
                 std::mem::forget(bytes);
                 // Safety
                 // Verified that bytes layout matches that of Vec
@@ -906,7 +906,7 @@ mod tests {
         let mut vector = vec![1_i32, 2, 3, 4, 5];
         let buffer = unsafe {
             Buffer::from_custom_allocation(
-                NonNull::new_unchecked(vector.as_mut_ptr() as *mut u8),
+                NonNull::new_unchecked(vector.as_mut_ptr().cast::<u8>()),
                 vector.len() * std::mem::size_of::<i32>(),
                 Arc::new(vector),
             )

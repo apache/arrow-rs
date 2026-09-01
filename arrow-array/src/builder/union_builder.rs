@@ -297,6 +297,7 @@ impl UnionBuilder {
                         mut null_buffer_builder,
                     },
                 )| {
+                    // SAFETY: builder is constructed from valid value buffer, slot count, and null buffer maintained by the builder
                     let array_ref = make_array(unsafe {
                         ArrayDataBuilder::new(data_type.clone())
                             .add_buffer(values_buffer.finish())
@@ -334,6 +335,7 @@ impl UnionBuilder {
                     null_buffer_builder,
                 } = field_data;
 
+                // SAFETY: builder is constructed from valid value buffer, slot count, and null buffer maintained by the builder
                 let array_ref = make_array(unsafe {
                     ArrayDataBuilder::new(data_type.clone())
                         .add_buffer(values_buffer.finish_cloned())
@@ -378,9 +380,11 @@ impl ArrayBuilder for UnionBuilder {
     fn finish_cloned(&self) -> ArrayRef {
         // We construct the UnionArray carefully to ensure try_new cannot fail.
         // Since UnionBuilder controls all the invariants, this should never panic.
-        Arc::new(self.build_cloned().unwrap_or_else(|err| {
-            panic!("UnionBuilder::build_cloned failed unexpectedly: {}", err)
-        }))
+        Arc::new(
+            self.build_cloned().unwrap_or_else(|err| {
+                panic!("UnionBuilder::build_cloned failed unexpectedly: {err}")
+            }),
+        )
     }
 
     /// Returns the builder as a non-mutable `Any` reference

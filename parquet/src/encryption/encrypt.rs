@@ -124,7 +124,7 @@ impl FileEncryptionProperties {
         let mut column_names: Vec<String> = Vec::with_capacity(self.column_keys.len());
         let mut keys: Vec<Vec<u8>> = Vec::with_capacity(self.column_keys.len());
         let mut meta: Vec<Vec<u8>> = Vec::with_capacity(self.column_keys.len());
-        for (key, value) in self.column_keys.iter() {
+        for (key, value) in &self.column_keys {
             column_names.push(key.clone());
             keys.push(value.key.clone());
             if let Some(metadata) = value.key_metadata.as_ref() {

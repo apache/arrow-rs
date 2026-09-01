@@ -385,13 +385,10 @@ fn create_random_struct_array(
     null_density: f32,
     true_density: f32,
 ) -> Result<ArrayRef> {
-    let struct_fields = match field.data_type() {
-        DataType::Struct(fields) => fields,
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot create struct array for field {field}"
-            )));
-        }
+    let DataType::Struct(struct_fields) = field.data_type() else {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot create struct array for field {field}"
+        )));
     };
 
     let child_arrays = struct_fields
@@ -431,13 +428,10 @@ fn create_random_map_array(
         false => 0.0,
     };
 
-    let entries_field = match field.data_type() {
-        DataType::Map(f, _) => f,
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot create map array for field {field:?}"
-            )));
-        }
+    let DataType::Map(entries_field, _) = field.data_type() else {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot create map array for field {field:?}"
+        )));
     };
 
     let (offsets, child_len) = create_random_offsets::<i32>(size, 0, 5);

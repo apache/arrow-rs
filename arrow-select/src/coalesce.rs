@@ -500,7 +500,7 @@ impl BatchCoalescer {
             debug_assert!(remaining_rows > 0);
 
             // Copy remaining_rows from each array
-            for in_progress in self.in_progress_arrays.iter_mut() {
+            for in_progress in &mut self.in_progress_arrays {
                 in_progress.copy_rows(offset, remaining_rows)?;
             }
 
@@ -514,7 +514,7 @@ impl BatchCoalescer {
         // Add any the remaining rows to the buffer
         self.buffered_rows += num_rows;
         if num_rows > 0 {
-            for in_progress in self.in_progress_arrays.iter_mut() {
+            for in_progress in &mut self.in_progress_arrays {
                 in_progress.copy_rows(offset, num_rows)?;
             }
         }
@@ -525,7 +525,7 @@ impl BatchCoalescer {
         }
 
         // clear in progress sources (to allow the memory to be freed)
-        for in_progress in self.in_progress_arrays.iter_mut() {
+        for in_progress in &mut self.in_progress_arrays {
             in_progress.set_source(None);
         }
 
@@ -628,8 +628,7 @@ impl BatchCoalescer {
 
         if filter_len > batch_num_rows {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Filter predicate of length {} is larger than target array of length {}",
-                filter_len, batch_num_rows
+                "Filter predicate of length {filter_len} is larger than target array of length {batch_num_rows}"
             )));
         }
 
@@ -2069,7 +2068,7 @@ mod tests {
         let values: Vec<_> = values.into_iter().collect();
         let values_iter = std::iter::repeat(values.iter())
             .flatten()
-            .cloned()
+            .copied()
             .take(num_rows);
 
         let mut builder = StringViewBuilder::with_capacity(100).with_fixed_block_size(8192);
@@ -2180,12 +2179,12 @@ mod tests {
         // Only need to normalize StringViews (as == also tests for memory layout)
         let (schema, mut columns, row_count) = batch.into_parts();
 
-        for column in columns.iter_mut() {
+        for column in &mut columns {
             if let Some(string_view) = column.as_string_view_opt() {
                 // Re-create the StringViewArray to ensure memory layout is
                 // consistent
                 let mut builder = StringViewBuilder::new();
-                for s in string_view.iter() {
+                for s in string_view {
                     builder.append_option(s);
                 }
                 *column = Arc::new(builder.finish());
@@ -2555,8 +2554,7 @@ mod tests {
             assert_eq!(
                 coalescer.get_buffered_rows(),
                 0,
-                "Buffer should be empty before batch {}",
-                i
+                "Buffer should be empty before batch {i}"
             );
 
             coalescer.push_batch(large_batch).unwrap();
@@ -2564,29 +2562,25 @@ mod tests {
             // Each large batch should bypass and produce exactly one output batch
             assert!(
                 coalescer.has_completed_batch(),
-                "Should have completed batch after pushing batch {}",
-                i
+                "Should have completed batch after pushing batch {i}"
             );
 
             let output = coalescer.next_completed_batch().unwrap();
             assert_eq!(
                 output.num_rows(),
                 expected_size,
-                "Batch {} should have bypassed with original size",
-                i
+                "Batch {i} should have bypassed with original size"
             );
 
             // Should be no more batches and buffer should be empty
             assert!(
                 !coalescer.has_completed_batch(),
-                "Should have no more completed batches after batch {}",
-                i
+                "Should have no more completed batches after batch {i}"
             );
             assert_eq!(
                 coalescer.get_buffered_rows(),
                 0,
-                "Buffer should be empty after batch {}",
-                i
+                "Buffer should be empty after batch {i}"
             );
 
             all_outputs.push(output);

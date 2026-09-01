@@ -114,7 +114,7 @@ impl Type {
     pub fn get_fields(&self) -> &[TypePtr] {
         match *self {
             Type::GroupType { ref fields, .. } => &fields[..],
-            _ => panic!("Cannot call get_fields() on a non-group type"),
+            Type::PrimitiveType { .. } => panic!("Cannot call get_fields() on a non-group type"),
         }
     }
 
@@ -130,7 +130,9 @@ impl Type {
                 physical_type,
                 ..
             } => physical_type,
-            _ => panic!("Cannot call get_physical_type() on a non-primitive type"),
+            Type::GroupType { .. } => {
+                panic!("Cannot call get_physical_type() on a non-primitive type")
+            }
         }
     }
 
@@ -142,7 +144,7 @@ impl Type {
     pub fn get_precision(&self) -> i32 {
         match *self {
             Type::PrimitiveType { precision, .. } => precision,
-            _ => panic!("Cannot call get_precision() on non-primitive type"),
+            Type::GroupType { .. } => panic!("Cannot call get_precision() on non-primitive type"),
         }
     }
 
@@ -154,7 +156,7 @@ impl Type {
     pub fn get_scale(&self) -> i32 {
         match *self {
             Type::PrimitiveType { scale, .. } => scale,
-            _ => panic!("Cannot call get_scale() on non-primitive type"),
+            Type::GroupType { .. } => panic!("Cannot call get_scale() on non-primitive type"),
         }
     }
 
@@ -209,7 +211,7 @@ impl Type {
     pub fn is_schema(&self) -> bool {
         match *self {
             Type::GroupType { ref basic_info, .. } => !basic_info.has_repetition(),
-            _ => false,
+            Type::PrimitiveType { .. } => false,
         }
     }
 
@@ -368,7 +370,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             }
             // Check that logical type and physical type are compatible
             match (logical_type, self.physical_type) {
-                (LogicalType::Map | LogicalType::List, _) => {
+                (LogicalType::Map | LogicalType::List | LogicalType::File, _) => {
                     return Err(general_err!(
                         "{:?} cannot be applied to a primitive type for field '{}'",
                         logical_type,
@@ -664,6 +666,9 @@ impl<'a> GroupTypeBuilder<'a> {
 
     /// Creates a new `GroupType` instance from the gathered attributes.
     pub fn build(self) -> Result<Type> {
+        if matches!(&self.logical_type, Some(LogicalType::File)) {
+            validate_file_type_fields(self.name, &self.fields)?;
+        }
         let mut basic_info = BasicTypeInfo {
             name: String::from(self.name),
             repetition: self.repetition,
@@ -681,6 +686,96 @@ impl<'a> GroupTypeBuilder<'a> {
             fields: self.fields,
         })
     }
+}
+
+/// Validates the fields of a `FILE`-annotated group against the Parquet
+/// [specification].
+///
+/// A `FILE` group annotates a reference to a range of bytes. Every field is
+/// optional both in the schema and in the data: a writer may omit any field
+/// from the group definition, and any field that is present must have a field
+/// repetition type of `OPTIONAL`. The recognized fields (identified by name)
+/// and their expected physical/logical types are:
+///
+/// | Field          | Physical type | Logical type |
+/// |----------------|---------------|--------------|
+/// | `uri`          | `BYTE_ARRAY`  | `STRING`     |
+/// | `offset`       | `INT64`       | —            |
+/// | `size`         | `INT64`       | —            |
+/// | `content_type` | `BYTE_ARRAY`  | `STRING`     |
+/// | `checksum`     | `BYTE_ARRAY`  | `STRING`     |
+/// | `inline`       | `BYTE_ARRAY`  | —            |
+///
+/// [specification]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#file
+fn validate_file_type_fields(name: &str, fields: &[TypePtr]) -> Result<()> {
+    // (name, expected physical type, expected logical type)
+    const VALID_FIELDS: &[(&str, PhysicalType, Option<LogicalType>)] = &[
+        ("uri", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+        ("offset", PhysicalType::INT64, None),
+        ("size", PhysicalType::INT64, None),
+        (
+            "content_type",
+            PhysicalType::BYTE_ARRAY,
+            Some(LogicalType::String),
+        ),
+        (
+            "checksum",
+            PhysicalType::BYTE_ARRAY,
+            Some(LogicalType::String),
+        ),
+        ("inline", PhysicalType::BYTE_ARRAY, None),
+    ];
+
+    for field in fields {
+        let field_name = field.get_basic_info().name();
+        let Some((_, expected_physical, expected_logical)) =
+            VALID_FIELDS.iter().find(|(n, _, _)| *n == field_name)
+        else {
+            return Err(general_err!(
+                "FILE type group '{}' contains unrecognized field '{}'. \
+                 Valid fields are: uri, offset, size, content_type, checksum, inline",
+                name,
+                field_name
+            ));
+        };
+
+        // Every field present in a FILE group must be OPTIONAL.
+        let is_optional = field.get_basic_info().has_repetition()
+            && field.get_basic_info().repetition() == Repetition::OPTIONAL;
+        if !is_optional {
+            return Err(general_err!(
+                "FILE type field '{}' must be OPTIONAL in group '{}'",
+                field_name,
+                name
+            ));
+        }
+
+        // FILE fields are always primitives with a fixed physical type.
+        if field.is_group() {
+            return Err(general_err!(
+                "FILE type field '{}' in group '{}' must be a primitive type",
+                field_name,
+                name
+            ));
+        }
+        if field.get_physical_type() != *expected_physical {
+            return Err(general_err!(
+                "FILE type field '{}' in group '{}' must have physical type {:?}",
+                field_name,
+                name,
+                expected_physical
+            ));
+        }
+        if field.get_basic_info().logical_type_ref() != expected_logical.as_ref() {
+            return Err(general_err!(
+                "FILE type field '{}' in group '{}' must have logical type {:?}",
+                field_name,
+                name,
+                expected_logical
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Basic type info. This contains information such as the name of the type,
@@ -977,7 +1072,7 @@ impl ColumnDescriptor {
     pub fn physical_type(&self) -> PhysicalType {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { physical_type, .. } => *physical_type,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
@@ -989,7 +1084,7 @@ impl ColumnDescriptor {
     pub fn type_length(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { type_length, .. } => *type_length,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
@@ -1001,7 +1096,7 @@ impl ColumnDescriptor {
     pub fn type_precision(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { precision, .. } => *precision,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
@@ -1013,7 +1108,7 @@ impl ColumnDescriptor {
     pub fn type_scale(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { scale, .. } => *scale,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
@@ -1215,7 +1310,7 @@ pub(crate) fn num_nodes(tp: &TypePtr) -> Result<usize> {
         return Err(general_err!("Root schema must be Group type"));
     }
     let mut n_nodes = 1usize; // count root
-    for f in tp.get_fields().iter() {
+    for f in tp.get_fields() {
         count_nodes(f, &mut n_nodes);
     }
     Ok(n_nodes)
@@ -1236,7 +1331,7 @@ fn num_leaves(tp: &TypePtr) -> Result<usize> {
         return Err(general_err!("Root schema must be Group type"));
     }
     let mut n_leaves = 0usize;
-    for f in tp.get_fields().iter() {
+    for f in tp.get_fields() {
         count_leaves(f, &mut n_leaves);
     }
     Ok(n_leaves)
@@ -1253,7 +1348,7 @@ fn count_leaves(tp: &TypePtr, n_leaves: &mut usize) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn build_tree<'a>(
     tp: &'a TypePtr,
     root_idx: usize,
@@ -1276,7 +1371,7 @@ fn build_tree<'a>(
             max_rep_level += 1;
             repeated_ancestor_def_level = max_def_level;
         }
-        _ => {}
+        Repetition::REQUIRED => {}
     }
 
     match tp.as_ref() {
@@ -1312,7 +1407,7 @@ fn build_tree<'a>(
 }
 
 /// Checks if the logical type is valid.
-fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
+fn check_logical_type(logical_type: Option<&LogicalType>) -> Result<()> {
     if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type
         && *bit_width != 8
         && *bit_width != 16
@@ -1328,7 +1423,7 @@ fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
 
 // convert thrift decoded array of `SchemaElement` into this crate's representation of
 // parquet types. this function consumes `elements`.
-pub(crate) fn parquet_schema_from_array<'a>(elements: Vec<SchemaElement<'a>>) -> Result<TypePtr> {
+pub(crate) fn parquet_schema_from_array(elements: Vec<SchemaElement<'_>>) -> Result<TypePtr> {
     let mut index = 0;
     let num_elements = elements.len();
     let mut schema_nodes = Vec::with_capacity(1); // there should only be one element when done
@@ -1356,8 +1451,8 @@ pub(crate) fn parquet_schema_from_array<'a>(elements: Vec<SchemaElement<'a>>) ->
 }
 
 // recursive helper function for schema conversion
-fn schema_from_array_helper<'a>(
-    elements: &mut IntoIter<SchemaElement<'a>>,
+fn schema_from_array_helper(
+    elements: &mut IntoIter<SchemaElement<'_>>,
     num_elements: usize,
     index: usize,
 ) -> Result<(usize, TypePtr)> {
@@ -1385,7 +1480,7 @@ fn schema_from_array_helper<'a>(
     // LogicalType is prefered to ConvertedType, but both may be present.
     let logical_type = element.logical_type;
 
-    check_logical_type(&logical_type)?;
+    check_logical_type(logical_type.as_ref())?;
 
     let field_id = element.field_id;
     match element.num_children {
@@ -1505,7 +1600,7 @@ mod tests {
                 Type::PrimitiveType { physical_type, .. } => {
                     assert_eq!(physical_type, PhysicalType::INT32);
                 }
-                _ => panic!(),
+                Type::GroupType { .. } => panic!(),
             }
         }
 
@@ -2540,6 +2635,193 @@ mod tests {
 
         let result_schema = parquet_schema_from_array(thrift_schema).unwrap();
         assert_eq!(result_schema, expected_schema);
+    }
+
+    /// Builds an `OPTIONAL` primitive field for use inside a `FILE` group.
+    fn file_field(name: &str, physical: PhysicalType, logical: Option<LogicalType>) -> TypePtr {
+        Arc::new(
+            Type::primitive_type_builder(name, physical)
+                .with_repetition(Repetition::OPTIONAL)
+                .with_logical_type(logical)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// The full set of recognized `FILE` fields, all `OPTIONAL`, per the spec.
+    fn all_file_fields() -> Vec<TypePtr> {
+        vec![
+            file_field("uri", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+            file_field("offset", PhysicalType::INT64, None),
+            file_field("size", PhysicalType::INT64, None),
+            file_field(
+                "content_type",
+                PhysicalType::BYTE_ARRAY,
+                Some(LogicalType::String),
+            ),
+            file_field(
+                "checksum",
+                PhysicalType::BYTE_ARRAY,
+                Some(LogicalType::String),
+            ),
+            file_field("inline", PhysicalType::BYTE_ARRAY, None),
+        ]
+    }
+
+    #[test]
+    fn test_file_logical_type_roundtrip() {
+        let file_group = Arc::new(
+            Type::group_type_builder("f")
+                .with_repetition(Repetition::REQUIRED)
+                .with_logical_type(Some(LogicalType::File))
+                .with_fields(all_file_fields())
+                .build()
+                .unwrap(),
+        );
+        let schema = Arc::new(
+            Type::group_type_builder("example")
+                .with_fields(vec![file_group])
+                .build()
+                .unwrap(),
+        );
+        let result = roundtrip_schema(schema.clone()).unwrap();
+        assert_eq!(result, schema);
+        assert_eq!(
+            result.get_fields()[0].get_basic_info().logical_type_ref(),
+            Some(&LogicalType::File)
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_all_fields() {
+        let result = Type::group_type_builder("file_field")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(all_file_fields())
+            .build();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().get_fields().len(), 6);
+    }
+
+    #[test]
+    fn test_file_logical_type_uri_only() {
+        // Every field is optional, so a group may define just `uri`.
+        let result = Type::group_type_builder("file_field")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![file_field(
+                "uri",
+                PhysicalType::BYTE_ARRAY,
+                Some(LogicalType::String),
+            )])
+            .build();
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap().get_basic_info().logical_type_ref(),
+            Some(&LogicalType::File)
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_inline_only() {
+        // An inline-only group need only define `inline`.
+        let result = Type::group_type_builder("inline_file")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![file_field("inline", PhysicalType::BYTE_ARRAY, None)])
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_file_logical_type_empty_group_is_allowed() {
+        // No field is mandatory in the schema, so an empty group is valid.
+        let result = Type::group_type_builder("empty_file")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![])
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_file_logical_type_rejects_unrecognized_field() {
+        let unknown_field = file_field("unknown_field", PhysicalType::BYTE_ARRAY, None);
+        let result = Type::group_type_builder("bad_file")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![
+                file_field("uri", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+                unknown_field,
+            ])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type group 'bad_file' contains unrecognized field \
+             'unknown_field'. Valid fields are: uri, offset, size, content_type, \
+             checksum, inline"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_requires_optional_fields() {
+        // A REQUIRED field is no longer valid: every field must be OPTIONAL.
+        let uri_field = Arc::new(
+            Type::primitive_type_builder("uri", PhysicalType::BYTE_ARRAY)
+                .with_repetition(Repetition::REQUIRED)
+                .with_logical_type(Some(LogicalType::String))
+                .build()
+                .unwrap(),
+        );
+        let result = Type::group_type_builder("required_uri")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![uri_field])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type field 'uri' must be OPTIONAL in group 'required_uri'"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_rejects_wrong_physical_type() {
+        // `size` must be an INT64, not a BYTE_ARRAY.
+        let bad_size = file_field("size", PhysicalType::BYTE_ARRAY, None);
+        let result = Type::group_type_builder("bad_size")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![bad_size])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type field 'size' in group 'bad_size' must have physical type INT64"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_rejects_wrong_logical_type() {
+        // `uri` must carry the STRING logical type.
+        let bad_uri = file_field("uri", PhysicalType::BYTE_ARRAY, None);
+        let result = Type::group_type_builder("bad_uri")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![bad_uri])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type field 'uri' in group 'bad_uri' must have logical type \
+             Some(String)"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_not_allowed_on_primitive() {
+        let result = Type::primitive_type_builder("bad", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .build();
+        assert!(result.is_err());
     }
 
     #[test]

@@ -1279,8 +1279,7 @@ mod tests {
                 arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
             assert_eq!(
                 roundtrip, original,
-                "Round-trip batch mismatch for file: {}",
-                rel
+                "Round-trip batch mismatch for file: {rel}"
             );
         }
         Ok(())
@@ -1638,7 +1637,7 @@ mod tests {
             let editors_field = arrow_schema.field_with_name("editors")?;
             let editors_item_type = match editors_field.data_type() {
                 DataType::List(item_field) => item_field.data_type(),
-                other => panic!("Editors field should be a List, but was {:?}", other),
+                other => panic!("Editors field should be a List, but was {other:?}"),
             };
             assert_eq!(
                 author_type, editors_item_type,
@@ -2029,7 +2028,7 @@ mod tests {
             .into_owned();
 
         let in_file = File::open(&file_path)
-            .unwrap_or_else(|_| panic!("Failed to open test file: {}", file_path));
+            .unwrap_or_else(|_| panic!("Failed to open test file: {file_path}"));
 
         let reader = ReaderBuilder::new()
             .build(BufReader::new(in_file))
@@ -2120,10 +2119,9 @@ mod tests {
                     .expect("RunArray<Int32Type>");
                 assert_eq!(got_ree, &ree);
             }
-            other => panic!(
-                "Unexpected DataType for round-tripped RunEndEncoded column: {:?}",
-                other
-            ),
+            other => {
+                panic!("Unexpected DataType for round-tripped RunEndEncoded column: {other:?}")
+            }
         }
         Ok(())
     }
@@ -2166,7 +2164,7 @@ mod tests {
                     .expect("RunArray<Int16Type>");
                 assert_eq!(got, &ree);
             }
-            other => panic!("Unexpected DataType: {:?}", other),
+            other => panic!("Unexpected DataType: {other:?}"),
         }
         Ok(())
     }
@@ -2206,7 +2204,7 @@ mod tests {
                     .expect("RunArray<Int64Type>");
                 assert_eq!(got, &ree);
             }
-            other => panic!("Unexpected DataType for REE column: {:?}", other),
+            other => panic!("Unexpected DataType for REE column: {other:?}"),
         }
         Ok(())
     }
@@ -2306,7 +2304,7 @@ mod tests {
                     "Logical values differ after REE slice round-trip"
                 );
             }
-            other => panic!("Unexpected DataType for REE column: {:?}", other),
+            other => panic!("Unexpected DataType for REE column: {other:?}"),
         }
         Ok(())
     }
@@ -3081,7 +3079,7 @@ mod tests {
                 msg,
                 "AvroBinaryFormat is only supported with Encoder, use build_encoder instead"
             ),
-            other => panic!("expected InvalidArgumentError, got {:?}", other),
+            other => panic!("expected InvalidArgumentError, got {other:?}"),
         }
     }
     #[test]
@@ -3918,9 +3916,7 @@ mod tests {
         if cfg!(feature = "avro_custom_types") {
             assert!(
                 schemas_equal_ignoring_metadata(rt_arrow_schema.as_ref(), &schema),
-                "Schema fields mismatch.\nExpected: {:?}\nGot: {:?}",
-                schema,
-                rt_arrow_schema
+                "Schema fields mismatch.\nExpected: {schema:?}\nGot: {rt_arrow_schema:?}"
             );
             for field_name in ["u64", "f16", "iv_ym", "iv_dt", "iv_mdn"] {
                 let field = rt_arrow_schema
@@ -3928,8 +3924,7 @@ mod tests {
                     .expect("field exists");
                 assert!(
                     field.metadata().get(AVRO_NAME_METADATA_KEY).is_some(),
-                    "Field '{}' should have avro.name metadata",
-                    field_name
+                    "Field '{field_name}' should have avro.name metadata"
                 );
             }
         } else {
@@ -3979,9 +3974,7 @@ mod tests {
             ]);
             assert!(
                 schemas_equal_ignoring_metadata(rt_arrow_schema.as_ref(), &exp_schema),
-                "Schema fields mismatch.\nExpected: {:?}\nGot: {:?}",
-                exp_schema,
-                rt_arrow_schema
+                "Schema fields mismatch.\nExpected: {exp_schema:?}\nGot: {rt_arrow_schema:?}"
             );
             for field_name in ["iv_ym", "iv_dt", "iv_mdn"] {
                 let field = rt_arrow_schema
@@ -3989,8 +3982,7 @@ mod tests {
                     .expect("field exists");
                 assert!(
                     field.metadata().get(AVRO_NAME_METADATA_KEY).is_some(),
-                    "Field '{}' should have avro.name metadata",
-                    field_name
+                    "Field '{field_name}' should have avro.name metadata"
                 );
             }
         }

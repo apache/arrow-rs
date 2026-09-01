@@ -200,7 +200,7 @@ impl<'a, T: ArrowPrimitiveType> Tensor<'a, T> {
                     ));
                 }
             }
-        };
+        }
 
         // Checking that the tensor strides used for construction are correct
         // otherwise a row major stride is calculated and used as value for the tensor

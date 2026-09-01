@@ -165,7 +165,7 @@ impl<T: ArrowNativeType> Deref for ScalarBuffer<T> {
         // SAFETY: Verified alignment in From<Buffer>
         unsafe {
             std::slice::from_raw_parts(
-                self.buffer.as_ptr() as *const T,
+                self.buffer.as_ptr().cast::<T>(),
                 self.buffer.len() / std::mem::size_of::<T>(),
             )
         }
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn test_basic() {
         let expected = [0_i32, 1, 2];
-        let buffer = Buffer::from_iter(expected.iter().cloned());
+        let buffer = Buffer::from_iter(expected.iter().copied());
         let typed = ScalarBuffer::<i32>::new(buffer.clone(), 0, 3);
         assert_eq!(*typed, expected);
 
@@ -315,7 +315,7 @@ mod tests {
     #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
     fn test_unaligned() {
         let expected = [0_i32, 1, 2];
-        let buffer = Buffer::from_iter(expected.iter().cloned());
+        let buffer = Buffer::from_iter(expected.iter().copied());
         let buffer = buffer.slice(1);
         ScalarBuffer::<i32>::new(buffer, 0, 2);
     }

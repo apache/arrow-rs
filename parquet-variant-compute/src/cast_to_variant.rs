@@ -1811,7 +1811,7 @@ mod tests {
                     );
                     field_arrays.push(Arc::new(array));
                     fields.push(Field::new(
-                        format!("int_field_{}", field_idx),
+                        format!("int_field_{field_idx}"),
                         DataType::Int64,
                         false,
                     ));
@@ -1825,7 +1825,7 @@ mod tests {
                     );
                     field_arrays.push(Arc::new(array));
                     fields.push(Field::new(
-                        format!("int32_field_{}", field_idx),
+                        format!("int32_field_{field_idx}"),
                         DataType::Int32,
                         false,
                     ));
@@ -1839,7 +1839,7 @@ mod tests {
                     );
                     field_arrays.push(Arc::new(array));
                     fields.push(Field::new(
-                        format!("float_field_{}", field_idx),
+                        format!("float_field_{field_idx}"),
                         DataType::Float64,
                         false,
                     ));
@@ -1859,7 +1859,7 @@ mod tests {
                     let array = BinaryArray::from(binary_data);
                     field_arrays.push(Arc::new(array));
                     fields.push(Field::new(
-                        format!("binary_field_{}", field_idx),
+                        format!("binary_field_{field_idx}"),
                         DataType::Binary,
                         false,
                     ));

@@ -274,9 +274,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         ArrayRef,
         Option<NullBuffer>,
     ) {
-        let f = match self.data_type {
-            DataType::ListView(f) | DataType::LargeListView(f) => f,
-            _ => unreachable!(),
+        let (DataType::ListView(f) | DataType::LargeListView(f)) = self.data_type else {
+            unreachable!()
         };
         (
             f,
@@ -449,6 +448,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 }
 
+impl<'a, OffsetSize: OffsetSizeTrait> IntoIterator for &'a GenericListViewArray<OffsetSize> {
+    type Item = Option<ArrayRef>;
+    type IntoIter = GenericListViewArrayIter<'a, OffsetSize>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        GenericListViewArrayIter::<'a, OffsetSize>::new(self)
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListViewArray<OffsetSize> {
     type Item = ArrayRef;
 
@@ -560,8 +568,8 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListViewArray<Offse
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let prefix = OffsetSize::PREFIX;
         write!(f, "{prefix}ListViewArray\n[\n")?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }

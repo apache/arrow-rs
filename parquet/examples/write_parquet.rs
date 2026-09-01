@@ -76,7 +76,7 @@ fn mem(system: &mut System) -> String {
     system
         .process(pid)
         .map(|proc| format!("{}MB", proc.memory() / 1_000_000))
-        .unwrap_or("N/A".to_string())
+        .unwrap_or_else(|| "N/A".to_string())
 }
 
 fn main() -> Result<()> {

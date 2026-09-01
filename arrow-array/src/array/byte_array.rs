@@ -216,18 +216,23 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
     ///
     /// # Panics
-    /// Panics if the iterator has no upper bound on its size hint, or if the total
-    /// length of the values exceeds `T::Offset::MAX`
+    /// Panics if the total length of the values exceeds `T::Offset::MAX`
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<T::Native>,
         I: IntoIterator<Item = Ptr>,
     {
         let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+        // The size hint is only used to pre-allocate: an iterator is free to yield
+        // a different number of items than it reports.
+        let (lower, upper) = iter.size_hint();
+        let capacity = upper.unwrap_or(lower);
 
-        let mut offsets = MutableBuffer::new((data_len + 1) * std::mem::size_of::<T::Offset>());
+        let mut offsets = MutableBuffer::new(
+            capacity
+                .saturating_add(1)
+                .saturating_mul(std::mem::size_of::<T::Offset>()),
+        );
         offsets.push(T::Offset::usize_as(0));
 
         let mut values = MutableBuffer::new(0);
@@ -290,10 +295,8 @@ impl<T: ByteArrayType> GenericByteArray<T> {
 
     /// Returns true if all data within this array is ASCII
     pub fn is_ascii(&self) -> bool {
-        let offsets = self.value_offsets();
-        let start = offsets.first().unwrap();
-        let end = offsets.last().unwrap();
-        self.value_data()[start.as_usize()..end.as_usize()].is_ascii()
+        let offsets = &self.value_offsets;
+        self.value_data()[offsets.first().as_usize()..offsets.last().as_usize()].is_ascii()
     }
 
     /// Returns the offset values in the offsets buffer
@@ -462,8 +465,8 @@ impl<T: ByteArrayType> GenericByteArray<T> {
 impl<T: ByteArrayType> std::fmt::Debug for GenericByteArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}{}Array\n[\n", T::Offset::PREFIX, T::PREFIX)?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }
@@ -639,6 +642,26 @@ where
 mod tests {
     use crate::{Array, BinaryArray, StringArray};
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
+
+    /// `from_iter_values` must work with iterators that report no upper size bound,
+    /// and must not trust the size hint it does get.
+    #[test]
+    fn from_iter_values_untrusted_size_hint() {
+        // No upper bound at all:
+        let no_upper_bound = (0..20).filter(|i| i % 2 == 0).map(|i| format!("v{i}"));
+        assert_eq!(no_upper_bound.size_hint(), (0, Some(20)));
+        let array = StringArray::from_iter_values(no_upper_bound);
+        assert_eq!(array.len(), 10);
+        assert_eq!(array.value(0), "v0");
+        assert_eq!(array.value(9), "v18");
+
+        // Upper bound larger than the number of yielded values:
+        let too_large_upper_bound = (0..).map(|i| format!("v{i}")).take_while(|v| v != "v3");
+        assert_eq!(too_large_upper_bound.size_hint(), (0, None));
+        let array = StringArray::from_iter_values(too_large_upper_bound);
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value(2), "v2");
+    }
 
     #[test]
     fn try_new() {

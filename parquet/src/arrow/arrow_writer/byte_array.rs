@@ -24,7 +24,9 @@ use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use crate::file::properties::{
+    EnabledStatistics, ResolvedColumnProperties, WriterProperties, WriterVersion,
+};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
@@ -88,9 +90,15 @@ macro_rules! downcast_op {
                 DataType::LargeUtf8 => {
                     downcast_dict_op!(key, LargeStringArray, $array, $op$(, $arg)*)
                 }
+                DataType::Utf8View => {
+                    downcast_dict_op!(key, StringViewArray, $array, $op$(, $arg)*)
+                }
                 DataType::Binary => downcast_dict_op!(key, BinaryArray, $array, $op$(, $arg)*),
                 DataType::LargeBinary => {
                     downcast_dict_op!(key, LargeBinaryArray, $array, $op$(, $arg)*)
+                }
+                DataType::BinaryView => {
+                    downcast_dict_op!(key, BinaryViewArray, $array, $op$(, $arg)*)
                 }
                 DataType::FixedSizeBinary(_) => {
                     downcast_dict_op!(key, FixedSizeBinaryArray, $array, $op$(, $arg)*)
@@ -129,16 +137,16 @@ enum FallbackEncoderImpl {
 }
 
 impl FallbackEncoder {
-    /// Create the fallback encoder for the given [`ColumnDescPtr`] and [`WriterProperties`]
-    fn new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
+    /// Create the fallback encoder for the given [`WriterProperties`] and the
+    /// column settings already resolved from them
+    fn new(props: &WriterProperties, column_props: &ResolvedColumnProperties) -> Result<Self> {
         // Set either main encoder or fallback encoder.
-        let encoding =
-            props
-                .encoding(descr.path())
-                .unwrap_or_else(|| match props.writer_version() {
-                    WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
-                    WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
-                });
+        let encoding = column_props
+            .encoding
+            .unwrap_or_else(|| match props.writer_version() {
+                WriterVersion::PARQUET_1_0 => Encoding::PLAIN,
+                WriterVersion::PARQUET_2_0 => Encoding::DELTA_BYTE_ARRAY,
+            });
 
         let encoder = match encoding {
             Encoding::PLAIN => FallbackEncoderImpl::Plain { buffer: vec![] },
@@ -323,7 +331,6 @@ impl Storage for ByteArrayStorage {
         key as u64
     }
 
-    #[allow(dead_code)] // not used in parquet_derive, so is dead there
     fn estimated_memory_size(&self) -> usize {
         self.page.capacity() * std::mem::size_of::<u8>()
             + self.values.capacity() * std::mem::size_of::<std::ops::Range<usize>>()
@@ -434,19 +441,21 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         Some(sbbf)
     }
 
-    fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
+    fn try_new(
+        descr: &ColumnDescPtr,
+        props: &WriterProperties,
+        column_props: &ResolvedColumnProperties,
+    ) -> Result<Self>
     where
         Self: Sized,
     {
-        let dictionary = props
-            .dictionary_enabled(descr.path())
-            .then(DictEncoder::default);
+        let dictionary = column_props.dictionary_enabled.then(DictEncoder::default);
 
-        let fallback = FallbackEncoder::new(descr, props)?;
+        let fallback = FallbackEncoder::new(props, column_props)?;
 
-        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(props, descr)?;
+        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(column_props)?;
 
-        let statistics_enabled = props.statistics_enabled(descr.path());
+        let statistics_enabled = column_props.statistics_enabled;
 
         let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 
@@ -566,6 +575,14 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         self.dict_encoder.is_some()
     }
 
+    fn compresses_against_previous_value(&self) -> bool {
+        // While dictionary encoding is active the data page holds RLE
+        // indices, which carry no cross-value state; only the DELTA_BYTE_ARRAY
+        // fallback shares prefixes with the preceding value.
+        self.dict_encoder.is_none()
+            && matches!(self.fallback.encoder, FallbackEncoderImpl::Delta { .. })
+    }
+
     fn estimated_memory_size(&self) -> usize {
         let encoder_size = match &self.dict_encoder {
             Some(encoder) => encoder.estimated_memory_size(),
@@ -644,12 +661,18 @@ where
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
             update_geo_stats_accumulator(accumulator.as_mut(), values, indices.clone());
         } else if let Some((min, max)) = compute_min_max(values, indices.clone()) {
-            if encoder.min_value.as_ref().is_none_or(|m| m > &min) {
-                encoder.min_value = Some(min);
+            // Compare before copying: `write_gather` runs once per
+            // mini-batch, and a byte-budgeted mini-batch of large values can
+            // hold a single value, so an unconditional copy here would
+            // duplicate every value once for `min` and once for `max`.
+            let min = min.as_ref();
+            if encoder.min_value.as_ref().is_none_or(|m| m.data() > min) {
+                encoder.min_value = Some(min.to_vec().into());
             }
 
-            if encoder.max_value.as_ref().is_none_or(|m| m < &max) {
-                encoder.max_value = Some(max);
+            let max = max.as_ref();
+            if encoder.max_value.as_ref().is_none_or(|m| m.data() < max) {
+                encoder.max_value = Some(max.to_vec().into());
             }
         }
     }
@@ -772,7 +795,7 @@ fn count_within_budget_offsets<T: ByteArrayType>(
 fn compute_min_max<T>(
     array: T,
     mut valid: impl Iterator<Item = usize>,
-) -> Option<(ByteArray, ByteArray)>
+) -> Option<(T::Item, T::Item)>
 where
     T: ArrayAccessor,
     T::Item: Copy + Ord + AsRef<[u8]>,
@@ -787,7 +810,7 @@ where
         min = min.min(val);
         max = max.max(val);
     }
-    Some((min.as_ref().to_vec().into(), max.as_ref().to_vec().into()))
+    Some((min, max))
 }
 
 /// Updates geospatial statistics for the provided array and indices

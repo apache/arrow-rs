@@ -232,7 +232,7 @@ impl BitPacking for bool {
 
     #[inline]
     fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize) {
-        assert!(num_bits == 1);
+        assert_eq!(num_bits, 1);
         // Safety:
         //   we asserted that we will only decode with a bitwidth of 1,
         //   so the u8 can only be 0 or 1, which are the valid representations of a bool.
@@ -1113,7 +1113,7 @@ impl From<Vec<u8>> for BitReader {
 ///
 /// Replace with `value.compress(mask)` when `uint_gather_scatter_bits`
 /// is stabilised: <https://github.com/rust-lang/rust/issues/149069>
-#[allow(dead_code)]
+#[cfg_attr(all(not(feature = "arrow"), not(test)), expect(dead_code))]
 #[inline]
 pub(crate) fn compress(value: u64, mask: u64) -> u64 {
     #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
@@ -1461,6 +1461,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_get_batch() {
         const SIZE: &[usize] = &[1, 31, 32, 33, 128, 129];
         for s in SIZE {

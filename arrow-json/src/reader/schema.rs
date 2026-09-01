@@ -328,13 +328,13 @@ fn collect_field_types_from_object(
                     match ele_type {
                         InferredType::Scalar(_) => {
                             field_types.insert(
-                                k.to_string(),
+                                k.clone(),
                                 InferredType::Array(Box::new(InferredType::Scalar(HashSet::new()))),
                             );
                         }
                         InferredType::Object(_) => {
                             field_types.insert(
-                                k.to_string(),
+                                k.clone(),
                                 InferredType::Array(Box::new(InferredType::Object(HashMap::new()))),
                             );
                         }
@@ -342,7 +342,7 @@ fn collect_field_types_from_object(
                             // set inner type to any for nested array as well
                             // so it can be updated properly from subsequent type merges
                             field_types.insert(
-                                k.to_string(),
+                                k.clone(),
                                 InferredType::Array(Box::new(InferredType::Any)),
                             );
                         }
@@ -373,7 +373,7 @@ fn collect_field_types_from_object(
                 // we treat json as nullable by default when inferring, so just
                 // mark existence of a field if it wasn't known before
                 if !field_types.contains_key(k) {
-                    field_types.insert(k.to_string(), InferredType::Any);
+                    field_types.insert(k.clone(), InferredType::Any);
                 }
             }
             Value::Number(n) => {
@@ -391,7 +391,7 @@ fn collect_field_types_from_object(
                     field_types.get(k).unwrap_or(&InferredType::Any),
                     InferredType::Any
                 ) {
-                    field_types.insert(k.to_string(), InferredType::Object(HashMap::new()));
+                    field_types.insert(k.clone(), InferredType::Object(HashMap::new()));
                 }
                 match field_types.get_mut(k).unwrap() {
                     InferredType::Object(inner_field_types) => {
@@ -440,7 +440,7 @@ where
                     "Expected JSON record to be an object, found {value:?}"
                 )));
             }
-        };
+        }
     }
 
     generate_schema(field_types)
@@ -664,11 +664,7 @@ mod tests {
             infer_json_schema_from_seekable(Cursor::new(data), None).expect("infer");
         let schema = Schema::new(vec![Field::new(
             "obj",
-            DataType::Struct(
-                [Field::new("foo", DataType::Int64, true)]
-                    .into_iter()
-                    .collect(),
-            ),
+            DataType::Struct(std::iter::once(Field::new("foo", DataType::Int64, true)).collect()),
             true,
         )]);
         assert_eq!(inferred_schema, schema);

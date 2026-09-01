@@ -405,8 +405,9 @@ impl Sbbf {
             .chunks_exact(4 * 8)
             .map(|chunk| {
                 let mut block = Block::ZERO;
-                for (i, word) in chunk.chunks_exact(4).enumerate() {
-                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
+                let (words, _remainder) = chunk.as_chunks::<4>();
+                for (i, word) in words.iter().enumerate() {
+                    block[i] = u32::from_le_bytes(*word);
                 }
                 block
             })
@@ -446,7 +447,7 @@ impl Sbbf {
         // Safety: Block is repr(transparent) and [u32; 8] can be reinterpreted as [u8; 32].
         let slice = unsafe {
             std::slice::from_raw_parts(
-                self.0.as_ptr() as *const u8,
+                self.0.as_ptr().cast::<u8>(),
                 self.0.len() * size_of::<Block>(),
             )
         };
@@ -771,6 +772,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_mask_set_quick_check() {
         for i in 0..1_000_000 {
             let result = Block::mask(i);
@@ -779,6 +781,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_block_insert_and_check() {
         for i in 0..1_000_000 {
             let mut block = Block::ZERO;
@@ -788,6 +791,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_sbbf_insert_and_check() {
         let mut sbbf = Sbbf(vec![Block::ZERO; 1_000]);
         for i in 0..1_000_000 {
@@ -907,8 +911,7 @@ mod tests {
         for v in &values {
             assert!(
                 sbbf.check(v.as_str()),
-                "Value '{}' missing after folding (false negative!)",
-                v
+                "Value '{v}' missing after folding (false negative!)"
             );
         }
     }
@@ -989,8 +992,7 @@ mod tests {
         for value in &test_values {
             assert!(
                 reconstructed.check(value),
-                "Value '{}' should be present after round-trip",
-                value
+                "Value '{value}' should be present after round-trip"
             );
         }
     }
@@ -1032,6 +1034,7 @@ mod tests {
     /// Combined: every hash sets the *same bits* in the *same destination
     /// block* whether you fold or build fresh → filters are bit-identical.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_sbbf_folded_equals_fresh() {
         let values = (0..5000).map(|i| format!("elem_{i}")).collect::<Vec<_>>();
         let hashes = values
@@ -1050,7 +1053,7 @@ mod tests {
             }
 
             // --- Per-hash verification of the two lemmas ---
-            for &h in hashes.iter() {
+            for &h in &hashes {
                 // mask(h as u32) gives the 8-bit pattern that this hash sets
                 // inside whichever block it lands in. It uses only the lower
                 // 32 bits of h, so it's the same regardless of filter size.
@@ -1129,6 +1132,7 @@ mod tests {
     /// At each intermediate size we build a fresh filter and assert
     /// bit-equality, confirming the lemma composes across folds.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_multi_step_fold() {
         let values = (0..3000).map(|i| format!("x_{i}")).collect::<Vec<_>>();
 
@@ -1158,6 +1162,7 @@ mod tests {
     ///
     /// compare the final size after folding against the theoretical optimal size
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_fold_size_vs_optimal_fixed_size() {
         for (ndv, target_fpp) in [
             (1000, 0.05),
@@ -1192,6 +1197,7 @@ mod tests {
     /// we measure fpp empirically by probing with values that were never inserted
     /// and counting how many are incorrectly marked as present
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_folded_fpp_matches_fresh_fpp() {
         let ndv = 2000;
         let num_probes = 50_000;

@@ -41,6 +41,19 @@ mod object;
 
 const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 
+/// The maximum number of nested objects and arrays a [`Variant`] may contain.
+///
+/// Full [validation] recurses into nested values, so unbounded nesting would overflow the stack --
+/// an abort, not a catchable panic. Validation therefore rejects more deeply nested values, which
+/// also bounds the recursion of infallible accesses such as [`Debug`] and [`PartialEq`].
+///
+/// The variant [spec] does not specify a limit. This value matches the default `serde_json`
+/// recursion limit, so any variant parsed from JSON already satisfies it.
+///
+/// [validation]: Variant#Validation
+/// [spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
+pub const MAX_NESTING_DEPTH: usize = 128;
+
 /// A Variant [`ShortString`]
 ///
 /// This implementation is a zero cost wrapper over `&str` that ensures
@@ -352,7 +365,17 @@ impl<'m, 'v> Variant<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        Self::try_new_with_metadata_and_shallow_validation(metadata, value)?.with_full_validation()
+        Self::try_new_with_metadata_at_depth(metadata, value, 0)
+    }
+
+    // Same as [`Self::try_new_with_metadata`], tracking how deeply validation has recursed.
+    pub(crate) fn try_new_with_metadata_at_depth(
+        metadata: VariantMetadata<'m>,
+        value: &'v [u8],
+        depth: usize,
+    ) -> Result<Self, ArrowError> {
+        Self::try_new_with_metadata_and_shallow_validation(metadata, value)?
+            .with_full_validation_at_depth(depth)
     }
 
     /// Similar to [`Self::try_new_with_metadata`], but [unvalidated].
@@ -455,13 +478,20 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// If [`Self::is_fully_validated`] is true, validation is a no-op. Otherwise, the cost is `O(m + v)`
     /// where `m` and `v` are the sizes of metadata and value buffers, respectively.
     ///
+    /// Values nested more than [`MAX_NESTING_DEPTH`] deep are rejected.
+    ///
     /// [objects]: VariantObject#Validation
     /// [arrays]: VariantList#Validation
     pub fn with_full_validation(self) -> Result<Self, ArrowError> {
+        self.with_full_validation_at_depth(0)
+    }
+
+    // Same as [`Self::with_full_validation`], tracking how deeply validation has recursed.
+    pub(crate) fn with_full_validation_at_depth(self, depth: usize) -> Result<Self, ArrowError> {
         use Variant::*;
         match self {
-            List(list) => list.with_full_validation().map(List),
-            Object(obj) => obj.with_full_validation().map(Object),
+            List(list) => list.with_full_validation_at_depth(depth).map(List),
+            Object(obj) => obj.with_full_validation_at_depth(depth).map(Object),
             _ => Ok(self),
         }
     }
@@ -843,9 +873,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => i.try_into().ok(),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal4(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal8(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal16(d) => d.as_integer()?.try_into().ok(),
             _ => None,
         }
     }
@@ -890,9 +920,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal4(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal8(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal16(d) => d.as_integer()?.try_into().ok(),
             _ => None,
         }
     }
@@ -941,8 +971,8 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int32(i) => Some(i),
             Variant::Int64(i) => i.try_into().ok(),
             Variant::Decimal4(d) => d.as_integer(),
-            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal8(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal16(d) => d.as_integer()?.try_into().ok(),
             _ => None,
         }
     }
@@ -989,7 +1019,7 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int64(i) => Some(i),
             Variant::Decimal4(d) => d.as_integer().map(|i| i as i64),
             Variant::Decimal8(d) => d.as_integer(),
-            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal16(d) => d.as_integer()?.try_into().ok(),
             _ => None,
         }
     }
@@ -1003,9 +1033,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => i.try_into().ok(),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal8(d) => d.as_integer().and_then(|i| i.try_into().ok()),
-            Variant::Decimal16(d) => d.as_integer().and_then(|i| i.try_into().ok()),
+            Variant::Decimal4(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal8(d) => d.as_integer()?.try_into().ok(),
+            Variant::Decimal16(d) => d.as_integer()?.try_into().ok(),
             _ => None,
         }
     }
@@ -1197,9 +1227,10 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int8(i) => VariantDecimal4::try_new(i as i32, 0).ok(),
             Variant::Int16(i) => VariantDecimal4::try_new(i as i32, 0).ok(),
             Variant::Int32(i) => VariantDecimal4::try_new(i, 0).ok(),
-            Variant::Int64(i) => i32::try_from(i)
-                .ok()
-                .and_then(|i| VariantDecimal4::try_new(i, 0).ok()),
+            Variant::Int64(i) => {
+                let i = i32::try_from(i).ok()?;
+                VariantDecimal4::try_new(i, 0).ok()
+            }
             Variant::Decimal4(decimal4) => Some(decimal4),
             Variant::Decimal8(decimal8) => decimal8.try_into().ok(),
             Variant::Decimal16(decimal16) => decimal16.try_into().ok(),
@@ -1756,12 +1787,12 @@ impl std::fmt::Debug for InvalidVariant {
 // helper to print binary data in hex format in debug mode, as space-separated hex byte values.
 struct HexString<'a>(&'a [u8]);
 
-impl<'a> std::fmt::Debug for HexString<'a> {
+impl std::fmt::Debug for HexString<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some((first, rest)) = self.0.split_first() {
-            write!(f, "{:02x}", first)?;
+            write!(f, "{first:02x}")?;
             for b in rest {
-                write!(f, " {:02x}", b)?;
+                write!(f, " {b:02x}")?;
             }
         }
         Ok(())
@@ -1957,7 +1988,7 @@ mod tests {
         let variant = Variant::try_new(&metadata, &value).unwrap();
 
         // Test Debug formatter (?)
-        let debug_output = format!("{:?}", variant);
+        let debug_output = format!("{variant:?}");
 
         // Verify that the debug output contains all the expected types
         assert!(debug_output.contains("\"null\": Null"));
@@ -1989,7 +2020,7 @@ mod tests {
         assert_eq!(debug_output, expected);
 
         // Test alternate Debug formatter (#?)
-        let alt_debug_output = format!("{:#?}", variant);
+        let alt_debug_output = format!("{variant:#?}");
         let expected = r#"{
     "binary": Binary(01 02 03 04 de ad be ef),
     "boolean_false": BooleanFalse,

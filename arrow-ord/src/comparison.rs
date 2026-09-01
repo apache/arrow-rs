@@ -61,7 +61,7 @@ where
             for j in 0..list.len() {
                 if list.is_valid(j) && (left.value(i) == list.value(j)) {
                     bit_util::set_bit(bool_slice, i);
-                    continue;
+                    break;
                 }
             }
         }
@@ -102,7 +102,7 @@ where
             for j in 0..list.len() {
                 if list.is_valid(j) && (left.value(i) == list.value(j)) {
                     bit_util::set_bit(bool_slice, i);
-                    continue;
+                    break;
                 }
             }
         }
@@ -976,7 +976,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_eq_scalar,
         vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
-        "arrow".as_bytes(),
+        b"arrow",
         crate::cmp::eq,
         vec![true, false, false, false, false]
     );
@@ -991,7 +991,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_neq_scalar,
         vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
-        "arrow".as_bytes(),
+        b"arrow",
         crate::cmp::neq,
         vec![false, true, true, true, true]
     );
@@ -1006,7 +1006,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_lt_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        "flight".as_bytes(),
+        b"flight",
         crate::cmp::lt,
         vec![true, true, false, false, false]
     );
@@ -1021,7 +1021,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_lt_eq_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        "flight".as_bytes(),
+        b"flight",
         crate::cmp::lt_eq,
         vec![true, true, true, false, false]
     );
@@ -1036,7 +1036,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_gt_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        "flight".as_bytes(),
+        b"flight",
         crate::cmp::gt,
         vec![false, false, false, true, true]
     );
@@ -1051,7 +1051,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_gt_eq_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        "flight".as_bytes(),
+        b"flight",
         crate::cmp::gt_eq,
         vec![false, false, true, true, true]
     );

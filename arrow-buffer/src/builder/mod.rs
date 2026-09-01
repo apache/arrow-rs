@@ -266,7 +266,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         // - MutableBuffer is aligned and initialized for len elements of T
         // - MutableBuffer corresponds to a single allocation
         // - MutableBuffer does not support modification whilst active immutable borrows
-        unsafe { std::slice::from_raw_parts(self.buffer.as_ptr() as _, self.len()) }
+        unsafe { std::slice::from_raw_parts(self.buffer.as_ptr().cast(), self.len()) }
     }
 
     /// View the contents of this buffer as a mutable slice
@@ -290,7 +290,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         // - MutableBuffer is aligned and initialized for len elements of T
         // - MutableBuffer corresponds to a single allocation
         // - MutableBuffer does not support modification whilst active immutable borrows
-        unsafe { std::slice::from_raw_parts_mut(self.buffer.as_mut_ptr() as _, self.len()) }
+        unsafe { std::slice::from_raw_parts_mut(self.buffer.as_mut_ptr().cast(), self.len()) }
     }
 
     /// Shorten this BufferBuilder to `len` items

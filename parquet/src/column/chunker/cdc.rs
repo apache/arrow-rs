@@ -324,7 +324,6 @@ impl ContentDefinedChunker {
             //   def_levels:    [1, 0, 1, 0, 1]
             //   level:          0  1  2  3  4
             //   value_offset:   0     1     2  (only increments on def==1)
-            #[allow(clippy::needless_range_loop)]
             for offset in 0..num_levels {
                 let def_level = def_levels
                     .value_at(offset)
@@ -1024,7 +1023,7 @@ mod arrow_tests {
                     crate::basic::PageType::DICTIONARY_PAGE => {
                         info.has_dictionary_page = true;
                     }
-                    _ => {}
+                    crate::basic::PageType::INDEX_PAGE => {}
                 }
             }
             result.push(info);
@@ -1391,6 +1390,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn delete_once() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1452,6 +1452,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn delete_twice() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1515,6 +1516,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn insert_once() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1576,6 +1578,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn insert_twice() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1639,6 +1642,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn update_once() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1694,6 +1698,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn update_twice() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1752,6 +1757,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn prepend() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1819,6 +1825,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn append() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1902,6 +1909,7 @@ mod arrow_tests {
                 }
 
                 #[test]
+                #[cfg_attr(miri, ignore)] // Takes too long
                 fn array_offsets() {
                     let (dtype, nullable, part_length, edit_length) = config();
                     let schema = make_schema(&dtype, nullable);
@@ -1975,6 +1983,7 @@ mod arrow_tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // Takes too long
         fn insert_once() {
             let s = schema();
             let part1 = generate_table(&s, PART_LENGTH, 0);
@@ -2037,6 +2046,7 @@ mod arrow_tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // Takes too long
         fn delete_once() {
             let s = schema();
             let part1 = generate_table(&s, PART_LENGTH, 0);
@@ -2095,6 +2105,7 @@ mod arrow_tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // Takes too long
         fn update_once() {
             let s = schema();
             let part1 = generate_table(&s, PART_LENGTH, 0);
@@ -2154,6 +2165,7 @@ mod arrow_tests {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore)] // Takes too long
         fn append() {
             let s = schema();
             let part1 = generate_table(&s, PART_LENGTH, 0);
@@ -2217,6 +2229,7 @@ mod arrow_tests {
     // --- Direct chunker test (kept from original) ---
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cdc_array_offsets_direct() {
         use crate::basic::Type as PhysicalType;
         use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
@@ -2272,6 +2285,7 @@ mod arrow_tests {
     /// Writing nested list data with CDC enabled panicked with an out-of-bounds
     /// slice access when null list entries had non-zero child ranges.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cdc_list_roundtrip() {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
@@ -2302,6 +2316,7 @@ mod arrow_tests {
 
     /// Test CDC with deeply nested types: List<List<Int32>>, List<Struct<List<Int32>>>
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_cdc_deeply_nested_roundtrip() {
         let inner_field = Field::new_list_field(DataType::Int32, true);
         let inner_type = DataType::List(Arc::new(inner_field));

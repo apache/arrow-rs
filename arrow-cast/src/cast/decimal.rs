@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::cast::*;
+use crate::parse::{DecimalParseError, parse_decimal_checked};
 
 /// A utility trait that provides checked conversions between
 /// decimal types inspired by [`NumCast`]
@@ -179,7 +180,7 @@ where
     // handling, which is faster and simpler for scaling by 10^delta_scale.
     let max = O::MAX_FOR_EACH_PRECISION.get(delta_scale as usize)?;
     let mul = max.add_wrapping(O::Native::ONE);
-    let f_fallible = move |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
+    let f_fallible = move |x| O::Native::from_decimal(x)?.mul_checked(mul).ok();
 
     // if the gain in precision (digits) is greater than the multiplication due to scaling
     // every number will fit into the output type
@@ -369,9 +370,8 @@ where
     } else {
         let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
         array.try_unary(|x| {
-            f_fallible(x).ok_or_else(|| error(x)).and_then(|v| {
-                O::validate_decimal_precision(v, output_precision, output_scale).map(|()| v)
-            })
+            let v = f_fallible(x).ok_or_else(|| error(x))?;
+            O::validate_decimal_precision(v, output_precision, output_scale).map(|()| v)
         })?
     };
     Ok(array)
@@ -529,109 +529,34 @@ where
     )?))
 }
 
-/// Parses given string to specified decimal native (i128/i256) based on given
-/// scale. Returns an `Err` if it cannot parse given string.
+/// Parses the given string as a decimal with the given scale, returning the
+/// unscaled representation in the decimal type's native integer (e.g. `i32`
+/// for `Decimal32Type`, `i256` for `Decimal256Type`).
+///
+/// Returns an error if the input is not a valid decimal string, or if the
+/// scaled and rounded value does not fit the maximum precision of the decimal
+/// type. The caller is responsible for validating the result against any
+/// smaller target precision.
+#[deprecated(
+    since = "60.0.0",
+    note = "Use `arrow_cast::parse::parse_decimal` instead"
+)]
 pub fn parse_string_to_decimal_native<T: DecimalType>(
     value_str: &str,
     scale: usize,
-) -> Result<T::Native, ArrowError>
-where
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
-    let value_str = value_str.trim();
-    let parts: Vec<&str> = value_str.split('.').collect();
-    if parts.len() > 2 {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid decimal format: {value_str:?}"
-        )));
-    }
-
-    let (negative, first_part) = if parts[0].is_empty() {
-        (false, parts[0])
-    } else {
-        match parts[0].as_bytes()[0] {
-            b'-' => (true, &parts[0][1..]),
-            b'+' => (false, &parts[0][1..]),
-            _ => (false, parts[0]),
-        }
-    };
-
-    let integers = first_part;
-    let decimals = if parts.len() == 2 { parts[1] } else { "" };
-
-    if integers.is_empty() && decimals.is_empty() {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid decimal format: {value_str:?}"
-        )));
-    }
-
-    if !integers.is_empty() && !integers.as_bytes()[0].is_ascii_digit() {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid decimal format: {value_str:?}"
-        )));
-    }
-
-    if !decimals.is_empty() && !decimals.as_bytes()[0].is_ascii_digit() {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid decimal format: {value_str:?}"
-        )));
-    }
-
-    // Adjust decimal based on scale
-    let mut number_decimals = if decimals.len() > scale {
-        let decimal_number = i256::from_string(decimals).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!("Cannot parse decimal format: {value_str}"))
-        })?;
-
-        let div = i256::from_i128(10_i128).pow_checked((decimals.len() - scale) as u32)?;
-
-        let half = div.div_wrapping(i256::from_i128(2));
-        let half_neg = half.neg_wrapping();
-
-        let d = decimal_number.div_wrapping(div);
-        let r = decimal_number.mod_wrapping(div);
-
-        // Round result
-        let adjusted = match decimal_number >= i256::ZERO {
-            true if r >= half => d.add_wrapping(i256::ONE),
-            false if r <= half_neg => d.sub_wrapping(i256::ONE),
-            _ => d,
-        };
-
-        let integers = if !integers.is_empty() {
-            i256::from_string(integers)
-                .ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(format!(
-                        "Cannot parse decimal format: {value_str}"
-                    ))
-                })
-                .map(|v| v.mul_wrapping(i256::from_i128(10_i128).pow_wrapping(scale as u32)))?
-        } else {
-            i256::ZERO
-        };
-
-        format!("{}", integers.add_wrapping(adjusted))
-    } else {
-        let padding = if scale > decimals.len() { scale } else { 0 };
-
-        let decimals = format!("{decimals:0<padding$}");
-        format!("{integers}{decimals}")
-    };
-
-    if negative {
-        number_decimals.insert(0, '-');
-    }
-
-    let value = i256::from_string(number_decimals.as_str()).ok_or_else(|| {
+) -> Result<T::Native, ArrowError> {
+    let overflow = || {
         ArrowError::InvalidArgumentError(format!(
-            "Cannot convert {} to {}: Overflow",
-            value_str,
+            "Cannot convert {value_str} to {}: Overflow",
             T::PREFIX
         ))
-    })?;
-
-    T::Native::from_decimal(value).ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!("Cannot convert {} to {}", value_str, T::PREFIX))
+    };
+    let scale = i8::try_from(scale).map_err(|_| overflow())?;
+    parse_decimal_checked::<T>(value_str, T::MAX_PRECISION, scale).map_err(|e| match e {
+        DecimalParseError::InvalidFormat => {
+            ArrowError::InvalidArgumentError(format!("Invalid decimal format: {value_str:?}"))
+        }
+        DecimalParseError::Overflow => overflow(),
     })
 }
 
@@ -643,62 +568,51 @@ pub(crate) fn generic_string_to_decimal_cast<'a, T, S>(
 ) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T: DecimalType,
-    T::Native: DecimalCast + ArrowNativeTypeOp,
     &'a S: StringArrayType<'a>,
 {
     if cast_options.safe {
-        let iter = from.iter().map(|v| {
-            v.and_then(|v| parse_string_to_decimal_native::<T>(v, scale as usize).ok())
-                .and_then(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
-        });
+        let iter = from
+            .iter()
+            .map(|v| parse_decimal_checked::<T>(v?, precision, scale).ok());
         // Benefit:
-        //     20% performance improvement
+        //     15-19% faster than appending to a PrimitiveBuilder (measured
+        //     with the cast_kernels string-to-decimal benchmarks)
         // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
+        //     The iterator is trustedLen because it comes from a `StringArray`.
         Ok(unsafe {
             PrimitiveArray::<T>::from_trusted_len_iter(iter)
                 .with_precision_and_scale(precision, scale)?
         })
     } else {
-        let vec = from
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    parse_string_to_decimal_native::<T>(v, scale as usize)
-                        .map_err(|_| {
-                            ArrowError::CastError(format!(
-                                "Cannot cast string '{v}' to value of {} type",
-                                T::DATA_TYPE,
-                            ))
-                        })
-                        .and_then(|v| {
-                            T::validate_decimal_precision(v, precision, scale).map(|()| v)
-                        })
-                })
-                .transpose()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        // Benefit:
-        //     20% performance improvement
-        // Soundness:
-        //     The iterator is trustedLen because it comes from an `StringArray`.
-        Ok(unsafe {
-            PrimitiveArray::<T>::from_trusted_len_iter(vec.iter())
-                .with_precision_and_scale(precision, scale)?
-        })
+        let mut builder = PrimitiveBuilder::<T>::with_capacity(from.len());
+        for v in from.iter() {
+            match v {
+                Some(v) => {
+                    let v = parse_decimal_checked::<T>(v, precision, scale).map_err(|e| {
+                        let reason = match e {
+                            DecimalParseError::InvalidFormat => "invalid decimal format",
+                            DecimalParseError::Overflow => "value does not fit",
+                        };
+                        ArrowError::CastError(format!(
+                            "Cannot cast string '{v}' to value of {}({precision}, {scale}) type: {reason}",
+                            T::PREFIX,
+                        ))
+                    })?;
+                    builder.append_value(v);
+                }
+                None => builder.append_null(),
+            }
+        }
+        builder.finish().with_precision_and_scale(precision, scale)
     }
 }
 
-pub(crate) fn string_to_decimal_cast<T, Offset: OffsetSizeTrait>(
+pub(crate) fn string_to_decimal_cast<T: DecimalType, Offset: OffsetSizeTrait>(
     from: &GenericStringArray<Offset>,
     precision: u8,
     scale: i8,
     cast_options: &CastOptions,
-) -> Result<PrimitiveArray<T>, ArrowError>
-where
-    T: DecimalType,
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
+) -> Result<PrimitiveArray<T>, ArrowError> {
     generic_string_to_decimal_cast::<T, GenericStringArray<Offset>>(
         from,
         precision,
@@ -707,42 +621,23 @@ where
     )
 }
 
-pub(crate) fn string_view_to_decimal_cast<T>(
+pub(crate) fn string_view_to_decimal_cast<T: DecimalType>(
     from: &StringViewArray,
     precision: u8,
     scale: i8,
     cast_options: &CastOptions,
-) -> Result<PrimitiveArray<T>, ArrowError>
-where
-    T: DecimalType,
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
+) -> Result<PrimitiveArray<T>, ArrowError> {
     generic_string_to_decimal_cast::<T, StringViewArray>(from, precision, scale, cast_options)
 }
 
 /// Cast Utf8 to decimal
-pub(crate) fn cast_string_to_decimal<T, Offset: OffsetSizeTrait>(
+pub(crate) fn cast_string_to_decimal<T: DecimalType, Offset: OffsetSizeTrait>(
     from: &dyn Array,
     precision: u8,
     scale: i8,
     cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    T: DecimalType,
-    T::Native: DecimalCast + ArrowNativeTypeOp,
-{
-    if scale < 0 {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Cannot cast string to decimal with negative scale {scale}"
-        )));
-    }
-
-    if scale > T::MAX_SCALE {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Cannot cast string to decimal greater than maximum scale {}",
-            T::MAX_SCALE
-        )));
-    }
+) -> Result<ArrayRef, ArrowError> {
+    validate_decimal_precision_and_scale::<T>(precision, scale)?;
 
     let result = match from.data_type() {
         DataType::Utf8View => string_view_to_decimal_cast::<T>(
@@ -793,17 +688,16 @@ where
     } else {
         array
             .try_unary::<_, D, _>(|v| {
-                single_float_to_decimal::<D>(v.as_(), mul)
-                    .ok_or_else(|| {
-                        ArrowError::CastError(format!(
-                            "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                            D::PREFIX,
-                            precision,
-                            scale,
-                            v
-                        ))
-                    })
-                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|()| v))
+                let v = single_float_to_decimal::<D>(v.as_(), mul).ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Cannot cast to {}({}, {}). Overflowing on {:?}",
+                        D::PREFIX,
+                        precision,
+                        scale,
+                        v
+                    ))
+                })?;
+                D::validate_decimal_precision(v, precision, scale).map(|()| v)
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
@@ -945,54 +839,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_string_to_decimal_native() -> Result<(), ArrowError> {
+    #[expect(deprecated)]
+    fn test_parse_string_to_decimal_native() {
         assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("0", 0)?,
-            0_i128
+            parse_string_to_decimal_native::<Decimal128Type>("123.456", 2).unwrap(),
+            12346
+        );
+        // The value is checked against the maximum precision of the type, not
+        // against any target precision
+        assert_eq!(
+            parse_string_to_decimal_native::<Decimal128Type>(&"9".repeat(38), 0).unwrap(),
+            10_i128.pow(38) - 1
+        );
+        assert!(
+            parse_string_to_decimal_native::<Decimal128Type>(&i128::MAX.to_string(), 0).is_err()
         );
         assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("0", 5)?,
-            0_i128
-        );
-
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123", 0)?,
-            123_i128
+            parse_string_to_decimal_native::<Decimal128Type>("abc", 2)
+                .unwrap_err()
+                .to_string(),
+            "Invalid argument error: Invalid decimal format: \"abc\""
         );
         assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123", 5)?,
-            12300000_i128
+            parse_string_to_decimal_native::<Decimal32Type>("1", 10)
+                .unwrap_err()
+                .to_string(),
+            "Invalid argument error: Cannot convert 1 to Decimal32: Overflow"
         );
-
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123.45", 0)?,
-            123_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123.45", 5)?,
-            12345000_i128
-        );
-
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 0)?,
-            123_i128
-        );
-        assert_eq!(
-            parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 5)?,
-            12345679_i128
-        );
-
-        for value in ["", " ", ".", "+", "-", "+.", "-."] {
-            assert!(
-                parse_string_to_decimal_native::<Decimal128Type>(value, 2).is_err(),
-                "expected {value:?} to fail parsing as Decimal128"
-            );
-            assert!(
-                parse_string_to_decimal_native::<Decimal256Type>(value, 2).is_err(),
-                "expected {value:?} to fail parsing as Decimal256"
-            );
-        }
-        Ok(())
     }
 
     #[test]

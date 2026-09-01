@@ -120,7 +120,7 @@ enum IpcBodySink<'a> {
     /// Accumulate pre-encoded buffer segments for deferred zero-copy streaming.
     Collect(&'a mut Vec<EncodedBuffer>),
 }
-impl<'a> IpcBodySink<'a> {
+impl IpcBodySink<'_> {
     /// Writes the encoded buffer to the sink.
     pub fn write(&mut self, pad_len: usize, buffer: EncodedBuffer) {
         match self {
@@ -469,21 +469,23 @@ impl IpcWriteOptions {
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
     ) -> Result<Self, ArrowError> {
-        let is_alignment_valid =
-            alignment == 8 || alignment == 16 || alignment == 32 || alignment == 64;
-        if !is_alignment_valid {
-            return Err(ArrowError::InvalidArgumentError(
-                "Alignment should be 8, 16, 32, or 64.".to_string(),
-            ));
-        }
-        let alignment: u8 = u8::try_from(alignment).expect("range already checked");
+        let alignment: u8 = match alignment {
+            8 => 8,
+            16 => 16,
+            32 => 32,
+            64 => 64,
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Alignment should be 8, 16, 32, or 64.".to_string(),
+                ));
+            }
+        };
         match metadata_version {
             crate::MetadataVersion::V1
             | crate::MetadataVersion::V2
             | crate::MetadataVersion::V3 => Err(ArrowError::InvalidArgumentError(
                 "Writing IPC metadata version 3 and lower not supported".to_string(),
             )),
-            #[allow(deprecated)]
             crate::MetadataVersion::V4 => Ok(Self {
                 alignment,
                 write_legacy_ipc_format,
@@ -762,7 +764,7 @@ impl IpcDataGenerator {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn encode_dictionaries<I: Iterator<Item = i64>>(
         &self,
         field: &Field,
@@ -1373,7 +1375,6 @@ impl DictionaryTracker {
     /// is true, an error will be generated if an update to an
     /// existing dictionary is attempted.
     pub fn new(error_on_replacement: bool) -> Self {
-        #[allow(deprecated)]
         Self {
             written: HashMap::new(),
             dict_ids: Vec::new(),
@@ -1548,11 +1549,11 @@ fn compare_dictionaries(old: &ArrayData, new: &ArrayData) -> DictionaryCompariso
     let existing_len = old.len();
     let new_len = new.len();
     if existing_len == new_len {
-        if *old == *new {
-            return DictionaryComparison::Equal;
+        return if *old == *new {
+            DictionaryComparison::Equal
         } else {
-            return DictionaryComparison::NotEqual;
-        }
+            DictionaryComparison::NotEqual
+        };
     }
 
     // Can't be a delta if the new is shorter than the existing
@@ -3209,9 +3210,9 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dctfield = Field::new_dict("dict", array.data_type().clone(), false, 0, false);
-        let union_fields = [(0, Arc::new(dctfield))].into_iter().collect();
+        let union_fields = std::iter::once((0, Arc::new(dctfield))).collect();
 
         let types = [0, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
         let offsets = [0, 1, 2].into_iter().collect::<ScalarBuffer<i32>>();
@@ -3255,7 +3256,7 @@ mod tests {
         let array = Arc::new(inner) as ArrayRef;
 
         // Dict field with id 2
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dctfield = Arc::new(Field::new_dict(
             "dict",
             array.data_type().clone(),
@@ -3835,9 +3836,9 @@ mod tests {
 
         for i in 0..100_000 {
             for value in [
-                format!("value{}", i),
-                format!("value{}", i),
-                format!("value{}", i),
+                format!("value{i}"),
+                format!("value{i}"),
+                format!("value{i}"),
             ] {
                 ls.values().append_value(&value);
             }
@@ -3852,9 +3853,9 @@ mod tests {
 
         for i in 0..100_000 {
             for value in [
-                format!("value{}", i),
-                format!("value{}", i),
-                format!("value{}", i),
+                format!("value{i}"),
+                format!("value{i}"),
+                format!("value{i}"),
             ] {
                 ls.values().append_value(&value);
             }
@@ -4285,7 +4286,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_list_view_of_dict() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::ListView(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4300,7 +4301,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_large_list_view_of_dict() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::LargeListView(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4315,7 +4316,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_sliced_list_view_of_dict() {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::ListView(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4365,7 +4366,7 @@ mod tests {
         let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
         let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_field = Arc::new(Field::new_dict(
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4409,7 +4410,7 @@ mod tests {
         let keys = Int32Array::from_iter_values([0, 0, 1, 2, 3, 0, 2]);
         let dict_array = DictionaryArray::new(keys, Arc::new(values));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dict_field = Arc::new(Field::new_dict(
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4456,7 +4457,7 @@ mod tests {
 
         let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let entries_field = Arc::new(Field::new(
             Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(
@@ -4528,7 +4529,7 @@ mod tests {
         let value_keys = Int32Array::from_iter_values([0, 1, 2, 0, 1, 0]);
         let dict_values = DictionaryArray::new(value_keys, Arc::new(value_values));
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let entries_field = Arc::new(Field::new(
             Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(

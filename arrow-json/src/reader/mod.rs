@@ -161,7 +161,7 @@ use crate::reader::run_end_array::RunEndEncodedArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
-use crate::reader::tape::{Tape, TapeDecoder};
+use crate::reader::tape::{Tape, TapeDecoder, TapeDecoderOptions};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
 pub use schema::*;
@@ -185,6 +185,7 @@ mod timestamp_array;
 mod value_iter;
 
 /// A builder for [`Reader`] and [`Decoder`]
+#[derive(Clone)]
 pub struct ReaderBuilder {
     batch_size: usize,
     coerce_primitive: bool,
@@ -192,6 +193,7 @@ pub struct ReaderBuilder {
     ignore_type_conflicts: bool,
     is_field: bool,
     struct_mode: StructMode,
+    flatten_top_level_arrays: bool,
 
     schema: SchemaRef,
 }
@@ -213,6 +215,7 @@ impl ReaderBuilder {
             ignore_type_conflicts: false,
             is_field: false,
             struct_mode: Default::default(),
+            flatten_top_level_arrays: false,
             schema,
         }
     }
@@ -255,6 +258,7 @@ impl ReaderBuilder {
             ignore_type_conflicts: false,
             is_field: true,
             struct_mode: Default::default(),
+            flatten_top_level_arrays: false,
             schema: Arc::new(Schema::new([field.into()])),
         }
     }
@@ -313,6 +317,29 @@ impl ReaderBuilder {
             ..self
         }
     }
+    /// Sets whether to flatten top-level arrays.
+    ///
+    /// * When `true`, each element of a top-level array will be treated as its own row.
+    /// * When `false` (the default), the entire top-level array will be treated as one row.
+    ///
+    /// For example, consider this input file:
+    /// ```text
+    /// [{ "a": 1 }, { "a": 2 }, { "b": 3 }]
+    /// [{ "a": 4 }, { "a": 5 }, { "b": 6 }]
+    /// ```
+    ///
+    /// By default, this would be parsed as two rows, each an array containing three elements.
+    /// With this option set to `true`, however, this would be parsed as six rows.
+    ///
+    /// Note that even with this option set to `true`, top-level objects are still permitted
+    /// and will be parsed as individual rows in the exact same manner as when this option is
+    /// set to `false`. It is even possible to mix top-level arrays with top-level objects.
+    pub fn with_flatten(self, flatten_top_level_arrays: bool) -> Self {
+        Self {
+            flatten_top_level_arrays,
+            ..self
+        }
+    }
 
     /// Create a [`Reader`] with the provided [`BufRead`]
     pub fn build<R: BufRead>(self, reader: R) -> Result<Reader<R>, ArrowError> {
@@ -346,7 +373,11 @@ impl ReaderBuilder {
         Ok(Decoder {
             decoder,
             is_field: self.is_field,
-            tape_decoder: TapeDecoder::new(self.batch_size, num_fields),
+            tape_decoder: TapeDecoder::new(TapeDecoderOptions {
+                batch_size: self.batch_size,
+                num_fields,
+                flatten_top_level_arrays: self.flatten_top_level_arrays,
+            }),
             batch_size: self.batch_size,
             schema: self.schema,
         })
@@ -683,12 +714,12 @@ impl Decoder {
 
         // First offset is null sentinel
         let mut next_object = 1;
-        let pos: Vec<_> = (0..tape.num_rows())
+        let pos = (0..tape.num_rows())
             .map(|_| {
-                let next = tape.next(next_object, "row").unwrap();
-                std::mem::replace(&mut next_object, next)
+                let next = tape.next(next_object, "row")?;
+                Ok(std::mem::replace(&mut next_object, next))
             })
-            .collect();
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         let decoded = self.decoder.decode(&tape, &pos)?;
         self.tape_decoder.clear();
@@ -877,13 +908,21 @@ mod tests {
         strict_mode: bool,
         schema: SchemaRef,
     ) -> Vec<RecordBatch> {
+        let config = ReaderBuilder::new(schema)
+            .with_batch_size(batch_size)
+            .with_strict_mode(strict_mode)
+            .with_coerce_primitive(coerce_primitive);
+        do_read_config(buf, config)
+    }
+
+    fn do_read_config(buf: &str, builder: ReaderBuilder) -> Vec<RecordBatch> {
         let mut unbuffered = vec![];
 
         // Test with different batch sizes to test for boundary conditions
-        for batch_size in [1, 3, 100, batch_size] {
-            unbuffered = ReaderBuilder::new(schema.clone())
+        for batch_size in [1, 3, 100, builder.batch_size] {
+            unbuffered = builder
+                .clone()
                 .with_batch_size(batch_size)
-                .with_coerce_primitive(coerce_primitive)
                 .build(Cursor::new(buf.as_bytes()))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
@@ -895,10 +934,9 @@ mod tests {
 
             // Test with different buffer sizes to test for boundary conditions
             for b in [1, 3, 5] {
-                let buffered = ReaderBuilder::new(schema.clone())
+                let buffered = builder
+                    .clone()
                     .with_batch_size(batch_size)
-                    .with_coerce_primitive(coerce_primitive)
-                    .with_strict_mode(strict_mode)
                     .build(BufReader::with_capacity(b, Cursor::new(buf.as_bytes())))
                     .unwrap()
                     .collect::<Result<Vec<_>, _>>()
@@ -1456,7 +1494,7 @@ mod tests {
         assert!(col1.is_null(5));
         assert_eq!(
             col1.values(),
-            &[100, 200, 204, 1103420, 0, 0].map(T::Native::usize_as)
+            &[100, 200, 205, 1103420, 0, 0].map(T::Native::usize_as)
         );
 
         let col2 = batches[0].column(1).as_primitive::<T>();
@@ -1476,8 +1514,98 @@ mod tests {
         assert!(col3.is_null(5));
         assert_eq!(
             col3.values(),
-            &[3830, 12345, 0, 0, 0, 0].map(T::Native::usize_as)
+            &[3830, 12346, 0, 0, 0, 0].map(T::Native::usize_as)
         );
+    }
+
+    #[test]
+    fn test_decimal_number_formats() {
+        // Rounding half away from zero, exponent notation (a valid JSON
+        // number syntax), surrounding whitespace in strings and negative
+        // scales are all accepted
+        let buf = r#"
+        {"a": 0e0, "b": " 1.5 ", "c": 1234.5}
+        {"a": 1.5E2, "b": "-0.005", "c": -150}
+        {"a": 1e-3, "b": "1e2", "c": 1E2}
+        {"a": -0E+0, "b": "+.5", "c": 5}
+        "#;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Decimal128(10, 2), true),
+            Field::new("b", DataType::Decimal64(18, 2), true),
+            Field::new("c", DataType::Decimal128(10, -2), true),
+        ]));
+        let batches = do_read(buf, 1024, true, false, schema);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(
+            batches[0]
+                .column(0)
+                .as_primitive::<Decimal128Type>()
+                .values(),
+            &[0, 15000, 0, 0]
+        );
+        assert_eq!(
+            batches[0]
+                .column(1)
+                .as_primitive::<Decimal64Type>()
+                .values(),
+            &[150, -1, 10000, 50]
+        );
+        assert_eq!(
+            batches[0]
+                .column(2)
+                .as_primitive::<Decimal128Type>()
+                .values(),
+            &[12, -2, 1, 0]
+        );
+
+        // Invalid and out-of-range values are errors (or nulls when type
+        // conflicts are ignored), never panics
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Decimal128(5, 2),
+            true,
+        )]));
+        let long = "1".repeat(300);
+        for (buf, expected) in [
+            (
+                r#"{"a": "abc"}"#.to_string(),
+                "Invalid decimal format: \"abc\"",
+            ),
+            (
+                r#"{"a": 123456789}"#.to_string(),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                r#"{"a": 1e99999}"#.to_string(),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                format!(r#"{{"a": {long}}}"#),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                r#"{"a": 4825037936439135476.2609835314269495255615E-14}"#.to_string(),
+                "does not fit in Decimal128(5, 2)",
+            ),
+        ] {
+            let err = ReaderBuilder::new(schema.clone())
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(expected), "{buf}: {err}");
+
+            let batch = ReaderBuilder::new(schema.clone())
+                .with_ignore_type_conflicts(true)
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert!(batch.column(0).is_null(0), "{buf}");
+        }
     }
 
     #[test]
@@ -1590,9 +1718,8 @@ mod tests {
         {"c": "14:26:56.123"}
         "#;
 
-        let unit = match T::DATA_TYPE {
-            DataType::Time32(unit) | DataType::Time64(unit) => unit,
-            _ => unreachable!(),
+        let (DataType::Time32(unit) | DataType::Time64(unit)) = T::DATA_TYPE else {
+            unreachable!()
         };
 
         let unit_in_nanos = match unit {
@@ -2740,7 +2867,7 @@ mod tests {
         )]));
 
         let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
-        let _ = decoder.decode(r#"{"a": { "child":"#.as_bytes()).unwrap();
+        let _ = decoder.decode(br#"{"a": { "child":"#).unwrap();
         assert!(decoder.tape_decoder.has_partial_row());
         assert_eq!(decoder.tape_decoder.num_buffered_rows(), 1);
         let _ = decoder.flush().unwrap_err();
@@ -3295,7 +3422,7 @@ mod tests {
                     .iter()
                     .chain(json_values[..i].iter())
                     .zip(&schema.fields)
-                    .map(|(v, f)| (f.name().to_string(), v.clone()))
+                    .map(|(v, f)| (f.name().clone(), v.clone()))
                     .collect();
                 serde_json::Value::Object(pairs)
             })
@@ -3671,6 +3798,45 @@ mod tests {
     }
 
     #[test]
+    fn test_read_run_end_encoded_nullability() {
+        for field_nullable in [false, true] {
+            for values_nullable in [false, true] {
+                let ree_type = DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Utf8, values_nullable)),
+                );
+                let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, field_nullable)]));
+
+                for buf in [
+                    r#"{"a": "x"}
+                    {"a": null}
+                    {"a": "y"}"#,
+                    r#"{"a": "x"}
+                    {}
+                    {"a": "y"}"#,
+                ] {
+                    let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+                    let result = decoder.decode(buf.as_bytes()).and_then(|_| decoder.flush());
+
+                    if field_nullable && values_nullable {
+                        result.expect("REE field and values are both nullable");
+                    } else {
+                        let err = result.expect_err(
+                            "REE nulls require both the field and values to be nullable",
+                        );
+                        assert!(
+                            err.to_string().contains(
+                                "Encountered nulls in non-nullable values of RunEndEncoded"
+                            ),
+                            "unexpected error: {err}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_read_run_end_encoded_all_unique() {
         let buf = r#"
         {"a": 1}
@@ -3754,5 +3920,28 @@ mod tests {
         assert_eq!(nested_values.len(), 2);
         assert_eq!(nested_values.value(0), "x");
         assert_eq!(nested_values.value(1), "y");
+    }
+
+    #[test]
+    fn test_flatten_top_level_arrays() {
+        let buf = r#"
+            [
+                {"a": 1},
+                {"a": 2}
+            ]
+            {"a": 3}
+            [{"a": 4}, {"a": 5}, {"a": 6}]
+            "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let batches = do_read_config(buf, ReaderBuilder::new(schema).with_flatten(true));
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0);
+        let col = col.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(col.len(), 6);
+        for i in 0..6 {
+            assert_eq!(col.value(i), (i as i32) + 1);
+        }
     }
 }

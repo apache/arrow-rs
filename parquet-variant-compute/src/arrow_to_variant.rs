@@ -87,7 +87,7 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder<'a, datatypes::Int64Type>),
 }
 
-impl<'a> ArrowToVariantRowBuilder<'a> {
+impl ArrowToVariantRowBuilder<'_> {
     /// Appends a single row at the given index to the supplied builder.
     pub fn append_row(
         &mut self,
@@ -365,16 +365,16 @@ macro_rules! define_row_builder {
                         $(
                             // NOTE: The `?` macro expansion fails without the type annotation.
                             let Some(value): Option<$option_ty> = value else {
-                                if !self.options.safe {
-                                    return Err(ArrowError::ComputeError(format!(
-                                        "Failed to convert value at index {index}: conversion failed",
-                                    )));
-                                } else {
+                                return if self.options.safe {
                                     // Overflow is encoded as Variant::Null,
                                     // distinct from None indicating a missing value
                                     builder.append_value(Variant::Null);
-                                    return Ok(());
-                                }
+                                    Ok(())
+                                } else {
+                                    Err(ArrowError::ComputeError(format!(
+                                        "Failed to convert value at index {index}: conversion failed",
+                                    )))
+                                };
                             };
                         )?
                     )?
@@ -501,7 +501,7 @@ pub(crate) struct NullArrowToVariantBuilder;
 
 impl NullArrowToVariantBuilder {
     fn append_row(
-        &mut self,
+        &self,
         builder: &mut impl VariantBuilderExt,
         _index: usize,
     ) -> Result<(), ArrowError> {
@@ -903,9 +903,9 @@ mod tests {
         for (i, expected) in expected_values.iter().enumerate() {
             match expected {
                 Some(variant) => {
-                    assert_eq!(variant_array.value(i), *variant, "Mismatch at index {}", i)
+                    assert_eq!(variant_array.value(i), *variant, "Mismatch at index {i}")
                 }
-                None => assert!(variant_array.is_null(i), "Expected null at index {}", i),
+                None => assert!(variant_array.is_null(i), "Expected null at index {i}"),
             }
         }
     }

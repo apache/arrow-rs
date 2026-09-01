@@ -146,7 +146,7 @@ fn test_cast_timestamp_with_timezone_daylight_3() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)] // running forever
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_can_cast_types() {
     // this function attempts to ensure that can_cast_types stays
     // in sync with cast.  It simply tries all combinations of
@@ -183,7 +183,7 @@ fn test_can_cast_types() {
                 }
                 // otherwise it was a match
                 _ => {}
-            };
+            }
         }
     }
 }
@@ -366,7 +366,7 @@ fn make_fixed_size_list_array() -> FixedSizeListArray {
 }
 
 fn make_fixed_size_binary_array() -> FixedSizeBinaryArray {
-    let values: &[u8; 15] = b"hellotherearrow";
+    let values = b"hellotherearrow";
 
     let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
         .len(3)

@@ -542,7 +542,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             }
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#universal-unique-identifier-encoding
             FieldType::Uuid => self.skip_bytes(16),
-            _ => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
+            FieldType::Stop => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
         }
     }
 }

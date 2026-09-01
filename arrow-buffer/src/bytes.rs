@@ -27,7 +27,7 @@ use crate::alloc::Deallocation;
 use crate::buffer::dangling_ptr;
 
 #[cfg(feature = "pool")]
-use crate::pool::{MemoryPool, MemoryReservation};
+use crate::pool::{MemoryPool, MemoryReservation, lock_reservation};
 #[cfg(feature = "pool")]
 use std::sync::Mutex;
 
@@ -110,7 +110,7 @@ impl Bytes {
     /// Register this [`Bytes`] with the provided [`MemoryPool`], replacing any prior reservation.
     #[cfg(feature = "pool")]
     pub(crate) fn claim(&self, pool: &dyn MemoryPool) {
-        *self.reservation.lock().unwrap() = Some(pool.reserve(self.capacity()));
+        *lock_reservation(&self.reservation) = Some(pool.reserve(self.capacity()));
     }
 
     /// Resize the memory reservation of this buffer
@@ -118,7 +118,7 @@ impl Bytes {
     /// This is a no-op if this buffer doesn't have a reservation.
     #[cfg(feature = "pool")]
     fn resize_reservation(&self, new_size: usize) {
-        let mut guard = self.reservation.lock().unwrap();
+        let mut guard = lock_reservation(&self.reservation);
         if let Some(mut reservation) = guard.take() {
             // Resize the reservation
             reservation.resize(new_size);
@@ -218,7 +218,7 @@ impl PartialEq for Bytes {
 
 impl Debug for Bytes {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "Bytes {{ ptr: {:?}, len: {}, data: ", self.ptr, self.len,)?;
+        write!(f, "Bytes {{ ptr: {:?}, len: {}, data: ", self.ptr, self.len)?;
 
         f.debug_list().entries(self.iter()).finish()?;
 

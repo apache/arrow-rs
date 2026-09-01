@@ -361,7 +361,7 @@ struct NullUnshredVariantBuilder;
 
 impl NullUnshredVariantBuilder {
     fn append_row(
-        &mut self,
+        &self,
         builder: &mut impl VariantBuilderExt,
         _metadata: &VariantMetadata,
         _index: usize,
@@ -382,7 +382,7 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
     }
 
     fn append_row(
-        &mut self,
+        &self,
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
         index: usize,
@@ -462,7 +462,7 @@ impl<'a, T: AppendToVariantBuilder> UnshredPrimitiveRowBuilder<'a, T> {
     }
 
     fn append_row(
-        &mut self,
+        &self,
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
         index: usize,
@@ -570,7 +570,7 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
     }
 
     fn append_row(
-        &mut self,
+        &self,
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
         index: usize,
@@ -614,7 +614,7 @@ where
     }
 
     fn append_row(
-        &mut self,
+        &self,
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
         index: usize,

@@ -166,6 +166,40 @@ parquet files run the following from the top-level `arrow-rs` directory:
 cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
 ```
 
+## Miri
+
+Run tests under [`Miri`](https://github.com/rust-lang/miri) like so, assuming
+[`cargo-nextest`](https://nexte.st/) is available:
+
+```sh
+# Run all tests
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run
+# Run specific tests
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer --lib bigint
+# Run specific crate
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer
+```
+
+The whole suite will take a long time to run so it's suggested to run individual
+suites/tests when required.
+
+Add a `cfg_attr` to tests in cases where the test should be ignored by Miri:
+
+```rust
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test123() {}
+```
+
+Please ensure you include a comment why the test is being ignored. Common cases
+are:
+
+- Takes too long
+  - Threshold is if it takes longer than 1 minute
+- Zstd code unsupported by Miri
+- Inline assembly unsupported by Miri
+- Any other operation thats unsupported by Miri
+
 ## Breaking Changes
 
 Our [release schedule] allows breaking API changes only in major releases.
@@ -203,7 +237,7 @@ rather than to individual crates, so that they apply everywhere.
 
 One of the concerns with `clippy` is that it often produces a lot of false positives, or that some recommendations may hurt readability. We do not have a policy of which lints are ignored, but if you disagree with a `clippy` lint, you may disable the lint and briefly justify it.
 
-Search for `allow(clippy::` in the codebase to identify lints that are ignored/allowed. We currently prefer ignoring lints on the lowest unit possible.
+Search for `expect(clippy::` in the codebase to identify lints that are intentionally suppressed. We currently prefer suppressing lints on the lowest unit possible.
 
 - If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
 - If you have several lints on a function or module, you may disable the lint on the function or module.

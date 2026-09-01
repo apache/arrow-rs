@@ -149,7 +149,7 @@ async fn test_misspecified_encryption_keys() {
     check_for_error(
         "Parquet error: No column decryption key set for encrypted column 'double_field'",
         footer_key,
-        "".as_bytes(),
+        b"",
         column_2_key,
         empty_column_key,
     )
@@ -163,7 +163,7 @@ async fn test_misspecified_encryption_keys() {
         )
         .as_str(),
         footer_key,
-        "abc".as_bytes(),
+        b"abc",
         column_2_key,
         empty_column_key,
     )
@@ -173,7 +173,7 @@ async fn test_misspecified_encryption_keys() {
     check_for_error(
         "Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong?",
         footer_key,
-        "1123456789012345".as_bytes(),
+        b"1123456789012345",
         column_2_key,
         empty_column_key,
     )
@@ -224,7 +224,7 @@ async fn test_misspecified_encryption_keys() {
     check_for_error(
         "Parquet error: No column decryption key set for encrypted column 'double_field'",
         aes256_footer_key,
-        "".as_bytes(),
+        b"",
         aes256_column_2_key,
         additional_column_keys,
     )
@@ -238,7 +238,7 @@ async fn test_misspecified_encryption_keys() {
         )
         .as_str(),
         aes256_footer_key,
-        "abc".as_bytes(),
+        b"abc",
         aes256_column_2_key,
         additional_column_keys,
     )
@@ -248,7 +248,7 @@ async fn test_misspecified_encryption_keys() {
     check_for_error(
         "Parquet error: Unable to decrypt column 'double_field', perhaps the column key is wrong?",
         aes256_footer_key,
-        "22345678901234567890123456789012".as_bytes(),
+        b"22345678901234567890123456789012",
         aes256_column_2_key,
         additional_column_keys,
     )
@@ -344,7 +344,7 @@ async fn test_aes_ctr_encryption() {
             _ => {
                 panic!("Expected ParquetError::NYI");
             }
-        };
+        }
     }
 
     aes_ctr_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS).await;
@@ -380,7 +380,7 @@ async fn test_write_non_uniform_encryption() {
         );
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_keys(column_names.to_vec(), column_keys.clone())
+            .with_column_keys(column_names.clone(), column_keys.clone())
             .unwrap()
             .build()
             .unwrap();
@@ -513,7 +513,7 @@ async fn test_read_encrypted_file_from_object_store() {
     let store = Arc::new(LocalFileSystem::new_with_prefix(test_data).unwrap());
     let path = Path::from("uniform_encryption.parquet.encrypted");
 
-    let key_code: &[u8] = "0123456789012345".as_bytes();
+    let key_code: &[u8] = b"0123456789012345";
     let decryption_properties = FileDecryptionProperties::builder(key_code.to_vec())
         .build()
         .unwrap();
@@ -800,7 +800,7 @@ fn spawn_parquet_parallel_serialization_task(
         let mut current_rg_rows = 0;
 
         while let Some(mut rb) = data.recv().await {
-            // This loop allows the "else" block to repeatedly split the RecordBatch to handle the case
+            // This loop repeatedly splits the RecordBatch to handle the case
             // when max_row_group_rows < execution.batch_size as an alternative to a recursive async
             // function.
             loop {
@@ -808,33 +808,33 @@ fn spawn_parquet_parallel_serialization_task(
                     send_arrays_to_column_writers(&col_array_channels, &rb, &schema).await?;
                     current_rg_rows += rb.num_rows();
                     break;
-                } else {
-                    let rows_left = max_row_group_rows - current_rg_rows;
-                    let rb_split = rb.slice(0, rows_left);
-                    send_arrays_to_column_writers(&col_array_channels, &rb_split, &schema).await?;
-
-                    // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
-                    // on a separate task, so that we can immediately start on the next RG before waiting
-                    // for the current one to finish.
-                    drop(col_array_channels);
-
-                    let finalize_rg_task =
-                        spawn_rg_join_and_finalize_task(col_writer_tasks, max_row_group_rows);
-
-                    // Do not surface error from closed channel (means something
-                    // else hit an error, and the plan is shutting down).
-                    if serialize_tx.send(finalize_rg_task).await.is_err() {
-                        return Ok(());
-                    }
-
-                    current_rg_rows = 0;
-                    rb = rb.slice(rows_left, rb.num_rows() - rows_left);
-
-                    row_group_index += 1;
-                    let column_writers = writer_factory.create_column_writers(row_group_index)?;
-                    (col_writer_tasks, col_array_channels) =
-                        spawn_column_parallel_row_group_writer(column_writers, 100)?;
                 }
+
+                let rows_left = max_row_group_rows - current_rg_rows;
+                let rb_split = rb.slice(0, rows_left);
+                send_arrays_to_column_writers(&col_array_channels, &rb_split, &schema).await?;
+
+                // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
+                // on a separate task, so that we can immediately start on the next RG before waiting
+                // for the current one to finish.
+                drop(col_array_channels);
+
+                let finalize_rg_task =
+                    spawn_rg_join_and_finalize_task(col_writer_tasks, max_row_group_rows);
+
+                // Do not surface error from closed channel (means something
+                // else hit an error, and the plan is shutting down).
+                if serialize_tx.send(finalize_rg_task).await.is_err() {
+                    return Ok(());
+                }
+
+                current_rg_rows = 0;
+                rb = rb.slice(rows_left, rb.num_rows() - rows_left);
+
+                row_group_index += 1;
+                let column_writers = writer_factory.create_column_writers(row_group_index)?;
+                (col_writer_tasks, col_array_channels) =
+                    spawn_column_parallel_row_group_writer(column_writers, 100)?;
             }
         }
 

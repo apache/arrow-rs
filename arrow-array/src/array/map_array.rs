@@ -70,7 +70,7 @@ impl MapArray {
         ordered: bool,
     ) -> Result<Self, ArrowError> {
         let len = offsets.len() - 1; // Offsets guaranteed to not be empty
-        let end_offset = offsets.last().unwrap().as_usize();
+        let end_offset = offsets.last().as_usize();
         // don't need to check other values of `offsets` because they are checked
         // during construction of `OffsetBuffer`
         if end_offset > entries.len() {
@@ -181,9 +181,8 @@ impl MapArray {
         Option<NullBuffer>,
         bool,
     ) {
-        let (f, ordered) = match self.data_type {
-            DataType::Map(f, ordered) => (f, ordered),
-            _ => unreachable!(),
+        let DataType::Map(f, ordered) = self.data_type else {
+            unreachable!()
         };
         (f, self.value_offsets, self.entries, self.nulls, ordered)
     }
@@ -260,7 +259,7 @@ impl MapArray {
         let end = *unsafe { self.value_offsets().get_unchecked(i + 1) };
         let start = *unsafe { self.value_offsets().get_unchecked(i) };
         self.entries
-            .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
+            .slice(start.as_usize(), (end - start).as_usize())
     }
 
     /// Returns ith value of this map array.
@@ -309,6 +308,15 @@ impl MapArray {
 
     /// constructs a new iterator
     pub fn iter(&self) -> MapArrayIter<'_> {
+        MapArrayIter::new(self)
+    }
+}
+
+impl<'a> IntoIterator for &'a MapArray {
+    type Item = Option<StructArray>;
+    type IntoIter = MapArrayIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
         MapArrayIter::new(self)
     }
 }
@@ -609,8 +617,8 @@ impl ArrayAccessor for &MapArray {
 impl std::fmt::Debug for MapArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "MapArray\n[\n")?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }
@@ -618,9 +626,8 @@ impl std::fmt::Debug for MapArray {
 
 impl From<MapArray> for ListArray {
     fn from(value: MapArray) -> Self {
-        let field = match value.data_type() {
-            DataType::Map(field, _) => field,
-            _ => unreachable!("This should be a map type."),
+        let DataType::Map(field, _) = value.data_type() else {
+            unreachable!("This should be a map type.")
         };
         let data_type = DataType::List(field.clone());
         let builder = value.into_data().into_builder().data_type(data_type);

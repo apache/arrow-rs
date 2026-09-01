@@ -102,12 +102,7 @@ impl RecordBatchDecoder<'_> {
                 self.create_primitive_array(field_node, data_type, &buffers)
             }
             BinaryView | Utf8View => {
-                let count = variadic_counts
-                    .pop_front()
-                    .ok_or(ArrowError::IpcError(format!(
-                        "Missing variadic count for {data_type} column"
-                    )))?;
-                let count = count + 2; // view and null buffer.
+                let count = self.next_variadic_buffer_count(variadic_counts, data_type)?;
                 let buffers = (0..count)
                     .map(|_| self.next_buffer())
                     .collect::<Result<Vec<_>, _>>()?;
@@ -175,7 +170,7 @@ impl RecordBatchDecoder<'_> {
                 let index_node = self.next_node(field)?;
                 let index_buffers = [self.next_buffer()?, self.next_buffer()?];
 
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 let dict_id = field.dict_id().ok_or_else(|| {
                     ArrowError::ParseError(format!("Field {field} does not have dict id"))
                 })?;
@@ -302,7 +297,7 @@ impl RecordBatchDecoder<'_> {
         if self.skip_validation.get() {
             // SAFETY: flag can only be set via unsafe code
             unsafe { builder = builder.skip_validation(true) }
-        };
+        }
         Ok(make_array(builder.build()?))
     }
 
@@ -546,6 +541,11 @@ impl<'a> RecordBatchDecoder<'a> {
     }
 
     /// Read the record batch, consuming the reader
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the message does not describe a batch matching the schema,
+    /// for example if it declares more variadic buffer counts than the schema uses.
     pub fn read_record_batch(mut self) -> Result<RecordBatch, ArrowError> {
         let mut variadic_counts: VecDeque<i64> = self
             .batch
@@ -562,19 +562,23 @@ impl<'a> RecordBatchDecoder<'a> {
             // project fields
             for (idx, field) in schema.fields().iter().enumerate() {
                 // A projected field can appear more than once, so collect all matching positions.
-                let mut child = None;
+                let mut decoded = None;
                 for (proj_idx, projected_idx) in projection.iter().enumerate() {
                     if *projected_idx == idx {
-                        if child.is_none() {
-                            child = Some(self.create_array(field, &mut variadic_counts)?);
-                        }
-
                         // Reuse the decoded array for duplicate projection entries.
-                        arrays.push((proj_idx, child.as_ref().unwrap().clone()));
+                        let child = match decoded.clone() {
+                            Some(child) => child,
+                            None => {
+                                let child = self.create_array(field, &mut variadic_counts)?;
+                                decoded = Some(Arc::clone(&child));
+                                child
+                            }
+                        };
+                        arrays.push((proj_idx, child));
                     }
                 }
 
-                if child.is_none() {
+                if decoded.is_none() {
                     self.skip_field(field, &mut variadic_counts)?;
                 }
             }
@@ -594,7 +598,7 @@ impl<'a> RecordBatchDecoder<'a> {
                     ))
                 }
             } else {
-                assert!(variadic_counts.is_empty());
+                check_variadic_counts_consumed(&variadic_counts)?;
                 RecordBatch::try_new_with_options(schema, columns, &options)
             }
         } else {
@@ -615,7 +619,7 @@ impl<'a> RecordBatchDecoder<'a> {
                     ))
                 }
             } else {
-                assert!(variadic_counts.is_empty());
+                check_variadic_counts_consumed(&variadic_counts)?;
                 RecordBatch::try_new_with_options(schema, children, &options)
             }
         }
@@ -633,8 +637,11 @@ impl<'a> RecordBatchDecoder<'a> {
         )
     }
 
-    fn skip_buffer(&mut self) {
-        self.buffers.next().unwrap();
+    fn skip_buffer(&mut self) -> Result<(), ArrowError> {
+        self.buffers.next().ok_or_else(|| {
+            ArrowError::IpcError("Buffer count mismatched with metadata".to_string())
+        })?;
+        Ok(())
     }
 
     fn next_node(&mut self, field: &Field) -> Result<&'a FieldNode, ArrowError> {
@@ -655,42 +662,36 @@ impl<'a> RecordBatchDecoder<'a> {
         match field.data_type() {
             Utf8 | Binary | LargeBinary | LargeUtf8 => {
                 for _ in 0..3 {
-                    self.skip_buffer()
+                    self.skip_buffer()?;
                 }
             }
             Utf8View | BinaryView => {
-                let count = variadic_count
-                    .pop_front()
-                    .ok_or(ArrowError::IpcError(format!(
-                        "Missing variadic count for {} column",
-                        field.data_type()
-                    )))?;
-                let count = count + 2; // view and null buffer.
-                for _i in 0..count {
-                    self.skip_buffer()
+                let count = self.next_variadic_buffer_count(variadic_count, field.data_type())?;
+                for _ in 0..count {
+                    self.skip_buffer()?;
                 }
             }
             FixedSizeBinary(_) => {
-                self.skip_buffer();
-                self.skip_buffer();
+                self.skip_buffer()?;
+                self.skip_buffer()?;
             }
             List(list_field) | LargeList(list_field) | Map(list_field, _) => {
-                self.skip_buffer();
-                self.skip_buffer();
+                self.skip_buffer()?;
+                self.skip_buffer()?;
                 self.skip_field(list_field, variadic_count)?;
             }
             ListView(list_field) | LargeListView(list_field) => {
-                self.skip_buffer(); // Null buffer
-                self.skip_buffer(); // Offsets
-                self.skip_buffer(); // Sizes
+                self.skip_buffer()?; // Null buffer
+                self.skip_buffer()?; // Offsets
+                self.skip_buffer()?; // Sizes
                 self.skip_field(list_field, variadic_count)?;
             }
             FixedSizeList(list_field, _) => {
-                self.skip_buffer();
+                self.skip_buffer()?;
                 self.skip_field(list_field, variadic_count)?;
             }
             Struct(struct_fields) => {
-                self.skip_buffer();
+                self.skip_buffer()?;
 
                 // skip for each field
                 for struct_field in struct_fields {
@@ -702,19 +703,19 @@ impl<'a> RecordBatchDecoder<'a> {
                 self.skip_field(values_field, variadic_count)?;
             }
             Dictionary(_, _) => {
-                self.skip_buffer(); // Nulls
-                self.skip_buffer(); // Indices
+                self.skip_buffer()?; // Nulls
+                self.skip_buffer()?; // Indices
             }
             Union(fields, mode) => {
                 if self.version < MetadataVersion::V5 {
-                    self.skip_buffer(); // Null buffer
+                    self.skip_buffer()?; // Null buffer
                 }
-                self.skip_buffer(); // Type ids
+                self.skip_buffer()?; // Type ids
 
                 match mode {
-                    UnionMode::Dense => self.skip_buffer(), // Offsets
+                    UnionMode::Dense => self.skip_buffer()?, // Offsets
                     UnionMode::Sparse => {}
-                };
+                }
 
                 for (_, field) in fields.iter() {
                     self.skip_field(field, variadic_count)?
@@ -747,11 +748,42 @@ impl<'a> RecordBatchDecoder<'a> {
             | Decimal64(_, _)
             | Decimal128(_, _)
             | Decimal256(_, _) => {
-                self.skip_buffer();
-                self.skip_buffer();
+                self.skip_buffer()?;
+                self.skip_buffer()?;
             }
-        };
+        }
         Ok(())
+    }
+}
+
+impl RecordBatchDecoder<'_> {
+    /// Takes the number of variadic buffers declared for one `BinaryView` or `Utf8View`
+    /// column, and returns the total number of buffers to read for it.
+    ///
+    /// The count comes from the IPC message, so it may be missing, negative, or larger
+    /// than the number of buffers the message actually has.
+    fn next_variadic_buffer_count(
+        &self,
+        variadic_counts: &mut VecDeque<i64>,
+        data_type: &DataType,
+    ) -> Result<usize, ArrowError> {
+        let count = variadic_counts.pop_front().ok_or_else(|| {
+            ArrowError::IpcError(format!("Missing variadic count for {data_type} column"))
+        })?;
+
+        let remaining = self.buffers.len();
+
+        // The view buffer and the null buffer are not counted as variadic.
+        usize::try_from(count)
+            .ok()
+            .and_then(|count| count.checked_add(2))
+            .filter(|total| *total <= remaining)
+            .ok_or_else(|| {
+                ArrowError::IpcError(format!(
+                    "Invalid variadic count {count} for {data_type} column, \
+                     with {remaining} buffer(s) left in the message"
+                ))
+            })
     }
 }
 
@@ -870,13 +902,13 @@ fn get_dictionary_values(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
     schema: &Schema,
-    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
     require_alignment: bool,
     skip_validation: UnsafeFlag,
 ) -> Result<ArrayRef, ArrowError> {
     let id = batch.id();
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     let fields_using_this_dictionary = schema.fields_with_dict_id(id);
     let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
@@ -926,6 +958,22 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
     Ok(buf.into())
 }
 
+/// One variadic buffer count is consumed per `BinaryView` or `Utf8View` column in
+/// the schema, so any count left over means the message and the schema disagree.
+///
+/// The opposite case, too few counts, is reported by [`RecordBatchDecoder::create_array`].
+fn check_variadic_counts_consumed(variadic_counts: &VecDeque<i64>) -> Result<(), ArrowError> {
+    if variadic_counts.is_empty() {
+        Ok(())
+    } else {
+        Err(ArrowError::IpcError(format!(
+            "Mismatch between schema and data: the IPC message declares {} more variadic \
+             buffer count(s) than the schema has BinaryView or Utf8View columns",
+            variadic_counts.len()
+        )))
+    }
+}
+
 /// Parse an encapsulated message
 ///
 /// <https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format>
@@ -949,7 +997,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
     }
 
     // read footer length
-    let footer_len = i32::from_le_bytes(buf[..4].try_into().unwrap());
+    let footer_len = i32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
     footer_len
         .try_into()
         .map_err(|_| ArrowError::ParseError(format!("Invalid footer length: {footer_len}")))
@@ -1250,7 +1298,9 @@ impl FileReaderBuilder {
 
         let total_blocks = blocks.len();
 
-        let ipc_schema = footer.schema().unwrap();
+        let ipc_schema = footer.schema().ok_or_else(|| {
+            ArrowError::ParseError("Unable to get schema from IPC Footer".to_string())
+        })?;
         if !ipc_schema.endianness().equals_to_target_endianness() {
             return Err(ArrowError::IpcError(
                 "the endianness of the source system does not match the endianness of the target system.".to_owned()
@@ -1267,10 +1317,12 @@ impl FileReaderBuilder {
         let mut custom_metadata = HashMap::new();
         if let Some(fb_custom_metadata) = footer.custom_metadata() {
             for kv in fb_custom_metadata {
-                custom_metadata.insert(
-                    kv.key().unwrap().to_string(),
-                    kv.value().unwrap().to_string(),
-                );
+                let (Some(key), Some(value)) = (kv.key(), kv.value()) else {
+                    return Err(ArrowError::ParseError(
+                        "Custom metadata in the IPC footer is missing a key or a value".to_string(),
+                    ));
+                };
+                custom_metadata.insert(key.to_string(), value.to_string());
             }
         }
 
@@ -1541,8 +1593,8 @@ pub struct StreamReader<R> {
     /// This value is set to `true` the first time the reader's `next()` returns `None`.
     finished: bool,
 
-    /// Optional projection
-    projection: Option<(Vec<usize>, Schema)>,
+    /// Optional projection: column indices and the resulting projected schema
+    projection: Option<(Vec<usize>, SchemaRef)>,
 
     /// Should validation be skipped when reading data? Defaults to false.
     ///
@@ -1612,7 +1664,7 @@ impl<R: Read> StreamReader<R> {
 
         let projection = match projection {
             Some(projection_indices) => {
-                let schema = schema.project(&projection_indices)?;
+                let schema = Arc::new(schema.project(&projection_indices)?);
                 Some((projection_indices, schema))
             }
             _ => None,
@@ -1628,9 +1680,12 @@ impl<R: Read> StreamReader<R> {
         })
     }
 
-    /// Return the schema of the stream
+    /// Return the schema of the record batches produced by this reader
     pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        match &self.projection {
+            Some((_, projected_schema)) => projected_schema.clone(),
+            None => self.schema.clone(),
+        }
     }
 
     /// Check if the stream is finished
@@ -1661,10 +1716,8 @@ impl<R: Read> StreamReader<R> {
                 IpcMessage::RecordBatch(record_batch) => {
                     return Ok(Some(record_batch));
                 }
-                IpcMessage::DictionaryBatch { .. } => {
-                    continue;
-                }
-            };
+                IpcMessage::DictionaryBatch { .. } => {}
+            }
         }
     }
 
@@ -1722,7 +1775,7 @@ impl<R: Read> StreamReader<R> {
                     &body.into(),
                     dict,
                     &self.schema,
-                    &mut self.dictionaries_by_id,
+                    &self.dictionaries_by_id,
                     &version,
                     false,
                     self.skip_validation.clone(),
@@ -1786,7 +1839,7 @@ impl<R: Read> Iterator for StreamReader<R> {
 
 impl<R: Read> RecordBatchReader for StreamReader<R> {
     fn schema(&self) -> SchemaRef {
-        self.schema.clone()
+        self.schema()
     }
 }
 
@@ -1796,7 +1849,7 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 /// batch or dictionary batch requires access to stream state such as schema
 /// and the full dictionary cache.
 #[derive(Debug)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) enum IpcMessage {
     Schema(arrow_schema::Schema),
     RecordBatch(RecordBatch),
@@ -1931,7 +1984,7 @@ impl<R: Read> MessageReader<R> {
                     Err(ArrowError::from(e))
                 };
             }
-        };
+        }
 
         let meta_len = {
             // If a continuation marker is encountered, skip over it and read
@@ -2193,6 +2246,117 @@ mod tests {
         }
     }
 
+    /// A `Utf8View` batch whose variadic buffer count is `count`, with two buffers
+    /// in the message. Returns the error from reading it with the given projection.
+    fn read_batch_with_variadic_count(count: i64, projection: Option<&[usize]>) -> ArrowError {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Utf8View,
+            true,
+        )]));
+
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[FieldNode::new(1, 0)]);
+        let buffers = fbb.create_vector(&[crate::Buffer::new(0, 8), crate::Buffer::new(8, 8)]);
+        let variadic_buffer_counts = fbb.create_vector(&[count]);
+        let batch_offset = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 1,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression: None,
+                variadicBufferCounts: Some(variadic_buffer_counts),
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<RecordBatch>(&batch_bytes).unwrap();
+
+        let data_buffer = Buffer::from(vec![0u8; 16]);
+        let dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+
+        RecordBatchDecoder::try_new(
+            &data_buffer,
+            batch,
+            schema,
+            &dictionaries,
+            &MetadataVersion::V5,
+        )
+        .unwrap()
+        .with_projection(projection)
+        .read_record_batch()
+        .expect_err("should get error")
+    }
+
+    /// A variadic count the message cannot honour used to panic while slicing the
+    /// buffers it did not read, both when reading the column and when skipping it.
+    #[test]
+    fn test_invalid_variadic_buffer_count_error() {
+        // -2 leaves no buffers at all, -1 leaves too few, and 1 asks for more than the
+        // message has. The projection selects nothing, so the column is skipped instead.
+        for count in [-2, -1, 1, i64::MAX] {
+            for projection in [None, Some([].as_slice())] {
+                let err = read_batch_with_variadic_count(count, projection);
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "Ipc error: Invalid variadic count {count} for Utf8View column, \
+                         with 2 buffer(s) left in the message"
+                    ),
+                    "count {count}, projection {projection:?}"
+                );
+            }
+        }
+    }
+
+    /// The valid count for a message with two buffers is zero.
+    #[test]
+    fn test_valid_variadic_buffer_count_is_accepted() {
+        let err = read_batch_with_variadic_count(0, None);
+        assert!(!err.to_string().contains("Invalid variadic count"), "{err}");
+    }
+
+    #[test]
+    fn test_missing_footer_schema_error() {
+        use crate::r#gen::File::{Footer, FooterArgs};
+        use flatbuffers::FlatBufferBuilder;
+
+        // a footer that verifies but has no schema table. record batches present
+        // (so the earlier ok_or_else passes) but schema absent, which used to panic.
+        let mut fbb = FlatBufferBuilder::new();
+        let record_batches = fbb.create_vector::<Block>(&[]);
+        let footer = Footer::create(
+            &mut fbb,
+            &FooterArgs {
+                version: MetadataVersion::V5,
+                schema: None,
+                dictionaries: None,
+                recordBatches: Some(record_batches),
+                custom_metadata: None,
+            },
+        );
+        fbb.finish(footer, None);
+        let footer_data = fbb.finished_data();
+
+        // assemble a minimal IPC file: magic header, footer, footer length, magic trailer
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&crate::ARROW_MAGIC);
+        buf.extend_from_slice(footer_data);
+        buf.extend_from_slice(&(footer_data.len() as i32).to_le_bytes());
+        buf.extend_from_slice(&crate::ARROW_MAGIC);
+
+        let err = FileReader::try_new(Cursor::new(buf), None)
+            .expect_err("expected an error, not a panic");
+        assert!(
+            matches!(err, ArrowError::ParseError(_)),
+            "expected ParseError, got {err:?}"
+        );
+    }
+
     /// Test that the reader can read legacy files where empty list arrays were written with a 0-byte offsets buffer.
     #[test]
     fn test_read_legacy_empty_list_without_offsets_buffer() {
@@ -2372,6 +2536,26 @@ mod tests {
 
         let projection = vec![3, 2, 1];
         let mut reader = FileReader::try_new(Cursor::new(buf), Some(projection)).unwrap();
+        let reader_schema = RecordBatchReader::schema(&reader);
+        let read_batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(reader_schema, read_batch.schema());
+    }
+
+    #[test]
+    fn test_stream_reader_projected_schema_matches_batch_schema() {
+        let schema = create_test_projection_schema();
+        let batch = create_test_projection_batch_data(&schema);
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::StreamWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let projection = vec![3, 2, 1];
+        let mut reader = StreamReader::try_new(Cursor::new(buf), Some(projection)).unwrap();
         let reader_schema = RecordBatchReader::schema(&reader);
         let read_batch = reader.next().unwrap().unwrap();
 
@@ -2834,7 +3018,7 @@ mod tests {
         let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 2, 2, 3]);
         let key_dict_array = DictionaryArray::new(key_dict_keys, values);
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let keys_field = Arc::new(Field::new_dict(
             Field::MAP_KEY_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
@@ -2842,7 +3026,7 @@ mod tests {
             1,
             false,
         ));
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let values_field = Arc::new(Field::new_dict(
             Field::MAP_VALUE_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
@@ -2923,7 +3107,7 @@ mod tests {
     #[test]
     fn test_roundtrip_stream_dict_of_list_of_dict() {
         // list
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::List(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
@@ -2935,7 +3119,7 @@ mod tests {
         test_roundtrip_stream_dict_of_list_of_dict_impl::<i32, i32>(list_data_type, offsets);
 
         // large list
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::LargeList(Arc::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
@@ -2954,7 +3138,7 @@ mod tests {
         let dict_array = DictionaryArray::new(keys, Arc::new(values));
         let dict_data = dict_array.into_data();
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let list_data_type = DataType::FixedSizeList(
             Arc::new(Field::new_dict(
                 "item",
@@ -3045,7 +3229,7 @@ mod tests {
 
         let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 2, 0, 2, 3]);
         let key_dict_array = DictionaryArray::new(key_dict_keys, utf8_view_array.clone());
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let keys_field = Arc::new(Field::new_dict(
             Field::MAP_KEY_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8View)),
@@ -3056,7 +3240,7 @@ mod tests {
 
         let value_dict_keys = Int8Array::from_iter_values([0, 3, 0, 1, 2, 0, 1]);
         let value_dict_array = DictionaryArray::new(value_dict_keys, bin_view_array);
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let values_field = Arc::new(Field::new_dict(
             Field::MAP_VALUE_FIELD_DEFAULT_NAME,
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::BinaryView)),
@@ -3442,7 +3626,7 @@ mod tests {
                 ["a", "b"]
                     .iter()
                     .map(|name| {
-                        #[allow(deprecated)]
+                        #[expect(deprecated)]
                         Field::new_dict(
                             name.to_string(),
                             DataType::Dictionary(
@@ -3544,7 +3728,7 @@ mod tests {
         let array = unsafe {
             StringViewArray::new_unchecked(
                 binary_view_array.views().clone(),
-                binary_view_array.data_buffers().to_vec(),
+                Arc::clone(binary_view_array.data_buffers()),
                 binary_view_array.nulls().cloned(),
             )
         };

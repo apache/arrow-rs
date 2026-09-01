@@ -63,7 +63,7 @@ fn bench_typed<T: DataType>(
     let mut encoder = get_encoder::<T>(encoding, &column_desc_ptr).unwrap();
     encoder.put(values).unwrap();
     let encoded = encoder.flush_buffer().unwrap();
-    println!("{} encoded as {} bytes", name, encoded.len(),);
+    println!("{} encoded as {} bytes", name, encoded.len());
 
     let mut buffer = vec![T::T::default(); values.len()];
     c.bench_function(&format!("decoding: {name}"), |b| {

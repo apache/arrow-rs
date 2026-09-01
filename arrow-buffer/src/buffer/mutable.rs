@@ -27,7 +27,7 @@ use crate::{
 };
 
 #[cfg(feature = "pool")]
-use crate::pool::{MemoryPool, MemoryReservation};
+use crate::pool::{MemoryPool, MemoryReservation, lock_reservation};
 #[cfg(feature = "pool")]
 use std::sync::Mutex;
 
@@ -232,13 +232,13 @@ impl MutableBuffer {
     pub(crate) fn from_bytes(bytes: Bytes) -> Result<Self, Bytes> {
         let layout = match bytes.deallocation() {
             Deallocation::Standard(layout) => *layout,
-            _ => return Err(bytes),
+            Deallocation::Custom(..) => return Err(bytes),
         };
 
         let len = bytes.len();
         let data = bytes.ptr();
         #[cfg(feature = "pool")]
-        let reservation = bytes.reservation.lock().unwrap().take();
+        let reservation = lock_reservation(&bytes.reservation).take();
         mem::forget(bytes);
 
         Ok(Self {
@@ -447,7 +447,7 @@ impl MutableBuffer {
         self.layout = new_layout;
         #[cfg(feature = "pool")]
         {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
+            if let Some(reservation) = lock_reservation(&self.reservation).as_mut() {
                 reservation.resize(self.layout.size());
             }
         }
@@ -464,7 +464,7 @@ impl MutableBuffer {
         self.len = len;
         #[cfg(feature = "pool")]
         {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
+            if let Some(reservation) = lock_reservation(&self.reservation).as_mut() {
                 reservation.resize(self.len);
             }
         }
@@ -484,7 +484,7 @@ impl MutableBuffer {
         self.len = new_len;
         #[cfg(feature = "pool")]
         {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
+            if let Some(reservation) = lock_reservation(&self.reservation).as_mut() {
                 reservation.resize(self.len);
             }
         }
@@ -573,7 +573,7 @@ impl MutableBuffer {
         self.len = 0;
         #[cfg(feature = "pool")]
         {
-            if let Some(reservation) = self.reservation.lock().unwrap().as_mut() {
+            if let Some(reservation) = lock_reservation(&self.reservation).as_mut() {
                 reservation.resize(self.len);
             }
         }
@@ -608,8 +608,8 @@ impl MutableBuffer {
         let bytes = unsafe { Bytes::new(self.data, self.len, Deallocation::Standard(self.layout)) };
         #[cfg(feature = "pool")]
         {
-            let reservation = self.reservation.lock().unwrap().take();
-            *bytes.reservation.lock().unwrap() = reservation;
+            let reservation = lock_reservation(&self.reservation).take();
+            *lock_reservation(&bytes.reservation) = reservation;
         }
         std::mem::forget(self);
         Buffer::from(bytes)
@@ -657,7 +657,7 @@ impl MutableBuffer {
             // this assumes that `[ToByteSlice]` can be copied directly
             // without calling `to_byte_slice` for each element,
             // which is correct for all ArrowNativeType implementations.
-            let src = items.as_ptr() as *const u8;
+            let src = items.as_ptr().cast::<u8>();
             let dst = self.data.as_ptr().add(self.len);
             std::ptr::copy_nonoverlapping(src, dst, additional);
         }
@@ -802,7 +802,10 @@ impl MutableBuffer {
     /// for the same reasons as [`MutableBuffer::reserve`].
     ///
     /// # Safety
-    /// Callers must ensure that `iter` reports an exact size via `size_hint`.
+    /// Callers must ensure that `iter` reports an exact size via `size_hint`
+    /// and that `I::next()` does not panic, or `set_len` will leave the buffer
+    /// in an inconsistent state, exposing uninitialized/stale bytes as though
+    /// they were valid.
     #[inline]
     pub unsafe fn extend_bool_trusted_len<I: Iterator<Item = bool>>(
         &mut self,
@@ -931,7 +934,7 @@ impl MutableBuffer {
     /// multiple arrays.
     #[cfg(feature = "pool")]
     pub fn claim(&self, pool: &dyn MemoryPool) {
-        *self.reservation.lock().unwrap() = Some(pool.reserve(self.capacity()));
+        *lock_reservation(&self.reservation) = Some(pool.reserve(self.capacity()));
     }
 }
 
@@ -1102,7 +1105,14 @@ impl MutableBuffer {
     /// if any of the items of the iterator is an error.
     /// Prefer this to `collect` whenever possible, as it is faster ~60% faster.
     ///
+    /// # Errors
+    ///
+    /// Returns the first error yielded by the iterator.
+    ///
     /// # Panics
+    ///
+    /// Note that unlike the [`Err`] cases, these panics are violations of the safety contract
+    /// below, and are only checks that happen to be cheap enough to keep:
     ///
     /// Panics if the iterator does not report an upper bound via `size_hint`, or if the
     /// reported length does not match the number of items produced before an error-free finish,
@@ -1182,7 +1192,7 @@ impl Drop for MutableBuffer {
     fn drop(&mut self) {
         if self.layout.size() != 0 {
             // Safety: data was allocated with standard allocator with given layout
-            unsafe { std::alloc::dealloc(self.data.as_ptr() as _, self.layout) };
+            unsafe { std::alloc::dealloc(self.data.as_ptr().cast(), self.layout) };
         }
     }
 }
@@ -1455,13 +1465,13 @@ mod tests {
 
         buf.extend_from_slice(&[0xaa]);
         buf2.extend_from_slice(&[0xaa, 0xbb]);
-        assert!(buf != buf2);
+        assert_ne!(buf, buf2);
 
         buf.extend_from_slice(&[0xbb]);
         assert_eq!(buf, buf2);
 
         buf2.reserve(65);
-        assert!(buf != buf2);
+        assert_ne!(buf, buf2);
     }
 
     #[test]

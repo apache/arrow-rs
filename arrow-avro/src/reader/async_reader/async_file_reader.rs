@@ -131,8 +131,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             let read = self.take(to_read).read_to_end(&mut buffer).await?;
             if read as u64 != to_read {
                 return Err(AvroError::EOF(format!(
-                    "expected to read {} bytes, got {}",
-                    to_read, read
+                    "expected to read {to_read} bytes, got {read}"
                 )));
             }
 

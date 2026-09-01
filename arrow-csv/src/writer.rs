@@ -247,7 +247,7 @@ impl<W: Write> Writer<W> {
                     .schema()
                     .fields()
                     .iter()
-                    .for_each(|field| headers.push(field.name().to_string()));
+                    .for_each(|field| headers.push(field.name().clone()));
                 self.writer
                     .write_record(&headers[..])
                     .map_err(map_csv_error)?;

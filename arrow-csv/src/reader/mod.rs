@@ -472,7 +472,7 @@ pub fn infer_schema_from_files(
         ..Default::default()
     };
 
-    for fname in files.iter() {
+    for fname in files {
         let f = File::open(fname)?;
         let (schema, records_read) = format.infer_schema(f, Some(records_to_read))?;
         if records_read == 0 {
@@ -1017,15 +1017,13 @@ fn parse(
         })
         .collect();
 
-    arrays.and_then(|arr| {
-        RecordBatch::try_new_with_options(
-            projected_schema,
-            arr,
-            &RecordBatchOptions::new()
-                .with_match_field_names(true)
-                .with_row_count(Some(rows.len())),
-        )
-    })
+    RecordBatch::try_new_with_options(
+        projected_schema,
+        arrays?,
+        &RecordBatchOptions::new()
+            .with_match_field_names(true)
+            .with_row_count(Some(rows.len())),
+    )
 }
 
 fn parse_bool(string: &str) -> Option<bool> {
@@ -1388,6 +1386,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use arrow_array::cast::AsArray;
+    use arrow_cast::display::array_value_to_string;
 
     #[test]
     fn test_csv() {
@@ -1461,7 +1460,7 @@ mod tests {
         assert_eq!("53.002666", lat.value_as_string(1));
         assert_eq!("52.412811", lat.value_as_string(2));
         assert_eq!("51.481583", lat.value_as_string(3));
-        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("12.123457", lat.value_as_string(4));
         assert_eq!("50.760000", lat.value_as_string(5));
         assert_eq!("0.123000", lat.value_as_string(6));
         assert_eq!("123.000000", lat.value_as_string(7));
@@ -1487,6 +1486,61 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_reader_decimal_parsing() {
+        // Rounding half away from zero, surrounding whitespace, exponent
+        // notation and negative scales are all accepted
+        let data = " 1.995 ,1.5e2,1234.5,0e0\n-0.005,-1.5E-2,-150,1E+2\n123,+.5,5,-7\n";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Decimal128(10, 2), false),
+            Field::new("b", DataType::Decimal64(18, 2), false),
+            Field::new("c", DataType::Decimal128(10, -2), false),
+            Field::new("d", DataType::Decimal32(9, 0), false),
+        ]));
+        let mut csv = ReaderBuilder::new(schema).build(Cursor::new(data)).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+        let column = |i: usize| {
+            (0..batch.num_rows())
+                .map(|row| array_value_to_string(batch.column(i), row).unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(column(0), ["2.00", "-0.01", "123.00"]);
+        assert_eq!(column(1), ["150.00", "-0.02", "0.50"]);
+        assert_eq!(
+            batch.column(2).as_primitive::<Decimal128Type>().values(),
+            &[12, -2, 0]
+        );
+        assert_eq!(column(3), ["0", "100", "-7"]);
+
+        // Invalid and out-of-range values are errors, never panics
+        for (data, expected) in [
+            ("abc\n", "Invalid decimal format: \"abc\""),
+            ("1.2.3\n", "Invalid decimal format: \"1.2.3\""),
+            (
+                "123456789\n",
+                "\"123456789\" does not fit in Decimal128(5, 2)",
+            ),
+            ("1e99999\n", "does not fit in Decimal128(5, 2)"),
+            (
+                &format!("{}\n", "1".repeat(300)),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                "4825037936439135476.2609835314269495255615E-14\n",
+                "does not fit in Decimal128(5, 2)",
+            ),
+        ] {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "a",
+                DataType::Decimal128(5, 2),
+                false,
+            )]));
+            let mut csv = ReaderBuilder::new(schema).build(Cursor::new(data)).unwrap();
+            let err = csv.next().unwrap().unwrap_err().to_string();
+            assert!(err.contains(expected), "{data:?}: {err}");
+        }
+    }
+
+    #[test]
     fn test_csv_reader_with_decimal_3264() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
@@ -1509,7 +1563,7 @@ mod tests {
         assert_eq!("53.002666", lat.value_as_string(1));
         assert_eq!("52.412811", lat.value_as_string(2));
         assert_eq!("51.481583", lat.value_as_string(3));
-        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("12.123457", lat.value_as_string(4));
         assert_eq!("50.760000", lat.value_as_string(5));
         assert_eq!("0.123000", lat.value_as_string(6));
         assert_eq!("123.000000", lat.value_as_string(7));
@@ -2678,7 +2732,7 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(match batches {
-            Err(ArrowError::CsvError(e)) => e.to_string().contains("incorrect number of fields"),
+            Err(ArrowError::CsvError(e)) => e.contains("incorrect number of fields"),
             _ => false,
         });
     }
@@ -2907,8 +2961,7 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(match batches {
-            Err(ArrowError::InvalidArgumentError(e)) =>
-                e.to_string().contains("contains null values"),
+            Err(ArrowError::InvalidArgumentError(e)) => e.contains("contains null values"),
             _ => false,
         });
     }

@@ -25,7 +25,7 @@ use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_string::like::*;
 use arrow_string::regexp::regexp_is_match_scalar;
-use criterion::Criterion;
+use criterion::{Criterion, Throughput};
 use rand::RngExt;
 use rand::rngs::StdRng;
 use std::hint;
@@ -529,6 +529,23 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("eq dictionary[10] string[4])", |b| {
         b.iter(|| eq(&dict_arr_a, &dict_arr_b).unwrap())
     });
+
+    // eq scalar benchmarks across sizes: 16 bytes of view a row, so the largest is bandwidth-bound
+
+    let mut group = c.benchmark_group("stringview_scalar_eq");
+
+    for rows in [65_536usize, 1024 * 1024, 1024 * 1024 * 8] {
+        let mut rng = seedable_rng();
+        let values = StringViewArray::from_iter(make_string_array(rows, &mut rng));
+        let scalar = StringViewArray::new_scalar("xxxx");
+
+        group.throughput(Throughput::Elements(rows as u64));
+        group.bench_function(format!("eq_scalar(rows={rows})"), |b| {
+            b.iter(|| eq(&values, &scalar).unwrap())
+        });
+    }
+
+    group.finish();
 
     // RunEndEncoded benchmarks
 

@@ -675,8 +675,8 @@ fn make_dict_batch() -> RecordBatch {
         Some("fffff"),
         Some("aaa"),
     ];
-    let dict_i8_array = DictionaryArray::<Int8Type>::from_iter(values.iter().cloned());
-    let dict_i32_array = DictionaryArray::<Int32Type>::from_iter(values.iter().cloned());
+    let dict_i8_array = DictionaryArray::<Int8Type>::from_iter(values.iter().copied());
+    let dict_i32_array = DictionaryArray::<Int32Type>::from_iter(values.iter().copied());
 
     // Dictionary array of integers
     let int64_values = Int64Array::from(vec![0, -100, 100]);

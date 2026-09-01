@@ -197,6 +197,7 @@ where
     /// let keys = dictionary_array.keys();
     ///
     /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
+    /// ```
     pub fn try_new_from_builder<K2>(
         mut source: PrimitiveDictionaryBuilder<K2, V>,
     ) -> Result<Self, ArrowError>
@@ -226,9 +227,13 @@ where
 
         Ok(Self {
             map,
-            keys_builder: new_keys
-                .into_builder()
-                .expect("underlying buffer has no references"),
+            keys_builder: new_keys.into_builder().map_err(|_| {
+                ArrowError::ComputeError(
+                    "Internal Error: the keys just derived from the source builder are \
+                     unexpectedly shared, so they cannot be reused as a builder"
+                        .to_string(),
+                )
+            })?,
             values_builder,
         })
     }
@@ -357,7 +362,7 @@ where
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Append an `Option` value into the builder repeatedly `count` times.
@@ -370,7 +375,7 @@ where
         match value {
             None => self.keys_builder.append_nulls(count),
             Some(v) => self.append_values(v, count),
-        };
+        }
     }
 
     /// Extends builder with dictionary
@@ -445,6 +450,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -461,6 +467,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -493,6 +500,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 

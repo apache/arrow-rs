@@ -66,7 +66,7 @@ pub struct ParquetObjectReader {
     runtime: Option<Handle>,
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl ParquetObjectReader {
     /// Creates a new [`ParquetObjectReader`] for the provided [`ObjectStore`] and [`Path`].
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
@@ -177,7 +177,7 @@ impl ParquetObjectReader {
     }
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl MetadataSuffixFetch for &mut ParquetObjectReader {
     fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
         let options = GetOptions {
@@ -194,7 +194,7 @@ impl MetadataSuffixFetch for &mut ParquetObjectReader {
     }
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl AsyncFileReader for ParquetObjectReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
         self.spawn(|store, path| store.get_range(path, range).boxed())
@@ -257,10 +257,10 @@ impl AsyncFileReader for ParquetObjectReader {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
+#[expect(deprecated)]
 mod tests {
-    use crate::arrow::async_reader::ArrowReaderOptions;
     use crate::file::metadata::PageIndexPolicy;
+    use crate::{arrow::async_reader::ArrowReaderOptions, file::metadata::PageIndex};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -342,7 +342,7 @@ mod tests {
             Ok(_) => panic!("expected failure"),
             Err(e) => {
                 let err = e.to_string();
-                assert!(err.contains("I don't exist.parquet not found:"), "{err}",);
+                assert!(err.contains("I don't exist.parquet not found:"), "{err}");
             }
         }
     }
@@ -427,7 +427,7 @@ mod tests {
 
         let err = reader.get_bytes(0..1).await.unwrap_err().to_string();
 
-        assert!(err.to_string().contains("was cancelled"));
+        assert!(err.contains("was cancelled"));
     }
 
     #[tokio::test]
@@ -447,7 +447,7 @@ mod tests {
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
 
         // With preload=true, indexes should be loaded since the test file has them
-        assert!(metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
     }
 
     #[tokio::test]
@@ -468,7 +468,7 @@ mod tests {
 
         // With Optional policy, it will TRY to load indexes but won't fail if they don't exist
         // The test file has page indexes, so they will be some
-        assert!(metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some());
     }
 
     #[tokio::test]
@@ -496,8 +496,8 @@ mod tests {
         // Both should succeed (no panic/error)
         // metadata1 (Skip) uses preload=false -> Skip policy
         // metadata2 (Optional) overrides preload=false -> Optional policy
-        assert!(metadata1.column_index().is_none());
-        assert!(metadata2.column_index().is_some());
+        assert!(metadata1.page_index().is_none());
+        assert!(metadata2.page_index().is_some());
     }
 
     #[tokio::test]
@@ -516,6 +516,6 @@ mod tests {
         // With no options provided, preload flags (true) should be respected
         // and converted to Optional policy internally (preload=true -> Optional)
         // The test file has page indexes, so they will be some
-        assert!(metadata.column_index().is_some() && metadata.column_index().is_some());
+        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
     }
 }

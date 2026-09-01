@@ -625,9 +625,9 @@ where
     ) -> Result<CancelFlightInfoResult> {
         let action = Action::new("CancelFlightInfo", request.encode_to_vec());
         let response = self.do_action(action).await?.try_next().await?;
-        let response = response.ok_or(FlightError::protocol(
-            "Received no response for cancel_flight_info call",
-        ))?;
+        let response = response.ok_or_else(|| {
+            FlightError::protocol("Received no response for cancel_flight_info call")
+        })?;
         CancelFlightInfoResult::decode(response)
             .map_err(|e| FlightError::DecodeError(e.to_string()))
     }
@@ -664,9 +664,9 @@ where
     ) -> Result<FlightEndpoint> {
         let action = Action::new("RenewFlightEndpoint", request.encode_to_vec());
         let response = self.do_action(action).await?.try_next().await?;
-        let response = response.ok_or(FlightError::protocol(
-            "Received no response for renew_flight_endpoint call",
-        ))?;
+        let response = response.ok_or_else(|| {
+            FlightError::protocol("Received no response for renew_flight_endpoint call")
+        })?;
         FlightEndpoint::decode(response).map_err(|e| FlightError::DecodeError(e.to_string()))
     }
 

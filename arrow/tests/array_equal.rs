@@ -1358,7 +1358,7 @@ fn make_struct(elements: Vec<Option<(Option<&'static str>, Option<i32>)>>) -> St
                 .field_builder::<StringBuilder>(0)
                 .unwrap()
                 .append_value(s),
-        };
+        }
 
         builder
             .field_builder::<Int32Builder>(1)

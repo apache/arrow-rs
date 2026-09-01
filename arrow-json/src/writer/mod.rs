@@ -104,6 +104,14 @@
 //!     serde_json::json!({"a": 2}),
 //! );
 //! ```
+//!
+//! ## Customizing the encoder
+//!
+//! The output produced for each data type can be customized using
+//! [`WriterBuilder::with_encoder_factory`]. For example, you can override the
+//! default hex encoding of binary data to use `Base64` instead, or provide
+//! encoders for types with no built-in encoding, such as unions.
+//! See the example on [`EncoderFactory`].
 mod encoder;
 
 use std::{fmt::Debug, io::Write, sync::Arc};
@@ -2209,6 +2217,31 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_encoder_negative_scale() {
+        // https://github.com/apache/arrow-rs/issues/10865
+        let array = Decimal128Array::from_iter([Some(0), Some(12), Some(-12)])
+            .with_precision_and_scale(10, -2)
+            .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":0}
+{"decimal":1200}
+{"decimal":-1200}
+"#,
+        );
+    }
+
+    #[test]
     fn write_structs_as_list() {
         let schema = Schema::new(vec![
             Field::new(
@@ -2311,13 +2344,12 @@ mod tests {
                 _options: &'a EncoderOptions,
             ) -> Result<Option<NullableEncoder<'a>>, ArrowError> {
                 let data_type = array.data_type();
-                let fields = match data_type {
-                    DataType::Union(fields, UnionMode::Sparse) => fields,
-                    _ => return Ok(None),
+                let DataType::Union(fields, UnionMode::Sparse) = data_type else {
+                    return Ok(None);
                 };
                 // check that the fields are supported
                 let fields = fields.iter().map(|(_, f)| f).collect::<Vec<_>>();
-                for f in fields.iter() {
+                for f in &fields {
                     match f.data_type() {
                         DataType::Null => {}
                         DataType::Int32 => {}

@@ -37,14 +37,14 @@ fn criterion_benchmark(c: &mut Criterion) {
         i256::MAX,
     ];
 
-    for number in numbers.iter() {
+    for number in &numbers {
         let t = hint::black_box(number.to_string());
         c.bench_function(&format!("i256_parse({t})"), |b| {
             b.iter(|| i256::from_str(&t).unwrap());
         });
     }
 
-    for number in numbers.iter() {
+    for number in &numbers {
         c.bench_function(&format!("i256_to_f64({number})"), |b| {
             b.iter(|| (*number).to_f64().unwrap())
         });
