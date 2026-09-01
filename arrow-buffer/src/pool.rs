@@ -57,7 +57,7 @@ pub trait MemoryReservation: Debug + Send + Sync {
 ///    │ slices...  │    │ slices...  │
 ///    │────────────│    │────────────│
 ///    │ Arc<Bytes> │    │ Arc<Bytes> │ (shared buffer)
-///    └─────▲─────┘    └───────▲───┘
+///    └─────▲──────┘    └───────▲────┘
 ///          │                   │
 ///          │       Bytes       │
 ///          │  ┌─────────────┐  │
