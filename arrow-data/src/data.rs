@@ -696,19 +696,23 @@ impl ArrayData {
         assert!(end <= self.len());
 
         if let DataType::Struct(_) = self.data_type() {
-            // Slice into children
-            let new_offset = self.offset + offset;
+            // A struct has no buffers of its own, and reading child element `i`
+            // combines this array's offset with the child's own offset. Applying
+            // the slice to both would count it twice, so the cumulative offset
+            // goes to the children and this array's offset is reset to 0.
+            let child_offset = self.offset + offset;
             ArrayData {
                 data_type: self.data_type().clone(),
                 len: length,
-                offset: new_offset,
+                offset: 0,
                 buffers: self.buffers.clone(),
-                // Slice child data, to propagate offsets down to them
                 child_data: self
                     .child_data()
                     .iter()
-                    .map(|data| data.slice(offset, length))
+                    .map(|data| data.slice(child_offset, length))
                     .collect(),
+                // `nulls` belongs to this array rather than to the children, so
+                // it is sliced by `offset` alone.
                 nulls: self.nulls.as_ref().map(|x| x.slice(offset, length)),
             }
         } else {
