@@ -250,16 +250,16 @@ enum Decoder {
     /// String data encoded as UTF-8 bytes, but mapped to Arrow's StringViewArray
     StringView(OffsetBufferBuilder<i32>, Vec<u8>),
     Array(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
-    /// The trailing `usize` counts the rows appended since the last flush. A record with no
-    /// fields has no child array to take a length from, so this is the only length available to
-    /// it; it is maintained for every record to keep the arms uniform.
-    Record(
-        Fields,
-        Vec<Decoder>,
-        Vec<Option<AvroLiteral>>,
-        Option<Projector>,
-        usize,
-    ),
+    Record {
+        fields: Fields,
+        decoders: Vec<Decoder>,
+        defaults: Vec<Option<AvroLiteral>>,
+        projector: Option<Projector>,
+        /// Rows appended since the last flush. A record with no fields (legal) has no child
+        /// array to take a length from, so this is the only length available to it; it is
+        /// maintained for every record to keep the arms uniform.
+        row_count: usize,
+    },
     Map(
         FieldRef,
         OffsetBufferBuilder<i32>,
@@ -538,7 +538,13 @@ impl Decoder {
                     } else {
                         None
                     };
-                Self::Record(arrow_fields.into(), encodings, field_defaults, projector, 0)
+                Self::Record {
+                    fields: arrow_fields.into(),
+                    decoders: encodings,
+                    defaults: field_defaults,
+                    projector,
+                    row_count: 0,
+                }
             }
             (Codec::Map(child), _) => {
                 let val_field = child.field_with_name(ArrowField::MAP_VALUE_FIELD_DEFAULT_NAME);
@@ -741,11 +747,15 @@ impl Decoder {
                     offsets.push_length(0);
                 }
             }
-            Self::Record(_, children, _, _, len) => {
-                for child in children {
+            Self::Record {
+                decoders,
+                row_count,
+                ..
+            } => {
+                for child in decoders.iter_mut() {
                     child.append_nulls(count)?;
                 }
-                *len += count;
+                *row_count += count;
             }
             Self::Fixed(width, values) => {
                 values.resize(values.len() + (*width as usize) * count, 0)
@@ -1184,7 +1194,13 @@ impl Decoder {
                 inner.append_default(lit)
             }
             Self::Union(u) => u.append_default(lit),
-            Self::Record(field_meta, decoders, field_defaults, _, len) => match lit {
+            Self::Record {
+                fields: field_meta,
+                decoders,
+                defaults: field_defaults,
+                row_count,
+                ..
+            } => match lit {
                 AvroLiteral::Map(entries) => {
                     for (i, dec) in decoders.iter_mut().enumerate() {
                         let name = field_meta[i].name();
@@ -1196,7 +1212,7 @@ impl Decoder {
                             dec.append_null()?;
                         }
                     }
-                    *len += 1;
+                    *row_count += 1;
                     Ok(())
                 }
                 AvroLiteral::Null => {
@@ -1207,7 +1223,7 @@ impl Decoder {
                             dec.append_null()?;
                         }
                     }
-                    *len += 1;
+                    *row_count += 1;
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -1345,15 +1361,25 @@ impl Decoder {
                 let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
                 off.push_length(total_items);
             }
-            Self::Record(_, encodings, _, None, len) => {
-                for encoding in encodings {
+            Self::Record {
+                decoders,
+                projector: None,
+                row_count,
+                ..
+            } => {
+                for encoding in decoders {
                     encoding.decode(buf)?;
                 }
-                *len += 1;
+                *row_count += 1;
             }
-            Self::Record(_, encodings, _, Some(proj), len) => {
-                proj.project_record(buf, encodings)?;
-                *len += 1;
+            Self::Record {
+                decoders,
+                projector: Some(proj),
+                row_count,
+                ..
+            } => {
+                proj.project_record(buf, decoders)?;
+                *row_count += 1;
             }
             Self::Map(_, koff, moff, kdata, valdec) => {
                 let newly_added = read_blocks(buf, |cur| {
@@ -1526,13 +1552,18 @@ impl Decoder {
                 Ok(())
             }
             ResolutionPlan::Record(proj) => {
-                let Self::Record(_, encodings, _, _, len) = self else {
+                let Self::Record {
+                    decoders,
+                    row_count,
+                    ..
+                } = self
+                else {
                     return Err(AvroError::SchemaError(
                         "record projection provided for non-record decoder".into(),
                     ));
                 };
-                proj.project_record(buf, encodings)?;
-                *len += 1;
+                proj.project_record(buf, decoders)?;
+                *row_count += 1;
                 Ok(())
             }
         }
@@ -1673,19 +1704,23 @@ impl Decoder {
                 let offsets = flush_offsets(offsets);
                 Arc::new(ListArray::try_new(field.clone(), offsets, values, nulls)?)
             }
-            Self::Record(fields, encodings, _, _, len) => {
-                let arrays = encodings
+            Self::Record {
+                fields,
+                decoders,
+                row_count,
+                ..
+            } => {
+                let arrays = decoders
                     .iter_mut()
                     .map(|x| x.flush(None))
                     .collect::<Result<Vec<_>, _>>()?;
-                // An Avro record with no fields is legal and encodes to zero bytes, so it has to
-                // flush as a zero-field struct of the right length. `StructArray::try_new` infers
-                // the length from the first child, of which there is none.
+                // In case there are no fields (legal, encodes to zero bytes), manually specify
+                // the length for the output struct to account for this.
                 Arc::new(StructArray::try_new_with_length(
                     fields.clone(),
                     arrays,
                     nulls,
-                    std::mem::replace(len, 0),
+                    std::mem::replace(row_count, 0),
                 )?)
             }
             Self::Map(map_field, k_off, m_off, kdata, valdec) => {
@@ -1860,9 +1895,15 @@ impl ResolutionPlan {
             (_, ResolutionInfo::EnumMapping(m)) => {
                 Ok(ResolutionPlan::EnumMapping(EnumResolution::new(m)))
             }
-            (Decoder::Record(_, _, field_defaults, _, _), ResolutionInfo::Record(r)) => Ok(
-                ResolutionPlan::Record(ProjectorBuilder::try_new(r, field_defaults).build()?),
-            ),
+            (
+                Decoder::Record {
+                    defaults: field_defaults,
+                    ..
+                },
+                ResolutionInfo::Record(r),
+            ) => Ok(ResolutionPlan::Record(
+                ProjectorBuilder::try_new(r, field_defaults).build()?,
+            )),
             (_, ResolutionInfo::Record(_)) => Err(AvroError::SchemaError(
                 "record resolution on non-record decoder".into(),
             )),
@@ -4303,16 +4344,16 @@ mod tests {
             encodings.push(enc);
         }
         let fields: Fields = field_refs.into();
-        Decoder::Record(
+        Decoder::Record {
             fields,
-            encodings,
-            vec![None; reader_fields.len()],
-            Some(Projector {
+            decoders: encodings,
+            defaults: vec![None; reader_fields.len()],
+            projector: Some(Projector {
                 writer_projections,
                 default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
             }),
-            0,
-        )
+            row_count: 0,
+        }
     }
 
     #[test]
@@ -4694,7 +4735,13 @@ mod tests {
             writer_projections: vec![],
             default_injections: Arc::from(default_injections),
         };
-        Decoder::Record(fields, encodings, field_defaults, Some(projector), 0)
+        Decoder::Record {
+            fields,
+            decoders: encodings,
+            defaults: field_defaults,
+            projector: Some(projector),
+            row_count: 0,
+        }
     }
 
     #[cfg(feature = "avro_custom_types")]
@@ -5272,13 +5319,13 @@ mod tests {
             writer_projections: vec![],
             default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
         };
-        let mut rec = Decoder::Record(
-            field_refs.into(),
-            encoders,
-            field_defaults,
-            Some(projector),
-            0,
-        );
+        let mut rec = Decoder::Record {
+            fields: field_refs.into(),
+            decoders: encoders,
+            defaults: field_defaults,
+            projector: Some(projector),
+            row_count: 0,
+        };
         let mut map: IndexMap<String, AvroLiteral> = IndexMap::new();
         map.insert("a".to_string(), AvroLiteral::Int(9));
         rec.append_default(&AvroLiteral::Map(map)).unwrap();
