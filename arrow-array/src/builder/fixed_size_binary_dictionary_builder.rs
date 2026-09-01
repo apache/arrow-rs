@@ -159,9 +159,13 @@ where
         Ok(Self {
             state,
             dedup,
-            keys_builder: new_keys
-                .into_builder()
-                .expect("underlying buffer has no references"),
+            keys_builder: new_keys.into_builder().map_err(|_| {
+                ArrowError::ComputeError(
+                    "Internal Error: the keys just derived from the source builder are \
+                     unexpectedly shared, so they cannot be reused as a builder"
+                        .to_string(),
+                )
+            })?,
             values_builder,
             byte_width,
         })
