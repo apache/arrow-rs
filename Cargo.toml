@@ -253,7 +253,6 @@ needless_pass_by_value = "allow"             # ~260 violations in ~110 files
 non_std_lazy_statics = "allow"               # ~56 violations in ~10 files
 range_plus_one = "allow"                     # ~17 violations in ~13 files
 redundant_closure_for_method_calls = "allow" # ~310 violations in ~130 files
-redundant_else = "allow"                     # ~23 violations in ~16 files
 return_self_not_must_use = "allow"           # ~470 violations in ~91 files
 semicolon_if_nothing_returned = "allow"      # ~1300 violations in ~250 files
 similar_names = "allow"                      # ~150 violations in ~43 files

@@ -209,10 +209,9 @@ impl Parser<'_> {
         while let Some(value) = self.tokenizer.next() {
             if value == "}" {
                 break;
-            } else {
-                self.tokenizer.backtrack();
-                vec.push(Arc::new(self.add_type()?));
             }
+            self.tokenizer.backtrack();
+            vec.push(Arc::new(self.add_type()?));
         }
         Ok(vec)
     }

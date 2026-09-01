@@ -1549,11 +1549,11 @@ fn compare_dictionaries(old: &ArrayData, new: &ArrayData) -> DictionaryCompariso
     let existing_len = old.len();
     let new_len = new.len();
     if existing_len == new_len {
-        if *old == *new {
-            return DictionaryComparison::Equal;
+        return if *old == *new {
+            DictionaryComparison::Equal
         } else {
-            return DictionaryComparison::NotEqual;
-        }
+            DictionaryComparison::NotEqual
+        };
     }
 
     // Can't be a delta if the new is shorter than the existing
