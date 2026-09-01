@@ -3672,7 +3672,7 @@ mod tests {
         ensure_roundtrip(Arc::new(ls.finish()));
     }
 
-    /// Read/write a record batch to a File and Stream and ensure it is the same at the outout
+    /// Read/write a record batch to a File and Stream and ensure it is the same at the output
     fn ensure_roundtrip(array: ArrayRef) {
         let num_rows = array.len();
         let orig_batch = RecordBatch::try_from_iter(vec![("a", array)]).unwrap();
