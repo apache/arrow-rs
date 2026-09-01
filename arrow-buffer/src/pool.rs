@@ -25,7 +25,7 @@
 //! ```text
 //!     (pool tracker)                        (resizable)
 //!  ┌──────────────────┐ fn reserve() ┌─────────────────────────┐
-//!  │ trait MemoryPool │────────────►│ trait MemoryReservation │
+//!  │ trait MemoryPool │─────────────►│ trait MemoryReservation │
 //!  └──────────────────┘              └─────────────────────────┘
 //! ```
 
