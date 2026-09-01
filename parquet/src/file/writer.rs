@@ -1698,12 +1698,14 @@ mod tests {
 
         let mut buffer: Vec<u8> = vec![];
         let mut result_pages: Vec<Page> = vec![];
+        let mut total_uncompressed_size = 0;
         {
             let mut writer = TrackedWrite::new(&mut buffer);
             let mut page_writer = SerializedPageWriter::new(&mut writer);
 
             for page in compressed_pages {
-                page_writer.write_page(page).unwrap();
+                let page_spec = page_writer.write_page(page).unwrap();
+                total_uncompressed_size += page_spec.uncompressed_size as i64;
             }
             page_writer.close().unwrap();
         }
@@ -1718,6 +1720,7 @@ mod tests {
             let meta = ColumnChunkMetaData::builder(Arc::new(desc))
                 .set_compression_codec(codec.into())
                 .set_total_compressed_size(reader.len() as i64)
+                .set_total_uncompressed_size(total_uncompressed_size)
                 .set_num_values(total_num_values)
                 .build()
                 .unwrap();
