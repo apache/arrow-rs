@@ -40,14 +40,10 @@ use lexical_core::FormattedSize;
 
 type TimeFormat<'a> = Option<&'a str>;
 
-/// A compiled items used to format the time
-pub struct CompiledItems<'a>(Vec<Item<'a>>);
+struct CompiledItems<'a>(Vec<Item<'a>>);
 
-/// A format which used to display the given time.
-pub enum CompiledTimeFormat<'a> {
-    /// The default time format, will use rfc3339 format
+enum CompiledTimeFormat<'a> {
     Default,
-    /// A user custom time format
     Custom(Box<CompiledItems<'a>>),
 }
 
