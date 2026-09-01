@@ -1713,9 +1713,7 @@ mod tests {
         // Two independently-built `Dictionary<UInt8, Utf8View>` arrays holding the
         // same 200 distinct values. Naively concatenating their dictionaries yields
         // 400 entries, which overflows the u8 key range, but the distinct values do
-        // fit -- so the values must be merged and deduplicated instead. This mirrors
-        // a `Dictionary<UInt16, Utf8View>` column read in several partitions, each
-        // building its own dictionary, and then combined.
+        // fit -- so the values must be merged and deduplicated instead.
         let dict = |offset: usize| {
             let values: StringViewArray = (0..200).map(|i| Some(format!("v{i}"))).collect();
             let keys = UInt8Array::from_iter_values((0..200).map(|i| (i + offset) as u8 % 200));
@@ -1728,7 +1726,10 @@ mod tests {
 
         assert_eq!(combined.len(), 400);
         assert_eq!(combined.values().data_type(), &DataType::Utf8View);
-        assert!(combined.values().len() < 400);
+        // Merged down to something the key type can address. Two dictionaries
+        // stay within reach of the best-effort interner, so a few duplicates
+        // survive and the count is not exactly 200
+        assert!(u8::try_from(combined.values().len()).is_ok());
 
         let values = combined.values().as_string_view();
         let actual: Vec<_> = combined
@@ -1768,7 +1769,7 @@ mod tests {
 
         assert_eq!(combined.len(), 400);
         assert_eq!(combined.values().data_type(), &DataType::BinaryView);
-        assert!(combined.values().len() < 400);
+        assert!(u8::try_from(combined.values().len()).is_ok());
 
         let values = combined.values().as_binary_view();
         let actual: Vec<_> = combined
@@ -1801,9 +1802,10 @@ mod tests {
         let combined = combined.as_dictionary::<UInt8Type>();
 
         assert_eq!(combined.len(), 800);
-        // Every key is addressable; how far below 200 the merge gets depends on
-        // whether the best-effort interner sufficed or the exact retry ran
-        assert!(u8::try_from(combined.values().len()).is_ok());
+        // Four dictionaries leave the best-effort interner with more duplicates
+        // than the key type can address, so the exact retry runs and the merged
+        // values end up one per distinct value
+        assert_eq!(combined.values().len(), 200);
 
         let values = combined.values().as_string::<i32>();
         let actual: Vec<_> = combined

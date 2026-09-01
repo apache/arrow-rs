@@ -464,22 +464,21 @@ mod tests {
     use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
     use std::sync::Arc;
 
-    use arrow_array::types::UInt16Type;
-    use arrow_array::{StringViewArray, UInt16Array};
+    use arrow_array::types::UInt8Type;
+    use arrow_array::{StringViewArray, UInt8Array};
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
     fn merge_string_view_dictionaries_deduplicates_exactly() {
-        // Four dictionaries over the same values: 60000 distinct strings, an
-        // empty string and a null. Concatenating them would need 240008 keys,
-        // far past the UInt16 range, while the distinct values leave room to
-        // spare -- so the merge has to deduplicate them exactly. At this
-        // cardinality the best-effort interner alone leaves thousands of
-        // duplicates behind and overflows, which forces the exact retry.
-        const DISTINCT: usize = 60000;
+        // Four dictionaries over the same values: 200 distinct strings, an
+        // empty string and a null. Concatenating them would need 808 keys, far
+        // past the u8 range, while the distinct values leave room to spare --
+        // so the merge has to deduplicate them exactly. At this cardinality the
+        // best-effort interner alone leaves enough duplicates behind to
+        // overflow, which forces the exact retry.
+        const DISTINCT: usize = 200;
         let len = DISTINCT + 2;
 
-        let dictionaries: Vec<DictionaryArray<UInt16Type>> = (0..4)
+        let dictionaries: Vec<DictionaryArray<UInt8Type>> = (0..4)
             .map(|d| {
                 let values: StringViewArray = (0..DISTINCT)
                     .map(|i| Some(format!("value_{i:06}")))
@@ -488,12 +487,12 @@ mod tests {
                 // Offset the keys per dictionary so the merge can't rely on the
                 // arrays being laid out the same way
                 let keys =
-                    UInt16Array::from_iter_values((0..len).map(|i| ((i + d * 7919) % len) as u16));
-                DictionaryArray::<UInt16Type>::new(keys, Arc::new(values))
+                    UInt8Array::from_iter_values((0..len).map(|i| ((i + d * 7919) % len) as u8));
+                DictionaryArray::<UInt8Type>::new(keys, Arc::new(values))
             })
             .collect();
 
-        let refs: Vec<&DictionaryArray<UInt16Type>> = dictionaries.iter().collect();
+        let refs: Vec<&DictionaryArray<UInt8Type>> = dictionaries.iter().collect();
         let merged = merge_dictionary_values(&refs, None).unwrap();
 
         // One key per distinct value, null and empty string kept apart
