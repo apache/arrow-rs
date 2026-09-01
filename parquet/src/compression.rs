@@ -146,6 +146,13 @@ pub(crate) trait CompressionLevel<T: std::fmt::Display + std::cmp::PartialOrd> {
 /// Given the compression type `codec`, returns a codec used to compress and decompress
 /// bytes for the compression type.
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
+#[cfg_attr(
+    any(feature = "lz4", test),
+    expect(
+        clippy::used_underscore_binding,
+        reason = "`_options` is only read when the `lz4` feature is on"
+    )
+)]
 pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<Box<dyn Codec>>> {
     #[cfg_attr(
         any(
