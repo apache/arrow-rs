@@ -1912,10 +1912,10 @@ mod tests {
     fn test_take_bool_nullable_index_sliced_source() {
         let source = BooleanArray::from(vec![Some(true), Some(false), Some(true), Some(false)]);
         let source = source.slice(1, 3); // logical: [false, true, false], offset=1
-        let source = source.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let source = source;
 
         let indices = UInt32Array::from(vec![Some(2), None, Some(0)]);
-        let result = take(source, &indices, None).unwrap();
+        let result = take(&source, &indices, None).unwrap();
         let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
 
         let expected = BooleanArray::from(vec![Some(false), None, Some(false)]);
