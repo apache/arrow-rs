@@ -2860,6 +2860,128 @@ mod tests {
     }
 
     #[test]
+    fn test_truncated_rows_with_extra_fields() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]));
+
+        let data_short = "a,b,c\n1,2";
+        let data_extra = "a,b,c\n4,5,6,7";
+        let data_mixed = "a,b,c\n1,2\n4,5,6,7";
+
+        // 1. with_truncated_rows(true) + ExtraFields::Ignore
+        // - a row with fewer fields is padded
+        // - a row with extra fields has the extra fields ignored
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .with_extra_fields(ExtraFields::Ignore)
+            .build(Cursor::new(data_mixed))
+            .unwrap();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 2);
+        let col_a = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int32Array>()
+            .unwrap();
+        let col_c = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<arrow_array::Int32Array>()
+            .unwrap();
+        assert_eq!(col_a.value(0), 1);
+        assert!(col_c.is_null(0));
+        assert_eq!(col_a.value(1), 4);
+        assert_eq!(col_c.value(1), 6);
+
+        // 2. with_truncated_rows(true) + ExtraFields::Error
+        // - a short row is still padded
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .with_extra_fields(ExtraFields::Error)
+            .build(Cursor::new(data_short))
+            .unwrap();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches[0].num_rows(), 1);
+
+        // - a row with extra fields still returns the exact field-count error
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .with_extra_fields(ExtraFields::Error)
+            .build(Cursor::new(data_extra))
+            .unwrap();
+        let err = reader.collect::<Result<Vec<_>, _>>().unwrap_err();
+        assert!(
+            err.to_string().contains("incorrect number of fields")
+                || err.to_string().contains("Expected 3"),
+            "{}",
+            err
+        );
+
+        // 3. with_truncated_rows(false) + ExtraFields::Ignore
+        // - a short row still returns the existing short-row error
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_truncated_rows(false)
+            .with_extra_fields(ExtraFields::Ignore)
+            .build(Cursor::new(data_short))
+            .unwrap();
+        let err = reader.collect::<Result<Vec<_>, _>>().unwrap_err();
+        assert!(
+            err.to_string().contains("incorrect number of fields")
+                || err.to_string().contains("found 2"),
+            "{}",
+            err
+        );
+
+        // - a row with extra fields is successfully decoded with extra fields ignored
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_truncated_rows(false)
+            .with_extra_fields(ExtraFields::Ignore)
+            .build(Cursor::new(data_extra))
+            .unwrap();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches[0].num_rows(), 1);
+
+        // 4. with_truncated_rows(false) + ExtraFields::Error
+        // - preserve existing default behavior (error on both)
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_truncated_rows(false)
+            .with_extra_fields(ExtraFields::Error)
+            .build(Cursor::new(data_short))
+            .unwrap();
+        let err = reader.collect::<Result<Vec<_>, _>>().unwrap_err();
+        assert!(
+            err.to_string().contains("incorrect number of fields")
+                || err.to_string().contains("found 2"),
+            "{}",
+            err
+        );
+
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_truncated_rows(false)
+            .with_extra_fields(ExtraFields::Error)
+            .build(Cursor::new(data_extra))
+            .unwrap();
+        let err = reader.collect::<Result<Vec<_>, _>>().unwrap_err();
+        assert!(
+            err.to_string().contains("incorrect number of fields")
+                || err.to_string().contains("Expected 3"),
+            "{}",
+            err
+        );
+    }
+
+    #[test]
     fn test_truncated_rows_csv() {
         let file = File::open("test/data/truncated_rows.csv").unwrap();
         let schema = Arc::new(Schema::new(vec![
