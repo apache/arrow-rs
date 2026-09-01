@@ -1494,7 +1494,7 @@ mod tests {
         assert!(col1.is_null(5));
         assert_eq!(
             col1.values(),
-            &[100, 200, 204, 1103420, 0, 0].map(T::Native::usize_as)
+            &[100, 200, 205, 1103420, 0, 0].map(T::Native::usize_as)
         );
 
         let col2 = batches[0].column(1).as_primitive::<T>();
@@ -1514,8 +1514,98 @@ mod tests {
         assert!(col3.is_null(5));
         assert_eq!(
             col3.values(),
-            &[3830, 12345, 0, 0, 0, 0].map(T::Native::usize_as)
+            &[3830, 12346, 0, 0, 0, 0].map(T::Native::usize_as)
         );
+    }
+
+    #[test]
+    fn test_decimal_number_formats() {
+        // Rounding half away from zero, exponent notation (a valid JSON
+        // number syntax), surrounding whitespace in strings and negative
+        // scales are all accepted
+        let buf = r#"
+        {"a": 0e0, "b": " 1.5 ", "c": 1234.5}
+        {"a": 1.5E2, "b": "-0.005", "c": -150}
+        {"a": 1e-3, "b": "1e2", "c": 1E2}
+        {"a": -0E+0, "b": "+.5", "c": 5}
+        "#;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Decimal128(10, 2), true),
+            Field::new("b", DataType::Decimal64(18, 2), true),
+            Field::new("c", DataType::Decimal128(10, -2), true),
+        ]));
+        let batches = do_read(buf, 1024, true, false, schema);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(
+            batches[0]
+                .column(0)
+                .as_primitive::<Decimal128Type>()
+                .values(),
+            &[0, 15000, 0, 0]
+        );
+        assert_eq!(
+            batches[0]
+                .column(1)
+                .as_primitive::<Decimal64Type>()
+                .values(),
+            &[150, -1, 10000, 50]
+        );
+        assert_eq!(
+            batches[0]
+                .column(2)
+                .as_primitive::<Decimal128Type>()
+                .values(),
+            &[12, -2, 1, 0]
+        );
+
+        // Invalid and out-of-range values are errors (or nulls when type
+        // conflicts are ignored), never panics
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Decimal128(5, 2),
+            true,
+        )]));
+        let long = "1".repeat(300);
+        for (buf, expected) in [
+            (
+                r#"{"a": "abc"}"#.to_string(),
+                "Invalid decimal format: \"abc\"",
+            ),
+            (
+                r#"{"a": 123456789}"#.to_string(),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                r#"{"a": 1e99999}"#.to_string(),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                format!(r#"{{"a": {long}}}"#),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                r#"{"a": 4825037936439135476.2609835314269495255615E-14}"#.to_string(),
+                "does not fit in Decimal128(5, 2)",
+            ),
+        ] {
+            let err = ReaderBuilder::new(schema.clone())
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(expected), "{buf}: {err}");
+
+            let batch = ReaderBuilder::new(schema.clone())
+                .with_ignore_type_conflicts(true)
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert!(batch.column(0).is_null(0), "{buf}");
+        }
     }
 
     #[test]
