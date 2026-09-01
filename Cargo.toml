@@ -224,7 +224,6 @@ cast_lossless = "allow"                      # ~640 violations in ~100 files
 cast_possible_truncation = "allow"           # ~890 violations in ~190 files
 cast_possible_wrap = "allow"                 # ~570 violations in ~120 files
 cast_precision_loss = "allow"                # ~130 violations in ~33 files
-cast_ptr_alignment = "allow"                 # ~3 violations in ~3 files
 cast_sign_loss = "allow"                     # ~590 violations in ~150 files
 default_trait_access = "allow"               # ~210 violations in ~68 files
 doc_markdown = "allow"                       # ~2300 violations in ~290 files

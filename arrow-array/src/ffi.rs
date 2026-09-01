@@ -397,7 +397,14 @@ impl ImportedArrowArray<'_> {
             } else {
                 let lengths = self.array.buffer(self.array.num_buffers() - 1);
                 // SAFETY: is lengths is non-null, then it must be valid for up to num_variadic_buffers.
-                unsafe { std::slice::from_raw_parts(lengths.cast::<i64>(), num_variadic_buffers) }
+                // The C data interface requires buffers to be aligned for their type.
+                #[expect(
+                    clippy::cast_ptr_alignment,
+                    reason = "the C data interface requires aligned buffers"
+                )]
+                unsafe {
+                    std::slice::from_raw_parts(lengths.cast::<i64>(), num_variadic_buffers)
+                }
             }
         } else {
             &[]
