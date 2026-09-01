@@ -28,12 +28,13 @@ use arrow::datatypes::{
     Decimal256Type, DecimalType, format_decimal_str,
 };
 use arrow::error::{ArrowError, Result};
-use arrow::util::display::{CompiledTimeFormat, FormatResult, lexical_to_string, write_timestamp};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use arrow::util::display::{FormatResult, lexical_to_string};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, TimeZone, Timelike, Utc};
 use half::f16;
 use num_traits::NumCast;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 use std::fmt::Write;
+use arrow::array::timezone::Tz;
 
 /// Extension trait for Arrow primitive types that can extract their native value from a Variant
 pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
@@ -713,14 +714,18 @@ pub(crate) fn variant_to_boolean(variant: &Variant<'_, '_>, shred: bool) -> Opti
 fn write_utc_timestamp_with_default_format(
     f: &mut dyn Write,
     naive: NaiveDateTime,
+    timezone: Option<Tz>,
 ) -> FormatResult {
-    write_timestamp(
-        f,
-        naive,
-        "+00:00".parse().ok(),
-        &CompiledTimeFormat::Default,
-    )
+    match timezone {
+        Some(tz) => {
+            let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
+            write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
+        }
+        None => write!(f, "{naive:?}")?
+    }
+    Ok(())
 }
+
 // convert a variant to an owned string.
 pub(crate) fn variant_to_string(variant: &Variant<'_, '_>) -> Option<String> {
     match variant {
@@ -770,22 +775,22 @@ pub(crate) fn variant_to_string(variant: &Variant<'_, '_>) -> Option<String> {
         }
         Variant::TimestampMicros(t) => {
             let mut out = String::new();
-            let _ = write_utc_timestamp_with_default_format(&mut out, t.naive_utc());
+            let _ = write_utc_timestamp_with_default_format(&mut out, t.naive_utc(), "+00:00".parse().ok());
             Some(out)
         }
         Variant::TimestampNtzMicros(t) => {
             let mut out = String::new();
-            let _ = write_utc_timestamp_with_default_format(&mut out, *t);
+            let _ = write_utc_timestamp_with_default_format(&mut out, *t, None);
             Some(out)
         }
         Variant::TimestampNanos(t) => {
             let mut out = String::new();
-            let _ = write_utc_timestamp_with_default_format(&mut out, t.naive_utc());
+            let _ = write_utc_timestamp_with_default_format(&mut out, t.naive_utc(), "+00:00".parse().ok());
             Some(out)
         }
         Variant::TimestampNtzNanos(t) => {
             let mut out = String::new();
-            let _ = write_utc_timestamp_with_default_format(&mut out, *t);
+            let _ = write_utc_timestamp_with_default_format(&mut out, *t, None);
             Some(out)
         }
         Variant::Uuid(u) => Some(u.to_string()),
@@ -888,7 +893,7 @@ pub(crate) use primitive_conversion_single_value;
 mod tests {
     use crate::type_conversion::variant_to_string;
     use arrow::array::{
-        Array, AsArray, BooleanArray, Date32Array, Int32Builder, ListBuilder, StringArray,
+        Array, AsArray, BooleanArray, Date32Array, Int32Builder, ListBuilder,
         Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
     };
     use arrow::compute::cast;
@@ -924,10 +929,7 @@ mod tests {
 
         let date32_array = Date32Array::from_iter_values(epoch_days);
         let date32_cast_array = cast(&date32_array, &DataType::Utf8).unwrap();
-        let date32_utf8_array = date32_cast_array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let date32_utf8_array = date32_cast_array.as_string::<i32>();
         for (a, b) in zip(variant_as_string_array, date32_utf8_array) {
             assert_eq!(a.unwrap(), b.unwrap());
         }
@@ -954,10 +956,7 @@ mod tests {
         );
 
         let time_micro_cast_array = cast(&time_micro_array, &DataType::Utf8).unwrap();
-        let time_micro_utf8_array = time_micro_cast_array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let time_micro_utf8_array = time_micro_cast_array.as_string::<i32>();
 
         for (a, b) in zip(time_variant_as_string_array, time_micro_utf8_array) {
             assert_eq!(a.unwrap(), b.unwrap());
@@ -978,10 +977,7 @@ mod tests {
             TimestampMicrosecondArray::from_iter_values(micros).with_timezone("+00:00");
         let timestamp_micro_arrow_cast_array =
             cast(&timestamp_micro_arrow_array, &DataType::Utf8).unwrap();
-        let timestamp_micro_utf8_array = timestamp_micro_arrow_cast_array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let timestamp_micro_utf8_array = timestamp_micro_arrow_cast_array.as_string::<i32>();
         for (a, b) in zip(timestamp_micro_as_string_array, timestamp_micro_utf8_array) {
             assert_eq!(a.unwrap(), b.unwrap());
         }
@@ -1005,10 +1001,8 @@ mod tests {
             TimestampMicrosecondArray::from_iter_values(micros_ntz);
         let timestamp_micro_ntz_arrow_cast_array =
             cast(&timestamp_micro_ntz_arrow_array, &DataType::Utf8).unwrap();
-        let timestamp_micro_ntz_utf8_array = timestamp_micro_ntz_arrow_cast_array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let timestamp_micro_ntz_utf8_array =
+            timestamp_micro_ntz_arrow_cast_array.as_string::<i32>();
 
         for (a, b) in zip(
             timestamp_micro_ntz_variant_as_string_array,
@@ -1032,10 +1026,7 @@ mod tests {
             TimestampNanosecondArray::from_iter_values(nanos).with_timezone("+00:00");
         let timestamp_nano_arrow_cast_array =
             cast(&timestamp_nano_arrow_array, &DataType::Utf8).unwrap();
-        let timestamp_nano_cast_utf8_array = timestamp_nano_arrow_cast_array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let timestamp_nano_cast_utf8_array = timestamp_nano_arrow_cast_array.as_string::<i32>();
         for (a, b) in zip(
             timestamp_nano_cast_utf8_array,
             timestamp_nano_as_string_array,
@@ -1059,11 +1050,7 @@ mod tests {
 
         let timestamp_nano_ntz_arrow_cast_array =
             cast(&timestamp_nano_ntz_arrow_array, &DataType::Utf8).unwrap();
-        let timestamp_nano_ntz_utf8_array = timestamp_nano_ntz_arrow_cast_array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-
+        let timestamp_nano_ntz_utf8_array = timestamp_nano_ntz_arrow_cast_array.as_string::<i32>();
         for (a, b) in zip(
             timestamp_nano_ntz_variant_as_string_array,
             timestamp_nano_ntz_utf8_array,
@@ -1092,7 +1079,7 @@ mod tests {
         builder.append(true);
         let list_arrow_array = builder.finish();
         let cast_array = cast(&list_arrow_array, &DataType::Utf8).unwrap();
-        let arrow_list_cast_utf8_array = cast_array.as_any().downcast_ref::<StringArray>().unwrap();
+        let arrow_list_cast_utf8_array = cast_array.as_string::<i32>();
 
         assert_eq!(arrow_list_cast_utf8_array.len(), 1);
         assert_eq!(

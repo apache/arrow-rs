@@ -756,8 +756,7 @@ macro_rules! decimal_display {
 
 decimal_display!(Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type);
 
-/// Writes a timestamp value to the output using the given representation.
-pub fn write_timestamp(
+fn write_timestamp(
     f: &mut dyn Write,
     naive: NaiveDateTime,
     timezone: Option<Tz>,
