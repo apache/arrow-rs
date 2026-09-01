@@ -341,7 +341,7 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
         DataType::Union(fields, UnionMode::Sparse) => {
             let mut children = Vec::with_capacity(fields.len());
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
-            let type_ids = take_union_type_ids(fields, values.type_ids(), indices)?;
+            let type_ids = take_union_type_ids::<_, VALIDATE_INDICES>(fields, values.type_ids(), indices)?;
             for (type_id, _field) in fields.iter() {
                 let values = values.child(type_id);
                 let values = take_impl::<_, VALIDATE_INDICES>(values, indices)?;
@@ -354,13 +354,13 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
 
             let type_ids = PrimitiveArray::<Int8Type>::try_new(
-                take_union_type_ids(fields, values.type_ids(), indices)?,
+                take_union_type_ids::<_, VALIDATE_INDICES>(fields, values.type_ids(), indices)?,
                 None,
             )?;
             // Keep index nulls so `take` of each child writes a null instead of
             // reading child offset 0 (the default `take_native` fills in).
             let offsets = <PrimitiveArray<Int32Type>>::try_new(
-                take_native(values.offsets().unwrap(), indices),
+                take_native::<_, _, VALIDATE_INDICES>(values.offsets().unwrap(), indices),
                 indices.nulls().cloned(),
             )?;
 
@@ -404,13 +404,13 @@ fn take_impl<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
 /// Union arrays do not have a top-level null bitmap. A null is represented by selecting an
 /// arbitrary valid child type id with a null value in that child. In particular, a null index
 /// cannot fall back to type id `0`, as unions are not required to have such a child.
-fn take_union_type_ids<IndexType: ArrowPrimitiveType>(
+fn take_union_type_ids<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     fields: &UnionFields,
     type_ids: &ScalarBuffer<i8>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ScalarBuffer<i8>, ArrowError> {
     if indices.null_count() == 0 {
-        return Ok(take_native(type_ids, indices));
+        return Ok(take_native::<_, _, VALIDATE_INDICES>(type_ids, indices));
     }
 
     let null_type_id = fields
@@ -422,7 +422,7 @@ fn take_union_type_ids<IndexType: ArrowPrimitiveType>(
                 "Cannot take from a union with zero fields when indices contains nulls".into(),
             )
         })?;
-    let taken_type_ids = take_native(type_ids, indices);
+    let taken_type_ids = take_native::<_, _, VALIDATE_INDICES>(type_ids, indices);
     let type_ids = indices
         .iter()
         .zip(&taken_type_ids)
@@ -463,7 +463,7 @@ where
     T: ArrowPrimitiveType,
     I: ArrowPrimitiveType,
 {
-    let values_buf = take_native(values.values(), indices);
+    let values_buf = take_native::<_, _, VALIDATE_INDICES>(values.values(), indices);
     let nulls = take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices);
     Ok(PrimitiveArray::try_new(values_buf, nulls)?.with_data_type(values.data_type().clone()))
 }
@@ -483,7 +483,7 @@ fn take_nulls<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
 }
 
 #[inline(never)]
-fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
+fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &[T],
     indices: &PrimitiveArray<I>,
 ) -> ScalarBuffer<T> {
@@ -501,11 +501,24 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
                 },
             })
             .collect(),
-        None => indices
-            .values()
-            .iter()
-            .map(|index| values[index.as_usize()])
-            .collect(),
+        None => {
+            if VALIDATE_INDICES {
+                indices
+                    .values()
+                    .iter()
+                    .map(|index| values[index.as_usize()])
+                    .collect()
+            } else {
+                indices
+                    .values()
+                    .iter()
+                    .map(|index| {
+                        // SAFETY: !VALIDATE_INDICES means the caller guarantees all indices are in-bounds.
+                        unsafe { *values.get_unchecked(index.as_usize()) }
+                    })
+                    .collect()
+            }
+        }
     }
 }
 
@@ -893,7 +906,7 @@ fn take_byte_view<T: ByteViewType, IndexType: ArrowPrimitiveType, const VALIDATE
     array: &GenericByteViewArray<T>,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericByteViewArray<T>, ArrowError> {
-    let new_views = take_native(array.views(), indices);
+    let new_views = take_native::<_, _, VALIDATE_INDICES>(array.views(), indices);
     let new_nulls = take_nulls::<_, VALIDATE_INDICES>(array.nulls(), indices);
     let buffers = Arc::clone(array.data_buffers());
     // Safety:  array.views was valid, and take_native copies only valid values, and verifies bounds
@@ -1073,8 +1086,8 @@ where
     OffsetType: ArrowPrimitiveType,
     OffsetType::Native: OffsetSizeTrait,
 {
-    let taken_offsets = take_native(values.offsets(), indices);
-    let taken_sizes = take_native(values.sizes(), indices);
+    let taken_offsets = take_native::<_, _, VALIDATE_INDICES>(values.offsets(), indices);
+    let taken_sizes = take_native::<_, _, VALIDATE_INDICES>(values.sizes(), indices);
     let nulls = take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices);
 
     let field = match values.data_type() {
