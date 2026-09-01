@@ -220,7 +220,6 @@ wildcard_dependencies = "warn"
 # Lints in `pedantic` that we currently allow.
 # Some of these we should consider enabling in the future.
 # Counts come from `cargo clippy --all-features --all-targets`.
-borrow_as_ptr = "allow"                      # ~9 violations in ~1 file
 cast_lossless = "allow"                      # ~640 violations in ~100 files
 cast_possible_truncation = "allow"           # ~890 violations in ~190 files
 cast_possible_wrap = "allow"                 # ~570 violations in ~120 files
