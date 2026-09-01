@@ -507,12 +507,8 @@ fn take_bits<I: ArrowPrimitiveType, const CHECKED: bool>(
             let mut output = vec![0u8; out_bytes];
             let out_ptr = output.as_mut_ptr();
             index_nulls.valid_indices().for_each(|valid_idx| {
-                let index_val = if CHECKED {
-                    indices.value(valid_idx).as_usize()
-                } else {
-                    // SAFETY: valid_idx < indices.len(), guaranteed by valid_indices().
-                    unsafe { indices.value_unchecked(valid_idx) }.as_usize()
-                };
+                // SAFETY: valid_idx < indices.len(), guaranteed by valid_indices().
+                let index_val = unsafe { indices.value_unchecked(valid_idx) }.as_usize();
                 if CHECKED {
                     if values.value(index_val) {
                         // SAFETY: valid_idx < indices.len() = len, output buffer holds len bits.
@@ -593,12 +589,8 @@ fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
             let value_out_ptr = value_out.as_mut_ptr();
             let validity_out_ptr = validity_out.as_mut_ptr();
             for out_pos in index_nulls.valid_indices() {
-                let src_idx = if CHECKED {
-                    indices.value(out_pos).as_usize()
-                } else {
-                    // SAFETY: out_pos < indices.len(), guaranteed by valid_indices().
-                    unsafe { indices.value_unchecked(out_pos) }.as_usize()
-                };
+                // SAFETY: out_pos < indices.len(), guaranteed by valid_indices().
+                let src_idx = unsafe { indices.value_unchecked(out_pos) }.as_usize();
                 if CHECKED {
                     if values.value(src_idx) {
                         // SAFETY: out_pos < indices.len() = len, output buffer holds len bits.
@@ -642,12 +634,8 @@ fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let mut packed_values = 0u8;
                 let mut packed_validity = 0u8;
                 for bit_pos in 0..8usize {
-                    let src_idx = if CHECKED {
-                        indices.value(bit_base + bit_pos).as_usize()
-                    } else {
-                        // SAFETY: bit_base + bit_pos < full_bytes * 8 <= len.
-                        unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize()
-                    };
+                    // SAFETY: bit_base + bit_pos < full_bytes * 8 <= len.
+                    let src_idx = unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
                     if CHECKED {
                         packed_values |= (values.value(src_idx) as u8) << bit_pos;
                         packed_validity |= (validity.value(src_idx) as u8) << bit_pos;
@@ -670,12 +658,8 @@ fn take_bits_with_validity<I: ArrowPrimitiveType, const CHECKED: bool>(
                 let mut packed_values = 0u8;
                 let mut packed_validity = 0u8;
                 for bit_pos in 0..(len - bit_base) {
-                    let src_idx = if CHECKED {
-                        indices.value(bit_base + bit_pos).as_usize()
-                    } else {
-                        // SAFETY: bit_base + bit_pos < len (remainder loop bound).
-                        unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize()
-                    };
+                    // SAFETY: bit_base + bit_pos < len (remainder loop bound).
+                    let src_idx = unsafe { indices.value_unchecked(bit_base + bit_pos) }.as_usize();
                     if CHECKED {
                         packed_values |= (values.value(src_idx) as u8) << bit_pos;
                         packed_validity |= (validity.value(src_idx) as u8) << bit_pos;
