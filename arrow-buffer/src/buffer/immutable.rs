@@ -227,16 +227,16 @@ impl Buffer {
             // Drop guard: keeps Buffer::ptr consistent with Bytes::ptr even if a custom
             // MemoryReservation::resize panics inside try_realloc (see #10379).
             struct PtrSync<'a> {
-                ptr: &'a mut *const u8,
-                bytes: *const Bytes,
+                buffer_ptr: &'a mut *const u8,
+                bytes_ptr: *const Bytes,
                 offset: usize,
                 is_empty: bool,
             }
             impl Drop for PtrSync<'_> {
                 fn drop(&mut self) {
-                    // SAFETY: bytes is valid while Arc<Bytes> is held by Buffer
-                    let base = unsafe { (*self.bytes).as_ptr() };
-                    *self.ptr = if self.is_empty {
+                    // SAFETY: bytes_ptr is valid while Arc<Bytes> is held by Buffer
+                    let base = unsafe { (*self.bytes_ptr).as_ptr() };
+                    *self.buffer_ptr = if self.is_empty {
                         base
                     } else {
                         // SAFETY: offset is within the allocated region
@@ -245,8 +245,8 @@ impl Buffer {
                 }
             }
             let _sync = PtrSync {
-                ptr: &mut self.ptr,
-                bytes: bytes as *const Bytes,
+                buffer_ptr: &mut self.ptr,
+                bytes_ptr: std::ptr::from_ref::<Bytes>(bytes),
                 offset,
                 is_empty,
             };
