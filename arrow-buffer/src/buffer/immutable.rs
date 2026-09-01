@@ -224,17 +224,33 @@ impl Buffer {
         if desired_capacity < self.capacity()
             && let Some(bytes) = Arc::get_mut(&mut self.data)
         {
-            if bytes.try_realloc(desired_capacity).is_ok() {
-                // Realloc complete - update our pointer into `bytes`:
-                self.ptr = if is_empty {
-                    bytes.as_ptr()
-                } else {
-                    // SAFETY: we kept all elements leading up to the offset
-                    unsafe { bytes.as_ptr().add(offset) }
-                }
-            } else {
-                // Failure to reallocate is fine; we just failed to free up memory.
+            // Drop guard: keeps Buffer::ptr consistent with Bytes::ptr even if a custom
+            // MemoryReservation::resize panics inside try_realloc (see #10379).
+            struct PtrSync<'a> {
+                ptr: &'a mut *const u8,
+                bytes: *const Bytes,
+                offset: usize,
+                is_empty: bool,
             }
+            impl Drop for PtrSync<'_> {
+                fn drop(&mut self) {
+                    // SAFETY: bytes is valid while Arc<Bytes> is held by Buffer
+                    let base = unsafe { (*self.bytes).as_ptr() };
+                    *self.ptr = if self.is_empty {
+                        base
+                    } else {
+                        // SAFETY: offset is within the allocated region
+                        unsafe { base.add(self.offset) }
+                    };
+                }
+            }
+            let _sync = PtrSync {
+                ptr: &mut self.ptr,
+                bytes: bytes as *const Bytes,
+                offset,
+                is_empty,
+            };
+            bytes.try_realloc(desired_capacity).ok();
         }
     }
 
@@ -1157,5 +1173,59 @@ mod tests {
             let expected = Buffer::from(original_buffer_data).slice_with_length(0, slice_length);
             assert_eq!(buffer_back.as_slice(), expected.as_slice());
         }
+    }
+
+    #[test]
+    #[cfg(feature = "pool")]
+    fn test_shrink_to_fit_panicking_reservation() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use crate::pool::{MemoryPool, MemoryReservation};
+
+        #[derive(Debug)]
+        struct PanicPool;
+
+        #[derive(Debug)]
+        struct PanicReservation {
+            panicked: bool,
+        }
+
+        impl MemoryReservation for PanicReservation {
+            fn size(&self) -> usize {
+                0
+            }
+            fn resize(&mut self, _: usize) {
+                if !self.panicked {
+                    self.panicked = true;
+                    panic!("intentional panic in resize");
+                }
+            }
+        }
+
+        impl MemoryPool for PanicPool {
+            fn reserve(&self, _: usize) -> Box<dyn MemoryReservation> {
+                Box::new(PanicReservation { panicked: false })
+            }
+            fn available(&self) -> isize {
+                isize::MAX
+            }
+            fn used(&self) -> usize {
+                0
+            }
+            fn capacity(&self) -> usize {
+                usize::MAX
+            }
+        }
+
+        let pool = PanicPool;
+        let data: Vec<u8> = (0..8).collect();
+        let mut buf = Buffer::from_slice_ref(data.as_slice());
+        buf.claim(&pool);
+
+        // shrink_to_fit panics because PanicReservation::resize panics, but
+        // Buffer::ptr must stay consistent with Bytes::ptr (no use-after-free).
+        let _ = catch_unwind(AssertUnwindSafe(|| buf.shrink_to_fit()));
+
+        assert_eq!(buf.as_slice(), data.as_slice());
     }
 }
