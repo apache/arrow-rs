@@ -260,7 +260,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.row_group_index = self
             .row_group_index
             .checked_add(1)
-            .expect("SerializedFileWriter::row_group_index overflowed");
+            .ok_or_else(|| ParquetError::General("Row group index overflowed".to_string()))?;
 
         let bloom_filter_position = self.properties().bloom_filter_position();
         let row_groups = &mut self.row_groups;
@@ -2354,6 +2354,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_32k_rowgroups() {
         let message_type = "
             message test_schema {
@@ -2503,6 +2504,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     #[cfg(feature = "arrow")]
     fn test_byte_stream_split_extended_roundtrip() {
         let path = format!(
@@ -2617,6 +2619,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_rewrite_no_page_indexes() {
         let file = get_test_file("alltypes_tiny_pages.parquet");
         let metadata = ParquetMetaDataReader::new()
@@ -2648,6 +2651,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_rewrite_missing_column_index() {
         // this file has an INT96 column that lacks a column index entry
         let file = get_test_file("alltypes_tiny_pages.parquet");

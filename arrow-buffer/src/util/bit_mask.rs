@@ -156,6 +156,10 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
 /// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
 unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "the pointer is only written through `write_unaligned`"
+    )]
     let ptr = unsafe { data.as_mut_ptr().add(offset) }.cast::<u64>();
     unsafe { ptr.write_unaligned(chunk) };
 }

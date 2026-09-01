@@ -732,14 +732,14 @@ impl i256 {
             // self is between 10^64 and 10^77 (~i256::MAX).
             // `value` is 14 digits max (10^77 / 10^64 = 10^13),
             // so it fits to `low` u128
-            debug_assert!(value.high == 0);
+            debug_assert_eq!(value.high, 0);
             Some(64 + value.low.checked_ilog10()?)
         } else if self >= POW10_32 {
             let value = self.checked_div(POW10_32)?;
             // self is between 10^32 and 10^64.
             // `value` is 33 digits max (10^64/10^32=10^32)
             // so it fits to `low` 128-bit value
-            debug_assert!(value.high == 0);
+            debug_assert_eq!(value.high, 0);
             Some(32 + value.low.checked_ilog10()?)
         } else {
             // self fits within u128 (high == 0 and self > 0).

@@ -197,6 +197,7 @@ where
     /// let keys = dictionary_array.keys();
     ///
     /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
+    /// ```
     pub fn try_new_from_builder<K2>(
         mut source: PrimitiveDictionaryBuilder<K2, V>,
     ) -> Result<Self, ArrowError>
@@ -226,9 +227,13 @@ where
 
         Ok(Self {
             map,
-            keys_builder: new_keys
-                .into_builder()
-                .expect("underlying buffer has no references"),
+            keys_builder: new_keys.into_builder().map_err(|_| {
+                ArrowError::ComputeError(
+                    "Internal Error: the keys just derived from the source builder are \
+                     unexpectedly shared, so they cannot be reused as a builder"
+                        .to_string(),
+                )
+            })?,
             values_builder,
         })
     }

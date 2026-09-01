@@ -1706,10 +1706,9 @@ mod test {
             if (n & !0x7F) == 0 {
                 out.push(n as u8);
                 break;
-            } else {
-                out.push(((n & 0x7F) | 0x80) as u8);
-                n >>= 7;
             }
+            out.push(((n & 0x7F) | 0x80) as u8);
+            n >>= 7;
         }
         out
     }
@@ -3117,9 +3116,8 @@ mod test {
                             test.name
                         );
                         continue;
-                    } else {
-                        panic!("Test '{}' failed during build: {e}", test.name);
                     }
+                    panic!("Test '{}' failed during build: {e}", test.name);
                 }
             };
             let stream = Box::pin(stream::once(async { Bytes::from(body) }));

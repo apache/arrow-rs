@@ -1465,13 +1465,13 @@ mod tests {
 
         buf.extend_from_slice(&[0xaa]);
         buf2.extend_from_slice(&[0xaa, 0xbb]);
-        assert!(buf != buf2);
+        assert_ne!(buf, buf2);
 
         buf.extend_from_slice(&[0xbb]);
         assert_eq!(buf, buf2);
 
         buf2.reserve(65);
-        assert!(buf != buf2);
+        assert_ne!(buf, buf2);
     }
 
     #[test]
