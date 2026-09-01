@@ -347,7 +347,7 @@ impl ImportedArrowArray<'_> {
             | DataType::LargeListView(field)
             | DataType::Map(field, _) => Ok([self.consume_child(0, field.data_type())?].to_vec()),
             DataType::Struct(fields) => {
-                assert!(fields.len() == self.array.num_children());
+                assert_eq!(fields.len(), self.array.num_children());
                 fields
                     .iter()
                     .enumerate()
@@ -355,7 +355,7 @@ impl ImportedArrowArray<'_> {
                     .collect::<Result<Vec<_>>>()
             }
             DataType::Union(union_fields, _) => {
-                assert!(union_fields.len() == self.array.num_children());
+                assert_eq!(union_fields.len(), self.array.num_children());
                 union_fields
                     .iter()
                     .enumerate()

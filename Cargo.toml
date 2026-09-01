@@ -238,7 +238,6 @@ implicit_hasher = "allow"                    # ~9 violations in ~4 files
 inline_always = "allow"                      # ~30 violations in ~17 files
 items_after_statements = "allow"             # ~130 violations in ~41 files
 manual_assert = "allow"                      # ~20 violations in ~12 files
-manual_assert_eq = "allow"                   # ~29 violations in ~10 files
 many_single_char_names = "allow"             # ~8 violations in ~5 files
 map_unwrap_or = "allow"                      # ~76 violations in ~40 files
 match_bool = "allow"                         # ~100 violations in ~49 files
