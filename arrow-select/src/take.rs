@@ -1594,12 +1594,37 @@ pub fn take_record_batch(
     record_batch: &RecordBatch,
     indices: &dyn Array,
 ) -> Result<RecordBatch, ArrowError> {
-    let columns = record_batch
-        .columns()
-        .iter()
-        .map(|c| take(c, indices, None))
-        .collect::<Result<Vec<_>, _>>()?;
-    RecordBatch::try_new(record_batch.schema(), columns)
+    unsafe { take_record_batch_unchecked(record_batch, indices) }
+}
+
+/// Take rows by index from [`RecordBatch`], returning a new [`RecordBatch`], without bounds
+/// checking.
+///
+/// # Safety
+///
+/// The caller must guarantee that every non-null value in `indices` is a valid row index for
+/// `record_batch` (i.e. `index < record_batch.num_rows()`). Violating this will cause a panic
+/// or undefined behaviour inside the inner kernels.
+///
+/// # Errors
+///
+/// Returns an [`ArrowError`] if `indices` is not an integer array type.
+pub unsafe fn take_record_batch_unchecked(
+    record_batch: &RecordBatch,
+    indices: &dyn Array,
+) -> Result<RecordBatch, ArrowError> {
+    downcast_integer_array!(
+        indices => {
+            let indices = indices.to_indices();
+            let columns = record_batch
+                .columns()
+                .iter()
+                .map(|c| take_impl::<_, false>(c.as_ref(), &indices))
+                .collect::<Result<Vec<_>, _>>()?;
+            RecordBatch::try_new(record_batch.schema(), columns)
+        },
+        d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
+    )
 }
 
 #[cfg(test)]
