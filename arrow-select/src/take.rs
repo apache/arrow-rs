@@ -172,12 +172,12 @@ where
     T::Native: Display,
 {
     let Some(len) = T::Native::from_usize(len) else {
-        if T::DATA_TYPE.is_integer() {
+        return if T::DATA_TYPE.is_integer() {
             // the biggest representable value for T::Native is lower than len, e.g: u8::MAX < 512, no need to check bounds
-            return Ok(());
+            Ok(())
         } else {
-            return Err(ArrowError::ComputeError("Cast to usize failed".to_string()));
-        }
+            Err(ArrowError::ComputeError("Cast to usize failed".to_string()))
+        };
     };
 
     if indices.null_count() > 0 {

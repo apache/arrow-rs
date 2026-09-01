@@ -54,11 +54,8 @@ fn cases_dir() -> PathBuf {
             let pb = PathBuf::from(trimmed).join("..").join("variant");
             if pb.is_dir() {
                 return pb;
-            } else {
-                panic!(
-                    "Can't find variant data at `{pb:?}`. Used value of env `{env_name}`../variant ",
-                )
             }
+            panic!("Can't find variant data at `{pb:?}`. Used value of env `{env_name}`../variant ")
         }
     }
 
