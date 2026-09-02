@@ -280,7 +280,7 @@ impl CompressionCodec {
         };
         if ret.len() != decompressed_size {
             return Err(ArrowError::IpcError(format!(
-                "Expected compressed length of {decompressed_size} got {}",
+                "Expected decompressed length of {decompressed_size} got {}",
                 ret.len()
             )));
         }
@@ -310,7 +310,18 @@ fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> 
 fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     use std::io::Read;
     let mut output = Vec::with_capacity(decompressed_size);
-    lz4_flex::frame::FrameDecoder::new(input).read_to_end(&mut output)?;
+    let mut decoder = lz4_flex::frame::FrameDecoder::new(input);
+    decoder
+        .by_ref()
+        .take(decompressed_size as u64)
+        .read_to_end(&mut output)?;
+
+    // Probe without growing `output` to reject data exceeding the advertised size.
+    if decoder.read(&mut [0])? != 0 {
+        return Err(ArrowError::IpcError(format!(
+            "LZ4 decompressed buffer exceeds advertised size of {decompressed_size}"
+        )));
+    }
     Ok(output)
 }
 
@@ -375,14 +386,17 @@ fn decompress_zstd(
     ))
 }
 
-/// Get the uncompressed length
-/// Notes:
-///   LENGTH_NO_COMPRESSED_DATA: indicate that the data that follows is not compressed
-///    0: indicate that there is no data
-///   positive number: indicate the uncompressed length for the following data
-/// Returns an error if the input buffer is shorter than 8 bytes
+/// Reads the uncompressed length from a compressed IPC buffer.
+///
+/// A positive value is the exact expected uncompressed length, `0` indicates
+/// that there is no data, and `-1` indicates that the bytes following the
+/// prefix are not compressed.
+/// IPC decompression limits its output buffer to a positive advertised length
+/// and rejects output whose length differs.
+///
+/// Returns an error if the input buffer is shorter than the 8-byte prefix.
 #[inline]
-fn read_uncompressed_size(buffer: &[u8]) -> Result<i64, ArrowError> {
+pub fn read_uncompressed_size(buffer: &[u8]) -> Result<i64, ArrowError> {
     let len_buffer = buffer.get(..LENGTH_OF_PREFIX_DATA as usize).ok_or_else(|| {
         ArrowError::IpcError(format!(
             "Compressed IPC buffer is too short: expected at least {LENGTH_OF_PREFIX_DATA} bytes, got {}",
