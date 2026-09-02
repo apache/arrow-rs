@@ -823,6 +823,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let metadata = self.build_column_metadata()?;
         self.page_writer.close()?;
 
+        let write_bloom_filter = self.props.bloom_filter_for_dictionary_encoded_chunks()
+            || self.has_non_dictionary_data_page();
+        let bloom_filter = self
+            .encoder
+            .flush_bloom_filter()
+            .filter(|_| write_bloom_filter);
+
         let boundary_order = match (
             self.data_page_boundary_ascending,
             self.data_page_boundary_descending,
@@ -845,7 +852,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(ColumnCloseResult {
             bytes_written: self.column_metrics.total_bytes_written,
             rows_written: self.column_metrics.total_rows_written,
-            bloom_filter: self.encoder.flush_bloom_filter(),
+            bloom_filter,
             metadata,
             column_index,
             offset_index,
@@ -913,6 +920,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             sub_start = sub_end;
         }
         Ok(values_consumed)
+    }
+
+    fn has_non_dictionary_data_page(&self) -> bool {
+        self.encoding_stats.iter().any(|stats| {
+            matches!(
+                stats.page_type,
+                PageType::DATA_PAGE | PageType::DATA_PAGE_V2
+            ) && !matches!(
+                stats.encoding,
+                Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY
+            )
+        })
     }
 
     /// Creates a new streaming level encoder appropriate for the writer version.
@@ -2158,6 +2177,28 @@ mod tests {
         );
         assert_eq!(metadata.num_values(), 4); // just values
         assert_eq!(metadata.dictionary_page_offset(), None);
+    }
+
+    #[test]
+    fn test_bloom_filter_for_dictionary_encoded_chunks() {
+        fn bloom_filter_written(dictionary_enabled: bool, for_dictionary_chunks: bool) -> bool {
+            let props = Arc::new(
+                WriterProperties::builder()
+                    .set_dictionary_enabled(dictionary_enabled)
+                    .set_bloom_filter_enabled(true)
+                    .set_bloom_filter_for_dictionary_encoded_chunks(for_dictionary_chunks)
+                    .build(),
+            );
+            let mut writer =
+                get_test_column_writer::<Int32Type>(get_test_page_writer(), 0, 0, props);
+            writer.write_batch(&[1, 2, 1, 2], None, None).unwrap();
+            writer.close().unwrap().bloom_filter.is_some()
+        }
+
+        assert!(bloom_filter_written(true, true));
+        assert!(bloom_filter_written(false, true));
+        assert!(bloom_filter_written(false, false));
+        assert!(!bloom_filter_written(true, false));
     }
 
     #[test]
