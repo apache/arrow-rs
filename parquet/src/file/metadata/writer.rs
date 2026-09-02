@@ -333,6 +333,14 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// metadata writer. Then set the corresponding `bloom_filter_offset` and
 /// `bloom_filter_length` on [`ColumnChunkMetaData`] passed to this writer.
 ///
+/// <div class="warning">
+///
+/// **NOTE:**
+/// The serialization of custom [`PageIndexProvider`]s is not currently supported.
+/// The only supported page index structure is [`PageIndex`].
+///
+/// </div>
+///
 /// # Output Format
 ///
 /// The format of the metadata is as follows:
@@ -347,6 +355,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// [`ColumnChunkMetaData`]: crate::file::metadata::ColumnChunkMetaData
 /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`PageIndexProvider`]: crate::file::metadata::page_index::PageIndexProvider
 ///
 /// ```text
 /// ┌──────────────────────┐
@@ -453,6 +462,11 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         );
 
         // Downcast to PageIndex to access raw index structures for serialization
+        // TODO: rework the encoder to work with the PageIndexProvider API to
+        // remove the need for this cast. Because the page index is a dyn trait,
+        // it can't be cloned. An implementation would have to create a new
+        // `PageIndex` from the current `PageIndexProvider` and pass that to
+        // the encoder.
         if let Some(page_index_arc) = self.metadata.page_index.as_ref()
             && let Some(page_index) = page_index_arc
                 .as_any()
