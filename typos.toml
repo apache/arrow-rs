@@ -1,0 +1,21 @@
+[files]
+# Exclude generated/vendored files and test data that may contain intentional
+# or binary content that typos shouldn't scan.
+extend-exclude = [
+    "*.lock",
+    # Git submodules with upstream test data we don't control
+    "parquet-testing/",
+    "testing/",
+    # Generated code from flatbuffers / protobuf
+    "arrow-ipc/src/gen/",
+    "arrow-flight/gen/",
+    # Arrow format spec files with spec-defined identifiers
+    "format/",
+    # Binary test fixtures
+    "arrow-avro/test/",
+    "*.parquet",
+    "*.avro",
+    # Historical changelogs contain PR titles we don't own
+    "CHANGELOG.md",
+    "CHANGELOG-old.md",
+]

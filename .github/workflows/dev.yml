@@ -57,3 +57,19 @@ jobs:
           # if you encounter error, run the command below and commit the changes
           npx prettier@2.3.2 --write {arrow,arrow-flight,dev,arrow-integration-testing,parquet}/**/*.md README.md CODE_OF_CONDUCT.md CONTRIBUTING.md
           git diff --exit-code
+  typos:
+    name: Spell Check with Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # Version fixed on purpose. It uses heuristics to detect typos, so upgrading
+      # it may cause checks to fail more often.
+      # We can upgrade it manually once a while.
+      - name: Install typos
+        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
+        with:
+          tool: typos@1.37.0
+      - name: Run typos check
+        run: .github/ci/scripts/typos_check.sh
