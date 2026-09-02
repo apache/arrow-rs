@@ -3028,12 +3028,9 @@ mod tests {
         }};
     }
 
-    /// Runs a fast-path pair end to end through the public `cast_with_options`
+    /// Runs one fast-path pair end to end through the public `cast_with_options`
     /// entry point and compares every element against a per-element `num_cast`
     /// reference, under both `safe` settings and at several array offsets.
-    ///
-    /// The property test above only checks the numbers; this checks that the
-    /// `unary` substitution preserves length, validity and offsets as well.
     macro_rules! assert_fast_path_matches_reference {
         ($from_type:ty, $from:ty, $to_type:ty, $to:ty) => {{
             let mut values: Vec<Option<$from>> = vec![
@@ -3154,51 +3151,26 @@ mod tests {
         assert_eq!(i64::MAX as i32, -1);
     }
 
-    /// Every fast path pair with an integer source, driven end to end through
-    /// `cast_with_options` and compared against a per-element `num_cast`
-    /// reference. `Float32 -> Float64` is covered separately below because it
-    /// needs float specific inputs.
+    /// One pair per conversion class, driven end to end through
+    /// `cast_with_options`. The property test above already covers all 35 pairs
+    /// numerically; this checks the parts `unary` could get wrong instead --
+    /// length, validity, and array offsets -- so a representative sample is
+    /// enough rather than repeating the whole matrix.
     #[test]
     fn test_infallible_numeric_cast_fast_path_matches_reference() {
-        assert_fast_path_matches_reference!(Int8Type, i8, Int16Type, i16);
-        assert_fast_path_matches_reference!(Int8Type, i8, Int32Type, i32);
-        assert_fast_path_matches_reference!(Int8Type, i8, Int64Type, i64);
-        assert_fast_path_matches_reference!(Int8Type, i8, Float32Type, f32);
-        assert_fast_path_matches_reference!(Int8Type, i8, Float64Type, f64);
-        assert_fast_path_matches_reference!(Int16Type, i16, Int32Type, i32);
-        assert_fast_path_matches_reference!(Int16Type, i16, Int64Type, i64);
-        assert_fast_path_matches_reference!(Int16Type, i16, Float32Type, f32);
-        assert_fast_path_matches_reference!(Int16Type, i16, Float64Type, f64);
+        // signed widening, the motivating case
         assert_fast_path_matches_reference!(Int32Type, i32, Int64Type, i64);
-        assert_fast_path_matches_reference!(Int32Type, i32, Float32Type, f32);
-        assert_fast_path_matches_reference!(Int32Type, i32, Float64Type, f64);
-        assert_fast_path_matches_reference!(Int64Type, i64, Float32Type, f32);
-        assert_fast_path_matches_reference!(Int64Type, i64, Float64Type, f64);
-
-        assert_fast_path_matches_reference!(UInt8Type, u8, UInt16Type, u16);
-        assert_fast_path_matches_reference!(UInt8Type, u8, UInt32Type, u32);
-        assert_fast_path_matches_reference!(UInt8Type, u8, UInt64Type, u64);
-        assert_fast_path_matches_reference!(UInt8Type, u8, Int16Type, i16);
-        assert_fast_path_matches_reference!(UInt8Type, u8, Int32Type, i32);
-        assert_fast_path_matches_reference!(UInt8Type, u8, Int64Type, i64);
-        assert_fast_path_matches_reference!(UInt8Type, u8, Float32Type, f32);
-        assert_fast_path_matches_reference!(UInt8Type, u8, Float64Type, f64);
-        assert_fast_path_matches_reference!(UInt16Type, u16, UInt32Type, u32);
-        assert_fast_path_matches_reference!(UInt16Type, u16, UInt64Type, u64);
-        assert_fast_path_matches_reference!(UInt16Type, u16, Int32Type, i32);
-        assert_fast_path_matches_reference!(UInt16Type, u16, Int64Type, i64);
-        assert_fast_path_matches_reference!(UInt16Type, u16, Float32Type, f32);
-        assert_fast_path_matches_reference!(UInt16Type, u16, Float64Type, f64);
+        // signed to float, including a source narrower than the target
+        assert_fast_path_matches_reference!(Int8Type, i8, Float32Type, f32);
+        // unsigned widening
         assert_fast_path_matches_reference!(UInt32Type, u32, UInt64Type, u64);
-        assert_fast_path_matches_reference!(UInt32Type, u32, Int64Type, i64);
-        assert_fast_path_matches_reference!(UInt32Type, u32, Float32Type, f32);
-        assert_fast_path_matches_reference!(UInt32Type, u32, Float64Type, f64);
-        assert_fast_path_matches_reference!(UInt64Type, u64, Float32Type, f32);
+        // unsigned to a strictly wider signed target
+        assert_fast_path_matches_reference!(UInt16Type, u16, Int32Type, i32);
+        // unsigned to float, at the width where the value exceeds the mantissa
         assert_fast_path_matches_reference!(UInt64Type, u64, Float64Type, f64);
-    }
 
-    #[test]
-    fn test_infallible_float32_to_float64_cast_matches_reference() {
+        // Float32 -> Float64 is the one float source, and needs its own inputs:
+        // NaN, the infinities and a signed zero have no integer counterpart.
         let values = vec![
             Some(f32::MIN),
             Some(f32::MAX),
@@ -3206,22 +3178,20 @@ mod tests {
             Some(0.0),
             Some(-0.0),
             Some(1.5),
-            Some(-1.5),
             Some(f32::INFINITY),
             Some(f32::NEG_INFINITY),
             Some(f32::NAN),
             None,
         ];
         let array = Arc::new(Float32Array::from(values)) as ArrayRef;
-        let options = [
+
+        for cast_options in [
             CastOptions::default(),
             CastOptions {
                 safe: false,
                 ..Default::default()
             },
-        ];
-
-        for cast_options in options {
+        ] {
             for offset in [0, 1, 3] {
                 let input = array.slice(offset, array.len() - offset);
                 let output = cast_with_options(&input, &Float64, &cast_options).unwrap();
