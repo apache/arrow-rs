@@ -53,7 +53,7 @@ use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 mod byte_budget_chunker;
 pub(crate) mod encoder;
 
-use byte_budget_chunker::{ByteBudgetChunker, SubBatch};
+use byte_budget_chunker::{ByteBudgetChunker, SubBatchStrategy};
 
 macro_rules! downcast_writer {
     ($e:expr, $i:ident, $b:expr) => {
@@ -854,10 +854,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// byte limit after each. This keeps the page size close to
     /// `data_page_size_limit` instead of overshooting it by a whole chunk.
     ///
-    /// [`SubBatch::Values`] windows are cut on value boundaries, walking
-    /// definition levels to find where the value budget is used up;
-    /// [`SubBatch::Levels`] windows are a fixed level count. See [`SubBatch`]
-    /// for which budget gets which and why.
+    /// [`SubBatchStrategy::Values`] windows are cut on value boundaries,
+    /// walking definition levels to find where the value budget is used up;
+    /// [`SubBatchStrategy::Levels`] windows are a fixed level count. See
+    /// [`SubBatchStrategy`] for which budget gets which and why.
     ///
     /// For repeated/nested columns sub-batches then extend to the next
     /// `rep == 0` boundary so a record never spans data pages, matching the
@@ -879,13 +879,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         chunk_size: usize,
         chunk_def: LevelDataRef<'_>,
         chunk_rep: LevelDataRef<'_>,
-        sub_batch: SubBatch,
+        sub_batch: SubBatchStrategy,
     ) -> Result<usize> {
         // The chunker always sizes a sub-batch to at least one value or one
         // level, and a value-exact window spans at least one level, so each
         // iteration below makes progress (`sub_end > sub_start`).
         debug_assert!(
-            matches!(sub_batch, SubBatch::Values(n) | SubBatch::Levels(n) if n >= 1),
+            matches!(sub_batch, SubBatchStrategy::Values(n) | SubBatchStrategy::Levels(n) if n >= 1),
             "chunker must size at least one value or level"
         );
         let max_def_level = self.descr.max_def_level();
@@ -893,10 +893,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let mut sub_start = 0;
         while sub_start < chunk_size {
             let window_end = match sub_batch {
-                SubBatch::Values(n) => {
+                SubBatchStrategy::Values(n) => {
                     Self::window_end_for_values(chunk_def, chunk_size, max_def_level, sub_start, n)
                 }
-                SubBatch::Levels(n) => (sub_start + n).min(chunk_size),
+                SubBatchStrategy::Levels(n) => (sub_start + n).min(chunk_size),
             };
             let sub_end = match chunk_rep {
                 LevelDataRef::Materialized(levels) => {
