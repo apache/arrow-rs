@@ -252,6 +252,9 @@ fn build_string_dict_array(size: usize, distinct: usize) -> ArrayRef {
     ))
 }
 
+/// Array lengths the primitive to primitive cast benchmarks are run at.
+const NUMERIC_CAST_SIZES: [usize; 4] = [512, 1_024, 8_192, 65_536];
+
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
@@ -302,7 +305,6 @@ fn benchmark_infallible_numeric_cast(c: &mut Criterion) {
 fn add_benchmark(c: &mut Criterion) {
     benchmark_infallible_numeric_cast(c);
 
-    let i32_array = build_array::<Int32Type>(512);
     let i64_array = build_array::<Int64Type>(512);
     let f32_array = build_array::<Float32Type>(512);
     let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
@@ -348,33 +350,48 @@ fn add_benchmark(c: &mut Criterion) {
     let float64_array_cast_to_decimal = build_float64_array_for_cast_to_decimal(8_000, 0.1);
     let invalid_float64_array_to_decimal = build_float64_array_invalid_items(8_000, 0.1);
 
-    c.bench_function("cast int32 to int32 512", |b| {
-        b.iter(|| cast_array(&i32_array, DataType::Int32))
-    });
-    c.bench_function("cast int32 to uint32 512", |b| {
-        b.iter(|| cast_array(&i32_array, DataType::UInt32))
-    });
-    c.bench_function("cast int32 to float32 512", |b| {
-        b.iter(|| cast_array(&i32_array, DataType::Float32))
-    });
-    c.bench_function("cast int32 to float64 512", |b| {
-        b.iter(|| cast_array(&i32_array, DataType::Float64))
-    });
-    c.bench_function("cast int32 to int64 512", |b| {
-        b.iter(|| cast_array(&i32_array, DataType::Int64))
-    });
-    c.bench_function("cast float32 to int32 512", |b| {
-        b.iter(|| cast_array(&f32_array, DataType::Int32))
-    });
-    c.bench_function("cast float64 to float32 512", |b| {
-        b.iter(|| cast_array(&f64_array, DataType::Float32))
-    });
-    c.bench_function("cast float64 to uint64 512", |b| {
-        b.iter(|| cast_array(&f64_array, DataType::UInt64))
-    });
-    c.bench_function("cast int64 to int32 512", |b| {
-        b.iter(|| cast_array(&i64_array, DataType::Int32))
-    });
+    // The primitive to primitive casts are swept over several array sizes. At
+    // 512 the arrays are a couple of KiB and the measurement is dominated by
+    // dispatch; the larger sizes expose the per-element cost, which is what the
+    // numeric cast kernels actually control. The inputs carry 10% nulls, as
+    // `build_array` has always produced, so the null path is covered too.
+    //
+    // The 512 names are deliberately unchanged, so those rows stay comparable
+    // with historical runs.
+    for size in NUMERIC_CAST_SIZES {
+        let i32s = build_array::<Int32Type>(size);
+        let i64s = build_array::<Int64Type>(size);
+        let f32s = build_array::<Float32Type>(size);
+        let f64s = build_array::<Float64Type>(size);
+
+        c.bench_function(&format!("cast int32 to int32 {size}"), |b| {
+            b.iter(|| cast_array(&i32s, DataType::Int32))
+        });
+        c.bench_function(&format!("cast int32 to uint32 {size}"), |b| {
+            b.iter(|| cast_array(&i32s, DataType::UInt32))
+        });
+        c.bench_function(&format!("cast int32 to float32 {size}"), |b| {
+            b.iter(|| cast_array(&i32s, DataType::Float32))
+        });
+        c.bench_function(&format!("cast int32 to float64 {size}"), |b| {
+            b.iter(|| cast_array(&i32s, DataType::Float64))
+        });
+        c.bench_function(&format!("cast int32 to int64 {size}"), |b| {
+            b.iter(|| cast_array(&i32s, DataType::Int64))
+        });
+        c.bench_function(&format!("cast float32 to int32 {size}"), |b| {
+            b.iter(|| cast_array(&f32s, DataType::Int32))
+        });
+        c.bench_function(&format!("cast float64 to float32 {size}"), |b| {
+            b.iter(|| cast_array(&f64s, DataType::Float32))
+        });
+        c.bench_function(&format!("cast float64 to uint64 {size}"), |b| {
+            b.iter(|| cast_array(&f64s, DataType::UInt64))
+        });
+        c.bench_function(&format!("cast int64 to int32 {size}"), |b| {
+            b.iter(|| cast_array(&i64s, DataType::Int32))
+        });
+    }
     c.bench_function("cast int64 to decimal32(9, 0) 512", |b| {
         b.iter(|| cast_array(&i64_array, DataType::Decimal32(9, 0)))
     });
