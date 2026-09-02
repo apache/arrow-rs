@@ -233,8 +233,10 @@ impl ParquetMetaData {
         // out of scope.
         let page_index_size = if let Some(page_index) = self.page_index.as_ref() {
             if let Some(page_index) = page_index.as_any().downcast_ref::<PageIndex>() {
-                let page_index = Some(Arc::new(page_index.clone()));
-                page_index.heap_size()
+                // need to account for the `Arc` wrapper overhead
+                2 * std::mem::size_of::<usize>() // Arc stores weak and strong counts on the heap...
+                    + std::mem::size_of::<PageIndex>() // alongside an instance of PageIndex
+                    + page_index.heap_size()
             } else {
                 0
             }
@@ -2107,9 +2109,9 @@ mod tests {
 
         // Size with page index (includes Arc overhead plus PageIndex heap size)
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3233;
+        let bigger_expected_size = 3280;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3401;
+        let bigger_expected_size = 3448;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
