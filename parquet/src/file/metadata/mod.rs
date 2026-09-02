@@ -231,6 +231,11 @@ impl ParquetMetaData {
 
         // We can only determine the heap size for PageIndex. Custom providers are
         // out of scope.
+        // TODO: add heap_size calculation to the PageIndexProvider trait in some way.
+        // see https://github.com/apache/arrow-rs/pull/9138 and
+        // https://github.com/apache/arrow-rs/pull/9842 for some prior attempts. It
+        // would be nice for users to re-use the HeapSize machinery this crate already
+        // implements.
         let page_index_size = if let Some(page_index) = self.page_index.as_ref() {
             if let Some(page_index) = page_index.as_any().downcast_ref::<PageIndex>() {
                 // need to account for the `Arc` wrapper overhead
