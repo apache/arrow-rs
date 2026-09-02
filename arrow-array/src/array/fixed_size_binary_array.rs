@@ -1029,8 +1029,9 @@ mod tests {
     }
 
     #[test]
-    // Panic message differs by config: `build_unchecked` validates under
-    // force_validate, otherwise `FixedSizeBinaryArray::from` catches it.
+    // No `expected`: the panic message differs by config. Under force_validate
+    // `build_unchecked` rejects the data; otherwise `FixedSizeBinaryArray::from` does.
+    #[expect(clippy::should_panic_without_expect)]
     #[should_panic]
     fn test_fixed_size_binary_array_from_fixed_size_list_array_with_child_nulls_failed() {
         let values = [0_u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
