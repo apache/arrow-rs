@@ -233,7 +233,7 @@ impl Buffer {
                         unsafe { base.as_ptr().add(offset) }
                     };
                 })
-                .ok();
+                .ok(); // Failure to reallocate is fine; we just failed to free up memory.
         }
     }
 
