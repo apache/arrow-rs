@@ -211,7 +211,7 @@ impl ParquetMetaData {
 
     /// Returns a [`RowGroupPageIndex`] for a specific row group
     pub fn page_index_for_row_group(&self, row_group_idx: usize) -> RowGroupPageIndex {
-        RowGroupPageIndex::new(row_group_idx, self.page_index.as_ref().cloned())
+        RowGroupPageIndex::new(row_group_idx, self.page_index.clone())
     }
 
     /// Estimate of the bytes allocated to store `ParquetMetadata`
