@@ -89,10 +89,7 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     /// * `buffer` is not aligned to a multiple of `std::mem::align_of::<T>`
     /// * `bytes` is not large enough for the requested slice
     pub fn new(buffer: Buffer, offset: usize, len: usize) -> Self {
-        let size = std::mem::size_of::<T>();
-        let byte_offset = offset.checked_mul(size).expect("offset overflow");
-        let byte_len = len.checked_mul(size).expect("length overflow");
-        buffer.slice_with_length(byte_offset, byte_len).into()
+        Self::try_new(buffer, offset, len).unwrap_or_else(|err| panic!("{err}"))
     }
 
     /// Creates a new [`ScalarBuffer`] from a [`Buffer`], an `offset`, and a length in units of `T`.
@@ -358,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
+    #[should_panic(expected = "buffer is not aligned for i32 (requires 4-byte alignment)")]
     fn test_unaligned() {
         let expected = [0_i32, 1, 2];
         let buffer = Buffer::from_iter(expected.iter().copied());
@@ -367,35 +364,35 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
+    #[should_panic(expected = "buffer out of bounds: offset 4 + length 12 exceeds length 12")]
     fn test_length_out_of_bounds() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 1, 3);
     }
 
     #[test]
-    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
+    #[should_panic(expected = "buffer out of bounds: offset 16 + length 0 exceeds length 12")]
     fn test_offset_out_of_bounds() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 4, 0);
     }
 
     #[test]
-    #[should_panic(expected = "offset overflow")]
+    #[should_panic(expected = "offset overflow: does not fit in usize")]
     fn test_length_overflow() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, usize::MAX, 1);
     }
 
     #[test]
-    #[should_panic(expected = "offset overflow")]
+    #[should_panic(expected = "offset overflow: does not fit in usize")]
     fn test_start_overflow() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, usize::MAX / 4 + 1, 0);
     }
 
     #[test]
-    #[should_panic(expected = "length overflow")]
+    #[should_panic(expected = "length overflow: does not fit in usize")]
     fn test_end_overflow() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 0, usize::MAX / 4 + 1);
