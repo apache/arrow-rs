@@ -286,6 +286,8 @@ fn benchmark_infallible_numeric_cast(c: &mut Criterion) {
             },
         );
 
+        // Reference arm: the cost of the conversion with no dispatch and no
+        // per-element check, i.e. the floor the `cast` arms above should reach.
         group.bench_with_input(
             BenchmarkId::new("unary", null_density),
             input,
