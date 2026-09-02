@@ -1847,7 +1847,7 @@ mod tests {
             assert_eq!(
                 json!([
                     {
-                        "bytes": "4e656420466c616e64657273"
+                        "bytes": "426f622054686f6d70736f6e"
                     },
                     {
                         "bytes": null // the explicit null
@@ -1874,7 +1874,7 @@ mod tests {
 
             assert_eq!(
                 json!([
-                    { "bytes": "4e656420466c616e64657273" },
+                    { "bytes": "426f622054686f6d70736f6e" },
                     {},
                     { "bytes": "54726f79204d63436c757265" }
                 ]),
@@ -1886,7 +1886,7 @@ mod tests {
     #[test]
     fn test_writer_binary() {
         let values: [Option<&[u8]>; 3] = [
-            Some(b"Bob Smith" as &[u8]),
+            Some(b"Bob Thompson" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
         ];
