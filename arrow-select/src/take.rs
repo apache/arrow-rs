@@ -1627,7 +1627,7 @@ pub unsafe fn take_record_batch_unchecked(
                 .iter()
                 .map(|c| take_impl::<_, false>(c.as_ref(), &indices))
                 .collect::<Result<Vec<_>, _>>()?;
-            RecordBatch::try_new(record_batch.schema(), columns)
+            unsafe{ Ok(RecordBatch::new_unchecked(record_batch.schema(), columns,indices.len())) }
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
