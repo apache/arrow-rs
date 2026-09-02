@@ -4932,7 +4932,7 @@ pub(crate) mod tests {
                 ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
-            // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
+            // Although `Vec<Vec<PageLocation>>` of each row group is empty,
             // we should read the file successfully.
             assert!(builder.metadata().page_index().is_none());
             let reader = builder.build().unwrap();

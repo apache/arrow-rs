@@ -783,7 +783,7 @@ impl FromStr for Compression {
             }
             _ => {
                 return Err(ParquetError::General(format!(
-                    "unsupport compression {codec}"
+                    "unsupported compression {codec}"
                 )));
             }
         };

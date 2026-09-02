@@ -384,7 +384,7 @@ impl FFI_ArrowSchema {
     ///
     /// Panics if `index` is greater than or equal to the number of children.
     ///
-    /// This is to make sure that the unsafe acces to raw pointer is sound.
+    /// This is to make sure that the unsafe access to raw pointer is sound.
     pub fn child(&self, index: usize) -> &Self {
         assert!(index < self.n_children as usize);
         unsafe { self.children.add(index).as_ref().unwrap().as_ref().unwrap() }

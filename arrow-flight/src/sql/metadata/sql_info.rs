@@ -21,7 +21,7 @@
 //!   and building a conformant `RecordBatch` with sql info server metadata.
 //! - [`SqlInfoData`] - a helper type wrapping a `RecordBatch`
 //!   used for storing sql info server metadata.
-//! - [`GetSqlInfoBuilder`] - a builder for consructing [`CommandGetSqlInfo`] responses.
+//! - [`GetSqlInfoBuilder`] - a builder for constructing [`CommandGetSqlInfo`] responses.
 //!
 
 use std::collections::{BTreeMap, HashMap};
@@ -114,7 +114,7 @@ impl From<&HashMap<i32, Vec<i32>>> for SqlInfoValue {
     }
 }
 
-/// Something that can be converted into u32 (the represenation of a [`SqlInfo`] name)
+/// Something that can be converted into u32 (the representation of a [`SqlInfo`] name)
 pub trait SqlInfoName {
     fn as_u32(&self) -> u32;
 }
@@ -326,7 +326,7 @@ impl SqlInfoUnionBuilder {
 /// [`CommandGetSqlInfo`] are metadata requests used by a Flight SQL
 /// server to communicate supported capabilities to Flight SQL clients.
 ///
-/// Servers constuct - usually static - [`SqlInfoData`] via the [`SqlInfoDataBuilder`],
+/// Servers construct - usually static - [`SqlInfoData`] via the [`SqlInfoDataBuilder`],
 /// and build responses using [`CommandGetSqlInfo::into_builder`]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SqlInfoDataBuilder {
