@@ -166,11 +166,6 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             )?;
             VariantToShreddedVariantRowBuilder::Array(typed_value_builder)
         }
-        DataType::FixedSizeList(..) => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "{data_type} is not a valid variant shredding type"
-            )));
-        }
         // Supported shredded primitive types, see Variant shredding spec:
         // https://github.com/apache/parquet-format/blob/master/VariantShredding.md#shredded-value-types
         DataType::Boolean
