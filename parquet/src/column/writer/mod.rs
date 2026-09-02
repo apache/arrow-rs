@@ -4968,14 +4968,14 @@ mod tests {
         // physical type representation
         let f16_descr = Arc::new(get_test_float16_column_descr(1, 0));
         let fba_descr = {
-            let typ = SchemaType::primitive_type_builder(
+            let type_ = SchemaType::primitive_type_builder(
                 "col",
                 FixedLenByteArrayType::get_physical_type(),
             )
             .with_length(2)
             .build()?;
             Arc::new(ColumnDescriptor::new(
-                Arc::new(typ),
+                Arc::new(type_),
                 1,
                 0,
                 ColumnPath::from("col"),
@@ -5371,13 +5371,13 @@ mod tests {
         max_rep_level: i16,
     ) -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let typ = SchemaType::primitive_type_builder("col", T::get_physical_type())
+        let type_ = SchemaType::primitive_type_builder("col", T::get_physical_type())
             // length is set for "encoding support" tests for FIXED_LEN_BYTE_ARRAY type,
             // it should be no-op for other types
             .with_length(1)
             .build()
             .unwrap();
-        ColumnDescriptor::new(Arc::new(typ), max_def_level, max_rep_level, path)
+        ColumnDescriptor::new(Arc::new(type_), max_def_level, max_rep_level, path)
     }
 
     fn get_test_column_descr_with_path<T: DataType>(
@@ -5386,13 +5386,13 @@ mod tests {
         path: ColumnPath,
     ) -> ColumnDescriptor {
         let name = path.string();
-        let typ = SchemaType::primitive_type_builder(&name, T::get_physical_type())
+        let type_ = SchemaType::primitive_type_builder(&name, T::get_physical_type())
             // length is set for "encoding support" tests for FIXED_LEN_BYTE_ARRAY type,
             // it should be no-op for other types
             .with_length(1)
             .build()
             .unwrap();
-        ColumnDescriptor::new(Arc::new(typ), max_def_level, max_rep_level, path)
+        ColumnDescriptor::new(Arc::new(type_), max_def_level, max_rep_level, path)
     }
 
     fn write_and_collect_page_values(
@@ -5493,14 +5493,14 @@ mod tests {
         max_rep_level: i16,
     ) -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let typ = SchemaType::primitive_type_builder("col", T::get_physical_type())
+        let type_ = SchemaType::primitive_type_builder("col", T::get_physical_type())
             .with_length(16)
             .with_logical_type(Some(LogicalType::decimal(2, 3)))
             .with_scale(2)
             .with_precision(3)
             .build()
             .unwrap();
-        ColumnDescriptor::new(Arc::new(typ), max_def_level, max_rep_level, path)
+        ColumnDescriptor::new(Arc::new(type_), max_def_level, max_rep_level, path)
     }
 
     fn float16_statistics_roundtrip(
@@ -5529,13 +5529,13 @@ mod tests {
 
     fn get_test_float16_column_descr(max_def_level: i16, max_rep_level: i16) -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let typ =
+        let type_ =
             SchemaType::primitive_type_builder("col", FixedLenByteArrayType::get_physical_type())
                 .with_length(2)
                 .with_logical_type(Some(LogicalType::Float16))
                 .build()
                 .unwrap();
-        ColumnDescriptor::new(Arc::new(typ), max_def_level, max_rep_level, path)
+        ColumnDescriptor::new(Arc::new(type_), max_def_level, max_rep_level, path)
     }
 
     fn get_test_interval_column_writer(
@@ -5548,13 +5548,13 @@ mod tests {
 
     fn get_test_interval_column_descr() -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let typ =
+        let type_ =
             SchemaType::primitive_type_builder("col", FixedLenByteArrayType::get_physical_type())
                 .with_length(12)
                 .with_converted_type(ConvertedType::INTERVAL)
                 .build()
                 .unwrap();
-        ColumnDescriptor::new(Arc::new(typ), 0, 0, path)
+        ColumnDescriptor::new(Arc::new(type_), 0, 0, path)
     }
 
     /// Returns column writer for UINT32 Column provided as ConvertedType only
@@ -5578,11 +5578,11 @@ mod tests {
         max_rep_level: i16,
     ) -> ColumnDescriptor {
         let path = ColumnPath::from("col");
-        let typ = SchemaType::primitive_type_builder("col", T::get_physical_type())
+        let type_ = SchemaType::primitive_type_builder("col", T::get_physical_type())
             .with_converted_type(ConvertedType::UINT_32)
             .build()
             .unwrap();
-        ColumnDescriptor::new(Arc::new(typ), max_def_level, max_rep_level, path)
+        ColumnDescriptor::new(Arc::new(type_), max_def_level, max_rep_level, path)
     }
 
     #[test]

@@ -1034,19 +1034,19 @@ mod tests {
     /// Creates test column descriptor based on provided type parameters.
     macro_rules! make_column_descr {
         ($physical_type:expr, $logical_type:expr) => {{
-            let typ = PrimitiveTypeBuilder::new("col", $physical_type)
+            let type_ = PrimitiveTypeBuilder::new("col", $physical_type)
                 .with_converted_type($logical_type)
                 .build()
                 .unwrap();
             Arc::new(ColumnDescriptor::new(
-                Arc::new(typ),
+                Arc::new(type_),
                 0,
                 0,
                 ColumnPath::from("col"),
             ))
         }};
         ($physical_type:expr, $logical_type:expr, $len:expr, $prec:expr, $scale:expr) => {{
-            let typ = PrimitiveTypeBuilder::new("col", $physical_type)
+            let type_ = PrimitiveTypeBuilder::new("col", $physical_type)
                 .with_converted_type($logical_type)
                 .with_length($len)
                 .with_precision($prec)
@@ -1054,7 +1054,7 @@ mod tests {
                 .build()
                 .unwrap();
             Arc::new(ColumnDescriptor::new(
-                Arc::new(typ),
+                Arc::new(type_),
                 0,
                 0,
                 ColumnPath::from("col"),
@@ -1236,13 +1236,13 @@ mod tests {
 
         // FLOAT16
         let descr = {
-            let typ = PrimitiveTypeBuilder::new("col", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            let type_ = PrimitiveTypeBuilder::new("col", PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_logical_type(Some(LogicalType::Float16))
                 .with_length(2)
                 .build()
                 .unwrap();
             Arc::new(ColumnDescriptor::new(
-                Arc::new(typ),
+                Arc::new(type_),
                 0,
                 0,
                 ColumnPath::from("col"),
