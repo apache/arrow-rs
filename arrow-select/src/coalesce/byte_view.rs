@@ -501,8 +501,9 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 
         // Safety: we created valid views and buffers above and the
         // input arrays had value data and nulls
-        let new_array =
-            unsafe { GenericByteViewArray::<B>::new_unchecked(views.into(), buffers, nulls) };
+        let new_array = unsafe {
+            GenericByteViewArray::<B>::new_unchecked(views.into(), buffers.into(), nulls)
+        };
         Ok(Arc::new(new_array))
     }
 

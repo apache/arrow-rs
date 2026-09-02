@@ -291,9 +291,9 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 for field_id in field_ids_iter {
                     let next_field_name = self.metadata.get(field_id)?;
 
+                    // Equal names are rejected as well: field names must be unique within an
+                    // object. The sorted branch above enforces this via strictly ordered ids.
                     if let Some(current_name) = current_field_name
-                        // Equal names are rejected as well: field names must be unique within an
-                        // object. The sorted branch above enforces this via strictly ordered ids.
                         && next_field_name <= current_name
                     {
                         return Err(ArrowError::InvalidArgumentError(
@@ -1057,7 +1057,7 @@ mod tests {
             0,
             1,
             2,           // field offsets
-            0b0000_0100, // true
+            0b0000_1100, // true
             0b0000_1000, // false
         ];
         let err = Variant::try_new(&metadata_bytes, &value_bytes).unwrap_err();
