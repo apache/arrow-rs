@@ -69,7 +69,7 @@ use crate::errors::{ParquetError, Result};
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 pub(crate) use crate::file::metadata::memory::HeapSize;
-use crate::file::metadata::page_index::{PageIndex, PageIndexProvider};
+use crate::file::metadata::page_index::{PageIndex, PageIndexProvider, RowGroupPageIndex};
 #[cfg(feature = "encryption")]
 use crate::file::metadata::thrift::encryption::EncryptionAlgorithm;
 use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
@@ -207,6 +207,11 @@ impl ParquetMetaData {
     /// [ArrowReaderOptions::with_page_index_policy]: https://docs.rs/parquet/latest/parquet/arrow/arrow_reader/struct.ArrowReaderOptions.html#method.with_page_index_policy
     pub fn page_index(&self) -> Option<&Arc<dyn PageIndexProvider>> {
         self.page_index.as_ref()
+    }
+
+    /// Returns a [`RowGroupPageIndex`] for a specific row group
+    pub fn page_index_for_row_group(&self, row_group_idx: usize) -> RowGroupPageIndex {
+        RowGroupPageIndex::new(row_group_idx, self.page_index.as_ref().cloned())
     }
 
     /// Estimate of the bytes allocated to store `ParquetMetadata`

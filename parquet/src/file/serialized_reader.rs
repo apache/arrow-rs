@@ -310,7 +310,7 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
         // Row groups should be processed sequentially.
         let props = Arc::clone(&self.props);
         let f = Arc::clone(&self.chunk_reader);
-        let page_index = RowGroupPageIndex::new(i, self.metadata.page_index().cloned());
+        let page_index = self.metadata.page_index_for_row_group(i);
         Ok(Box::new(SerializedRowGroupReader::new(
             f,
             row_group_metadata,
@@ -1746,8 +1746,7 @@ mod tests {
             let row_group_metadata = file_reader.metadata.row_group(row_group_idx);
             let props = Arc::clone(&file_reader.props);
             let f = Arc::clone(&file_reader.chunk_reader);
-            let page_index =
-                RowGroupPageIndex::new(row_group_idx, file_reader.metadata.page_index().cloned());
+            let page_index = file_reader.metadata.page_index_for_row_group(row_group_idx);
             SerializedRowGroupReader::new(f, row_group_metadata, page_index, props)?
         };
 
@@ -2185,7 +2184,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 1);
 
         let page_index = metadata.page_index().unwrap();
-        let row_group_offset_indexes = RowGroupPageIndex::new(0, metadata.page_index().cloned());
+        let row_group_offset_indexes = metadata.page_index_for_row_group(0);
 
         // only one row group
         let row_group_metadata = metadata.row_group(0);

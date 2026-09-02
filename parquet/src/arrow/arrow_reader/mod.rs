@@ -1811,7 +1811,6 @@ pub(crate) mod tests {
         FixedLenByteArrayType, FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
-    use crate::file::metadata::page_index::RowGroupPageIndex;
     use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetStatisticsPolicy};
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
@@ -4887,8 +4886,7 @@ pub(crate) mod tests {
                 ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
-            let page_index = builder.metadata().page_index();
-            let row_group_page_index = RowGroupPageIndex::new(0, page_index.cloned());
+            let row_group_page_index = builder.metadata().page_index_for_row_group(0);
             assert!(row_group_page_index.offset_index(0).is_some());
             assert!(row_group_page_index.column_index(0).is_some());
             assert!(row_group_page_index.page_locations(0).is_some());

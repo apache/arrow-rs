@@ -28,7 +28,6 @@ use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderB
 use parquet::basic::{Encoding, PageType};
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::metadata::page_index::RowGroupPageIndex;
 use parquet::file::properties::{EnabledStatistics, ReaderProperties, WriterProperties};
 use parquet::file::reader::SerializedPageReader;
 use parquet::schema::types::ColumnPath;
@@ -87,7 +86,7 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
     for rg_idx in 0..meta.num_row_groups() {
         let row_group = meta.row_group(rg_idx);
         let row_group_layout = &layout.row_groups[rg_idx];
-        let rg_page_index = RowGroupPageIndex::new(rg_idx, meta.page_index().cloned());
+        let rg_page_index = meta.page_index_for_row_group(rg_idx);
 
         // Check against offset index
         for (col_idx, column_layout) in row_group_layout.columns.iter().enumerate() {

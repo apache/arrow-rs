@@ -22,7 +22,6 @@ use crate::arrow::arrow_reader::RowSelection;
 use crate::arrow::in_memory_row_group::{ColumnChunkData, FetchRanges, InMemoryRowGroup};
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
-use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::reader::ChunkReader;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
@@ -96,10 +95,7 @@ impl DataRequest {
             .page_index()
             .is_some_and(|pi| pi.has_offset_indexes())
         {
-            Some(RowGroupPageIndex::new(
-                row_group_idx,
-                parquet_metadata.page_index().cloned(),
-            ))
+            Some(parquet_metadata.page_index_for_row_group(row_group_idx))
         } else {
             None
         };
@@ -212,10 +208,7 @@ impl<'a> DataRequestBuilder<'a> {
             .page_index()
             .is_some_and(|pi| pi.has_offset_indexes())
         {
-            Some(RowGroupPageIndex::new(
-                row_group_idx,
-                parquet_metadata.page_index().cloned(),
-            ))
+            Some(parquet_metadata.page_index_for_row_group(row_group_idx))
         } else {
             None
         };

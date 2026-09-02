@@ -1167,7 +1167,6 @@ mod tests {
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
     use crate::data_type::{BoolType, ByteArrayType, Int32Type, Int96, Int96Type};
-    use crate::file::metadata::page_index::RowGroupPageIndex;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -2661,10 +2660,8 @@ mod tests {
         let output = Vec::<u8>::new();
         let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
 
-        let page_index = metadata.page_index();
-
         for (rg_idx, rg) in metadata.row_groups().iter().enumerate() {
-            let rg_page_index = RowGroupPageIndex::new(rg_idx, page_index.cloned());
+            let rg_page_index = metadata.page_index_for_row_group(rg_idx);
             let mut rg_out = writer.next_row_group().unwrap();
             for (col_idx, column) in rg.columns().iter().enumerate() {
                 let column_index = rg_page_index.column_index(col_idx).cloned();

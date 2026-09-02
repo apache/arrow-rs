@@ -859,8 +859,7 @@ impl RowGroupReaderBuilder {
             .page_index()
             .is_some_and(|pi| pi.has_offset_indexes())
         {
-            let page_index = self.metadata.page_index().cloned();
-            Some(RowGroupPageIndex::new(row_group_idx, page_index))
+            Some(self.metadata.page_index_for_row_group(row_group_idx))
         } else {
             None
         }
