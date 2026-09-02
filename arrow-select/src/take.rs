@@ -575,7 +575,7 @@ fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
             index_nulls.valid_indices().for_each(|valid_idx| {
                 // SAFETY: valid_idx < indices.len(), guaranteed by valid_indices().
                 let index_val = unsafe { indices.value_unchecked(valid_idx) }.as_usize();
-                if CHECKED {
+                if VALIDATE_INDICES {
                     if values.value(index_val) {
                         // SAFETY: valid_idx < indices.len() = len, output buffer holds len bits.
                         unsafe { bit_util::set_bit_raw(out_ptr, valid_idx) };
@@ -601,7 +601,7 @@ fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
                     // SAFETY: base + bit < full_bytes * 8 <= len, so base + bit is a valid
                     // position in the indices array.
                     let index_val = unsafe { indices.value_unchecked(base + bit) }.as_usize();
-                    if CHECKED {
+                    if VALIDATE_INDICES {
                         byte |= (values.value(index_val) as u8) << bit;
                     } else {
                         // SAFETY: caller guarantees index_val < values.len().
@@ -618,7 +618,7 @@ fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
                     // SAFETY: base + bit < len (remainder loop bound), so base + bit is a
                     // valid position in the indices array.
                     let index_val = unsafe { indices.value_unchecked(base + bit) }.as_usize();
-                    if CHECKED {
+                    if VALIDATE_INDICES {
                         byte |= (values.value(index_val) as u8) << bit;
                     } else {
                         // SAFETY: caller guarantees index_val < values.len().
