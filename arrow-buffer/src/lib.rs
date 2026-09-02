@@ -47,7 +47,7 @@ pub mod builder;
 pub use builder::*;
 
 mod error;
-pub use error::OutOfBoundsError;
+pub use error::{AlignmentError, BufferError, OutOfBoundsError, OverflowError};
 
 mod bigint;
 pub use bigint::i256;

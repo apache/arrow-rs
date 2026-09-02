@@ -17,6 +17,87 @@
 
 //! Errors returned by `arrow-buffer`.
 
+/// An error returned by a fallible buffer operation.
+///
+/// This error aggregates the specific errors that can occur in `arrow-buffer`.
+#[derive(Debug)]
+pub enum BufferError {
+    /// An arithmetic overflow.
+    Overflow(OverflowError),
+    /// An offset or range outside the buffer bounds.
+    OutOfBounds(OutOfBoundsError),
+    /// A buffer with insufficient alignment for a scalar type.
+    Misaligned(AlignmentError),
+}
+
+impl std::fmt::Display for BufferError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Overflow(err) => err.fmt(f),
+            Self::OutOfBounds(err) => err.fmt(f),
+            Self::Misaligned(err) => err.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for BufferError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Overflow(err) => Some(err),
+            Self::OutOfBounds(err) => Some(err),
+            Self::Misaligned(err) => Some(err),
+        }
+    }
+}
+
+/// A buffer whose pointer is not aligned for a scalar type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlignmentError {
+    alignment: usize,
+    type_name: &'static str,
+}
+
+impl AlignmentError {
+    /// Creates an error for a buffer that is not aligned for `T`.
+    pub fn new<T>() -> Self {
+        Self {
+            alignment: std::mem::align_of::<T>(),
+            type_name: std::any::type_name::<T>(),
+        }
+    }
+
+    /// The required alignment, in bytes.
+    pub const fn alignment(&self) -> usize {
+        self.alignment
+    }
+
+    /// The scalar type that requires alignment.
+    pub const fn type_name(&self) -> &'static str {
+        self.type_name
+    }
+}
+
+impl std::fmt::Display for AlignmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            alignment,
+            type_name,
+        } = self;
+        write!(
+            f,
+            "buffer is not aligned for {type_name} (requires {alignment}-byte alignment)"
+        )
+    }
+}
+
+impl std::error::Error for AlignmentError {}
+
+impl From<AlignmentError> for BufferError {
+    fn from(err: AlignmentError) -> Self {
+        Self::Misaligned(err)
+    }
+}
+
 /// An arithmetic overflow.
 ///
 /// Returned by the `try_` alternatives to the functions that panic on overflow,
@@ -87,6 +168,12 @@ impl std::fmt::Display for OverflowError {
 }
 
 impl std::error::Error for OverflowError {}
+
+impl From<OverflowError> for BufferError {
+    fn from(err: OverflowError) -> Self {
+        Self::Overflow(err)
+    }
+}
 
 /// An offset, or an offset and a length, that is out of bounds.
 ///
@@ -167,3 +254,40 @@ impl std::fmt::Display for OutOfBoundsError {
 }
 
 impl std::error::Error for OutOfBoundsError {}
+
+impl From<OutOfBoundsError> for BufferError {
+    fn from(err: OutOfBoundsError) -> Self {
+        Self::OutOfBounds(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use super::*;
+
+    #[test]
+    fn buffer_error_source() {
+        let overflow = OverflowError::new::<i32>("offset");
+        let err = BufferError::from(overflow);
+
+        assert_eq!(err.to_string(), "offset overflow: does not fit in i32");
+        assert!(
+            err.source()
+                .is_some_and(|source| source.is::<OverflowError>())
+        );
+
+        let out_of_bounds = OutOfBoundsError::new("buffer", 2, 1);
+        let err = BufferError::from(out_of_bounds);
+
+        assert_eq!(
+            err.to_string(),
+            "buffer out of bounds: offset 2 exceeds length 1"
+        );
+        assert!(
+            err.source()
+                .is_some_and(|source| source.is::<OutOfBoundsError>())
+        );
+    }
+}
