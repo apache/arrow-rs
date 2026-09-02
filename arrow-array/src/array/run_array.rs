@@ -128,16 +128,7 @@ impl<R: RunEndIndexType> RunArray<R> {
             .add_child_data(run_ends.to_data())
             .add_child_data(values.to_data());
 
-        // `build_unchecked` is used to avoid recursive validation of child arrays.
-        let array_data = unsafe { builder.build_unchecked() };
-
-        // Safety: `validate_data` checks below
-        //    1. The given array data has exactly two child arrays.
-        //    2. The first child array (run_ends) has valid data type.
-        //    3. run_ends array does not have null values
-        //    4. run_ends array has non-zero and strictly increasing values.
-        //    5. The length of run_ends array and values array are the same.
-        array_data.validate_data()?;
+        let array_data = builder.build()?;
 
         Ok(array_data.into())
     }

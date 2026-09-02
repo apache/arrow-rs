@@ -310,11 +310,9 @@ impl ImportedArrowArray<'_> {
             child_data.push(d.consume()?);
         }
 
-        // Align before validating, so C Data Interface buffers with only the
-        // spec's recommended 8-byte alignment (e.g. Decimal128 from a JVM
-        // producer) are realigned, not rejected. Matches the IPC reader, and
-        // stays correct under `force_validate`, which validates regardless of
-        // `skip_validation`. See https://github.com/apache/arrow-rs/issues/10034.
+        // Align before validate: spec-legal 8-byte-aligned buffers (e.g. Decimal128
+        // from JVM) get realigned rather than rejected, even under `force_validate`.
+        // Mirrors the IPC reader. See #10034.
         let mut builder = ArrayData::builder(self.data_type)
             .len(len)
             .offset(offset)
@@ -663,9 +661,31 @@ mod tests_to_then_from_ffi {
     }
     // case with nulls is tested in the docs, through the example on this module.
 
-    // The under-aligned `Decimal128` import (#10034) is tested in
-    // `arrow/tests/ffi.rs`. It needs `arrow-data/force_validate`, and this
-    // crate's `force_validate` does not reach `arrow-data`.
+    #[test]
+    fn test_decimal128_under_aligned_import() -> Result<()> {
+        // FixedSizeBinary(16) needs only 1-byte alignment so it builds cleanly
+        // even under force_validate; imported as Decimal128 it triggers the
+        // realignment path. Regression test for #10034.
+        let aligned = Buffer::from_vec(vec![0_i128, 1_i128, 2_i128]);
+        let under_aligned = aligned.slice(8);
+        assert_eq!(under_aligned.as_ptr().align_offset(8), 0);
+        assert_ne!(under_aligned.as_ptr().align_offset(16), 0);
+
+        let data = ArrayData::builder(DataType::FixedSizeBinary(16))
+            .len(2)
+            .add_buffer(under_aligned)
+            .build()?;
+
+        let array = FFI_ArrowArray::new(&data);
+        let imported = unsafe { from_ffi_and_data_type(array, DataType::Decimal128(10, 2)) }?;
+        let array = Decimal128Array::from(imported);
+
+        // slicing at byte 8 into [0i128, 1, 2] yields elements 1<<64 and 2<<64.
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.value(0), 1_i128 << 64);
+        assert_eq!(array.value(1), 2_i128 << 64);
+        Ok(())
+    }
 
     #[test]
     fn test_null_count_handling() {
