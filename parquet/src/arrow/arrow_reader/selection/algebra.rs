@@ -27,10 +27,11 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer, bit_util}
 use std::cmp::Ordering;
 use std::iter::Peekable;
 
-// The benchmark sweep crosses over at 4K rows when the outer mask keeps 75%
-// and the inner mask keeps 1%; denser masks and inner masks benefit more.
-const AND_THEN_DENSE_MASK_MIN_LEN: usize = 4096;
+// Dense expansion has a fixed per-word cost. Require a sufficiently large,
+// dense outer mask and enough inner survivors to amortize that cost.
+const AND_THEN_DENSE_MASK_MIN_LEN: usize = 8192;
 const AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION: usize = 4;
+const AND_THEN_DENSE_MASK_MIN_INNER_FRACTION: usize = 20;
 
 /// Applies `second` to the rows selected by `first`, both selector-backed.
 pub(super) fn and_then_row_selections(
@@ -414,12 +415,7 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
         return mask.clone();
     }
 
-    if mask.len() >= AND_THEN_DENSE_MASK_MIN_LEN
-        && mask.len() - selected_count
-            <= mask
-                .len()
-                .div_ceil(AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION)
-    {
+    if should_use_dense_mask(mask.len(), selected_count, other_true_count) {
         return and_then_dense_masks(mask, other);
     }
 
@@ -448,8 +444,16 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     builder.finish()
 }
 
+#[inline]
+fn should_use_dense_mask(mask_len: usize, selected_count: usize, other_true_count: usize) -> bool {
+    mask_len >= AND_THEN_DENSE_MASK_MIN_LEN
+        && mask_len - selected_count <= mask_len.div_ceil(AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION)
+        && other_true_count >= selected_count / AND_THEN_DENSE_MASK_MIN_INNER_FRACTION
+}
+
 /// Expands `other` into the set positions of a dense `mask`, processing one
 /// output word at a time. This is the inverse operation of bitmap compression.
+#[inline(never)]
 fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
     let mut other_chunks = other.bit_chunks().iter_padded();
     let mut other_remaining = other.len();
@@ -861,6 +865,18 @@ mod tests {
             let actual = outer.and_then(&inner);
             assert_eq!(actual.as_mask().unwrap(), &expected);
         }
+    }
+
+    #[test]
+    fn test_dense_mask_and_then_policy() {
+        let len = 8192;
+        let selected = len * 3 / 4;
+        let min_inner = selected / AND_THEN_DENSE_MASK_MIN_INNER_FRACTION;
+
+        assert!(!should_use_dense_mask(len - 1, selected, min_inner));
+        assert!(!should_use_dense_mask(len, selected - 1, min_inner));
+        assert!(!should_use_dense_mask(len, selected, min_inner - 1));
+        assert!(should_use_dense_mask(len, selected, min_inner));
     }
 
     #[test]

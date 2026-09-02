@@ -30,8 +30,10 @@ const MASK_ALGEBRA_ROWS: usize = 3_000_000;
 
 const MASK_AND_THEN_ROWS: usize = 8192;
 const MASK_AND_THEN_OUTER_SELECTIVITY: &[usize] = &[50, 60, 70, 75, 80, 85, 90, 95, 99];
-const MASK_AND_THEN_INNER_SELECTIVITY: &[usize] = &[1, 50, 99];
-const MASK_AND_THEN_LENGTHS: &[usize] = &[64, 128, 256, 512, 1024, 2048, 4096, 8192];
+const MASK_AND_THEN_INNER_SELECTIVITY: &[usize] = &[1, 5, 10, 20, 50, 80, 99];
+const MASK_AND_THEN_LENGTHS: &[usize] = &[
+    64, 128, 256, 512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536,
+];
 
 /// Operand length pairs. Unequal lengths pass the longer side's tail through unchanged,
 /// so the ratio decides how much of the work is the bitwise combine versus the tail.
@@ -106,6 +108,18 @@ fn pseudo_random_mask(len: usize, selection_percent: usize, seed: u64) -> Boolea
     BooleanBuffer::from(bits)
 }
 
+fn clustered_mask(len: usize, selection_percent: usize, seed: usize) -> BooleanBuffer {
+    assert!(len > 1);
+    assert!(selection_percent <= 100);
+    let selected = (len * selection_percent / 100).clamp(1, len - 1);
+    let start = seed % len;
+    let mut bits = vec![false; len];
+    for row in 0..selected {
+        bits[(start + row) % len] = true;
+    }
+    BooleanBuffer::from(bits)
+}
+
 fn mask_and_then_operands(
     rows: usize,
     outer_percent: usize,
@@ -113,6 +127,19 @@ fn mask_and_then_operands(
 ) -> (RowSelection, RowSelection) {
     let outer = pseudo_random_mask(rows, outer_percent, 0x517c_c1b7_2722_0a95);
     let inner = pseudo_random_mask(outer.count_set_bits(), inner_percent, 0x6eed_0e9d_a4d9_4a4f);
+    (
+        RowSelection::from_boolean_buffer(outer),
+        RowSelection::from_boolean_buffer(inner),
+    )
+}
+
+fn clustered_mask_and_then_operands(
+    rows: usize,
+    outer_percent: usize,
+    inner_percent: usize,
+) -> (RowSelection, RowSelection) {
+    let outer = clustered_mask(rows, outer_percent, 17);
+    let inner = clustered_mask(outer.count_set_bits(), inner_percent, 31);
     (
         RowSelection::from_boolean_buffer(outer),
         RowSelection::from_boolean_buffer(inner),
@@ -141,7 +168,25 @@ fn bench_mask_and_then_sweeps(c: &mut Criterion) {
     }
     selectivity.finish();
 
-    for &(outer_percent, inner_percent) in &[(75, 1), (99, 99)] {
+    let mut clustered = c.benchmark_group("mask_and_then_clustered_selectivity/8192");
+    clustered
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(1))
+        .sample_size(30);
+
+    for &outer_percent in MASK_AND_THEN_OUTER_SELECTIVITY {
+        for &inner_percent in MASK_AND_THEN_INNER_SELECTIVITY {
+            let (outer, inner) =
+                clustered_mask_and_then_operands(MASK_AND_THEN_ROWS, outer_percent, inner_percent);
+            clustered.bench_function(
+                format!("outer_{outer_percent:02}_inner_{inner_percent:02}"),
+                |b| b.iter(|| hint::black_box(outer.and_then(&inner))),
+            );
+        }
+    }
+    clustered.finish();
+
+    for &(outer_percent, inner_percent) in &[(75, 1), (75, 5), (90, 5), (99, 5), (99, 99)] {
         let mut lengths = c.benchmark_group(format!(
             "mask_and_then_length/outer_{outer_percent:02}_inner_{inner_percent:02}"
         ));
@@ -157,6 +202,23 @@ fn bench_mask_and_then_sweeps(c: &mut Criterion) {
             });
         }
         lengths.finish();
+
+        let mut clustered_lengths = c.benchmark_group(format!(
+            "mask_and_then_clustered_length/outer_{outer_percent:02}_inner_{inner_percent:02}"
+        ));
+        clustered_lengths
+            .warm_up_time(Duration::from_millis(500))
+            .measurement_time(Duration::from_secs(1))
+            .sample_size(30);
+
+        for &rows in MASK_AND_THEN_LENGTHS {
+            let (outer, inner) =
+                clustered_mask_and_then_operands(rows, outer_percent, inner_percent);
+            clustered_lengths.bench_function(rows.to_string(), |b| {
+                b.iter(|| hint::black_box(outer.and_then(&inner)))
+            });
+        }
+        clustered_lengths.finish();
     }
 }
 
