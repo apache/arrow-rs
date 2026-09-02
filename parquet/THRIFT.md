@@ -279,7 +279,7 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ConvertedType 
 ```
 
 The default behavior is to return an error when an unexpected field is encountered. One could,
-however, provide an `Unknown` variant if forward compatibility is neeeded in the case of an
+however, provide an `Unknown` variant if forward compatibility is needed in the case of an
 evolving enum.
 
 Deserializing structs is more involved, but still fairly easy. A thrift struct is serialized as

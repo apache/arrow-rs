@@ -234,7 +234,7 @@ fn row_group_from_encrypted_thrift(
 /// Typically this is used to decode the metadata from the end of a parquet
 /// file. The format of `buf` is the Thrift compact binary protocol, as specified
 /// by the [Parquet Spec]. Buffer can be encrypted with AES GCM or AES CTR
-/// ciphers as specfied in the [Parquet Encryption Spec].
+/// ciphers as specified in the [Parquet Encryption Spec].
 ///
 /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
 /// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/

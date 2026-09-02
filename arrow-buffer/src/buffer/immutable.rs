@@ -1084,7 +1084,7 @@ mod tests {
             // so we use the map to ensure it's in range.
             for l in (o..=64).map(|l| l - o) {
                 // and we just want to make sure every one of these keeps its offset and length
-                // when neeeded
+                // when needed
                 assert_preserved(o, l);
             }
         }
