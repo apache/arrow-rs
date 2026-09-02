@@ -134,7 +134,15 @@ impl Bytes {
     /// Returns `Err` if the memory was allocated with a custom allocator,
     /// or the call to `realloc` failed, for whatever reason.
     /// In case of `Err`, the [`Bytes`] will remain as it was (i.e. have the old size).
-    pub(crate) fn try_realloc(&mut self, new_len: usize) -> Result<(), ()> {
+    ///
+    /// `on_reallocated` is called after [`Bytes`] has updated its internal
+    /// pointer, but before resizing the memory reservation, which may call user
+    /// code.
+    pub(crate) fn try_realloc(
+        &mut self,
+        new_len: usize,
+        on_reallocated: impl FnOnce(NonNull<u8>),
+    ) -> Result<(), ()> {
         if let Deallocation::Standard(old_layout) = self.deallocation {
             if old_layout.size() == new_len {
                 return Ok(()); // Nothing to do
@@ -162,6 +170,7 @@ impl Bytes {
                     self.ptr = ptr;
                     self.len = new_len;
                     self.deallocation = Deallocation::Standard(new_layout);
+                    on_reallocated(ptr);
 
                     #[cfg(feature = "pool")]
                     {

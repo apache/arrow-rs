@@ -224,33 +224,16 @@ impl Buffer {
         if desired_capacity < self.capacity()
             && let Some(bytes) = Arc::get_mut(&mut self.data)
         {
-            // Drop guard: keeps Buffer::ptr consistent with Bytes::ptr even if a custom
-            // MemoryReservation::resize panics inside try_realloc (see #10379).
-            struct PtrSync<'a> {
-                buffer_ptr: &'a mut *const u8,
-                bytes_ptr: *const Bytes,
-                offset: usize,
-                is_empty: bool,
-            }
-            impl Drop for PtrSync<'_> {
-                fn drop(&mut self) {
-                    // SAFETY: bytes_ptr is valid while Arc<Bytes> is held by Buffer
-                    let base = unsafe { (*self.bytes_ptr).as_ptr() };
-                    *self.buffer_ptr = if self.is_empty {
-                        base
+            bytes
+                .try_realloc(desired_capacity, |base| {
+                    self.ptr = if is_empty {
+                        base.as_ptr()
                     } else {
-                        // SAFETY: offset is within the allocated region
-                        unsafe { base.add(self.offset) }
+                        // SAFETY: we kept all elements leading up to the offset
+                        unsafe { base.as_ptr().add(offset) }
                     };
-                }
-            }
-            let _sync = PtrSync {
-                buffer_ptr: &mut self.ptr,
-                bytes_ptr: std::ptr::from_ref::<Bytes>(bytes),
-                offset,
-                is_empty,
-            };
-            bytes.try_realloc(desired_capacity).ok();
+                })
+                .ok();
         }
     }
 
