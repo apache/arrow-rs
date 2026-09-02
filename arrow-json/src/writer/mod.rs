@@ -2549,9 +2549,9 @@ mod tests {
         }
 
         #[derive(Debug)]
-        struct IntArayBinaryEncoderFactory;
+        struct IntArrayBinaryEncoderFactory;
 
-        impl EncoderFactory for IntArayBinaryEncoderFactory {
+        impl EncoderFactory for IntArrayBinaryEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
                 _field: &'a FieldRef,
@@ -2589,7 +2589,7 @@ mod tests {
         let json_value: Value = {
             let mut buf = Vec::new();
             let mut writer = WriterBuilder::new()
-                .with_encoder_factory(Arc::new(IntArayBinaryEncoderFactory))
+                .with_encoder_factory(Arc::new(IntArrayBinaryEncoderFactory))
                 .build::<_, JsonArray>(&mut buf);
             writer.write_batches(&[&batch]).unwrap();
             writer.finish().unwrap();

@@ -1917,7 +1917,7 @@ impl<R: Read> MessageReader<R> {
     ///   the first read
     /// - `Err(_)` if the reader returns an error other than on the first
     ///   read, or if the metadata length is invalid
-    /// - `Ok(Some(_))` with the Message and buffer containiner the
+    /// - `Ok(Some(_))` with the Message and buffer containing the
     ///   body bytes otherwise.
     fn maybe_next(&mut self) -> Result<Option<(Message::Message<'_>, MutableBuffer)>, ArrowError> {
         let meta_len = self.read_meta_len()?;

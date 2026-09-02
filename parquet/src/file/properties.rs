@@ -964,7 +964,7 @@ impl WriterPropertiesBuilder {
     /// Spark, arrow-cpp, pyarrow, pandas to name a few), with the exception
     /// of the one in this crate, expect this field to be present, and will terminate execution
     /// if it is not. This will continue to be the case unless/until the Parquet format
-    /// specification is explicitly changed to allow this field to be missing. As a consquence,
+    /// specification is explicitly changed to allow this field to be missing. As a consequence,
     /// users should only set this to `false` if they have verified that any reader(s) they plan
     /// to use can tolerate the absence of this field.
     ///

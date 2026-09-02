@@ -645,7 +645,7 @@ async fn test_data_page_stats_with_all_null_page() {
 
 /////////////// MORE GENERAL TESTS //////////////////////
 // . Many columns in a file
-// . Differnet data types
+// . Different data types
 // . Different row group sizes
 
 // Four different integer types
@@ -2077,7 +2077,7 @@ async fn test_decimal128() {
 #[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_decimal_256() {
-    // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precicion 9, scale 2
+    // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precision 9, scale 2
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
         scenario: Scenario::Decimal256,
@@ -3226,10 +3226,10 @@ mod test {
 
     fn timestamp_nanoseconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampNanosecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }

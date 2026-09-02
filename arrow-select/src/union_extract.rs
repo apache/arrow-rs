@@ -225,7 +225,7 @@ fn extract_dense(
         match target.len().cmp(&union_array.len()) {
             // case 3.1: since the target is smaller than the union, allocate a new correctly sized null array
             Ordering::Less => Ok(new_null_array(target.data_type(), union_array.len())),
-            // case 3.2: target equals the union len, return it direcly
+            // case 3.2: target equals the union len, return it directly
             Ordering::Equal => Ok(Arc::clone(target)),
             // case 3.3: target len is bigger than the union len, slice it
             Ordering::Greater => Ok(target.slice(0, union_array.len())),

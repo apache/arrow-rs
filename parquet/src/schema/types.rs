@@ -1477,7 +1477,7 @@ fn schema_from_array_helper(
 
     let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
 
-    // LogicalType is prefered to ConvertedType, but both may be present.
+    // LogicalType is preferred to ConvertedType, but both may be present.
     let logical_type = element.logical_type;
 
     check_logical_type(logical_type.as_ref())?;

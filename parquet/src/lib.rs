@@ -217,7 +217,7 @@ mod parquet_thrift;
 #[derive(Debug)]
 pub enum DecodeResult<T: Debug> {
     /// The ranges of data necessary to proceed
-    // TODO: distinguish between minimim needed to make progress and what could be used?
+    // TODO: distinguish between minimum needed to make progress and what could be used?
     NeedsData(Vec<Range<u64>>),
     /// The decoder produced an output item
     Data(T),

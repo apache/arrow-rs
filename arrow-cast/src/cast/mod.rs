@@ -7645,7 +7645,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bianry_to_view() {
+    fn test_binary_to_view() {
         _test_binary_to_view::<i32>();
         _test_binary_to_view::<i64>();
     }
@@ -12943,7 +12943,7 @@ mod tests {
                 output_scale: 2,
                 expected_output_repr: Ok(10000), // 100.00
             },
-            // increase precision, decrease scale, no rouding
+            // increase precision, decrease scale, no rounding
             DecimalCastTestConfig {
                 input_prec: 5,
                 input_scale: 3,
