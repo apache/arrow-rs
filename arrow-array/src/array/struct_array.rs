@@ -879,8 +879,9 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("child array #0 for field x has length smaller than expected"));
-        assert!(err.contains("(5 < 6)"));
+        assert!(err.contains(
+            "child array #0 for field x has length smaller than expected for struct array (5 < 6)"
+        ));
     }
 
     /// validates that struct can be accessed using `column_name` as index i.e. `struct_array["column_name"]`.

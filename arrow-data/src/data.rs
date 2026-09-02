@@ -2525,13 +2525,17 @@ mod tests {
             .unwrap();
 
         // The parent needs child elements 1..6, but the child only has five.
-        let result = ArrayData::builder(data_type)
+        let err = ArrayData::builder(data_type)
             .len(5)
             .offset(1)
             .add_child_data(child)
-            .build();
+            .build()
+            .unwrap_err()
+            .to_string();
 
-        assert!(result.is_err());
+        assert!(err.contains(
+            "child array #0 for field x has length smaller than expected for struct array (5 < 6)"
+        ));
     }
 
     #[test]
