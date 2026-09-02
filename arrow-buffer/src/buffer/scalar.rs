@@ -97,6 +97,8 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
 
     /// Creates a new [`ScalarBuffer`] from a [`Buffer`], an `offset`, and a length in units of `T`.
     ///
+    /// # Errors
+    ///
     /// Returns an error if the offset or length overflows, the buffer is not aligned for `T`,
     /// or the requested slice is outside the buffer bounds.
     pub fn try_new(buffer: Buffer, offset: usize, len: usize) -> Result<Self, BufferError> {
