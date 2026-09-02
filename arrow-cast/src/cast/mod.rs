@@ -3236,10 +3236,22 @@ mod tests {
                     if input.is_null(index) {
                         continue;
                     }
-                    // bitwise, so that NaN and the sign of zero are checked too
+                    let value = input.value(index);
+                    if value.is_nan() {
+                        // Only NaN-ness is guaranteed: the sign and payload a
+                        // float conversion produces for a NaN are unspecified,
+                        // and Miri deliberately randomises them, so comparing
+                        // bit patterns here would be testing an accident.
+                        assert!(
+                            output.value(index).is_nan(),
+                            "at index {index} of offset {offset}"
+                        );
+                        continue;
+                    }
+                    // bitwise everywhere else, so the sign of zero is checked too
                     assert_eq!(
                         output.value(index).to_bits(),
-                        (input.value(index) as f64).to_bits(),
+                        (value as f64).to_bits(),
                         "at index {index} of offset {offset}"
                     );
                 }
