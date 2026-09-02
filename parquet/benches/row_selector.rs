@@ -345,18 +345,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let outer_mask = BooleanBuffer::from_iter((0..8192).map(|i| i % 100 != 0));
-    let inner_mask =
-        BooleanBuffer::from_iter((0..outer_mask.count_set_bits()).map(|i| i % 100 != 0));
-    let outer = RowSelection::from_boolean_buffer(outer_mask);
-    let inner = RowSelection::from_boolean_buffer(inner_mask);
-    let composed = outer.and_then(&inner);
-    let third_mask = BooleanBuffer::from_iter((0..composed.row_count()).map(|i| i % 100 != 0));
-    let third = RowSelection::from_boolean_buffer(third_mask);
-    c.bench_function("mask_and_then/8192/precomposed_outer_98_inner_99", |b| {
-        b.iter(|| hint::black_box(composed.and_then(&third)))
-    });
-
     bench_mask_and_then_sweeps(c);
 
     bench_mask_backed_algebra(c, selection_ratio);
