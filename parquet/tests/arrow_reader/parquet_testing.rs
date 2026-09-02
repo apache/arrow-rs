@@ -20,7 +20,7 @@
 //! [parquet-testing]: https://github.com/apache/parquet-testing
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, Int64Array, types};
+use arrow_array::{Array, BinaryArray, Int64Array, StringArray, types};
 use arrow_schema::{Field, Schema, TimeUnit};
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::basic::{LogicalType, Type as PhysicalType};
@@ -189,4 +189,44 @@ fn test_read_unknown_logical_type() {
     let out = reader.next().unwrap().unwrap();
     assert_eq!(out.num_rows(), 3);
     assert_eq!(out.num_columns(), 2);
+}
+
+#[test]
+fn test_json_and_bson_logical_types() {
+    let test_data = arrow::util::test_util::parquet_test_data();
+
+    let json_file = File::open(format!("{test_data}/json.parquet")).unwrap();
+    let mut json_reader = ParquetRecordBatchReaderBuilder::try_new(json_file)
+        .unwrap()
+        .build()
+        .unwrap();
+    let json_batch = json_reader.next().unwrap().unwrap();
+    assert!(json_reader.next().is_none());
+    let json = json_batch.column(0).as_string::<i32>();
+    assert_eq!(
+        json,
+        &StringArray::from(vec![
+            Some(r#"{"a":1}"#),
+            Some(r#"{"a":1,"b":null}"#),
+            Some("[1,null,3]"),
+            None,
+        ])
+    );
+
+    let bson_file = File::open(format!("{test_data}/bson.parquet")).unwrap();
+    let mut bson_reader = ParquetRecordBatchReaderBuilder::try_new(bson_file)
+        .unwrap()
+        .build()
+        .unwrap();
+    let bson_batch = bson_reader.next().unwrap().unwrap();
+    assert!(bson_reader.next().is_none());
+    let bson = bson_batch.column(0).as_binary::<i32>();
+    assert_eq!(
+        bson,
+        &BinaryArray::from(vec![
+            Some(&[12, 0, 0, 0, 16, 97, 0, 1, 0, 0, 0, 0][..]),
+            Some(&[15, 0, 0, 0, 16, 97, 0, 1, 0, 0, 0, 10, 98, 0, 0][..]),
+            None,
+        ])
+    );
 }
