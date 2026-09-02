@@ -33,6 +33,7 @@ name = "arrow_schema"
 bench = false
 
 [dependencies]
+arrow-buffer = { workspace = true }
 serde_core = { version = "1.0", default-features = false, features = [
     "std",
     "rc",
