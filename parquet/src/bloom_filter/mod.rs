@@ -39,7 +39,7 @@
 //! ```
 //!
 //! SBBFs use eight hash functions to cleanly fit in SIMD lanes<sup>[2][sbbf-paper]</sup>, therefore
-//! `k` is set to 8. The SBBF will spread those `m` bits accross a set of `b` blocks that
+//! `k` is set to 8. The SBBF will spread those `m` bits across a set of `b` blocks that
 //! are each 256 bits, i.e., 32 bytes, in size. The number of blocks is chosen as:
 //!
 //! ```text

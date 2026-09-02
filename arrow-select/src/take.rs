@@ -3581,8 +3581,8 @@ mod tests {
         )
         .unwrap();
 
-        let indicies = Int64Array::from(vec![0, 2, 4]);
-        let array = take(&array, &indicies, None).unwrap();
+        let indices = Int64Array::from(vec![0, 2, 4]);
+        let array = take(&array, &indices, None).unwrap();
         assert_eq!(array.len(), 3);
     }
 

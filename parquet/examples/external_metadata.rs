@@ -139,7 +139,7 @@ fn prepare_metadata(metadata: ParquetMetaData) -> ParquetMetaData {
     }
     let metadata = builder.build();
 
-    // verifiy that the size has indeed been reduced
+    // verify that the size has indeed been reduced
     let new_size = metadata.memory_size();
     assert!(new_size < orig_size, "metadata size did not decrease");
     println!("Reduced metadata size from {orig_size} to {new_size}");
