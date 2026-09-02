@@ -15,23 +15,48 @@
 # specific language governing permissions and limitations
 # under the License.
 
+[default.extend-words]
+# random words from unit tests
+ba = "ba"
+fo = "fo"
+nd = "nd"
+Nd = "Nd"
+Ue = "Ue"
+mis = "mis"
+Byt = "Byt"
+Ned = "Ned"
+tru = "tru"
+fals = "fals"
+ois = "ois"
+Ois = "Ois"
+Arro = "Arro"
+Hel = "Hel"
+hel = "hel"
+
+# abbreviations, common words, etc.
+tpe = "tpe"
+datas = "datas"
+flate = "flate"
+
 [files]
-# Exclude generated/vendored files and test data that may contain intentional
-# or binary content that typos shouldn't scan.
 extend-exclude = [
     "*.lock",
+    "*.csv",
+    "*.parquet",
+    "*.avro",
     # Git submodules with upstream test data we don't control
     "parquet-testing/",
     "testing/",
     # Generated code from flatbuffers / protobuf
     "arrow-ipc/src/gen/",
     "arrow-flight/gen/",
+    "arrow-flight/src/sql/arrow.flight.protocol.sql.rs",
     # Arrow format spec files with spec-defined identifiers
     "format/",
     # Binary test fixtures
     "arrow-avro/test/",
-    "*.parquet",
-    "*.avro",
+    # Benchmarks reference external dataset column names verbatim
+    "parquet/benches/",
     # Historical changelogs contain PR titles we don't own
     "CHANGELOG.md",
     "CHANGELOG-old.md",
