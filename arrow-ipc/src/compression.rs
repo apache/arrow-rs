@@ -428,6 +428,26 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lz4")]
+    fn test_lz4_decompression_rejects_output_exceeding_advertised_size() {
+        let input_bytes = b"hello lz4";
+        let codec = super::CompressionCodec::Lz4Frame;
+        let mut compressed = Vec::new();
+        codec
+            .compress(input_bytes, &mut compressed, &mut Default::default())
+            .unwrap();
+
+        let err = codec
+            .decompress(&compressed, input_bytes.len() - 1, &mut Default::default())
+            .expect_err("output larger than the advertised size should fail");
+
+        assert!(
+            err.to_string().contains("exceeds advertised size"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     #[cfg(feature = "zstd")]
     fn test_zstd_compression() {
         let input_bytes = b"hello zstd";
