@@ -16,26 +16,18 @@
 # under the License.
 
 [default.extend-words]
-# random words from unit tests
-ba = "ba"
-fo = "fo"
-nd = "nd"
-Nd = "Nd"
-Ue = "Ue"
-mis = "mis"
-Byt = "Byt"
-Ned = "Ned"
-tru = "tru"
-fals = "fals"
-ois = "ois"
-Ois = "Ois"
-Arro = "Arro"
-Hel = "Hel"
-hel = "hel"
+# String values in tests that are the subject of the test and cannot be renamed
+ba = "ba"       # sort/comparison test data e.g. vec!["ab", "ba", ...]
+fo = "fo"       # rank test data e.g. vec!["foo", "fo", ...]
+tru = "tru"     # partial boolean match arm: "t" | "tr" | "tru" | "true"
+fals = "fals"   # partial boolean match arm: "f" | "fa" | "fal" | "fals" | "false"
+Ue = "Ue"       # extracted from mixed-case test input "trUe"
+Arro = "Arro"   # extracted from LIKE test input "ArroW"
+Byt = "Byt"     # sort ordering test strings e.g. b"than12Byt", "LongerThan12Byt"
+hel = "hel"     # substring test data e.g. vec![Some("hel"), ...]
+mis = "mis"     # used in comment "mis-identifying" in parquet_derive
 
-# abbreviations, common words, etc.
-tpe = "tpe"
-datas = "datas"
+# flate2 is the crate name for the deflate/inflate compression library
 flate = "flate"
 
 [files]

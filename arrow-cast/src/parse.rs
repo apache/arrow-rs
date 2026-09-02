@@ -740,11 +740,11 @@ fn parse_date_to_days(string: &str) -> Option<i32> {
         let y = year as i64;
         let era = y.div_euclid(400);
         let yoe = y.rem_euclid(400) as i32;
-        let nd = NaiveDate::from_ymd_opt(yoe, month, day)?;
-        let in_era = (nd.num_days_from_ce() - EPOCH_DAYS_FROM_CE) as i64;
+        let naive_date = NaiveDate::from_ymd_opt(yoe, month, day)?;
+        let in_era = (naive_date.num_days_from_ce() - EPOCH_DAYS_FROM_CE) as i64;
         return i32::try_from(era * 146_097 + in_era).ok();
     }
-    parse_date(string).map(|nd| nd.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+    parse_date(string).map(|naive_date| naive_date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
 }
 
 impl Parser for Date32Type {

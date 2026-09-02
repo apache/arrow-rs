@@ -960,10 +960,10 @@ mod tests {
     fn test_statistics_from_thrift() {
         // Helper method to check statistics conversion.
         fn check_stats(stats: Statistics) {
-            let tpe = stats.physical_type();
+            let typ = stats.physical_type();
             let thrift_stats = page_stats_to_thrift(Some(&stats));
             assert_eq!(
-                from_thrift_page_stats(tpe, thrift_stats).unwrap(),
+                from_thrift_page_stats(typ, thrift_stats).unwrap(),
                 Some(stats)
             );
         }

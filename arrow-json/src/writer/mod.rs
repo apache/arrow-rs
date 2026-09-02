@@ -1886,7 +1886,7 @@ mod tests {
     #[test]
     fn test_writer_binary() {
         let values: [Option<&[u8]>; 3] = [
-            Some(b"Ned Flanders" as &[u8]),
+            Some(b"Bob Smith" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
         ];

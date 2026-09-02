@@ -185,7 +185,7 @@ impl Type {
                 for field in sub_type.get_fields() {
                     if !field_map
                         .get(field.name())
-                        .map(|tpe| tpe.check_contains(field))
+                        .map(|typ| typ.check_contains(field))
                         .unwrap_or(false)
                     {
                         return false;

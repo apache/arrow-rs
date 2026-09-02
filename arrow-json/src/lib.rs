@@ -289,7 +289,7 @@ mod tests {
         assert!(str::from_utf8(not_utf8).is_err());
 
         let values: &[Option<&[u8]>] = &[
-            Some(b"Ned Flanders" as &[u8]),
+            Some(b"Bob Smith" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
             Some(not_utf8),
