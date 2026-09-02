@@ -45,7 +45,8 @@ use crate::file::metadata::{
     OffsetIndexBuilder, PageEncodingStats,
 };
 use crate::file::properties::{
-    EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
+    EnabledStatistics, ResolvedColumnProperties, WriterProperties, WriterPropertiesPtr,
+    WriterVersion,
 };
 use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
@@ -457,7 +458,10 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // Column writer properties
     descr: ColumnDescPtr,
     props: WriterPropertiesPtr,
-    statistics_enabled: EnabledStatistics,
+    /// Per-column settings for [`Self::descr`], resolved once here so that the
+    /// per-batch and per-page write paths never search the per-column override
+    /// map in `props` again.
+    column_props: ResolvedColumnProperties,
 
     page_writer: Box<dyn PageWriter + 'a>,
     codec: Compression,
@@ -499,12 +503,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         props: WriterPropertiesPtr,
         page_writer: Box<dyn PageWriter + 'a>,
     ) -> Self {
-        let codec = props.compression(descr.path());
+        let column_props = props.resolve_column_properties(descr.path());
+        let codec = column_props.compression;
         let codec_options = CodecOptionsBuilder::default().build();
         let compressor = create_codec(codec, &codec_options).unwrap();
-        let encoder = E::try_new(&descr, props.as_ref()).unwrap();
+        let encoder = E::try_new(&descr, props.as_ref(), &column_props).unwrap();
 
-        let statistics_enabled = props.statistics_enabled(descr.path());
+        let statistics_enabled = column_props.statistics_enabled;
 
         let mut encodings = BTreeSet::new();
         // Used for level information
@@ -540,7 +545,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             rep_levels_encoder: Self::create_level_encoder(descr.max_rep_level(), &props),
             descr,
             props,
-            statistics_enabled,
+            column_props,
             page_writer,
             codec,
             compressor,
@@ -636,7 +641,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
         debug_assert!(base_batch_size > 0);
 
-        let chunker = ByteBudgetChunker::new(&self.descr, &self.props, base_batch_size);
+        let chunker = ByteBudgetChunker::new(&self.descr, &self.column_props, base_batch_size);
         while levels_offset < num_levels {
             let mut end_offset = num_levels.min(levels_offset + base_batch_size);
 
@@ -1065,11 +1070,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn should_dict_fallback(&self) -> bool {
         match self.encoder.estimated_dict_page_size() {
-            Some(size) => {
-                size >= self
-                    .props
-                    .column_dictionary_page_size_limit(self.descr.path())
-            }
+            Some(size) => size >= self.column_props.dictionary_page_size_limit,
             None => false,
         }
     }
@@ -1106,7 +1107,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             return;
         }
         let size = self.encoder.estimated_data_page_size();
-        if size >= self.props.column_data_page_size_limit(self.descr.path()) {
+        if size >= self.column_props.data_page_size_limit {
             self.page_metrics.page_size_exemption = size;
         }
     }
@@ -1127,7 +1128,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 .encoder
                 .estimated_data_page_size()
                 .saturating_sub(self.page_metrics.page_size_exemption)
-                >= self.props.column_data_page_size_limit(self.descr.path())
+                >= self.column_props.data_page_size_limit
     }
 
     /// Performs dictionary fallback.
@@ -1417,7 +1418,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 update_min(&self.descr, &min, &mut self.column_metrics.min_column_value);
                 update_max(&self.descr, &max, &mut self.column_metrics.max_column_value);
 
-                (self.statistics_enabled == EnabledStatistics::Page).then_some(
+                (self.column_props.statistics_enabled == EnabledStatistics::Page).then_some(
                     ValueStatistics::new(
                         Some(min),
                         Some(max),
@@ -1445,7 +1446,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         // From here on, we only need page statistics if they will be written to the page header.
         let page_statistics = page_statistics
-            .filter(|_| self.props.write_page_header_statistics(self.descr.path()))
+            .filter(|_| self.column_props.write_page_header_statistics)
             .map(|stats| self.truncate_statistics(Statistics::from(stats)));
 
         let compressed_page = match self.props.writer_version() {
@@ -1509,9 +1510,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         let buffer_len = buffer.len();
                         cmpr.compress(&values_data.buf, &mut buffer)?;
                         let compressed_values_size = buffer.len() - buffer_len;
-                        let threshold = self
-                            .props
-                            .column_data_page_v2_compression_ratio_threshold(self.descr.path());
+                        let threshold = self.column_props.data_page_v2_compression_ratio_threshold;
                         if (compressed_values_size as f64) >= (uncompressed_size as f64) * threshold
                         {
                             buffer.truncate(buffer_len);
@@ -1599,7 +1598,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .set_data_page_offset(data_page_offset)
             .set_dictionary_page_offset(dict_page_offset);
 
-        if self.statistics_enabled != EnabledStatistics::None {
+        if self.column_props.statistics_enabled != EnabledStatistics::None {
             let backwards_compatible_min_max = self.descr.sort_order().is_signed();
 
             let distinct_count = self
@@ -2850,6 +2849,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_column_writer_small_write_batch_size() {
         for i in &[1usize, 2, 5, 10, 11, 1023] {
             let props = WriterProperties::builder().set_write_batch_size(*i).build();
@@ -3726,6 +3726,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_column_writer_check_float16_min_max() {
         let input = [
             -f16::ONE,
@@ -3750,6 +3751,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_column_writer_check_float16_nan_middle() {
         let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
             .into_iter()
@@ -3767,6 +3769,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_float16_statistics_nan_middle() {
         let input = [f16::ONE, f16::NAN, f16::ONE + f16::ONE]
             .into_iter()
@@ -3784,6 +3787,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_float16_statistics_nan_start() {
         let input = [f16::NAN, f16::ONE, f16::ONE + f16::ONE]
             .into_iter()
@@ -4426,12 +4430,12 @@ mod tests {
         assert_eq!(1, r.rows_written);
 
         let stats = r.metadata.statistics().expect("statistics");
-        if let Statistics::ByteArray(_stats) = stats {
-            let min_value = _stats.min_opt().unwrap();
-            let max_value = _stats.max_opt().unwrap();
+        if let Statistics::ByteArray(stats) = stats {
+            let min_value = stats.min_opt().unwrap();
+            let max_value = stats.max_opt().unwrap();
 
-            assert!(!_stats.min_is_exact());
-            assert!(!_stats.max_is_exact());
+            assert!(!stats.min_is_exact());
+            assert!(!stats.max_is_exact());
 
             let expected_len = 64;
             assert_eq!(min_value.len(), expected_len);
@@ -4476,12 +4480,12 @@ mod tests {
         let stats = r.metadata.statistics().expect("statistics");
         assert_eq!(stats.null_count_opt(), Some(0));
         assert_eq!(stats.distinct_count_opt(), None);
-        if let Statistics::ByteArray(_stats) = stats {
-            let min_value = _stats.min_opt().unwrap();
-            let max_value = _stats.max_opt().unwrap();
+        if let Statistics::ByteArray(stats) = stats {
+            let min_value = stats.min_opt().unwrap();
+            let max_value = stats.max_opt().unwrap();
 
-            assert!(!_stats.min_is_exact());
-            assert!(!_stats.max_is_exact());
+            assert!(!stats.min_is_exact());
+            assert!(!stats.max_is_exact());
 
             assert_eq!(min_value.len(), TEST_TRUNCATE_LENGTH);
             assert_eq!(max_value.len(), TEST_TRUNCATE_LENGTH);
@@ -4528,12 +4532,12 @@ mod tests {
         let stats = r.metadata.statistics().expect("statistics");
         assert_eq!(stats.null_count_opt(), Some(0));
         assert_eq!(stats.distinct_count_opt(), None);
-        if let Statistics::FixedLenByteArray(_stats) = stats {
-            let min_value = _stats.min_opt().unwrap();
-            let max_value = _stats.max_opt().unwrap();
+        if let Statistics::FixedLenByteArray(stats) = stats {
+            let min_value = stats.min_opt().unwrap();
+            let max_value = stats.max_opt().unwrap();
 
-            assert!(!_stats.min_is_exact());
-            assert!(!_stats.max_is_exact());
+            assert!(!stats.min_is_exact());
+            assert!(!stats.max_is_exact());
 
             assert_eq!(min_value.len(), TEST_TRUNCATE_LENGTH);
             assert_eq!(max_value.len(), TEST_TRUNCATE_LENGTH);

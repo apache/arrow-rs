@@ -574,6 +574,10 @@ impl<'a> U64UnalignedSlice<'a> {
         assert!(u64_len_in_bytes <= left_buffer_mut.len());
         let (bytes_for_u64, remainder) = left_buffer_mut.split_at_mut(u64_len_in_bytes);
 
+        #[expect(
+            clippy::cast_ptr_alignment,
+            reason = "`U64UnalignedSlice` only reads and writes through the unaligned methods"
+        )]
         let ptr = bytes_for_u64.as_mut_ptr().cast::<u64>();
 
         let this = Self {

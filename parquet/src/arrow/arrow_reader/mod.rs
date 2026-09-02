@@ -1300,10 +1300,15 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         }
 
         let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => buffer.slice(
-                (TryInto::<usize>::try_into(bitset_offset).unwrap()
-                    - TryInto::<usize>::try_into(offset).unwrap())..,
-            ),
+            Some(_) => {
+                let bitset_start = bitset_offset
+                    .checked_sub(offset)
+                    .and_then(|start| usize::try_from(start).ok())
+                    .ok_or_else(|| {
+                        ParquetError::General("Bloom filter offset is invalid".to_string())
+                    })?;
+                buffer.slice(bitset_start..)
+            }
             None => {
                 let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
                     ParquetError::General("Bloom filter length is invalid".to_string())
@@ -2134,6 +2139,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_primitive_single_column_reader_test() {
         run_single_column_reader_tests::<BoolType, _, BoolType>(
             2,
@@ -2176,6 +2182,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_unsigned_primitive_single_column_reader_test() {
         run_single_column_reader_tests::<Int32Type, _, Int32Type>(
             2,
@@ -2499,6 +2506,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_fixed_length_binary_column_reader() {
         run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             20,
@@ -2519,6 +2527,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_interval_day_time_column_reader() {
         run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             12,
@@ -2543,6 +2552,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_int96_single_column_reader_test() {
         let encodings = &[Encoding::PLAIN, Encoding::RLE_DICTIONARY];
 
@@ -2626,6 +2636,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_utf8_single_column_reader_test() {
         fn string_converter<O: OffsetSizeTrait>(vals: &[Option<ByteArray>]) -> ArrayRef {
             Arc::new(GenericStringArray::<O>::from_iter(vals.iter().map(|x| {
@@ -2880,6 +2891,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_read_float16_nonzeros_file() {
         use arrow_array::Float16Array;
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -2936,6 +2948,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Zstd calls native C functions unsupported by Miri
     fn test_read_float32_float64_byte_stream_split() {
         let path = format!(
             "{}/byte_stream_split.zstd.parquet",
@@ -2965,6 +2978,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_read_extended_byte_stream_split() {
         let path = format!(
             "{}/byte_stream_split_extended.gzip.parquet",
@@ -3769,6 +3783,7 @@ pub(crate) mod tests {
         File::open(path.as_path()).expect("File not found!")
     }
 
+    #[cfg_attr(miri, ignore)] // calls native Zstd code unsupported by Miri
     #[test]
     fn test_read_structs() {
         // This particular test file has columns of struct types where there is
@@ -3822,6 +3837,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg_attr(miri, ignore)] // calls native Zstd code unsupported by Miri
     #[test]
     // same as test_read_structs but constructs projection mask via column names
     fn test_read_structs_by_name() {
@@ -4704,6 +4720,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_row_group_exact_multiple() {
         const BATCH_SIZE: usize = REPETITION_LEVELS_BATCH_SIZE;
         test_row_group_batch(8, 8);
@@ -4801,6 +4818,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_scan_row_with_selection() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
@@ -4874,6 +4892,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_read_with_page_index_enabled() {
         let testdata = arrow::util::test_util::parquet_test_data();
 
@@ -5017,6 +5036,7 @@ pub(crate) mod tests {
     //
     // For more information, check: https://github.com/apache/arrow-rs/issues/2988
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_read_lz4_hadoop_fallback() {
         for file in [
             "hadoop_lz4_compressed.parquet",
@@ -5053,6 +5073,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_read_lz4_hadoop_large() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/hadoop_lz4_compressed_larger.parquet");
@@ -5294,6 +5315,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_list_selection() {
         let schema = Arc::new(Schema::new(vec![Field::new_list(
             "list",
@@ -5349,6 +5371,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_list_selection_fuzz() {
         let mut rng = rng();
         let schema = Arc::new(Schema::new(vec![Field::new_list(
@@ -5787,6 +5810,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_row_numbers_with_multiple_row_groups() {
         test_row_numbers_with_multiple_row_groups_helper(
             false,
@@ -5813,6 +5837,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_row_numbers_with_multiple_row_groups_and_filter() {
         test_row_numbers_with_multiple_row_groups_helper(
             true,

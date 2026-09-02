@@ -354,9 +354,8 @@ fn eq_scalar_inner(chunk_size: usize, type_ids: &[i8], target: i8) -> BoolValue 
 
         if false_bits == type_ids.len() {
             return BoolValue::Scalar(false);
-        } else {
-            (false_bits, false)
         }
+        (false_bits, false)
     } else {
         (true_bits, true)
     };

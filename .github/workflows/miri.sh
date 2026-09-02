@@ -24,6 +24,7 @@ CRATES="
     -p arrow-schema
     -p arrow-select
     -p arrow-string
+    -p parquet
 "
 
 setup_miri() {

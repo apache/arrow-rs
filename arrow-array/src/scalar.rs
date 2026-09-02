@@ -75,6 +75,7 @@ use crate::Array;
 /// let r = eq(&a, &b).unwrap();
 /// let values: Vec<_> = r.values().iter().collect();
 /// assert_eq!(values, &[true, false, false, false, false]);
+/// ```
 pub trait Datum {
     /// Returns the value for this [`Datum`] and a boolean indicating if the value is scalar
     fn get(&self) -> (&dyn Array, bool);

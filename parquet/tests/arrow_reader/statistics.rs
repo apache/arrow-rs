@@ -374,6 +374,7 @@ impl Test<'_> {
 // Remaining cases
 //   f64::NAN
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_max_and_min_value_truncated() {
     let reader = TestReader {
@@ -417,6 +418,7 @@ async fn test_max_and_min_value_truncated() {
     .run()
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_one_row_group_without_null() {
     let reader = Int64Case {
@@ -447,6 +449,7 @@ async fn test_one_row_group_without_null() {
     .run()
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_one_row_group_with_null_and_negative() {
     let reader = Int64Case {
@@ -477,6 +480,7 @@ async fn test_one_row_group_with_null_and_negative() {
     .run()
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_two_row_group_with_null() {
     let reader = Int64Case {
@@ -507,6 +511,7 @@ async fn test_two_row_group_with_null() {
     .run()
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_two_row_groups_with_all_nulls_in_one() {
     let reader = Int64Case {
@@ -536,6 +541,7 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
     .run()
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_multiple_data_pages_nulls_and_negatives() {
     let reader = Int64Case {
@@ -569,6 +575,7 @@ async fn test_multiple_data_pages_nulls_and_negatives() {
     .run()
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_data_page_stats_with_all_null_page() {
     for data_type in &[
@@ -643,6 +650,7 @@ async fn test_data_page_stats_with_all_null_page() {
 // . Different row group sizes
 
 // Four different integer types
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_int_64() {
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
@@ -673,6 +681,7 @@ async fn test_int_64() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_int_32() {
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
@@ -702,6 +711,7 @@ async fn test_int_32() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_int_16() {
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
@@ -731,6 +741,7 @@ async fn test_int_16() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_int_8() {
     // This creates a parquet files of 4 columns named "i8", "i16", "i32", "i64"
@@ -760,6 +771,7 @@ async fn test_int_8() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_float_16() {
     // This creates a parquet files of 1 column named f
@@ -799,6 +811,7 @@ async fn test_float_16() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_float_32() {
     // This creates a parquet files of 1 column named f
@@ -828,6 +841,7 @@ async fn test_float_32() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_float_64() {
     // This creates a parquet files of 1 column named f
@@ -858,6 +872,7 @@ async fn test_float_64() {
 }
 
 // timestamp
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_timestamp() {
     // This creates a parquet files of 9 columns named "nanos", "nanos_timezoned", "micros", "micros_timezoned", "millis", "millis_timezoned", "seconds", "seconds_timezoned", "names"
@@ -1117,6 +1132,7 @@ async fn test_timestamp() {
 }
 
 // timestamp with different row group sizes
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_timestamp_diff_rg_sizes() {
     // This creates a parquet files of 9 columns named "nanos", "nanos_timezoned", "micros", "micros_timezoned", "millis", "millis_timezoned", "seconds", "seconds_timezoned", "names"
@@ -1355,6 +1371,7 @@ async fn test_timestamp_diff_rg_sizes() {
 }
 
 // date with different row group sizes
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_dates_32_diff_rg_sizes() {
     // This creates a parquet files of 3 columns named "date32", "date64", "names"
@@ -1395,6 +1412,7 @@ async fn test_dates_32_diff_rg_sizes() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_time32_second_diff_rg_sizes() {
     let reader = TestReader {
@@ -1421,6 +1439,7 @@ async fn test_time32_second_diff_rg_sizes() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_time32_millisecond_diff_rg_sizes() {
     let reader = TestReader {
@@ -1451,6 +1470,7 @@ async fn test_time32_millisecond_diff_rg_sizes() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_time64_microsecond_diff_rg_sizes() {
     let reader = TestReader {
@@ -1487,6 +1507,7 @@ async fn test_time64_microsecond_diff_rg_sizes() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_time64_nanosecond_diff_rg_sizes() {
     let reader = TestReader {
@@ -1523,6 +1544,7 @@ async fn test_time64_nanosecond_diff_rg_sizes() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_dates_64_diff_rg_sizes() {
     // The file is created by 4 record batches (each has a null row), each has 5 rows but then will be split into 2 row groups with size 13, 7
@@ -1553,6 +1575,7 @@ async fn test_dates_64_diff_rg_sizes() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_uint() {
     // This creates a parquet files of 4 columns named "u8", "u16", "u32", "u64"
@@ -1626,6 +1649,7 @@ async fn test_uint() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_int32_range() {
     // This creates a parquet file of 1 column "i"
@@ -1652,6 +1676,7 @@ async fn test_int32_range() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_uint32_range() {
     // This creates a parquet file of 1 column "u"
@@ -1678,6 +1703,7 @@ async fn test_uint32_range() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_numeric_limits_unsigned() {
     // file has 7 rows, 2 row groups: one with 5 rows, one with 2 rows.
@@ -1745,6 +1771,7 @@ async fn test_numeric_limits_unsigned() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_numeric_limits_signed() {
     // file has 7 rows, 2 row groups: one with 5 rows, one with 2 rows.
@@ -1812,6 +1839,7 @@ async fn test_numeric_limits_signed() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_numeric_limits_float() {
     // file has 7 rows, 2 row groups: one with 5 rows, one with 2 rows.
@@ -1879,6 +1907,7 @@ async fn test_numeric_limits_float() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_float64() {
     // This creates a parquet file of 1 column "f"
@@ -1906,6 +1935,7 @@ async fn test_float64() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_float16() {
     // This creates a parquet file of 1 column "f"
@@ -1943,6 +1973,7 @@ async fn test_float16() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_decimal32() {
     // This creates a parquet file of 1 column "decimal32_col" with decimal data type and precision 9, scale 2
@@ -1976,6 +2007,7 @@ async fn test_decimal32() {
     }
     .run();
 }
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_decimal64() {
     // This creates a parquet file of 1 column "decimal64_col" with decimal data type and precision 9, scale 2
@@ -2009,6 +2041,7 @@ async fn test_decimal64() {
     }
     .run();
 }
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_decimal128() {
     // This creates a parquet file of 1 column "decimal128_col" with decimal data type and precision 9, scale 2
@@ -2042,6 +2075,7 @@ async fn test_decimal128() {
     }
     .run();
 }
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_decimal_256() {
     // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precicion 9, scale 2
@@ -2075,6 +2109,7 @@ async fn test_decimal_256() {
     }
     .run();
 }
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_dictionary() {
     let reader = TestReader {
@@ -2127,6 +2162,7 @@ async fn test_dictionary() {
     .run();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_byte() {
     // This creates a parquet file of 5 columns
@@ -2258,6 +2294,7 @@ async fn test_byte() {
 }
 
 // PeriodsInColumnNames
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_period_in_column_names() {
     // This creates a parquet file of 2 columns "name" and "service.name"
@@ -2309,6 +2346,7 @@ async fn test_period_in_column_names() {
 }
 
 // Boolean
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_boolean() {
     // This creates a parquet files of 1 column named "bool"
@@ -2365,6 +2403,7 @@ async fn test_struct() {
 }
 
 // UTF8
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_utf8() {
     let reader = TestReader {
@@ -2406,6 +2445,7 @@ async fn test_utf8() {
 }
 
 // UTF8View
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_utf8_view() {
     let reader = TestReader {
@@ -2436,6 +2476,7 @@ async fn test_utf8_view() {
 }
 
 // BinaryView
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_binary_view() {
     let reader = TestReader {
@@ -2467,6 +2508,7 @@ async fn test_binary_view() {
 
 ////// Files with missing statistics ///////
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_missing_statistics() {
     let reader = Int64Case {
@@ -2554,6 +2596,7 @@ fn bool_arrow_and_parquet_schema() -> (SchemaRef, SchemaDescPtr) {
 
 /////// NEGATIVE TESTS ///////
 // column not found
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_column_not_found() {
     let reader = TestReader {
@@ -2577,6 +2620,7 @@ async fn test_column_not_found() {
     .run_col_not_found();
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_column_non_existent() {
     // Create a schema with an additional column
@@ -2897,6 +2941,7 @@ mod test {
         }
     }
 
+    #[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
     #[test]
     fn struct_leaf_statistics_from_column_index() {
         let leaf_field = Arc::new(Field::new("leaf", DataType::Int32, true));

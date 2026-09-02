@@ -23,7 +23,46 @@ use crate::error::ArrowError;
 use crate::field::Field;
 use crate::{DataType, FieldRef, Fields, Metadata};
 
-/// A builder to facilitate building a [`Schema`] from iteratively from [`FieldRef`]
+/// A builder to facilitate building a [`Schema`] iteratively from [`FieldRef`]
+///
+/// # Examples
+///
+/// Build a schema from scratch:
+///
+/// ```
+/// # use arrow_schema::*;
+/// let schema = {
+///     let mut builder = SchemaBuilder::new();
+///     builder.push(Field::new("id", DataType::Int64, false));
+///     builder.push(Field::new("name", DataType::Utf8, true));
+///     builder.finish()
+/// };
+/// assert_eq!(schema.fields().len(), 2);
+/// ```
+///
+/// Derive a new schema from an existing one, keeping all fields and metadata
+/// while appending new columns:
+///
+/// ```
+/// # use arrow_schema::*;
+/// let base = Schema::new_with_metadata(
+///     vec![
+///         Field::new("id", DataType::Int64, false),
+///         Field::new("name", DataType::Utf8, true),
+///     ],
+///     [("created_by", "myapp")],
+/// );
+///
+/// // Build a new schema that extends `base` with an extra field.
+/// let mut builder = SchemaBuilder::from(&base); // copies all fields *and* metadata.
+/// builder.push(Field::new("score", DataType::Float64, true));
+/// let extended = builder.finish();
+///
+/// assert_eq!(extended.fields().len(), 3);
+/// assert_eq!(extended.field(0).name(), "id");     // original fields preserved
+/// assert_eq!(extended.field(2).name(), "score");  // new field appended
+/// assert_eq!(extended.metadata()["created_by"], "myapp"); // metadata carried over
+/// ```
 #[derive(Debug, Default)]
 pub struct SchemaBuilder {
     fields: Vec<FieldRef>,
@@ -68,6 +107,25 @@ impl SchemaBuilder {
     }
 
     /// Returns a mutable reference to the [`FieldRef`] at index `idx`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_schema::*;
+    /// let original = Schema::new(vec![
+    ///     Field::new("id", DataType::Int32, false),
+    ///     Field::new("value", DataType::Utf8, true),
+    /// ]);
+    ///
+    /// let mut builder = SchemaBuilder::from(&original);
+    /// // Widen the "id" column from Int32 to Int64
+    /// *builder.field_mut(0) = Arc::new(Field::new("id", DataType::Int64, false));
+    /// let widened = builder.finish();
+    ///
+    /// assert_eq!(widened.field(0).data_type(), &DataType::Int64);
+    /// assert_eq!(widened.field(1).name(), "value"); // unchanged
+    /// ```
     ///
     /// # Panics
     ///
@@ -118,6 +176,72 @@ impl SchemaBuilder {
             fields: self.fields.into(),
             metadata: self.metadata,
         }
+    }
+
+    /// Consume this [`SchemaBuilder`] yielding a [`Schema`] with fields reordered
+    /// or subsetted according to `indices`.
+    ///
+    /// Fields appear in the output in the order given by `indices`. Metadata is
+    /// carried over from the builder unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any index is out of bounds or if any index is repeated.
+    ///
+    /// # Example: reorder fields
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let schema = Schema::new(vec![
+    ///     Field::new("id", DataType::Int64, false),
+    ///     Field::new("name", DataType::Utf8, true),
+    ///     Field::new("score", DataType::Float64, true),
+    /// ]);
+    ///
+    /// let reordered = SchemaBuilder::from(&schema).project(&[2, 0, 1]).unwrap();
+    /// assert_eq!(reordered.field(0).name(), "score");
+    /// assert_eq!(reordered.field(1).name(), "id");
+    /// assert_eq!(reordered.field(2).name(), "name");
+    /// ```
+    ///
+    /// # Example: select a subset of fields
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let schema = Schema::new(vec![
+    ///     Field::new("id", DataType::Int64, false),
+    ///     Field::new("name", DataType::Utf8, true),
+    ///     Field::new("score", DataType::Float64, true),
+    /// ]);
+    ///
+    /// let subset = SchemaBuilder::from(&schema).project(&[0, 2]).unwrap();
+    /// assert_eq!(subset.fields().len(), 2);
+    /// assert_eq!(subset.field(0).name(), "id");
+    /// assert_eq!(subset.field(1).name(), "score");
+    /// ```
+    pub fn project(self, indices: &[usize]) -> Result<Schema, ArrowError> {
+        let num_fields = self.fields.len();
+        let mut seen = std::collections::HashSet::new();
+        for &idx in indices {
+            if idx >= num_fields {
+                return Err(ArrowError::SchemaError(format!(
+                    "project index {idx} out of bounds, schema has {num_fields} fields"
+                )));
+            }
+            if !seen.insert(idx) {
+                return Err(ArrowError::SchemaError(format!(
+                    "project index {idx} is repeated"
+                )));
+            }
+        }
+        let fields: Vec<FieldRef> = indices
+            .iter()
+            .map(|&idx| self.fields[idx].clone())
+            .collect();
+        Ok(Schema {
+            fields: fields.into(),
+            metadata: self.metadata,
+        })
     }
 }
 
@@ -1428,5 +1552,57 @@ mod tests {
         assert_eq!(out.metadata.len(), 2);
         assert_eq!(out.metadata["k"], "v");
         assert_eq!(out.metadata["key"], "value");
+    }
+
+    #[test]
+    fn test_schema_builder_project() {
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, true),
+                Field::new("c", DataType::Float64, true),
+                Field::new("d", DataType::Boolean, false),
+            ],
+            [("meta", "data")],
+        );
+
+        // Reorder: reverse field order, keeping all fields.
+        let reordered = SchemaBuilder::from(&schema).project(&[3, 2, 1, 0]).unwrap();
+        assert_eq!(reordered.fields().len(), 4);
+        assert_eq!(reordered.field(0).name(), "d");
+        assert_eq!(reordered.field(1).name(), "c");
+        assert_eq!(reordered.field(2).name(), "b");
+        assert_eq!(reordered.field(3).name(), "a");
+        assert_eq!(reordered.metadata()["meta"], "data"); // metadata carried over
+
+        // Subset: keep only the two middle fields.
+        let subset = SchemaBuilder::from(&schema).project(&[1, 2]).unwrap();
+        assert_eq!(subset.fields().len(), 2);
+        assert_eq!(subset.field(0).name(), "b");
+        assert_eq!(subset.field(1).name(), "c");
+    }
+
+    #[test]
+    fn test_schema_builder_project_errors() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+
+        // Out of bounds.
+        let err = SchemaBuilder::from(&schema).project(&[0, 5]).unwrap_err();
+        assert!(
+            err.to_string().contains("out of bounds"),
+            "unexpected error: {err}"
+        );
+
+        // Repeated index.
+        let err = SchemaBuilder::from(&schema)
+            .project(&[0, 1, 0])
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("repeated"),
+            "unexpected error: {err}"
+        );
     }
 }
