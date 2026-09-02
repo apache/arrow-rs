@@ -137,18 +137,24 @@ use std::sync::Arc;
 /// [`OffsetIndex`]: crate::file::page_index::offset_index::OffsetIndexMetaData
 /// [`ColumnChunkMetaData`]: crate::file::metadata::ColumnChunkMetaData
 pub trait PageIndexProvider: Send + Sync + std::fmt::Debug {
-    /// Returns `true` if offset index structures are present
+    /// Returns `true` if offset index structures are available via this provider
     ///
     /// This indicates whether [`OffsetIndexMetaData`] structures were loaded or created.
     /// Returns `true` even if some individual columns lack offset indexes.
+    /// This should return `false` if all calls to [`Self::offset_index`] will return `None`.
+    ///
+    /// This does *not* indicate if the underlying Parquet file contains offset indexes.
     ///
     /// To check if a specific column has an offset index, use [`Self::offset_index`].
     fn has_offset_indexes(&self) -> bool;
 
-    /// Returns `true` if column index structures are present
+    /// Returns `true` if column index structures are available via this provider
     ///
     /// This indicates whether [`ColumnIndexMetaData`] structures were loaded or created.
     /// Returns `true` even if some individual columns lack column indexes.
+    /// This should return `false` if all calls to [`Self::column_index`] will return `None`.
+    ///
+    /// This does *not* indicate if the underlying Parquet file contains column indexes.
     ///
     /// To check if a specific column has a column index, use [`Self::column_index`].
     fn has_column_indexes(&self) -> bool;
