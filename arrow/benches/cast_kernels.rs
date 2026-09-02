@@ -17,7 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
+use criterion::{BenchmarkId, Criterion, Throughput};
 use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
@@ -26,7 +26,7 @@ use chrono::DateTime;
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::compute::cast;
+use arrow::compute::{CastOptions, cast, cast_with_options};
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
@@ -257,7 +257,49 @@ fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
 }
 
+fn benchmark_infallible_numeric_cast(c: &mut Criterion) {
+    const SIZE: usize = 100_000;
+    let mut group = c.benchmark_group("infallible numeric cast i32 to i64");
+    group.throughput(Throughput::Elements(SIZE as u64));
+
+    for null_density in [0.0, 0.1] {
+        let array = Arc::new(create_primitive_array::<Int32Type>(SIZE, null_density)) as ArrayRef;
+        let input = array.as_primitive::<Int32Type>();
+
+        group.bench_with_input(
+            BenchmarkId::new("cast safe", null_density),
+            &array,
+            |b, array| b.iter(|| cast_array(array, DataType::Int64)),
+        );
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        group.bench_with_input(
+            BenchmarkId::new("cast safe=false", null_density),
+            &array,
+            |b, array| {
+                b.iter(|| {
+                    hint::black_box(cast_with_options(array, &DataType::Int64, &options).unwrap())
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("unary", null_density),
+            input,
+            |b, input| {
+                b.iter(|| hint::black_box(input.unary::<_, Int64Type>(|value| value as i64)))
+            },
+        );
+    }
+    group.finish();
+}
+
 fn add_benchmark(c: &mut Criterion) {
+    benchmark_infallible_numeric_cast(c);
+
     let i32_array = build_array::<Int32Type>(512);
     let i64_array = build_array::<Int64Type>(512);
     let f32_array = build_array::<Float32Type>(512);

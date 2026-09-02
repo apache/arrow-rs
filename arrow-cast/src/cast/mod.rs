@@ -2554,9 +2554,16 @@ fn cast_numeric_arrays<FROM, TO>(
 where
     FROM: ArrowPrimitiveType,
     TO: ArrowPrimitiveType,
-    FROM::Native: NumCast,
+    FROM::Native: NumCast + AsPrimitive<TO::Native>,
     TO::Native: NumCast,
 {
+    if is_infallible_numeric_cast(&FROM::DATA_TYPE, &TO::DATA_TYPE) {
+        return Ok(Arc::new(
+            from.as_primitive::<FROM>()
+                .unary::<_, TO>(|value| value.as_()),
+        ));
+    }
+
     if cast_options.safe {
         // If the value can't be casted to the `TO::Native`, return null
         Ok(Arc::new(numeric_cast::<FROM, TO>(
@@ -2568,6 +2575,25 @@ where
             from.as_primitive::<FROM>(),
         )?))
     }
+}
+
+/// Returns true when every value of `from` can be cast to `to`.
+fn is_infallible_numeric_cast(from: &DataType, to: &DataType) -> bool {
+    use DataType::*;
+    matches!(
+        (from, to),
+        (Int8, Int16 | Int32 | Int64 | Float32 | Float64)
+            | (Int16, Int32 | Int64 | Float32 | Float64)
+            | (Int32, Int64 | Float32 | Float64)
+            | (Int64 | UInt64, Float32 | Float64)
+            | (
+                UInt8,
+                UInt16 | UInt32 | UInt64 | Int16 | Int32 | Int64 | Float32 | Float64
+            )
+            | (UInt16, UInt32 | UInt64 | Int32 | Int64 | Float32 | Float64)
+            | (UInt32, UInt64 | Int64 | Float32 | Float64)
+            | (Float32, Float64)
+    )
 }
 
 // Natural cast between numeric types
@@ -2938,6 +2964,81 @@ mod tests {
             assert_eq!($OUTPUT_TYPE, result.data_type());
             assert_eq!(result.as_ref(), &output);
         };
+    }
+
+    macro_rules! assert_infallible_numeric_pair {
+        ($from:ty, $to:ty, $from_type:expr, $to_type:expr) => {{
+            assert!(is_infallible_numeric_cast(&$from_type, &$to_type));
+
+            for value in [<$from>::MIN, <$from>::MAX, 0, 1] {
+                assert_eq!(num_cast::<$from, $to>(value), Some(value as $to));
+            }
+
+            let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+            for _ in 0..65 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let value: $from = state.as_();
+                assert_eq!(num_cast::<$from, $to>(value), Some(value as $to));
+            }
+        }};
+    }
+
+    #[test]
+    fn test_infallible_numeric_casts() {
+        assert_infallible_numeric_pair!(i8, i16, Int8, Int16);
+        assert_infallible_numeric_pair!(i8, i32, Int8, Int32);
+        assert_infallible_numeric_pair!(i8, i64, Int8, Int64);
+        assert_infallible_numeric_pair!(i8, f32, Int8, Float32);
+        assert_infallible_numeric_pair!(i8, f64, Int8, Float64);
+        assert_infallible_numeric_pair!(i16, i32, Int16, Int32);
+        assert_infallible_numeric_pair!(i16, i64, Int16, Int64);
+        assert_infallible_numeric_pair!(i16, f32, Int16, Float32);
+        assert_infallible_numeric_pair!(i16, f64, Int16, Float64);
+        assert_infallible_numeric_pair!(i32, i64, Int32, Int64);
+        assert_infallible_numeric_pair!(i32, f32, Int32, Float32);
+        assert_infallible_numeric_pair!(i32, f64, Int32, Float64);
+        assert_infallible_numeric_pair!(i64, f32, Int64, Float32);
+        assert_infallible_numeric_pair!(i64, f64, Int64, Float64);
+
+        assert_infallible_numeric_pair!(u8, u16, UInt8, UInt16);
+        assert_infallible_numeric_pair!(u8, u32, UInt8, UInt32);
+        assert_infallible_numeric_pair!(u8, u64, UInt8, UInt64);
+        assert_infallible_numeric_pair!(u8, i16, UInt8, Int16);
+        assert_infallible_numeric_pair!(u8, i32, UInt8, Int32);
+        assert_infallible_numeric_pair!(u8, i64, UInt8, Int64);
+        assert_infallible_numeric_pair!(u8, f32, UInt8, Float32);
+        assert_infallible_numeric_pair!(u8, f64, UInt8, Float64);
+        assert_infallible_numeric_pair!(u16, u32, UInt16, UInt32);
+        assert_infallible_numeric_pair!(u16, u64, UInt16, UInt64);
+        assert_infallible_numeric_pair!(u16, i32, UInt16, Int32);
+        assert_infallible_numeric_pair!(u16, i64, UInt16, Int64);
+        assert_infallible_numeric_pair!(u16, f32, UInt16, Float32);
+        assert_infallible_numeric_pair!(u16, f64, UInt16, Float64);
+        assert_infallible_numeric_pair!(u32, u64, UInt32, UInt64);
+        assert_infallible_numeric_pair!(u32, i64, UInt32, Int64);
+        assert_infallible_numeric_pair!(u32, f32, UInt32, Float32);
+        assert_infallible_numeric_pair!(u32, f64, UInt32, Float64);
+        assert_infallible_numeric_pair!(u64, f32, UInt64, Float32);
+        assert_infallible_numeric_pair!(u64, f64, UInt64, Float64);
+
+        assert!(is_infallible_numeric_cast(&Float32, &Float64));
+        for value in [
+            f32::MIN,
+            f32::MAX,
+            0.0,
+            -0.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ] {
+            assert_eq!(num_cast::<f32, f64>(value), Some(value as f64));
+        }
+        assert!(num_cast::<f32, f64>(f32::NAN).unwrap().is_nan());
+
+        assert!(!is_infallible_numeric_cast(&Int64, &Int32));
+        assert_eq!(num_cast::<i64, i32>(i64::MAX), None);
+        assert_eq!(i64::MAX as i32, -1);
     }
 
     fn run_decimal_cast_test_case<I, O>(t: DecimalCastTestConfig)
