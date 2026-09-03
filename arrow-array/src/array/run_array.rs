@@ -134,24 +134,22 @@ impl<R: RunEndIndexType> RunArray<R> {
         }
 
         // 3. run_ends must be strictly increasing, strictly positive integers.
-        let mut prev_value: i64 = 0;
-        for (ix, &run_end) in run_ends.values().iter().enumerate() {
-            let value = run_end.to_i64().ok_or_else(|| {
-                ArrowError::InvalidArgumentError(format!(
-                    "Value at position {ix} out of bounds: {run_end:?} (can not convert to i64)"
-                ))
-            })?;
-            if value <= 0 {
+        if let Some(first) = run_ends.values().first() {
+            let mut prev_value = *first;
+            if prev_value <= R::Native::usize_as(0) {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                    "The values in run_ends array should be strictly positive. Found value {value} at index {ix} that does not match the criteria."
+                    "The values in run_ends array should be strictly positive. Found value {prev_value:?} at index 0 that does not match the criteria."
                 )));
             }
-            if ix > 0 && value <= prev_value {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "The values in run_ends array should be strictly increasing. Found value {value} at index {ix} with previous value {prev_value} that does not match the criteria."
-                )));
+
+            for (ix, &run_end) in run_ends.values().iter().enumerate().skip(1) {
+                if run_end <= prev_value {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "The values in run_ends array should be strictly increasing. Found value {run_end:?} at index {ix} with previous value {prev_value:?} that does not match the criteria."
+                    )));
+                }
+                prev_value = run_end;
             }
-            prev_value = value;
         }
 
         let data_type = DataType::RunEndEncoded(
