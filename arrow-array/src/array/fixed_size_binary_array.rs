@@ -1029,10 +1029,10 @@ mod tests {
     }
 
     #[test]
-    // No `expected`: the panic message differs by config. Under force_validate
-    // `build_unchecked` rejects the data; otherwise `FixedSizeBinaryArray::from` does.
-    #[expect(clippy::should_panic_without_expect)]
-    #[should_panic]
+    // Under force_validate `build_unchecked` panics on the invalid child data
+    // before we reach the `FixedSizeBinaryArray::from` path we want to test.
+    #[cfg(not(feature = "force_validate"))]
+    #[should_panic(expected = "The child array cannot contain null values.")]
     fn test_fixed_size_binary_array_from_fixed_size_list_array_with_child_nulls_failed() {
         let values = [0_u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let values_data = ArrayData::builder(DataType::UInt8)
