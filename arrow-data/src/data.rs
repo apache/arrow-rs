@@ -1544,7 +1544,8 @@ impl ArrayData {
             DataType::Struct(fields) => {
                 for (field, child) in fields.iter().zip(&self.child_data) {
                     if !field.is_nullable() {
-                        self.validate_non_nullable(self.nulls(), child)?
+                        let child = child.slice(self.offset, self.len);
+                        self.validate_non_nullable(self.nulls(), &child)?
                     }
                 }
             }
@@ -2536,6 +2537,34 @@ mod tests {
         assert!(err.contains(
             "child array #0 for field x has length smaller than expected for struct array (5 < 6)"
         ));
+    }
+
+    #[test]
+    fn test_struct_non_nullable_child_nulls_account_for_parent_offset() {
+        let build = |parent_nulls| {
+            let child = ArrayData::builder(DataType::Int32)
+                .len(5)
+                .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4]))
+                .nulls(Some(NullBuffer::new(BooleanBuffer::from(vec![
+                    true, true, false, true, true,
+                ]))))
+                .build()
+                .unwrap();
+
+            ArrayData::builder(DataType::Struct(Fields::from(vec![Field::new(
+                "x",
+                DataType::Int32,
+                false,
+            )])))
+            .len(4)
+            .offset(1)
+            .nulls(Some(NullBuffer::new(BooleanBuffer::from(parent_nulls))))
+            .add_child_data(child)
+            .build()
+        };
+
+        assert!(build(vec![true, false, true, true]).is_ok());
+        assert!(build(vec![true, true, false, true]).is_err());
     }
 
     #[test]
