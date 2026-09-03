@@ -23,8 +23,8 @@ use crate::type_conversion::{
     primitive_conversion_single_value,
 };
 use arrow::array::{
-    Array, ArrayRef, AsArray, StructArray, downcast_dictionary_array, downcast_run_array,
-    new_null_array,
+    Array, ArrayRef, AsArray, StructArray, StructArrayBuilder, downcast_dictionary_array,
+    downcast_run_array, new_null_array,
 };
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
@@ -35,7 +35,7 @@ use arrow::datatypes::{
 };
 use arrow::error::Result;
 use arrow_schema::extension::{ExtensionType, Uuid as UuidExtension};
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, TimeUnit};
 use chrono::{DateTime, NaiveTime};
 use parquet_variant::{
     Uuid, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType as _,
@@ -418,7 +418,7 @@ impl VariantArray {
         }
 
         Self {
-            inner: builder.build(),
+            inner: builder.build().unwrap(),
             metadata,
             shredding_state: ShreddingState::new(value, typed_value),
         }
@@ -834,7 +834,7 @@ impl ShreddedVariantFieldArray {
         }
 
         Self {
-            inner: builder.build(),
+            inner: builder.build().unwrap(),
             shredding_state: ShreddingState::new(value, typed_value),
         }
     }
@@ -1003,55 +1003,6 @@ fn typed_value_field(array: &ArrayRef) -> FieldRef {
         field = field.with_extension_type(UuidExtension);
     }
     Arc::new(field)
-}
-
-/// Builds struct arrays from component fields
-///
-/// TODO: move to arrow crate
-#[derive(Debug, Default, Clone)]
-pub(crate) struct StructArrayBuilder {
-    fields: Vec<FieldRef>,
-    arrays: Vec<ArrayRef>,
-    nulls: Option<NullBuffer>,
-}
-
-impl StructArrayBuilder {
-    pub fn new() -> Self {
-        Default::default()
-    }
-
-    /// Add an array to this struct array as a field with the specified name.
-    pub fn with_field(mut self, field_name: &str, array: ArrayRef, nullable: bool) -> Self {
-        let field = Field::new(field_name, array.data_type().clone(), nullable);
-        self.fields.push(Arc::new(field));
-        self.arrays.push(array);
-        self
-    }
-
-    /// Add an array to this struct array using a caller-supplied [`FieldRef`].
-    ///
-    /// Use this when the field carries metadata (e.g. an extension type) that
-    /// would be lost if the field were synthesized from the array's data type alone.
-    pub fn with_field_ref(mut self, field: FieldRef, array: ArrayRef) -> Self {
-        self.fields.push(field);
-        self.arrays.push(array);
-        self
-    }
-
-    /// Set the null buffer for this struct array.
-    pub fn with_nulls(mut self, nulls: NullBuffer) -> Self {
-        self.nulls = Some(nulls);
-        self
-    }
-
-    pub fn build(self) -> StructArray {
-        let Self {
-            fields,
-            arrays,
-            nulls,
-        } = self;
-        StructArray::new(Fields::from(fields), arrays, nulls)
-    }
 }
 
 /// returns the non-null element at index as a Variant
@@ -1440,7 +1391,8 @@ mod test {
         let struct_array = StructArrayBuilder::new()
             .with_field("metadata", Arc::new(metadata), false)
             .with_field("typed_value", typed_value, true)
-            .build();
+            .build()
+            .unwrap();
         assert!(struct_array.column_by_name("value").is_none());
 
         let variant_array = VariantArray::try_new(&struct_array).unwrap();
@@ -1581,6 +1533,7 @@ mod test {
             .with_field("value", value, true)
             .with_field("typed_value", typed_value, true)
             .build()
+            .unwrap()
     }
 
     #[test]
@@ -1604,10 +1557,12 @@ mod test {
         let leaf = FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n([0u8; 16], 1)).unwrap();
         let inner = StructArrayBuilder::new()
             .with_field("typed_value", Arc::new(leaf), true)
-            .build();
+            .build()
+            .unwrap();
         let object = StructArrayBuilder::new()
             .with_field("id", Arc::new(inner), false)
-            .build();
+            .build()
+            .unwrap();
         let input = make_variant_struct_with_typed_value(Arc::new(object));
 
         // typed_value (struct) -> id (struct) -> typed_value (the FixedSizeBinary(16) UUID leaf).
