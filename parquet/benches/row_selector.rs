@@ -29,11 +29,9 @@ const MASK_RUN_LENGTHS: &[usize] = &[1, 4, 16, 32, 48, 64, 96, 128];
 const MASK_ALGEBRA_ROWS: usize = 3_000_000;
 
 const MASK_AND_THEN_ROWS: usize = 8192;
-const MASK_AND_THEN_OUTER_SELECTIVITY: &[usize] = &[50, 60, 70, 75, 80, 85, 90, 95, 99];
-const MASK_AND_THEN_INNER_SELECTIVITY: &[usize] = &[1, 5, 10, 20, 50, 80, 99];
-const MASK_AND_THEN_LENGTHS: &[usize] = &[
-    64, 128, 256, 512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536,
-];
+const MASK_AND_THEN_OUTER_SELECTIVITY: &[usize] = &[70, 75, 80, 99];
+const MASK_AND_THEN_INNER_SELECTIVITY: &[usize] = &[1, 5, 10, 99];
+const MASK_AND_THEN_LENGTHS: &[usize] = &[64, 4096, 8192, 16_384, 65_536];
 
 /// Operand length pairs. Unequal lengths pass the longer side's tail through unchanged,
 /// so the ratio decides how much of the work is the bitwise combine versus the tail.
@@ -186,7 +184,7 @@ fn bench_mask_and_then_sweeps(c: &mut Criterion) {
     }
     clustered.finish();
 
-    for &(outer_percent, inner_percent) in &[(75, 1), (75, 5), (90, 5), (99, 5), (99, 99)] {
+    for &(outer_percent, inner_percent) in &[(75, 5), (99, 5), (99, 99)] {
         let mut lengths = c.benchmark_group(format!(
             "mask_and_then_length/outer_{outer_percent:02}_inner_{inner_percent:02}"
         ));
