@@ -807,8 +807,8 @@ impl WriterPropertiesBuilder {
     /// Sets whether a column chunk whose data pages are all dictionary encoded gets a bloom
     /// filter (defaults to `true` via [`DEFAULT_BLOOM_FILTER_FOR_DICTIONARY_ENCODED_CHUNKS`]).
     ///
-    /// The dictionary page of such a chunk already lists every distinct value, so parquet-java
-    /// skips the bloom filter for it; set this to `false` to write files the same way.
+    /// The dictionary page of such a chunk already holds every distinct value, so its bloom
+    /// filter is redundant; set this to `false` to skip writing it and save the space.
     pub fn set_bloom_filter_for_dictionary_encoded_chunks(mut self, value: bool) -> Self {
         self.bloom_filter_for_dictionary_encoded_chunks = value;
         self
