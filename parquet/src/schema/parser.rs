@@ -243,7 +243,7 @@ impl Parser<'_> {
 
         // Parse logical or converted type if exists
         let (logical_type, converted_type) = if self.tokenizer.next() == Some("(") {
-            let tpe = self
+            let type_ = self
                 .tokenizer
                 .next()
                 .ok_or_else(|| general_err!("Expected converted type, found None"))
@@ -259,7 +259,7 @@ impl Parser<'_> {
                     }
                 })?;
             assert_token(self.tokenizer.next(), ")")?;
-            tpe
+            type_
         } else {
             self.tokenizer.backtrack();
             (None, ConvertedType::NONE)
@@ -330,8 +330,8 @@ impl Parser<'_> {
             let mut scale: i32 = -1;
 
             // Parse the concrete logical type
-            if let Some(tpe) = &logical {
-                match tpe {
+            if let Some(type_) = &logical {
+                match type_ {
                     LogicalType::Decimal { .. } => {
                         if self.tokenizer.next() == Some("(") {
                             precision = parse_i32(

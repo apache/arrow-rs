@@ -4393,7 +4393,7 @@ mod tests {
     fn test_cast_numeric_to_decimal128() {
         let decimal_type = DataType::Decimal128(38, 6);
         // u8, u16, u32, u64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(UInt8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4424,7 +4424,7 @@ mod tests {
             ])) as ArrayRef, // u64
         ];
 
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal128Array,
@@ -4440,7 +4440,7 @@ mod tests {
         }
 
         // i8, i16, i32, i64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(Int8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4470,7 +4470,7 @@ mod tests {
                 Some(5),
             ])) as ArrayRef, // i64
         ];
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal128Array,
@@ -4559,7 +4559,7 @@ mod tests {
     fn test_cast_numeric_to_decimal256() {
         let decimal_type = DataType::Decimal256(76, 6);
         // u8, u16, u32, u64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(UInt8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4590,7 +4590,7 @@ mod tests {
             ])) as ArrayRef, // u64
         ];
 
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal256Array,
@@ -4606,7 +4606,7 @@ mod tests {
         }
 
         // i8, i16, i32, i64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(Int8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4636,7 +4636,7 @@ mod tests {
                 Some(5),
             ])) as ArrayRef, // i64
         ];
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal256Array,
