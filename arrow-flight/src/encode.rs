@@ -2208,7 +2208,7 @@ mod tests {
             }
         }
 
-        // ensure that the specified overage is exactly the maxmium so
+        // ensure that the specified overage is exactly the maximum so
         // that when the splitting logic improves, the tests must be
         // updated to reflect the better logic
         assert_eq!(

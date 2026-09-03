@@ -867,30 +867,46 @@ mod tests {
     fn test_statistics_partial_eq() {
         let expected = Statistics::int32(Some(12), Some(45), None, Some(11), true);
 
-        assert!(Statistics::int32(Some(12), Some(45), None, Some(11), true) == expected);
-        assert!(Statistics::int32(Some(11), Some(45), None, Some(11), true) != expected);
-        assert!(Statistics::int32(Some(12), Some(44), None, Some(11), true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, Some(23), true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, Some(11), false) != expected);
-
-        assert!(
-            Statistics::int32(Some(12), Some(45), None, Some(11), false)
-                != Statistics::int64(Some(12), Some(45), None, Some(11), false)
+        assert_eq!(
+            Statistics::int32(Some(12), Some(45), None, Some(11), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(11), Some(45), None, Some(11), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(12), Some(44), None, Some(11), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(12), Some(45), None, Some(23), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(12), Some(45), None, Some(11), false),
+            expected
         );
 
-        assert!(
-            Statistics::boolean(Some(false), Some(true), None, None, true)
-                != Statistics::double(Some(1.2), Some(4.5), None, None, true)
+        assert_ne!(
+            Statistics::int32(Some(12), Some(45), None, Some(11), false),
+            Statistics::int64(Some(12), Some(45), None, Some(11), false)
         );
 
-        assert!(
+        assert_ne!(
+            Statistics::boolean(Some(false), Some(true), None, None, true),
+            Statistics::double(Some(1.2), Some(4.5), None, None, true)
+        );
+
+        assert_ne!(
             Statistics::byte_array(
                 Some(ByteArray::from(vec![1, 2, 3])),
                 Some(ByteArray::from(vec![1, 2, 3])),
                 None,
                 None,
                 true
-            ) != Statistics::fixed_len_byte_array(
+            ),
+            Statistics::fixed_len_byte_array(
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 None,
@@ -899,14 +915,15 @@ mod tests {
             )
         );
 
-        assert!(
+        assert_ne!(
             Statistics::byte_array(
                 Some(ByteArray::from(vec![1, 2, 3])),
                 Some(ByteArray::from(vec![1, 2, 3])),
                 None,
                 None,
                 true,
-            ) != Statistics::ByteArray(
+            ),
+            Statistics::ByteArray(
                 ValueStatistics::new(
                     Some(ByteArray::from(vec![1, 2, 3])),
                     Some(ByteArray::from(vec![1, 2, 3])),
@@ -918,14 +935,15 @@ mod tests {
             )
         );
 
-        assert!(
+        assert_ne!(
             Statistics::fixed_len_byte_array(
                 Some(FixedLenByteArray::from(vec![1, 2, 3])),
                 Some(FixedLenByteArray::from(vec![1, 2, 3])),
                 None,
                 None,
                 true,
-            ) != Statistics::FixedLenByteArray(
+            ),
+            Statistics::FixedLenByteArray(
                 ValueStatistics::new(
                     Some(FixedLenByteArray::from(vec![1, 2, 3])),
                     Some(FixedLenByteArray::from(vec![1, 2, 3])),
@@ -942,10 +960,10 @@ mod tests {
     fn test_statistics_from_thrift() {
         // Helper method to check statistics conversion.
         fn check_stats(stats: Statistics) {
-            let tpe = stats.physical_type();
+            let type_ = stats.physical_type();
             let thrift_stats = page_stats_to_thrift(Some(&stats));
             assert_eq!(
-                from_thrift_page_stats(tpe, thrift_stats).unwrap(),
+                from_thrift_page_stats(type_, thrift_stats).unwrap(),
                 Some(stats)
             );
         }

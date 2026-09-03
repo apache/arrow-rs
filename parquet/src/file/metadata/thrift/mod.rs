@@ -546,7 +546,7 @@ fn read_column_metadata(
     Ok(seen_mask)
 }
 
-// using ThriftSliceInputProtocol rather than ThriftCompactInputProtocl trait because
+// using ThriftSliceInputProtocol rather than ThriftCompactInputProtocol trait because
 // these are all internal and operate on slices.
 fn read_column_chunk(
     prot: &mut ThriftSliceInputProtocol<'_>,

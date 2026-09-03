@@ -1817,7 +1817,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_test_slices_iterator() {
         let mut rng = rng();
 
@@ -1889,7 +1889,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_filter() {
         let mut rng = rng();
 

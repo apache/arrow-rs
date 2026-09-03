@@ -206,7 +206,7 @@ impl FixedSizeBinaryArray {
 
     /// Create a new [`FixedSizeBinaryArray`] from the provided parts and number of elements, returning an error on failure
     ///
-    /// This is useful when the length cannot be determinated from the provided values (in case of `value_length == 0`) or nulls (`nulls.is_none()`).
+    /// This is useful when the length cannot be determined from the provided values (in case of `value_length == 0`) or nulls (`nulls.is_none()`).
     ///
     /// # Errors
     ///

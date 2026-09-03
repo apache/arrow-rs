@@ -1366,8 +1366,8 @@ mod tests {
         assert_eq!(i96.as_bytes(), &[1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]);
 
         // Test ByteArray
-        let ba = ByteArray::from(vec![1, 2, 3]);
-        assert_eq!(ba.as_bytes(), &[1, 2, 3]);
+        let byte_arr = ByteArray::from(vec![1, 2, 3]);
+        assert_eq!(byte_arr.as_bytes(), &[1, 2, 3]);
 
         // Test Decimal
         let decimal = Decimal::from_i32(123, 5, 2);
@@ -1407,26 +1407,26 @@ mod tests {
             Decimal::from_i32(3, 5, 2)
         );
 
-        assert!(Decimal::from_i32(222, 5, 2) != Decimal::from_i32(111, 5, 2));
-        assert!(Decimal::from_i32(222, 5, 2) != Decimal::from_i32(222, 6, 2));
-        assert!(Decimal::from_i32(222, 5, 2) != Decimal::from_i32(222, 5, 3));
+        assert_ne!(Decimal::from_i32(222, 5, 2), Decimal::from_i32(111, 5, 2));
+        assert_ne!(Decimal::from_i32(222, 5, 2), Decimal::from_i32(222, 6, 2));
+        assert_ne!(Decimal::from_i32(222, 5, 2), Decimal::from_i32(222, 5, 3));
 
-        assert!(Decimal::from_i64(222, 5, 2) != Decimal::from_i32(222, 5, 2));
+        assert_ne!(Decimal::from_i64(222, 5, 2), Decimal::from_i32(222, 5, 2));
     }
 
     #[test]
     fn test_byte_array_ord() {
-        let ba1 = ByteArray::from(vec![1, 2, 3]);
-        let ba11 = ByteArray::from(vec![1, 2, 3]);
-        let ba2 = ByteArray::from(vec![3, 4]);
-        let ba3 = ByteArray::from(vec![1, 2, 4]);
-        let ba4 = ByteArray::from(vec![]);
-        let ba5 = ByteArray::from(vec![2, 2, 3]);
+        let byte_arr1 = ByteArray::from(vec![1, 2, 3]);
+        let byte_arr11 = ByteArray::from(vec![1, 2, 3]);
+        let byte_arr2 = ByteArray::from(vec![3, 4]);
+        let byte_arr3 = ByteArray::from(vec![1, 2, 4]);
+        let byte_arr4 = ByteArray::from(vec![]);
+        let byte_arr5 = ByteArray::from(vec![2, 2, 3]);
 
-        assert!(ba1 < ba2);
-        assert!(ba3 > ba1);
-        assert!(ba1 > ba4);
-        assert_eq!(ba1, ba11);
-        assert!(ba5 > ba1);
+        assert!(byte_arr1 < byte_arr2);
+        assert!(byte_arr3 > byte_arr1);
+        assert!(byte_arr1 > byte_arr4);
+        assert_eq!(byte_arr1, byte_arr11);
+        assert!(byte_arr5 > byte_arr1);
     }
 }

@@ -1117,7 +1117,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         c1_builder.append_value(b"Homer");
         c1_builder.append_value(b"Bart");
         c1_builder.append_null();
-        c1_builder.append_value(b"Ned");
+        c1_builder.append_value(b"Bob");
         let mut c2_builder = FixedSizeBinaryBuilder::new(fixed_size);
         c2_builder.append_value(b"Simpson ").unwrap();
         c2_builder.append_value(b"Simpson ").unwrap();
@@ -1150,7 +1150,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             486f6d6572,53696d70736f6e20,\n\
             42617274,53696d70736f6e20,\n\
             ,,436f6d696320426f6f6b20477579\n\
-            4e6564,466c616e64657273,\n\
+            426f62,466c616e64657273,\n\
             ",
             String::from_utf8(buf).unwrap()
         );

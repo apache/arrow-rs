@@ -295,6 +295,8 @@ union LogicalType {
    17: (GeometryType) Geometry
    /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
    18: (GeographyType) Geography
+   /// A reference to a range of bytes, stored inline or in an external file.
+   19: File
 }
 );
 
@@ -781,7 +783,7 @@ impl FromStr for Compression {
             }
             _ => {
                 return Err(ParquetError::General(format!(
-                    "unsupport compression {codec}"
+                    "unsupported compression {codec}"
                 )));
             }
         };
@@ -1114,6 +1116,7 @@ impl ColumnOrder {
                 LogicalType::Variant(_)
                 | LogicalType::Geometry(_)
                 | LogicalType::Geography(_)
+                | LogicalType::File
                 | LogicalType::_Unknown { .. } => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
@@ -1341,6 +1344,7 @@ impl From<Option<LogicalType>> for ConvertedType {
                 | LogicalType::Variant(_)
                 | LogicalType::Geometry(_)
                 | LogicalType::Geography(_)
+                | LogicalType::File
                 | LogicalType::_Unknown { .. }
                 | LogicalType::Unknown => ConvertedType::NONE,
             },
@@ -1440,6 +1444,7 @@ impl str::FromStr for LogicalType {
             )),
             "FLOAT16" => Ok(LogicalType::Float16),
             "VARIANT" => Ok(LogicalType::variant(None)),
+            "FILE" => Ok(LogicalType::File),
             "GEOMETRY" => Ok(LogicalType::geometry(None)),
             "GEOGRAPHY" => Ok(LogicalType::geography(
                 None,
@@ -2103,10 +2108,10 @@ mod tests {
         // Helper to check the order in a list of values.
         // Only logical type is checked.
         fn check_sort_order(types: Vec<LogicalType>, expected_order: SortOrder) {
-            for tpe in types {
+            for type_ in types {
                 assert_eq!(
                     ColumnOrder::column_order_for_type(
-                        Some(&tpe),
+                        Some(&type_),
                         ConvertedType::NONE,
                         Type::BYTE_ARRAY
                     )
@@ -2166,9 +2171,9 @@ mod tests {
         // Helper to check the order in a list of values.
         // Only converted type is checked.
         fn check_sort_order(types: Vec<ConvertedType>, expected_order: SortOrder) {
-            for tpe in types {
+            for type_ in types {
                 assert_eq!(
-                    ColumnOrder::column_order_for_type(None, tpe, Type::BYTE_ARRAY).sort_order(),
+                    ColumnOrder::column_order_for_type(None, type_, Type::BYTE_ARRAY).sort_order(),
                     expected_order
                 );
             }

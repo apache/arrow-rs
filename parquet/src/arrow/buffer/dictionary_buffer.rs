@@ -400,6 +400,10 @@ fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &
     let state = RandomState::new();
 
     // SAFETY: MutableBuffer is 64-byte aligned; scratch is sized to exactly count * size_of::<u64>()
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "MutableBuffer is 64-byte aligned"
+    )]
     let hash_slots = unsafe { from_raw_parts_mut(scratch.as_mut_ptr().cast::<u64>(), count) };
 
     for idx in 0..count {
@@ -415,8 +419,14 @@ fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &
 #[inline]
 fn hashes_as_u64(scratch: &[u8]) -> &[u64] {
     let n = scratch.len() / size_of::<u64>();
-    // SAFETY: scratch was written as u64s by hash_byte_slices
-    unsafe { from_raw_parts(scratch.as_ptr().cast::<u64>(), n) }
+    // SAFETY: scratch was written as u64s by hash_byte_slices, and MutableBuffer is 64-byte aligned
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "MutableBuffer is 64-byte aligned"
+    )]
+    unsafe {
+        from_raw_parts(scratch.as_ptr().cast::<u64>(), n)
+    }
 }
 
 #[cfg(test)]

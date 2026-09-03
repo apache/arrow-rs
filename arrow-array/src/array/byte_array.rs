@@ -295,10 +295,8 @@ impl<T: ByteArrayType> GenericByteArray<T> {
 
     /// Returns true if all data within this array is ASCII
     pub fn is_ascii(&self) -> bool {
-        let offsets = self.value_offsets();
-        let start = offsets.first().unwrap();
-        let end = offsets.last().unwrap();
-        self.value_data()[start.as_usize()..end.as_usize()].is_ascii()
+        let offsets = &self.value_offsets;
+        self.value_data()[offsets.first().as_usize()..offsets.last().as_usize()].is_ascii()
     }
 
     /// Returns the offset values in the offsets buffer
@@ -736,13 +734,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "total length overflow: does not fit in usize")]
     fn create_repeated_usize_overflow_1() {
         let _arr = BinaryArray::new_repeated(b"hello", (usize::MAX / "hello".len()) + 1);
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "total length overflow: does not fit in usize")]
     fn create_repeated_usize_overflow_2() {
         let _arr = BinaryArray::new_repeated(b"hello", usize::MAX);
     }

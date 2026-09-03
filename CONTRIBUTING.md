@@ -166,6 +166,40 @@ parquet files run the following from the top-level `arrow-rs` directory:
 cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
 ```
 
+## Miri
+
+Run tests under [`Miri`](https://github.com/rust-lang/miri) like so, assuming
+[`cargo-nextest`](https://nexte.st/) is available:
+
+```sh
+# Run all tests
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run
+# Run specific tests
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer --lib bigint
+# Run specific crate
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer
+```
+
+The whole suite will take a long time to run so it's suggested to run individual
+suites/tests when required.
+
+Add a `cfg_attr` to tests in cases where the test should be ignored by Miri:
+
+```rust
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test123() {}
+```
+
+Please ensure you include a comment why the test is being ignored. Common cases
+are:
+
+- Takes too long
+  - Threshold is if it takes longer than 1 minute
+- Zstd code unsupported by Miri
+- Inline assembly unsupported by Miri
+- Any other operation thats unsupported by Miri
+
 ## Breaking Changes
 
 Our [release schedule] allows breaking API changes only in major releases.
@@ -208,6 +242,49 @@ Search for `expect(clippy::` in the codebase to identify lints that are intentio
 - If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
 - If you have several lints on a function or module, you may disable the lint on the function or module.
 - If a lint is pervasive across multiple modules, you may disable it at the crate level.
+
+## Spell Checking
+
+We use [`typos`](https://github.com/crate-ci/typos) to catch spelling mistakes in source code and
+comments. CI runs a spell check on every pull request.
+
+### Running locally
+
+Install `typos` and run it from the repo root:
+
+```bash
+cargo install typos-cli
+typos --config typos.toml
+```
+
+### Adding a pre-commit hook
+
+To catch typos before they reach CI, add `typos` as a Git pre-commit hook:
+
+```bash
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/sh
+typos --config typos.toml
+EOF
+chmod +x .git/hooks/pre-commit
+```
+
+After that, `typos` will run automatically on every `git commit`. If it finds an issue, the commit
+is blocked until you fix or allowlist the word.
+
+### Allowlisting false positives
+
+If `typos` flags a word that is intentionally spelled that way (a test value, a domain-specific
+term, a crate name, etc.), add it to `[default.extend-words]` in `typos.toml` at the repo root
+with a short comment explaining why:
+
+```toml
+[default.extend-words]
+flate = "flate"  # flate2 is the crate name for the deflate/inflate compression library
+```
+
+Prefer renaming variables over adding allowlist entries when the flagged word is just a local
+identifier that can be changed without affecting test semantics.
 
 ## Performance Improvements
 

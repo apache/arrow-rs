@@ -716,23 +716,30 @@ impl i256 {
             return Some(0);
         }
 
+        /// `10^32`
+        const POW10_32: i256 = i256::from_i128(100_000_000_000_000_000_000_000_000_000_000);
+
+        /// `10^64`
+        const POW10_64: i256 = i256::from_parts(
+            146_510_663_073_550_942_663_504_491_129_887_260_672,
+            29_387_358_770_557_187_699_218_413,
+        );
+
         // Layered approach to calculate logarithm using i128 log operations only
         // Consult int_log10.rs stdlib implementiation for u128
-        let pow_64: i256 = i256::from(10).checked_pow(64).unwrap();
-        let pow_32: i256 = i256::from(10).checked_pow(32).unwrap();
-        if self >= pow_64 {
-            let value = self.checked_div(pow_64)?;
+        if self >= POW10_64 {
+            let value = self.checked_div(POW10_64)?;
             // self is between 10^64 and 10^77 (~i256::MAX).
             // `value` is 14 digits max (10^77 / 10^64 = 10^13),
             // so it fits to `low` u128
-            debug_assert!(value.high == 0);
+            debug_assert_eq!(value.high, 0);
             Some(64 + value.low.checked_ilog10()?)
-        } else if self >= pow_32 {
-            let value = self.checked_div(pow_32)?;
+        } else if self >= POW10_32 {
+            let value = self.checked_div(POW10_32)?;
             // self is between 10^32 and 10^64.
             // `value` is 33 digits max (10^64/10^32=10^32)
             // so it fits to `low` 128-bit value
-            debug_assert!(value.high == 0);
+            debug_assert_eq!(value.high, 0);
             Some(32 + value.low.checked_ilog10()?)
         } else {
             // self fits within u128 (high == 0 and self > 0).
@@ -1553,7 +1560,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i256() {
         let candidates = [
             i256::ZERO,
@@ -1616,7 +1623,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i256_fuzz() {
         let mut rng = rng();
 
@@ -1819,7 +1826,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn test_decimal256_to_f64_typical_values() {
         let v = i256::from_i128(42_i128);
         assert_eq!(v.to_f64().unwrap(), 42.0);

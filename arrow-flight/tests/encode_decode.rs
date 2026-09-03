@@ -439,12 +439,12 @@ fn decode_misaligned(
 
     // MutableBuffer guarantees 64-byte alignment, so slicing at `alignment_offset`
     // produces a pointer misaligned for types with stricter requirements.
-    let mut mis = MutableBuffer::with_capacity(encoded.arrow_data.len() + alignment_offset);
+    let mut misaligned = MutableBuffer::with_capacity(encoded.arrow_data.len() + alignment_offset);
     for _ in 0..alignment_offset {
-        mis.push(0_u8);
+        misaligned.push(0_u8);
     }
-    mis.extend_from_slice(&encoded.arrow_data);
-    let misaligned_buf = Buffer::from(mis).slice(alignment_offset);
+    misaligned.extend_from_slice(&encoded.arrow_data);
+    let misaligned_buf = Buffer::from(misaligned).slice(alignment_offset);
 
     let message = arrow_ipc::root_as_message(&encoded.ipc_message).unwrap();
     let ipc_batch = message.header_as_record_batch().unwrap();
