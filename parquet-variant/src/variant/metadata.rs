@@ -392,17 +392,34 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// # Correctness
     ///
-    /// A returned field id is always verified, so this never disagrees with [`Self::get_entry`]
-    /// about which string a field id names, even for [invalid] metadata whose offsets are
-    /// arbitrary. The candidate entry is accepted only when it starts at `field_name`'s address
-    /// and has exactly `field_name`'s length, which makes the entry's bytes and `field_name`'s
-    /// bytes the same bytes. (Two live allocations cannot overlap, so an address inside our own
-    /// byte range belongs to our own bytes. In the degenerate zero-length case the two are both
-    /// empty and therefore still equal.)
+    /// This is only attempted for a [sorted] dictionary. The spec requires dictionary entries to
+    /// be unique only when `sorted_strings` is set, so an unsorted dictionary may legally hold the
+    /// same string at more than one field id. Resolving a borrowed name by the id it came from
+    /// would then disagree with a resolution by name, and callers rely on a name mapping to a
+    /// single id: [`ObjectBuilder`] detects duplicate fields by comparing field ids, so two ids
+    /// naming the same string would build an object whose field names are not unique. Requiring
+    /// sortedness makes the two resolutions agree, because validation rejects a sorted dictionary
+    /// with duplicate entries.
     ///
+    /// A returned field id is also always verified, so this never reports an id whose entry is not
+    /// `field_name` itself, even for [invalid] metadata whose offsets are arbitrary. The candidate
+    /// entry is accepted only when it starts at `field_name`'s address and has exactly
+    /// `field_name`'s length, which makes the entry's bytes and `field_name`'s bytes the same
+    /// bytes. (Two live allocations cannot overlap, so an address inside our own byte range
+    /// belongs to our own bytes. In the degenerate zero-length case the two are both empty and
+    /// therefore still equal.)
+    ///
+    /// [`ObjectBuilder`]: crate::ObjectBuilder
     /// [`VariantObject::field_name`]: crate::VariantObject::field_name
     /// [invalid]: Self#Validation
+    /// [sorted]: Self::is_sorted
     pub(crate) fn borrowed_field_id(&self, field_name: &str) -> Option<u32> {
+        // An unsorted dictionary may hold duplicate entries, which would make the id a name was
+        // borrowed from differ from the id a search by name returns; see "Correctness" above.
+        if !self.is_sorted() {
+            return None;
+        }
+
         // Addresses are compared as integers and never dereferenced, so this stays safe even when
         // `field_name` borrows from an unrelated allocation.
         let value_region_start = (self.bytes.as_ptr() as usize) + self.first_value_byte as usize;
@@ -443,7 +460,8 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn get_entry(&self, field_name: &str) -> Option<(u32, &'m str)> {
-        // A field name borrowed from this dictionary resolves without any string comparisons.
+        // A field name borrowed from this dictionary's (sorted) value region resolves without
+        // any string comparisons.
         if let Some(field_id) = self.borrowed_field_id(field_name) {
             return Some((field_id, self.get_impl(field_id as _)));
         }
@@ -708,8 +726,9 @@ mod tests {
         builder.finish().0
     }
 
-    /// Every entry of `metadata` must resolve to its own field id through the borrowed fast path,
-    /// through the general name search, and through an owned (non-borrowed) copy of the name.
+    /// Every entry of `metadata` must resolve to its own field id through the general name search
+    /// and through an owned (non-borrowed) copy of the name. The borrowed fast path must agree
+    /// whenever it applies, which is only for a sorted dictionary.
     fn assert_lookups_agree(metadata: &VariantMetadata<'_>) {
         for i in 0..metadata.len() {
             let borrowed = metadata.get(i).unwrap();
@@ -717,7 +736,7 @@ mod tests {
 
             assert_eq!(
                 metadata.borrowed_field_id(borrowed),
-                Some(i as u32),
+                metadata.is_sorted().then_some(i as u32),
                 "borrowed lookup of {borrowed:?} (field id {i})"
             );
             assert_eq!(
@@ -732,6 +751,22 @@ mod tests {
             );
             // An owned copy does not borrow from the dictionary, so it cannot take the fast path.
             assert_eq!(metadata.borrowed_field_id(owned.as_str()), None);
+        }
+    }
+
+    /// Like [`assert_lookups_agree`], but tolerates the fast path declining an entry, as it may
+    /// for a dictionary whose offset array does not increase strictly.
+    fn assert_lookups_agree_or_decline(metadata: &VariantMetadata<'_>) {
+        for i in 0..metadata.len() {
+            let borrowed = metadata.get(i).unwrap();
+            if let Some(field_id) = metadata.borrowed_field_id(borrowed) {
+                assert_eq!(field_id, i as u32, "borrowed lookup of {borrowed:?}");
+            }
+            assert_eq!(
+                metadata.get_entry(borrowed),
+                Some((i as u32, borrowed)),
+                "get_entry of borrowed {borrowed:?} (field id {i})"
+            );
         }
     }
 
@@ -758,7 +793,36 @@ mod tests {
 
         assert!(!metadata.is_sorted());
         assert_eq!(metadata.len(), 4);
+        // An unsorted dictionary may hold duplicate entries, so the fast path never applies to it
+        // and every name falls back to the general search.
         assert_lookups_agree(&metadata);
+    }
+
+    /// A dictionary that is not marked sorted may legally repeat a string, and the two field ids
+    /// naming it must not become distinguishable by where the caller's name was borrowed from:
+    /// `ObjectBuilder` detects duplicate fields by field id, so a name must map to a single id.
+    #[test]
+    fn test_borrowed_field_id_unsorted_dictionary_with_duplicate_entries() {
+        let bytes = &[
+            0b0000_0001, // header: offset_size_minus_one=0, sorted=0, version=1
+            2,           // dictionary_size
+            0x00,
+            0x01,
+            0x02,
+            b'a',
+            b'a',
+        ];
+        let metadata = VariantMetadata::try_new(bytes).unwrap();
+        assert!(!metadata.is_sorted());
+        assert_eq!(metadata.get(0).unwrap(), "a");
+        assert_eq!(metadata.get(1).unwrap(), "a");
+
+        // Whichever entry a name was borrowed from, it resolves to the first entry naming it.
+        let owned = String::from("a");
+        for name in [metadata.get(0).unwrap(), metadata.get(1).unwrap(), &owned] {
+            assert_eq!(metadata.borrowed_field_id(name), None);
+            assert_eq!(metadata.get_entry(name), Some((0, "a")));
+        }
     }
 
     #[test]
@@ -788,9 +852,10 @@ mod tests {
     fn test_borrowed_field_id_rejects_substring_of_an_entry() {
         // Dictionary ["x", "yy"], stored as the bytes "xyy". A slice of entry 1 that starts one
         // byte into the value region shares its start offset with entry 1 without being equal to
-        // it, which the fast path must detect rather than reporting a bogus field id.
+        // it, which the fast path must detect rather than reporting a bogus field id. The
+        // dictionary is sorted, so the fast path applies to it.
         let bytes = &[
-            0b0000_0001, // header: offset_size_minus_one=0, ordered=0, version=1
+            0b0001_0001, // header: offset_size_minus_one=0, ordered=1, version=1
             2,           // dictionary_size
             0x00,
             0x01,
@@ -800,8 +865,13 @@ mod tests {
             b'y',
         ];
         let metadata = VariantMetadata::try_new(bytes).unwrap();
+        assert!(metadata.is_sorted());
         assert_eq!(metadata.get(0).unwrap(), "x");
         assert_eq!(metadata.get(1).unwrap(), "yy");
+        assert_eq!(
+            metadata.borrowed_field_id(metadata.get(1).unwrap()),
+            Some(1)
+        );
 
         let prefix_of_entry_1 = &metadata.get(1).unwrap()[..1];
         assert_eq!(prefix_of_entry_1, "y");
@@ -825,20 +895,40 @@ mod tests {
             b'i',
         ];
         let metadata = VariantMetadata::try_new(bytes).unwrap();
+        assert!(!metadata.is_sorted());
         assert_eq!(metadata.get(0).unwrap(), "hi");
         assert_eq!(metadata.get(1).unwrap(), "");
 
-        // Whether or not the empty entry takes the fast path, both lookups must agree.
         assert_eq!(
             metadata.get_entry(metadata.get(0).unwrap()),
             Some((0, "hi"))
         );
         assert_eq!(metadata.get_entry(metadata.get(1).unwrap()), Some((1, "")));
         assert_eq!(metadata.get_entry(""), Some((1, "")));
-        assert_eq!(
-            metadata.borrowed_field_id(metadata.get(0).unwrap()),
-            Some(0)
-        );
+        assert_eq!(metadata.borrowed_field_id(metadata.get(0).unwrap()), None);
+    }
+
+    #[test]
+    fn test_borrowed_field_id_with_leading_empty_field_name() {
+        // A sorted dictionary can only hold an empty string as its first entry, where it shares a
+        // start offset with the entry after it. The fast path is free to decline such an
+        // ambiguous offset, but must never report the wrong field id for it.
+        let bytes = &[
+            0b0001_0001, // header: offset_size_minus_one=0, ordered=1, version=1
+            2,           // dictionary_size
+            0x00,
+            0x00,
+            0x02,
+            b'h',
+            b'i',
+        ];
+        let metadata = VariantMetadata::try_new(bytes).unwrap();
+        assert!(metadata.is_sorted());
+        assert_eq!(metadata.get(0).unwrap(), "");
+        assert_eq!(metadata.get(1).unwrap(), "hi");
+
+        assert_lookups_agree_or_decline(&metadata);
+        assert_eq!(metadata.get_entry(""), Some((0, "")));
     }
 
     #[test]
