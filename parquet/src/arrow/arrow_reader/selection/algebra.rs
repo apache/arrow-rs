@@ -536,7 +536,7 @@ fn deposit_u8(values: u8, mask: u8, selected: usize) -> u8 {
 mod tests {
     use super::*;
     use arrow_array::BooleanArray;
-    use rand::{RngExt, rng};
+    use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
 
     #[test]
     fn test_and() {
@@ -832,19 +832,64 @@ mod tests {
 
     #[test]
     fn test_dense_mask_and_then_mask_with_offsets() {
-        for outer_stride in [100, 20, 4] {
-            let len = 10_000;
-            let outer_offset = 3;
-            let outer = BooleanBuffer::from_iter(
-                (0..len + outer_offset).map(|i| (i + 1) % outer_stride != 0),
-            )
-            .slice(outer_offset, len);
+        for len in [8192, 8193, 10_000] {
+            for outer_stride in [100, 20, 4] {
+                let outer_offset = 3;
+                let outer = BooleanBuffer::from_iter(
+                    (0..len + outer_offset).map(|i| (i + 1) % outer_stride != 0),
+                )
+                .slice(outer_offset, len);
 
-            let inner_offset = 5;
+                let inner_offset = 5;
+                let inner_len = outer.count_set_bits();
+                let inner = BooleanBuffer::from_iter(
+                    (0..inner_len + inner_offset).map(|i| (i + 2) % 97 != 0),
+                )
+                .slice(inner_offset, inner_len);
+
+                assert!(should_use_dense_mask(
+                    outer.len(),
+                    inner.len(),
+                    inner.count_set_bits()
+                ));
+
+                let mut inner_idx = 0;
+                let expected = BooleanBuffer::from_iter((0..len).map(|i| {
+                    if !outer.value(i) {
+                        return false;
+                    }
+                    let value = inner.value(inner_idx);
+                    inner_idx += 1;
+                    value
+                }));
+
+                let outer = RowSelection::from_boolean_buffer(outer);
+                let inner = RowSelection::from_boolean_buffer(inner);
+                let actual = outer.and_then(&inner);
+                assert_eq!(actual.as_mask().unwrap(), &expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_dense_mask_and_then_mask_randomized_word_boundaries() {
+        let mut rng = StdRng::seed_from_u64(0x67e4_a91b_239d_c805);
+
+        for (len, outer_offset, inner_offset) in [(8192, 0, 0), (8192, 3, 5), (8193, 7, 1)] {
+            let outer =
+                BooleanBuffer::from_iter((0..len + outer_offset).map(|_| rng.random_bool(0.8)))
+                    .slice(outer_offset, len);
             let inner_len = outer.count_set_bits();
-            let inner =
-                BooleanBuffer::from_iter((0..inner_len + inner_offset).map(|i| (i + 2) % 97 != 0))
-                    .slice(inner_offset, inner_len);
+            let inner = BooleanBuffer::from_iter(
+                (0..inner_len + inner_offset).map(|_| rng.random_bool(0.5)),
+            )
+            .slice(inner_offset, inner_len);
+
+            assert!(should_use_dense_mask(
+                outer.len(),
+                inner.len(),
+                inner.count_set_bits()
+            ));
 
             let mut inner_idx = 0;
             let expected = BooleanBuffer::from_iter((0..len).map(|i| {
