@@ -506,51 +506,35 @@ fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanB
     BooleanBuffer::new(output.into(), 0, mask.len())
 }
 
-/// Deposits the least-significant bits of `values` into the set positions of `mask`.
+/// Deposits the least-significant bits of `values` into the set positions of
+/// `mask`, i.e. a software `pdep`. Bits of `values` above the
+/// `mask.count_ones()` meaningful ones are ignored.
+///
+/// Iterates over whichever side of `mask` has fewer bits: for a dense mask,
+/// insert a zero bit at each unset position, lowest first; otherwise scatter
+/// the low bits of `values` to each set position, lowest first.
 #[inline]
 fn deposit_u64(mut values: u64, mask: u64) -> u64 {
-    if mask == u64::MAX {
-        return values;
+    let mut zeros = !mask;
+    if zeros.count_ones() <= 32 {
+        // Inserting a zero shifts the bits above it up by one, so the garbage
+        // bits above the meaningful ones fall off the top.
+        while zeros != 0 {
+            let lower = (1_u64 << zeros.trailing_zeros()) - 1;
+            values = (values & lower) | ((values & !lower) << 1);
+            zeros &= zeros - 1;
+        }
+        values
+    } else {
+        let mut output = 0;
+        let mut ones = mask;
+        while ones != 0 {
+            output |= (values & 1) << ones.trailing_zeros();
+            values >>= 1;
+            ones &= ones - 1;
+        }
+        output
     }
-
-    if mask.count_ones() == 63 {
-        let dropped = (!mask).trailing_zeros();
-        let lower_mask = ((1_u128 << dropped) - 1) as u64;
-        return (values & lower_mask) | ((values & !lower_mask) << 1);
-    }
-
-    let mut output = 0;
-    for byte_offset in (0..64).step_by(8) {
-        let byte_mask = (mask >> byte_offset) as u8;
-        let selected = byte_mask.count_ones() as usize;
-        output |= (deposit_u8(values as u8, byte_mask, selected) as u64) << byte_offset;
-        values >>= selected;
-    }
-    output
-}
-
-#[inline]
-fn deposit_u8(values: u8, mask: u8, selected: usize) -> u8 {
-    if selected == 8 {
-        return values;
-    }
-
-    if selected == 7 {
-        let dropped = (!mask).trailing_zeros();
-        let lower_mask = ((1_u16 << dropped) - 1) as u8;
-        return (values & lower_mask) | ((values & !lower_mask) << 1);
-    }
-
-    let mut output = 0;
-    let mut input_idx = 0;
-    let mut remaining = mask;
-    while remaining != 0 {
-        let output_idx = remaining.trailing_zeros();
-        output |= ((values >> input_idx) & 1) << output_idx;
-        input_idx += 1;
-        remaining &= remaining - 1;
-    }
-    output
 }
 
 #[cfg(test)]
@@ -942,20 +926,47 @@ mod tests {
     }
 
     #[test]
-    fn test_deposit_u8() {
-        for mask in u8::MIN..=u8::MAX {
-            let selected = mask.count_ones() as usize;
-            for values in u8::MIN..=u8::MAX {
-                let mut expected = 0;
-                let mut input_idx = 0;
-                for output_idx in 0..8 {
-                    if mask & (1 << output_idx) != 0 {
-                        expected |= ((values >> input_idx) & 1) << output_idx;
-                        input_idx += 1;
-                    }
+    fn test_deposit_u64() {
+        fn reference(values: u64, mask: u64) -> u64 {
+            let mut expected = 0;
+            let mut input_idx = 0;
+            for output_idx in 0..64 {
+                if mask & (1 << output_idx) != 0 {
+                    expected |= ((values >> input_idx) & 1) << output_idx;
+                    input_idx += 1;
                 }
-                assert_eq!(deposit_u8(values, mask, selected), expected);
             }
+            expected
+        }
+
+        let mut rng = StdRng::seed_from_u64(0x2b7e_1516_28ae_d2a6);
+
+        // Masks with at most one unset bit or at most one set bit
+        for bit in 0..64 {
+            for mask in [u64::MAX, !(1 << bit), 1 << bit, 0] {
+                for _ in 0..16 {
+                    let values = rng.random::<u64>();
+                    assert_eq!(
+                        deposit_u64(values, mask),
+                        reference(values, mask),
+                        "{mask:#x}"
+                    );
+                }
+            }
+        }
+
+        // Masks across the full density range, exercising both loops
+        for _ in 0..20_000 {
+            let density = rng.random_range(0.0..=1.0);
+            let mask = (0..64).fold(0_u64, |mask, bit| {
+                mask | ((rng.random_bool(density) as u64) << bit)
+            });
+            let values = rng.random::<u64>();
+            assert_eq!(
+                deposit_u64(values, mask),
+                reference(values, mask),
+                "{mask:#x}"
+            );
         }
     }
 
