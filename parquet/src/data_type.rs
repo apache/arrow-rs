@@ -1408,11 +1408,11 @@ mod tests {
             Decimal::from_i32(3, 5, 2)
         );
 
-        assert!(Decimal::from_i32(222, 5, 2) != Decimal::from_i32(111, 5, 2));
-        assert!(Decimal::from_i32(222, 5, 2) != Decimal::from_i32(222, 6, 2));
-        assert!(Decimal::from_i32(222, 5, 2) != Decimal::from_i32(222, 5, 3));
+        assert_ne!(Decimal::from_i32(222, 5, 2), Decimal::from_i32(111, 5, 2));
+        assert_ne!(Decimal::from_i32(222, 5, 2), Decimal::from_i32(222, 6, 2));
+        assert_ne!(Decimal::from_i32(222, 5, 2), Decimal::from_i32(222, 5, 3));
 
-        assert!(Decimal::from_i64(222, 5, 2) != Decimal::from_i32(222, 5, 2));
+        assert_ne!(Decimal::from_i64(222, 5, 2), Decimal::from_i32(222, 5, 2));
     }
 
     #[test]

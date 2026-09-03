@@ -886,6 +886,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i32() {
         Int32Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int32Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -894,6 +895,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i64() {
         Int64Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int64Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -902,6 +904,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i96() {
         Int96Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int96Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -915,6 +918,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_double() {
         DoubleType::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         DoubleType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -922,6 +926,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_byte_array() {
         ByteArrayType::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         ByteArrayType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -930,6 +935,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_fixed_len_byte_array() {
         FixedLenByteArrayType::test(Encoding::PLAIN, TEST_SET_SIZE, 100);
         FixedLenByteArrayType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, 100);

@@ -59,12 +59,12 @@ pub(super) fn boolean_equal(
             let rem = len % 8;
             if rem == 0 {
                 return true;
-            } else {
-                let aligned_bits = len - rem;
-                lhs_start += aligned_bits;
-                rhs_start += aligned_bits;
-                len = rem
             }
+
+            let aligned_bits = len - rem;
+            lhs_start += aligned_bits;
+            rhs_start += aligned_bits;
+            len = rem;
         }
 
         equal_bits(

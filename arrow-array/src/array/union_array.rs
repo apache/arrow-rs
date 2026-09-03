@@ -1128,7 +1128,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn test_dense_i32_large() {
         let mut builder = UnionBuilder::new_dense();
 
@@ -1974,7 +1973,7 @@ mod tests {
             vec![1, 1].into(),
             None,
             vec![
-                // every children is completly null
+                // every child is completely null
                 Arc::new(Int8Array::new_null(2)), // all null, same len as it's parent
                 Arc::new(Int8Array::new_null(2)), // all null, same len as it's parent
             ],
@@ -1988,7 +1987,7 @@ mod tests {
             vec![1, 1].into(),
             Some(vec![0, 1].into()),
             vec![
-                // every children is completly null
+                // every child is completely null
                 Arc::new(Int8Array::new_null(3)), // bigger that parent
                 Arc::new(Int8Array::new_null(3)), // bigger that parent
             ],
@@ -2049,7 +2048,7 @@ mod tests {
             array.mask_sparse_all_with_nulls_skip_one(array.fields_logical_nulls())
         );
 
-        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        //like above, but repeated to generate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::new_null(len);
@@ -2099,7 +2098,7 @@ mod tests {
             array.mask_sparse_skip_without_nulls(array.fields_logical_nulls())
         );
 
-        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        //like above, but repeated to generate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::from_value(2, len);
@@ -2154,7 +2153,7 @@ mod tests {
             array.mask_sparse_skip_fully_null(array.fields_logical_nulls())
         );
 
-        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        //like above, but repeated to generate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::new_null(len);

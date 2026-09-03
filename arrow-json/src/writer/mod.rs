@@ -2217,6 +2217,31 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_encoder_negative_scale() {
+        // https://github.com/apache/arrow-rs/issues/10865
+        let array = Decimal128Array::from_iter([Some(0), Some(12), Some(-12)])
+            .with_precision_and_scale(10, -2)
+            .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":0}
+{"decimal":1200}
+{"decimal":-1200}
+"#,
+        );
+    }
+
+    #[test]
     fn write_structs_as_list() {
         let schema = Schema::new(vec![
             Field::new(
@@ -2524,9 +2549,9 @@ mod tests {
         }
 
         #[derive(Debug)]
-        struct IntArayBinaryEncoderFactory;
+        struct IntArrayBinaryEncoderFactory;
 
-        impl EncoderFactory for IntArayBinaryEncoderFactory {
+        impl EncoderFactory for IntArrayBinaryEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
                 _field: &'a FieldRef,
@@ -2564,7 +2589,7 @@ mod tests {
         let json_value: Value = {
             let mut buf = Vec::new();
             let mut writer = WriterBuilder::new()
-                .with_encoder_factory(Arc::new(IntArayBinaryEncoderFactory))
+                .with_encoder_factory(Arc::new(IntArrayBinaryEncoderFactory))
                 .build::<_, JsonArray>(&mut buf);
             writer.write_batches(&[&batch]).unwrap();
             writer.finish().unwrap();
