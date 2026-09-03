@@ -403,7 +403,10 @@ pub fn read_uncompressed_size(buffer: &[u8]) -> Result<i64, ArrowError> {
             buffer.len()
         ))
     })?;
-    Ok(i64::from_le_bytes(len_buffer.try_into().unwrap()))
+    let len_buffer: [u8; 8] = len_buffer
+        .try_into()
+        .map_err(|e| ArrowError::IpcError(format!("Invalid uncompressed length prefix: {e}")))?;
+    Ok(i64::from_le_bytes(len_buffer))
 }
 
 #[cfg(test)]
