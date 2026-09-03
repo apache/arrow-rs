@@ -2111,7 +2111,7 @@ mod tests {
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::{
-        BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
+        BloomFilterPosition, CdcOptions, EnabledStatistics, ReaderProperties, WriterVersion,
     };
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
@@ -6461,5 +6461,103 @@ mod tests {
             crate::basic::Type::INT32
         );
         assert_eq!(parquet_schema.column(1).path().string(), "row.b");
+    }
+
+    /// Content-defined chunking forces a page break at the end of every chunk
+    /// except the last. When the chunk's own values have already filled the
+    /// page, that forced break has nothing left to write.
+    ///
+    /// A `BOOLEAN` column written with `PARQUET_2_0` uses `RleValueEncoder`,
+    /// which creates its inner encoder lazily on the first `put`, so flushing
+    /// an empty page used to panic with "RLE value encoder is not initialized".
+    #[test]
+    fn test_arrow_writer_cdc_boolean_forced_page_break_after_flush() {
+        let num_rows = 500_000;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "flag",
+            ArrowDataType::Boolean,
+            false,
+        )]));
+        let values: Vec<bool> = (0..num_rows).map(|i| i % 7 == 0).collect();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(BooleanArray::from(values.clone())) as _],
+        )
+        .unwrap();
+
+        // A `data_page_size_limit` below `max_chunk_size` is an explicitly
+        // supported configuration; it just produces more, smaller pages.
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_data_page_size_limit(1024)
+            .set_content_defined_chunking(Some(CdcOptions {
+                min_chunk_size: 8 * 1024,
+                max_chunk_size: 16 * 1024,
+                norm_level: 0,
+            }))
+            .build();
+
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        // The column round-trips unchanged.
+        let reader = ParquetRecordBatchReader::try_new(data, 8192).unwrap();
+        let mut read_back = Vec::with_capacity(num_rows);
+        for batch in reader {
+            let batch = batch.unwrap();
+            let col = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap();
+            read_back.extend(col.iter().map(|v| v.unwrap()));
+        }
+        assert_eq!(read_back, values);
+    }
+
+    /// The same forced page break on a non-`BOOLEAN` column did not panic, but
+    /// wrote a data page holding zero values. No page should be empty.
+    #[test]
+    fn test_arrow_writer_cdc_writes_no_empty_data_pages() {
+        let num_rows = 500_000;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        let values: Vec<i32> = (0..num_rows).map(|i| i % 97).collect();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(values)) as _],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_dictionary_enabled(false)
+            .set_data_page_row_count_limit(128)
+            .set_content_defined_chunking(Some(CdcOptions {
+                min_chunk_size: 8 * 1024,
+                max_chunk_size: 16 * 1024,
+                norm_level: 0,
+            }))
+            .build();
+
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        let reader = SerializedFileReader::new(data).unwrap();
+        let mut num_pages = 0;
+        for i in 0..reader.num_row_groups() {
+            let row_group = reader.get_row_group(i).unwrap();
+            let mut pages = row_group.get_column_page_reader(0).unwrap();
+            while let Some(page) = pages.get_next_page().unwrap() {
+                assert_ne!(page.num_values(), 0, "wrote a data page with no values");
+                num_pages += 1;
+            }
+        }
+        assert!(num_pages > 1, "expected the column to span several pages");
     }
 }
