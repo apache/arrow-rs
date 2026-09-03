@@ -403,10 +403,6 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
         Ordering::Equal => {}
     }
 
-    if selected_count == mask.len() {
-        return other.clone();
-    }
-
     let other_true_count = other.count_set_bits();
     if other_true_count == 0 {
         return BooleanBuffer::new_unset(mask.len());
