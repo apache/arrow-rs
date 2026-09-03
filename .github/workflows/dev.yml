@@ -62,11 +62,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        # Version fixed on purpose. It uses heuristics to detect typos, so upgrading
+        # it may cause checks to fail more often.
+        # We can upgrade it manually once a while.
         with:
           persist-credentials: false
-      # Version fixed on purpose. It uses heuristics to detect typos, so upgrading
-      # it may cause checks to fail more often.
-      # We can upgrade it manually once a while.
       - name: Install typos
         uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
         with:
