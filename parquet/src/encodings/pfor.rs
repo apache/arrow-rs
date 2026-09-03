@@ -85,9 +85,7 @@ pub const fn exception_bits(byte_width: usize) -> i64 {
 /// frame wraps rather than overflows, which is what lets a frame sit above the minimum: a value
 /// below the frame wraps to a huge residual, fails the width test like any value above the window,
 /// and is patched from the exception list. Nothing here is exposed outside the crate.
-pub trait PforInt:
-    Copy + Default + Ord + Send + std::fmt::Debug + FromBitpacked + 'static
-{
+pub trait PforInt: Copy + Default + Ord + Send + std::fmt::Debug + FromBitpacked + 'static {
     /// Width of one value on the wire, in bytes: 4 for INT32, 8 for INT64.
     const BYTE_WIDTH: usize;
 
@@ -380,7 +378,9 @@ impl<T: PforInt> PforVectorInfo<T> {
             frame_of_reference,
             bit_width: width_byte & BIT_WIDTH_MASK,
             num_exceptions: u16::from_le_bytes(
-                src[T::BYTE_WIDTH + 1..T::BYTE_WIDTH + 3].try_into().unwrap(),
+                src[T::BYTE_WIDTH + 1..T::BYTE_WIDTH + 3]
+                    .try_into()
+                    .unwrap(),
             ),
             is_delta: width_byte & DELTA_FLAG != 0,
         };

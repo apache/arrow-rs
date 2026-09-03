@@ -660,10 +660,8 @@ where
         };
         let num_vectors = header.num_vectors();
 
-        let mut out = Vec::with_capacity(max_compressed_size::<T::T>(
-            num_values,
-            self.vector_size,
-        )?);
+        let mut out =
+            Vec::with_capacity(max_compressed_size::<T::T>(num_values, self.vector_size)?);
         header.write(&mut out);
 
         // The offset array is reserved now and filled in as each vector is written. An all-null
@@ -764,19 +762,27 @@ mod tests {
                     })
                     .collect(),
             ),
-            (
-                "random",
-                (0..1000).map(|_| rng.next() as i32).collect(),
-            ),
+            ("random", (0..1000).map(|_| rng.next() as i32).collect()),
             (
                 "small random",
                 (0..1000).map(|_| (rng.next() % 256) as i32).collect(),
             ),
-            ("extremes", vec![i32::MIN, i32::MAX, 0, -1, 1, i32::MIN, i32::MAX]),
+            (
+                "extremes",
+                vec![i32::MIN, i32::MAX, 0, -1, 1, i32::MIN, i32::MAX],
+            ),
             // A vector whose span covers the whole type, so the residuals need every bit.
             (
                 "full span",
-                (0..64).map(|i| if i % 2 == 0 { i32::MIN + i } else { i32::MAX - i }).collect(),
+                (0..64)
+                    .map(|i| {
+                        if i % 2 == 0 {
+                            i32::MIN + i
+                        } else {
+                            i32::MAX - i
+                        }
+                    })
+                    .collect(),
             ),
             ("sawtooth", (0..1000).map(|i| (i % 37) * 3).collect()),
             // Steps: long runs of one value, which differencing turns into runs of zero.
@@ -807,7 +813,15 @@ mod tests {
             ("extremes", vec![i64::MIN, i64::MAX, 0, -1, 1]),
             (
                 "full span",
-                (0..64).map(|i| if i % 2 == 0 { i64::MIN + i } else { i64::MAX - i }).collect(),
+                (0..64)
+                    .map(|i| {
+                        if i % 2 == 0 {
+                            i64::MIN + i
+                        } else {
+                            i64::MAX - i
+                        }
+                    })
+                    .collect(),
             ),
         ];
 
@@ -832,7 +846,11 @@ mod tests {
         // One vector per width, built so the planner has to choose that width: values spanning
         // exactly `w` bits with nothing to gain from a frame or from differencing.
         for w in 1..=32u32 {
-            let span: u64 = if w == 32 { u32::MAX as u64 } else { (1u64 << w) - 1 };
+            let span: u64 = if w == 32 {
+                u32::MAX as u64
+            } else {
+                (1u64 << w) - 1
+            };
             let values: Vec<i32> = (0..64)
                 .map(|i| ((i as u64 * 2_654_435_761) % (span + 1)) as u32 as i32)
                 .collect();
@@ -868,7 +886,10 @@ mod tests {
         assert_eq!(info.frame_of_reference, 777);
         assert!(!info.is_delta);
         // Header, one offset, and an info block holding the value: nothing else is needed.
-        assert_eq!(page.len(), HEADER_SIZE + OFFSET_SIZE + <i32 as PforInt>::INFO_SIZE);
+        assert_eq!(
+            page.len(),
+            HEADER_SIZE + OFFSET_SIZE + <i32 as PforInt>::INFO_SIZE
+        );
     }
 
     #[test]
@@ -1050,9 +1071,7 @@ mod tests {
 
     #[test]
     fn test_encoder_is_reusable_after_a_flush() {
-        let mut encoder = PforEncoder::<Int32Type>::new()
-            .with_vector_size(8)
-            .unwrap();
+        let mut encoder = PforEncoder::<Int32Type>::new().with_vector_size(8).unwrap();
 
         let first: Vec<i32> = (0..20).collect();
         encoder.put(&first).unwrap();
@@ -1075,9 +1094,7 @@ mod tests {
 
     #[test]
     fn test_put_accumulates_across_calls() {
-        let mut encoder = PforEncoder::<Int32Type>::new()
-            .with_vector_size(8)
-            .unwrap();
+        let mut encoder = PforEncoder::<Int32Type>::new().with_vector_size(8).unwrap();
         let values: Vec<i32> = (0..20).collect();
         for chunk in values.chunks(3) {
             encoder.put(chunk).unwrap();
@@ -1105,9 +1122,17 @@ mod tests {
 
     #[test]
     fn test_rejects_a_vector_size_the_header_cannot_describe() {
-        assert!(PforEncoder::<Int32Type>::new().with_vector_size(1000).is_err());
+        assert!(
+            PforEncoder::<Int32Type>::new()
+                .with_vector_size(1000)
+                .is_err()
+        );
         assert!(PforEncoder::<Int32Type>::new().with_vector_size(4).is_err());
-        assert!(PforEncoder::<Int32Type>::new().with_vector_size(1 << 16).is_err());
+        assert!(
+            PforEncoder::<Int32Type>::new()
+                .with_vector_size(1 << 16)
+                .is_err()
+        );
         assert!(PforEncoder::<Int32Type>::new().with_vector_size(8).is_ok());
     }
 
@@ -1195,8 +1220,8 @@ mod tests {
         // shape whose vectors do not all plan the same way.
         let values: Vec<i32> = (0..10_000i32)
             .map(|i| match i / 8 % 3 {
-                0 => i,               // a ramp
-                1 => 500,             // a constant
+                0 => i,                                  // a ramp
+                1 => 500,                                // a constant
                 _ => (i.wrapping_mul(2_654_435)) % 1024, // scattered
             })
             .collect();

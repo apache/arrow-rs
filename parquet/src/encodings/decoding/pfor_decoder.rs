@@ -30,8 +30,8 @@ use crate::util::bit_util::BitReader;
 
 /// Decoder for [`Encoding::PFOR`].
 ///
-/// A page is decoded one vector at a time into [`Self::vector`], and callers are served out of
-/// that buffer. Decoding a whole vector at once is what the format asks for -- the residuals are
+/// A page is decoded one vector at a time into a buffer of the decoder's own, and callers are
+/// served out of that buffer. Decoding a whole vector at once is what the format asks for -- the residuals are
 /// bit-packed as one run and the exceptions patched over the result -- and buffering it is what
 /// lets [`Decoder::get`] stop mid-vector and resume where it left off.
 pub struct PforDecoder<T: DataType> {
@@ -215,8 +215,7 @@ where
 
             for i in 0..num_exceptions {
                 let at = i * POSITION_SIZE;
-                let position =
-                    u16::from_le_bytes([positions[at], positions[at + 1]]) as usize;
+                let position = u16::from_le_bytes([positions[at], positions[at + 1]]) as usize;
                 // The exception carries whatever the packed stream carries: a value in a plain
                 // vector, a difference in a differenced one.
                 self.vector[position] = T::T::read_le(&values[i * T::T::BYTE_WIDTH..]);
@@ -377,7 +376,12 @@ mod tests {
     /// The offsets are the one part of a page that cannot be written by hand without recomputing
     /// them on every edit; the vector bodies below are literal bytes, so what is being tested is
     /// still the format and not our encoder.
-    fn page(log_vector_size: u8, value_byte_width: u8, num_elements: i32, vectors: &[Vec<u8>]) -> Vec<u8> {
+    fn page(
+        log_vector_size: u8,
+        value_byte_width: u8,
+        num_elements: i32,
+        vectors: &[Vec<u8>],
+    ) -> Vec<u8> {
         let mut out = vec![PACKING_MODE_FOR_BIT_PACK, log_vector_size, value_byte_width];
         out.extend_from_slice(&num_elements.to_le_bytes());
         let offset_array_at = out.len();
@@ -515,7 +519,10 @@ mod tests {
         for value in &values {
             vector.extend_from_slice(&(value.wrapping_sub(frame) as u64).to_le_bytes());
         }
-        assert_eq!(decode::<Int64Type>(&page(3, 8, 8, &[vector]), 8).unwrap(), values);
+        assert_eq!(
+            decode::<Int64Type>(&page(3, 8, 8, &[vector]), 8).unwrap(),
+            values
+        );
     }
 
     #[test]
@@ -556,7 +563,9 @@ mod tests {
 
         // A skip landing exactly on a vector boundary, which decodes nothing at all.
         let mut decoder = PforDecoder::<Int32Type>::new();
-        decoder.set_data(encoded_page::<Int32Type>(&expected, 8), 40).unwrap();
+        decoder
+            .set_data(encoded_page::<Int32Type>(&expected, 8), 40)
+            .unwrap();
         assert_eq!(decoder.skip(16).unwrap(), 16);
         assert_eq!(decoder.values_left(), 24);
         let mut out = vec![0i32; 24];
@@ -565,7 +574,9 @@ mod tests {
 
         // A skip stopping part-way into a vector, then a read that continues from there.
         let mut decoder = PforDecoder::<Int32Type>::new();
-        decoder.set_data(encoded_page::<Int32Type>(&expected, 8), 40).unwrap();
+        decoder
+            .set_data(encoded_page::<Int32Type>(&expected, 8), 40)
+            .unwrap();
         assert_eq!(decoder.skip(19).unwrap(), 19);
         let mut out = vec![0i32; 5];
         assert_eq!(decoder.get(&mut out).unwrap(), 5);
@@ -573,7 +584,9 @@ mod tests {
 
         // Interleaved reads and skips.
         let mut decoder = PforDecoder::<Int32Type>::new();
-        decoder.set_data(encoded_page::<Int32Type>(&expected, 8), 40).unwrap();
+        decoder
+            .set_data(encoded_page::<Int32Type>(&expected, 8), 40)
+            .unwrap();
         let mut out = vec![0i32; 3];
         decoder.get(&mut out).unwrap();
         assert_eq!(out, expected[..3]);
@@ -584,7 +597,9 @@ mod tests {
 
         // A skip past the end reports what it could actually skip.
         let mut decoder = PforDecoder::<Int32Type>::new();
-        decoder.set_data(encoded_page::<Int32Type>(&expected, 8), 40).unwrap();
+        decoder
+            .set_data(encoded_page::<Int32Type>(&expected, 8), 40)
+            .unwrap();
         assert_eq!(decoder.skip(100).unwrap(), 40);
         assert_eq!(decoder.values_left(), 0);
         assert_eq!(decoder.get(&mut out).unwrap(), 0);
