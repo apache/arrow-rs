@@ -266,7 +266,7 @@ where
         // it is what the decoder reads. `num_values` is the level count when a V1 page does not
         // give a value count of its own, and that includes nulls, which PFOR does not store -- so
         // the two are equal only for a required column. What cannot happen either way is a page
-        // claiming more values than there are levels to put them in.
+        // claiming more values than the levels leave room for.
         if header.num_elements as usize > num_values {
             return Err(general_err!(
                 "PFOR header element count {} exceeds the {} values the page has room for",
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn test_decode_delta_vector_at_width_zero() {
         // A constant difference needs no residuals at all: the values are the start value plus the
-        // frame, stepped. This is the fast path in the decoder, so it gets a page of its own.
+        // frame, stepped. That skip is the decoder's fast path, so it gets a page of its own.
         #[rustfmt::skip]
         let vector = vec![
             0x03, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, // frame 3, width 0 with the delta flag
@@ -617,8 +617,8 @@ mod tests {
 
     #[test]
     fn test_set_data_rejects_more_elements_than_the_page_has_room_for() {
-        // The header claims eight values where the caller knows there are four. Believing it would
-        // hand out values built from whatever follows.
+        // The header claims eight values where the caller knows of four. Believing it would hand
+        // out values built from whatever follows.
         let mut page = page(3, 4, 8, &[vec![0u8; 7]]);
         page[3] = 8;
         let mut decoder = PforDecoder::<Int32Type>::new();

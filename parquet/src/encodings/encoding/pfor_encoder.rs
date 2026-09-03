@@ -210,8 +210,8 @@ fn choose_frame_and_width<T: PforInt>(values: &[T], bounds: MinMax<T>) -> FrameC
     }
 
     // Slide a `2^w`-wide window over the buckets and keep the position that costs least. Widths
-    // below the bucket size cannot be resolved at this granularity, and once one window spans every
-    // bucket there are no exceptions left to remove, so the loop covers only the
+    // below the bucket size cannot be resolved at this granularity, and a window spanning every
+    // bucket has no exceptions left to remove, so the loop covers only the
     // `FRAME_SEARCH_BITS`-odd widths in between -- fixed work, and none of it touching the data
     // again.
     //
@@ -314,7 +314,7 @@ fn choose_frame_and_width<T: PforInt>(values: &[T], bounds: MinMax<T>) -> FrameC
 ///
 /// # Panics
 ///
-/// Panics on an empty slice: there is no frame of reference for an empty vector.
+/// Panics on an empty slice: an empty vector has no frame of reference.
 fn min_max<T: PforInt>(values: &[T]) -> MinMax<T> {
     let mut bounds = MinMax {
         min: values[0],
