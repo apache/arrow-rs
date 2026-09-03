@@ -2284,6 +2284,7 @@ impl UnionDecoder {
             children,
         )
         .map_err(|e| AvroError::ParseError(e.to_string()))?;
+        self.branches.counts.fill(0);
         Ok(Arc::new(arr))
     }
 }
@@ -4637,6 +4638,26 @@ mod tests {
             .expect("string child");
         assert_eq!(str_child.len(), 1);
         assert_eq!(str_child.value(0), "abc");
+    }
+
+    #[test]
+    fn test_union_dense_offsets_reset_after_flush() {
+        let union_dt = make_dense_union_avro(
+            vec![
+                (Codec::Null, "n", DataType::Null),
+                (Codec::Utf8, "s", DataType::Utf8),
+            ],
+            vec![0, 1],
+        );
+        let mut dec = Decoder::try_new(&union_dt).unwrap();
+
+        for _ in 0..2 {
+            dec.decode(&mut AvroCursor::new(&encode_avro_long(0)))
+                .unwrap();
+            let array = dec.flush(None).unwrap();
+            let union = array.as_union();
+            assert_eq!(union.value_offset(0), 0);
+        }
     }
 
     #[test]
