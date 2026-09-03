@@ -15,34 +15,51 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! PFOR against DELTA_BINARY_PACKED on encode speed, decode speed and size.
+//! PFOR against the other ways Parquet can carry an integer column.
 //!
-//! The columns are the ones the C++ implementation is benchmarked on: integer
-//! columns from ClickBench, TPC-H, TPC-DS and the NYC taxi trip data, plus four
-//! sorted or near-sorted shapes that separate the delta schemes from each other.
-//! The distributions are the same, and each column keeps the seed it has there,
-//! but the generators draw from a different engine, so the values are not
-//! identical to the C++ ones -- only the shape of each column is.
+//! Six arms, on the columns the C++ implementation is benchmarked on:
 //!
-//! Run with `cargo bench -p parquet --bench pfor`. The byte counts and ratios
-//! are printed once, before the timings.
+//! | arm | what it is |
+//! |---|---|
+//! | `RLE_BITPACK` | the RLE/bit-packed hybrid at the column's own bit width |
+//! | `DELTA_BINARY_PACKED` | Parquet's delta bit packing |
+//! | `PFOR` | PFOR with the differencing mode turned off |
+//! | `PFOR+DELTA` | PFOR free to choose differencing per vector, which is the default |
+//! | `PLAIN+ZSTD` | the raw little-endian values through zstd |
+//! | `PLAIN+LZ4` | the raw little-endian values through lz4 |
+//!
+//! The columns are integer columns from ClickBench, TPC-H, TPC-DS and the NYC taxi
+//! data, plus four sorted or near-sorted shapes that separate the delta schemes from
+//! each other. The distributions are the same as the C++ benchmark's and each column
+//! keeps the seed it has there, but the generators draw from a different engine, so
+//! the values are not identical -- only the shape of each column is.
+//!
+//! The two compressor arms time the compressor alone, over a buffer of values that is
+//! already in memory, which is what the C++ benchmark times. So their decode figure is
+//! bytes-to-bytes and does not include producing typed values; the other four arms all
+//! decode to values.
+//!
+//! Run with `cargo bench -p parquet --bench pfor`, or a subset with e.g.
+//! `cargo bench -p parquet --bench pfor -- "int32/decode/PFOR"`. The sizes are printed
+//! once, before the timings.
 
+use bytes::Bytes;
 use criterion::*;
-use parquet::basic::{Encoding, Type as ParquetType};
+use parquet::basic::{Compression, Encoding, Type as ParquetType, ZstdLevel};
+use parquet::compression::{Codec, CodecOptionsBuilder, create_codec};
 use parquet::data_type::{DataType, Int32Type, Int64Type};
 use parquet::decoding::{Decoder, get_decoder};
-use parquet::encoding::get_encoder;
+use parquet::encoding::{Encoder, PforEncoder, get_encoder};
+use parquet::encodings::pfor::PforInt;
+use parquet::encodings::rle::{RleDecoder, RleEncoder};
 use parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
+use parquet::util::bit_util::FromBitpacked;
 use rand::prelude::*;
 use std::sync::Arc;
 
 /// The element count the C++ comparison benchmark uses, so the two sets of
 /// numbers describe the same amount of work per iteration.
 const NUM_VALUES: usize = 102_400;
-
-/// The encodings under comparison. PFOR first, so it is the baseline column in
-/// the printed table.
-const ENCODINGS: [Encoding; 2] = [Encoding::PFOR, Encoding::DELTA_BINARY_PACKED];
 
 // ============================================================================
 // Draws
@@ -369,6 +386,74 @@ fn widen(values: &[i32]) -> Vec<i64> {
 // Harness
 // ============================================================================
 
+/// The arms of the comparison. Two of them are not simply an `Encoding`: PFOR's
+/// differencing mode is a knob on the encoder rather than a second encoding, and the
+/// compressor arms are a codec applied to a plain buffer.
+#[derive(Clone, Copy)]
+enum Arm {
+    /// The RLE/bit-packed hybrid, at the column's own bit width. That width is not
+    /// carried in the stream, so the reader is told it out of band -- which is also how
+    /// the C++ benchmark's RLE arm is set up.
+    RleBitPack,
+    /// An encoding the crate hands out through `get_encoder`/`get_decoder`.
+    Direct(Encoding),
+    /// PFOR, with the per-vector differencing mode allowed or forbidden.
+    Pfor { delta: bool },
+    /// The raw little-endian values through a page compressor.
+    PlainCompressed(Compression),
+}
+
+/// `(benchmark id, table heading, arm)`. Built at run time rather than declared as a
+/// constant because a zstd level is fallible to construct.
+fn arms() -> Vec<(&'static str, &'static str, Arm)> {
+    vec![
+        ("RLE_BITPACK", "RLE", Arm::RleBitPack),
+        (
+            "DELTA_BINARY_PACKED",
+            "DBP",
+            Arm::Direct(Encoding::DELTA_BINARY_PACKED),
+        ),
+        ("PFOR", "PFOR", Arm::Pfor { delta: false }),
+        ("PFOR+DELTA", "PFOR+D", Arm::Pfor { delta: true }),
+        (
+            "PLAIN+LZ4",
+            "LZ4",
+            Arm::PlainCompressed(Compression::LZ4_RAW),
+        ),
+        (
+            "PLAIN+ZSTD",
+            "ZSTD",
+            Arm::PlainCompressed(Compression::ZSTD(ZstdLevel::default())),
+        ),
+    ]
+}
+
+/// One column under one arm: the bytes, plus the bit width the RLE hybrid has to be
+/// handed back at decode time.
+struct Encoded {
+    bytes: Bytes,
+    bit_width: u8,
+}
+
+/// The value-type-dependent pieces the RLE arm needs, which `DataType` does not carry.
+/// The unsigned reinterpretation is what makes a negative value cost the full width,
+/// matching the C++ RLE arm.
+trait BenchValue: Copy + Default + PartialEq + FromBitpacked {
+    fn unsigned(self) -> u64;
+}
+
+impl BenchValue for i32 {
+    fn unsigned(self) -> u64 {
+        u64::from(self as u32)
+    }
+}
+
+impl BenchValue for i64 {
+    fn unsigned(self) -> u64 {
+        self as u64
+    }
+}
+
 fn descriptor(physical_type: ParquetType) -> ColumnDescPtr {
     ColumnDescPtr::new(ColumnDescriptor::new(
         Arc::new(
@@ -382,52 +467,150 @@ fn descriptor(physical_type: ParquetType) -> ColumnDescPtr {
     ))
 }
 
-fn encode<T: DataType>(values: &[T::T], encoding: Encoding, descr: &ColumnDescPtr) -> bytes::Bytes {
-    let mut encoder = get_encoder::<T>(encoding, descr).unwrap();
+fn codec_for(compression: Compression) -> Box<dyn Codec> {
+    create_codec(compression, &CodecOptionsBuilder::default().build())
+        .unwrap()
+        .expect("codec feature not enabled")
+}
+
+/// The bit width the RLE hybrid needs: enough bits for the widest value, read unsigned.
+fn bit_width_of<V: BenchValue>(values: &[V]) -> u8 {
+    let widest = values.iter().map(|v| v.unsigned()).max().unwrap_or(0);
+    (u64::BITS - widest.leading_zeros()).max(1) as u8
+}
+
+fn plain_bytes<T: DataType>(values: &[T::T], descr: &ColumnDescPtr) -> Bytes {
+    let mut encoder = get_encoder::<T>(Encoding::PLAIN, descr).unwrap();
     encoder.put(values).unwrap();
     encoder.flush_buffer().unwrap()
 }
 
-fn decode<T: DataType>(
-    encoded: bytes::Bytes,
-    out: &mut [T::T],
-    encoding: Encoding,
-    descr: &ColumnDescPtr,
-) {
-    let mut decoder: Box<dyn Decoder<T>> = get_decoder(descr.clone(), encoding).unwrap();
-    decoder.set_data(encoded, out.len()).unwrap();
-    let mut done = 0;
-    while done < out.len() {
-        let read = decoder.get(&mut out[done..]).unwrap();
-        assert_ne!(read, 0, "decoder stalled");
-        done += read;
+fn encode<T: DataType>(arm: Arm, values: &[T::T], descr: &ColumnDescPtr) -> Encoded
+where
+    T::T: BenchValue + PforInt,
+{
+    let bit_width = bit_width_of(values);
+    let bytes = match arm {
+        Arm::Direct(encoding) => {
+            let mut encoder = get_encoder::<T>(encoding, descr).unwrap();
+            encoder.put(values).unwrap();
+            encoder.flush_buffer().unwrap()
+        }
+        Arm::Pfor { delta } => {
+            let mut encoder = PforEncoder::<T>::new().with_delta_enabled(delta);
+            encoder.put(values).unwrap();
+            encoder.flush_buffer().unwrap()
+        }
+        Arm::RleBitPack => {
+            let mut encoder = RleEncoder::new(
+                bit_width,
+                RleEncoder::max_buffer_size(bit_width, values.len()),
+            );
+            for value in values {
+                encoder.put(value.unsigned());
+            }
+            Bytes::from(encoder.consume())
+        }
+        Arm::PlainCompressed(compression) => {
+            let plain = plain_bytes::<T>(values, descr);
+            let mut out = Vec::new();
+            codec_for(compression).compress(&plain, &mut out).unwrap();
+            Bytes::from(out)
+        }
+    };
+    Encoded { bytes, bit_width }
+}
+
+/// Decode one column back to values. Not used for the compressor arms, which stop at
+/// bytes.
+fn decode<T: DataType>(arm: Arm, encoded: &Encoded, out: &mut [T::T], descr: &ColumnDescPtr)
+where
+    T::T: BenchValue,
+{
+    match arm {
+        Arm::RleBitPack => {
+            let mut decoder = RleDecoder::new(encoded.bit_width);
+            decoder.set_data(encoded.bytes.clone()).unwrap();
+            let mut done = 0;
+            while done < out.len() {
+                let read = decoder.get_batch(&mut out[done..]).unwrap();
+                assert_ne!(read, 0, "decoder stalled");
+                done += read;
+            }
+        }
+        arm => {
+            let encoding = match arm {
+                Arm::Direct(encoding) => encoding,
+                Arm::Pfor { .. } => Encoding::PFOR,
+                _ => unreachable!("compressor arms do not decode to values"),
+            };
+            let mut decoder: Box<dyn Decoder<T>> = get_decoder(descr.clone(), encoding).unwrap();
+            decoder.set_data(encoded.bytes.clone(), out.len()).unwrap();
+            let mut done = 0;
+            while done < out.len() {
+                let read = decoder.get(&mut out[done..]).unwrap();
+                assert_ne!(read, 0, "decoder stalled");
+                done += read;
+            }
+        }
     }
 }
 
-/// Print the size of every column under both encodings, once, before any timing
-/// runs. Ratios are against the plain 4- or 8-byte-per-value form.
-fn report_sizes<T: DataType>(label: &str, columns: &[(&str, Vec<T::T>)], descr: &ColumnDescPtr) {
-    println!("\n{label}: bytes and ratio over {NUM_VALUES} values");
-    println!(
-        "{:<22} {:>12} {:>7} {:>12} {:>7}  smaller",
-        "column", "PFOR", "ratio", "DBP", "ratio"
-    );
+/// A wrong decode makes a timing meaningless, so every arm round trips once per column
+/// before it is measured.
+fn verify<T: DataType>(
+    arm: Arm,
+    name: &str,
+    encoded: &Encoded,
+    values: &[T::T],
+    descr: &ColumnDescPtr,
+) where
+    T::T: BenchValue + PforInt,
+{
+    if let Arm::PlainCompressed(compression) = arm {
+        let plain = plain_bytes::<T>(values, descr);
+        let mut got = Vec::new();
+        codec_for(compression)
+            .decompress(&encoded.bytes, &mut got, Some(plain.len()))
+            .unwrap();
+        assert!(got == plain.as_ref(), "did not round trip {name}");
+    } else {
+        let mut out = vec![T::T::default(); values.len()];
+        decode::<T>(arm, encoded, &mut out, descr);
+        assert!(out == *values, "did not round trip {name}");
+    }
+}
+
+/// Print the compression ratio of every column under every arm, once, before any timing
+/// runs. The ratio is against the plain 4- or 8-byte-per-value form.
+fn report_sizes<T: DataType>(label: &str, columns: &[(&str, Vec<T::T>)], descr: &ColumnDescPtr)
+where
+    T::T: BenchValue + PforInt,
+{
+    let arms = arms();
+    println!("\n{label}: ratio over plain, {NUM_VALUES} values per column");
+    print!("{:<22} {:>10}", "column", "plain B");
+    for (_, heading, _) in &arms {
+        print!("{heading:>9}");
+    }
+    println!("{:>10}", "smallest");
     for (name, values) in columns {
         let plain = (values.len() * std::mem::size_of::<T::T>()) as f64;
-        let sizes: Vec<usize> = ENCODINGS
+        let sizes: Vec<usize> = arms
             .iter()
-            .map(|&encoding| encode::<T>(values, encoding, descr).len())
+            .map(|&(_, _, arm)| encode::<T>(arm, values, descr).bytes.len())
             .collect();
-        let smaller = if sizes[0] < sizes[1] { "PFOR" } else { "DBP" };
-        println!(
-            "{:<22} {:>12} {:>7.2} {:>12} {:>7.2}  {}",
-            name,
-            sizes[0],
-            plain / sizes[0] as f64,
-            sizes[1],
-            plain / sizes[1] as f64,
-            smaller
-        );
+        let best = sizes
+            .iter()
+            .enumerate()
+            .min_by_key(|&(_, size)| size)
+            .map(|(index, _)| arms[index].1)
+            .unwrap();
+        print!("{:<22} {:>10}", name, plain as u64);
+        for size in &sizes {
+            print!("{:>9.2}", plain / *size as f64);
+        }
+        println!("{best:>10}");
     }
 }
 
@@ -436,40 +619,65 @@ fn bench_type<T: DataType>(
     label: &str,
     columns: &[(&str, Vec<T::T>)],
     descr: &ColumnDescPtr,
-) {
+) where
+    T::T: BenchValue + PforInt,
+{
     report_sizes::<T>(label, columns, descr);
+    let arms = arms();
+    let value_bytes = std::mem::size_of::<T::T>();
 
-    let mut encoding_group = c.benchmark_group(format!("{label}/encode"));
+    let mut encode_group = c.benchmark_group(format!("{label}/encode"));
     for (name, values) in columns {
-        encoding_group.throughput(Throughput::Bytes(
-            (values.len() * std::mem::size_of::<T::T>()) as u64,
-        ));
-        for encoding in ENCODINGS {
-            encoding_group.bench_function(BenchmarkId::new(format!("{encoding:?}"), name), |b| {
-                b.iter(|| encode::<T>(values, encoding, descr))
-            });
+        encode_group.throughput(Throughput::Bytes((values.len() * value_bytes) as u64));
+        for &(id, _, arm) in &arms {
+            let id = BenchmarkId::new(id, name);
+            if let Arm::PlainCompressed(compression) = arm {
+                // The compressor arms time the codec alone, over a buffer that is
+                // already in memory, which is what the C++ benchmark times.
+                let plain = plain_bytes::<T>(values, descr);
+                let mut codec = codec_for(compression);
+                let mut out = Vec::new();
+                encode_group.bench_function(id, |b| {
+                    b.iter(|| {
+                        out.clear();
+                        codec.compress(&plain, &mut out).unwrap();
+                    })
+                });
+            } else {
+                encode_group.bench_function(id, |b| b.iter(|| encode::<T>(arm, values, descr)));
+            }
         }
     }
-    encoding_group.finish();
+    encode_group.finish();
 
-    let mut decoding_group = c.benchmark_group(format!("{label}/decode"));
+    let mut decode_group = c.benchmark_group(format!("{label}/decode"));
     for (name, values) in columns {
-        decoding_group.throughput(Throughput::Bytes(
-            (values.len() * std::mem::size_of::<T::T>()) as u64,
-        ));
+        decode_group.throughput(Throughput::Bytes((values.len() * value_bytes) as u64));
         let mut out = vec![T::T::default(); values.len()];
-        for encoding in ENCODINGS {
-            let encoded = encode::<T>(values, encoding, descr);
-            // A wrong decode makes the timings meaningless, so check the round
-            // trip once per column before measuring it.
-            decode::<T>(encoded.clone(), &mut out, encoding, descr);
-            assert!(out == *values, "{encoding:?} did not round trip {name}");
-            decoding_group.bench_function(BenchmarkId::new(format!("{encoding:?}"), name), |b| {
-                b.iter(|| decode::<T>(encoded.clone(), &mut out, encoding, descr))
-            });
+        for &(id, _, arm) in &arms {
+            let encoded = encode::<T>(arm, values, descr);
+            verify::<T>(arm, name, &encoded, values, descr);
+            let id = BenchmarkId::new(id, name);
+            if let Arm::PlainCompressed(compression) = arm {
+                let plain_len = values.len() * value_bytes;
+                let mut codec = codec_for(compression);
+                let mut bytes = Vec::with_capacity(plain_len);
+                decode_group.bench_function(id, |b| {
+                    b.iter(|| {
+                        bytes.clear();
+                        codec
+                            .decompress(&encoded.bytes, &mut bytes, Some(plain_len))
+                            .unwrap();
+                    })
+                });
+            } else {
+                decode_group.bench_function(id, |b| {
+                    b.iter(|| decode::<T>(arm, &encoded, &mut out, descr))
+                });
+            }
         }
     }
-    decoding_group.finish();
+    decode_group.finish();
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -488,8 +696,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
 criterion_group! {
     name = benches;
-    // 33 columns times two encodings times two directions is a lot of
-    // benchmarks, so each one is measured for less than criterion's default.
+    // 33 columns times six arms times two directions is a lot of benchmarks, so each
+    // one is measured for less than criterion's default.
     config = Criterion::default()
         .sample_size(50)
         .warm_up_time(std::time::Duration::from_millis(500))
