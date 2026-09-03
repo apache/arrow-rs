@@ -163,8 +163,10 @@ impl NullBuffer {
                 buf[byte_start..byte_end].fill(0xFF);
             }
         } else {
-            // Only visit valid (non-null) positions — avoids branching on every bit.
-            for i in self.buffer.set_indices() {
+            for i in 0..self.buffer.len() {
+                if self.is_null(i) {
+                    continue;
+                }
                 for j in 0..count {
                     crate::bit_util::set_bit(buffer.as_mut(), i * count + j)
                 }
