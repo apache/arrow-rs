@@ -76,7 +76,15 @@ pub trait Encoder<T: DataType>: Send {
 
     /// Flushes the underlying byte buffer that's being processed by this encoder, and
     /// return the immutable copy of it. This will also reset the internal state.
-    fn flush_buffer(&mut self) -> Result<Bytes>;
+    fn flush_buffer(&mut self) -> Result<Bytes> {
+        let mut buffer = Vec::new();
+        self.flush_to(&mut buffer)?;
+        Ok(buffer.into())
+    }
+
+    /// Flushes the underlying byte buffer that's being processed by this encoder.
+    /// This will also reset the internal state.
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()>;
 }
 
 /// Gets a encoder for the particular data type `T` and encoding `encoding`. Memory usage
@@ -146,10 +154,6 @@ impl<T: DataType> PlainEncoder<T> {
 }
 
 impl<T: DataType> Encoder<T> for PlainEncoder<T> {
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
     fn encoding(&self) -> Encoding {
         Encoding::PLAIN
     }
@@ -164,6 +168,15 @@ impl<T: DataType> Encoder<T> for PlainEncoder<T> {
             .extend_from_slice(self.bit_writer.flush_buffer());
         self.bit_writer.clear();
         Ok(std::mem::take(&mut self.buffer).into())
+    }
+
+    #[inline]
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        out.extend_from_slice(&self.buffer);
+        out.extend_from_slice(self.bit_writer.flush_buffer());
+        self.buffer.clear();
+        self.bit_writer.clear();
+        Ok(())
     }
 
     #[inline]
@@ -227,10 +240,6 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
         Ok(())
     }
 
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
     fn encoding(&self) -> Encoding {
         Encoding::RLE
     }
@@ -260,6 +269,12 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
         buf[..4].copy_from_slice(&len.to_le_bytes());
 
         Ok(buf.into())
+    }
+
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        // TODO: RleEncoder could be reused instead of consumed
+        out.extend_from_slice(&self.flush_buffer()?);
+        Ok(())
     }
 
     /// return the estimated memory size of this encoder.
@@ -470,27 +485,22 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
         Ok(())
     }
 
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
     fn encoding(&self) -> Encoding {
         Encoding::DELTA_BINARY_PACKED
     }
 
     fn estimated_data_encoded_size(&self) -> usize {
-        self.bit_writer.bytes_written()
+        self.page_header_writer.bytes_written() + self.bit_writer.bytes_written()
     }
 
-    fn flush_buffer(&mut self) -> Result<Bytes> {
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
         // Write remaining values
         self.flush_block_values()?;
         // Write page header with total values
         self.write_page_header();
 
-        let mut buffer = Vec::new();
-        buffer.extend_from_slice(self.page_header_writer.flush_buffer());
-        buffer.extend_from_slice(self.bit_writer.flush_buffer());
+        out.extend_from_slice(self.page_header_writer.flush_buffer());
+        out.extend_from_slice(self.bit_writer.flush_buffer());
 
         // Reset state
         self.page_header_writer.clear();
@@ -500,7 +510,7 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
         self.current_value = 0;
         self.values_in_block = 0;
 
-        Ok(buffer.into())
+        Ok(())
     }
 
     /// return the estimated memory size of this encoder.
@@ -568,6 +578,8 @@ impl<T: DataType> DeltaBitPackEncoderConversion<T> for DeltaBitPackEncoder<T> {
 pub struct DeltaLengthByteArrayEncoder<T: DataType> {
     // length encoder
     len_encoder: DeltaBitPackEncoder<Int32Type>,
+    // length buffer
+    lengths: Vec<i32>,
     // byte array data
     data: Vec<ByteArray>,
     // data size in bytes of encoded values
@@ -586,6 +598,7 @@ impl<T: DataType> DeltaLengthByteArrayEncoder<T> {
     pub fn new() -> Self {
         Self {
             len_encoder: DeltaBitPackEncoder::new(),
+            lengths: vec![],
             data: vec![],
             encoded_size: 0,
             _phantom: PhantomData,
@@ -596,30 +609,27 @@ impl<T: DataType> DeltaLengthByteArrayEncoder<T> {
 impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         ensure_phys_ty!(
-            Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY,
+            Type::BYTE_ARRAY,
             "DeltaLengthByteArrayEncoder only supports ByteArrayType"
         );
 
-        let val_it = || {
-            values
-                .iter()
-                .map(|x| x.as_any().downcast_ref::<ByteArray>().unwrap())
-        };
+        let values = values
+            .iter()
+            .map(|x| x.as_any().downcast_ref::<ByteArray>().unwrap());
 
-        let lengths: Vec<i32> = val_it().map(|byte_array| byte_array.len() as i32).collect();
-        self.len_encoder.put(&lengths)?;
-        for byte_array in val_it() {
-            self.encoded_size += byte_array.len();
+        self.lengths.reserve(values.len());
+        for byte_array in values {
+            let len = byte_array.len();
+            self.lengths.push(len as i32);
+            self.encoded_size += len;
             self.data.push(byte_array.clone());
         }
+        self.len_encoder.put(&self.lengths)?;
+        self.lengths.clear();
 
         Ok(())
     }
 
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
     fn encoding(&self) -> Encoding {
         Encoding::DELTA_LENGTH_BYTE_ARRAY
     }
@@ -628,22 +638,22 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
         self.len_encoder.estimated_data_encoded_size() + self.encoded_size
     }
 
-    fn flush_buffer(&mut self) -> Result<Bytes> {
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
         ensure_phys_ty!(
-            Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY,
+            Type::BYTE_ARRAY,
             "DeltaLengthByteArrayEncoder only supports ByteArrayType"
         );
 
-        let mut total_bytes = vec![];
-        let lengths = self.len_encoder.flush_buffer()?;
-        total_bytes.extend_from_slice(&lengths);
+        out.reserve(self.estimated_data_encoded_size());
+        self.len_encoder.flush_to(out)?;
+
         self.data.iter().for_each(|byte_array| {
-            total_bytes.extend_from_slice(byte_array.data());
+            out.extend_from_slice(byte_array.data());
         });
         self.data.clear();
         self.encoded_size = 0;
 
-        Ok(total_bytes.into())
+        Ok(())
     }
 
     /// return the estimated memory size of this encoder.
@@ -660,6 +670,8 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
 pub struct DeltaByteArrayEncoder<T: DataType> {
     prefix_len_encoder: DeltaBitPackEncoder<Int32Type>,
     suffix_writer: DeltaLengthByteArrayEncoder<ByteArrayType>,
+    prefix_lengths: Vec<i32>,
+    suffixes: Vec<ByteArray>,
     previous: Vec<u8>,
     _phantom: PhantomData<T>,
 }
@@ -676,7 +688,9 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
         Self {
             prefix_len_encoder: DeltaBitPackEncoder::new(),
             suffix_writer: DeltaLengthByteArrayEncoder::new(),
-            previous: vec![],
+            prefix_lengths: Vec::new(),
+            suffixes: Vec::new(),
+            previous: Vec::new(),
             _phantom: PhantomData,
         }
     }
@@ -684,40 +698,43 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
 
 impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
-        let mut prefix_lengths: Vec<i32> = vec![];
-        let mut suffixes: Vec<ByteArray> = vec![];
+        self.prefix_lengths.reserve(values.len());
+        self.suffixes.reserve(values.len());
 
-        let values = values
-            .iter()
-            .map(|x| x.as_any())
-            .map(|x| match T::get_physical_type() {
-                Type::BYTE_ARRAY => x.downcast_ref::<ByteArray>().unwrap(),
-                Type::FIXED_LEN_BYTE_ARRAY => x.downcast_ref::<FixedLenByteArray>().unwrap(),
-                _ => panic!(
-                    "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
-                ),
-            });
+        let values = values.iter().map(|x| match T::get_physical_type() {
+            Type::BYTE_ARRAY => x.as_any().downcast_ref::<ByteArray>().unwrap(),
+            Type::FIXED_LEN_BYTE_ARRAY => x.as_any().downcast_ref::<FixedLenByteArray>().unwrap(),
+            _ => panic!(
+                "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
+            ),
+        });
 
-        for byte_array in values {
-            let current = byte_array.data();
+        let mut previous = self.previous.as_slice();
+        let mut previous_array = &ByteArray::from(Bytes::new());
+        for current_array in values {
+            let current = current_array.data();
             // Number of leading bytes shared with the previous value
-            let match_len = common_prefix_length(&self.previous, current);
-            prefix_lengths.push(match_len as i32);
-            suffixes.push(byte_array.slice(match_len, byte_array.len() - match_len));
+            let match_len = common_prefix_length(previous, current);
+            self.prefix_lengths.push(match_len as i32);
+            self.suffixes
+                .push(current_array.slice(match_len, current.len() - match_len));
             // Update previous for the next prefix
-            self.previous.clear();
-            self.previous.extend_from_slice(current);
+            previous = current;
+            previous_array = current_array;
         }
-        self.prefix_len_encoder.put(&prefix_lengths)?;
-        self.suffix_writer.put(&suffixes)?;
+        // Avoid keeping big values alive by copying previous slice into buffer
+        self.previous.clear();
+        self.previous.extend_from_slice(previous_array.data());
+
+        self.prefix_len_encoder.put(&self.prefix_lengths)?;
+        self.suffix_writer.put(&self.suffixes)?;
+
+        self.prefix_lengths.clear();
+        self.suffixes.clear();
 
         Ok(())
     }
 
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
     fn encoding(&self) -> Encoding {
         Encoding::DELTA_BYTE_ARRAY
     }
@@ -727,21 +744,16 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
             + self.suffix_writer.estimated_data_encoded_size()
     }
 
-    fn flush_buffer(&mut self) -> Result<Bytes> {
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
         match T::get_physical_type() {
             Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
-                // TODO: investigate if we can merge lengths and suffixes
-                // without copying data into new vector.
-                let mut total_bytes = vec![];
                 // Insert lengths ...
-                let lengths = self.prefix_len_encoder.flush_buffer()?;
-                total_bytes.extend_from_slice(&lengths);
+                self.prefix_len_encoder.flush_to(out)?;
                 // ... followed by suffixes
-                let suffixes = self.suffix_writer.flush_buffer()?;
-                total_bytes.extend_from_slice(&suffixes);
+                self.suffix_writer.flush_to(out)?;
 
                 self.previous.clear();
-                Ok(total_bytes.into())
+                Ok(())
             }
             _ => panic!(
                 "DeltaByteArrayEncoder only supports ByteArrayType and FixedLenByteArrayType"
@@ -753,6 +765,8 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
     fn estimated_memory_size(&self) -> usize {
         self.prefix_len_encoder.estimated_memory_size()
             + self.suffix_writer.estimated_memory_size()
+            + self.prefix_lengths.capacity() * std::mem::size_of::<i32>()
+            + self.suffixes.capacity() * std::mem::size_of::<ByteArray>()
             + (self.previous.capacity() * std::mem::size_of::<u8>())
     }
 }

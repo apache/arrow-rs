@@ -44,37 +44,21 @@ impl<T: DataType> ByteStreamSplitDecoder<T> {
     }
 }
 
-// Here we assume src contains the full data (which it must, since we're
-// can only know where to split the streams once all data is collected),
-// but dst can be just a slice starting from the given index.
 // We iterate over the output bytes and fill them in from their strided
 // input byte locations.
-fn join_streams_const<const TYPE_SIZE: usize>(
-    src: &[u8],
-    dst: &mut [u8],
-    stride: usize,
-    values_decoded: usize,
-) {
-    let sub_src = &src[values_decoded..];
+fn join_streams_const<const TYPE_SIZE: usize>(src: &[u8], dst: &mut [u8], stride: usize) {
     for i in 0..dst.len() / TYPE_SIZE {
         for j in 0..TYPE_SIZE {
-            dst[i * TYPE_SIZE + j] = sub_src[i + j * stride];
+            dst[i * TYPE_SIZE + j] = src[i + j * stride];
         }
     }
 }
 
 // Like the above, but type_size is not known at compile time.
-fn join_streams_variable(
-    src: &[u8],
-    dst: &mut [u8],
-    stride: usize,
-    type_size: usize,
-    values_decoded: usize,
-) {
-    let sub_src = &src[values_decoded..];
+fn join_streams_variable(src: &[u8], dst: &mut [u8], stride: usize, type_size: usize) {
     for i in 0..dst.len() / type_size {
         for j in 0..type_size {
-            dst[i * type_size + j] = sub_src[i + j * stride];
+            dst[i * type_size + j] = src[i + j * stride];
         }
     }
 }
@@ -89,27 +73,23 @@ impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
     }
 
     fn get(&mut self, buffer: &mut [<T as DataType>::T]) -> Result<usize> {
+        // We assume self.encoded_bytes contains the full data
+        // (which it must, since we can only know where to split the streams once all data is collected),
+        // but buffer can just be sliced starting from the given index.
+
         let total_remaining_values = self.values_left();
         let num_values = buffer.len().min(total_remaining_values);
         let buffer = &mut buffer[..num_values];
 
         // SAFETY: i/f32 and i/f64 has no constraints on their internal representation, so we can modify it as we want
-        let raw_out_bytes = unsafe { <T as DataType>::T::slice_as_bytes_mut(buffer) };
+        let dst = unsafe { <T as DataType>::T::slice_as_bytes_mut(buffer) };
         let type_size = T::get_type_size();
+
         let stride = self.encoded_bytes.len() / type_size;
+        let src = &self.encoded_bytes[self.values_decoded..];
         match type_size {
-            4 => join_streams_const::<4>(
-                &self.encoded_bytes,
-                raw_out_bytes,
-                stride,
-                self.values_decoded,
-            ),
-            8 => join_streams_const::<8>(
-                &self.encoded_bytes,
-                raw_out_bytes,
-                stride,
-                self.values_decoded,
-            ),
+            4 => join_streams_const::<4>(src, dst, stride),
+            8 => join_streams_const::<8>(src, dst, stride),
             _ => {
                 return Err(general_err!(
                     "byte stream split unsupported for data types of size {} bytes",
@@ -189,48 +169,21 @@ impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
         // Since this is FIXED_LEN_BYTE_ARRAY data, we can't use slice_as_bytes_mut. Instead we'll
         // have to do some data copies.
         let mut tmp_vec = vec![0_u8; num_values * type_size];
-        let raw_out_bytes = tmp_vec.as_mut_slice();
+        let dst = tmp_vec.as_mut_slice();
 
+        let src = &self.encoded_bytes[self.values_decoded..];
         let stride = self.encoded_bytes.len() / type_size;
         match type_size {
-            2 => join_streams_const::<2>(
-                &self.encoded_bytes,
-                raw_out_bytes,
-                stride,
-                self.values_decoded,
-            ),
-            4 => join_streams_const::<4>(
-                &self.encoded_bytes,
-                raw_out_bytes,
-                stride,
-                self.values_decoded,
-            ),
-            8 => join_streams_const::<8>(
-                &self.encoded_bytes,
-                raw_out_bytes,
-                stride,
-                self.values_decoded,
-            ),
-            16 => join_streams_const::<16>(
-                &self.encoded_bytes,
-                raw_out_bytes,
-                stride,
-                self.values_decoded,
-            ),
-            _ => join_streams_variable(
-                &self.encoded_bytes,
-                raw_out_bytes,
-                stride,
-                type_size,
-                self.values_decoded,
-            ),
+            2 => join_streams_const::<2>(src, dst, stride),
+            4 => join_streams_const::<4>(src, dst, stride),
+            8 => join_streams_const::<8>(src, dst, stride),
+            16 => join_streams_const::<16>(src, dst, stride),
+            _ => join_streams_variable(src, dst, stride, type_size),
         }
         self.values_decoded += num_values;
 
-        // create a buffer from the vec so far (and leave a new Vec in its place)
-        let vec_with_data = std::mem::take(&mut tmp_vec);
         // convert Vec to Bytes (which is a ref counted wrapper)
-        let bytes_with_data = Bytes::from(vec_with_data);
+        let bytes_with_data = Bytes::from(tmp_vec);
         for (i, bi) in buffer.iter_mut().enumerate().take(num_values) {
             // Get a view into the data, without also copying the bytes
             let data = bytes_with_data.slice(i * type_size..(i + 1) * type_size);

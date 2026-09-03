@@ -132,6 +132,8 @@ impl<T: DataType> DictEncoder<T> {
     /// Writes out the dictionary values with RLE encoding in a byte buffer, and return
     /// the result.
     pub fn write_indices(&mut self) -> Result<Bytes> {
+        // TODO: Move this into flush_buffer/flush_to?
+        //       That could allow reusing buffer with flush_to.
         let buffer_len = self.estimated_data_encoded_size();
         let mut buffer = Vec::with_capacity(buffer_len);
         buffer.push(self.bit_width());
@@ -164,9 +166,6 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
         Ok(())
     }
 
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
     fn encoding(&self) -> Encoding {
         Encoding::PLAIN_DICTIONARY
     }
@@ -182,6 +181,12 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
 
     fn flush_buffer(&mut self) -> Result<Bytes> {
         self.write_indices()
+    }
+
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        // TODO: RleEncoder could be reused instead of consumed
+        out.extend_from_slice(&self.flush_buffer()?);
+        Ok(())
     }
 
     /// Returns the estimated total memory usage
