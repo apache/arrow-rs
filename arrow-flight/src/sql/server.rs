@@ -31,7 +31,7 @@ use super::{
     CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
     CommandStatementIngest, CommandStatementQuery, CommandStatementSubstraitPlan,
     CommandStatementUpdate, DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt,
-    TicketStatementQuery,
+    SqlInfo, TicketStatementQuery,
 };
 use crate::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
@@ -568,6 +568,13 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     ) -> Result<Response<<Self as FlightService>::DoExchangeStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
+
+    /// Register a new SqlInfo result, making it available when calling GetSqlInfo.
+    #[deprecated(
+        since = "59.4.0",
+        note = "takes no value to register and has no effect. Use `SqlInfoDataBuilder::append` instead"
+    )]
+    async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
 }
 
 /// Implements the lower level interface to handle FlightSQL
