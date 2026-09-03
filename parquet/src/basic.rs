@@ -2115,10 +2115,10 @@ mod tests {
         // Helper to check the order in a list of values.
         // Only logical type is checked.
         fn check_sort_order(types: Vec<LogicalType>, expected_order: SortOrder) {
-            for tpe in types {
+            for type_ in types {
                 assert_eq!(
                     ColumnOrder::column_order_for_type(
-                        Some(&tpe),
+                        Some(&type_),
                         ConvertedType::NONE,
                         Type::BYTE_ARRAY
                     )
@@ -2178,9 +2178,9 @@ mod tests {
         // Helper to check the order in a list of values.
         // Only converted type is checked.
         fn check_sort_order(types: Vec<ConvertedType>, expected_order: SortOrder) {
-            for tpe in types {
+            for type_ in types {
                 assert_eq!(
-                    ColumnOrder::column_order_for_type(None, tpe, Type::BYTE_ARRAY).sort_order(),
+                    ColumnOrder::column_order_for_type(None, type_, Type::BYTE_ARRAY).sort_order(),
                     expected_order
                 );
             }
