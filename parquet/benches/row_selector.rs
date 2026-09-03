@@ -32,6 +32,8 @@ const MASK_AND_THEN_ROWS: usize = 8192;
 const MASK_AND_THEN_OUTER_SELECTIVITY: &[usize] = &[70, 75, 80, 99];
 const MASK_AND_THEN_INNER_SELECTIVITY: &[usize] = &[1, 5, 10, 99];
 const MASK_AND_THEN_LENGTHS: &[usize] = &[64, 4096, 8192, 16_384, 65_536];
+const MASK_AND_THEN_OFFSETS: &[(&str, usize, usize)] =
+    &[("outer_3_inner_5", 3, 5), ("outer_7_inner_1", 7, 1)];
 
 /// Operand length pairs. Unequal lengths pass the longer side's tail through unchanged,
 /// so the ratio decides how much of the work is the bitwise combine versus the tail.
@@ -84,7 +86,12 @@ fn mask_algebra_operand(len: usize, offset: usize, selection_ratio: f64) -> RowS
     RowSelection::from_boolean_buffer(BooleanBuffer::from(bits).slice(offset, len))
 }
 
-fn pseudo_random_mask(len: usize, selection_percent: usize, seed: u64) -> BooleanBuffer {
+fn pseudo_random_mask_with_offset(
+    len: usize,
+    selection_percent: usize,
+    seed: u64,
+    offset: usize,
+) -> BooleanBuffer {
     assert!(len > 1);
     assert!(selection_percent <= 100);
     let selected = (len * selection_percent / 100).clamp(1, len - 1);
@@ -99,11 +106,11 @@ fn pseudo_random_mask(len: usize, selection_percent: usize, seed: u64) -> Boolea
         .collect::<Vec<_>>();
     ranked.select_nth_unstable_by_key(selected, |(value, _)| *value);
 
-    let mut bits = vec![false; len];
+    let mut bits = vec![false; len + offset];
     for (_, row) in &ranked[..selected] {
-        bits[*row] = true;
+        bits[offset + *row] = true;
     }
-    BooleanBuffer::from(bits)
+    BooleanBuffer::from(bits).slice(offset, len)
 }
 
 fn clustered_mask(len: usize, selection_percent: usize, seed: usize) -> BooleanBuffer {
@@ -123,8 +130,24 @@ fn mask_and_then_operands(
     outer_percent: usize,
     inner_percent: usize,
 ) -> (RowSelection, RowSelection) {
-    let outer = pseudo_random_mask(rows, outer_percent, 0x517c_c1b7_2722_0a95);
-    let inner = pseudo_random_mask(outer.count_set_bits(), inner_percent, 0x6eed_0e9d_a4d9_4a4f);
+    mask_and_then_operands_with_offsets(rows, outer_percent, inner_percent, 0, 0)
+}
+
+fn mask_and_then_operands_with_offsets(
+    rows: usize,
+    outer_percent: usize,
+    inner_percent: usize,
+    outer_offset: usize,
+    inner_offset: usize,
+) -> (RowSelection, RowSelection) {
+    let outer =
+        pseudo_random_mask_with_offset(rows, outer_percent, 0x517c_c1b7_2722_0a95, outer_offset);
+    let inner = pseudo_random_mask_with_offset(
+        outer.count_set_bits(),
+        inner_percent,
+        0x6eed_0e9d_a4d9_4a4f,
+        inner_offset,
+    );
     (
         RowSelection::from_boolean_buffer(outer),
         RowSelection::from_boolean_buffer(inner),
@@ -183,6 +206,26 @@ fn bench_mask_and_then_sweeps(c: &mut Criterion) {
         }
     }
     clustered.finish();
+
+    let mut offsets = c.benchmark_group("mask_and_then_offsets/8192/outer_75_inner_05");
+    offsets
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(1))
+        .sample_size(30);
+
+    for &(label, outer_offset, inner_offset) in MASK_AND_THEN_OFFSETS {
+        let (outer, inner) = mask_and_then_operands_with_offsets(
+            MASK_AND_THEN_ROWS,
+            75,
+            5,
+            outer_offset,
+            inner_offset,
+        );
+        offsets.bench_function(label, |b| {
+            b.iter(|| hint::black_box(outer.and_then(&inner)))
+        });
+    }
+    offsets.finish();
 
     for &(outer_percent, inner_percent) in &[(75, 5), (99, 5), (99, 99)] {
         let mut lengths = c.benchmark_group(format!(
