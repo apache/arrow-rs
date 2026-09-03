@@ -147,10 +147,6 @@ impl NullBuffer {
             // boundary (bit i starts at bit i*count, which is divisible by 8),
             // so we can fill count/8 bytes of 0xFF at a time instead of setting
             // bits individually.
-            //
-            // By iterating over contiguous runs of valid bits rather than
-            // individual bits, a dense validity buffer (long runs of non-null
-            // values) collapses into a single fill call per run.
             let bytes_per_bit = count / 8;
             let buf = buffer.as_mut();
             for (start, end) in BitSliceIterator::new(
