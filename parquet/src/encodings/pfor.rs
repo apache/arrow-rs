@@ -41,41 +41,41 @@ use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::FromBitpacked;
 
 /// Number of elements compressed together as a unit, by default.
-pub const DEFAULT_VECTOR_SIZE: usize = 1 << DEFAULT_LOG_VECTOR_SIZE;
+pub(crate) const DEFAULT_VECTOR_SIZE: usize = 1 << DEFAULT_LOG_VECTOR_SIZE;
 
 /// `log2` of [`DEFAULT_VECTOR_SIZE`].
-pub const DEFAULT_LOG_VECTOR_SIZE: u8 = 10;
+pub(crate) const DEFAULT_LOG_VECTOR_SIZE: u8 = 10;
 
 /// Smallest vector the page header can describe, as a log.
-pub const MIN_LOG_VECTOR_SIZE: u8 = 3;
+pub(crate) const MIN_LOG_VECTOR_SIZE: u8 = 3;
 
 /// Largest vector the page header can describe, as a log.
-pub const MAX_LOG_VECTOR_SIZE: u8 = 15;
+pub(crate) const MAX_LOG_VECTOR_SIZE: u8 = 15;
 
 /// Largest vector the format allows, in elements.
-pub const MAX_VECTOR_SIZE: usize = 1 << MAX_LOG_VECTOR_SIZE;
+pub(crate) const MAX_VECTOR_SIZE: usize = 1 << MAX_LOG_VECTOR_SIZE;
 
 /// Width of one entry in the per-page offset array.
-pub const OFFSET_SIZE: usize = std::mem::size_of::<u32>();
+pub(crate) const OFFSET_SIZE: usize = std::mem::size_of::<u32>();
 
 /// Width of one exception position.
-pub const POSITION_SIZE: usize = std::mem::size_of::<u16>();
+pub(crate) const POSITION_SIZE: usize = std::mem::size_of::<u16>();
 
 /// Page header size in bytes: `packing_mode`, `log_vector_size` and `value_byte_width` one byte
 /// each, then `num_elements` as a four-byte little-endian signed integer.
-pub const HEADER_SIZE: usize = 3 + std::mem::size_of::<i32>();
+pub(crate) const HEADER_SIZE: usize = 3 + std::mem::size_of::<i32>();
 
 /// Packing mode: frame of reference plus bit-packing, currently the only mode.
-pub const PACKING_MODE_FOR_BIT_PACK: u8 = 0;
+pub(crate) const PACKING_MODE_FOR_BIT_PACK: u8 = 0;
 
 /// Mask selecting the bit width out of the info block's width byte.
-pub const BIT_WIDTH_MASK: u8 = 0x7F;
+pub(crate) const BIT_WIDTH_MASK: u8 = 0x7F;
 
 /// Bit of the info block's width byte that marks a differenced vector.
-pub const DELTA_FLAG: u8 = 0x80;
+pub(crate) const DELTA_FLAG: u8 = 0x80;
 
 /// Bits an exception costs on the wire: its position plus a full-width value.
-pub const fn exception_bits(byte_width: usize) -> i64 {
+pub(crate) const fn exception_bits(byte_width: usize) -> i64 {
     ((POSITION_SIZE + byte_width) * 8) as i64
 }
 
@@ -178,15 +178,9 @@ impl PforInt for i64 {
     }
 }
 
-/// Bits needed to hold `value`, i.e. the position of its highest set bit. Zero needs none.
-#[inline]
-pub fn bits_required(value: u64) -> u8 {
-    (u64::BITS - value.leading_zeros()) as u8
-}
-
 /// Mask of the low `bit_width` bits, saturating at all ones.
 #[inline]
-pub const fn low_mask(bit_width: u8) -> u64 {
+pub(crate) const fn low_mask(bit_width: u8) -> u64 {
     if bit_width >= 64 {
         u64::MAX
     } else {
@@ -196,7 +190,7 @@ pub const fn low_mask(bit_width: u8) -> u64 {
 
 /// Bytes needed to hold `bits`, rounded up.
 #[inline]
-pub fn bytes_for_bits(bits: usize) -> usize {
+pub(crate) fn bytes_for_bits(bits: usize) -> usize {
     bits.div_ceil(8)
 }
 
@@ -204,7 +198,7 @@ pub fn bytes_for_bits(bits: usize) -> usize {
 ///
 /// A size outside this range would encode a page that the decoder then rejects, so refuse it up
 /// front.
-pub fn validate_vector_size(vector_size: usize) -> Result<u8> {
+pub(crate) fn validate_vector_size(vector_size: usize) -> Result<u8> {
     if !vector_size.is_power_of_two()
         || !((1 << MIN_LOG_VECTOR_SIZE)..=MAX_VECTOR_SIZE).contains(&vector_size)
     {
@@ -220,7 +214,7 @@ pub fn validate_vector_size(vector_size: usize) -> Result<u8> {
 
 /// The per-page header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PforHeader {
+pub(crate) struct PforHeader {
     /// How the residuals are laid out. Always [`PACKING_MODE_FOR_BIT_PACK`] today.
     pub packing_mode: u8,
     /// `log2` of the number of elements per vector.
@@ -322,7 +316,7 @@ impl PforHeader {
 /// The exception count is unsigned: a vector holds up to [`MAX_VECTOR_SIZE`] elements and every
 /// one of them can be an exception, so a count of 32768 has to be representable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PforVectorInfo<T> {
+pub(crate) struct PforVectorInfo<T> {
     /// Subtracted from every element before packing; added back on decode.
     pub frame_of_reference: T,
     /// Bits each packed residual occupies. Zero means the vector packs nothing at all.
@@ -410,7 +404,11 @@ impl<T: PforInt> PforVectorInfo<T> {
 /// past the array and the rest strictly increasing. Checking the chain as a whole, before decoding
 /// any of it, keeps a page whose offsets overlap or run backwards from decoding part-way and
 /// emitting values built out of the wrong bytes.
-pub fn validate_offsets(offsets: &[u8], num_vectors: usize, payload_size: usize) -> Result<()> {
+pub(crate) fn validate_offsets(
+    offsets: &[u8],
+    num_vectors: usize,
+    payload_size: usize,
+) -> Result<()> {
     let offset_array_size = num_vectors * OFFSET_SIZE;
     let mut previous = 0usize;
     for v in 0..num_vectors {
@@ -451,7 +449,7 @@ pub fn validate_offsets(offsets: &[u8], num_vectors: usize, payload_size: usize)
 /// Panics if `offsets` is shorter than `(index + 1) * OFFSET_SIZE`. Callers check the array
 /// against the buffer before reading any of it.
 #[inline]
-pub fn read_offset(offsets: &[u8], index: usize) -> usize {
+pub(crate) fn read_offset(offsets: &[u8], index: usize) -> usize {
     let at = index * OFFSET_SIZE;
     u32::from_le_bytes(offsets[at..at + OFFSET_SIZE].try_into().unwrap()) as usize
 }
@@ -464,7 +462,10 @@ pub fn read_offset(offsets: &[u8], index: usize) -> usize {
 /// does pick costs no more than that. Bit packing rounds the packed section up to a whole byte,
 /// hence the trailing byte. Differencing adds one full-width start value, and the model only
 /// chooses it when doing so still comes out cheaper, but the bound has to hold either way.
-pub fn max_compressed_size<T: PforInt>(num_values: usize, vector_size: usize) -> Result<usize> {
+pub(crate) fn max_compressed_size<T: PforInt>(
+    num_values: usize,
+    vector_size: usize,
+) -> Result<usize> {
     validate_vector_size(vector_size)?;
     let num_vectors = num_values.div_ceil(vector_size);
     let max_vector_size = T::INFO_SIZE + T::BYTE_WIDTH + vector_size * T::BYTE_WIDTH + 1;
@@ -474,16 +475,6 @@ pub fn max_compressed_size<T: PforInt>(num_values: usize, vector_size: usize) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_bits_required() {
-        assert_eq!(bits_required(0), 0);
-        assert_eq!(bits_required(1), 1);
-        assert_eq!(bits_required(2), 2);
-        assert_eq!(bits_required(255), 8);
-        assert_eq!(bits_required(256), 9);
-        assert_eq!(bits_required(u64::MAX), 64);
-    }
 
     #[test]
     fn test_low_mask() {

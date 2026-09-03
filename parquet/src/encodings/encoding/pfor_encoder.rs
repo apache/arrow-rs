@@ -30,9 +30,12 @@ use bytes::Bytes;
 use super::Encoder;
 use crate::basic::Encoding;
 use crate::data_type::DataType;
-use crate::encodings::pfor::*;
+use crate::encodings::pfor::{
+    DEFAULT_VECTOR_SIZE, MAX_VECTOR_SIZE, OFFSET_SIZE, PACKING_MODE_FOR_BIT_PACK, PforHeader,
+    PforInt, PforVectorInfo, exception_bits, low_mask, max_compressed_size, validate_vector_size,
+};
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::BitWriter;
+use crate::util::bit_util::{BitWriter, num_required_bits};
 
 /// Buckets used by the frame search, as a shift and as a count.
 ///
@@ -57,11 +60,11 @@ fn build_offset_histogram<T: PforInt>(values: &[T], frame: T, out: &mut [i32; 65
     let mut chunks = values.chunks_exact(4);
     for chunk in &mut chunks {
         for (lane, value) in chunk.iter().enumerate() {
-            h[lane][bits_required(value.residual_from(frame_bits)) as usize] += 1;
+            h[lane][num_required_bits(value.residual_from(frame_bits)) as usize] += 1;
         }
     }
     for value in chunks.remainder() {
-        h[0][bits_required(value.residual_from(frame_bits)) as usize] += 1;
+        h[0][num_required_bits(value.residual_from(frame_bits)) as usize] += 1;
     }
     for b in 0..=64 {
         out[b] = h[0][b] + h[1][b] + h[2][b] + h[3][b];
@@ -84,7 +87,7 @@ fn best_width_from_histogram<T: PforInt>(histogram: &[i32; 65], num_elements: us
     for b in 0..=max_bits {
         exceptions_above -= histogram[b as usize] as i64;
 
-        // A vector holds at most `MAX_VECTOR_SIZE` elements, so that is also the most exceptions one
+        // A vector holds at most `MAX_VECTOR_SIZE` elements, so that is also the most exceptions
         // can name. The full-width candidate has none at all, so a best is always found.
         if exceptions_above > MAX_VECTOR_SIZE as i64 {
             continue;
@@ -119,7 +122,7 @@ fn build_frame_search_histograms<T: PforInt>(
     let mut h = [[0i32; 65]; 4];
     for (i, value) in values.iter().enumerate() {
         let offset = value.residual_from(frame_bits);
-        h[i & 3][bits_required(offset) as usize] += 1;
+        h[i & 3][num_required_bits(offset) as usize] += 1;
         buckets[(offset >> shift) as usize] += 1;
     }
     for b in 0..=64 {
@@ -177,7 +180,7 @@ fn choose_frame_and_width<T: PforInt>(values: &[T], bounds: MinMax<T>) -> FrameC
         };
     }
 
-    let range_bits = bits_required(range) as u32;
+    let range_bits = num_required_bits(range) as u32;
     let shift = range_bits.saturating_sub(FRAME_SEARCH_BITS);
 
     // One walk serves both halves of the search: the bit-width histogram costs the minimum as a
@@ -401,7 +404,7 @@ fn estimate_delta_cost_bits<T: PforInt>(values: &[T]) -> i64 {
     let mut i = stride;
     while i < num_elements {
         let d = T::from_bits(values[i].to_bits().wrapping_sub(values[i - 1].to_bits()));
-        h[sampled & 3][bits_required(zigzag(d)) as usize] += 1;
+        h[sampled & 3][num_required_bits(zigzag(d)) as usize] += 1;
         sampled += 1;
         i += stride;
     }
@@ -691,6 +694,9 @@ mod tests {
     use super::*;
     use crate::data_type::{Int32Type, Int64Type};
     use crate::encodings::decoding::{Decoder, PforDecoder};
+    use crate::encodings::pfor::{
+        HEADER_SIZE, MAX_LOG_VECTOR_SIZE, MIN_LOG_VECTOR_SIZE, read_offset,
+    };
 
     /// Encode then decode, asserting the values survive and reporting the page.
     fn round_trip<T: DataType>(values: &[T::T], vector_size: usize) -> Bytes
@@ -1195,7 +1201,7 @@ mod tests {
 
     #[test]
     fn test_build_offset_histogram_wraps_below_the_frame() {
-        // A value below the frame lands in the top bin rather than in a low one, which is what makes
+        // A value below the frame lands in the top bin rather than in a low one, which is what
         // it fail the width test and become a patch.
         let mut histogram = [0i32; 65];
         build_offset_histogram(&[10i32, 11, 9], 10, &mut histogram);

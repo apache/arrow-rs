@@ -24,16 +24,19 @@ use bytes::Bytes;
 use super::Decoder;
 use crate::basic::Encoding;
 use crate::data_type::DataType;
-use crate::encodings::pfor::*;
+use crate::encodings::pfor::{
+    DEFAULT_LOG_VECTOR_SIZE, HEADER_SIZE, OFFSET_SIZE, PACKING_MODE_FOR_BIT_PACK, POSITION_SIZE,
+    PforHeader, PforInt, PforVectorInfo, bytes_for_bits, read_offset, validate_offsets,
+};
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::BitReader;
 
 /// Decoder for [`Encoding::PFOR`].
 ///
 /// A page is decoded one vector at a time into a buffer of the decoder's own, and callers are
-/// served out of that buffer. Decoding a whole vector at once is what the format asks for -- the residuals are
-/// bit-packed as one run and the exceptions patched over the result -- and buffering it is what
-/// lets [`Decoder::get`] stop mid-vector and resume where it left off.
+/// served out of that buffer. Decoding a whole vector at once is what the format asks for -- the
+/// residuals are bit-packed as one run and the exceptions patched over the result -- and buffering
+/// it is what lets [`Decoder::get`] stop mid-vector and resume where it left off.
 pub struct PforDecoder<T: DataType> {
     /// The page, from its header on. `None` until [`Decoder::set_data`].
     data: Option<Bytes>,
@@ -89,7 +92,10 @@ where
         std::cmp::min(vector_size, self.header.num_elements as usize - start)
     }
 
-    /// Decode vector `index` into [`Self::vector`], replacing whatever it held.
+    /// Decode vector `index` into the decoder's buffer, replacing whatever it held.
+    ///
+    /// The work runs in the order the format lays the vector out: locate and check it, then
+    /// residuals, then exceptions, then -- for a differenced vector -- the running sum.
     fn decode_vector(&mut self, index: usize) -> Result<()> {
         let data = self
             .data
@@ -99,140 +105,51 @@ where
 
         // Offsets count from the start of the offset array, which follows the header.
         let payload = &data[HEADER_SIZE..];
-        let offset = read_offset(payload, index);
-        let src = &payload[offset..];
+        let vector_at = read_offset(payload, index);
+        let src = &payload[vector_at..];
 
-        let info = PforVectorInfo::<T::T>::read(src)?;
-        let info_bytes = info.stored_bytes();
-        if info_bytes > src.len() {
-            return Err(general_err!(
-                "PFOR delta vector needs {} bytes of metadata but only {} remain",
-                info_bytes,
-                src.len()
-            ));
-        }
-
-        // A differenced vector stores its own first value, which is what lets it decode without
-        // the vector before it -- the property the mode exists for.
-        let start_value = if info.is_delta {
-            T::T::read_le(&src[T::T::INFO_SIZE..])
-        } else {
-            T::T::default()
-        };
-
-        // Everything below is sized by fields that came off the wire, so check them against the
-        // vector's element count and against the bytes that remain before reading any of them.
-        if info.num_exceptions as usize > num_elements {
-            return Err(general_err!(
-                "PFOR vector has {} exceptions but only {} elements",
-                info.num_exceptions,
-                num_elements
-            ));
-        }
-        let packed_bytes = bytes_for_bits(num_elements * info.bit_width as usize);
-        let exception_bytes = info.num_exceptions as usize * (POSITION_SIZE + T::T::BYTE_WIDTH);
-        if info_bytes + packed_bytes + exception_bytes > src.len() {
-            return Err(general_err!(
-                "PFOR vector needs {} bytes but only {} remain",
-                info_bytes + packed_bytes + exception_bytes,
-                src.len()
-            ));
-        }
+        let layout = VectorLayout::read(src, num_elements)?;
+        let info = layout.info;
+        let frame = info.frame_of_reference;
 
         self.vector.clear();
         self.vector.resize(num_elements, T::T::default());
-        let frame_bits = info.frame_of_reference.to_bits();
 
         // A constant vector, which is the whole of what it stores.
         if info.bit_width == 0 && info.num_exceptions == 0 {
             if info.is_delta {
-                // Every difference is the frame, so the values step by it from the start value.
-                // Slot 0 always holds a difference of zero, so a frame other than zero cannot
-                // occur here, but the running sum reconstructs the sequence either way rather
-                // than assuming it.
-                let mut acc = start_value.to_bits();
-                for (i, slot) in self.vector.iter_mut().enumerate() {
-                    if i > 0 {
-                        acc = acc.wrapping_add(frame_bits);
-                    }
-                    *slot = T::T::from_bits(acc);
-                }
+                step_by(&mut self.vector, layout.start_value, frame);
             } else {
-                self.vector.fill(info.frame_of_reference);
+                self.vector.fill(frame);
             }
             return Ok(());
         }
 
-        // Unpack the residuals, then add the frame back. The add is modular in the unsigned
-        // domain, so the bits the unpacker wrote are the signed values once the frame is on them,
-        // exactly as the encoder produced them.
         if info.bit_width > 0 {
-            let packed_start = HEADER_SIZE + offset + info_bytes;
-            let mut reader = BitReader::new(data.slice(packed_start..packed_start + packed_bytes));
-            let unpacked = reader.get_batch(&mut self.vector, info.bit_width as usize);
-            if unpacked != num_elements {
-                return Err(general_err!(
-                    "PFOR vector unpacked {} of {} values",
-                    unpacked,
-                    num_elements
-                ));
-            }
-            if frame_bits != 0 {
-                for slot in &mut self.vector {
-                    *slot = T::T::from_bits(slot.to_bits().wrapping_add(frame_bits));
-                }
-            }
+            // Slice out of the page rather than out of `src`: BitReader wants an owned `Bytes`.
+            let packed_at = HEADER_SIZE + vector_at + layout.packed_at;
+            let packed = data.slice(packed_at..packed_at + layout.packed_bytes);
+            unpack_residuals(&mut self.vector, packed, info.bit_width, frame)?;
         } else {
             // Width zero with exceptions: every unpatched slot is the frame itself.
-            self.vector.fill(info.frame_of_reference);
+            self.vector.fill(frame);
         }
 
-        // Patch the exceptions in. They are stored as two arrays, positions then values, both at
-        // the end of the vector.
         if info.num_exceptions > 0 {
-            let num_exceptions = info.num_exceptions as usize;
-            let positions_at = info_bytes + packed_bytes;
-            let values_at = positions_at + num_exceptions * POSITION_SIZE;
-            let positions = &src[positions_at..values_at];
-            let values = &src[values_at..values_at + num_exceptions * T::T::BYTE_WIDTH];
-
-            // Every position indexes the vector, so one past its end would be an out-of-bounds
-            // write. Take the maximum first: a reduction still vectorizes, where a bounds check
-            // inside the patch loop would not.
-            let mut max_position = 0u16;
-            for i in 0..num_exceptions {
-                let at = i * POSITION_SIZE;
-                let position = u16::from_le_bytes([positions[at], positions[at + 1]]);
-                max_position = max_position.max(position);
-            }
-            if max_position as usize >= num_elements {
-                return Err(general_err!(
-                    "PFOR exception position {} is outside a vector of {} elements",
-                    max_position,
-                    num_elements
-                ));
-            }
-
-            for i in 0..num_exceptions {
-                let at = i * POSITION_SIZE;
-                let position = u16::from_le_bytes([positions[at], positions[at + 1]]) as usize;
-                // The exception carries whatever the packed stream carries: a value in a plain
-                // vector, a difference in a differenced one.
-                self.vector[position] = T::T::read_le(&values[i * T::T::BYTE_WIDTH..]);
-            }
+            patch_exceptions(
+                &mut self.vector,
+                &src[layout.positions_at..layout.values_at],
+                &src[layout.values_at..layout.values_end],
+            )?;
         }
 
         // In a differenced vector, everything above produced differences. Sum them.
         //
         // This has to come after the patch: an exception in a differenced vector is a difference
         // too, and summing before patching would carry the placeholder zero into every value that
-        // follows. The sum runs in the unsigned domain for the same reason the frame add does.
+        // follows.
         if info.is_delta {
-            let mut acc = start_value.to_bits();
-            for slot in &mut self.vector {
-                acc = acc.wrapping_add(slot.to_bits());
-                *slot = T::T::from_bits(acc);
-            }
+            accumulate(&mut self.vector, layout.start_value);
         }
 
         Ok(())
@@ -352,6 +269,164 @@ where
     }
 }
 
+/// Where the parts of one encoded vector sit, once their sizes have been checked.
+///
+/// Every field below is sized by numbers that came off the wire, so they are checked here --
+/// against the vector's element count and against the bytes that remain -- before anything reads
+/// through them. Offsets are relative to the start of the vector, not of the page.
+#[derive(Debug, Clone, Copy)]
+struct VectorLayout<V> {
+    info: PforVectorInfo<V>,
+    /// First value of a differenced vector, zero otherwise.
+    start_value: V,
+    packed_at: usize,
+    packed_bytes: usize,
+    positions_at: usize,
+    values_at: usize,
+    values_end: usize,
+}
+
+impl<V: PforInt> VectorLayout<V> {
+    fn read(src: &[u8], num_elements: usize) -> Result<Self> {
+        let info = PforVectorInfo::<V>::read(src)?;
+        let info_bytes = info.stored_bytes();
+        if info_bytes > src.len() {
+            return Err(general_err!(
+                "PFOR delta vector needs {} bytes of metadata but only {} remain",
+                info_bytes,
+                src.len()
+            ));
+        }
+
+        // A differenced vector stores its own first value, which is what lets it decode without
+        // the vector before it -- the property the mode exists for.
+        let start_value = if info.is_delta {
+            V::read_le(&src[V::INFO_SIZE..])
+        } else {
+            V::default()
+        };
+
+        if info.num_exceptions as usize > num_elements {
+            return Err(general_err!(
+                "PFOR vector has {} exceptions but only {} elements",
+                info.num_exceptions,
+                num_elements
+            ));
+        }
+
+        let num_exceptions = info.num_exceptions as usize;
+        let packed_bytes = bytes_for_bits(num_elements * info.bit_width as usize);
+        let positions_at = info_bytes + packed_bytes;
+        let values_at = positions_at + num_exceptions * POSITION_SIZE;
+        let values_end = values_at + num_exceptions * V::BYTE_WIDTH;
+        if values_end > src.len() {
+            return Err(general_err!(
+                "PFOR vector needs {} bytes but only {} remain",
+                values_end,
+                src.len()
+            ));
+        }
+
+        Ok(Self {
+            info,
+            start_value,
+            packed_at: info_bytes,
+            packed_bytes,
+            positions_at,
+            values_at,
+            values_end,
+        })
+    }
+}
+
+/// Unpack the residuals into `out` and add the frame back.
+///
+/// The add is modular in the unsigned domain, so the bits the unpacker wrote are the signed values
+/// once the frame is on them, exactly as the encoder produced them.
+fn unpack_residuals<V: PforInt>(
+    out: &mut [V],
+    packed: Bytes,
+    bit_width: u8,
+    frame: V,
+) -> Result<()> {
+    let mut reader = BitReader::new(packed);
+    let unpacked = reader.get_batch(out, bit_width as usize);
+    if unpacked != out.len() {
+        return Err(general_err!(
+            "PFOR vector unpacked {} of {} values",
+            unpacked,
+            out.len()
+        ));
+    }
+    let frame_bits = frame.to_bits();
+    if frame_bits != 0 {
+        for slot in out {
+            *slot = V::from_bits(slot.to_bits().wrapping_add(frame_bits));
+        }
+    }
+    Ok(())
+}
+
+/// Patch the exceptions over `out`, taking their positions and values from the two arrays that
+/// close the vector.
+///
+/// An exception carries whatever the packed stream carries: a value in a plain vector, a difference
+/// in a differenced one.
+fn patch_exceptions<V: PforInt>(out: &mut [V], positions: &[u8], values: &[u8]) -> Result<()> {
+    let num_exceptions = positions.len() / POSITION_SIZE;
+
+    // Every position indexes the vector, so one past its end would be an out-of-bounds write. Take
+    // the maximum first: a reduction still vectorizes, where a bounds check inside the patch loop
+    // would not.
+    let mut max_position = 0u16;
+    for i in 0..num_exceptions {
+        let at = i * POSITION_SIZE;
+        let position = u16::from_le_bytes([positions[at], positions[at + 1]]);
+        max_position = max_position.max(position);
+    }
+    if max_position as usize >= out.len() {
+        return Err(general_err!(
+            "PFOR exception position {} is outside a vector of {} elements",
+            max_position,
+            out.len()
+        ));
+    }
+
+    for i in 0..num_exceptions {
+        let at = i * POSITION_SIZE;
+        let position = u16::from_le_bytes([positions[at], positions[at + 1]]) as usize;
+        out[position] = V::read_le(&values[i * V::BYTE_WIDTH..]);
+    }
+    Ok(())
+}
+
+/// Turn the differences in `out` into values, starting from `start`.
+///
+/// The sum runs in the unsigned domain for the same reason the frame add does.
+fn accumulate<V: PforInt>(out: &mut [V], start: V) {
+    let mut acc = start.to_bits();
+    for slot in out {
+        acc = acc.wrapping_add(slot.to_bits());
+        *slot = V::from_bits(acc);
+    }
+}
+
+/// Fill `out` with the sequence that steps from `start` by `step`.
+///
+/// This is a differenced vector whose every difference is the frame. Slot 0 always holds a
+/// difference of zero, so a frame other than zero cannot occur here, but the running sum
+/// reconstructs the sequence either way rather than assuming it.
+fn step_by<V: PforInt>(out: &mut [V], start: V, step: V) {
+    let step_bits = step.to_bits();
+    let mut acc = start.to_bits();
+    for (i, slot) in out.iter_mut().enumerate() {
+        if i > 0 {
+            acc = acc.wrapping_add(step_bits);
+        }
+        *slot = V::from_bits(acc);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,6 +468,74 @@ mod tests {
             out.extend_from_slice(body);
         }
         out
+    }
+
+    // The four phases of `decode_vector` are exercised through whole pages below. These tests
+    // reach them directly, which is the only way to cover an argument no encoder of ours produces.
+
+    #[test]
+    fn test_patch_exceptions_writes_positions_and_values() {
+        let mut out = vec![0i32; 4];
+        let positions = [1u16, 3]
+            .iter()
+            .flat_map(|p| p.to_le_bytes())
+            .collect::<Vec<_>>();
+        let values = [-7i32, 9]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect::<Vec<_>>();
+        patch_exceptions(&mut out, &positions, &values).unwrap();
+        assert_eq!(out, vec![0, -7, 0, 9]);
+    }
+
+    #[test]
+    fn test_patch_exceptions_rejects_a_position_one_past_the_end() {
+        let mut out = vec![0i32; 4];
+        let err = patch_exceptions(&mut out, &4u16.to_le_bytes(), &0i32.to_le_bytes()).unwrap_err();
+        assert!(
+            err.to_string().contains("outside a vector of 4 elements"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_accumulate_sums_differences_and_wraps_at_the_type_width() {
+        let mut out = vec![0i32, 5, -2, 7];
+        accumulate(&mut out, 10);
+        assert_eq!(out, vec![10, 15, 13, 20]);
+
+        // A sum past the type's range wraps, matching what the encoder differenced.
+        let mut out = vec![0i32, 1];
+        accumulate(&mut out, i32::MAX);
+        assert_eq!(out, vec![i32::MAX, i32::MIN]);
+    }
+
+    #[test]
+    fn test_step_by_reconstructs_a_constant_delta_vector() {
+        let mut out = vec![0i64; 4];
+        step_by(&mut out, 100, 7);
+        assert_eq!(out, vec![100, 107, 114, 121]);
+
+        // The legal case: every difference is zero, so the vector is constant.
+        let mut out = vec![0i64; 3];
+        step_by(&mut out, -5, 0);
+        assert_eq!(out, vec![-5, -5, -5]);
+    }
+
+    #[test]
+    fn test_unpack_residuals_adds_the_frame_back() {
+        // Four 4-bit residuals 1, 2, 3, 4 over a frame of 1000.
+        let packed = Bytes::from(vec![0x21u8, 0x43]);
+        let mut out = vec![0i32; 4];
+        unpack_residuals(&mut out, packed, 4, 1000).unwrap();
+        assert_eq!(out, vec![1001, 1002, 1003, 1004]);
+    }
+
+    #[test]
+    fn test_unpack_residuals_rejects_a_buffer_that_runs_short() {
+        let mut out = vec![0i32; 8];
+        let err = unpack_residuals(&mut out, Bytes::from(vec![0u8]), 4, 0).unwrap_err();
+        assert!(err.to_string().contains("unpacked 2 of 8 values"), "{err}");
     }
 
     #[test]
