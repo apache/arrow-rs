@@ -27,8 +27,21 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer, bit_util}
 use std::cmp::Ordering;
 use std::iter::Peekable;
 
-// Dense expansion has a fixed per-word cost. Require a sufficiently large,
-// dense outer mask and enough inner survivors to amortize that cost.
+// Policy for the word-at-a-time expansion in `and_then_dense_masks`.
+//
+// The dense path costs a fixed amount per 64-bit output word, independent of
+// how many inner rows survive. The set-index path instead walks the outer set
+// bits up to the last inner survivor and appends each survivor individually,
+// so it wins when the outer mask is sparse, or when only a few inner rows
+// survive and they sit near the start of the selection (for example, a
+// clustered page-level filter). The thresholds below keep the set-index path
+// for those inputs:
+//
+// - `MIN_LEN`: the outer mask must have at least this many rows.
+// - `MAX_DROPPED_FRACTION` is a divisor: at most `1 / 4` of the outer rows may
+//   be unset, i.e. roughly 75% outer selectivity or more.
+// - `MIN_INNER_FRACTION` is a divisor: at least `1 / 20` of the selected rows
+//   must survive the inner selection, i.e. roughly 5% inner selectivity or more.
 const AND_THEN_DENSE_MASK_MIN_LEN: usize = 8192;
 const AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION: usize = 4;
 const AND_THEN_DENSE_MASK_MIN_INNER_FRACTION: usize = 20;
@@ -440,6 +453,10 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     builder.finish()
 }
 
+/// Returns whether `and_then_masks` should take the dense path for an outer
+/// mask of `mask_len` rows with `selected_count` set bits, given that
+/// `other_true_count` of those rows survive the inner selection. See the
+/// `AND_THEN_DENSE_MASK_*` constants for the rationale behind each threshold.
 #[inline]
 fn should_use_dense_mask(mask_len: usize, selected_count: usize, other_true_count: usize) -> bool {
     mask_len >= AND_THEN_DENSE_MASK_MIN_LEN
@@ -448,7 +465,11 @@ fn should_use_dense_mask(mask_len: usize, selected_count: usize, other_true_coun
 }
 
 /// Expands `other` into the set positions of a dense `mask`, processing one
-/// output word at a time. This is the inverse operation of bitmap compression.
+/// output word at a time. Each output word takes the next
+/// `mask_word.count_ones()` bits of `other` and scatters them into the set
+/// positions of `mask_word`, so this is the inverse of compressing `mask` down
+/// to its selected rows. Callers must have validated that `other.len()` equals
+/// the number of set bits in `mask`.
 #[inline(never)]
 fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
     let mut other_chunks = other.bit_chunks().iter_padded();
