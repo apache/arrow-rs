@@ -72,23 +72,22 @@ impl DataRequest {
             .collect()
     }
 
-    /// Create a new InMemoryRowGroup, and fill it with provided data
+    /// Create a new InMemoryRowGroup, and fill it with provided data.
     ///
-    /// Assumes that all needed data is present in the buffers
-    /// and clears any explicitly requested ranges
+    /// Assumes that all needed data is present in the buffers.
     pub fn try_into_in_memory_row_group<'a>(
         self,
         row_group_idx: usize,
         row_count: usize,
         parquet_metadata: &'a ParquetMetaData,
         projection: &ProjectionMask,
-        buffers: &mut PushBuffers,
+        buffers: &PushBuffers,
     ) -> Result<InMemoryRowGroup<'a>, ParquetError> {
         let chunks = self.get_chunks(buffers)?;
 
         let Self {
             column_chunks,
-            ranges,
+            ranges: _,
             page_start_offsets,
         } = self;
 
@@ -104,9 +103,6 @@ impl DataRequest {
         };
 
         in_memory_row_group.fill_column_chunks(projection, page_start_offsets, chunks);
-
-        // Clear the ranges that were explicitly requested
-        buffers.clear_ranges(&ranges);
 
         Ok(in_memory_row_group)
     }
