@@ -142,14 +142,32 @@ impl NullBuffer {
             .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
         let mut buffer = MutableBuffer::new_null(capacity);
 
-        // Expand each bit within `null_mask` into `element_len`
-        // bits, constructing the implicit mask of the child elements
-        for i in 0..self.buffer.len() {
-            if self.is_null(i) {
-                continue;
+        if count % 8 == 0 {
+            // When count is a multiple of 8 every expanded run starts on a byte
+            // boundary (bit i starts at bit i*count, which is divisible by 8),
+            // so we can fill count/8 bytes of 0xFF at a time instead of setting
+            // bits individually.
+            //
+            // By iterating over contiguous runs of valid bits rather than
+            // individual bits, a dense validity buffer (long runs of non-null
+            // values) collapses into a single fill call per run.
+            let bytes_per_bit = count / 8;
+            let buf = buffer.as_mut();
+            for (start, end) in BitSliceIterator::new(
+                self.buffer.values(),
+                self.buffer.offset(),
+                self.buffer.len(),
+            ) {
+                let byte_start = start * bytes_per_bit;
+                let byte_end = end * bytes_per_bit;
+                buf[byte_start..byte_end].fill(0xFF);
             }
-            for j in 0..count {
-                crate::bit_util::set_bit(buffer.as_mut(), i * count + j)
+        } else {
+            // Only visit valid (non-null) positions — avoids branching on every bit.
+            for i in self.buffer.set_indices() {
+                for j in 0..count {
+                    crate::bit_util::set_bit(buffer.as_mut(), i * count + j)
+                }
             }
         }
         Ok(Self {
