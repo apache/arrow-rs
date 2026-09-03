@@ -182,6 +182,7 @@ fn assert_layout(file_reader: &Bytes, meta: &ParquetMetaData, layout: &Layout) {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_primitive() {
     let array = Arc::new(Int32Array::from_iter_values(0..2000)) as _;
     let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
@@ -359,6 +360,7 @@ fn test_primitive() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_string() {
     let array = Arc::new(StringArray::from_iter_values(
         (0..2000).map(|x| format!("{x:04}")),
@@ -616,6 +618,7 @@ fn test_per_column_data_page_size_limit() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_fixed_size_binary() {
     // FixedSizeBinary values larger than the data page byte limit.
     let value_size = 1024usize;
@@ -748,6 +751,46 @@ fn test_large_string() {
                             page_type: PageType::DATA_PAGE,
                         })
                         .collect(),
+                    dictionary_page: None,
+                }],
+            }],
+        },
+    });
+}
+
+#[test]
+fn test_large_string_delta_byte_array_shared_prefix() {
+    // Regression for https://github.com/apache/arrow-rs/issues/10489, at the
+    // `ArrowWriter` level the report used.
+    //
+    // Same shape as `test_large_string` — 64 KiB values against a 16 KiB
+    // page limit — but `DELTA_BYTE_ARRAY` and 32 identical values. Expect a
+    // single page holding all 32 rows and about one value's worth of bytes,
+    // rather than the 32 pages and ~2 MiB `PLAIN` produces.
+    let value_size = 64 * 1024;
+    let strings: Vec<String> = (0..32).map(|_| "x".repeat(value_size)).collect();
+    let array = Arc::new(StringArray::from(strings)) as _;
+    let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .set_data_page_size_limit(16 * 1024)
+        .set_statistics_enabled(EnabledStatistics::None)
+        .build();
+
+    do_test(LayoutTest {
+        props,
+        batches: vec![batch],
+        layout: Layout {
+            row_groups: vec![RowGroup {
+                columns: vec![ColumnChunk {
+                    pages: vec![Page {
+                        rows: 32,
+                        page_header_size: 21,
+                        compressed_size: 65696,
+                        encoding: Encoding::DELTA_BYTE_ARRAY,
+                        page_type: PageType::DATA_PAGE,
+                    }],
                     dictionary_page: None,
                 }],
             }],

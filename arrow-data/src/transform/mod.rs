@@ -371,11 +371,14 @@ pub enum Capacities {
     /// * the capacity of the array offsets
     /// * the capacity of the binary/ str buffer
     Binary(usize, Option<usize>),
-    /// List and LargeList data types
+    /// List, LargeList and Map data types
     ///
     /// Defines
     /// * the capacity of the array offsets
     /// * the capacity of the child data
+    ///
+    /// For Map the child data is the entries [`DataType::Struct`], so the child
+    /// capacity is a [`Capacities::Struct`] holding the key and value capacities.
     List(usize, Option<Box<Capacities>>),
     /// Struct type
     ///
@@ -492,9 +495,14 @@ impl<'a> MutableArrayData<'a> {
                 | DataType::LargeList(_)
                 | DataType::ListView(_)
                 | DataType::LargeListView(_)
-                | DataType::FixedSizeList(_, _),
+                | DataType::FixedSizeList(_, _)
+                | DataType::Map(_, _),
                 Capacities::List(capacity, _),
             ) => {
+                array_capacity = *capacity;
+                new_buffers(data_type, *capacity)
+            }
+            (DataType::Struct(_), Capacities::Struct(capacity, _)) => {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
@@ -1028,5 +1036,45 @@ mod test {
         // capacities are rounded up to multiples of 64 by MutableBuffer
         assert_eq!(mutable.data.buffer1.capacity(), 64);
         assert_eq!(mutable.data.child_data[0].data.buffer1.capacity(), 192);
+    }
+
+    #[test]
+    fn test_map_append_with_capacities() {
+        let entries = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("keys", DataType::Int64, false),
+                    Field::new("values", DataType::Int64, true),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+        let array = ArrayData::new_empty(&DataType::Map(entries, false));
+
+        let mutable = MutableArrayData::with_capacities(
+            vec![&array],
+            false,
+            Capacities::List(
+                6,
+                Some(Box::new(Capacities::Struct(
+                    17,
+                    Some(vec![Capacities::Array(17), Capacities::Array(17)]),
+                ))),
+            ),
+        );
+
+        // capacities are rounded up to multiples of 64 by MutableBuffer
+        // the map offsets buffer holds `1 + 6` i32s
+        assert_eq!(mutable.data.buffer1.capacity(), 64);
+
+        // the entries struct itself has no buffers of its own
+        let entries = &mutable.data.child_data[0];
+        assert_eq!(entries.data.buffer1.capacity(), 0);
+
+        // both key and value buffers hold 17 i64s
+        assert_eq!(entries.data.child_data[0].data.buffer1.capacity(), 192);
+        assert_eq!(entries.data.child_data[1].data.buffer1.capacity(), 192);
     }
 }

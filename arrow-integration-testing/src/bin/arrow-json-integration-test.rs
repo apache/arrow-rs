@@ -161,8 +161,8 @@ fn validate(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()> {
         if let Some(Ok(arrow_batch)) = arrow_reader.next() {
             // compare batches
             let num_columns = arrow_batch.num_columns();
-            assert!(num_columns == json_batch.num_columns());
-            assert!(arrow_batch.num_rows() == json_batch.num_rows());
+            assert_eq!(num_columns, json_batch.num_columns());
+            assert_eq!(arrow_batch.num_rows(), json_batch.num_rows());
 
             for i in 0..num_columns {
                 assert_eq!(

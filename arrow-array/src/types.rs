@@ -963,7 +963,7 @@ impl Date32Type {
     ///
     /// Returns `Some(NaiveDate)` if it fits, `None` otherwise.
     pub fn to_naive_date_opt(i: <Date32Type as ArrowPrimitiveType>::Native) -> Option<NaiveDate> {
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let epoch = NaiveDate::default();
         let d = Duration::try_days(i as i64)?;
         epoch.checked_add_signed(d)
     }
@@ -974,7 +974,7 @@ impl Date32Type {
     ///
     /// * `d` - The NaiveDate to convert
     pub fn from_naive_date(d: NaiveDate) -> <Date32Type as ArrowPrimitiveType>::Native {
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let epoch = NaiveDate::default();
         d.sub(epoch).num_days() as <Date32Type as ArrowPrimitiveType>::Native
     }
 
@@ -1245,7 +1245,7 @@ impl Date64Type {
     ///
     /// Returns `Some(NaiveDateTime)` if it fits, `None` otherwise.
     pub fn to_naive_date_opt(i: <Date64Type as ArrowPrimitiveType>::Native) -> Option<NaiveDate> {
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let epoch = NaiveDate::default();
         let d = Duration::try_milliseconds(i)?;
         epoch.checked_add_signed(d)
     }
@@ -1256,7 +1256,7 @@ impl Date64Type {
     ///
     /// * `d` - The NaiveDate to convert
     pub fn from_naive_date(d: NaiveDate) -> <Date64Type as ArrowPrimitiveType>::Native {
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let epoch = NaiveDate::default();
         d.sub(epoch).num_milliseconds()
     }
 
@@ -1745,7 +1745,7 @@ impl<O: OffsetSizeTrait> ByteArrayType for GenericBinaryType<O> {
 
     fn validate(offsets: &OffsetBuffer<Self::Offset>, values: &Buffer) -> Result<(), ArrowError> {
         // offsets are guaranteed to be monotonically increasing and non-empty
-        let max_offset = offsets.last().unwrap().as_usize();
+        let max_offset = offsets.last().as_usize();
         if values.len() < max_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Maximum offset of {max_offset} is larger than values of length {}",

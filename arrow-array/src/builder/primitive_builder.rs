@@ -32,13 +32,13 @@ pub type Int16Builder = PrimitiveBuilder<Int16Type>;
 pub type Int32Builder = PrimitiveBuilder<Int32Type>;
 /// A signed 64-bit integer array builder.
 pub type Int64Builder = PrimitiveBuilder<Int64Type>;
-/// An usigned 8-bit integer array builder.
+/// An unsigned 8-bit integer array builder.
 pub type UInt8Builder = PrimitiveBuilder<UInt8Type>;
-/// An usigned 16-bit integer array builder.
+/// An unsigned 16-bit integer array builder.
 pub type UInt16Builder = PrimitiveBuilder<UInt16Type>;
-/// An usigned 32-bit integer array builder.
+/// An unsigned 32-bit integer array builder.
 pub type UInt32Builder = PrimitiveBuilder<UInt32Type>;
-/// An usigned 64-bit integer array builder.
+/// An unsigned 64-bit integer array builder.
 pub type UInt64Builder = PrimitiveBuilder<UInt64Type>;
 /// A 16-bit floating point array builder.
 pub type Float16Builder = PrimitiveBuilder<Float16Type>;
@@ -61,13 +61,13 @@ pub type Date32Builder = PrimitiveBuilder<Date32Type>;
 /// A 64-bit date array builder.
 pub type Date64Builder = PrimitiveBuilder<Date64Type>;
 
-/// A 32-bit elaspsed time in seconds array builder.
+/// A 32-bit elapsed time in seconds array builder.
 pub type Time32SecondBuilder = PrimitiveBuilder<Time32SecondType>;
-/// A 32-bit elaspsed time in milliseconds array builder.
+/// A 32-bit elapsed time in milliseconds array builder.
 pub type Time32MillisecondBuilder = PrimitiveBuilder<Time32MillisecondType>;
-/// A 64-bit elaspsed time in microseconds array builder.
+/// A 64-bit elapsed time in microseconds array builder.
 pub type Time64MicrosecondBuilder = PrimitiveBuilder<Time64MicrosecondType>;
-/// A 64-bit elaspsed time in nanoseconds array builder.
+/// A 64-bit elapsed time in nanoseconds array builder.
 pub type Time64NanosecondBuilder = PrimitiveBuilder<Time64NanosecondType>;
 
 /// A “calendar” interval in months array builder.
@@ -96,6 +96,48 @@ pub type Decimal128Builder = PrimitiveBuilder<Decimal128Type>;
 pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 
 /// Builder for [`PrimitiveArray`]
+///
+/// # Performance
+///
+/// Rust's `Vec` is highly optimized, and Arrow's conversion from `Vec` to
+/// [`PrimitiveArray`] is zero-copy — the array reuses the same underlying allocation
+/// without any data being copied. If your values are already in a `Vec`, or can be
+/// collected into one, prefer constructing a [`PrimitiveArray`] directly:
+///
+/// ```
+/// # use arrow_array::{Int32Array, Array};
+/// // Zero-copy: the array reuses the Vec's allocation
+/// let array = Int32Array::from(vec![1, 2, 3]);
+/// assert_eq!(array.len(), 3);
+/// ```
+///
+/// Internally, [`PrimitiveBuilder`] is itself backed by a `Vec<T::Native>` and a
+/// [`NullBufferBuilder`], so using one does not unlock any additional performance —
+/// it is simply a convenience wrapper for incremental construction.
+///
+/// # When to use [`PrimitiveBuilder`]
+///
+/// Prefer the builder when your array **may contain nulls but you don't know their
+/// positions upfront**. Managing a `Vec<T>` and a [`NullBufferBuilder`] in parallel
+/// by hand is error-prone; the builder keeps them in sync automatically as you call
+/// [`append_value`](PrimitiveBuilder::append_value) and
+/// [`append_null`](PrimitiveBuilder::append_null).
+///
+/// ```
+/// # use arrow_array::builder::Int32Builder;
+/// # use arrow_array::Array;
+/// let mut builder = Int32Builder::new();
+/// for (i, v) in [1, 2, 3].iter().enumerate() {
+///     if i == 1 {
+///         builder.append_null();
+///     } else {
+///         builder.append_value(*v);
+///     }
+/// }
+/// let array = builder.finish();
+/// assert_eq!(array.len(), 3);
+/// assert!(array.is_null(1));
+/// ```
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     values_builder: Vec<T::Native>,
@@ -328,6 +370,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .add_buffer(std::mem::take(&mut self.values_builder).into())
             .nulls(nulls);
 
+        // SAFETY: builder is constructed from valid primitive value buffer and null buffer with matching lengths
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
     }
@@ -342,6 +385,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .add_buffer(values_buffer)
             .nulls(nulls);
 
+        // SAFETY: builder is constructed from valid primitive value buffer and null buffer with matching lengths
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
     }

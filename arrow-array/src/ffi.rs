@@ -322,7 +322,9 @@ impl ImportedArrowArray<'_> {
             child_data.push(d.consume()?);
         }
 
-        // Should FFI be checking validity?
+        // Safety: all fields (length, null_count, null buffer, data buffers, child data) were
+        // derived from the C Data Interface schema and array, which the caller of `from_ffi`
+        // guarantees follow the spec; the constructed `ArrayData` satisfies its invariants.
         Ok(unsafe {
             ArrayData::new_unchecked(
                 self.data_type,
@@ -345,7 +347,7 @@ impl ImportedArrowArray<'_> {
             | DataType::LargeListView(field)
             | DataType::Map(field, _) => Ok([self.consume_child(0, field.data_type())?].to_vec()),
             DataType::Struct(fields) => {
-                assert!(fields.len() == self.array.num_children());
+                assert_eq!(fields.len(), self.array.num_children());
                 fields
                     .iter()
                     .enumerate()
@@ -353,7 +355,7 @@ impl ImportedArrowArray<'_> {
                     .collect::<Result<Vec<_>>>()
             }
             DataType::Union(union_fields, _) => {
-                assert!(union_fields.len() == self.array.num_children());
+                assert_eq!(union_fields.len(), self.array.num_children());
                 union_fields
                     .iter()
                     .enumerate()
@@ -395,7 +397,14 @@ impl ImportedArrowArray<'_> {
             } else {
                 let lengths = self.array.buffer(self.array.num_buffers() - 1);
                 // SAFETY: is lengths is non-null, then it must be valid for up to num_variadic_buffers.
-                unsafe { std::slice::from_raw_parts(lengths.cast::<i64>(), num_variadic_buffers) }
+                // The C data interface requires buffers to be aligned for their type.
+                #[expect(
+                    clippy::cast_ptr_alignment,
+                    reason = "the C data interface requires aligned buffers"
+                )]
+                unsafe {
+                    std::slice::from_raw_parts(lengths.cast::<i64>(), num_variadic_buffers)
+                }
             }
         } else {
             &[]
@@ -472,7 +481,15 @@ impl ImportedArrowArray<'_> {
                 length * (bits / 8)
             }
             (DataType::Utf8 | DataType::Binary, 2) => {
-                if self.array.is_empty() {
+                // We can short circuit for empty arrays with offset 0 since we know
+                // the values buffer must also be empty, and the single offset present
+                // in the offsets buffer can be an arbitrary value from the producer.
+                //
+                // If the array is empty yet has a non-zero offset, the C data interface
+                // guarantees there are `length + offset` values encoded in the buffer,
+                // so we must find the real size of the values buffer from the offsets
+                // buffer.
+                if self.array.is_empty() && self.array.offset() == 0 {
                     return Ok(0);
                 }
 
@@ -482,11 +499,14 @@ impl ImportedArrowArray<'_> {
                 // we assume that pointer is aligned for `i32`, as Utf8 uses `i32` offsets.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i32>();
-                // get last offset
+                // Safety: `len` is the byte length of the offset buffer; dividing by `size_of::<i32>()`
+                // gives the number of i32 elements. The `- 1` is safe because the offset buffer
+                // is always non-empty.
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
             (DataType::LargeUtf8 | DataType::LargeBinary, 2) => {
-                if self.array.is_empty() {
+                // See the note on the `Utf8` / `Binary` arm above.
+                if self.array.is_empty() && self.array.offset() == 0 {
                     return Ok(0);
                 }
 
@@ -496,7 +516,7 @@ impl ImportedArrowArray<'_> {
                 // we assume that pointer is aligned for `i64`, as Large uses `i64` offsets.
                 #[expect(clippy::cast_ptr_alignment)]
                 let offset_buffer = self.array.buffer(1).cast::<i64>();
-                // get last offset
+                // Safety: same as the i32 case above but for i64 offsets.
                 (unsafe { *offset_buffer.add(len / size_of::<i64>() - 1) }) as usize
             }
             // View types: these have variadic buffers.
@@ -1691,6 +1711,54 @@ mod tests_from_ffi {
         test_round_trip(&imported_array.consume()?)
     }
 
+    /// A zero-length `Utf8` / `Binary` array at a non-zero offset must survive a
+    /// round trip: the length of the values buffer has to come from the last offset
+    /// of the window, as it already does for non-empty arrays, rather than being
+    /// short-circuited to 0 on the length alone.
+    ///
+    /// <https://github.com/apache/arrow-rs/issues/10910>
+    #[test]
+    fn test_zero_length_bytes_at_non_zero_offset() -> Result<()> {
+        // "x", "aa", "bb", viewed as zero elements starting at `offset`.
+        let small = Buffer::from_slice_ref([0i32, 1, 3, 5]);
+        let large = Buffer::from_slice_ref([0i64, 1, 3, 5]);
+        let values = Buffer::from(b"xaabb".as_slice());
+
+        for (data_type, offsets) in [
+            (DataType::Utf8, &small),
+            (DataType::Binary, &small),
+            (DataType::LargeUtf8, &large),
+            (DataType::LargeBinary, &large),
+        ] {
+            for offset in 0..4 {
+                let data = ArrayData::try_new(
+                    data_type.clone(),
+                    0,
+                    None,
+                    offset,
+                    vec![offsets.clone(), values.clone()],
+                    vec![],
+                )?;
+
+                let array = FFI_ArrowArray::new(&data);
+                let schema = FFI_ArrowSchema::try_from(&data_type)?;
+                let imported = unsafe { from_ffi(array, &schema) }?;
+
+                // `from_ffi` builds the `ArrayData` with `new_unchecked`, so an
+                // inconsistency only surfaces once something validates it.
+                imported.validate_full()?;
+                assert_eq!(imported.len(), 0);
+                assert_eq!(imported, data);
+
+                // The values buffer is sized from the last offset of the window,
+                // not short-circuited to 0.
+                assert_eq!(imported.buffers()[1].len(), [0, 1, 3, 5][offset]);
+            }
+        }
+
+        Ok(())
+    }
+
     fn roundtrip_string_array(array: StringArray) -> StringArray {
         let data = array.into_data();
 
@@ -1815,7 +1883,7 @@ mod tests_from_ffi {
     #[cfg(not(feature = "force_validate"))]
     fn test_utf8_view_ffi_from_dangling_pointer() {
         let empty = GenericByteViewBuilder::<StringViewType>::new().finish();
-        let buffers = empty.data_buffers().to_vec();
+        let buffers = Arc::clone(empty.data_buffers());
         let nulls = empty.nulls().cloned();
 
         // Create a dangling pointer to a view buffer with zero length.

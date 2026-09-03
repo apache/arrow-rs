@@ -222,7 +222,9 @@ where
             .into_request(),
         )?;
         let mut result = self.flight_client.do_put(req).await?.into_inner();
-        let result = result.message().await?.unwrap();
+        let result = result.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
         let result: DoPutUpdateResult = Message::decode(&*result.app_metadata)?;
         Ok(result.record_count)
     }
@@ -258,7 +260,9 @@ where
             return Err(FlightError::ExternalError(Box::new(msg)));
         }
 
-        let result = result.message().await?.unwrap();
+        let result = result.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
         let result: DoPutUpdateResult = Message::decode(&*result.app_metadata)?;
         Ok(result.record_count)
     }
@@ -387,9 +391,16 @@ where
         };
         let req = self.set_request_headers(action.into_request())?;
         let mut result = self.flight_client.do_action(req).await?.into_inner();
-        let result = result.message().await?.unwrap();
+        let result = result.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
         let any = Any::decode(&*result.body)?;
-        let prepared_result: ActionCreatePreparedStatementResult = any.unpack()?.unwrap();
+        let prepared_result: ActionCreatePreparedStatementResult =
+            any.unpack()?.ok_or_else(|| {
+                FlightError::protocol(
+                    "Server did not return an ActionCreatePreparedStatementResult",
+                )
+            })?;
         let dataset_schema = match prepared_result.dataset_schema.len() {
             0 => Schema::empty(),
             _ => Schema::try_from(IpcMessage(prepared_result.dataset_schema))?,
@@ -415,9 +426,13 @@ where
         };
         let req = self.set_request_headers(action.into_request())?;
         let mut result = self.flight_client.do_action(req).await?.into_inner();
-        let result = result.message().await?.unwrap();
+        let result = result.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
         let any = Any::decode(&*result.body)?;
-        let begin_result: ActionBeginTransactionResult = any.unpack()?.unwrap();
+        let begin_result: ActionBeginTransactionResult = any.unpack()?.ok_or_else(|| {
+            FlightError::protocol("Server did not return an ActionBeginTransactionResult")
+        })?;
         Ok(begin_result.transaction_id)
     }
 
@@ -542,7 +557,9 @@ where
                 ..Default::default()
             }]))
             .await?;
-        let result = result.message().await?.unwrap();
+        let result = result.message().await?.ok_or_else(|| {
+            FlightError::protocol("Server closed the stream without sending a result")
+        })?;
         let result: DoPutUpdateResult = Message::decode(&*result.app_metadata)?;
         Ok(result.record_count)
     }

@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::null_sentinel;
-use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
@@ -284,14 +283,14 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     let nulls = decode_nulls_sentinel(rows, options);
 
     let values_capacity = rows.iter().map(|row| decoded_len(row, options)).sum();
-    let mut offsets = BufferBuilder::<I>::new(len + 1);
-    offsets.append(I::zero());
+    let mut offsets = Vec::<I>::with_capacity(len + 1);
+    offsets.push(I::zero());
     let mut values = MutableBuffer::new(values_capacity);
 
     for row in rows {
         let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
         *row = &row[offset..];
-        offsets.append(I::from_usize(values.len()).expect("offset overflow"))
+        offsets.push(I::from_usize(values.len()).expect("offset overflow"))
     }
 
     if options.descending {
@@ -375,7 +374,7 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
 
     // SAFETY:
     // Valid by construction above
-    unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()], nulls) }
+    unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()].into(), nulls) }
 }
 
 /// Decodes a binary view array from `rows` with the provided `options`

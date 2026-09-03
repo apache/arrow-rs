@@ -328,8 +328,15 @@ fn compress_zstd(
     context: &mut IpcWriteContext,
     level: i32,
 ) -> Result<(), ArrowError> {
-    let result = context.zstd_compressor(level).compress(input)?;
-    output.extend_from_slice(&result);
+    let start = output.len();
+    output.reserve(zstd::zstd_safe::compress_bound(input.len()));
+
+    let mut cursor = std::io::Cursor::new(output);
+    cursor.set_position(start as u64);
+    context
+        .zstd_compressor(level)
+        .compress_to_buffer(input, &mut cursor)?;
+
     Ok(())
 }
 
