@@ -162,6 +162,25 @@ impl NullBuffer {
                 let byte_end = end * bytes_per_bit;
                 buf[byte_start..byte_end].fill(0xFF);
             }
+        } else if count % 4 == 0 {
+            // count is a multiple of 4 but not 8: each bit's range starts and ends
+            // on a nibble boundary. Fill any full bytes, then OR in the partial nibble
+            // (0x0F if the range ends mid-byte, 0xF0 if it starts mid-byte).
+            let buf = buffer.as_mut();
+            for i in 0..self.buffer.len() {
+                if self.is_null(i) {
+                    continue;
+                }
+                let start_bit = i * count;
+                let end_bit = start_bit + count;
+                if start_bit % 8 == 0 {
+                    buf[start_bit / 8..end_bit / 8].fill(0xFF);
+                    buf[end_bit / 8] |= 0x0F;
+                } else {
+                    buf[start_bit / 8] |= 0xF0;
+                    buf[start_bit / 8 + 1..end_bit / 8].fill(0xFF);
+                }
+            }
         } else {
             for i in 0..self.buffer.len() {
                 if self.is_null(i) {
@@ -489,5 +508,19 @@ mod tests {
 
         let result = NullBuffer::union(Some(&all_null), Some(&all_valid));
         assert_eq!(result, Some(all_null.clone()));
+    }
+
+    #[test]
+    fn test_expand_code_paths() {
+        let source = NullBuffer::from(&[true, false, true] as &[bool]);
+
+        for count in [8, 4, 3] {
+            let expanded = source.expand(count);
+            assert_eq!(expanded.len(), 3 * count);
+            assert_eq!(expanded.null_count(), count);
+            assert!((0..count).all(|i| expanded.is_valid(i)));
+            assert!((count..2 * count).all(|i| expanded.is_null(i)));
+            assert!((2 * count..3 * count).all(|i| expanded.is_valid(i)));
+        }
     }
 }
