@@ -451,6 +451,15 @@ enum Encoding {
   /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
   /// perform poorly for large values of N.
   BYTE_STREAM_SPLIT = 9;
+  /// Patched Frame of Reference encoding for integers, either INT32 or INT64.
+  ///
+  /// Values are encoded in fixed-size vectors. Each vector subtracts a frame of
+  /// reference, bit-packs the residuals at a width chosen by a cost model, and
+  /// stores the values that do not fit at that width separately, as exceptions.
+  ///
+  /// Value 10 is reserved for the separately proposed ALP encoding, so this
+  /// enum has a hole at 10. See `EncodingMask::ALLOWED_MASK`.
+  PFOR = 11;
 }
 );
 
@@ -471,6 +480,7 @@ impl FromStr for Encoding {
             "DELTA_BYTE_ARRAY" | "delta_byte_array" => Ok(Encoding::DELTA_BYTE_ARRAY),
             "RLE_DICTIONARY" | "rle_dictionary" => Ok(Encoding::RLE_DICTIONARY),
             "BYTE_STREAM_SPLIT" | "byte_stream_split" => Ok(Encoding::BYTE_STREAM_SPLIT),
+            "PFOR" | "pfor" => Ok(Encoding::PFOR),
             _ => Err(general_err!("unknown encoding: {}", s)),
         }
     }
@@ -516,9 +526,15 @@ impl EncodingMask {
     /// Highest valued discriminant in the [`Encoding`] enum
     const MAX_ENCODING: i32 = Encoding::MAX_DISCRIMINANT;
     /// A mask consisting of unused bit positions, used for validation. This includes the never
-    /// used GROUP_VAR_INT encoding value of `1`.
+    /// used GROUP_VAR_INT encoding value of `1`, and the value `10` held in reserve for the
+    /// separately proposed ALP encoding.
+    ///
+    /// Bit 10 has to be listed here rather than left to the range check: it sits below
+    /// [`Self::MAX_ENCODING`], so without it a column chunk claiming encoding 10 would pass
+    /// [`Self::try_new`] and then panic in `i32_to_encoding` when the mask was iterated --
+    /// a panic reachable from a file.
     const ALLOWED_MASK: u32 =
-        !(1u32 << (EncodingMask::MAX_ENCODING as u32 + 1)).wrapping_sub(1) | (1 << 1);
+        !(1u32 << (EncodingMask::MAX_ENCODING as u32 + 1)).wrapping_sub(1) | (1 << 1) | (1 << 10);
 
     /// Attempt to create a new `EncodingMask` from an integer.
     ///
@@ -610,6 +626,7 @@ fn i32_to_encoding(val: i32) -> Encoding {
         7 => Encoding::DELTA_BYTE_ARRAY,
         8 => Encoding::RLE_DICTIONARY,
         9 => Encoding::BYTE_STREAM_SPLIT,
+        11 => Encoding::PFOR,
         _ => panic!("Impossible encoding {val}"),
     }
 }
@@ -1970,6 +1987,7 @@ mod tests {
         );
         assert_eq!(Encoding::DELTA_BYTE_ARRAY.to_string(), "DELTA_BYTE_ARRAY");
         assert_eq!(Encoding::RLE_DICTIONARY.to_string(), "RLE_DICTIONARY");
+        assert_eq!(Encoding::PFOR.to_string(), "PFOR");
     }
 
     #[test]
@@ -2316,9 +2334,14 @@ mod tests {
         encoding = "BYTE_STREAM_SPLIT".parse().unwrap();
         assert_eq!(encoding, Encoding::BYTE_STREAM_SPLIT);
 
+        encoding = "PFOR".parse().unwrap();
+        assert_eq!(encoding, Encoding::PFOR);
+
         // test lowercase
         encoding = "byte_stream_split".parse().unwrap();
         assert_eq!(encoding, Encoding::BYTE_STREAM_SPLIT);
+        encoding = "pfor".parse().unwrap();
+        assert_eq!(encoding, Encoding::PFOR);
 
         // test unknown string
         match "plain_xxx".parse::<Encoding>() {
@@ -2452,6 +2475,7 @@ mod tests {
             Encoding::PLAIN_DICTIONARY,
             Encoding::RLE_DICTIONARY,
             Encoding::BYTE_STREAM_SPLIT,
+            Encoding::PFOR,
         ];
         encodings_roundtrip(encodings.into());
     }
@@ -2475,6 +2499,22 @@ mod tests {
             err.to_string(),
             "Parquet error: Attempt to create invalid mask: 0x2"
         );
+
+        // Value 10 is reserved for ALP and has no `Encoding` variant, so a mask claiming it
+        // has to be rejected here. Were it accepted, iterating the mask would reach
+        // `i32_to_encoding(10)` and panic.
+        let res = EncodingMask::try_new(1 << 10);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Attempt to create invalid mask: 0x400"
+        );
+
+        // The bit above the hole is a real encoding and must still be accepted.
+        let mask = EncodingMask::try_new(1 << 11).unwrap();
+        assert!(mask.is_only(Encoding::PFOR));
+        assert_eq!(mask.encodings().collect::<Vec<_>>(), vec![Encoding::PFOR]);
     }
 
     #[test]

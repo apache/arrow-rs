@@ -34,6 +34,9 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{self, BitReader, FromBitpacked};
 
 mod byte_stream_split_decoder;
+mod pfor_decoder;
+
+pub use pfor_decoder::PforDecoder;
 
 pub(crate) mod private {
     use super::*;
@@ -63,7 +66,8 @@ pub(crate) mod private {
             Encoding::RLE
             | Encoding::DELTA_BINARY_PACKED
             | Encoding::DELTA_BYTE_ARRAY
-            | Encoding::DELTA_LENGTH_BYTE_ARRAY => Err(general_err!(
+            | Encoding::DELTA_LENGTH_BYTE_ARRAY
+            | Encoding::PFOR => Err(general_err!(
                 "Encoding {} is not supported for type",
                 encoding
             )),
@@ -91,6 +95,7 @@ pub(crate) mod private {
             match encoding {
                 Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
                 Encoding::DELTA_BINARY_PACKED => Ok(Box::new(DeltaBitPackDecoder::new())),
+                Encoding::PFOR => Ok(Box::new(PforDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -104,6 +109,7 @@ pub(crate) mod private {
             match encoding {
                 Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
                 Encoding::DELTA_BINARY_PACKED => Ok(Box::new(DeltaBitPackDecoder::new())),
+                Encoding::PFOR => Ok(Box::new(PforDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }

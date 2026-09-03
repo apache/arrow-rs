@@ -34,6 +34,9 @@ pub use dict_encoder::DictEncoder;
 
 mod byte_stream_split_encoder;
 mod dict_encoder;
+mod pfor_encoder;
+
+pub use pfor_encoder::PforEncoder;
 
 // ----------------------------------------------------------------------
 // Encoders
@@ -85,27 +88,95 @@ pub fn get_encoder<T: DataType>(
     encoding: Encoding,
     descr: &ColumnDescPtr,
 ) -> Result<Box<dyn Encoder<T>>> {
-    let encoder: Box<dyn Encoder<T>> = match encoding {
-        Encoding::PLAIN => Box::new(PlainEncoder::new()),
-        Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
-            return Err(general_err!(
-                "Cannot initialize this encoding through this function"
-            ));
+    use self::private::GetEncoder;
+    T::T::get_encoder(encoding, descr)
+}
+
+pub(crate) mod private {
+    use super::*;
+
+    /// A trait that allows getting an [`Encoder`] implementation for a [`DataType`] with the
+    /// corresponding [`ParquetValueType`]. This is necessary to support [`Encoder`]
+    /// implementations that are not applicable to every [`DataType`], and by extension not to
+    /// every [`ParquetValueType`].
+    ///
+    /// The mirror of [`crate::encodings::decoding::private::GetDecoder`], and introduced for the
+    /// same reason: a flat `match` on [`Encoding`] alone cannot express "this encoding exists
+    /// only for these physical types", so an encoding so restricted has to dispatch on the value
+    /// type first and the encoding second.
+    pub trait GetEncoder {
+        fn get_encoder<T: DataType<T = Self>>(
+            encoding: Encoding,
+            descr: &ColumnDescPtr,
+        ) -> Result<Box<dyn Encoder<T>>> {
+            get_encoder_default(encoding, descr)
         }
-        Encoding::RLE => Box::new(RleValueEncoder::new()),
-        Encoding::DELTA_BINARY_PACKED => Box::new(DeltaBitPackEncoder::new()),
-        Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(DeltaLengthByteArrayEncoder::new()),
-        Encoding::DELTA_BYTE_ARRAY => Box::new(DeltaByteArrayEncoder::new()),
-        Encoding::BYTE_STREAM_SPLIT => match T::get_physical_type() {
-            Type::FIXED_LEN_BYTE_ARRAY => Box::new(VariableWidthByteStreamSplitEncoder::new(
-                descr.type_length(),
-            )),
-            _ => Box::new(ByteStreamSplitEncoder::new()),
-        },
-        #[expect(deprecated, reason = "BIT_PACKED is the encoding we reject here")]
-        e @ Encoding::BIT_PACKED => return Err(nyi_err!("Encoding {} is not supported", e)),
-    };
-    Ok(encoder)
+    }
+
+    fn get_encoder_default<T: DataType>(
+        encoding: Encoding,
+        descr: &ColumnDescPtr,
+    ) -> Result<Box<dyn Encoder<T>>> {
+        let encoder: Box<dyn Encoder<T>> = match encoding {
+            Encoding::PLAIN => Box::new(PlainEncoder::new()),
+            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
+                return Err(general_err!(
+                    "Cannot initialize this encoding through this function"
+                ));
+            }
+            Encoding::RLE => Box::new(RleValueEncoder::new()),
+            Encoding::DELTA_BINARY_PACKED => Box::new(DeltaBitPackEncoder::new()),
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(DeltaLengthByteArrayEncoder::new()),
+            Encoding::DELTA_BYTE_ARRAY => Box::new(DeltaByteArrayEncoder::new()),
+            Encoding::BYTE_STREAM_SPLIT => match T::get_physical_type() {
+                Type::FIXED_LEN_BYTE_ARRAY => Box::new(VariableWidthByteStreamSplitEncoder::new(
+                    descr.type_length(),
+                )),
+                _ => Box::new(ByteStreamSplitEncoder::new()),
+            },
+            Encoding::PFOR => {
+                return Err(general_err!(
+                    "Encoding {} is not supported for type",
+                    encoding
+                ));
+            }
+            #[expect(deprecated, reason = "BIT_PACKED is the encoding we reject here")]
+            e @ Encoding::BIT_PACKED => return Err(nyi_err!("Encoding {} is not supported", e)),
+        };
+        Ok(encoder)
+    }
+
+    impl GetEncoder for bool {}
+
+    impl GetEncoder for i32 {
+        fn get_encoder<T: DataType<T = Self>>(
+            encoding: Encoding,
+            descr: &ColumnDescPtr,
+        ) -> Result<Box<dyn Encoder<T>>> {
+            match encoding {
+                Encoding::PFOR => Ok(Box::new(PforEncoder::new())),
+                _ => get_encoder_default(encoding, descr),
+            }
+        }
+    }
+
+    impl GetEncoder for i64 {
+        fn get_encoder<T: DataType<T = Self>>(
+            encoding: Encoding,
+            descr: &ColumnDescPtr,
+        ) -> Result<Box<dyn Encoder<T>>> {
+            match encoding {
+                Encoding::PFOR => Ok(Box::new(PforEncoder::new())),
+                _ => get_encoder_default(encoding, descr),
+            }
+        }
+    }
+
+    impl GetEncoder for f32 {}
+    impl GetEncoder for f64 {}
+    impl GetEncoder for ByteArray {}
+    impl GetEncoder for FixedLenByteArray {}
+    impl GetEncoder for Int96 {}
 }
 
 // ----------------------------------------------------------------------

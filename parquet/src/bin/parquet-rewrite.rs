@@ -130,6 +130,9 @@ enum EncodingArgs {
 
     /// Encoding for fixed-width data.
     ByteStreamSplit,
+
+    /// Patched frame of reference encoding for integers, either INT32 or INT64.
+    Pfor,
 }
 
 #[expect(deprecated)]
@@ -145,6 +148,7 @@ impl From<EncodingArgs> for Encoding {
             EncodingArgs::DeltaByteArray => Self::DELTA_BYTE_ARRAY,
             EncodingArgs::RleDictionary => Self::RLE_DICTIONARY,
             EncodingArgs::ByteStreamSplit => Self::BYTE_STREAM_SPLIT,
+            EncodingArgs::Pfor => Self::PFOR,
         }
     }
 }
