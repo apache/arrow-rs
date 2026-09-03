@@ -142,7 +142,7 @@ impl NullBuffer {
             .ok_or_else(|| OverflowError::new::<usize>("buffer length"))?;
         let mut buffer = MutableBuffer::new_null(capacity);
 
-        if count % 8 == 0 {
+        if count.is_multiple_of(8) {
             // When count is a multiple of 8 every expanded run starts on a byte
             // boundary (bit i starts at bit i*count, which is divisible by 8),
             // so we can fill count/8 bytes of 0xFF at a time instead of setting
@@ -158,7 +158,7 @@ impl NullBuffer {
                 let byte_end = end * bytes_per_bit;
                 buf[byte_start..byte_end].fill(0xFF);
             }
-        } else if count % 4 == 0 {
+        } else if count.is_multiple_of(4) {
             // count is a multiple of 4 but not 8: each bit's range starts and ends
             // on a nibble boundary. Fill any full bytes, then OR in the partial nibble
             // (0x0F if the range ends mid-byte, 0xF0 if it starts mid-byte).
@@ -169,7 +169,7 @@ impl NullBuffer {
                 }
                 let start_bit = i * count;
                 let end_bit = start_bit + count;
-                if start_bit % 8 == 0 {
+                if start_bit.is_multiple_of(8) {
                     buf[start_bit / 8..end_bit / 8].fill(0xFF);
                     buf[end_bit / 8] |= 0x0F;
                 } else {
