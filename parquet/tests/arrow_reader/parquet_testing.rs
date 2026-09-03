@@ -44,6 +44,7 @@ use std::sync::Arc;
 /// | `float_alp_4096`, `double_alp_4096` | `ALP`, 4096-value vectors | Readers must honor `log_vector_size` from the page header rather than assume 1024 |
 /// | `float_alp_32`, `double_alp_32`     | `ALP`, 32-value vectors   | Many vectors per page, stresses the per-vector metadata loop                      |
 #[test]
+#[cfg_attr(miri, ignore)] // Zstd calls native C functions unsupported by Miri
 fn test_alp_extended() {
     let alp_extended = PathBuf::from(parquet_test_data()).join("alp_extended.zstd.parquet");
     let file = File::open(alp_extended).unwrap();
