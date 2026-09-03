@@ -290,16 +290,16 @@ impl ParquetMetaDataReader {
             Err(ParquetError::NeedMoreData(needed)) => {
                 // If reader is the same length as `file_size` then presumably there is no more to
                 // read, so return an EOF error.
-                if file_size == reader.len() || needed as u64 > file_size {
-                    return Err(eof_err!(
+                return if file_size == reader.len() || needed as u64 > file_size {
+                    Err(eof_err!(
                         "Parquet file too small. Size is {} but need {}",
                         file_size,
                         needed
-                    ));
+                    ))
                 } else {
                     // Ask for a larger buffer
-                    return Err(ParquetError::NeedMoreData(needed));
-                }
+                    Err(ParquetError::NeedMoreData(needed))
+                };
             }
             Err(e) => return Err(e),
         };
@@ -355,16 +355,16 @@ impl ParquetMetaDataReader {
         let file_range = file_size.saturating_sub(reader.len())..file_size;
         if !(file_range.contains(&range.start) && file_range.contains(&range.end)) {
             // Requested range starts beyond EOF
-            if range.end > file_size {
-                return Err(eof_err!(
+            return if range.end > file_size {
+                Err(eof_err!(
                     "Parquet file too small. Range {range:?} is beyond file bounds {file_size}",
-                ));
+                ))
             } else {
                 // Ask for a larger buffer
-                return Err(ParquetError::NeedMoreData(
+                Err(ParquetError::NeedMoreData(
                     (file_size - range.start).try_into()?,
-                ));
-            }
+                ))
+            };
         }
 
         // Perform extra sanity check to make sure `range` and the footer metadata don't
@@ -875,6 +875,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_try_parse() {
         let file = get_test_file("alltypes_tiny_pages.parquet");
         let len = file.len();

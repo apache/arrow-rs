@@ -319,7 +319,7 @@ pub enum DataType {
     /// A list of some logical data type with variable length.
     ///
     /// Logically the same as [`List`], but the internal representation differs in how child
-    /// data is referenced, allowing flexibility in how data is layed out.
+    /// data is referenced, allowing flexibility in how data is laid out.
     ///
     /// [`List`]: Self::List
     ListView(FieldRef),
@@ -332,7 +332,7 @@ pub enum DataType {
     /// A list of some logical data type with variable length and 64-bit offsets.
     ///
     /// Logically the same as [`LargeList`], but the internal representation differs in how child
-    /// data is referenced, allowing flexibility in how data is layed out.
+    /// data is referenced, allowing flexibility in how data is laid out.
     ///
     /// [`LargeList`]: Self::LargeList
     LargeListView(FieldRef),
@@ -1271,7 +1271,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
+    #[cfg_attr(miri, ignore)] // fork is not supported
     fn test_debug_format_field() {
         // Make sure the `Debug` formatting of `DataType` is readable and not too long
         insta::assert_debug_snapshot!(DataType::new_list(DataType::Int8, false), @r"

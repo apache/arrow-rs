@@ -1832,7 +1832,7 @@ mod test {
         let ranges = expect_needs_data(decoder.try_decode());
         push_ranges_to_decoder(&mut decoder, ranges);
 
-        // expect the first ane only batch to be decoded
+        // expect the first and only batch to be decoded
         let batch1 = expect_data(decoder.try_decode());
         let expected1 = TEST_BATCH.slice(225, 20);
         assert_eq!(batch1, expected1);

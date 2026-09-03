@@ -116,6 +116,13 @@ pub trait GeoStatsAccumulator: Send {
 pub struct DefaultGeoStatsAccumulatorFactory {}
 
 impl GeoStatsAccumulatorFactory for DefaultGeoStatsAccumulatorFactory {
+    #[cfg_attr(
+        feature = "geospatial",
+        expect(
+            clippy::used_underscore_binding,
+            reason = "`_descr` is only read when the `geospatial` feature is on"
+        )
+    )]
     fn new_accumulator(&self, _descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator> {
         #[cfg(feature = "geospatial")]
         if let Some(crate::basic::LogicalType::Geometry { .. }) = _descr.logical_type_ref() {
@@ -281,7 +288,7 @@ mod test {
         assert!(!accumulator.is_valid());
         assert!(accumulator.finish().is_none());
 
-        // Check that we return None if the type is not geometry or goegraphy
+        // Check that we return None if the type is not geometry or geography
         let parquet_type = Type::primitive_type_builder("geom", crate::basic::Type::BYTE_ARRAY)
             .build()
             .unwrap();

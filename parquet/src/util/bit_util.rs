@@ -175,7 +175,7 @@ impl FromBitpacked for bool {
 
     #[inline]
     fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize) {
-        assert!(num_bits == 1);
+        assert_eq!(num_bits, 1);
         // Safety:
         //   we asserted that we will only decode with a bitwidth of 1,
         //   so the u8 can only be 0 or 1, which are the valid representations of a bool.
@@ -1302,6 +1302,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_get_batch() {
         const SIZE: &[usize] = &[1, 31, 32, 33, 128, 129];
         for s in SIZE {

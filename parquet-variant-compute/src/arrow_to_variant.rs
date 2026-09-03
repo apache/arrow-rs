@@ -365,16 +365,16 @@ macro_rules! define_row_builder {
                         $(
                             // NOTE: The `?` macro expansion fails without the type annotation.
                             let Some(value): Option<$option_ty> = value else {
-                                if !self.options.safe {
-                                    return Err(ArrowError::ComputeError(format!(
-                                        "Failed to convert value at index {index}: conversion failed",
-                                    )));
-                                } else {
+                                return if self.options.safe {
                                     // Overflow is encoded as Variant::Null,
                                     // distinct from None indicating a missing value
                                     builder.append_value(Variant::Null);
-                                    return Ok(());
-                                }
+                                    Ok(())
+                                } else {
+                                    Err(ArrowError::ComputeError(format!(
+                                        "Failed to convert value at index {index}: conversion failed",
+                                    )))
+                                };
                             };
                         )?
                     )?
