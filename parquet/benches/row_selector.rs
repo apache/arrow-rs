@@ -28,6 +28,12 @@ const MASK_RUN_LENGTHS: &[usize] = &[1, 4, 16, 32, 48, 64, 96, 128];
 
 const MASK_ALGEBRA_ROWS: usize = 3_000_000;
 
+/// Inputs for the mask-backed `and_then` sweeps. `MASK_AND_THEN_ROWS` is the
+/// length used by the selectivity and offset sweeps. Selectivities are the
+/// percentage of rows that are selected; the values bracket the thresholds
+/// that choose between the word-at-a-time expansion and the set-index
+/// implementation (roughly 75% outer, 5% inner, 8,192 rows), and the lengths
+/// include sizes on both sides of the row threshold.
 const MASK_AND_THEN_ROWS: usize = 8192;
 const MASK_AND_THEN_OUTER_SELECTIVITY: &[usize] = &[70, 75, 80, 99];
 const MASK_AND_THEN_INNER_SELECTIVITY: &[usize] = &[1, 5, 10, 99];
@@ -86,6 +92,9 @@ fn mask_algebra_operand(len: usize, offset: usize, selection_ratio: f64) -> RowS
     RowSelection::from_boolean_buffer(BooleanBuffer::from(bits).slice(offset, len))
 }
 
+/// Selects exactly `selection_percent` of `len` rows, chosen by a hash of the
+/// row index so the set bits are spread evenly. The buffer is built with
+/// `offset` leading bits and then sliced, so the mask starts mid-word.
 fn pseudo_random_mask_with_offset(
     len: usize,
     selection_percent: usize,
@@ -113,6 +122,9 @@ fn pseudo_random_mask_with_offset(
     BooleanBuffer::from(bits).slice(offset, len)
 }
 
+/// Selects `selection_percent` of `len` rows as one contiguous run starting at
+/// `seed % len` and wrapping around the end. Every word is all set or all
+/// unset except at the run boundaries, which models page-level filters.
 fn clustered_mask(len: usize, selection_percent: usize, seed: usize) -> BooleanBuffer {
     assert!(len > 1);
     assert!(selection_percent <= 100);
@@ -125,6 +137,8 @@ fn clustered_mask(len: usize, selection_percent: usize, seed: usize) -> BooleanB
     BooleanBuffer::from(bits)
 }
 
+/// Builds a pseudo-random outer mask of `rows` rows and an inner mask sized to
+/// the outer mask's selected row count, as `and_then` requires.
 fn mask_and_then_operands(
     rows: usize,
     outer_percent: usize,
@@ -154,6 +168,7 @@ fn mask_and_then_operands_with_offsets(
     )
 }
 
+/// Same as `mask_and_then_operands`, but both masks are contiguous runs.
 fn clustered_mask_and_then_operands(
     rows: usize,
     outer_percent: usize,
