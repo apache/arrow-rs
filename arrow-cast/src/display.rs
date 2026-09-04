@@ -35,26 +35,38 @@ use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::*;
 use chrono::format::{Item, StrftimeItems};
-use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, TimeZone, Utc};
 use lexical_core::FormattedSize;
 
 type TimeFormat<'a> = Option<&'a str>;
 
 struct CompiledItems<'a>(Vec<Item<'a>>);
 
-enum CompiledTimeFormat<'a> {
+enum CompiledTimeFormatInner<'a> {
     Default,
     Custom(Box<CompiledItems<'a>>),
 }
 
+/// A compiled time format that can be used to format temporal values.
+///
+/// This struct wraps a [`CompiledTimeFormatInner`] and provides methods for formatting temporal values.
+pub struct CompiledTimeFormat<'a>(CompiledTimeFormatInner<'a>);
+
 impl<'a> CompiledTimeFormat<'a> {
-    fn new(format: TimeFormat<'a>) -> Self {
+    /// Construct a CompiledTimeFormat from the given time format
+    pub fn new(format: TimeFormat<'a>) -> Self {
         match format {
-            Some(format) => Self::Custom(Box::new(CompiledItems(
+            Some(format) => Self(CompiledTimeFormatInner::Custom(Box::new(CompiledItems(
                 StrftimeItems::new(format).collect(),
-            ))),
-            None => Self::Default,
+            )))),
+            None => Self(CompiledTimeFormatInner::Default),
         }
+    }
+}
+
+impl Default for CompiledTimeFormat<'_> {
+    fn default() -> Self {
+        Self(CompiledTimeFormatInner::Default)
     }
 }
 
@@ -752,7 +764,8 @@ macro_rules! decimal_display {
 
 decimal_display!(Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type);
 
-fn write_timestamp(
+/// Writing a given data time instance to the writer using specified time format.
+pub fn write_timestamp(
     f: &mut dyn Write,
     naive: NaiveDateTime,
     timezone: Option<Tz>,
@@ -761,20 +774,20 @@ fn write_timestamp(
     match timezone {
         Some(tz) => {
             let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
-            match format {
-                CompiledTimeFormat::Custom(items) => {
+            match &format.0 {
+                CompiledTimeFormatInner::Custom(items) => {
                     write!(f, "{}", date.format_with_items(items.0.iter()))?
                 }
-                CompiledTimeFormat::Default => {
+                CompiledTimeFormatInner::Default => {
                     write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
                 }
             }
         }
-        None => match format {
-            CompiledTimeFormat::Custom(items) => {
+        None => match &format.0 {
+            CompiledTimeFormatInner::Custom(items) => {
                 write!(f, "{}", naive.format_with_items(items.0.iter()))?
             }
-            CompiledTimeFormat::Default => write!(f, "{naive:?}")?,
+            CompiledTimeFormatInner::Default => write!(f, "{naive:?}")?,
         },
     }
     Ok(())
@@ -816,6 +829,54 @@ timestamp_display!(
     TimestampNanosecondType
 );
 
+/// A temporal value that can be formatted with a [`CompiledTimeFormat`].
+///
+/// This trait is implemented for [`NaiveDate`], [`NaiveTime`], and [`NaiveDateTime`].
+/// It enables [`write_temporal_display`] to format these types according to a specified time format.
+pub trait TemporalFormat: Debug {
+    /// Writes this value using the given compiled time format.
+    fn write_with_time_format(
+        &self,
+        f: &mut dyn Write,
+        format: &CompiledTimeFormat<'_>,
+    ) -> FormatResult;
+}
+
+macro_rules! impl_temporal_format {
+    ($($t:ty),+ $(,)?) => {
+        $(
+            impl TemporalFormat for $t {
+                #[inline]
+                fn write_with_time_format(
+                    &self,
+                    f: &mut dyn Write,
+                    format: &CompiledTimeFormat<'_>,
+                ) -> FormatResult {
+                    match &format.0 {
+                        CompiledTimeFormatInner::Custom(items) => {
+                            write!(f, "{}", self.format_with_items(items.0.iter()))?
+                        }
+                        CompiledTimeFormatInner::Default => write!(f, "{self:?}")?,
+                    }
+                    Ok(())
+                }
+            }
+        )+
+    };
+}
+
+impl_temporal_format!(NaiveDate, NaiveTime, NaiveDateTime);
+
+/// Writing a given value to the writer using the specified format.
+#[inline]
+pub fn write_temporal_display(
+    f: &mut dyn Write,
+    value: &impl TemporalFormat,
+    format: &CompiledTimeFormat<'_>,
+) -> FormatResult {
+    value.write_with_time_format(f, format)
+}
+
 macro_rules! temporal_display {
     ($convert:ident, $format:ident, $t:ty) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
@@ -835,12 +896,8 @@ macro_rules! temporal_display {
                     ))
                 })?;
 
-                match fmt {
-                    CompiledTimeFormat::Custom(items) => {
-                        write!(f, "{}", naive.format_with_items(items.0.iter()))?
-                    }
-                    CompiledTimeFormat::Default => write!(f, "{naive:?}")?,
-                }
+                write_temporal_display(f, &naive, fmt)?;
+
                 Ok(())
             }
         }

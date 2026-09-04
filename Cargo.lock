@@ -2501,6 +2501,7 @@ dependencies = [
  "parquet-variant",
  "parquet-variant-json",
  "rand 0.10.2",
+ "ryu",
  "serde_json",
  "uuid",
 ]
