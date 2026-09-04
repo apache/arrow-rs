@@ -2554,9 +2554,25 @@ fn cast_numeric_arrays<FROM, TO>(
 where
     FROM: ArrowPrimitiveType,
     TO: ArrowPrimitiveType,
-    FROM::Native: NumCast,
+    FROM::Native: NumCast + AsPrimitive<TO::Native>,
     TO::Native: NumCast,
 {
+    if is_infallible_numeric_cast(&FROM::DATA_TYPE, &TO::DATA_TYPE) {
+        // `unary` applies the conversion to every slot, including null ones, and
+        // reuses the input's null buffer instead of rebuilding it. That is what
+        // lets the loop vectorize.
+        //
+        // As a consequence the values buffer underneath a null slot now holds the
+        // converted input value rather than the zero left there by `unary_opt` /
+        // `try_unary`. Values under a null slot are undefined by the Arrow
+        // specification, and this matches the other `unary`-based kernels, but it
+        // does change the bytes an IPC writer emits for those positions.
+        return Ok(Arc::new(
+            from.as_primitive::<FROM>()
+                .unary::<_, TO>(|value| value.as_()),
+        ));
+    }
+
     if cast_options.safe {
         // If the value can't be casted to the `TO::Native`, return null
         Ok(Arc::new(numeric_cast::<FROM, TO>(
@@ -2568,6 +2584,45 @@ where
             from.as_primitive::<FROM>(),
         )?))
     }
+}
+
+/// Returns `true` when the per-element checked conversion can be replaced by a
+/// plain widening conversion, that is when
+///
+/// ```text
+/// num_cast::<FROM, TO>(v) == Some(v.as_())
+/// ```
+///
+/// holds for *every* value of `FROM`.
+///
+/// Note that the required invariant is agreement with [`AsPrimitive::as_`], not
+/// merely that `num_cast` is total; a pair belongs here only if it also has a
+/// case in `test_infallible_numeric_casts`, which asserts exactly that equality.
+///
+/// The match is fail-closed: an unlisted pair keeps the existing checked path, so
+/// an omission costs performance and never correctness. The set is deliberately
+/// conservative and does not attempt to be exhaustive. In particular `Float16` is
+/// excluded, because `f16` has no primitive `as` conversion and so needs separate
+/// correctness reasoning.
+///
+/// Called with associated constants, so each monomorphisation folds this to a
+/// constant and the branch disappears.
+fn is_infallible_numeric_cast(from: &DataType, to: &DataType) -> bool {
+    use DataType::*;
+    matches!(
+        (from, to),
+        (Int8, Int16 | Int32 | Int64 | Float32 | Float64)
+            | (Int16, Int32 | Int64 | Float32 | Float64)
+            | (Int32, Int64 | Float32 | Float64)
+            | (Int64 | UInt64, Float32 | Float64)
+            | (
+                UInt8,
+                UInt16 | UInt32 | UInt64 | Int16 | Int32 | Int64 | Float32 | Float64
+            )
+            | (UInt16, UInt32 | UInt64 | Int32 | Int64 | Float32 | Float64)
+            | (UInt32, UInt64 | Int64 | Float32 | Float64)
+            | (Float32, Float64)
+    )
 }
 
 // Natural cast between numeric types
@@ -2938,6 +2993,267 @@ mod tests {
             assert_eq!($OUTPUT_TYPE, result.data_type());
             assert_eq!(result.as_ref(), &output);
         };
+    }
+
+    /// Asserts the property `is_infallible_numeric_cast` relies on: `num_cast`
+    /// never rejects a value of `$from`, *and* agrees with the conversion the
+    /// fast path actually performs, [`AsPrimitive::as_`].
+    ///
+    /// This also pins the behaviour of `num_traits` itself. Totality of these
+    /// conversions is an assumption the fast path bakes in; if a future version
+    /// made any of them fallible, the fast path would silently diverge from the
+    /// checked path and this test is what would catch it.
+    macro_rules! assert_infallible_numeric_pair {
+        ($from:ty, $to:ty, $from_type:expr, $to_type:expr) => {{
+            assert!(is_infallible_numeric_cast(&$from_type, &$to_type));
+
+            let assert_value = |value: $from| {
+                let expected = value as $to;
+                let as_primitive: $to = value.as_();
+                assert_eq!(as_primitive, expected, "AsPrimitive disagrees with `as`");
+                assert_eq!(num_cast::<$from, $to>(value), Some(expected));
+            };
+
+            for value in [<$from>::MIN, <$from>::MAX, 0, 1] {
+                assert_value(value);
+            }
+
+            let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+            for _ in 0..65 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                assert_value(state.as_());
+            }
+        }};
+    }
+
+    /// Runs one fast-path pair end to end through the public `cast_with_options`
+    /// entry point and compares every element against a per-element `num_cast`
+    /// reference, under both `safe` settings and at several array offsets.
+    macro_rules! assert_fast_path_matches_reference {
+        ($from_type:ty, $from:ty, $to_type:ty, $to:ty) => {{
+            let mut values: Vec<Option<$from>> = vec![
+                Some(<$from>::MIN),
+                Some(<$from>::MAX),
+                Some(0),
+                Some(1),
+                None,
+            ];
+            let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+            for _ in 0..65 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                values.push(Some(state.as_()));
+                values.push(None);
+            }
+
+            let array = Arc::new(PrimitiveArray::<$from_type>::from(values)) as ArrayRef;
+            let to_data_type = <$to_type as ArrowPrimitiveType>::DATA_TYPE;
+            let options = [
+                CastOptions::default(),
+                CastOptions {
+                    safe: false,
+                    ..Default::default()
+                },
+            ];
+
+            for cast_options in options {
+                for offset in [0, 1, 3] {
+                    let input = array.slice(offset, array.len() - offset);
+                    let output = cast_with_options(&input, &to_data_type, &cast_options).unwrap();
+
+                    let input = input.as_primitive::<$from_type>();
+                    let output = output.as_primitive::<$to_type>();
+                    assert_eq!(output.len(), input.len());
+                    assert_eq!(output.null_count(), input.null_count());
+
+                    for index in 0..output.len() {
+                        assert_eq!(output.is_null(index), input.is_null(index));
+                        if input.is_null(index) {
+                            continue;
+                        }
+                        let value = input.value(index);
+                        let expected = num_cast::<$from, $to>(value)
+                            .expect("num_cast must be total for a fast path pair");
+                        assert_eq!(
+                            output.value(index),
+                            expected,
+                            "{} -> {} at index {index} of offset {offset}",
+                            stringify!($from),
+                            stringify!($to),
+                        );
+                    }
+                }
+            }
+        }};
+    }
+
+    #[test]
+    fn test_infallible_numeric_casts() {
+        assert_infallible_numeric_pair!(i8, i16, Int8, Int16);
+        assert_infallible_numeric_pair!(i8, i32, Int8, Int32);
+        assert_infallible_numeric_pair!(i8, i64, Int8, Int64);
+        assert_infallible_numeric_pair!(i8, f32, Int8, Float32);
+        assert_infallible_numeric_pair!(i8, f64, Int8, Float64);
+        assert_infallible_numeric_pair!(i16, i32, Int16, Int32);
+        assert_infallible_numeric_pair!(i16, i64, Int16, Int64);
+        assert_infallible_numeric_pair!(i16, f32, Int16, Float32);
+        assert_infallible_numeric_pair!(i16, f64, Int16, Float64);
+        assert_infallible_numeric_pair!(i32, i64, Int32, Int64);
+        assert_infallible_numeric_pair!(i32, f32, Int32, Float32);
+        assert_infallible_numeric_pair!(i32, f64, Int32, Float64);
+        assert_infallible_numeric_pair!(i64, f32, Int64, Float32);
+        assert_infallible_numeric_pair!(i64, f64, Int64, Float64);
+
+        assert_infallible_numeric_pair!(u8, u16, UInt8, UInt16);
+        assert_infallible_numeric_pair!(u8, u32, UInt8, UInt32);
+        assert_infallible_numeric_pair!(u8, u64, UInt8, UInt64);
+        assert_infallible_numeric_pair!(u8, i16, UInt8, Int16);
+        assert_infallible_numeric_pair!(u8, i32, UInt8, Int32);
+        assert_infallible_numeric_pair!(u8, i64, UInt8, Int64);
+        assert_infallible_numeric_pair!(u8, f32, UInt8, Float32);
+        assert_infallible_numeric_pair!(u8, f64, UInt8, Float64);
+        assert_infallible_numeric_pair!(u16, u32, UInt16, UInt32);
+        assert_infallible_numeric_pair!(u16, u64, UInt16, UInt64);
+        assert_infallible_numeric_pair!(u16, i32, UInt16, Int32);
+        assert_infallible_numeric_pair!(u16, i64, UInt16, Int64);
+        assert_infallible_numeric_pair!(u16, f32, UInt16, Float32);
+        assert_infallible_numeric_pair!(u16, f64, UInt16, Float64);
+        assert_infallible_numeric_pair!(u32, u64, UInt32, UInt64);
+        assert_infallible_numeric_pair!(u32, i64, UInt32, Int64);
+        assert_infallible_numeric_pair!(u32, f32, UInt32, Float32);
+        assert_infallible_numeric_pair!(u32, f64, UInt32, Float64);
+        assert_infallible_numeric_pair!(u64, f32, UInt64, Float32);
+        assert_infallible_numeric_pair!(u64, f64, UInt64, Float64);
+
+        assert!(is_infallible_numeric_cast(&Float32, &Float64));
+        for value in [
+            f32::MIN,
+            f32::MAX,
+            f32::MIN_POSITIVE,
+            0.0,
+            -0.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ] {
+            let expected = value as f64;
+            let as_primitive: f64 = value.as_();
+            assert_eq!(as_primitive.to_bits(), expected.to_bits());
+            assert_eq!(num_cast::<f32, f64>(value), Some(expected));
+        }
+        assert!(num_cast::<f32, f64>(f32::NAN).unwrap().is_nan());
+        assert!(AsPrimitive::<f64>::as_(f32::NAN).is_nan());
+
+        assert!(!is_infallible_numeric_cast(&Int64, &Int32));
+        assert_eq!(num_cast::<i64, i32>(i64::MAX), None);
+        assert_eq!(i64::MAX as i32, -1);
+    }
+
+    /// One pair per conversion class, driven end to end through
+    /// `cast_with_options`. The property test above already covers all 35 pairs
+    /// numerically; this checks the parts `unary` could get wrong instead --
+    /// length, validity, and array offsets -- so a representative sample is
+    /// enough rather than repeating the whole matrix.
+    #[test]
+    fn test_infallible_numeric_cast_fast_path_matches_reference() {
+        // signed widening, the motivating case
+        assert_fast_path_matches_reference!(Int32Type, i32, Int64Type, i64);
+        // signed to float, including a source narrower than the target
+        assert_fast_path_matches_reference!(Int8Type, i8, Float32Type, f32);
+        // unsigned widening
+        assert_fast_path_matches_reference!(UInt32Type, u32, UInt64Type, u64);
+        // unsigned to a strictly wider signed target
+        assert_fast_path_matches_reference!(UInt16Type, u16, Int32Type, i32);
+        // unsigned to float, at the width where the value exceeds the mantissa
+        assert_fast_path_matches_reference!(UInt64Type, u64, Float64Type, f64);
+
+        // Float32 -> Float64 is the one float source, and needs its own inputs:
+        // NaN, the infinities and a signed zero have no integer counterpart.
+        let values = vec![
+            Some(f32::MIN),
+            Some(f32::MAX),
+            Some(f32::MIN_POSITIVE),
+            Some(0.0),
+            Some(-0.0),
+            Some(1.5),
+            Some(f32::INFINITY),
+            Some(f32::NEG_INFINITY),
+            Some(f32::NAN),
+            None,
+        ];
+        let array = Arc::new(Float32Array::from(values)) as ArrayRef;
+
+        for cast_options in [
+            CastOptions::default(),
+            CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        ] {
+            for offset in [0, 1, 3] {
+                let input = array.slice(offset, array.len() - offset);
+                let output = cast_with_options(&input, &Float64, &cast_options).unwrap();
+
+                let input = input.as_primitive::<Float32Type>();
+                let output = output.as_primitive::<Float64Type>();
+                assert_eq!(output.len(), input.len());
+                assert_eq!(output.null_count(), input.null_count());
+
+                for index in 0..output.len() {
+                    assert_eq!(output.is_null(index), input.is_null(index));
+                    if input.is_null(index) {
+                        continue;
+                    }
+                    let value = input.value(index);
+                    if value.is_nan() {
+                        // Only NaN-ness is guaranteed: the sign and payload a
+                        // float conversion produces for a NaN are unspecified,
+                        // and Miri deliberately randomises them, so comparing
+                        // bit patterns here would be testing an accident.
+                        assert!(
+                            output.value(index).is_nan(),
+                            "at index {index} of offset {offset}"
+                        );
+                        continue;
+                    }
+                    // bitwise everywhere else, so the sign of zero is checked too
+                    assert_eq!(
+                        output.value(index).to_bits(),
+                        (value as f64).to_bits(),
+                        "at index {index} of offset {offset}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The fast path must not swallow a conversion that can overflow: those keep
+    /// returning null under `safe` and an error under `safe: false`.
+    #[test]
+    fn test_fallible_numeric_casts_remain_checked() {
+        let unchecked = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        // narrowing
+        let array = Arc::new(Int64Array::from(vec![Some(i64::MAX), Some(1)])) as ArrayRef;
+        let output = cast(&array, &Int32).unwrap();
+        assert!(output.is_null(0));
+        assert_eq!(output.as_primitive::<Int32Type>().value(1), 1);
+        assert!(cast_with_options(&array, &Int32, &unchecked).is_err());
+
+        // unsigned to signed of the same width
+        let array = Arc::new(UInt32Array::from(vec![Some(u32::MAX)])) as ArrayRef;
+        assert!(cast(&array, &Int32).unwrap().is_null(0));
+        assert!(cast_with_options(&array, &Int32, &unchecked).is_err());
+
+        // signed to unsigned
+        let array = Arc::new(Int8Array::from(vec![Some(-1i8)])) as ArrayRef;
+        assert!(cast(&array, &UInt8).unwrap().is_null(0));
+        assert!(cast_with_options(&array, &UInt8, &unchecked).is_err());
     }
 
     fn run_decimal_cast_test_case<I, O>(t: DecimalCastTestConfig)
