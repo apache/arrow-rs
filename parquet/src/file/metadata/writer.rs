@@ -253,8 +253,9 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // unencrypted metadata before it is returned to users. This allows the metadata
         // to be usable for retrieving the row group statistics for example, without users
         // needing to decrypt the metadata.
-        let builder = ParquetMetaDataBuilder::new(file_metadata)
-            .set_page_index(Some(PageIndex::new(column_indexes, offset_indexes)));
+        let builder = ParquetMetaDataBuilder::new(file_metadata).set_page_index(Some(Arc::new(
+            PageIndex::new(column_indexes, offset_indexes),
+        )));
 
         Ok(match unencrypted_row_groups {
             Some(rg) => builder.set_row_groups(rg).build(),
@@ -332,6 +333,14 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// metadata writer. Then set the corresponding `bloom_filter_offset` and
 /// `bloom_filter_length` on [`ColumnChunkMetaData`] passed to this writer.
 ///
+/// <div class="warning">
+///
+/// **NOTE:**
+/// The serialization of custom [`PageIndexProvider`]s is not currently supported.
+/// The only supported page index structure is [`PageIndex`].
+///
+/// </div>
+///
 /// # Output Format
 ///
 /// The format of the metadata is as follows:
@@ -346,6 +355,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// [`ColumnChunkMetaData`]: crate::file::metadata::ColumnChunkMetaData
 /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`PageIndexProvider`]: crate::file::metadata::page_index::PageIndexProvider
 ///
 /// ```text
 /// ┌──────────────────────┐
@@ -442,8 +452,6 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
         let key_value_metadata = file_metadata.key_value_metadata().cloned();
 
-        let page_index = self.metadata.page_index().cloned();
-
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
             &schema_descr,
@@ -453,17 +461,23 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             self.write_path_in_schema,
         );
 
-        if let Some(PageIndex {
-            column_indexes,
-            offset_indexes,
-        }) = page_index
+        // Downcast to PageIndex to access raw index structures for serialization
+        // TODO: rework the encoder to work with the PageIndexProvider API to
+        // remove the need for this cast. Because the page index is a dyn trait,
+        // it can't be cloned. An implementation would have to create a new
+        // `PageIndex` from the current `PageIndexProvider` and pass that to
+        // the encoder.
+        if let Some(page_index_arc) = self.metadata.page_index.as_ref()
+            && let Some(page_index) = page_index_arc
+                .as_any()
+                .downcast_ref::<crate::file::metadata::PageIndex>()
         {
-            if let Some(column_indexes) = column_indexes {
-                encoder = encoder.with_column_indexes(column_indexes);
+            if let Some(column_indexes) = page_index.column_indexes_raw() {
+                encoder = encoder.with_column_indexes(column_indexes.clone());
             }
 
-            if let Some(offset_indexes) = offset_indexes {
-                encoder = encoder.with_offset_indexes(offset_indexes);
+            if let Some(offset_indexes) = page_index.offset_indexes_raw() {
+                encoder = encoder.with_offset_indexes(offset_indexes.clone());
             }
         }
 

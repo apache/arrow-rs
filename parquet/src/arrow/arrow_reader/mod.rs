@@ -1017,8 +1017,8 @@ impl ArrowReaderMetadata {
     /// See [`ArrowReaderOptions::with_page_index_policy`] for more information on the page index.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
-            .with_column_index_policy(options.column_index)
-            .with_offset_index_policy(options.offset_index)
+            .with_column_index_policy(options.column_index_policy())
+            .with_offset_index_policy(options.offset_index_policy())
             .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
@@ -4905,19 +4905,11 @@ pub(crate) mod tests {
                 ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
-            let page_index = builder
-                .metadata()
-                .page_index()
-                .expect("page index should be present");
-            let num_columns = builder.metadata().row_group(0).num_columns();
-            let offset_indexes = page_index.offset_indexes_for_rowgroup(0);
-            assert!(offset_indexes.is_some_and(|offset_idxs| offset_idxs.len() == num_columns));
-            let column_indexes = page_index.offset_indexes_for_rowgroup(0);
-            assert!(column_indexes.is_some_and(|cis| cis.len() == num_columns));
-            assert!(page_index.offset_index(0, 0).is_some());
-            assert!(page_index.column_index(0, 0).is_some());
-            assert!(page_index.page_locations(0, 0).is_some());
-            assert_eq!(page_index.num_data_pages(0, 0), Some(325));
+            let row_group_page_index = builder.metadata().page_index_for_row_group(0);
+            assert!(row_group_page_index.offset_index(0).is_some());
+            assert!(row_group_page_index.column_index(0).is_some());
+            assert!(row_group_page_index.page_locations(0).is_some());
+            assert_eq!(row_group_page_index.num_data_pages(0), Some(325));
             let reader = builder.build().unwrap();
             let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
             assert_eq!(batches.len(), 8);
