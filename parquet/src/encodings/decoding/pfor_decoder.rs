@@ -343,6 +343,15 @@ impl<V: PforInt> VectorLayout<V> {
 ///
 /// The add is modular in the unsigned domain, so the bits the unpacker wrote are the signed values
 /// once the frame is on them, exactly as the encoder produced them.
+///
+/// TODO: fuse the frame add into the unpacking kernel. Paired per column against the C++
+/// implementation of this format on 29 shared int32 columns, this decoder runs at 0.37x of it
+/// (0.32x-0.70x, slower on all 29), while `DELTA_BINARY_PACKED` in this crate runs at 1.55x of
+/// the same C++ benchmark on 29 of 29 -- so the gap is this inner loop, not the machine or the
+/// harness. Two candidates, not yet separated: the C++ side adds the frame inside its vectorized
+/// unpack kernel where this makes a second pass over the whole vector, and `unpack32` here is
+/// scalar code left to the autovectorizer. A fused variant would settle how much of the 2.7x is
+/// the extra pass.
 fn unpack_residuals<V: PforInt>(
     out: &mut [V],
     packed: Bytes,
