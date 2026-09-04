@@ -1368,17 +1368,144 @@ impl ArrowRowGroupWriterFactory {
         Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
     }
 
+    /// The [`PageStoreFactory`] this factory allocates column chunk buffers
+    /// from, as set by [`Self::with_page_store_factory`].
+    ///
+    /// A caller that builds some of a row group's column chunks by another
+    /// route can pass this to that route as well, so that every chunk in the
+    /// row group is buffered by the same page store, whether that spills to a
+    /// temporary file, to object storage or to the heap.
+    pub fn page_store_factory(&self) -> &Arc<dyn PageStoreFactory> {
+        &self.page_store_factory
+    }
+
     /// Create column writers for a new row group, with the given row group index
     pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
-        let mut writers = Vec::with_capacity(self.arrow_schema.fields.len());
+        let props = Arc::clone(&self.props);
+        let writers = self.create_selected_column_writers(row_group_index, &props, &|_| true)?;
+        Ok(writers
+            .into_iter()
+            .map(|writer| writer.expect("every leaf column was selected"))
+            .collect())
+    }
+
+    /// Create a writer for one leaf column of the given row group, using
+    /// `props` in place of the file writer's properties.
+    ///
+    /// `column_index` indexes the parquet *leaf* columns of the schema, in
+    /// schema order: the order of [`SchemaDescriptor::columns`], which is also
+    /// the order in which [`compute_leaves`] yields [`ArrowLeafColumn`]s and
+    /// the order of the writers returned by [`Self::create_column_writers`].
+    ///
+    /// It is not an index into the Arrow schema's top level fields. A struct,
+    /// list or map field expands to one leaf column per primitive it contains,
+    /// so the Arrow fields `[i, struct<a, b>, t]` have the four leaf columns
+    /// `[i, s.a, s.b, t]` and the field `t` is column 3, not column 2. An index
+    /// at or past the number of leaf columns is an error.
+    ///
+    /// The writer allocates its page store from the same [`PageStoreFactory`]
+    /// (and, with the `encryption` feature, is wired to the same file
+    /// encryptor) as [`Self::create_column_writers`]. Only the encoding level
+    /// properties differ, so the [`ArrowColumnChunk`] it produces is still
+    /// appendable to a row group of the same file writer. This makes it
+    /// possible to encode the same rows several times with different
+    /// properties and keep only the chunk that came out smallest, or to build
+    /// the rest of the row group's chunks by some other route.
+    ///
+    /// `props` must describe the same schema as the file writer: properties
+    /// that change the physical layout of the file, such as the writer version
+    /// or the schema itself, will produce chunks that the file writer cannot
+    /// accept. Per-column encoding, compression, dictionary and statistics
+    /// settings are the intended use.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    /// # use parquet::arrow::ArrowSchemaConverter;
+    /// # use parquet::arrow::arrow_writer::{ArrowRowGroupWriterFactory, compute_leaves};
+    /// # use parquet::basic::Encoding;
+    /// # use parquet::file::properties::WriterProperties;
+    /// # use parquet::file::writer::SerializedFileWriter;
+    /// # fn main() -> parquet::errors::Result<()> {
+    /// let values: ArrayRef = Arc::new(Int32Array::from_iter_values(0..1024));
+    /// let batch = RecordBatch::try_from_iter([("id", values)])?;
+    /// let schema = batch.schema();
+    ///
+    /// let props = Arc::new(WriterProperties::builder().build());
+    /// let parquet_schema = ArrowSchemaConverter::new().convert(&schema)?;
+    /// let mut buffer = Vec::new();
+    /// let mut file_writer =
+    ///     SerializedFileWriter::new(&mut buffer, parquet_schema.root_schema_ptr(), props.clone())?;
+    /// let factory = ArrowRowGroupWriterFactory::new(&file_writer, Arc::clone(&schema));
+    ///
+    /// // Encoding properties for this column chunk only.
+    /// let column_props = Arc::new(
+    ///     WriterProperties::builder()
+    ///         .set_dictionary_enabled(false)
+    ///         .set_encoding(Encoding::DELTA_BINARY_PACKED)
+    ///         .build(),
+    /// );
+    /// // The single leaf column of this schema, written at those properties.
+    /// let mut writer = factory.create_column_writer(0, 0, &column_props)?;
+    ///
+    /// for (field, column) in schema.fields().iter().zip(batch.columns()) {
+    ///     for leaf in compute_leaves(field, column)? {
+    ///         writer.write(&leaf)?;
+    ///     }
+    /// }
+    ///
+    /// let mut row_group = file_writer.next_row_group()?;
+    /// writer.close()?.append_to_row_group(&mut row_group)?;
+    /// row_group.close()?;
+    /// file_writer.close()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn create_column_writer(
+        &self,
+        row_group_index: usize,
+        column_index: usize,
+        props: &WriterPropertiesPtr,
+    ) -> Result<ArrowColumnWriter> {
+        let num_columns = self.schema.num_columns();
+        if column_index >= num_columns {
+            return Err(general_err!(
+                "column_index {column_index} is out of range: the schema has {num_columns} leaf columns, so the valid indices are 0..{num_columns}"
+            ));
+        }
+        let mut writers = self
+            .create_selected_column_writers(row_group_index, props, &|leaf| leaf == column_index)?;
+        Ok(writers[column_index]
+            .take()
+            .expect("the requested leaf column was selected"))
+    }
+
+    /// Create a column writer for each leaf column `select` accepts, with one
+    /// entry per leaf column of the schema in leaf order, holding `None`
+    /// wherever `select` returned `false` so that the entries stay aligned with
+    /// that order. Nothing is allocated for an unselected column: in particular
+    /// no page store is created for it, which matters when the page store
+    /// factory allocates something more expensive than a heap buffer.
+    ///
+    /// This is the only place column writers are constructed.
+    /// [`Self::create_column_writers`] and [`Self::create_column_writer`] are
+    /// its two degenerate cases, selecting every column and exactly one.
+    fn create_selected_column_writers(
+        &self,
+        row_group_index: usize,
+        props: &WriterPropertiesPtr,
+        select: &dyn Fn(usize) -> bool,
+    ) -> Result<Vec<Option<ArrowColumnWriter>>> {
+        let mut writers = Vec::with_capacity(self.schema.num_columns());
         let mut leaves = self.schema.columns().iter();
         let column_factory = self.column_writer_factory(row_group_index);
         for field in &self.arrow_schema.fields {
             column_factory.get_arrow_column_writer(
                 field.data_type(),
-                &self.props,
+                props,
                 &mut leaves,
                 &mut writers,
+                select,
             )?;
         }
         Ok(writers)
@@ -1470,38 +1597,49 @@ impl ArrowColumnWriterFactory {
     }
 
     /// Gets an [`ArrowColumnWriter`] for the given `data_type`, appending the
-    /// output ColumnDesc to `leaves` and the column writers to `out`
+    /// output ColumnDesc to `leaves` and the column writers to `out`.
+    ///
+    /// One entry is appended to `out` per leaf column, holding `None` for a
+    /// leaf `select` rejects so that the entries stay aligned with the leaf
+    /// order either way.
     fn get_arrow_column_writer(
         &self,
         data_type: &ArrowDataType,
         props: &WriterPropertiesPtr,
         leaves: &mut Iter<'_, ColumnDescPtr>,
-        out: &mut Vec<ArrowColumnWriter>,
+        out: &mut Vec<Option<ArrowColumnWriter>>,
+        select: &dyn Fn(usize) -> bool,
     ) -> Result<()> {
         let write_distinct_values = props.write_row_group_number_distinct_values();
 
         // Instantiate writers for normal columns
-        let col = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
+        let col = |desc: &ColumnDescPtr| -> Result<Option<ArrowColumnWriter>> {
+            if !select(out.len()) {
+                return Ok(None);
+            }
             let page_writer = self.create_page_writer(desc, out.len())?;
             let chunk = page_writer.buffer.clone();
             let writer = get_column_writer(desc.clone(), props.clone(), page_writer);
-            Ok(ArrowColumnWriter {
+            Ok(Some(ArrowColumnWriter {
                 chunk,
                 writer: ArrowColumnWriterImpl::Column(writer),
                 distinct_values_seen: write_distinct_values.then(HashSet::new),
-            })
+            }))
         };
 
         // Instantiate writers for byte arrays (e.g. Utf8,  Binary, etc)
-        let bytes = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
+        let bytes = |desc: &ColumnDescPtr| -> Result<Option<ArrowColumnWriter>> {
+            if !select(out.len()) {
+                return Ok(None);
+            }
             let page_writer = self.create_page_writer(desc, out.len())?;
             let chunk = page_writer.buffer.clone();
             let writer = GenericColumnWriter::new(desc.clone(), props.clone(), page_writer);
-            Ok(ArrowColumnWriter {
+            Ok(Some(ArrowColumnWriter {
                 chunk,
                 writer: ArrowColumnWriterImpl::ByteArray(writer),
                 distinct_values_seen: write_distinct_values.then(HashSet::new),
-            })
+            }))
         };
 
         match data_type {
@@ -1520,17 +1658,17 @@ impl ArrowColumnWriterFactory {
             | ArrowDataType::FixedSizeList(f, _)
             | ArrowDataType::ListView(f)
             | ArrowDataType::LargeListView(f) => {
-                self.get_arrow_column_writer(f.data_type(), props, leaves, out)?
+                self.get_arrow_column_writer(f.data_type(), props, leaves, out, select)?
             }
             ArrowDataType::Struct(fields) => {
                 for field in fields {
-                    self.get_arrow_column_writer(field.data_type(), props, leaves, out)?
+                    self.get_arrow_column_writer(field.data_type(), props, leaves, out, select)?
                 }
             }
             ArrowDataType::Map(f, _) => match f.data_type() {
                 ArrowDataType::Struct(f) => {
-                    self.get_arrow_column_writer(f[0].data_type(), props, leaves, out)?;
-                    self.get_arrow_column_writer(f[1].data_type(), props, leaves, out)?
+                    self.get_arrow_column_writer(f[0].data_type(), props, leaves, out, select)?;
+                    self.get_arrow_column_writer(f[1].data_type(), props, leaves, out, select)?
                 }
                 _ => unreachable!("invalid map type"),
             },
@@ -1546,7 +1684,7 @@ impl ArrowColumnWriterFactory {
                 _ => out.push(col(leaves.next().unwrap())?),
             },
             ArrowDataType::RunEndEncoded(_, value_field) => {
-                self.get_arrow_column_writer(value_field.data_type(), props, leaves, out)?
+                self.get_arrow_column_writer(value_field.data_type(), props, leaves, out, select)?
             }
             _ => {
                 return Err(ParquetError::NYI(format!(
@@ -2331,6 +2469,439 @@ mod tests {
         );
     }
 
+    /// Writes `batch` as a single row group and returns the finished file.
+    ///
+    /// With `column_props` set, every leaf column's writer is built one at a
+    /// time through [`ArrowRowGroupWriterFactory::create_column_writer`] at
+    /// those properties. With `None`, the row group is built in one call to
+    /// [`ArrowRowGroupWriterFactory::create_column_writers`] at the file
+    /// writer's own properties, which is the ordinary write path.
+    fn write_via_row_group_factory(
+        batch: &RecordBatch,
+        file_props: WriterProperties,
+        column_props: Option<WriterProperties>,
+    ) -> Bytes {
+        let schema = batch.schema();
+        let file_props = Arc::new(file_props);
+        let parquet_schema = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = SerializedFileWriter::new(
+            &mut buf,
+            parquet_schema.root_schema_ptr(),
+            file_props.clone(),
+        )
+        .unwrap();
+        let factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+
+        let mut col_writers: Vec<ArrowColumnWriter> = match column_props {
+            Some(props) => {
+                let props = Arc::new(props);
+                (0..parquet_schema.num_columns())
+                    .map(|column| factory.create_column_writer(0, column, &props).unwrap())
+                    .collect()
+            }
+            None => factory.create_column_writers(0).unwrap(),
+        };
+
+        let mut writers = col_writers.iter_mut();
+        for (field, column) in schema.fields().iter().zip(batch.columns()) {
+            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
+                writers.next().unwrap().write(&leaf).unwrap();
+            }
+        }
+
+        let mut rg = writer.next_row_group().unwrap();
+        for chunk in col_writers {
+            chunk.close().unwrap().append_to_row_group(&mut rg).unwrap();
+        }
+        rg.close().unwrap();
+        writer.close().unwrap();
+        Bytes::from(buf)
+    }
+
+    /// Building every column one at a time at the file writer's own properties
+    /// must reproduce `create_column_writers`, and different properties must
+    /// really reach the encoders while still producing an appendable chunk.
+    #[test]
+    fn create_column_writer_honours_per_column_properties() {
+        let array: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..4096).map(|i| format!("value-{:04}", i % 97)),
+        ));
+        let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+
+        let props = || {
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .set_dictionary_page_size_limit(4096)
+                .build()
+        };
+
+        // Handing the primitive the file writer's own properties must
+        // reproduce `create_column_writers` byte for byte.
+        let batched = write_via_row_group_factory(&batch, props(), None);
+        let per_column = write_via_row_group_factory(&batch, props(), Some(props()));
+        assert_eq!(batched, per_column);
+
+        // Per-column properties really do change the encoding, and the
+        // resulting chunk is still appendable to the same file writer.
+        let pinned = write_via_row_group_factory(
+            &batch,
+            props(),
+            Some(
+                WriterProperties::builder()
+                    .set_statistics_enabled(EnabledStatistics::Page)
+                    .set_dictionary_enabled(false)
+                    .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+                    .build(),
+            ),
+        );
+        assert_ne!(batched, pinned);
+
+        let reader = SerializedFileReader::new(pinned.clone()).unwrap();
+        let column = reader.metadata().row_group(0).column(0);
+        assert!(column.dictionary_page_offset().is_none());
+        let encodings: Vec<_> = column.encodings().collect();
+        assert!(
+            encodings.contains(&Encoding::DELTA_BYTE_ARRAY),
+            "expected the requested encoding, got {encodings:?}"
+        );
+
+        // Every variant reads back to the original rows.
+        for data in [batched, per_column, pinned] {
+            let read = ParquetRecordBatchReader::try_new(data, 1024)
+                .unwrap()
+                .collect::<ArrowResult<Vec<_>>>()
+                .unwrap();
+            let read = arrow_select::concat::concat_batches(&batch.schema(), &read).unwrap();
+            assert_eq!(read, batch);
+        }
+    }
+
+    /// `column_index` must address the schema's leaf columns, including across
+    /// a nested field that expands into several leaves, and the chunks the
+    /// primitive produces must be indistinguishable from the ones the
+    /// all-columns call produces.
+    #[test]
+    fn create_column_writer_addresses_leaf_columns() {
+        let ints: ArrayRef = Arc::new(Int32Array::from_iter_values(0..64));
+        let inner_a: ArrayRef = Arc::new(Int32Array::from_iter_values((0..64).map(|i| i * 2)));
+        let inner_b: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..64).map(|i| format!("s{i}")),
+        ));
+        let structs: ArrayRef = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", ArrowDataType::Int32, false)),
+                inner_a,
+            ),
+            (
+                Arc::new(Field::new("b", ArrowDataType::Utf8, false)),
+                inner_b,
+            ),
+        ]));
+        let tail: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..64).map(|i| format!("t{}", i % 4)),
+        ));
+        let batch = RecordBatch::try_from_iter([("i", ints), ("s", structs), ("t", tail)]).unwrap();
+
+        let schema = batch.schema();
+        let props = Arc::new(WriterProperties::builder().build());
+        let parquet_schema = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        let mut buf = Vec::with_capacity(1024);
+        let writer =
+            SerializedFileWriter::new(&mut buf, parquet_schema.root_schema_ptr(), props.clone())
+                .unwrap();
+        let factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+
+        // Three Arrow fields, but four leaf columns: the struct field `s`
+        // expands into two of them, so the last field is column 3, not 2.
+        assert_eq!(schema.fields().len(), 3);
+        assert_eq!(parquet_schema.num_columns(), 4);
+        let paths: Vec<String> = parquet_schema
+            .columns()
+            .iter()
+            .map(|c| c.path().string())
+            .collect();
+        assert_eq!(paths, ["i", "s.a", "s.b", "t"]);
+
+        // One writer per leaf column, built one at a time, against one writer
+        // per leaf column built in a single call.
+        let mut one_at_a_time: Vec<ArrowColumnWriter> = (0..parquet_schema.num_columns())
+            .map(|column| factory.create_column_writer(0, column, &props).unwrap())
+            .collect();
+        let mut all = factory.create_column_writers(0).unwrap();
+        assert_eq!(all.len(), 4);
+
+        let mut leaf_idx = 0usize;
+        for (field, column) in schema.fields().iter().zip(batch.columns()) {
+            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
+                one_at_a_time[leaf_idx].write(&leaf).unwrap();
+                all[leaf_idx].write(&leaf).unwrap();
+                leaf_idx += 1;
+            }
+        }
+        assert_eq!(leaf_idx, 4);
+
+        // A writer built for the wrong leaf would have the wrong descriptor and
+        // so encode to a different size: `s.b` and `t` are both strings, and
+        // only the right pairing matches.
+        for (idx, (ours, theirs)) in one_at_a_time.into_iter().zip(all).enumerate() {
+            let ours = ours.close().unwrap();
+            let theirs = theirs.close().unwrap();
+            assert_eq!(
+                ours.close().metadata.compressed_size(),
+                theirs.close().metadata.compressed_size(),
+                "leaf column {idx} encoded differently from the all-columns writer"
+            );
+            assert_eq!(
+                ours.close().metadata.num_values(),
+                theirs.close().metadata.num_values()
+            );
+            assert_eq!(
+                ours.close().metadata.column_path(),
+                theirs.close().metadata.column_path(),
+                "leaf column {idx} was built for the wrong column"
+            );
+        }
+    }
+
+    /// A writer built by the primitive must allocate its page store from the
+    /// factory's own [`PageStoreFactory`].
+    #[test]
+    fn create_column_writer_uses_the_configured_page_store() {
+        let a: ArrayRef = Arc::new(Int32Array::from_iter_values(0..128));
+        let b: ArrayRef = Arc::new(Int32Array::from_iter_values((0..128).map(|i| i * 3)));
+        let batch = RecordBatch::try_from_iter([("a", a), ("b", b)]).unwrap();
+        let schema = batch.schema();
+
+        let props = Arc::new(WriterProperties::builder().build());
+        let parquet_schema = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        let mut buf = Vec::with_capacity(1024);
+        let writer =
+            SerializedFileWriter::new(&mut buf, parquet_schema.root_schema_ptr(), props.clone())
+                .unwrap();
+
+        let puts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let store_factory: Arc<dyn PageStoreFactory> =
+            Arc::new(RecordingPageStoreFactory { puts: puts.clone() });
+        let factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema))
+            .with_page_store_factory(Arc::clone(&store_factory));
+
+        // The getter hands back exactly the factory that was configured, so a
+        // caller producing chunks by another route can share it.
+        assert!(Arc::ptr_eq(factory.page_store_factory(), &store_factory));
+
+        // Build a writer for the second leaf column only, and feed it only its
+        // own leaf.
+        let mut column_writer = factory.create_column_writer(0, 1, &props).unwrap();
+        let mut leaf_idx = 0usize;
+        for (field, column) in schema.fields().iter().zip(batch.columns()) {
+            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
+                if leaf_idx == 1 {
+                    column_writer.write(&leaf).unwrap();
+                }
+                leaf_idx += 1;
+            }
+        }
+        column_writer.close().unwrap();
+
+        assert!(
+            puts.load(std::sync::atomic::Ordering::Relaxed) > 0,
+            "the column's pages did not go through the configured page store"
+        );
+    }
+
+    /// An index at or past the number of leaf columns is a clear error naming
+    /// the valid range, not a panic.
+    #[test]
+    fn create_column_writer_rejects_an_out_of_range_column() {
+        let a: ArrayRef = Arc::new(Int32Array::from_iter_values(0..8));
+        let b: ArrayRef = Arc::new(Int32Array::from_iter_values(8..16));
+        let batch = RecordBatch::try_from_iter([("a", a), ("b", b)]).unwrap();
+        let schema = batch.schema();
+
+        let props = Arc::new(WriterProperties::builder().build());
+        let parquet_schema = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        let mut buf = Vec::with_capacity(1024);
+        let writer =
+            SerializedFileWriter::new(&mut buf, parquet_schema.root_schema_ptr(), props.clone())
+                .unwrap();
+        let factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+
+        // The last valid index works.
+        factory.create_column_writer(0, 1, &props).unwrap();
+
+        let err = factory.create_column_writer(0, 2, &props).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("column_index 2 is out of range"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("0..2"),
+            "the error must name the valid range: {message}"
+        );
+    }
+
+    /// Several writers for the *same* leaf column, under different properties,
+    /// can be alive at once and each closes independently. This is the probe
+    /// pattern: encode the same rows every way and keep the smallest chunk.
+    #[test]
+    fn create_column_writer_probes_one_column_under_several_properties() {
+        let array: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..2048).map(|i| format!("value-{:04}", i % 53)),
+        ));
+        let batch = RecordBatch::try_from_iter([("col", array)]).unwrap();
+        let schema = batch.schema();
+
+        let file_props = Arc::new(WriterProperties::builder().build());
+        let parquet_schema = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = SerializedFileWriter::new(
+            &mut buf,
+            parquet_schema.root_schema_ptr(),
+            file_props.clone(),
+        )
+        .unwrap();
+        let factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+
+        let candidates = [
+            Arc::new(WriterProperties::builder().build()),
+            Arc::new(
+                WriterProperties::builder()
+                    .set_dictionary_enabled(false)
+                    .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+                    .build(),
+            ),
+            Arc::new(
+                WriterProperties::builder()
+                    .set_dictionary_enabled(false)
+                    .set_encoding(Encoding::PLAIN)
+                    .build(),
+            ),
+        ];
+
+        // All of the probe writers for column 0 exist at the same time.
+        let mut probes: Vec<ArrowColumnWriter> = candidates
+            .iter()
+            .map(|props| factory.create_column_writer(0, 0, props).unwrap())
+            .collect();
+
+        for (field, column) in schema.fields().iter().zip(batch.columns()) {
+            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
+                for probe in &mut probes {
+                    probe.write(&leaf).unwrap();
+                }
+            }
+        }
+
+        // Each one closes on its own, and the candidates really did encode
+        // differently.
+        let sizes: Vec<i64> = probes
+            .into_iter()
+            .map(|probe| probe.close().unwrap().close().metadata.compressed_size())
+            .collect();
+        assert_eq!(sizes.len(), candidates.len());
+        assert!(
+            sizes.iter().collect::<HashSet<_>>().len() == sizes.len(),
+            "the candidate properties all encoded to the same size: {sizes:?}"
+        );
+
+        // The probe chunks are thrown away; the winner is written again for
+        // real and the file still reads back.
+        let winner = sizes
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, size)| **size)
+            .map(|(idx, _)| idx)
+            .unwrap();
+        let mut real = factory
+            .create_column_writer(0, 0, &candidates[winner])
+            .unwrap();
+        for (field, column) in schema.fields().iter().zip(batch.columns()) {
+            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
+                real.write(&leaf).unwrap();
+            }
+        }
+        let mut rg = writer.next_row_group().unwrap();
+        real.close().unwrap().append_to_row_group(&mut rg).unwrap();
+        rg.close().unwrap();
+        writer.close().unwrap();
+
+        let read = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        let read = arrow_select::concat::concat_batches(&schema, &read).unwrap();
+        assert_eq!(read, batch);
+    }
+
+    /// With the `encryption` feature on, the writers the primitive builds must
+    /// be wired to the file writer's encryptor: a file written entirely through
+    /// it must be readable only with the matching decryption properties.
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn create_column_writer_uses_the_file_encryptor() {
+        use crate::arrow::arrow_reader::ArrowReaderOptions;
+        use crate::encryption::decrypt::FileDecryptionProperties;
+        use crate::encryption::encrypt::FileEncryptionProperties;
+
+        let key: Vec<u8> = b"0123456789012345".to_vec();
+        let array: ArrayRef = Arc::new(Int32Array::from_iter_values(0..256));
+        let batch = RecordBatch::try_from_iter([("v", array)]).unwrap();
+        let schema = batch.schema();
+
+        let props = Arc::new(
+            WriterProperties::builder()
+                .with_file_encryption_properties(
+                    FileEncryptionProperties::builder(key.clone())
+                        .build()
+                        .unwrap(),
+                )
+                .build(),
+        );
+        let parquet_schema = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer =
+            SerializedFileWriter::new(&mut buf, parquet_schema.root_schema_ptr(), props.clone())
+                .unwrap();
+        let factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+
+        let mut writers: Vec<ArrowColumnWriter> = (0..parquet_schema.num_columns())
+            .map(|column| factory.create_column_writer(0, column, &props).unwrap())
+            .collect();
+        let mut leaf_idx = 0usize;
+        for (field, column) in schema.fields().iter().zip(batch.columns()) {
+            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
+                writers[leaf_idx].write(&leaf).unwrap();
+                leaf_idx += 1;
+            }
+        }
+        let mut rg = writer.next_row_group().unwrap();
+        for chunk in writers {
+            chunk.close().unwrap().append_to_row_group(&mut rg).unwrap();
+        }
+        rg.close().unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(buf);
+
+        // Without the key the pages cannot be read back.
+        assert!(
+            ParquetRecordBatchReader::try_new(data.clone(), 1024).is_err(),
+            "the chunks were written unencrypted"
+        );
+
+        let options = ArrowReaderOptions::new().with_file_decryption_properties(
+            FileDecryptionProperties::builder(key).build().unwrap(),
+        );
+        let read = ParquetRecordBatchReaderBuilder::try_new_with_options(data, options)
+            .unwrap()
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        let read = arrow_select::concat::concat_batches(&schema, &read).unwrap();
+        assert_eq!(read, batch);
+    }
     #[test]
     fn arrow_writer() {
         // define schema
