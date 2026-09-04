@@ -91,16 +91,12 @@ fn bench_null_buffer_expand(c: &mut Criterion) {
     let mut group = c.benchmark_group("null_buffer_expand");
 
     let cases: &[(&str, usize, usize)] = &[
-        ("len=512/count=16", 512, 16),
-        ("len=512/count=12", 512, 12),
+        ("len=512/count=16", 512, 16), // pow2
+        ("len=512/count=12", 512, 12), // non-pow2
         ("len=1024/count=128", 1024, 128),
         ("len=1024/count=96", 1024, 96),
         ("len=2048/count=256", 2048, 256),
         ("len=2048/count=192", 2048, 192),
-        // general (non-multiple-of-4) path
-        ("len=1024/count=7", 1024, 7),
-        ("len=1024/count=17", 1024, 17),
-        ("len=1024/count=29", 1024, 29),
     ];
 
     for &(label, len, count) in cases {
