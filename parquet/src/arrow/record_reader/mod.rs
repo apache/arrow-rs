@@ -154,11 +154,35 @@ where
         loop {
             let records_to_read = num_records - records_read;
             records_read += self.read_one_batch(records_to_read)?;
-            if records_read == num_records || !self.column_reader.as_mut().unwrap().has_next()? {
+            let reader = self.column_reader.as_mut().unwrap();
+            // A short read caused by the values buffer running out of capacity
+            // is not an exhausted column chunk, and reading again would either
+            // spin or overflow. Stop and let the caller emit a shorter batch.
+            // https://github.com/apache/arrow-rs/issues/7973
+            if records_read == num_records || reader.stopped_for_capacity() || !reader.has_next()? {
                 break;
             }
         }
+
+        if records_read == 0 && self.num_values == 0 && self.stopped_for_capacity() {
+            // Nothing is buffered and not even one value fits, so shortening
+            // the batch cannot make progress.
+            return Err(general_err!(
+                "index overflow decoding byte array: a single value is too large to address \
+                 with 32 bit offsets, read this column as LargeUtf8, LargeBinary or a view type"
+            ));
+        }
+
         Ok(records_read)
+    }
+
+    /// Returns true if the last call to [`Self::read_records`] returned fewer
+    /// records than requested because the values buffer could not accept more
+    /// data, rather than because the column chunk was exhausted
+    pub fn stopped_for_capacity(&self) -> bool {
+        self.column_reader
+            .as_ref()
+            .is_some_and(|reader| reader.stopped_for_capacity())
     }
 
     /// Try to skip the next `num_records` rows

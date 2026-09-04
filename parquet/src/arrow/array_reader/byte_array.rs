@@ -120,6 +120,10 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
         read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)
     }
 
+    fn stopped_for_capacity(&self) -> bool {
+        self.record_reader.stopped_for_capacity()
+    }
+
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_compact_bitmap();
@@ -183,6 +187,11 @@ struct ByteArrayColumnValueDecoder<I: OffsetSizeTrait> {
     dict: Option<OffsetBuffer<I>>,
     decoder: Option<ByteArrayDecoder>,
     validate_utf8: bool,
+    /// The length in bytes of the longest value in `dict`
+    ///
+    /// Lets [`Self::values_capacity`] bound the decoded size of a dictionary
+    /// encoded page without decoding any keys
+    max_dict_value_len: usize,
 }
 
 impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
@@ -194,6 +203,7 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             dict: None,
             decoder: None,
             validate_utf8,
+            max_dict_value_len: 0,
         }
     }
 
@@ -214,7 +224,7 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             ));
         }
 
-        let mut buffer = OffsetBuffer::with_capacity(0);
+        let mut buffer = OffsetBuffer::<I>::with_capacity(0);
         let mut decoder = ByteArrayDecoderPlain::new(
             buf,
             num_values as usize,
@@ -222,6 +232,12 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             self.validate_utf8,
         );
         decoder.read(&mut buffer, usize::MAX)?;
+        self.max_dict_value_len = buffer
+            .offsets
+            .windows(2)
+            .map(|w| w[1].as_usize() - w[0].as_usize())
+            .max()
+            .unwrap_or(0);
         self.dict = Some(buffer);
         Ok(())
     }
@@ -259,6 +275,19 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             .ok_or_else(|| general_err!("no decoder set"))?;
 
         decoder.skip(num_values, self.dict.as_ref())
+    }
+
+    fn values_capacity(&self, out: &Self::Buffer) -> Option<usize> {
+        // 64 bit offsets cannot overflow for any buffer that fits in memory,
+        // and `IS_LARGE` is a constant so this whole method folds to `None`
+        // when monomorphised for `i64`
+        if I::IS_LARGE {
+            return None;
+        }
+        let headroom = I::MAX_OFFSET.saturating_sub(out.values.len());
+        self.decoder
+            .as_ref()?
+            .values_capacity(headroom, self.max_dict_value_len)
     }
 }
 
@@ -322,6 +351,25 @@ impl ByteArrayDecoder {
             }
             ByteArrayDecoder::DeltaLength(d) => d.read(out, len),
             ByteArrayDecoder::DeltaByteArray(d) => d.read(out, len),
+        }
+    }
+
+    /// Returns an upper bound on the number of values that can be decoded from
+    /// the remainder of this page into an [`OffsetBuffer`] with `headroom`
+    /// bytes of offset range left, or `None` if the whole remainder is
+    /// guaranteed to fit
+    ///
+    /// `max_dict_value_len` is the length of the longest value in the
+    /// dictionary and is only read for dictionary encoded pages.
+    ///
+    /// The common case is a single comparison against a bound that is already
+    /// known, no values are decoded and nothing is scanned.
+    pub fn values_capacity(&self, headroom: usize, max_dict_value_len: usize) -> Option<usize> {
+        match self {
+            ByteArrayDecoder::Plain(d) => d.values_capacity(headroom),
+            ByteArrayDecoder::Dictionary(d) => d.values_capacity(headroom, max_dict_value_len),
+            ByteArrayDecoder::DeltaLength(d) => d.values_capacity(headroom),
+            ByteArrayDecoder::DeltaByteArray(d) => d.values_capacity(headroom),
         }
     }
 
@@ -420,6 +468,38 @@ impl ByteArrayDecoderPlain {
             output.check_valid_utf8(initial_values_length)?;
         }
         Ok(to_read)
+    }
+
+    /// See [`ByteArrayDecoder::values_capacity`]
+    fn values_capacity(&self, headroom: usize) -> Option<usize> {
+        if self.max_remaining_values == 0 {
+            return None;
+        }
+        // The bytes left in the page bound the bytes this decoder can still
+        // append, and they include the four byte length prefixes, so this is a
+        // strict over-estimate. One comparison, no scan.
+        let remaining_bytes = self.buf.len() - self.offset;
+        if remaining_bytes <= headroom {
+            return None;
+        }
+
+        // Only reached when the remainder of the page might not fit: walk the
+        // length prefixes to find how many values do.
+        let buf = self.buf.as_ref();
+        let mut offset = self.offset;
+        let mut total = 0usize;
+        let mut count = 0usize;
+        while count < self.max_remaining_values && offset + 4 <= buf.len() {
+            let len_bytes: [u8; 4] = buf[offset..offset + 4].try_into().unwrap();
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            if total + len > headroom {
+                break;
+            }
+            total += len;
+            offset += 4 + len;
+            count += 1;
+        }
+        Some(count)
     }
 
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
@@ -523,6 +603,31 @@ impl ByteArrayDecoderDeltaLength {
         Ok(to_read)
     }
 
+    /// See [`ByteArrayDecoder::values_capacity`]
+    fn values_capacity(&self, headroom: usize) -> Option<usize> {
+        if self.length_offset >= self.lengths.len() {
+            return None;
+        }
+        // The value bytes left in the page bound what this decoder can still
+        // append. One comparison, no scan.
+        let remaining_bytes = self.data.len() - self.data_offset;
+        if remaining_bytes <= headroom {
+            return None;
+        }
+
+        let mut total = 0usize;
+        let mut count = 0usize;
+        for length in &self.lengths[self.length_offset..] {
+            let length = (*length).max(0) as usize;
+            if total + length > headroom {
+                break;
+            }
+            total += length;
+            count += 1;
+        }
+        Some(count)
+    }
+
     fn skip(&mut self, to_skip: usize) -> Result<usize> {
         let remain_values = self.lengths.len() - self.length_offset;
         let to_skip = remain_values.min(to_skip);
@@ -568,6 +673,22 @@ impl ByteArrayDecoderDelta {
         Ok(read)
     }
 
+    /// See [`ByteArrayDecoder::values_capacity`]
+    fn values_capacity(&self, headroom: usize) -> Option<usize> {
+        // A DELTA_BYTE_ARRAY value can be longer than the bytes it occupies in
+        // the page because of the shared prefix, so the page length is not a
+        // bound. Use the longest value in the page, which the decoder computed
+        // when it decoded the length arrays.
+        let max_value_len = self.decoder.max_value_len();
+        if max_value_len == 0 {
+            return None;
+        }
+        if self.decoder.remaining().saturating_mul(max_value_len) <= headroom {
+            return None;
+        }
+        Some(headroom / max_value_len)
+    }
+
     fn skip(&mut self, to_skip: usize) -> Result<usize> {
         self.decoder.skip(to_skip)
     }
@@ -602,6 +723,24 @@ impl ByteArrayDecoderDictionary {
         self.decoder.read(len, |keys| {
             output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice())
         })
+    }
+
+    /// See [`ByteArrayDecoder::values_capacity`]
+    fn values_capacity(&self, headroom: usize, max_dict_value_len: usize) -> Option<usize> {
+        // The keys are not decoded here, so bound the output by the longest
+        // value in the dictionary. One multiply and one comparison.
+        if max_dict_value_len == 0 {
+            return None;
+        }
+        if self
+            .decoder
+            .remaining()
+            .saturating_mul(max_dict_value_len)
+            <= headroom
+        {
+            return None;
+        }
+        Some(headroom / max_dict_value_len)
     }
 
     fn skip<I: OffsetSizeTrait>(
@@ -679,6 +818,48 @@ mod tests {
                     None,
                     None,
                 ]
+            );
+        }
+    }
+
+    #[test]
+    fn test_byte_array_decoder_values_capacity() {
+        // values are 5, 5, 1 and 1 bytes long
+        let (pages, encoded_dictionary) =
+            byte_array_all_encodings(vec!["hello", "world", "a", "b"]);
+
+        let column_desc = utf8_column();
+        let mut decoder = ByteArrayColumnValueDecoder::<i32>::new(&column_desc);
+        decoder
+            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+        assert_eq!(decoder.max_dict_value_len, 5);
+
+        for (encoding, page) in pages {
+            decoder.set_data(encoding, page, 4, Some(4)).unwrap();
+            let max_dict_value_len = decoder.max_dict_value_len;
+            let inner = decoder.decoder.as_ref().unwrap();
+
+            // Room for everything left in the page, so no cap is reported and
+            // the fast path does not scan
+            assert_eq!(
+                inner.values_capacity(usize::MAX / 2, max_dict_value_len),
+                None,
+                "{encoding}"
+            );
+
+            // Room for the first two values only
+            assert_eq!(
+                inner.values_capacity(10, max_dict_value_len),
+                Some(2),
+                "{encoding}"
+            );
+
+            // No room at all
+            assert_eq!(
+                inner.values_capacity(0, max_dict_value_len),
+                Some(0),
+                "{encoding}"
             );
         }
     }

@@ -20,7 +20,7 @@
 use crate::arrow::array_reader::row_group_cache::BatchID;
 use crate::arrow::array_reader::{ArrayReader, row_group_cache::RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 use arrow_array::{ArrayRef, BooleanArray, new_empty_array};
 use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::DataType as ArrowType;
@@ -140,6 +140,20 @@ impl CachedArrayReader {
         // columns to batch boundaries, so the batch containing that row is loaded.
         let read = self.inner.read_records(self.batch_size)?;
 
+        // The cache maps row offsets to batches at fixed multiples of
+        // `batch_size`, so a short read that is not end of column would make
+        // every later batch id point at the wrong rows. Refuse instead of
+        // silently returning shifted data.
+        // https://github.com/apache/arrow-rs/issues/7973
+        if read < self.batch_size && self.inner.stopped_for_capacity() {
+            return Err(general_err!(
+                "cannot split a batch inside the predicate cache: a byte array column \
+                 exceeded the 2GB limit of 32 bit offsets after {read} of {} rows. Read this \
+                 column as LargeUtf8, LargeBinary or a view type, or reduce the batch size",
+                self.batch_size
+            ));
+        }
+
         // If there are no remaining records (EOF), return immediately without
         // attempting to cache an empty batch. This prevents inserting zero-length
         // arrays into the cache which can later cause panics when slicing.
@@ -195,6 +209,10 @@ impl ArrayReader for CachedArrayReader {
 
     fn get_data_type(&self) -> &ArrowType {
         self.inner.get_data_type()
+    }
+
+    fn stopped_for_capacity(&self) -> bool {
+        self.inner.stopped_for_capacity()
     }
 
     fn read_records(&mut self, num_records: usize) -> Result<usize> {
