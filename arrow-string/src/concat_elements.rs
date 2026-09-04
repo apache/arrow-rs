@@ -221,8 +221,7 @@ pub fn concat_elements_fixed_size_binary(
     let output_size = left_size + right_size;
     let output_value_length = i32::try_from(output_size).map_err(|_| {
         ArrowError::InvalidArgumentError(format!(
-            "Concatenated FixedSizeBinary value length {output_size} exceeds {}",
-            i32::MAX
+            "Concatenated FixedSizeBinary value length {output_size} exceeds i32"
         ))
     })?;
 
@@ -708,7 +707,7 @@ mod tests {
         let output = concat_elements_fixed_size_binary(&left, &right);
         assert_eq!(
             output.unwrap_err().to_string(),
-            "Invalid argument error: Concatenated FixedSizeBinary value length 3758096384 exceeds 2147483647".to_string()
+            "Invalid argument error: Concatenated FixedSizeBinary value length 3758096384 exceeds i32".to_string()
         );
     }
 
