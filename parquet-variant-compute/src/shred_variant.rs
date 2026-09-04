@@ -528,8 +528,9 @@ impl IntoShreddingField for (DataType, bool) {
 /// should be shredded and with what types. Fields are nullable by default; pass
 /// a `(data_type, nullable)` pair or a `FieldRef` to control nullability.
 ///
-/// Note: this builder currently only supports struct fields. List support
-/// will be added in the future.
+/// The index `0` represents the shared element schema of a list, so
+/// `items[0].id` and `items[0].name` describe fields on the same list element
+/// struct. Non-zero indexes are rejected.
 ///
 /// # Example
 ///
@@ -556,6 +557,8 @@ impl IntoShreddingField for (DataType, bool) {
 ///         VariantPath::from_iter([VariantPathElement::from("metrics.cpu")]),
 ///         &DataType::Float64,
 ///     )?
+///     // index 0 describes the shared schema for every element of a list
+///     .with_path("items[0].id", &DataType::Int64)?
 ///     .build();
 ///    Ok(())
 /// }
@@ -584,6 +587,8 @@ impl ShreddedSchemaBuilder {
     /// * `path` - Anything convertible to [`VariantPath`] (e.g., a `&str`)
     /// * `field` - Anything convertible via [`IntoShreddingField`] (e.g. `FieldRef`,
     ///   `&DataType`, or `(&DataType, bool)` to control nullability)
+    ///
+    /// List paths must use index `0`; non-zero indexes return an error.
     pub fn with_path<'a, P, F>(mut self, path: P, field: F) -> Result<Self>
     where
         P: TryInto<VariantPath<'a>>,
@@ -593,7 +598,7 @@ impl ShreddedSchemaBuilder {
         let path: VariantPath<'a> = path
             .try_into()
             .map_err(|e| ArrowError::InvalidArgumentError(format!("{e:?}")))?;
-        self.root.insert_path(&path, field.into_shredding_field());
+        self.root.insert_path(&path, field.into_shredding_field())?;
         Ok(self)
     }
 
@@ -614,6 +619,8 @@ enum VariantSchemaNode {
     Leaf(ShreddingField),
     /// An inner struct node with nested fields
     Struct(BTreeMap<String, VariantSchemaNode>),
+    /// An inner list node with a shared element schema
+    List(Box<VariantSchemaNode>),
 }
 
 impl Default for VariantSchemaNode {
@@ -624,14 +631,18 @@ impl Default for VariantSchemaNode {
 
 impl VariantSchemaNode {
     /// Insert a path into this node with the given data type.
-    fn insert_path(&mut self, path: &VariantPath<'_>, field: ShreddingField) {
-        self.insert_path_elements(path, field);
+    fn insert_path(&mut self, path: &VariantPath<'_>, field: ShreddingField) -> Result<()> {
+        self.insert_path_elements(path, field)
     }
 
-    fn insert_path_elements(&mut self, segments: &[VariantPathElement<'_>], field: ShreddingField) {
+    fn insert_path_elements(
+        &mut self,
+        segments: &[VariantPathElement<'_>],
+        field: ShreddingField,
+    ) -> Result<()> {
         let Some((head, tail)) = segments.split_first() else {
             *self = Self::Leaf(field);
-            return;
+            return Ok(());
         };
 
         match head {
@@ -639,11 +650,11 @@ impl VariantSchemaNode {
                 // Ensure this node is a Struct node
                 let children = match self {
                     Self::Struct(children) => children,
-                    Self::Leaf(_) => {
+                    Self::Leaf(_) | Self::List(_) => {
                         *self = Self::Struct(BTreeMap::new());
                         match self {
                             Self::Struct(children) => children,
-                            Self::Leaf(_) => unreachable!(),
+                            Self::Leaf(_) | Self::List(_) => unreachable!(),
                         }
                     }
                 };
@@ -651,12 +662,25 @@ impl VariantSchemaNode {
                 children
                     .entry(name.to_string())
                     .or_default()
-                    .insert_path_elements(tail, field);
+                    .insert_path_elements(tail, field)
             }
-            VariantPathElement::Index { .. } => {
-                // List support to be added later; reject for now
-                unreachable!("List paths are not supported yet");
+            VariantPathElement::Index { index: 0 } => {
+                let element = match self {
+                    Self::List(element) => element,
+                    _ => {
+                        *self = Self::List(Box::default());
+                        match self {
+                            Self::List(element) => element,
+                            _ => unreachable!(),
+                        }
+                    }
+                };
+
+                element.insert_path_elements(tail, field)
             }
+            VariantPathElement::Index { index } => Err(ArrowError::InvalidArgumentError(format!(
+                "Only list index [0] is supported, got [{index}]"
+            ))),
         }
     }
 
@@ -677,6 +701,7 @@ impl VariantSchemaNode {
                     Some(DataType::Struct(Fields::from(child_fields)))
                 }
             }
+            Self::List(element) => element.to_shredding_field("item").map(DataType::List),
         }
     }
 
@@ -687,7 +712,7 @@ impl VariantSchemaNode {
                 field.data_type.clone(),
                 field.nullable,
             ))),
-            Self::Struct(_) => self
+            Self::Struct(_) | Self::List(_) => self
                 .to_shredding_type()
                 .map(|data_type| Arc::new(Field::new(name, data_type, true))),
         }
@@ -1845,15 +1870,12 @@ mod tests {
         ]);
 
         // Target schema is List<Struct<id:int64,name:utf8>>
-        let object_fields = Fields::from(vec![
-            Field::new("id", DataType::Int64, true),
-            Field::new("name", DataType::Utf8, true),
-        ]);
-        let list_schema = DataType::List(Arc::new(Field::new(
-            "item",
-            DataType::Struct(object_fields),
-            true,
-        )));
+        let list_schema = ShreddedSchemaBuilder::default()
+            .with_path("[0].id", &DataType::Int64)
+            .unwrap()
+            .with_path("[0].name", &DataType::Utf8)
+            .unwrap()
+            .build();
         let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 3);
 
@@ -2893,6 +2915,67 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_variant_schema_builder_list() -> Result<()> {
+        let shredding_type = ShreddedSchemaBuilder::default()
+            .with_path("items[0].id", &DataType::Int64)?
+            .with_path("items[0].name", &DataType::Utf8)?
+            .build();
+
+        assert_eq!(
+            shredding_type,
+            DataType::Struct(Fields::from(vec![Field::new(
+                "items",
+                DataType::new_list(
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("id", DataType::Int64, true),
+                        Field::new("name", DataType::Utf8, true),
+                    ])),
+                    true,
+                ),
+                true,
+            )]))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_schema_builder_nested_lists() -> Result<()> {
+        let shredding_type = ShreddedSchemaBuilder::default()
+            .with_path("matrix[0][0]", (&DataType::Float64, false))?
+            .build();
+
+        assert_eq!(
+            shredding_type,
+            DataType::Struct(Fields::from(vec![Field::new(
+                "matrix",
+                DataType::new_list(DataType::new_list(DataType::Float64, false), true),
+                true,
+            )]))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_schema_builder_rejects_non_zero_list_indexes() {
+        for (path, index) in [("items[1].id", 1), ("items[42].name", 42)] {
+            let error = ShreddedSchemaBuilder::default()
+                .with_path(path, &DataType::Int64)
+                .err()
+                .unwrap();
+
+            let ArrowError::InvalidArgumentError(message) = error else {
+                panic!("expected InvalidArgumentError, got {error:?}");
+            };
+            assert_eq!(
+                message,
+                format!("Only list index [0] is supported, got [{index}]")
+            );
+        }
     }
 
     #[test]
