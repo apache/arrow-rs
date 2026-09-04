@@ -339,6 +339,12 @@ fn take_impl<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
             }
         }
         DataType::Union(fields, UnionMode::Sparse) => {
+            if indices.null_count() > 0 && fields.iter().any(|(_, field)| !field.is_nullable()) {
+                return Err(ArrowError::ComputeError(
+                    "Cannot take null indices from a sparse union with non-nullable fields".into(),
+                ));
+            }
+
             let mut children = Vec::with_capacity(fields.len());
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
             let type_ids = take_union_type_ids(fields, values.type_ids(), indices)?;
@@ -415,11 +421,11 @@ fn take_union_type_ids<IndexType: ArrowPrimitiveType>(
 
     let null_type_id = fields
         .iter()
-        .next()
+        .find(|(_, field)| field.is_nullable())
         .map(|(type_id, _)| type_id)
         .ok_or_else(|| {
             ArrowError::ComputeError(
-                "Cannot take from a union with zero fields when indices contains nulls".into(),
+                "Cannot take null indices from a union with no nullable fields".into(),
             )
         })?;
     let taken_type_ids = take_native(type_ids, indices);
@@ -1346,6 +1352,13 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     run_array: &RunArray<T>,
     logical_indices: &PrimitiveArray<I>,
 ) -> Result<RunArray<T>, ArrowError> {
+    if logical_indices.null_count() > 0 && !run_array.values_field().is_nullable() {
+        return Err(ArrowError::ComputeError(
+            "Cannot take null indices from a RunEndEncoded array with a non-nullable values field"
+                .into(),
+        ));
+    }
+
     let physical_indices = physical_indices_for_take(run_array, logical_indices)?;
 
     // Run encode the physical indices into new_run_ends
@@ -3225,6 +3238,27 @@ mod tests {
     }
 
     #[test]
+    fn test_take_runs_null_indices_non_nullable_values() {
+        let run_array = unsafe {
+            RunArray::<Int32Type>::new_unchecked(
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Int32, false)),
+                ),
+                RunEndBuffer::new(vec![1_i32, 2].into(), 0, 2),
+                Arc::new(Int32Array::from(vec![10, 20])),
+            )
+        };
+        let indices = Int32Array::from(vec![Some(0), None]);
+
+        let error = take(&run_array, &indices, None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Compute error: Cannot take null indices from a RunEndEncoded array with a non-nullable values field"
+        );
+    }
+
+    #[test]
     fn test_take_runs_sliced() {
         let logical_array: Vec<i32> = vec![1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6];
 
@@ -3471,6 +3505,61 @@ mod tests {
     }
 
     #[test]
+    fn test_take_dense_union_null_indices_uses_nullable_field() {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("non_nullable", DataType::Int32, false),
+                Field::new("nullable", DataType::Int32, true),
+            ],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8]),
+            Some(ScalarBuffer::from(vec![0_i32])),
+            vec![
+                Arc::new(Int32Array::from(vec![10])),
+                Arc::new(Int32Array::from(vec![20])),
+            ],
+        )
+        .unwrap();
+
+        let taken = take(&union, &UInt32Array::from(vec![None]), None).unwrap();
+        let taken = taken.as_union();
+        assert_eq!(taken.type_id(0), 1);
+        assert!(taken.child(1).is_null(0));
+    }
+
+    #[test]
+    fn test_take_sparse_union_null_indices_non_nullable_fields() {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("non_nullable", DataType::Int32, false),
+                Field::new("nullable", DataType::Int32, true),
+            ],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8]),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![10])),
+                Arc::new(Int32Array::from(vec![20])),
+            ],
+        )
+        .unwrap();
+
+        let error = take(&union, &UInt32Array::from(vec![None]), None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Compute error: Cannot take null indices from a sparse union with non-nullable fields"
+        );
+    }
+
+    #[test]
     fn test_take_empty_union_without_null_indices() {
         let fields = UnionFields::try_new(vec![], Vec::<Field>::new()).unwrap();
         let indices = UInt32Array::from(Vec::<u32>::new());
@@ -3521,7 +3610,7 @@ mod tests {
             let error = take(values, &indices, None).unwrap_err();
             assert_eq!(
                 error.to_string(),
-                "Compute error: Cannot take from a union with zero fields when indices contains nulls"
+                "Compute error: Cannot take null indices from a union with no nullable fields"
             );
         }
     }
