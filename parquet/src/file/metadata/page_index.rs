@@ -373,7 +373,7 @@ impl RowGroupPageIndex {
 ///
 /// This struct provides a dense representation of the Page Index. It is
 /// used internally by this crate when assembling and writing the Page
-/// Index. It is also the default implmentation of the [`PageIndexProvider`]
+/// Index. It is also the default implementation of the [`PageIndexProvider`]
 /// contained in the [`ParquetMetaData`].
 ///
 /// # Example: Constructing a synthetic `PageIndex`
