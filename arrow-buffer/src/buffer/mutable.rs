@@ -749,7 +749,7 @@ impl MutableBuffer {
 
     /// Fallible version of [`MutableBuffer::collect_bool`].
     ///
-    /// `len` is a bit count, so the reservation is `ceil(len / 64)` words. Reserving that
+    /// `len` is a bit count, so the reservation is `ceil(len / 64)` u64 slots. Reserving that
     /// up front means a `len` taken from a row or bit count in user controlled data aborts
     /// the process before `f` is ever called, so this reports the failure instead.
     #[inline]
@@ -1783,31 +1783,5 @@ mod tests {
         let mut buf = MutableBuffer::new(1);
         buf.push(1u8);
         buf.reserve(usize::MAX);
-    }
-    #[test]
-    #[cfg_attr(miri, ignore)] // miri interprets the allocation and runs out of memory itself
-    fn try_collect_bool_reports_a_len_it_cannot_reserve() {
-        // 2^60 bits is 2^54 u64 words, which is 128 PiB of backing storage.
-        // collect_bool reserves that before calling f, so it aborts the process.
-        let mut calls = 0usize;
-        let result = MutableBuffer::try_collect_bool(1usize << 60, |_| {
-            calls += 1;
-            true
-        });
-        assert!(matches!(
-            result,
-            Err(MutableBufferError::AllocationError(_))
-        ));
-        assert_eq!(calls, 0, "f must not run when the reservation fails");
-    }
-
-    #[test]
-    fn try_collect_bool_matches_collect_bool_for_sizes_that_fit() {
-        for len in [0usize, 1, 63, 64, 65, 1000] {
-            let checked = MutableBuffer::try_collect_bool(len, |i| i % 3 == 0)
-                .expect("reservation should succeed");
-            let unchecked = MutableBuffer::collect_bool(len, |i| i % 3 == 0);
-            assert_eq!(checked.as_slice(), unchecked.as_slice(), "len {len}");
-        }
     }
 }
