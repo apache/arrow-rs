@@ -1525,7 +1525,8 @@ impl ArrayData {
         match &self.data_type {
             DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
                 if !f.is_nullable() {
-                    self.validate_non_nullable(None, &self.child_data[0])?
+                    let child = &self.child_data[0];
+                    self.validate_non_nullable(None, child, child.nulls())?
                 }
             }
             DataType::FixedSizeList(field, len) => {
@@ -1535,17 +1536,19 @@ impl ArrayData {
                         Some(nulls) => {
                             let element_len = *len as usize;
                             let expanded = nulls.expand(element_len);
-                            self.validate_non_nullable(Some(&expanded), child)?;
+                            self.validate_non_nullable(Some(&expanded), child, child.nulls())?;
                         }
-                        None => self.validate_non_nullable(None, child)?,
+                        None => self.validate_non_nullable(None, child, child.nulls())?,
                     }
                 }
             }
             DataType::Struct(fields) => {
                 for (field, child) in fields.iter().zip(&self.child_data) {
                     if !field.is_nullable() {
-                        let child = child.slice(self.offset, self.len);
-                        self.validate_non_nullable(self.nulls(), &child)?
+                        let child_nulls = child
+                            .nulls()
+                            .map(|nulls| nulls.slice(self.offset, self.len));
+                        self.validate_non_nullable(self.nulls(), child, child_nulls.as_ref())?
                     }
                 }
             }
@@ -1560,9 +1563,10 @@ impl ArrayData {
         &self,
         mask: Option<&NullBuffer>,
         child: &ArrayData,
+        child_nulls: Option<&NullBuffer>,
     ) -> Result<(), ArrowError> {
         let Some(mask) = mask else {
-            return match child.null_count() {
+            return match child_nulls.map(NullBuffer::null_count).unwrap_or_default() {
                 0 => Ok(()),
                 _ => Err(ArrowError::InvalidArgumentError(format!(
                     "non-nullable child of type {} contains nulls not present in parent {}",
@@ -1571,7 +1575,7 @@ impl ArrayData {
             };
         };
 
-        match child.nulls() {
+        match child_nulls {
             Some(nulls) if !mask.contains(nulls) => Err(ArrowError::InvalidArgumentError(format!(
                 "non-nullable child of type {} contains nulls not present in parent",
                 child.data_type
