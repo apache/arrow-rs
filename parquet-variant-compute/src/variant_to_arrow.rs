@@ -37,6 +37,7 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{CastOptions, DecimalCast, cast_with_options};
 use arrow::datatypes::{self, DataType, DecimalType};
 use arrow::error::{ArrowError, Result};
+use arrow::util::display::CompiledTimeFormat;
 use arrow_schema::{FieldRef, Fields, TimeUnit, UnionFields, UnionMode};
 use parquet_variant::{Variant, VariantPath};
 use std::sync::Arc;
@@ -1301,15 +1302,53 @@ impl VariantPathRowBuilder<'_> {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct TemporalFormats<'a> {
+    date: CompiledTimeFormat<'a>,
+    time: CompiledTimeFormat<'a>,
+    timestamp: CompiledTimeFormat<'a>,
+    timestamp_tz: CompiledTimeFormat<'a>,
+}
+
+impl<'a> TemporalFormats<'a> {
+    pub(crate) fn new(options: &CastOptions<'a>) -> Self {
+        let options = &options.format_options;
+        Self {
+            date: CompiledTimeFormat::new(options.date_format()),
+            time: CompiledTimeFormat::new(options.time_format()),
+            timestamp: CompiledTimeFormat::new(options.timestamp_format()),
+            timestamp_tz: CompiledTimeFormat::new(options.timestamp_tz_format()),
+        }
+    }
+
+    pub(crate) fn date(&self) -> &CompiledTimeFormat<'a> {
+        &self.date
+    }
+
+    pub(crate) fn time(&self) -> &CompiledTimeFormat<'a> {
+        &self.time
+    }
+
+    pub(crate) fn timestamp(&self) -> &CompiledTimeFormat<'a> {
+        &self.timestamp
+    }
+
+    pub(crate) fn timestamp_tz(&self) -> &CompiledTimeFormat<'a> {
+        &self.timestamp_tz
+    }
+}
+
+// Define a builder for converting variant values into a primitive Arrow array.
+// `, $shred` passes shredding state; `; temporal_formats: $name` binds the temporal formats.
 macro_rules! define_variant_to_primitive_builder {
     (struct $name:ident<$lifetime:lifetime $(, $generic:ident: $bound:path )?>
     |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
-    |$value: ident $(, $shred: ident)?| $value_transform:expr,
+    |$value: ident $(, $shred: ident)? $(; temporal_formats: $formats:ident)?| $value_transform:expr,
     type_name: $type_name:expr) => {
         define_variant_to_primitive_builder!(
             struct $name<$lifetime $(, $generic: $bound )?>
             |$array_param $(, $field: $field_type)?| -> $builder_name $(< $array_type >)? { $init_expr },
-            |$value $(,$shred)?| $value_transform,
+            |$value $(,$shred)? $(; temporal_formats: $formats)?| $value_transform,
             type_name: $type_name,
             append_value: |builder, v| builder.append_value(v)
         );
@@ -1317,7 +1356,7 @@ macro_rules! define_variant_to_primitive_builder {
 
     (struct $name:ident<$lifetime:lifetime $(, $generic:ident: $bound:path )?>
     |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
-    |$value: ident $(, $shred: ident)?| $value_transform:expr,
+    |$value: ident $(, $shred: ident)? $(; temporal_formats: $formats:ident)?| $value_transform:expr,
     type_name: $type_name:expr,
     append_value: |$builder:ident, $append_value:ident| $append_expr:expr) => {
         pub(crate) struct $name<$lifetime $(, $generic : $bound )?>
@@ -1325,6 +1364,7 @@ macro_rules! define_variant_to_primitive_builder {
             builder: $builder_name $(<$array_type>)?,
             $($shred: bool,)?
             cast_options: &$lifetime CastOptions<$lifetime>,
+            $($formats: TemporalFormats<$lifetime>,)?
         }
 
         impl<$lifetime $(, $generic: $bound+ )?> $name<$lifetime $(, $generic )?> {
@@ -1335,10 +1375,12 @@ macro_rules! define_variant_to_primitive_builder {
                 // add this so that $init_expr can use it
                 $( $field: $field_type, )?
             ) -> Self {
+                $(let $formats = TemporalFormats::new(cast_options);)?
                 Self {
                     builder: $init_expr,
                     cast_options,
                     $($shred)?
+                    $($formats)?
                 }
             }
 
@@ -1349,6 +1391,7 @@ macro_rules! define_variant_to_primitive_builder {
 
             fn append_value(&mut self, $value: &Variant<'_, '_>) -> Result<bool> {
                 $(let $shred: bool = self.shred;)?
+                $(let $formats = &self.$formats;)?
                 match variant_cast_with_options(
                     $value,
                     self.cast_options,
@@ -1389,7 +1432,7 @@ macro_rules! define_variant_to_primitive_builder {
 define_variant_to_primitive_builder!(
     struct VariantToStringGetArrowBuilder<'a, B: StringLikeArrayBuilder>
     |capacity| -> B { B::with_capacity(capacity) },
-    |value| variant_to_string(value),
+    |value; temporal_formats: formats| variant_to_string(value, formats),
     type_name: B::type_name(),
     append_value: |builder, v| builder.append_value(&v)
 );
