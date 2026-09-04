@@ -219,11 +219,16 @@ pub fn concat_elements_fixed_size_binary(
         ))
     })?;
     let output_size = left_size + right_size;
+    let output_value_length = i32::try_from(output_size).map_err(|_| {
+        ArrowError::InvalidArgumentError(format!(
+            "Concatenated FixedSizeBinary value length {output_size} exceeds i32"
+        ))
+    })?;
 
     // Pre-compute combined null bitmap so the per-row NULL check is efficient
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
-    let mut result = FixedSizeBinaryBuilder::with_capacity(left.len(), output_size as i32);
+    let mut result = FixedSizeBinaryBuilder::with_capacity(left.len(), output_value_length);
     let mut buffer = MutableBuffer::with_capacity(output_size);
     for i in 0..left.len() {
         if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
@@ -688,6 +693,21 @@ mod tests {
         assert_eq!(
             output.unwrap_err().to_string(),
             "Compute error: Arrays must have the same length: 2 != 1".to_string()
+        );
+    }
+
+    #[test]
+    fn test_fixed_size_binary_concat_width_overflow() {
+        let width = 0x7000_0000_i32;
+        let left =
+            FixedSizeBinaryArray::try_new(width, Buffer::from(Vec::<u8>::new()), None).unwrap();
+        let right =
+            FixedSizeBinaryArray::try_new(width, Buffer::from(Vec::<u8>::new()), None).unwrap();
+
+        let output = concat_elements_fixed_size_binary(&left, &right);
+        assert_eq!(
+            output.unwrap_err().to_string(),
+            "Invalid argument error: Concatenated FixedSizeBinary value length 3758096384 exceeds i32".to_string()
         );
     }
 

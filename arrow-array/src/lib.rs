@@ -229,6 +229,9 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
 
+/// Arrow crate version
+pub const ARROW_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod array;
 pub use array::*;
 

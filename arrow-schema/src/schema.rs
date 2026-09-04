@@ -144,7 +144,7 @@ impl SchemaBuilder {
         &mut self.metadata
     }
 
-    /// Reverse the fileds
+    /// Reverse the fields
     pub fn reverse(&mut self) {
         self.fields.reverse();
     }

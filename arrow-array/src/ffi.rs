@@ -253,14 +253,8 @@ pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Resul
         data_type: dt,
         owner: &array,
     };
-    let mut data = tmp.consume()?;
-    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
-    // a no-op when buffers are already aligned. Unreachable under
-    // `cfg(feature = "force_validate")`; tracked in #10034.
-    // See https://github.com/apache/arrow/issues/43552 and
-    // https://github.com/apache/arrow-rs/issues/10028 for context.
-    data.align_buffers();
-    Ok(data)
+    // `consume` aligns under-aligned buffers before validating them.
+    tmp.consume()
 }
 
 /// Import [ArrayData] from the C Data Interface
@@ -278,14 +272,8 @@ pub unsafe fn from_ffi_and_data_type(
         data_type,
         owner: &array,
     };
-    let mut data = tmp.consume()?;
-    // arrow-rs has stricter alignment requirements than the C Data Interface spec;
-    // a no-op when buffers are already aligned. Unreachable under
-    // `cfg(feature = "force_validate")`; tracked in #10034.
-    // See https://github.com/apache/arrow/issues/43552 and
-    // https://github.com/apache/arrow-rs/issues/10028 for context.
-    data.align_buffers();
-    Ok(data)
+    // `consume` aligns under-aligned buffers before validating them.
+    tmp.consume()
 }
 
 #[derive(Debug)]
@@ -322,20 +310,22 @@ impl ImportedArrowArray<'_> {
             child_data.push(d.consume()?);
         }
 
-        // Safety: all fields (length, null_count, null buffer, data buffers, child data) were
-        // derived from the C Data Interface schema and array, which the caller of `from_ffi`
-        // guarantees follow the spec; the constructed `ArrayData` satisfies its invariants.
-        Ok(unsafe {
-            ArrayData::new_unchecked(
-                self.data_type,
-                len,
-                null_count,
-                null_bit_buffer,
-                offset,
-                buffers,
-                child_data,
-            )
-        })
+        // Align before validate: spec-legal 8-byte-aligned buffers (e.g. Decimal128
+        // from JVM) get realigned rather than rejected, even under `force_validate`.
+        // Mirrors the IPC reader. See #10034.
+        let mut builder = ArrayData::builder(self.data_type)
+            .len(len)
+            .offset(offset)
+            .null_bit_buffer(null_bit_buffer)
+            .buffers(buffers)
+            .child_data(child_data)
+            .align_buffers(true);
+        // Only set the count if the producer reported one; else `build` recomputes.
+        if let Some(null_count) = null_count {
+            builder = builder.null_count(null_count);
+        }
+        // SAFETY: the caller guarantees the data agrees with the C Data Interface.
+        unsafe { builder.skip_validation(true) }.build()
     }
 
     fn consume_children(&self) -> Result<Vec<ArrayData>> {
@@ -672,33 +662,25 @@ mod tests_to_then_from_ffi {
     // case with nulls is tested in the docs, through the example on this module.
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
-    fn test_decimal128_under_aligned_round_trip() -> Result<()> {
-        // Construct an 8-aligned-but-not-16-aligned i128 data buffer to model
-        // an FFI producer that only guarantees the C Data Interface's
-        // recommended 8-byte alignment (e.g. arrow-java).
+    fn test_decimal128_under_aligned_import() -> Result<()> {
+        // FixedSizeBinary(16) needs only 1-byte alignment so it builds cleanly
+        // even under force_validate; imported as Decimal128 it triggers the
+        // realignment path. Regression test for #10034.
         let aligned = Buffer::from_vec(vec![0_i128, 1_i128, 2_i128]);
         let under_aligned = aligned.slice(8);
         assert_eq!(under_aligned.as_ptr().align_offset(8), 0);
         assert_ne!(under_aligned.as_ptr().align_offset(16), 0);
 
-        // SAFETY: buffer is large enough for 2 i128 elements; misaligned
-        // input is the condition under test.
-        let data = unsafe {
-            ArrayData::builder(DataType::Decimal128(10, 2))
-                .len(2)
-                .add_buffer(under_aligned)
-                .build_unchecked()
-        };
+        let data = ArrayData::builder(DataType::FixedSizeBinary(16))
+            .len(2)
+            .add_buffer(under_aligned)
+            .build()?;
 
-        let schema = FFI_ArrowSchema::try_from(data.data_type()).unwrap();
         let array = FFI_ArrowArray::new(&data);
-
-        let imported = unsafe { from_ffi(array, &schema) }?;
+        let imported = unsafe { from_ffi_and_data_type(array, DataType::Decimal128(10, 2)) }?;
         let array = Decimal128Array::from(imported);
 
-        // The little-endian byte layout of [0i128, 1, 2] sliced 8 bytes in
-        // yields elements `1 << 64` and `2 << 64`.
+        // slicing at byte 8 into [0i128, 1, 2] yields elements 1<<64 and 2<<64.
         assert_eq!(array.len(), 2);
         assert_eq!(array.value(0), 1_i128 << 64);
         assert_eq!(array.value(1), 2_i128 << 64);

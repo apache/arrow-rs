@@ -16,7 +16,7 @@
 // under the License.
 
 //! Interoperability test for https://github.com/apache/parquet-format/pull/514.
-//! Demonstrate reading NaN statstics and counts from a file generated with
+//! Demonstrate reading NaN statistics and counts from a file generated with
 //! parquet-java, and show that on write we produce the same statistics.
 
 use bytes::Bytes;

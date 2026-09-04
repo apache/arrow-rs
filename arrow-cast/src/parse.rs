@@ -740,11 +740,11 @@ fn parse_date_to_days(string: &str) -> Option<i32> {
         let y = year as i64;
         let era = y.div_euclid(400);
         let yoe = y.rem_euclid(400) as i32;
-        let nd = NaiveDate::from_ymd_opt(yoe, month, day)?;
-        let in_era = (nd.num_days_from_ce() - EPOCH_DAYS_FROM_CE) as i64;
+        let naive_date = NaiveDate::from_ymd_opt(yoe, month, day)?;
+        let in_era = (naive_date.num_days_from_ce() - EPOCH_DAYS_FROM_CE) as i64;
         return i32::try_from(era * 146_097 + in_era).ok();
     }
-    parse_date(string).map(|nd| nd.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+    parse_date(string).map(|naive_date| naive_date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
 }
 
 impl Parser for Date32Type {
@@ -962,53 +962,59 @@ fn parse_decimal_mantissa<T: DecimalType>(
         }
     };
 
-    let mut value = T::Native::ZERO;
-    let mut chunk = 0_u64;
-    let mut chunk_len = 0_usize;
-    let mut saw_point = false;
+    let mut acc = DecimalAccumulator::<T> {
+        value: T::Native::ZERO,
+        chunk: 0,
+        chunk_len: 0,
+        negative,
+    };
     let mut int_kept = 0_usize;
     let mut frac_kept = 0_usize;
     let mut first_discarded_digit = None;
 
+    // Digits before the decimal point
     let mut index = 0;
     while let Some(&b) = mantissa.get(index) {
-        match b {
-            b'0'..=b'9' => {
-                let digit = b - b'0';
-                let (kept, keep) = if saw_point {
-                    (&mut frac_kept, frac_keep)
-                } else {
-                    (&mut int_kept, int_keep)
-                };
-                if *kept < keep {
-                    *kept += 1;
-                    // Cannot overflow: the chunk is folded into `value` before it
-                    // exceeds MAX_CHUNK_DIGITS digits, all of which fit in a u64
-                    chunk = chunk * 10 + digit as u64;
-                    chunk_len += 1;
-                    if chunk_len == MAX_CHUNK_DIGITS {
-                        value = fold_decimal_chunk::<T>(value, chunk, chunk_len, negative)?;
-                        chunk = 0;
-                        chunk_len = 0;
-                    }
-                } else {
-                    first_discarded_digit.get_or_insert(digit);
-                }
-            }
-            b'.' if !saw_point => saw_point = true,
-            b'e' | b'E' => return Err(MantissaError::Exponent(index)),
-            _ => return Err(MantissaError::InvalidFormat),
+        if !b.is_ascii_digit() {
+            break;
+        }
+        if int_kept < int_keep {
+            int_kept += 1;
+            acc.push(b - b'0')?;
+        } else {
+            first_discarded_digit.get_or_insert(b - b'0');
         }
         index += 1;
     }
 
-    if chunk_len > 0 {
-        value = fold_decimal_chunk::<T>(value, chunk, chunk_len, negative)?;
+    // Digits after the decimal point
+    if mantissa.get(index) == Some(&b'.') {
+        index += 1;
+        while let Some(&b) = mantissa.get(index) {
+            if !b.is_ascii_digit() {
+                break;
+            }
+            if frac_kept < frac_keep {
+                frac_kept += 1;
+                acc.push(b - b'0')?;
+            } else {
+                first_discarded_digit.get_or_insert(b - b'0');
+            }
+            index += 1;
+        }
+    }
+
+    match mantissa.get(index) {
+        None => {}
+        Some(b'e' | b'E') => return Err(MantissaError::Exponent(index)),
+        Some(_) => return Err(MantissaError::InvalidFormat),
     }
 
     if int_kept == 0 && frac_kept == 0 && first_discarded_digit.is_none() {
         return Err(MantissaError::InvalidFormat);
     }
+
+    let mut value = acc.finish()?;
 
     // Scale the value up to the target scale. Skipped for zero, where computing
     // 10^missing could overflow the native type even though the result (zero)
@@ -1062,10 +1068,45 @@ fn split_sign(bytes: &[u8]) -> (bool, &[u8]) {
     }
 }
 
+/// Accumulates decimal digits into `chunk`, folding it into `value` whenever
+/// it reaches [`MAX_CHUNK_DIGITS`] digits
+struct DecimalAccumulator<T: DecimalType> {
+    value: T::Native,
+    chunk: u64,
+    chunk_len: usize,
+    negative: bool,
+}
+
+impl<T: DecimalType> DecimalAccumulator<T> {
+    #[inline(always)]
+    fn push(&mut self, digit: u8) -> Result<(), DecimalParseError> {
+        // Cannot overflow: the chunk is folded into `value` before it exceeds
+        // MAX_CHUNK_DIGITS digits, all of which fit in a u64
+        self.chunk = self.chunk * 10 + digit as u64;
+        self.chunk_len += 1;
+        if self.chunk_len == MAX_CHUNK_DIGITS {
+            self.value =
+                fold_decimal_chunk::<T>(self.value, self.chunk, self.chunk_len, self.negative)?;
+            self.chunk = 0;
+            self.chunk_len = 0;
+        }
+        Ok(())
+    }
+
+    /// Folds the digits still in `chunk` into the value
+    #[inline]
+    fn finish(self) -> Result<T::Native, DecimalParseError> {
+        if self.chunk_len == 0 {
+            return Ok(self.value);
+        }
+        fold_decimal_chunk::<T>(self.value, self.chunk, self.chunk_len, self.negative)
+    }
+}
+
 /// Folds a chunk of up to [`MAX_CHUNK_DIGITS`] digits into `value`, producing
 /// `value * 10^chunk_len + chunk` (`chunk` is negated first when parsing a
 /// negative number).
-#[inline]
+#[inline(always)]
 fn fold_decimal_chunk<T: DecimalType>(
     value: T::Native,
     chunk: u64,

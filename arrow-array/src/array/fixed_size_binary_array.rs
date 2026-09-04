@@ -206,7 +206,7 @@ impl FixedSizeBinaryArray {
 
     /// Create a new [`FixedSizeBinaryArray`] from the provided parts and number of elements, returning an error on failure
     ///
-    /// This is useful when the length cannot be determinated from the provided values (in case of `value_length == 0`) or nulls (`nulls.is_none()`).
+    /// This is useful when the length cannot be determined from the provided values (in case of `value_length == 0`) or nulls (`nulls.is_none()`).
     ///
     /// # Errors
     ///
@@ -1029,6 +1029,9 @@ mod tests {
     }
 
     #[test]
+    // Under force_validate `build_unchecked` panics on the invalid child data
+    // before we reach the `FixedSizeBinaryArray::from` path we want to test.
+    #[cfg(not(feature = "force_validate"))]
     #[should_panic(expected = "The child array cannot contain null values.")]
     fn test_fixed_size_binary_array_from_fixed_size_list_array_with_child_nulls_failed() {
         let values = [0_u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];

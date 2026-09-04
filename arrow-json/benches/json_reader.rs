@@ -22,6 +22,8 @@ use arrow_schema::{DataType, Field, Schema};
 use criterion::{
     BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 use serde::Serialize;
 use serde_json::{Map, Number, Value};
 use std::fmt::Write;
@@ -405,6 +407,28 @@ fn bench_serialize_map(c: &mut Criterion) {
     bench_serialize_values(c, "decode_map_large_serialize", &large_values, schema);
 }
 
+fn build_decimal_json(rows: usize) -> Vec<u8> {
+    // Builds newline-delimited JSON objects with a single number field of
+    // seven integer and two fractional digits, e.g. {"d":8402913.57}
+    let mut rng = StdRng::seed_from_u64(42);
+    let mut out = String::with_capacity(rows * 18);
+    for _ in 0..rows {
+        let value: u32 = rng.random_range(100_000_000..1_000_000_000);
+        writeln!(&mut out, "{{\"d\":{}.{:02}}}", value / 100, value % 100).unwrap();
+    }
+    out.into_bytes()
+}
+
+fn bench_decode_decimal(c: &mut Criterion) {
+    let data = build_decimal_json(ROWS);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "d",
+        DataType::Decimal128(10, 2),
+        false,
+    )]));
+    bench_decode_schema(c, "decode_decimal128_json", &data, schema);
+}
+
 fn build_ree_json(rows: usize, run_length: usize) -> Vec<u8> {
     let mut out = String::with_capacity(rows * 24);
     for row in 0..rows {
@@ -539,6 +563,7 @@ criterion_group!(
     bench_serialize_map,
     bench_decode_ree,
     bench_serialize_ree,
+    bench_decode_decimal,
     bench_schema_inference
 );
 criterion_main!(benches);

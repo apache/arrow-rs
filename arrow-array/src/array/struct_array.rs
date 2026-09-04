@@ -864,22 +864,24 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed: end <= self.len()")]
     fn test_struct_array_from_data_with_offset_and_length_error() {
         let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let int_field = Field::new("x", DataType::Int32, false);
         let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
         let int_data = int_arr.to_data();
         // If parent offset is 3 and len is 3 then child must have 6 items
-        let struct_data =
-            ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
-                .len(3)
-                .offset(3)
-                .nulls(Some(struct_nulls))
-                .add_child_data(int_data)
-                .build()
-                .unwrap();
-        let _ = StructArray::from(struct_data);
+        let err = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .offset(3)
+            .nulls(Some(struct_nulls))
+            .add_child_data(int_data)
+            .build()
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains(
+            "child array #0 for field x has length smaller than expected for struct array (5 < 6)"
+        ));
     }
 
     /// validates that struct can be accessed using `column_name` as index i.e. `struct_array["column_name"]`.
