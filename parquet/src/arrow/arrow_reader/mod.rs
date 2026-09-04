@@ -64,30 +64,6 @@ pub mod statistics;
 /// Default batch size for reading parquet files
 pub const DEFAULT_BATCH_SIZE: usize = 1024;
 
-/// Returns whether a same-projection predicate group is a conservative fusion
-/// candidate.
-///
-/// Restricting automatic fusion to one non-repeated top-level parquet leaf
-/// bounds the cost of compacting survivor batches and excludes wide and nested
-/// projections. The callers separately exclude predicate chains with an active
-/// row limit.
-pub(crate) fn should_fuse_same_projection(
-    projection: &ProjectionMask,
-    parquet_schema: &SchemaDescriptor,
-) -> bool {
-    let mut selected =
-        (0..parquet_schema.num_columns()).filter(|idx| projection.leaf_included(*idx));
-    let Some(leaf_idx) = selected.next() else {
-        return false;
-    };
-    if selected.next().is_some() {
-        return false;
-    }
-
-    let column = parquet_schema.column(leaf_idx);
-    column.path().parts().len() == 1 && column.max_rep_level() == 0
-}
-
 /// A row group and its optional row-group-local [`RowSelection`].
 ///
 /// A row-group-local selection is relative to the rows in this row group. For
@@ -1350,7 +1326,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             batch_size,
             row_group_plan,
             projection,
-            mut filter,
+            filter,
             row_selection_policy,
             limit,
             offset,
@@ -1375,6 +1351,15 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         let mut plan_builder = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
             .with_row_selection_policy(row_selection_policy);
+
+        // Consecutive predicates on the same single-column projection are
+        // evaluated from one decoded stream, see `RowFilter::fuse_same_projection`.
+        let mut filter = filter.map(|filter| {
+            filter.fuse_same_projection(
+                reader.metadata.file_metadata().schema_descr(),
+                row_selection_policy,
+            )
+        });
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
@@ -1859,34 +1844,6 @@ pub(crate) mod tests {
 
     fn row_selection(rows: usize) -> RowSelection {
         RowSelection::from(vec![RowSelector::select(rows)])
-    }
-
-    #[test]
-    fn conservative_same_projection_fusion_requires_one_leaf() {
-        let schema = parse_message_type(
-            "message schema {
-                REQUIRED INT32 a;
-                REQUIRED INT32 b;
-                REQUIRED INT32 c;
-                REQUIRED GROUP nested { REQUIRED INT32 d; }
-                REPEATED INT32 e;
-            }",
-        )
-        .unwrap();
-        let schema = crate::schema::types::SchemaDescriptor::new(Arc::new(schema));
-
-        let one_leaf = ProjectionMask::leaves(&schema, [1]);
-        let two_leaves = ProjectionMask::leaves(&schema, [0, 2]);
-        let nested_leaf = ProjectionMask::leaves(&schema, [3]);
-        let repeated_leaf = ProjectionMask::leaves(&schema, [4]);
-        assert!(super::should_fuse_same_projection(&one_leaf, &schema));
-        assert!(!super::should_fuse_same_projection(&two_leaves, &schema));
-        assert!(!super::should_fuse_same_projection(&nested_leaf, &schema));
-        assert!(!super::should_fuse_same_projection(&repeated_leaf, &schema));
-        assert!(!super::should_fuse_same_projection(
-            &ProjectionMask::none(schema.num_columns()),
-            &schema
-        ));
     }
 
     #[test]

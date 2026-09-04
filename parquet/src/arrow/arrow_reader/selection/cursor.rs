@@ -51,6 +51,18 @@ impl Default for RowSelectionPolicy {
     }
 }
 
+impl RowSelectionPolicy {
+    /// Resolve this policy into the [`RowSelectionStrategy`] to use for
+    /// `selection`, inspecting its density only for [`Self::Auto`].
+    pub(crate) fn resolve(&self, selection: &RowSelection) -> RowSelectionStrategy {
+        match self {
+            Self::Selectors => RowSelectionStrategy::Selectors,
+            Self::Mask => RowSelectionStrategy::Mask,
+            Self::Auto { threshold } => selection.auto_selection_strategy(*threshold),
+        }
+    }
+}
+
 /// Fully resolved strategy for materializing [`RowSelection`] during execution.
 ///
 /// This is determined by [`RowSelectionPolicy`], including selector density for

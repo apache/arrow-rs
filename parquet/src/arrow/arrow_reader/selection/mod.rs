@@ -49,7 +49,8 @@ use algebra::{
 };
 pub use boolean::MaskRunIter;
 use boolean::{
-    MaskSelection, limit_mask, mask_has_at_least_runs, offset_mask, split_off_mask, trim_mask,
+    MaskSelection, boolean_mask_from_selectors, limit_mask, mask_has_at_least_runs, offset_mask,
+    split_off_mask, trim_mask,
 };
 pub(crate) use cursor::{LoadedRowRanges, MaskCursor, RowSelectionStrategy};
 pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
@@ -300,6 +301,15 @@ impl RowSelection {
         match self.inner {
             RowSelectionInner::Selectors(s) => s,
             RowSelectionInner::Mask(m) => (*m).into_selectors(),
+        }
+    }
+
+    /// Consume the selection and return it as a packed [`BooleanBuffer`] with
+    /// one bit per row, materializing selector-backed selections.
+    pub(crate) fn into_boolean_buffer(self) -> BooleanBuffer {
+        match self.inner {
+            RowSelectionInner::Mask(m) => (*m).into_mask(),
+            RowSelectionInner::Selectors(s) => boolean_mask_from_selectors(&s),
         }
     }
 
