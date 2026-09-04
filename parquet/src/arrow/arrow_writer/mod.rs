@@ -3133,6 +3133,89 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(s)]).unwrap();
         roundtrip(batch, None);
     }
+
+    #[test]
+    fn arrow_writer_pfor() {
+        // The round-trip matrix above covers PFOR across page versions, nullability and row group
+        // sizes. What it does not check is that PFOR is what actually ended up in the file, so this
+        // reads the encoding back out of the column chunk metadata.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i32", DataType::Int32, false),
+            Field::new("i64", DataType::Int64, true),
+        ]));
+
+        let i32_values: Vec<i32> = (0..5000).map(|i| 1_000_000 + (i % 17)).collect();
+        let i64_values: Vec<Option<i64>> = (0..5000)
+            .map(|i| {
+                if i % 7 == 0 {
+                    None
+                } else {
+                    Some(i * 1_000_003)
+                }
+            })
+            .collect();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(i32_values)),
+                Arc::new(Int64Array::from(i64_values)),
+            ],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PFOR)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer)).unwrap();
+        let row_group = reader.metadata().row_group(0);
+        for column in 0..row_group.num_columns() {
+            let column = row_group.column(column);
+            let encodings: Vec<_> = column.encodings().collect();
+            assert!(
+                encodings.contains(&Encoding::PFOR),
+                "{} was written as {encodings:?}",
+                column.column_path()
+            );
+        }
+
+        let read = reader
+            .build()
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        let read = arrow::compute::concat_batches(&schema, &read).unwrap();
+        assert_eq!(read, batch);
+    }
+
+    #[test]
+    #[should_panic(expected = "PFOR is not supported for type")]
+    fn arrow_writer_pfor_is_refused_for_other_types() {
+        // PFOR is defined for INT32 and INT64 only, so a column of any other physical type has to
+        // be refused. The lookup returns an error, and the column writer unwraps it -- which is how
+        // this crate already treats an encoding a column cannot use.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Float64,
+            false,
+        )]));
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PFOR)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Float64Array::from(vec![1.0, 2.0]))])
+                .unwrap();
+        let _ = writer.write(&batch);
+    }
+
     #[test]
     fn arrow_writer_page_size() {
         let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
@@ -3404,6 +3487,7 @@ mod tests {
                     Encoding::PLAIN,
                     Encoding::DELTA_BINARY_PACKED,
                     Encoding::BYTE_STREAM_SPLIT,
+                    Encoding::PFOR,
                 ],
                 DataType::Float32 | DataType::Float64 => {
                     vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT]
