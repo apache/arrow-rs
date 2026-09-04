@@ -1785,6 +1785,7 @@ mod tests {
         buf.reserve(usize::MAX);
     }
     #[test]
+    #[cfg_attr(miri, ignore)] // miri interprets the allocation and runs out of memory itself
     fn try_collect_bool_reports_a_len_it_cannot_reserve() {
         // 2^60 bits is 2^54 u64 words, which is 128 PiB of backing storage.
         // collect_bool reserves that before calling f, so it aborts the process.
