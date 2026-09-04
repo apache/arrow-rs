@@ -147,6 +147,10 @@ impl NullBuffer {
             // boundary (bit i starts at bit i*count, which is divisible by 8),
             // so we can fill count/8 bytes of 0xFF at a time instead of setting
             // bits individually.
+            //
+            // By iterating over contiguous runs of valid bits rather than
+            // individual bits, a dense validity buffer (long runs of non-null
+            // values) collapses into a single fill call per run.
             let bytes_per_bit = count / 8;
             let buf = buffer.as_mut();
             for (start, end) in BitSliceIterator::new(
@@ -178,12 +182,42 @@ impl NullBuffer {
                 }
             }
         } else {
-            for i in 0..self.buffer.len() {
-                if self.is_null(i) {
-                    continue;
-                }
-                for j in 0..count {
-                    crate::bit_util::set_bit(buffer.as_mut(), i * count + j)
+            // For each contiguous run of valid bits [start, end), the corresponding
+            // output bits [start*count, end*count) are set. Boundary bytes that are
+            // only partially covered are ORed with a mask; fully covered interior
+            // bytes are filled with 0xFF.
+            let buf = buffer.as_mut();
+            for (start, end) in BitSliceIterator::new(
+                self.buffer.values(),
+                self.buffer.offset(),
+                self.buffer.len(),
+            ) {
+                let start_bit = start * count;
+                let end_bit = end * count;
+                let start_byte = start_bit / 8;
+                let start_offset = (start_bit % 8) as u32; // first bit to set within start_byte
+                let end_byte = end_bit / 8;
+                let end_offset = (end_bit % 8) as u32; // one-past-last bit within end_byte
+
+                if start_byte == end_byte {
+                    // All bits land in one byte: mask from start_offset up to end_offset.
+                    // 0xFF << start_offset  → bits [start_offset, 7] set
+                    // (1 << end_offset) - 1 → bits [0, end_offset) set
+                    // AND of both           → bits [start_offset, end_offset) set
+                    buf[start_byte] |= (0xFFu8 << start_offset) & ((1u8 << end_offset) - 1);
+                } else {
+                    if start_offset != 0 {
+                        // Partial leading byte: set bits from start_offset to bit 7.
+                        buf[start_byte] |= 0xFFu8 << start_offset;
+                    }
+                    // Full interior bytes (skip start_byte if it was only partially covered).
+                    let full_start = start_byte + (start_offset != 0) as usize;
+                    buf[full_start..end_byte].fill(0xFF);
+                    if end_offset != 0 {
+                        // Partial trailing byte: set bits 0 up to end_offset.
+                        // (1 << end_offset) - 1 → bits [0, end_offset) set
+                        buf[end_byte] |= (1u8 << end_offset) - 1;
+                    }
                 }
             }
         }
