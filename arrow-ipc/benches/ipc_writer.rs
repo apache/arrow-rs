@@ -27,6 +27,7 @@ use arrow_ipc::writer::{
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
+use std::io::Write;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -42,6 +43,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 writer.write(&batch).unwrap();
             }
             writer.finish().unwrap();
+            black_box(&buffer);
         })
     });
 
@@ -74,6 +76,38 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("StreamEncoder/encode_and_write_10", |b| {
+        let batch = create_batch(8192, true);
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            let mut encoder = StreamEncoder::try_new(batch.schema().as_ref()).unwrap();
+            for _ in 0..10 {
+                for encoded in encoder.encode(&batch).unwrap() {
+                    buffer.write_all(encoded.as_slice()).unwrap();
+                }
+            }
+            for encoded in encoder.finish().unwrap() {
+                buffer.write_all(encoded.as_slice()).unwrap();
+            }
+            black_box(&buffer);
+        })
+    });
+
+    group.bench_function("StreamEncoder/encode_to_10", |b| {
+        let batch = create_batch(8192, true);
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            let mut encoder = StreamEncoder::try_new(batch.schema().as_ref()).unwrap();
+            for _ in 0..10 {
+                encoder.encode_to(&batch, &mut buffer).unwrap();
+            }
+            encoder.finish_to(&mut buffer).unwrap();
+            black_box(&buffer);
+        })
+    });
+
     group.bench_function("StreamEncoder/encode_10/zstd", |b| {
         let batch = create_batch(8192, true);
         b.iter(move || {
@@ -86,6 +120,48 @@ fn criterion_benchmark(c: &mut Criterion) {
                 black_box(encoder.encode(&batch).unwrap());
             }
             black_box(encoder.finish().unwrap());
+        })
+    });
+
+    group.bench_function("StreamEncoder/encode_and_write_10/zstd", |b| {
+        let batch = create_batch(8192, true);
+        let options = IpcWriteOptions::default()
+            .try_with_compression(Some(CompressionType::ZSTD))
+            .unwrap();
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            let mut encoder =
+                StreamEncoder::try_new_with_options(batch.schema().as_ref(), options.clone())
+                    .unwrap();
+            for _ in 0..10 {
+                for encoded in encoder.encode(&batch).unwrap() {
+                    buffer.write_all(encoded.as_slice()).unwrap();
+                }
+            }
+            for encoded in encoder.finish().unwrap() {
+                buffer.write_all(encoded.as_slice()).unwrap();
+            }
+            black_box(&buffer);
+        })
+    });
+
+    group.bench_function("StreamEncoder/encode_to_10/zstd", |b| {
+        let batch = create_batch(8192, true);
+        let options = IpcWriteOptions::default()
+            .try_with_compression(Some(CompressionType::ZSTD))
+            .unwrap();
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            let mut encoder =
+                StreamEncoder::try_new_with_options(batch.schema().as_ref(), options.clone())
+                    .unwrap();
+            for _ in 0..10 {
+                encoder.encode_to(&batch, &mut buffer).unwrap();
+            }
+            encoder.finish_to(&mut buffer).unwrap();
+            black_box(&buffer);
         })
     });
 
