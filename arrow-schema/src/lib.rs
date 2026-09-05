@@ -183,6 +183,28 @@ impl ops::Not for SortOptions {
         }
     }
 }
+/// Controls which properties of nested [`Field`]s are considered when comparing
+/// two [`DataType`]s for [semantic equality](DataType::semantic_equality).
+///
+/// Plain [`PartialEq`] on [`DataType`] requires an exact match of every nested
+/// field, including its name, nullability, and metadata. `SemanticEqualityOptions` lets
+/// callers relax those checks, e.g. to treat `List<item: Int32>` and
+/// `List<element: Int32>` as equivalent by setting `check_field_name` to `false`.
+#[derive(Clone, Debug, Default)]
+pub struct SemanticEqualityOptions {
+    /// If `true`, nested fields must have the same nullability to be considered equal.
+    pub check_nullability: bool,
+    /// If `true`, nested fields must have the same name to be considered equal.
+    pub check_field_name: bool,
+    /// If `true`, nested fields must have the same metadata to be considered equal.
+    pub check_metadata: bool,
+}
+
+/// Compares two [`DataType`]s for semantic equality, according to the rules
+/// configured by `depth`. See [`DataType::semantic_equality`] for details.
+pub fn equal_datatypes(dt: &DataType, other: &DataType, options: &SemanticEqualityOptions) -> bool {
+    dt.semantic_equality(other, options)
+}
 
 #[test]
 fn test_overloaded_not_sort_options() {
