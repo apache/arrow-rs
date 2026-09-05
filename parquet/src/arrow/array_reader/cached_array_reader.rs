@@ -647,6 +647,53 @@ mod tests {
     }
 
     #[test]
+    fn test_consumer_cleanup_after_skip() {
+        // A consumer that skips several batches (e.g. rows filtered out by a
+        // predicate) must still remove the skipped batches from the shared
+        // cache, even though it never fetched them itself: one cleanup call
+        // covers the whole skipped range.
+        let metrics = ArrowReaderMetrics::disabled();
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+
+        // Producer populates batches 0..=3 (12 values).
+        let producer_values: Vec<i32> = (1..=12).collect();
+        let mut producer = CachedArrayReader::new(
+            Box::new(MockArrayReader::new(producer_values.clone())),
+            cache.clone(),
+            0,
+            CacheRole::Producer,
+            metrics.clone(),
+        );
+        for _ in 0..4 {
+            producer.read_records(3).unwrap();
+            producer.consume_batch().unwrap();
+        }
+        for batch in 0..4 {
+            assert!(cache.read().unwrap().get(0, BatchID { val: batch }).is_some());
+        }
+
+        // Consumer skips batches 0..=2 outright and reads batch 3.
+        let mut consumer = CachedArrayReader::new(
+            Box::new(MockArrayReader::new(producer_values)),
+            cache.clone(),
+            0,
+            CacheRole::Consumer,
+            metrics,
+        );
+        assert_eq!(consumer.skip_records(9).unwrap(), 9);
+        assert_eq!(consumer.read_records(3).unwrap(), 3);
+        let array = consumer.consume_batch().unwrap();
+        assert_eq!(array.len(), 3);
+
+        // current_batch_id = 12 / 3 = 4, so cleanup covers batches 0..3 in a
+        // single call, including the ones the consumer never fetched.
+        for batch in 0..3 {
+            assert!(cache.read().unwrap().get(0, BatchID { val: batch }).is_none());
+        }
+        assert!(cache.read().unwrap().get(0, BatchID { val: 3 }).is_some());
+    }
+
+    #[test]
     fn test_producer_keeps_batches() {
         let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
