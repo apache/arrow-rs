@@ -575,9 +575,9 @@ impl RleDecoder {
                         let out = &mut buffer[values_read..values_read + num_values];
                         let idx = &index_buf[..num_values];
                         let dict_len = dict.len();
-                        let mut out_chunks = out.chunks_exact_mut(CHUNK);
-                        let idx_chunks = idx.chunks_exact(CHUNK);
-                        for (out_chunk, idx_chunk) in out_chunks.by_ref().zip(idx_chunks) {
+                        let (out_chunks, out_chunks_remainder) = out.as_chunks_mut::<CHUNK>();
+                        let (idx_chunks, idx_chunks_remainder) = idx.as_chunks::<CHUNK>();
+                        for (out_chunk, idx_chunk) in out_chunks.iter_mut().zip(idx_chunks) {
                             // u32 max-reduction instead of `.all(|&i| ..)`: `.all`
                             // short-circuits and blocks autovectorisation. Negative
                             // i32 cast to u32 becomes a large value so the bounds
@@ -591,11 +591,7 @@ impl RleDecoder {
                                 b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
                             }
                         }
-                        for (b, i) in out_chunks
-                            .into_remainder()
-                            .iter_mut()
-                            .zip(idx.chunks_exact(CHUNK).remainder().iter())
-                        {
+                        for (b, i) in out_chunks_remainder.iter_mut().zip(idx_chunks_remainder) {
                             let dict_idx = *i as usize;
                             if dict_idx >= dict_len {
                                 return Err(oob(*i as u32, dict_len));

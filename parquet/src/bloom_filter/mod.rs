@@ -402,7 +402,9 @@ impl Sbbf {
     /// Creates a new [Sbbf] from a raw byte slice.
     pub fn new(bitset: &[u8]) -> Self {
         let data = bitset
-            .chunks_exact(4 * 8)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|chunk| {
                 let mut block = Block::ZERO;
                 let (words, _remainder) = chunk.as_chunks::<4>();
