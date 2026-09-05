@@ -543,11 +543,11 @@ impl<F: AlpFloat> StreamingPage<F> {
         }
 
         // Encode whole vectors straight from the input, no copy.
-        let mut chunks = values.chunks_exact(VECTOR_SIZE);
-        for vector in chunks.by_ref() {
+        let (chunks, remainder) = values.as_chunks::<VECTOR_SIZE>();
+        for vector in chunks {
             self.push_vector(vector, preset, scratch)?;
         }
-        self.carry.extend_from_slice(chunks.remainder());
+        self.carry.extend_from_slice(remainder);
         Ok(())
     }
 
