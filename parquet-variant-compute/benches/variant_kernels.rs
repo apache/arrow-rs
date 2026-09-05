@@ -21,7 +21,7 @@ use arrow_schema::{DataType, Field, FieldRef, Fields};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantPath};
 use parquet_variant_compute::{
-    GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, variant_get,
+    GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, shred_variant, variant_get,
 };
 use parquet_variant_json::append_json;
 use rand::RngExt;
@@ -34,6 +34,7 @@ use std::sync::Arc;
 
 const VARIANT_GET_UNSHREDDED_OBJECT_ROWS: usize = 262_144;
 const VARIANT_ARRAY_BUILD_ROWS: usize = 262_144;
+const SHRED_VARIANT_OBJECT_ROWS: usize = 8_192;
 
 fn variant_array_builder_build_bench(c: &mut Criterion) {
     c.bench_function("variant_array_builder_build_262k_small_values", |b| {
@@ -201,11 +202,63 @@ pub fn variant_get_unshredded_object_path_bench(c: &mut Criterion) {
     });
 }
 
+/// Shreds objects whose fields only partially match the requested shredding schema.
+///
+/// Every field that is *not* covered by the schema is copied into the leftover `value` column,
+/// which requires the builder to resolve that field's name back to its id in the row's metadata
+/// dictionary. The source array's dictionary holds 300 field names, so the cost of that name
+/// lookup is visible.
+pub fn shred_variant_partial_object_bench(c: &mut Criterion) {
+    let variant_array = create_unshredded_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
+
+    // The source objects have 15 fields (`attr.000`, `attr.020`, ... `attr.280`). Shred the first
+    // 5 of them, leaving the other 10 to be written to the leftover `value` column.
+    let shredded_fields = (0..300)
+        .step_by(20)
+        .take(5)
+        .map(|index| {
+            Arc::new(Field::new(
+                format!("attr.{index:03}"),
+                DataType::Int32,
+                true,
+            ))
+        })
+        .collect::<Vec<FieldRef>>();
+    let as_type = DataType::Struct(Fields::from(shredded_fields));
+
+    c.bench_function("shred_variant_partial_object_8k_rows", |b| {
+        b.iter(|| std::hint::black_box(shred_variant(&variant_array, &as_type).unwrap()))
+    });
+}
+
+/// Same as [`shred_variant_partial_object_bench`], but no field of the source objects is covered
+/// by the shredding schema, so all 15 fields per row take the leftover `value` column path.
+pub fn shred_variant_unmatched_object_bench(c: &mut Criterion) {
+    let variant_array = create_unshredded_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
+
+    let shredded_fields = (0..5)
+        .map(|index| {
+            Arc::new(Field::new(
+                format!("missing.{index}"),
+                DataType::Int32,
+                true,
+            ))
+        })
+        .collect::<Vec<FieldRef>>();
+    let as_type = DataType::Struct(Fields::from(shredded_fields));
+
+    c.bench_function("shred_variant_unmatched_object_8k_rows", |b| {
+        b.iter(|| std::hint::black_box(shred_variant(&variant_array, &as_type).unwrap()))
+    });
+}
+
 criterion_group!(
     benches,
     variant_get_bench,
     variant_get_shredded_utf8_bench,
     variant_get_unshredded_object_path_bench,
+    shred_variant_partial_object_bench,
+    shred_variant_unmatched_object_bench,
     variant_array_builder_build_bench,
     benchmark_batch_json_string_to_variant
 );
