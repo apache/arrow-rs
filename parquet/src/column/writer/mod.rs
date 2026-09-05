@@ -1466,7 +1466,17 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
     /// Adds data page.
     /// Data page is either buffered in case of dictionary encoding or written directly.
+    ///
+    /// A call with nothing buffered is a no-op. Content-defined chunking forces a page
+    /// break at chunk boundaries, and writing the chunk can already have flushed the
+    /// page (the chunk hits `data_page_size_limit` or `data_page_row_count_limit`).
+    /// Flushing an empty BOOLEAN RLE encoder panics; other encodings would emit a
+    /// zero-value data page.
     pub(crate) fn add_data_page(&mut self) -> Result<()> {
+        if self.page_metrics.num_buffered_values == 0 {
+            return Ok(());
+        }
+
         // Extract encoded values
         let values_data = self.encoder.flush_data_page()?;
 
