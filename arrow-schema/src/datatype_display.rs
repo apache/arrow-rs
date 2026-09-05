@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::DataType;
+use crate::Field;
 use crate::Metadata;
 use std::fmt;
 use std::fmt::Display;
@@ -173,11 +174,30 @@ impl Display for DataType {
                 Ok(())
             }
             Self::RunEndEncoded(run_ends_field, values_field) => {
+                let default_names = run_ends_field.name() == Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME
+                    && values_field.name() == Field::REE_VALUES_FIELD_DEFAULT_NAME;
                 write!(f, "RunEndEncoded(")?;
-                let run_ends_str = format_field(run_ends_field);
-                let values_str = format_field(values_field);
-
-                write!(f, "{run_ends_str}, {values_str})")?;
+                let v_null = format_nullability(values_field);
+                let v_meta = format_metadata(values_field.metadata());
+                if default_names {
+                    write!(
+                        f,
+                        "{}, {v_null}{}{})",
+                        run_ends_field.data_type(),
+                        values_field.data_type(),
+                        v_meta,
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "\"{}\": {}, \"{}\": {v_null}{}{})",
+                        run_ends_field.name(),
+                        run_ends_field.data_type(),
+                        values_field.name(),
+                        values_field.data_type(),
+                        v_meta,
+                    )?;
+                }
                 Ok(())
             }
         }
@@ -474,24 +494,73 @@ mod tests {
 
     #[test]
     fn test_display_run_end_encoded() {
-        let run_ends_field = Arc::new(Field::new("run_ends", DataType::UInt32, false));
-        let values_field = Arc::new(Field::new("values", DataType::Int32, true));
-        let ree_data_type = DataType::RunEndEncoded(run_ends_field.clone(), values_field.clone());
-        let ree_data_type_string = ree_data_type.to_string();
-        let expected_string = "RunEndEncoded(\"run_ends\": non-null UInt32, \"values\": Int32)";
-        assert_eq!(ree_data_type_string, expected_string);
+        // Compact form: default field names
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::UInt32,
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            true,
+        ));
+        let ree = DataType::RunEndEncoded(run_ends_field.clone(), values_field.clone());
+        assert_eq!(ree.to_string(), "RunEndEncoded(UInt32, Int32)");
 
-        // Test with metadata
-        let mut run_ends_field_with_metadata = Field::new("run_ends", DataType::UInt32, false);
-        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
-        run_ends_field_with_metadata.set_metadata(metadata);
-        let ree_data_type_with_metadata =
-            DataType::RunEndEncoded(Arc::new(run_ends_field_with_metadata), values_field.clone());
-        let ree_data_type_with_metadata_string = ree_data_type_with_metadata.to_string();
-        let expected_string_with_metadata = "RunEndEncoded(\"run_ends\": non-null UInt32, metadata: {\"key\": \"value\"}, \"values\": Int32)";
+        // Compact form: non-null values
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
+        let values_field_str = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            DataType::Utf8,
+            false,
+        ));
+        let ree2 = DataType::RunEndEncoded(run_ends_field, values_field_str);
+        assert_eq!(ree2.to_string(), "RunEndEncoded(Int32, non-null Utf8)");
+
+        // Compact form: with metadata on values field
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
+        let mut values_with_meta =
+            Field::new(Field::REE_VALUES_FIELD_DEFAULT_NAME, DataType::Utf8, true);
+        values_with_meta.set_metadata(HashMap::from([("k".to_string(), "v".to_string())]));
+        let ree_meta = DataType::RunEndEncoded(run_ends_field, Arc::new(values_with_meta));
         assert_eq!(
-            ree_data_type_with_metadata_string,
-            expected_string_with_metadata
+            ree_meta.to_string(),
+            "RunEndEncoded(Int32, Utf8, metadata: {\"k\": \"v\"})"
+        );
+
+        // Verbose form: non-default field name on values
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
+        let named_values = Arc::new(Field::new("named_values", DataType::Utf8, false));
+        let ree3 = DataType::RunEndEncoded(run_ends_field, named_values);
+        assert_eq!(
+            ree3.to_string(),
+            "RunEndEncoded(\"run_ends\": Int32, \"named_values\": non-null Utf8)"
+        );
+
+        // Verbose form: non-default field name on run_ends
+        let custom_re = Arc::new(Field::new("re", DataType::Int32, false));
+        let values_field = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            true,
+        ));
+        let ree4 = DataType::RunEndEncoded(custom_re, values_field);
+        assert_eq!(
+            ree4.to_string(),
+            "RunEndEncoded(\"re\": Int32, \"values\": Int32)"
         );
     }
 
