@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::arrow::ProjectionMask;
-use crate::arrow::arrow_reader::RowSelection;
+use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
+use crate::arrow::arrow_reader::{RowSelection, RowSelector};
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::{Array, BooleanArray, RecordBatch};
 use arrow_buffer::BooleanBuffer;
@@ -272,11 +273,31 @@ fn is_fusable_projection(projection: &ProjectionMask, parquet_schema: &SchemaDes
 /// when they form one contiguous range and compacted with
 /// [`filter_record_batch`] otherwise.
 ///
-/// Survivor positions are tracked as a bitmap, matching the predicate's
-/// output and avoiding intermediate conversions to selector runs.
+/// Survivor positions use selector runs for clustered filters and bitmaps for
+/// fragmented filters, allowing [`RowSelection::and_then`] to use the cheaper
+/// representation for each intermediate result.
 pub(crate) struct FusedPredicate {
     /// At least two predicates, all with the same projection.
     predicates: Vec<Box<dyn ArrowPredicate>>,
+}
+
+/// Average run length below which a bitmap is cheaper than selector runs.
+const FUSION_SELECTION_THRESHOLD: usize = 32;
+
+/// Keep fragmented selections as bitmaps and compact selections as runs.
+fn adapt_fusion_selection(selection: RowSelection) -> RowSelection {
+    match (
+        selection.auto_selection_strategy(FUSION_SELECTION_THRESHOLD),
+        selection.as_mask().is_some(),
+    ) {
+        (RowSelectionStrategy::Mask, true) | (RowSelectionStrategy::Selectors, false) => selection,
+        (RowSelectionStrategy::Mask, false) => {
+            RowSelection::from_boolean_buffer(selection.into_boolean_buffer())
+        }
+        (RowSelectionStrategy::Selectors, true) => {
+            RowSelection::from(Vec::<RowSelector>::from(selection))
+        }
+    }
 }
 
 impl FusedPredicate {
@@ -331,18 +352,20 @@ impl ArrowPredicate for FusedPredicate {
                 continue;
             }
 
-            let next = RowSelection::from_boolean_buffer(filter.values().clone());
-            accepted = Some(match accepted {
+            let next =
+                adapt_fusion_selection(RowSelection::from_boolean_buffer(filter.values().clone()));
+            let combined = match accepted {
                 Some(accepted) => accepted.and_then(&next),
                 None => next,
-            });
+            };
+            accepted = Some(adapt_fusion_selection(combined));
             if idx != last {
                 batch = narrow_batch(&batch, &filter, true_count)?;
             }
         }
 
         let mask = match accepted {
-            Some(accepted) => accepted.as_mask().unwrap().clone(),
+            Some(accepted) => accepted.into_boolean_buffer(),
             None => BooleanBuffer::new_set(num_rows),
         };
         debug_assert_eq!(mask.len(), num_rows);
@@ -639,6 +662,20 @@ mod tests {
             narrowed.column(0).as_primitive::<Int32Type>().values(),
             &[1, 3]
         );
+    }
+
+    #[test]
+    fn adaptive_fusion_selection_uses_selectors_for_long_runs() {
+        let mask = BooleanBuffer::from_iter((0..1_024).map(|idx| (256..768).contains(&idx)));
+        let selection = adapt_fusion_selection(RowSelection::from_boolean_buffer(mask));
+        assert!(selection.as_mask().is_none());
+    }
+
+    #[test]
+    fn adaptive_fusion_selection_keeps_fragmented_masks() {
+        let mask = BooleanBuffer::from_iter((0..1_024).map(|idx| idx % 2 == 0));
+        let selection = adapt_fusion_selection(RowSelection::from_boolean_buffer(mask));
+        assert!(selection.as_mask().is_some());
     }
 
     /// Fusing predicates into one `ReadPlanBuilder::with_predicate` call

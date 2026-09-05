@@ -405,22 +405,6 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
         return mask.clone();
     }
 
-    // Dense outer masks have few gaps. Copy the corresponding inner ranges
-    // in bulk instead of visiting every selected row. Keep the set-bit path
-    // when the inner result is sparse enough to make that cheaper.
-    if mask.len() - selected_count <= mask.len() / 16 && other_true_count >= selected_count / 20 {
-        let mut builder = BooleanBufferBuilder::new(mask.len());
-        let mut offset = other.offset();
-        for (start, end) in mask.set_slices() {
-            builder.append_n(start - builder.len(), false);
-            let len = end - start;
-            builder.append_packed_range(offset..offset + len, other.values());
-            offset += len;
-        }
-        builder.append_n(mask.len() - builder.len(), false);
-        return builder.finish();
-    }
-
     let mut builder = BooleanBufferBuilder::new(mask.len());
     let mut outer_set_indices = mask.set_indices();
     let mut next_selected_ordinal = 0usize;
@@ -451,32 +435,6 @@ mod tests {
     use super::*;
     use arrow_array::BooleanArray;
     use rand::{RngExt, rng};
-
-    #[test]
-    fn test_mask_and_then_ranges_with_offsets() {
-        for len in [0, 1, 7, 63, 64, 65, 1024, 8192, 8193] {
-            for stride in [2, 4, 16, 20, 100] {
-                for offset in [0, 3, 65] {
-                    let outer =
-                        BooleanBuffer::from_iter((0..len + offset).map(|i| (i + 1) % stride != 0))
-                            .slice(offset, len);
-                    let selected = outer.count_set_bits();
-                    for inner_stride in [1, 2, 20, 100] {
-                        let inner_offset = offset + 5;
-                        let inner = BooleanBuffer::from_iter(
-                            (0..selected + inner_offset).map(|i| i % inner_stride == 0),
-                        )
-                        .slice(inner_offset, selected);
-                        let mut values = inner.iter();
-                        let expected = BooleanBuffer::from_iter(
-                            outer.iter().map(|keep| keep && values.next().unwrap()),
-                        );
-                        assert_eq!(and_then_masks(&outer, &inner), expected);
-                    }
-                }
-            }
-        }
-    }
 
     #[test]
     fn test_and() {
