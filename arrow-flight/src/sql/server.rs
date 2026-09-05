@@ -572,7 +572,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     /// Register a new SqlInfo result, making it available when calling GetSqlInfo.
     #[deprecated(
         since = "59.4.0",
-        note = "takes no value to register and has no effect. Use `SqlInfoDataBuilder::append` instead"
+        note = "Not used in request handling and doesn't accept a value to register. Use `SqlInfoDataBuilder::append` instead"
     )]
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
 }
