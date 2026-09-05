@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PhysicalType","ThirdPartyType","Type"],"struct":["Field"]};

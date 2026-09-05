@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Decode a Thrift `OffsetIndex` from the provided bytes."><title>decode_offset_index in parquet::file::page_index::index_reader - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="parquet" data-themes="" data-resource-suffix="" data-rustdoc-version="1.100.0-nightly (a69a63265 2026-09-03)" data-channel="nightly" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../../static.files/main-1814ead3.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-9f56287d.css"></noscript><link rel="icon" href="https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">decode_offset_index</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../../../parquet/index.html"><img src="https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg" alt="logo"></a><h2><a href="../../../../parquet/index.html">parquet</a><span class="version">59.2.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">decode_<wbr>offset_<wbr>index</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example" title="Example">Example</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In parquet::<wbr>file::<wbr>page_<wbr>index::<wbr>index_<wbr>reader</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../../index.html">parquet</a>::<wbr><a href="../../index.html">file</a>::<wbr><a href="../index.html">page_index</a>::<wbr><a href="index.html">index_reader</a></div><h1>Function <span class="fn">decode_<wbr>offset_<wbr>index</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../../src/parquet/file/page_index/index_reader.rs.html#100-112">Source</a> </span></div><pre class="rust item-decl"><code>pub fn decode_offset_index(
+    data: &amp;[<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u8.html">u8</a>],
+) -&gt; <a class="type" href="../../../errors/type.Result.html" title="type parquet::errors::Result">Result</a>&lt;<a class="struct" href="../offset_index/struct.OffsetIndexMetaData.html" title="struct parquet::file::page_index::offset_index::OffsetIndexMetaData">OffsetIndexMetaData</a>, <a class="enum" href="../../../errors/enum.ParquetError.html" title="enum parquet::errors::ParquetError">ParquetError</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Decode a Thrift <a href="https://github.com/apache/parquet-format/blob/e94a5d090b324a0c0ee1adbb8ea6b099852dc3cc/src/main/thrift/parquet.thrift#L1253-L1273"><code>OffsetIndex</code></a> from the provided bytes.</p>
+<p>The passed in bytes contain a serialized Thrift <code>OffsetIndex</code> struct as
+read from a Parquet file.</p>
+<p>Returns an <a href="../offset_index/struct.OffsetIndexMetaData.html" title="struct parquet::file::page_index::offset_index::OffsetIndexMetaData"><code>OffsetIndexMetaData</code></a> containing page location information.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="comment">// Open the Parquet file
+</span><span class="kw">let </span><span class="kw-2">mut </span>file = File::open(<span class="string">"data.parquet"</span>)<span class="question-mark">?</span>;
+<span class="kw">let </span>reader = SerializedFileReader::new(file.try_clone()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+<span class="kw">let </span>metadata = reader.metadata();
+
+<span class="comment">// Select a row group and column to read
+</span><span class="kw">let </span>row_group_idx = <span class="number">0</span>;
+<span class="kw">let </span>column_idx = <span class="number">0</span>;
+
+<span class="comment">// Get the column chunk metadata
+</span><span class="kw">let </span>row_group = metadata.row_group(row_group_idx);
+<span class="kw">let </span>column_chunk = row_group.column(column_idx);
+
+<span class="comment">// Get the offset index byte range from the column metadata
+</span><span class="kw">if let </span><span class="prelude-val">Some</span>(range) = column_chunk.offset_index_range() {
+    <span class="comment">// Read the offset index bytes from the file
+    </span><span class="kw">let </span><span class="kw-2">mut </span>buffer = <span class="macro">vec!</span>[<span class="number">0u8</span>; (range.end - range.start) <span class="kw">as </span>usize];
+    file.seek(std::io::SeekFrom::Start(range.start))<span class="question-mark">?</span>;
+    file.read_exact(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
+
+    <span class="comment">// Decode the offset index
+    </span><span class="kw">let </span>offset_index = decode_offset_index(<span class="kw-2">&amp;</span>buffer)<span class="question-mark">?</span>;
+
+    <span class="comment">// Access page location information
+    </span><span class="kw">for </span>(i, page_location) <span class="kw">in </span>offset_index.page_locations().iter().enumerate() {
+        <span class="macro">println!</span>(<span class="string">"Page {}: offset={}, size={}, first_row={}"</span>,
+            i,
+            page_location.offset,
+            page_location.compressed_page_size,
+            page_location.first_row_index
+        );
+    }
+}</code></pre></div></div></details></section></div></main></body></html>

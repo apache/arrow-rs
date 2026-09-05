@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["NeedsIndexData","PageIndexPolicy"],"fn":["needs_index_data","parse_index_data"],"struct":["ParquetMetaDataReader"]};

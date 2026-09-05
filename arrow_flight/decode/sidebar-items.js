@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DecodedPayload"],"struct":["DecodedFlightData","FlightDataDecoder","FlightRecordBatchStream","FlightStreamState"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["BufferSpec"],"fn":["checked_len_plus_offset","contains_nulls","count_nulls","get_fixed_size_binary_width","layout","new_buffers"],"struct":["ArrayData","ArrayDataBuilder","DataTypeLayout"],"type":["ArrayDataRef"]};

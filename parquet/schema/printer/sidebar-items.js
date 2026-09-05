@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["INDENT_WIDTH"],"fn":["print_column_chunk_metadata","print_dashes","print_file_metadata","print_logical_and_converted","print_parquet_metadata","print_row_group_metadata","print_schema","print_timeunit"],"struct":["Printer"]};

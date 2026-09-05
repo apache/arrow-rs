@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RowSelectionInner"],"mod":["algebra","boolean","cursor","ranges","selector"],"struct":["RowSelection"]};

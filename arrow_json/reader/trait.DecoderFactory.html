@@ -1,0 +1,155 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="A trait to create custom decoders for specific data types."><title>DecoderFactory in arrow_json::reader - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="arrow_json" data-themes="" data-resource-suffix="" data-rustdoc-version="1.100.0-nightly (a69a63265 2026-09-03)" data-channel="nightly" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-1814ead3.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-9f56287d.css"></noscript><link rel="icon" href="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"></head><body class="rustdoc trait"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">DecoderFactory</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../arrow_json/index.html"><img src="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg" alt="logo"></a><h2><a href="../../arrow_json/index.html">arrow_<wbr>json</a><span class="version">59.2.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Decoder<wbr>Factory</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#examples" title="Examples">Examples</a></li></ul><h3><a href="#provided-methods">Provided Methods</a></h3><ul class="block"><li><a href="#method.make_default_decoder" title="make_default_decoder">make_default_decoder</a></li></ul><h3><a href="#implementors">Implementors</a></h3></section><div id="rustdoc-modnav"><h2><a href="index.html">In arrow_<wbr>json::<wbr>reader</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">arrow_json</a>::<wbr><a href="index.html">reader</a></div><h1>Trait <span class="trait">Decoder<wbr>Factory</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/arrow_json/reader/mod.rs.html#897-923">Source</a> </span></div><pre class="rust item-decl"><code>pub trait DecoderFactory:
+    <a class="trait" href="https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html" title="trait core::fmt::Debug">Debug</a>
+    + <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a>
+    + <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> {
+    // Provided method
+    fn <a href="#method.make_default_decoder" class="fn">make_default_decoder</a>(
+        &amp;self,
+        _ctx: &amp;<a class="struct" href="struct.DecoderContext.html" title="struct arrow_json::reader::DecoderContext">DecoderContext</a>,
+        _field: &amp;FieldRef,
+        _is_nullable: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="trait.ArrayDecoder.html" title="trait arrow_json::reader::ArrayDecoder">ArrayDecoder</a>&gt;&gt;, ArrowError&gt; { ... }
+}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A trait to create custom decoders for specific data types.</p>
+<p>Overrides the reader’s decoder for a data type, or adds support for one it does not
+handle. The reader-side counterpart of <a href="../writer/trait.EncoderFactory.html" title="trait arrow_json::writer::EncoderFactory"><code>EncoderFactory</code></a>; register an
+implementation with <a href="struct.ReaderBuilder.html#method.with_decoder_factory" title="method arrow_json::reader::ReaderBuilder::with_decoder_factory"><code>ReaderBuilder::with_decoder_factory</code></a>.</p>
+<h2 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h2>
+<p>Decodes <code>Binary</code> from a JSON array of integers rather than the default hex string.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::sync::Arc;
+<span class="kw">use </span>arrow_array::{Array, ArrayRef, BinaryArray};
+<span class="kw">use </span>arrow_array::types::Float64Type;
+<span class="kw">use </span>arrow_array::cast::AsArray;
+<span class="kw">use </span>arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape, TapeElement};
+<span class="kw">use </span>arrow_json::ReaderBuilder;
+<span class="kw">use </span>arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema};
+<span class="kw">use </span>arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
+<span class="kw">use </span>arrow_array::StringArray;
+
+<span class="doccomment">/// Decodes `[104, 105]` into the bytes `b"hi"`
+</span><span class="kw">struct </span>IntArrayBinaryDecoder;
+
+<span class="kw">impl </span>ArrayDecoder <span class="kw">for </span>IntArrayBinaryDecoder {
+    <span class="kw">fn </span>decode(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tape: <span class="kw-2">&amp;</span>Tape&lt;<span class="lifetime">'_</span>&gt;, pos: <span class="kw-2">&amp;</span>[u32]) -&gt; <span class="prelude-ty">Result</span>&lt;ArrayRef, ArrowError&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>values: Vec&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;u8&gt;&gt;&gt; = Vec::with_capacity(pos.len());
+        <span class="kw">for </span>p <span class="kw">in </span>pos {
+            <span class="kw">match </span>tape.get(<span class="kw-2">*</span>p) {
+                TapeElement::Null =&gt; values.push(<span class="prelude-val">None</span>),
+                TapeElement::StartList(end) =&gt; {
+                    <span class="kw">let </span><span class="kw-2">mut </span>bytes = Vec::new();
+                    <span class="kw">let </span><span class="kw-2">mut </span>cur = p + <span class="number">1</span>;
+                    <span class="kw">while </span>cur &lt; end {
+                        <span class="kw">match </span>tape.get(cur) {
+                            <span class="comment">// JSON text yields `Number`; serde yields `I32`
+                            </span>TapeElement::Number(idx) =&gt; {
+                                <span class="kw">let </span>s = tape.get_string(idx);
+                                bytes.push(s.parse::&lt;u8&gt;().map_err(|e| {
+                                    ArrowError::JsonError(<span class="macro">format!</span>(<span class="string">"invalid byte {s}: {e}"</span>))
+                                })<span class="question-mark">?</span>);
+                            }
+                            TapeElement::I32(v) =&gt; bytes.push(v <span class="kw">as </span>u8),
+                            <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(tape.error(cur, <span class="string">"byte"</span>)),
+                        }
+                        cur = tape.next(cur, <span class="string">"byte"</span>)<span class="question-mark">?</span>;
+                    }
+                    values.push(<span class="prelude-val">Some</span>(bytes));
+                }
+                <span class="kw">_ </span>=&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(tape.error(<span class="kw-2">*</span>p, <span class="string">"list of bytes"</span>)),
+            }
+        }
+        <span class="prelude-val">Ok</span>(Arc::new(BinaryArray::from_iter(values.iter().map(|v| v.as_deref()))))
+    }
+}
+
+<span class="doccomment">/// Upper-cases whatever the reader's own decoder produced
+</span><span class="kw">struct </span>ShoutDecoder(Box&lt;<span class="kw">dyn </span>ArrayDecoder&gt;);
+
+<span class="kw">impl </span>ArrayDecoder <span class="kw">for </span>ShoutDecoder {
+    <span class="kw">fn </span>decode(<span class="kw-2">&amp;mut </span><span class="self">self</span>, tape: <span class="kw-2">&amp;</span>Tape&lt;<span class="lifetime">'_</span>&gt;, pos: <span class="kw-2">&amp;</span>[u32]) -&gt; <span class="prelude-ty">Result</span>&lt;ArrayRef, ArrowError&gt; {
+        <span class="kw">let </span>inner = <span class="self">self</span>.<span class="number">0</span>.decode(tape, pos)<span class="question-mark">?</span>;
+        <span class="kw">let </span>values = inner.as_string::&lt;i32&gt;();
+        <span class="prelude-val">Ok</span>(Arc::new(StringArray::from_iter(
+            values.iter().map(|v| v.map(str::to_uppercase)),
+        )))
+    }
+}
+
+<span class="attr">#[derive(Debug)]
+</span><span class="kw">struct </span>IntArrayBinaryDecoderFactory;
+
+<span class="kw">impl </span>DecoderFactory <span class="kw">for </span>IntArrayBinaryDecoderFactory {
+    <span class="kw">fn </span>make_default_decoder(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        ctx: <span class="kw-2">&amp;</span>DecoderContext,
+        field: <span class="kw-2">&amp;</span>FieldRef,
+        is_nullable: bool,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Box&lt;<span class="kw">dyn </span>ArrayDecoder&gt;&gt;, ArrowError&gt; {
+        <span class="comment">// Selection can key off metadata, e.g. to recognise an extension type, and
+        // build on the reader's own decoder for the very same field
+        </span><span class="kw">if </span>field.metadata().get(EXTENSION_TYPE_NAME_KEY).map(String::as_str)
+            == <span class="prelude-val">Some</span>(<span class="string">"apache.shout"</span>)
+        {
+            <span class="kw">let </span>inner = ctx.make_builtin_decoder(field, is_nullable)<span class="question-mark">?</span>;
+            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Box::new(ShoutDecoder(inner))));
+        }
+
+        <span class="kw">match </span>field.data_type() {
+            DataType::Binary =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(Box::new(IntArrayBinaryDecoder))),
+            <span class="comment">// Returning `None` uses the reader's default decoder
+            </span><span class="kw">_ </span>=&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
+        }
+    }
+}
+
+<span class="kw">let </span>nested = Fields::from(<span class="macro">vec!</span>[Field::new(<span class="string">"inner"</span>, DataType::Binary, <span class="bool-val">true</span>)]);
+<span class="kw">let </span>schema = Arc::new(Schema::new(<span class="macro">vec!</span>[
+    Field::new(<span class="string">"bytes"</span>, DataType::Binary, <span class="bool-val">true</span>),
+    Field::new(<span class="string">"float"</span>, DataType::Float64, <span class="bool-val">true</span>),
+    Field::new(<span class="string">"nested"</span>, DataType::Struct(nested), <span class="bool-val">true</span>),
+    Field::new(<span class="string">"shout"</span>, DataType::Utf8, <span class="bool-val">true</span>)
+        .with_metadata([(EXTENSION_TYPE_NAME_KEY, <span class="string">"apache.shout"</span>)]),
+]));
+
+<span class="kw">let </span>json = <span class="string">r#"{"bytes": [104, 105], "float": 1.0, "nested": {"inner": [104, 105]}, "shout": "hi"}
+{"float": 2.3}
+{"bytes": [98], "nested": {"inner": [98]}}
+"#</span>;
+
+<span class="kw">let </span>batch = ReaderBuilder::new(schema)
+    .with_decoder_factory(Arc::new(IntArrayBinaryDecoderFactory))
+    .build(json.as_bytes())
+    .unwrap()
+    .next()
+    .unwrap()
+    .unwrap();
+
+<span class="kw">let </span>bytes = batch.column(<span class="number">0</span>).as_binary::&lt;i32&gt;();
+<span class="macro">assert_eq!</span>(bytes.value(<span class="number">0</span>), <span class="string">b"hi"</span>);
+<span class="macro">assert!</span>(bytes.is_null(<span class="number">1</span>));
+<span class="macro">assert_eq!</span>(bytes.value(<span class="number">2</span>), <span class="string">b"b"</span>);
+
+<span class="comment">// The override applies wherever `Binary` appears, including nested, while types
+// the factory declines are decoded as usual
+</span><span class="kw">let </span>inner = batch.column(<span class="number">2</span>).as_struct().column(<span class="number">0</span>).as_binary::&lt;i32&gt;();
+<span class="macro">assert_eq!</span>(inner.value(<span class="number">0</span>), <span class="string">b"hi"</span>);
+<span class="macro">assert_eq!</span>(batch.column(<span class="number">1</span>).as_primitive::&lt;Float64Type&gt;().value(<span class="number">0</span>), <span class="number">1.0</span>);
+
+<span class="comment">// Dispatched on metadata, and decoded by the reader's own `Utf8` decoder
+</span><span class="macro">assert_eq!</span>(batch.column(<span class="number">3</span>).as_string::&lt;i32&gt;().value(<span class="number">0</span>), <span class="string">"HI"</span>);</code></pre></div></div></details><h2 id="provided-methods" class="section-header">Provided Methods<a href="#provided-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="method.make_default_decoder" class="method"><a class="src rightside" href="../../src/arrow_json/reader/mod.rs.html#915-922">Source</a><h4 class="code-header">fn <a href="#method.make_default_decoder" class="fn">make_default_decoder</a>(
+    &amp;self,
+    _ctx: &amp;<a class="struct" href="struct.DecoderContext.html" title="struct arrow_json::reader::DecoderContext">DecoderContext</a>,
+    _field: &amp;FieldRef,
+    _is_nullable: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="trait.ArrayDecoder.html" title="trait arrow_json::reader::ArrayDecoder">ArrayDecoder</a>&gt;&gt;, ArrowError&gt;</h4></section></summary><div class="docblock"><p>Make a decoder for <code>field</code>, or <code>Ok(None)</code> to use the reader’s default.</p>
+<p>Receives the [<code>FieldRef</code>] rather than just its [<code>DataType</code>] so decoder
+selection can consider the field’s metadata, e.g. to identify <a href="https://arrow.apache.org/docs/format/Columnar.html#extension-types">extension
+types</a>. The root of a <a href="struct.ReaderBuilder.html#method.new" title="associated function arrow_json::reader::ReaderBuilder::new"><code>ReaderBuilder::new</code></a> schema is presented as a
+synthesized nameless <code>Struct</code> field.</p>
+<p>Use <a href="struct.DecoderContext.html#method.make_decoder" title="method arrow_json::reader::DecoderContext::make_decoder"><code>DecoderContext::make_decoder</code></a> on <code>ctx</code> to build child decoders, and
+<a href="struct.DecoderContext.html#method.make_builtin_decoder" title="method arrow_json::reader::DecoderContext::make_builtin_decoder"><code>DecoderContext::make_builtin_decoder</code></a> to build on the reader’s own decoder
+for this field. Calling <code>make_decoder</code> with the field this was invoked with
+recurses back here and loops.</p>
+<p><code>is_nullable</code> folds in ancestor nullability, so it may differ from
+<code>field.is_nullable()</code> in either direction: a nullable struct widens its
+children, while a run-end encoded array narrows its values.</p>
+</div></details></div><h2 id="dyn-compatibility" class="section-header">Dyn Compatibility<a href="#dyn-compatibility" class="anchor">§</a></h2><div class="dyn-compatibility-info"><p>This trait <b>is</b> <a href="https://doc.rust-lang.org/nightly/reference/items/traits.html#dyn-compatibility">dyn compatible</a>.</p><p><i>In older versions of Rust, dyn compatibility was called "object safety".</i></p></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"></div><script src="../../trait.impl/arrow_json/reader/trait.DecoderFactory.js" async></script></section></div></main></body></html>
