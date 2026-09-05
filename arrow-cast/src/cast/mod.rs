@@ -14412,7 +14412,11 @@ mod tests {
         .as_u128();
 
         let raw_array = unsafe {
-            BinaryViewArray::new_unchecked(views.into(), buffers, Some(vec![true, false].into()))
+            BinaryViewArray::new_unchecked(
+                views.into(),
+                buffers.into(),
+                Some(vec![true, false].into()),
+            )
         };
 
         let casted = cast_with_options(&raw_array, &DataType::Utf8View, &unsafe_opts).unwrap();
