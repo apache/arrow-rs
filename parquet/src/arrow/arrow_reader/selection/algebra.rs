@@ -27,6 +27,25 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer, bit_util}
 use std::cmp::Ordering;
 use std::iter::Peekable;
 
+// Policy for the word-at-a-time expansion in `and_then_dense_masks`.
+//
+// The dense path costs a fixed amount per 64-bit output word, independent of
+// how many inner rows survive. The set-index path instead walks the outer set
+// bits up to the last inner survivor and appends each survivor individually,
+// so it wins when the outer mask is sparse, or when only a few inner rows
+// survive and they sit near the start of the selection (for example, a
+// clustered page-level filter). The thresholds below keep the set-index path
+// for those inputs:
+//
+// - `MIN_LEN`: the outer mask must have at least this many rows.
+// - `MAX_DROPPED_FRACTION` is a divisor: at most `1 / 4` of the outer rows may
+//   be unset, i.e. roughly 75% outer selectivity or more.
+// - `MIN_INNER_FRACTION` is a divisor: at least `1 / 20` of the selected rows
+//   must survive the inner selection, i.e. roughly 5% inner selectivity or more.
+const AND_THEN_DENSE_MASK_MIN_LEN: usize = 8192;
+const AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION: usize = 4;
+const AND_THEN_DENSE_MASK_MIN_INNER_FRACTION: usize = 20;
+
 /// Applies `second` to the rows selected by `first`, both selector-backed.
 pub(super) fn and_then_row_selections(
     first: &[RowSelector],
@@ -405,6 +424,10 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
         return mask.clone();
     }
 
+    if should_use_dense_mask(mask.len(), selected_count, other_true_count) {
+        return and_then_dense_masks(mask, other);
+    }
+
     let mut builder = BooleanBufferBuilder::new(mask.len());
     let mut outer_set_indices = mask.set_indices();
     let mut next_selected_ordinal = 0usize;
@@ -430,11 +453,95 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     builder.finish()
 }
 
+/// Returns whether `and_then_masks` should take the dense path for an outer
+/// mask of `mask_len` rows with `selected_count` set bits, given that
+/// `other_true_count` of those rows survive the inner selection. See the
+/// `AND_THEN_DENSE_MASK_*` constants for the rationale behind each threshold.
+#[inline]
+fn should_use_dense_mask(mask_len: usize, selected_count: usize, other_true_count: usize) -> bool {
+    mask_len >= AND_THEN_DENSE_MASK_MIN_LEN
+        && mask_len - selected_count <= mask_len.div_ceil(AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION)
+        && other_true_count >= selected_count / AND_THEN_DENSE_MASK_MIN_INNER_FRACTION
+}
+
+/// Expands `other` into the set positions of a dense `mask`, processing one
+/// output word at a time. Each output word takes the next
+/// `mask_word.count_ones()` bits of `other` and scatters them into the set
+/// positions of `mask_word`, so this is the inverse of compressing `mask` down
+/// to its selected rows. Callers must have validated that `other.len()` equals
+/// the number of set bits in `mask`.
+#[inline(never)]
+fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
+    let mut other_chunks = other.bit_chunks().iter_padded();
+    let mut other_remaining = other.len();
+    let mut pending = 0_u128;
+    let mut pending_len = 0;
+    let mut output = MutableBuffer::with_capacity(mask.len().div_ceil(8));
+
+    for mask_word in mask
+        .bit_chunks()
+        .iter_padded()
+        .take(mask.len().div_ceil(64))
+    {
+        let selected = mask_word.count_ones() as usize;
+        while pending_len < selected {
+            let chunk = other_chunks
+                .next()
+                .expect("validated other length matches selected row count");
+            let chunk_len = other_remaining.min(64);
+            pending |= (chunk as u128) << pending_len;
+            pending_len += chunk_len;
+            other_remaining -= chunk_len;
+        }
+
+        let values = pending as u64;
+        output.extend_from_slice(&deposit_u64(values, mask_word).to_le_bytes());
+        pending >>= selected;
+        pending_len -= selected;
+    }
+
+    debug_assert_eq!(other_remaining, 0);
+    debug_assert_eq!(pending_len, 0);
+    output.truncate(mask.len().div_ceil(8));
+    BooleanBuffer::new(output.into(), 0, mask.len())
+}
+
+/// Deposits the least-significant bits of `values` into the set positions of
+/// `mask`, i.e. a software `pdep`. Bits of `values` above the
+/// `mask.count_ones()` meaningful ones are ignored.
+///
+/// Iterates over whichever side of `mask` has fewer bits: for a dense mask,
+/// insert a zero bit at each unset position, lowest first; otherwise scatter
+/// the low bits of `values` to each set position, lowest first.
+#[inline]
+fn deposit_u64(mut values: u64, mask: u64) -> u64 {
+    let mut zeros = !mask;
+    if zeros.count_ones() <= 32 {
+        // Inserting a zero shifts the bits above it up by one, so the garbage
+        // bits above the meaningful ones fall off the top.
+        while zeros != 0 {
+            let lower = (1_u64 << zeros.trailing_zeros()) - 1;
+            values = (values & lower) | ((values & !lower) << 1);
+            zeros &= zeros - 1;
+        }
+        values
+    } else {
+        let mut output = 0;
+        let mut ones = mask;
+        while ones != 0 {
+            output |= (values & 1) << ones.trailing_zeros();
+            values >>= 1;
+            ones &= ones - 1;
+        }
+        output
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::BooleanArray;
-    use rand::{RngExt, rng};
+    use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
 
     #[test]
     fn test_and() {
@@ -726,6 +833,141 @@ mod tests {
             actual_bits,
             vec![false, false, true, false, false, false, true, false]
         );
+    }
+
+    #[test]
+    fn test_dense_mask_and_then_mask_with_offsets() {
+        for len in [8192, 8193, 10_000] {
+            for outer_stride in [100, 20, 4] {
+                let outer_offset = 3;
+                let outer = BooleanBuffer::from_iter(
+                    (0..len + outer_offset).map(|i| (i + 1) % outer_stride != 0),
+                )
+                .slice(outer_offset, len);
+
+                let inner_offset = 5;
+                let inner_len = outer.count_set_bits();
+                let inner = BooleanBuffer::from_iter(
+                    (0..inner_len + inner_offset).map(|i| (i + 2) % 97 != 0),
+                )
+                .slice(inner_offset, inner_len);
+
+                assert!(should_use_dense_mask(
+                    outer.len(),
+                    inner.len(),
+                    inner.count_set_bits()
+                ));
+
+                let mut inner_idx = 0;
+                let expected = BooleanBuffer::from_iter((0..len).map(|i| {
+                    if !outer.value(i) {
+                        return false;
+                    }
+                    let value = inner.value(inner_idx);
+                    inner_idx += 1;
+                    value
+                }));
+
+                let outer = RowSelection::from_boolean_buffer(outer);
+                let inner = RowSelection::from_boolean_buffer(inner);
+                let actual = outer.and_then(&inner);
+                assert_eq!(actual.as_mask().unwrap(), &expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_dense_mask_and_then_mask_randomized_word_boundaries() {
+        let mut rng = StdRng::seed_from_u64(0x67e4_a91b_239d_c805);
+
+        for (len, outer_offset, inner_offset) in [(8192, 0, 0), (8192, 3, 5), (8193, 7, 1)] {
+            let outer =
+                BooleanBuffer::from_iter((0..len + outer_offset).map(|_| rng.random_bool(0.8)))
+                    .slice(outer_offset, len);
+            let inner_len = outer.count_set_bits();
+            let inner = BooleanBuffer::from_iter(
+                (0..inner_len + inner_offset).map(|_| rng.random_bool(0.5)),
+            )
+            .slice(inner_offset, inner_len);
+
+            assert!(should_use_dense_mask(
+                outer.len(),
+                inner.len(),
+                inner.count_set_bits()
+            ));
+
+            let mut inner_idx = 0;
+            let expected = BooleanBuffer::from_iter((0..len).map(|i| {
+                if !outer.value(i) {
+                    return false;
+                }
+                let value = inner.value(inner_idx);
+                inner_idx += 1;
+                value
+            }));
+
+            let outer = RowSelection::from_boolean_buffer(outer);
+            let inner = RowSelection::from_boolean_buffer(inner);
+            let actual = outer.and_then(&inner);
+            assert_eq!(actual.as_mask().unwrap(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_dense_mask_and_then_policy() {
+        let len = 8192;
+        let selected = len * 3 / 4;
+        let min_inner = selected / AND_THEN_DENSE_MASK_MIN_INNER_FRACTION;
+
+        assert!(!should_use_dense_mask(len - 1, selected, min_inner));
+        assert!(!should_use_dense_mask(len, selected - 1, min_inner));
+        assert!(!should_use_dense_mask(len, selected, min_inner - 1));
+        assert!(should_use_dense_mask(len, selected, min_inner));
+    }
+
+    #[test]
+    fn test_deposit_u64() {
+        fn reference(values: u64, mask: u64) -> u64 {
+            let mut expected = 0;
+            let mut input_idx = 0;
+            for output_idx in 0..64 {
+                if mask & (1 << output_idx) != 0 {
+                    expected |= ((values >> input_idx) & 1) << output_idx;
+                    input_idx += 1;
+                }
+            }
+            expected
+        }
+
+        let mut rng = StdRng::seed_from_u64(0x2b7e_1516_28ae_d2a6);
+
+        // Masks with at most one unset bit or at most one set bit
+        for bit in 0..64 {
+            for mask in [u64::MAX, !(1 << bit), 1 << bit, 0] {
+                for _ in 0..16 {
+                    let values = rng.random::<u64>();
+                    assert_eq!(
+                        deposit_u64(values, mask),
+                        reference(values, mask),
+                        "{mask:#x}"
+                    );
+                }
+            }
+        }
+
+        // Masks across the full density range, exercising both loops
+        for _ in 0..20_000 {
+            let density = rng.random_range(0.0..=1.0);
+            let mask = (0..64).fold(0_u64, |mask, bit| {
+                mask | ((rng.random_bool(density) as u64) << bit)
+            });
+            let values = rng.random::<u64>();
+            assert_eq!(
+                deposit_u64(values, mask),
+                reference(values, mask),
+                "{mask:#x}"
+            );
+        }
     }
 
     #[test]
