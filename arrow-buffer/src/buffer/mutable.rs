@@ -737,9 +737,31 @@ impl MutableBuffer {
     ///
     /// This is similar to `from_trusted_len_iter_bool`, however, can be significantly faster
     /// as it eliminates the conditional `Iterator::next`
+    ///
+    /// # Panics
+    ///
+    /// Panics if the backing storage for `len` bits cannot be allocated. Use
+    /// [`MutableBuffer::try_collect_bool`] for a fallible version.
     #[inline]
-    pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
-        let mut buffer: Vec<u64> = Vec::with_capacity(bit_util::ceil(len, 64));
+    pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, f: F) -> Self {
+        Self::try_collect_bool(len, f).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Fallible version of [`MutableBuffer::collect_bool`].
+    ///
+    /// `len` is a bit count, so the reservation is `ceil(len / 64)` u64 slots. This function
+    /// returns an error if that much memory cannot be reserved up front.
+    #[inline]
+    pub fn try_collect_bool<F: FnMut(usize) -> bool>(
+        len: usize,
+        mut f: F,
+    ) -> Result<Self, MutableBufferError> {
+        let words = bit_util::ceil(len, 64);
+        let layout = Layout::array::<u64>(words).map_err(|_| MutableBufferError::LayoutError)?;
+        let mut buffer: Vec<u64> = Vec::new();
+        buffer
+            .try_reserve(words)
+            .map_err(|_| MutableBufferError::AllocationError(layout))?;
 
         let chunks = len / 64;
         let remainder = len % 64;
@@ -765,7 +787,7 @@ impl MutableBuffer {
 
         let mut buffer: MutableBuffer = buffer.into();
         buffer.truncate(bit_util::ceil(len, 8));
-        buffer
+        Ok(buffer)
     }
 
     /// Extends this buffer with boolean values.
