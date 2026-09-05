@@ -501,10 +501,16 @@ impl RowGroupReaderBuilder {
                 let cache_projection =
                     self.compute_cache_projection(row_group_info.row_group_idx, &filter);
 
+                let cache_batch_size = self.cache_batch_size(
+                    row_group_info.row_group_idx,
+                    row_group_info.row_count,
+                    &filter,
+                    &cache_projection,
+                );
                 let cache_info = CacheInfo::new(
                     cache_projection,
                     Arc::new(RwLock::new(RowGroupCache::new(
-                        self.batch_size,
+                        cache_batch_size,
                         self.max_predicate_cache_size,
                     ))),
                 );
@@ -824,6 +830,62 @@ impl RowGroupReaderBuilder {
     ///
     /// Returns the columns that are used by the filters *and* then used in the
     /// final projection, excluding any nested columns.
+    /// Chooses the predicate cache's batch granularity for one row group.
+    ///
+    /// The consumer-side reassembly in `CachedArrayReader::consume_batch`
+    /// concatenates one slice per cached batch its span touches. For byte-view
+    /// columns that concat rewrites every non-inline view's `buffer_index`,
+    /// which profiling shows dominates the cache's cost (arrow-rs#10774),
+    /// while a span served from a single cached batch is a plain `filter`
+    /// that shares the source buffers and rewrites nothing.
+    ///
+    /// Use one batch for the whole row group -- making the zero-rewrite path
+    /// the only path -- when all of the following hold:
+    ///
+    /// 1. The filter has a single predicate. With several predicates the
+    ///    later producers read under the selection refined by earlier ones;
+    ///    coarse batches then expand each fetch to the whole row group,
+    ///    decoding rows the selection skipped (measured 2x regressions on
+    ///    multi-predicate ClickBench queries).
+    /// 2. At least one cached column is BYTE_ARRAY. Fixed-width concat is a
+    ///    plain memcpy with nothing to save, and the larger one-shot decode
+    ///    allocations measurably hurt (ClickBench Q1).
+    /// 3. The cached columns' uncompressed size fits in half the cache
+    ///    budget, so coarser entries cannot start failing inserts, which
+    ///    would push consumers onto the re-decode fallback at whole-row-group
+    ///    granularity.
+    ///
+    /// Otherwise fall back to `self.batch_size` (the previous behavior).
+    fn cache_batch_size(
+        &self,
+        row_group_idx: usize,
+        row_count: usize,
+        filter: &RowFilter,
+        cache_projection: &ProjectionMask,
+    ) -> usize {
+        use crate::basic::Type as PhysicalType;
+
+        if filter.predicates.len() != 1 {
+            return self.batch_size;
+        }
+        let rg = self.metadata.row_group(row_group_idx);
+        let mut cached_bytes: i64 = 0;
+        let mut has_byte_array = false;
+        for (idx, col) in rg.columns().iter().enumerate() {
+            if !cache_projection.leaf_included(idx) {
+                continue;
+            }
+            cached_bytes += col.uncompressed_size();
+            has_byte_array |= col.column_descr().physical_type() == PhysicalType::BYTE_ARRAY;
+        }
+        if !has_byte_array
+            || (cached_bytes as usize).saturating_mul(2) > self.max_predicate_cache_size
+        {
+            return self.batch_size;
+        }
+        row_count.max(self.batch_size)
+    }
+
     fn compute_cache_projection(&self, row_group_idx: usize, filter: &RowFilter) -> ProjectionMask {
         let meta = self.metadata.row_group(row_group_idx);
         match self.compute_cache_projection_inner(filter) {
