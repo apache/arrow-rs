@@ -138,9 +138,7 @@ impl<T: DataType> DictEncoder<T> {
 
         // Write bit width in the first byte
         let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
-        for index in &self.indices {
-            encoder.put(*index)
-        }
+        encoder.put_batch(&self.indices);
         self.indices.clear();
         Ok(encoder.consume().into())
     }

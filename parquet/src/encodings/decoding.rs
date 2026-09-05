@@ -32,7 +32,7 @@ use crate::encodings::decoding::byte_stream_split_decoder::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{self, BitReader, FromBitpacked};
+use crate::util::bit_util::{self, BitPacking, BitReader};
 
 pub(crate) mod alp_decoder;
 mod byte_stream_split_decoder;
@@ -461,7 +461,7 @@ impl<T: DataType> RleValueDecoder<T> {
 
 impl<T: DataType> Decoder<T> for RleValueDecoder<T>
 where
-    T::T: FromBitpacked,
+    T::T: BitPacking,
 {
     #[inline]
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
@@ -665,7 +665,7 @@ where
 
 impl<T: DataType> Decoder<T> for DeltaBitPackDecoder<T>
 where
-    T::T: Default + FromPrimitive + FromBitpacked + WrappingAdd + Copy,
+    T::T: Default + FromPrimitive + BitPacking + WrappingAdd + Copy,
 {
     // # of total values is derived from encoding
     #[inline]
