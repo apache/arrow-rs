@@ -53,16 +53,23 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         return Ok(make_array(left.to_data()));
     }
 
+    // Compute right_values & right_bitmap. True bits are positions that should
+    // become null; nulls in `right` do not introduce nulls.
+    let should_null = match right.nulls() {
+        Some(nulls) => right.values() & nulls.inner(),
+        None => right.values().clone(),
+    };
+
     match left.data_type() {
         DataType::RunEndEncoded(_, values) => {
-            if !values.is_nullable() && right.iter().any(|value| value == Some(true)) {
+            if !values.is_nullable() && should_null.has_true() {
                 return Err(ArrowError::ComputeError(
                     "Cannot introduce nulls into a RunEndEncoded array with a non-nullable values field".into(),
                 ));
             }
-            return nullif_take(left, right);
+            return nullif_take(left, &should_null);
         }
-        DataType::Union(_, _) => return nullif_take(left, right),
+        DataType::Union(_, _) => return nullif_take(left, &should_null),
         _ => {}
     }
 
@@ -77,13 +84,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     // Thus: result = left null bitmap & (!right_values | !right_bitmap)
     //              OR left null bitmap & !(right_values & right_bitmap)
 
-    // Compute right_values & right_bitmap
-    let right = match right.nulls() {
-        Some(nulls) => right.values() & nulls.inner(),
-        None => right.values().clone(),
-    };
-
-    // Compute left null bitmap & !right
+    // Compute left null bitmap & !should_null
 
     let (combined, null_count) = match left_data.nulls() {
         Some(left) => {
@@ -91,8 +92,8 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
             let b = bitwise_bin_op_helper(
                 left.buffer(),
                 left.offset(),
-                right.inner(),
-                right.offset(),
+                should_null.inner(),
+                should_null.offset(),
                 len,
                 |l, r| {
                     let t = l & !r;
@@ -104,11 +105,12 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
         None => {
             let mut null_count = 0;
-            let buffer = bitwise_unary_op_helper(right.inner(), right.offset(), len, |b| {
-                let t = !b;
-                null_count += t.count_zeros() as usize;
-                t
-            });
+            let buffer =
+                bitwise_unary_op_helper(should_null.inner(), should_null.offset(), len, |b| {
+                    let t = !b;
+                    null_count += t.count_zeros() as usize;
+                    t
+                });
             (buffer, null_count)
         }
     };
@@ -125,9 +127,9 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
 }
 
 /// Applies `nullif` to arrays that represent logical nulls in their children.
-fn nullif_take(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowError> {
+fn nullif_take(left: &dyn Array, should_null: &BooleanBuffer) -> Result<ArrayRef, ArrowError> {
     let indices = UInt64Array::from_iter((0..left.len()).map(|index| {
-        if right.is_valid(index) && right.value(index) {
+        if should_null.value(index) {
             None
         } else {
             Some(index as u64)
@@ -212,6 +214,31 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some(10), None]
+        );
+    }
+
+    #[test]
+    fn test_nullif_run_end_encoded_mask_nulls() {
+        let values = Int32Array::from(vec![10, 20, 30]);
+        let ree =
+            RunArray::<Int16Type>::try_new(&Int16Array::from(vec![1, 2, 3]), &values).unwrap();
+        let mask = BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
+        let mask = mask.slice(1, 3); // Some(false), None, Some(true)
+        let mask = mask.as_any().downcast_ref::<BooleanArray>().unwrap();
+
+        let result = nullif(&ree, mask).unwrap();
+        let result = result
+            .as_any()
+            .downcast_ref::<RunArray<Int16Type>>()
+            .unwrap();
+        assert_eq!(result.logical_null_count(), 1);
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(10), Some(20), None]
         );
     }
 
