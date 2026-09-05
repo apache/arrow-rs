@@ -206,21 +206,8 @@ impl RowFilter {
 }
 
 impl RowFilter {
-    /// Fuse runs of consecutive predicates that share one fusable projection
-    /// into a single [`FusedPredicate`] each.
-    ///
-    /// Evaluating such a run as separate predicates decodes (or replays from
-    /// the predicate cache) the same column once per predicate. A fused run
-    /// decodes it once and evaluates each predicate on the rows accepted by
-    /// its predecessors, so the observable semantics are unchanged. The
-    /// resulting [`RowSelection`] and any output `limit` short-circuit apply
-    /// to the fused predicate exactly as they would to the last predicate of
-    /// the run.
-    ///
-    /// Fusion is restricted to projections of exactly one non-repeated
-    /// top-level leaf. That bounds the cost of compacting survivor batches
-    /// between predicates and leaves wide or nested projections on the
-    /// per-predicate path.
+    /// Fuse consecutive predicates on the same single top-level, non-repeated leaf.
+    /// This avoids repeated decoding or predicate-cache replay of that column.
     pub(crate) fn fuse_same_projection(self, parquet_schema: &SchemaDescriptor) -> Self {
         let mut fused: Vec<Box<dyn ArrowPredicate>> = Vec::with_capacity(self.predicates.len());
         let mut run: Vec<Box<dyn ArrowPredicate>> = Vec::new();
@@ -248,8 +235,7 @@ impl RowFilter {
     }
 }
 
-/// Returns whether predicates on `projection` may be fused: the projection
-/// must select exactly one non-repeated top-level parquet leaf.
+/// Restrict fusion to one top-level, non-repeated leaf to limit compaction costs.
 fn is_fusable_projection(projection: &ProjectionMask, parquet_schema: &SchemaDescriptor) -> bool {
     let mut selected =
         (0..parquet_schema.num_columns()).filter(|idx| projection.leaf_included(*idx));
@@ -264,27 +250,18 @@ fn is_fusable_projection(projection: &ProjectionMask, parquet_schema: &SchemaDes
     column.path().parts().len() == 1 && column.max_rep_level() == 0
 }
 
-/// Consecutive [`RowFilter`] predicates that share one [`ProjectionMask`],
-/// evaluated against a single decoded batch.
-///
-/// The predicates run in order and each one only sees the rows accepted by
-/// its predecessors, exactly as if they were separate [`RowFilter`]
-/// predicates. Between predicates the surviving rows are narrowed zero-copy
-/// when they form one contiguous range and compacted with
-/// [`filter_record_batch`] otherwise.
-///
-/// Survivor positions use selector runs for clustered filters and bitmaps for
-/// fragmented filters, allowing [`RowSelection::and_then`] to use the cheaper
-/// representation for each intermediate result.
+/// Evaluate same-projection predicates in order on one decoded batch.
+/// Later predicates see only surviving rows, sliced when contiguous or compacted
+/// otherwise. Selections use runs or bitmaps according to fragmentation.
 pub(crate) struct FusedPredicate {
     /// At least two predicates, all with the same projection.
     predicates: Vec<Box<dyn ArrowPredicate>>,
 }
 
-/// Average run length below which a bitmap is cheaper than selector runs.
+/// Heuristic average run length below which bitmaps are preferred.
 const FUSION_SELECTION_THRESHOLD: usize = 32;
 
-/// Keep fragmented selections as bitmaps and compact selections as runs.
+/// Use bitmaps for short runs and selectors for long runs.
 fn adapt_fusion_selection(selection: RowSelection) -> RowSelection {
     match (
         selection.auto_selection_strategy(FUSION_SELECTION_THRESHOLD),
@@ -331,9 +308,7 @@ impl ArrowPredicate for FusedPredicate {
 
     fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError> {
         let num_rows = batch.num_rows();
-        // Rows of the input batch accepted by every predicate so far. `None`
-        // until some predicate rejects a row, so a run of predicates that
-        // accept everything costs no selection work.
+        // Positions in the original batch; None until a predicate rejects rows.
         let mut accepted: Option<RowSelection> = None;
         let mut batch = batch;
         let last = self.predicates.len() - 1;
@@ -373,8 +348,7 @@ impl ArrowPredicate for FusedPredicate {
     }
 }
 
-/// Evaluate `predicate` on `batch`, validating the result length and mapping
-/// `null` results to `false` so the result can be used as a filter.
+/// Validate the predicate result length and treat nulls as false.
 fn evaluate_predicate(
     predicate: &mut dyn ArrowPredicate,
     batch: RecordBatch,

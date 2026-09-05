@@ -1326,7 +1326,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             batch_size,
             row_group_plan,
             projection,
-            filter,
+            mut filter,
             row_selection_policy,
             limit,
             offset,
@@ -1351,12 +1351,6 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         let mut plan_builder = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
             .with_row_selection_policy(row_selection_policy);
-
-        // Consecutive predicates on the same single-column projection are
-        // evaluated from one decoded stream, see `RowFilter::fuse_same_projection`.
-        let mut filter = filter.map(|filter| {
-            filter.fuse_same_projection(reader.metadata.file_metadata().schema_descr())
-        });
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {

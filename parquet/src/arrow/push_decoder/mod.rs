@@ -320,8 +320,7 @@ impl ParquetPushDecoderBuilder {
             max_predicate_cache_size,
         } = self;
 
-        // Consecutive predicates on the same single-column projection are
-        // evaluated from one decoded stream, see `RowFilter::fuse_same_projection`.
+        // Evaluate eligible same-projection predicates as one predicate.
         let filter = filter.map(|filter| {
             filter.fuse_same_projection(parquet_metadata.file_metadata().schema_descr())
         });
