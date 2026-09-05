@@ -322,7 +322,10 @@ impl ParquetPushDecoderBuilder {
 
         // Evaluate eligible same-projection predicates as one predicate.
         let filter = filter.map(|filter| {
-            filter.fuse_same_projection(parquet_metadata.file_metadata().schema_descr())
+            filter.fuse_same_projection(
+                parquet_metadata.file_metadata().schema_descr(),
+                row_selection_policy,
+            )
         });
 
         let has_predicates = filter

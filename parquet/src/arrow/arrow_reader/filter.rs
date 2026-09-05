@@ -17,7 +17,7 @@
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
-use crate::arrow::arrow_reader::{RowSelection, RowSelector};
+use crate::arrow::arrow_reader::{RowSelection, RowSelectionPolicy, RowSelector};
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::{Array, BooleanArray, RecordBatch};
 use arrow_buffer::BooleanBuffer;
@@ -203,46 +203,49 @@ impl RowFilter {
     pub fn into_predicates(self) -> Vec<Box<dyn ArrowPredicate>> {
         self.predicates
     }
-}
 
-impl RowFilter {
     /// Fuse consecutive predicates on the same single top-level, non-repeated leaf.
     /// This avoids repeated decoding or predicate-cache replay of that column.
-    pub(crate) fn fuse_same_projection(self, parquet_schema: &SchemaDescriptor) -> Self {
-        let mut fused: Vec<Box<dyn ArrowPredicate>> = Vec::with_capacity(self.predicates.len());
-        let mut run: Vec<Box<dyn ArrowPredicate>> = Vec::new();
-        let mut flush = |run: &mut Vec<Box<dyn ArrowPredicate>>| {
-            if run.len() > 1 && is_fusable_projection(run[0].projection(), parquet_schema) {
-                let run = std::mem::take(run);
-                fused.push(Box::new(FusedPredicate::new(run)));
+    pub(crate) fn fuse_same_projection(
+        self,
+        parquet_schema: &SchemaDescriptor,
+        row_selection_policy: RowSelectionPolicy,
+    ) -> Self {
+        let mut predicates: Vec<Box<dyn ArrowPredicate>> =
+            Vec::with_capacity(self.predicates.len());
+        let mut group: Vec<Box<dyn ArrowPredicate>> = Vec::new();
+        let mut flush_group = |group: &mut Vec<Box<dyn ArrowPredicate>>| {
+            if group.len() > 1 && can_fuse_projection(group[0].projection(), parquet_schema) {
+                let group = std::mem::take(group);
+                predicates.push(Box::new(FusedPredicate::new(group, row_selection_policy)));
             } else {
-                fused.append(run);
+                predicates.append(group);
             }
         };
 
         for predicate in self.predicates {
-            if run
+            if group
                 .last()
                 .is_some_and(|last| last.projection() != predicate.projection())
             {
-                flush(&mut run);
+                flush_group(&mut group);
             }
-            run.push(predicate);
+            group.push(predicate);
         }
-        flush(&mut run);
+        flush_group(&mut group);
 
-        Self { predicates: fused }
+        Self { predicates }
     }
 }
 
 /// Restrict fusion to one top-level, non-repeated leaf to limit compaction costs.
-fn is_fusable_projection(projection: &ProjectionMask, parquet_schema: &SchemaDescriptor) -> bool {
-    let mut selected =
+fn can_fuse_projection(projection: &ProjectionMask, parquet_schema: &SchemaDescriptor) -> bool {
+    let mut leaf_indices =
         (0..parquet_schema.num_columns()).filter(|idx| projection.leaf_included(*idx));
-    let Some(leaf_idx) = selected.next() else {
+    let Some(leaf_idx) = leaf_indices.next() else {
         return false;
     };
-    if selected.next().is_some() {
+    if leaf_indices.next().is_some() {
         return false;
     }
 
@@ -252,42 +255,30 @@ fn is_fusable_projection(projection: &ProjectionMask, parquet_schema: &SchemaDes
 
 /// Evaluate same-projection predicates in order on one decoded batch.
 /// Later predicates see only surviving rows, sliced when contiguous or compacted
-/// otherwise. Selections use runs or bitmaps according to fragmentation.
-pub(crate) struct FusedPredicate {
+/// otherwise. Selections follow the reader's row selection policy.
+struct FusedPredicate {
     /// At least two predicates, all with the same projection.
     predicates: Vec<Box<dyn ArrowPredicate>>,
-}
-
-/// Heuristic average run length below which bitmaps are preferred.
-const FUSION_SELECTION_THRESHOLD: usize = 32;
-
-/// Use bitmaps for short runs and selectors for long runs.
-fn adapt_fusion_selection(selection: RowSelection) -> RowSelection {
-    match (
-        selection.auto_selection_strategy(FUSION_SELECTION_THRESHOLD),
-        selection.as_mask().is_some(),
-    ) {
-        (RowSelectionStrategy::Mask, true) | (RowSelectionStrategy::Selectors, false) => selection,
-        (RowSelectionStrategy::Mask, false) => {
-            RowSelection::from_boolean_buffer(selection.into_boolean_buffer())
-        }
-        (RowSelectionStrategy::Selectors, true) => {
-            RowSelection::from(Vec::<RowSelector>::from(selection))
-        }
-    }
+    row_selection_policy: RowSelectionPolicy,
 }
 
 impl FusedPredicate {
     /// Create a fused predicate from at least two predicates that share one
     /// projection.
-    pub(crate) fn new(predicates: Vec<Box<dyn ArrowPredicate>>) -> Self {
+    fn new(
+        predicates: Vec<Box<dyn ArrowPredicate>>,
+        row_selection_policy: RowSelectionPolicy,
+    ) -> Self {
         debug_assert!(predicates.len() > 1);
         debug_assert!(
             predicates
                 .windows(2)
                 .all(|pair| pair[0].projection() == pair[1].projection())
         );
-        Self { predicates }
+        Self {
+            predicates,
+            row_selection_policy,
+        }
     }
 }
 
@@ -309,14 +300,14 @@ impl ArrowPredicate for FusedPredicate {
     fn evaluate(&mut self, batch: RecordBatch) -> Result<BooleanArray, ArrowError> {
         let num_rows = batch.num_rows();
         // Positions in the original batch; None until a predicate rejects rows.
-        let mut accepted: Option<RowSelection> = None;
-        let mut batch = batch;
-        let last = self.predicates.len() - 1;
+        let mut selection: Option<RowSelection> = None;
+        let mut filtered_batch = batch;
+        let last_predicate_idx = self.predicates.len() - 1;
 
         for (idx, predicate) in self.predicates.iter_mut().enumerate() {
-            let filter = evaluate_predicate(predicate.as_mut(), batch.clone())?;
+            let filter = evaluate_predicate(predicate.as_mut(), filtered_batch.clone())?;
             // No mapping is needed if all preceding predicates accepted every row.
-            if idx == last && accepted.is_none() {
+            if idx == last_predicate_idx && selection.is_none() {
                 return Ok(filter);
             }
             let true_count = filter.true_count();
@@ -327,24 +318,47 @@ impl ArrowPredicate for FusedPredicate {
                 continue;
             }
 
-            let next =
-                adapt_fusion_selection(RowSelection::from_boolean_buffer(filter.values().clone()));
-            let combined = match accepted {
-                Some(accepted) => accepted.and_then(&next),
-                None => next,
+            let predicate_selection = adapt_fusion_selection(
+                RowSelection::from_boolean_buffer(filter.values().clone()),
+                self.row_selection_policy,
+            );
+            let combined_selection = match selection {
+                Some(selection) => selection.and_then(&predicate_selection),
+                None => predicate_selection,
             };
-            accepted = Some(adapt_fusion_selection(combined));
-            if idx != last {
-                batch = narrow_batch(&batch, &filter, true_count)?;
+            selection = Some(adapt_fusion_selection(
+                combined_selection,
+                self.row_selection_policy,
+            ));
+            if idx != last_predicate_idx {
+                filtered_batch = narrow_batch(&filtered_batch, &filter, true_count)?;
             }
         }
 
-        let mask = match accepted {
-            Some(accepted) => accepted.into_boolean_buffer(),
+        let mask = match selection {
+            Some(selection) => selection.into_boolean_buffer(),
             None => BooleanBuffer::new_set(num_rows),
         };
         debug_assert_eq!(mask.len(), num_rows);
         Ok(BooleanArray::new(mask, None))
+    }
+}
+
+/// Apply the reader's row selection policy to a fusion selection.
+fn adapt_fusion_selection(selection: RowSelection, policy: RowSelectionPolicy) -> RowSelection {
+    let strategy = match policy {
+        RowSelectionPolicy::Auto { threshold } => selection.auto_selection_strategy(threshold),
+        RowSelectionPolicy::Mask => RowSelectionStrategy::Mask,
+        RowSelectionPolicy::Selectors => RowSelectionStrategy::Selectors,
+    };
+    match (strategy, selection.as_mask().is_some()) {
+        (RowSelectionStrategy::Mask, true) | (RowSelectionStrategy::Selectors, false) => selection,
+        (RowSelectionStrategy::Mask, false) => {
+            RowSelection::from_boolean_buffer(selection.into_boolean_buffer())
+        }
+        (RowSelectionStrategy::Selectors, true) => {
+            RowSelection::from(Vec::<RowSelector>::from(selection))
+        }
     }
 }
 
@@ -393,7 +407,7 @@ mod tests {
     use crate::arrow::array_reader::ArrayReader;
     use crate::arrow::array_reader::StructArrayReader;
     use crate::arrow::array_reader::test_util::make_int32_page_reader;
-    use crate::arrow::arrow_reader::{ReadPlanBuilder, RowSelectionPolicy};
+    use crate::arrow::arrow_reader::ReadPlanBuilder;
     use crate::schema::parser::parse_message_type;
     use arrow_array::Int32Array;
     use arrow_array::cast::AsArray;
@@ -416,18 +430,18 @@ mod tests {
     }
 
     #[test]
-    fn fusable_projection_requires_one_top_level_leaf() {
+    fn can_fuse_projection_requires_one_top_level_leaf() {
         let schema = test_schema();
 
         let one_leaf = ProjectionMask::leaves(&schema, [1]);
         let two_leaves = ProjectionMask::leaves(&schema, [0, 2]);
         let nested_leaf = ProjectionMask::leaves(&schema, [3]);
         let repeated_leaf = ProjectionMask::leaves(&schema, [4]);
-        assert!(is_fusable_projection(&one_leaf, &schema));
-        assert!(!is_fusable_projection(&two_leaves, &schema));
-        assert!(!is_fusable_projection(&nested_leaf, &schema));
-        assert!(!is_fusable_projection(&repeated_leaf, &schema));
-        assert!(!is_fusable_projection(
+        assert!(can_fuse_projection(&one_leaf, &schema));
+        assert!(!can_fuse_projection(&two_leaves, &schema));
+        assert!(!can_fuse_projection(&nested_leaf, &schema));
+        assert!(!can_fuse_projection(&repeated_leaf, &schema));
+        assert!(!can_fuse_projection(
             &ProjectionMask::none(schema.num_columns()),
             &schema
         ));
@@ -440,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn fuse_same_projection_groups_consecutive_fusable_runs() {
+    fn fuse_same_projection_groups_consecutive_eligible_predicates() {
         let schema = test_schema();
         let a = ProjectionMask::leaves(&schema, [0]);
         let b = ProjectionMask::leaves(&schema, [1]);
@@ -453,10 +467,10 @@ mod tests {
             accept_all(a.clone()),
             // single predicate: kept as-is
             accept_all(b.clone()),
-            // two leaves: not fusable
+            // two leaves: not eligible for fusion
             accept_all(ac.clone()),
             accept_all(ac.clone()),
-            // nested leaf: not fusable
+            // nested leaf: not eligible for fusion
             accept_all(nested.clone()),
             accept_all(nested.clone()),
             // fused
@@ -464,7 +478,7 @@ mod tests {
             accept_all(a.clone()),
             accept_all(a.clone()),
         ])
-        .fuse_same_projection(&schema);
+        .fuse_same_projection(&schema, RowSelectionPolicy::default());
 
         let projections: Vec<_> = filter
             .predicates()
@@ -484,11 +498,12 @@ mod tests {
         let a = ProjectionMask::leaves(&schema, [0]);
         let b = ProjectionMask::leaves(&schema, [1]);
 
-        let filter =
-            RowFilter::new(vec![accept_all(a), accept_all(b)]).fuse_same_projection(&schema);
+        let filter = RowFilter::new(vec![accept_all(a), accept_all(b)])
+            .fuse_same_projection(&schema, RowSelectionPolicy::default());
         assert_eq!(filter.predicates().len(), 2);
 
-        let filter = RowFilter::new(vec![]).fuse_same_projection(&schema);
+        let filter =
+            RowFilter::new(vec![]).fuse_same_projection(&schema, RowSelectionPolicy::default());
         assert!(filter.predicates().is_empty());
     }
 
@@ -574,6 +589,31 @@ mod tests {
     type PredicateChain = fn() -> Vec<Box<dyn ArrowPredicate>>;
 
     #[test]
+    fn fusion_selection_respects_policy() {
+        let mask = BooleanBuffer::from(vec![true, true, false, false, true, true, false, false]);
+        for (policy, expect_mask) in [
+            (RowSelectionPolicy::Mask, true),
+            (RowSelectionPolicy::Selectors, false),
+            (RowSelectionPolicy::Auto { threshold: 2 }, false),
+            (RowSelectionPolicy::Auto { threshold: 3 }, true),
+        ] {
+            for selection in [
+                RowSelection::from_boolean_buffer(mask.clone()),
+                RowSelection::from(vec![
+                    RowSelector::select(2),
+                    RowSelector::skip(2),
+                    RowSelector::select(2),
+                    RowSelector::skip(2),
+                ]),
+            ] {
+                let selection = adapt_fusion_selection(selection, policy);
+                assert_eq!(selection.as_mask().is_some(), expect_mask, "{policy:?}");
+                assert_eq!(selection.into_boolean_buffer(), mask);
+            }
+        }
+    }
+
+    #[test]
     fn fused_predicate_matches_sequential_evaluation() {
         let cases: Vec<PredicateChain> = vec![
             || vec![even(), divisible_by_three_after_even()],
@@ -590,14 +630,16 @@ mod tests {
             let batch = int_batch(0..num_rows);
             for make_predicates in &cases {
                 let expected = sequential(&batch, &mut make_predicates());
-                let mut fused = FusedPredicate::new(make_predicates());
-                let actual = fused.evaluate(batch.clone()).unwrap();
-                assert_eq!(actual.null_count(), 0);
-                assert_eq!(
-                    actual.values().iter().collect::<Vec<_>>(),
-                    expected,
-                    "{num_rows} rows"
-                );
+                for policy in POLICIES {
+                    let mut fused = FusedPredicate::new(make_predicates(), policy);
+                    let actual = fused.evaluate(batch.clone()).unwrap();
+                    assert_eq!(actual.null_count(), 0);
+                    assert_eq!(
+                        actual.values().iter().collect::<Vec<_>>(),
+                        expected,
+                        "{num_rows} rows, {policy:?}"
+                    );
+                }
             }
         }
     }
@@ -607,7 +649,7 @@ mod tests {
         let short = Box::new(ArrowPredicateFn::new(ProjectionMask::all(), |_| {
             Ok(BooleanArray::from(vec![true]))
         }));
-        let mut fused = FusedPredicate::new(vec![all_true(), short]);
+        let mut fused = FusedPredicate::new(vec![all_true(), short], RowSelectionPolicy::default());
         let err = fused.evaluate(int_batch(0..4)).unwrap_err();
         assert!(
             err.to_string()
@@ -641,14 +683,20 @@ mod tests {
     #[test]
     fn adaptive_fusion_selection_uses_selectors_for_long_runs() {
         let mask = BooleanBuffer::from_iter((0..1_024).map(|idx| (256..768).contains(&idx)));
-        let selection = adapt_fusion_selection(RowSelection::from_boolean_buffer(mask));
+        let selection = adapt_fusion_selection(
+            RowSelection::from_boolean_buffer(mask),
+            RowSelectionPolicy::default(),
+        );
         assert!(selection.as_mask().is_none());
     }
 
     #[test]
     fn adaptive_fusion_selection_keeps_fragmented_masks() {
         let mask = BooleanBuffer::from_iter((0..1_024).map(|idx| idx % 2 == 0));
-        let selection = adapt_fusion_selection(RowSelection::from_boolean_buffer(mask));
+        let selection = adapt_fusion_selection(
+            RowSelection::from_boolean_buffer(mask),
+            RowSelectionPolicy::default(),
+        );
         assert!(selection.as_mask().is_some());
     }
 
@@ -685,7 +733,7 @@ mod tests {
             }
 
             for policy in POLICIES {
-                let mut fused = FusedPredicate::new(make_predicates());
+                let mut fused = FusedPredicate::new(make_predicates(), policy);
                 let plan = ReadPlanBuilder::new(7)
                     .with_selection(initial.clone())
                     .with_row_selection_policy(policy)
