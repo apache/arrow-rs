@@ -1355,10 +1355,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         // Consecutive predicates on the same single-column projection are
         // evaluated from one decoded stream, see `RowFilter::fuse_same_projection`.
         let mut filter = filter.map(|filter| {
-            filter.fuse_same_projection(
-                reader.metadata.file_metadata().schema_descr(),
-                row_selection_policy,
-            )
+            filter.fuse_same_projection(reader.metadata.file_metadata().schema_descr())
         });
 
         // Update selection based on any filters

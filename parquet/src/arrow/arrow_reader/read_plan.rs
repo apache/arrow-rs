@@ -157,16 +157,16 @@ impl ReadPlanBuilder {
     ///
     /// Guarantees to return either `Selectors` or `Mask`, never `Auto`.
     pub(crate) fn resolve_selection_strategy(&self) -> RowSelectionStrategy {
-        match self.selection.as_ref() {
-            Some(selection) => self.row_selection_policy.resolve(selection),
-            // Selecting every row needs no density inspection: an explicit
-            // policy still applies, otherwise selectors are the cheapest form.
-            None => match self.row_selection_policy {
-                RowSelectionPolicy::Mask => RowSelectionStrategy::Mask,
-                RowSelectionPolicy::Selectors | RowSelectionPolicy::Auto { .. } => {
-                    RowSelectionStrategy::Selectors
-                }
-            },
+        match self.row_selection_policy {
+            RowSelectionPolicy::Selectors => RowSelectionStrategy::Selectors,
+            RowSelectionPolicy::Mask => RowSelectionStrategy::Mask,
+            RowSelectionPolicy::Auto { threshold, .. } => {
+                let Some(selection) = self.selection.as_ref() else {
+                    return RowSelectionStrategy::Selectors;
+                };
+
+                selection.auto_selection_strategy(threshold)
+            }
         }
     }
 

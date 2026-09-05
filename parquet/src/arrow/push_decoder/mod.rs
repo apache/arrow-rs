@@ -323,10 +323,7 @@ impl ParquetPushDecoderBuilder {
         // Consecutive predicates on the same single-column projection are
         // evaluated from one decoded stream, see `RowFilter::fuse_same_projection`.
         let filter = filter.map(|filter| {
-            filter.fuse_same_projection(
-                parquet_metadata.file_metadata().schema_descr(),
-                row_selection_policy,
-            )
+            filter.fuse_same_projection(parquet_metadata.file_metadata().schema_descr())
         });
 
         let has_predicates = filter
