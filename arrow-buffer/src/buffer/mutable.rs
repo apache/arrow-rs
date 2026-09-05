@@ -749,9 +749,8 @@ impl MutableBuffer {
 
     /// Fallible version of [`MutableBuffer::collect_bool`].
     ///
-    /// `len` is a bit count, so the reservation is `ceil(len / 64)` u64 slots. Reserving that
-    /// up front means a `len` taken from a row or bit count in user controlled data aborts
-    /// the process before `f` is ever called, so this reports the failure instead.
+    /// `len` is a bit count, so the reservation is `ceil(len / 64)` u64 slots. This function
+    /// returns an error if that much memory cannot be reserved up front.
     #[inline]
     pub fn try_collect_bool<F: FnMut(usize) -> bool>(
         len: usize,
