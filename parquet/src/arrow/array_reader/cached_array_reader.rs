@@ -669,7 +669,13 @@ mod tests {
             producer.consume_batch().unwrap();
         }
         for batch in 0..4 {
-            assert!(cache.read().unwrap().get(0, BatchID { val: batch }).is_some());
+            assert!(
+                cache
+                    .read()
+                    .unwrap()
+                    .get(0, BatchID { val: batch })
+                    .is_some()
+            );
         }
 
         // Consumer skips batches 0..=2 outright and reads batch 3.
@@ -688,7 +694,13 @@ mod tests {
         // current_batch_id = 12 / 3 = 4, so cleanup covers batches 0..3 in a
         // single call, including the ones the consumer never fetched.
         for batch in 0..3 {
-            assert!(cache.read().unwrap().get(0, BatchID { val: batch }).is_none());
+            assert!(
+                cache
+                    .read()
+                    .unwrap()
+                    .get(0, BatchID { val: batch })
+                    .is_none()
+            );
         }
         assert!(cache.read().unwrap().get(0, BatchID { val: 3 }).is_some());
     }
