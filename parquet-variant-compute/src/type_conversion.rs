@@ -26,13 +26,16 @@ use arrow::compute::{
 };
 use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
-    Decimal256Type, DecimalType,
+    Decimal256Type, DecimalType, format_decimal_str,
 };
 use arrow::error::{ArrowError, Result};
+use arrow::util::display::{lexical_to_string, write_temporal_display, write_timestamp};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use half::f16;
 use num_traits::NumCast;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
+use ryu::Float;
+use std::fmt::Write;
 
 /// Extension trait for Arrow primitive types that can extract their native value from a Variant
 pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
@@ -705,6 +708,148 @@ pub(crate) fn variant_to_boolean(variant: &Variant<'_, '_>, shred: bool) -> Opti
     }
 }
 
+fn convert_float_to_string<F: Float>(f: F) -> String {
+    let mut buffer = ryu::Buffer::new();
+    buffer.format(f).to_string()
+}
+
+// convert a variant to an owned string.
+pub(crate) fn variant_to_string(
+    variant: &Variant<'_, '_>,
+    formats: &TemporalFormats<'_>,
+) -> Option<String> {
+    match variant {
+        Variant::String(s) => Some(s.to_string()),
+        Variant::ShortString(s) => Some(s.to_string()),
+        Variant::BooleanTrue => Some("true".into()),
+        Variant::BooleanFalse => Some("false".into()),
+        Variant::Int8(i) => Some(lexical_to_string(*i)),
+        Variant::Int16(i) => Some(lexical_to_string(*i)),
+        Variant::Int32(i) => Some(lexical_to_string(*i)),
+        Variant::Int64(i) => Some(lexical_to_string(*i)),
+        Variant::Float(f) => Some(convert_float_to_string(*f)),
+        Variant::Double(f) => Some(convert_float_to_string(*f)),
+        Variant::Decimal4(d) => {
+            let value_str = d.integer().to_string();
+            Some(format_decimal_str(
+                &value_str,
+                value_str.len(),
+                d.scale() as _,
+            ))
+        }
+        Variant::Decimal8(d) => {
+            let value_str = d.integer().to_string();
+            Some(format_decimal_str(
+                &value_str,
+                value_str.len(),
+                d.scale() as _,
+            ))
+        }
+        Variant::Decimal16(d) => {
+            let value_str = d.integer().to_string();
+            Some(format_decimal_str(
+                &value_str,
+                value_str.len(),
+                d.scale() as _,
+            ))
+        }
+        Variant::Date(d) => {
+            let mut ret_string = String::new();
+            match write_temporal_display(&mut ret_string, d, formats.date()) {
+                Ok(()) => Some(ret_string),
+                Err(_) => None,
+            }
+        }
+        Variant::Time(t) => {
+            let mut ret_string = String::new();
+            // Do not compile format every time !
+            match write_temporal_display(&mut ret_string, t, formats.time()) {
+                Ok(()) => Some(ret_string),
+                Err(_) => None,
+            }
+        }
+        Variant::TimestampMicros(t) => {
+            let mut ret_string = String::new();
+            match write_timestamp(
+                &mut ret_string,
+                t.naive_utc(),
+                "+00:00".parse().ok(),
+                formats.timestamp_tz(),
+            ) {
+                Ok(()) => Some(ret_string),
+                Err(_) => None,
+            }
+        }
+        Variant::TimestampNtzMicros(t) => {
+            let mut ret_string = String::new();
+            match write_timestamp(&mut ret_string, *t, None, formats.timestamp()) {
+                Ok(()) => Some(ret_string),
+                Err(_) => None,
+            }
+        }
+        Variant::TimestampNanos(t) => {
+            let mut ret_string = String::new();
+            match write_timestamp(
+                &mut ret_string,
+                t.naive_utc(),
+                "+00:00".parse().ok(),
+                formats.timestamp_tz(),
+            ) {
+                Ok(()) => Some(ret_string),
+                Err(_) => None,
+            }
+        }
+        Variant::TimestampNtzNanos(t) => {
+            let mut ret_string = String::new();
+            match write_timestamp(&mut ret_string, *t, None, formats.timestamp()) {
+                Ok(()) => Some(ret_string),
+                Err(_) => None,
+            }
+        }
+        Variant::Uuid(u) => Some(u.to_string()),
+        Variant::Binary(v) => std::str::from_utf8(v).ok().map(|s| s.to_string()),
+        Variant::List(l) => Some(cast_list_to_string(l.iter(), formats)),
+        _ => None,
+    }
+}
+
+fn cast_list_to_string<'m, 'v>(
+    mut iter: impl Iterator<Item = Variant<'m, 'v>>,
+    formats: &TemporalFormats,
+) -> String {
+    let mut ret_str = String::new();
+    let _ = ret_str.write_char('[');
+
+    if let Some(item) = iter.next() {
+        let _ = write!(
+            ret_str,
+            "{}",
+            variant_to_string(&item, formats).unwrap_or_default()
+        );
+    }
+
+    for item in iter {
+        let _ = write!(
+            ret_str,
+            ", {}",
+            variant_to_string(&item, formats).unwrap_or_default()
+        );
+    }
+
+    let _ = ret_str.write_char(']');
+
+    ret_str
+}
+
+pub(crate) fn variant_to_binary<'v>(variant: &Variant<'_, 'v>) -> Option<&'v [u8]> {
+    match *variant {
+        Variant::Binary(d) => Some(d),
+        Variant::String(s) => Some(s.as_bytes()),
+        Variant::ShortString(s) => Some(s.as_str().as_bytes()),
+        _ => None,
+    }
+}
+
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
     ($array:expr, $cast_fn:expr, $index:expr) => {{
@@ -762,4 +907,256 @@ macro_rules! primitive_conversion_single_value {
         )
     }};
 }
+use crate::variant_to_arrow::TemporalFormats;
 pub(crate) use primitive_conversion_single_value;
+
+#[cfg(test)]
+mod tests {
+    use crate::type_conversion::variant_to_string;
+    use crate::variant_to_arrow::TemporalFormats;
+    use arrow::array::{
+        Array, AsArray, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Builder,
+        ListBuilder, Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+    };
+    use arrow::compute::cast;
+    use arrow_schema::DataType;
+    use chrono::{DateTime, NaiveDate, NaiveTime};
+    use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt};
+    use std::iter::zip;
+
+    #[test]
+    fn test_compatible_cast_logic_with_cast_kernel() {
+        // boolean -> string
+        let boolean_array = BooleanArray::from(vec![Some(true), Some(false)]);
+        let cast_array = cast(&boolean_array, &DataType::Utf8).unwrap();
+        let boolean_utf8_array = cast_array.as_string::<i32>();
+        let expected_array = vec![
+            variant_to_string(&Variant::BooleanTrue, &TemporalFormats::default()),
+            variant_to_string(&Variant::BooleanFalse, &TemporalFormats::default()),
+        ];
+        for (a, b) in zip(boolean_utf8_array, expected_array) {
+            assert_eq!(a.unwrap(), b.unwrap());
+        }
+
+        // float -> string
+        let raw_float_array = vec![1.23, 1e10, f32::NAN, f32::INFINITY];
+        let float32_array = Float32Array::from(raw_float_array.clone());
+        let cast_array = cast(&float32_array, &DataType::Utf8).unwrap();
+        let float_utf8_array = cast_array.as_string::<i32>();
+        let float_variant_array = raw_float_array
+            .iter()
+            .map(|f| Variant::from(*f))
+            .collect::<Vec<Variant>>();
+        let float_variant_as_string_array = float_variant_array
+            .iter()
+            .map(|v| variant_to_string(v, &TemporalFormats::default()))
+            .collect::<Vec<Option<String>>>();
+        for (a, b) in zip(float_utf8_array, float_variant_as_string_array) {
+            assert_eq!(a.unwrap(), b.unwrap());
+        }
+
+        // double -> string
+        let raw_float64_array = vec![1.23, 1e10, f64::NAN, f64::INFINITY];
+        let float64_array = Float64Array::from(raw_float64_array.clone());
+        let cast_array = cast(&float64_array, &DataType::Utf8).unwrap();
+        let float64_utf8_array = cast_array.as_string::<i32>();
+        let float64_variant_array = raw_float64_array
+            .iter()
+            .map(|f| Variant::from(*f))
+            .collect::<Vec<Variant>>();
+        let float64_variant_as_string_array = float64_variant_array
+            .iter()
+            .map(|v| variant_to_string(v, &TemporalFormats::default()))
+            .collect::<Vec<Option<String>>>();
+        for (a, b) in zip(float64_utf8_array, float64_variant_as_string_array) {
+            assert_eq!(a.unwrap(), b.unwrap());
+        }
+
+        // date -> string
+        let epoch_days = [-10, 0, 18628];
+        let date_array = epoch_days
+            .iter()
+            .map(|d| Variant::Date(NaiveDate::from_epoch_days(*d).unwrap()))
+            .collect::<Vec<Variant>>();
+        let variant_as_string_array = date_array
+            .iter()
+            .map(|v| variant_to_string(v, &TemporalFormats::default()))
+            .collect::<Vec<Option<String>>>();
+
+        let date32_array = Date32Array::from_iter_values(epoch_days);
+        let date32_cast_array = cast(&date32_array, &DataType::Utf8).unwrap();
+        let date32_utf8_array = date32_cast_array.as_string::<i32>();
+        for (a, b) in zip(variant_as_string_array, date32_utf8_array) {
+            assert_eq!(a.unwrap(), b.unwrap());
+        }
+
+        // time -> string
+        let time_tuples = [(123, 0), (123, 456789000), (12345, 456789000)];
+        let time_array = time_tuples
+            .iter()
+            .map(|tuple| {
+                Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(tuple.0, tuple.1).unwrap(),
+                )
+            })
+            .collect::<Vec<Variant>>();
+        let time_variant_as_string_array = time_array
+            .iter()
+            .map(|v| variant_to_string(v, &TemporalFormats::default()))
+            .collect::<Vec<Option<String>>>();
+
+        let time_micro_array = Time64MicrosecondArray::from_iter(
+            time_tuples
+                .iter()
+                .map(|item| Some(item.0 as i64 * 1_000_000 + item.1 as i64 / 1000)),
+        );
+
+        let time_micro_cast_array = cast(&time_micro_array, &DataType::Utf8).unwrap();
+        let time_micro_utf8_array = time_micro_cast_array.as_string::<i32>();
+
+        for (a, b) in zip(time_variant_as_string_array, time_micro_utf8_array) {
+            assert_eq!(a.unwrap(), b.unwrap());
+        }
+
+        // timestamp(micro) -> string
+        let micros = [-123456, 123456, 45678];
+        let timestamp_micro_array = micros
+            .iter()
+            .map(|m| Variant::TimestampMicros(DateTime::from_timestamp_micros(*m).unwrap()))
+            .collect::<Vec<Variant>>();
+        let timestamp_micro_as_string_array = timestamp_micro_array
+            .iter()
+            .map(|v| variant_to_string(v, &TemporalFormats::default()))
+            .collect::<Vec<Option<String>>>();
+
+        let timestamp_micro_arrow_array =
+            TimestampMicrosecondArray::from_iter_values(micros).with_timezone("+00:00");
+        let timestamp_micro_arrow_cast_array =
+            cast(&timestamp_micro_arrow_array, &DataType::Utf8).unwrap();
+        let timestamp_micro_utf8_array = timestamp_micro_arrow_cast_array.as_string::<i32>();
+        for (a, b) in zip(timestamp_micro_as_string_array, timestamp_micro_utf8_array) {
+            assert_eq!(a.unwrap(), b.unwrap());
+        }
+
+        // timestamp(micro) ntz -> string
+        let micros_ntz = [-123456, 123456, 45678];
+        let timestamp_micro_ntz_variant_array = micros_ntz
+            .iter()
+            .map(|m| {
+                Variant::TimestampNtzMicros(
+                    DateTime::from_timestamp_micros(*m).unwrap().naive_utc(),
+                )
+            })
+            .collect::<Vec<Variant>>();
+        let timestamp_micro_ntz_variant_as_string_array = timestamp_micro_ntz_variant_array
+            .iter()
+            .map(|v| variant_to_string(v, &TemporalFormats::default()))
+            .collect::<Vec<Option<String>>>();
+
+        let timestamp_micro_ntz_arrow_array =
+            TimestampMicrosecondArray::from_iter_values(micros_ntz);
+        let timestamp_micro_ntz_arrow_cast_array =
+            cast(&timestamp_micro_ntz_arrow_array, &DataType::Utf8).unwrap();
+        let timestamp_micro_ntz_utf8_array =
+            timestamp_micro_ntz_arrow_cast_array.as_string::<i32>();
+
+        for (a, b) in zip(
+            timestamp_micro_ntz_variant_as_string_array,
+            timestamp_micro_ntz_utf8_array,
+        ) {
+            assert_eq!(a.unwrap(), b.unwrap());
+        }
+
+        // timestamp(nano) -> string
+        let nanos = [-2_208_936_075_000_000_000, 0, 1_662_921_288_000_000_000];
+        let timestamp_nano_variant_array = nanos
+            .iter()
+            .map(|n| Variant::TimestampNanos(DateTime::from_timestamp_nanos(*n)))
+            .collect::<Vec<Variant>>();
+        let timestamp_nano_as_string_array = timestamp_nano_variant_array
+            .iter()
+            .map(|v| variant_to_string(v, &TemporalFormats::default()))
+            .collect::<Vec<Option<String>>>();
+
+        let timestamp_nano_arrow_array =
+            TimestampNanosecondArray::from_iter_values(nanos).with_timezone("+00:00");
+        let timestamp_nano_arrow_cast_array =
+            cast(&timestamp_nano_arrow_array, &DataType::Utf8).unwrap();
+        let timestamp_nano_cast_utf8_array = timestamp_nano_arrow_cast_array.as_string::<i32>();
+        for (a, b) in zip(
+            timestamp_nano_cast_utf8_array,
+            timestamp_nano_as_string_array,
+        ) {
+            assert_eq!(a.unwrap(), b.unwrap());
+        }
+
+        // timestamp(nano) ntz -> string
+        let nanos_ntz = [-2_208_936_075_000_000_000i64, 0, 1_662_921_288_000_000_000];
+        let timestamp_nano_ntz_variant_array = nanos_ntz
+            .iter()
+            .map(|n| Variant::TimestampNtzNanos(DateTime::from_timestamp_nanos(*n).naive_utc()))
+            .collect::<Vec<Variant>>();
+
+        let timestamp_nano_ntz_variant_as_string_array = timestamp_nano_ntz_variant_array
+            .iter()
+            .map(|v| variant_to_string(v, &TemporalFormats::default()))
+            .collect::<Vec<Option<String>>>();
+
+        let timestamp_nano_ntz_arrow_array = TimestampNanosecondArray::from_iter_values(nanos_ntz);
+
+        let timestamp_nano_ntz_arrow_cast_array =
+            cast(&timestamp_nano_ntz_arrow_array, &DataType::Utf8).unwrap();
+        let timestamp_nano_ntz_utf8_array = timestamp_nano_ntz_arrow_cast_array.as_string::<i32>();
+        for (a, b) in zip(
+            timestamp_nano_ntz_variant_as_string_array,
+            timestamp_nano_ntz_utf8_array,
+        ) {
+            assert_eq!(a.unwrap(), b.unwrap());
+        }
+
+        // list -> string
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+        list_builder.append_value(123);
+        list_builder.append_value(234);
+        list_builder.append_null();
+        list_builder.append_value(345);
+        list_builder.finish();
+        let (metadata, value) = variant_builder.finish();
+        let variant_list = Variant::new(&metadata, &value);
+        let variant_list_as_string = variant_to_string(&variant_list, &TemporalFormats::default());
+
+        let inner_builder = Int32Builder::new();
+        let mut builder = ListBuilder::new(inner_builder);
+        builder.values().append_value(123);
+        builder.values().append_value(234);
+        builder.values().append_null();
+        builder.values().append_value(345);
+        builder.append(true);
+        let list_arrow_array = builder.finish();
+        let cast_array = cast(&list_arrow_array, &DataType::Utf8).unwrap();
+        let arrow_list_cast_utf8_array = cast_array.as_string::<i32>();
+
+        assert_eq!(arrow_list_cast_utf8_array.len(), 1);
+        assert_eq!(
+            variant_list_as_string.unwrap(),
+            arrow_list_cast_utf8_array.value(0)
+        );
+    }
+
+    #[test]
+    fn test_variant_to_string_list_mixed_types() {
+        // Test mixed types list
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+        list_builder.append_value(42i32);
+        list_builder.append_value("text");
+        list_builder.append_value(true);
+        list_builder.finish();
+        let (metadata, value) = variant_builder.finish();
+        let variant_list = Variant::new(&metadata, &value);
+
+        let result = variant_to_string(&variant_list, &TemporalFormats::default()).unwrap();
+        assert_eq!(result, "[42, text, true]");
+    }
+}
