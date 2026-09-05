@@ -303,7 +303,7 @@ trait IpcRecordBatchSink: IpcMessageSinkExt {
 
 impl<W> IpcMessageSink for W
 where
-    W: Write,
+    W: Write + ?Sized,
 {
     fn write_slice(&mut self, bytes: &[u8]) -> Result<(), ArrowError> {
         if !bytes.is_empty() {
@@ -315,7 +315,7 @@ where
 
 impl<W> IpcRecordBatchSink for W
 where
-    W: Write,
+    W: Write + ?Sized,
 {
     fn write_record_batch(
         &mut self,
@@ -907,7 +907,7 @@ impl IpcDataGenerator {
     /// Write dictionary batches and the record batch directly to `writer`, skipping the
     /// intermediate body `Vec<u8>` allocations
     /// Returns [`IpcWriteMetadata`] with the sizes needed to build footer blocks.
-    fn write<W: Write>(
+    fn write<W: Write + ?Sized>(
         &self,
         batch: &RecordBatch,
         dictionary_tracker: &mut DictionaryTracker,
@@ -944,7 +944,7 @@ impl IpcDataGenerator {
         )
     }
 
-    fn write_to_sink<S: IpcRecordBatchSink>(
+    fn write_to_sink<S: IpcRecordBatchSink + ?Sized>(
         &self,
         batch: &RecordBatch,
         dictionary_tracker: &mut DictionaryTracker,
@@ -1825,12 +1825,13 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
 
 /// Arrow IPC stream encoder.
 ///
-/// Encodes Arrow [`RecordBatch`]es to byte buffers using the [IPC Streaming Format],
-/// without performing any IO.
+/// Encodes Arrow [`RecordBatch`]es using the [IPC Streaming Format].
 ///
-/// The returned [`Buffer`]s are ordered and should be written to the destination
-/// stream in order. Uncompressed record batch body buffers can share the original
-/// Arrow buffers instead of being copied into an intermediate contiguous buffer.
+/// [`Self::encode`] returns ordered [`Buffer`]s without performing IO, while
+/// [`Self::encode_to`] writes the same encoded pieces to a borrowed destination.
+/// Uncompressed record batch body buffers returned by [`Self::encode`] can share
+/// the original Arrow buffers instead of being copied into an intermediate
+/// contiguous buffer.
 ///
 /// # Example
 /// ```
@@ -1909,6 +1910,35 @@ impl StreamEncoder {
         Ok(out)
     }
 
+    /// Encode a [`RecordBatch`] directly to a borrowed destination.
+    ///
+    /// The first call also writes the IPC stream schema message before the
+    /// record batch message. Later calls only write dictionary and record batch
+    /// messages. Every call for this encoder must append to the same logical
+    /// output stream and this method does not flush the destination.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if encoding or writing fails.
+    /// If this returns an error, the destination may contain a partial IPC
+    /// message and the encoder's internal state may already have advanced.
+    /// Both the encoder and destination must be discarded.
+    pub fn encode_to<W: Write + ?Sized>(
+        &mut self,
+        batch: &RecordBatch,
+        sink: &mut W,
+    ) -> Result<(), ArrowError> {
+        self.encode_schema_to_sink(sink)?;
+        self.data_gen.write(
+            batch,
+            &mut self.dictionary_tracker,
+            &self.write_options,
+            &mut self.ipc_write_context,
+            sink,
+        )?;
+        Ok(())
+    }
+
     /// Encode the end-of-stream marker.
     ///
     /// If no batches have been encoded, this also emits the IPC stream schema
@@ -1925,14 +1955,38 @@ impl StreamEncoder {
         Ok(out)
     }
 
+    /// Encode the end-of-stream marker directly to a borrowed destination.
+    ///
+    /// If no batches have been encoded, this also writes the IPC stream schema
+    /// message so the output forms a valid empty IPC stream. The destination
+    /// must be the same logical output stream used by [`Self::encode_to`] and
+    /// this method does not flush it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if encoding or writing fails. In this case, the
+    /// destination may contain an incomplete IPC stream and must be discarded.
+    pub fn finish_to<W: Write + ?Sized>(mut self, sink: &mut W) -> Result<(), ArrowError> {
+        self.encode_schema_to_sink(sink)?;
+        sink.write_eos(&self.write_options)?;
+        Ok(())
+    }
+
     fn encode_schema(&mut self, out: &mut Vec<Buffer>) -> Result<(), ArrowError> {
+        let mut sink = Buffers { out };
+        self.encode_schema_to_sink(&mut sink)
+    }
+
+    fn encode_schema_to_sink<S: IpcMessageSink + ?Sized>(
+        &mut self,
+        sink: &mut S,
+    ) -> Result<(), ArrowError> {
         if !self.schema_encoded {
             let encoded_message = self.data_gen.schema_to_bytes_with_dictionary_tracker(
                 &self.schema,
                 &mut self.dictionary_tracker,
                 &self.write_options,
             );
-            let mut sink = Buffers { out };
             sink.write_encoded_data(encoded_message, &self.write_options)?;
             self.schema_encoded = true;
         }
@@ -2834,6 +2888,21 @@ mod tests {
         bytes
     }
 
+    fn encode_stream_to_writer(
+        schema: &Schema,
+        batches: &[RecordBatch],
+        options: IpcWriteOptions,
+    ) -> Vec<u8> {
+        let mut encoder = StreamEncoder::try_new_with_options(schema, options).unwrap();
+        let mut bytes = Vec::new();
+        let sink: &mut dyn Write = &mut bytes;
+        for batch in batches {
+            encoder.encode_to(batch, sink).unwrap();
+        }
+        encoder.finish_to(sink).unwrap();
+        bytes
+    }
+
     fn write_stream(schema: &Schema, batches: &[RecordBatch], options: IpcWriteOptions) -> Vec<u8> {
         let mut bytes = Vec::new();
         let mut writer = StreamWriter::try_new_with_options(&mut bytes, schema, options).unwrap();
@@ -2883,13 +2952,48 @@ mod tests {
     }
 
     #[test]
+    fn test_stream_encoder_to_writer_matches_buffer_output() {
+        let batch = record_batch!(("a", Int32, [1, 2, 3]), ("b", Utf8, ["x", "y", "z"])).unwrap();
+        let options = IpcWriteOptions::default();
+        let encoded = encode_stream(
+            batch.schema_ref(),
+            std::slice::from_ref(&batch),
+            options.clone(),
+        );
+        let encoded_to =
+            encode_stream_to_writer(batch.schema_ref(), std::slice::from_ref(&batch), options);
+
+        assert_eq!(encoded_to, encoded);
+    }
+
+    #[test]
+    #[cfg(feature = "zstd")]
+    fn test_stream_encoder_to_writer_matches_buffer_output_zstd() {
+        let batch = record_batch!(("a", Int32, [1, 2, 3]), ("b", Utf8, ["x", "y", "z"])).unwrap();
+        let options = IpcWriteOptions::default()
+            .try_with_compression(Some(crate::CompressionType::ZSTD))
+            .unwrap();
+        let encoded = encode_stream(
+            batch.schema_ref(),
+            std::slice::from_ref(&batch),
+            options.clone(),
+        );
+        let encoded_to =
+            encode_stream_to_writer(batch.schema_ref(), std::slice::from_ref(&batch), options);
+
+        assert_eq!(encoded_to, encoded);
+    }
+
+    #[test]
     fn test_stream_encoder_empty_stream_matches_stream_writer() {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let options = IpcWriteOptions::default();
         let encoded = encode_stream(&schema, &[], options.clone());
+        let encoded_to = encode_stream_to_writer(&schema, &[], options.clone());
         let written = write_stream(&schema, &[], options);
 
         assert_eq!(encoded, written);
+        assert_eq!(encoded_to, written);
 
         let mut reader = StreamReader::try_new(Cursor::new(encoded), None).unwrap();
         assert!(reader.next().is_none());
@@ -2912,9 +3016,12 @@ mod tests {
         .unwrap();
         let options = IpcWriteOptions::default();
         let encoded = encode_stream(&schema, std::slice::from_ref(&batch), options.clone());
+        let encoded_to =
+            encode_stream_to_writer(&schema, std::slice::from_ref(&batch), options.clone());
         let written = write_stream(&schema, std::slice::from_ref(&batch), options);
 
         assert_eq!(encoded, written);
+        assert_eq!(encoded_to, written);
 
         let mut reader = StreamReader::try_new(Cursor::new(encoded), None).unwrap();
         assert_eq!(reader.next().unwrap().unwrap(), batch);
