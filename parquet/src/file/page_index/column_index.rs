@@ -531,11 +531,6 @@ macro_rules! colidx_enum_func {
             Self::DOUBLE(ref typed) => typed.$func($arg),
             Self::BYTE_ARRAY(ref typed) => typed.$func($arg),
             Self::FIXED_LEN_BYTE_ARRAY(ref typed) => typed.$func($arg),
-            _ => panic!(concat!(
-                "Cannot call ",
-                stringify!($func),
-                " on ColumnIndexMetaData::NONE"
-            )),
         }
     }};
     ($self:ident, $func:ident) => {{
@@ -548,28 +543,19 @@ macro_rules! colidx_enum_func {
             Self::DOUBLE(ref typed) => typed.$func(),
             Self::BYTE_ARRAY(ref typed) => typed.$func(),
             Self::FIXED_LEN_BYTE_ARRAY(ref typed) => typed.$func(),
-            _ => panic!(concat!(
-                "Cannot call ",
-                stringify!($func),
-                " on ColumnIndexMetaData::NONE"
-            )),
         }
     }};
 }
 
 /// Parsed [`ColumnIndex`] information for a Parquet file.
 ///
-/// See [`ParquetColumnIndex`] for more information.
+/// See [`PageIndex`] for more information.
 ///
-/// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
+/// [`PageIndex`]: crate::file::metadata::PageIndex
 /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq)]
 #[expect(non_camel_case_types)]
 pub enum ColumnIndexMetaData {
-    /// Sometimes reading page index from parquet file
-    /// will only return pageLocations without min_max index,
-    /// `NONE` represents this lack of index information
-    NONE,
     /// Boolean type index
     BOOLEAN(PrimitiveColumnIndex<bool>),
     /// 32-bit integer type index
@@ -602,7 +588,6 @@ impl ColumnIndexMetaData {
     /// Get boundary_order of this page index.
     pub fn get_boundary_order(&self) -> Option<BoundaryOrder> {
         match self {
-            Self::NONE => None,
             Self::BOOLEAN(index) => Some(index.boundary_order),
             Self::INT32(index) => Some(index.boundary_order),
             Self::INT64(index) => Some(index.boundary_order),
@@ -619,7 +604,6 @@ impl ColumnIndexMetaData {
     /// Returns `None` if no null counts have been set in the index
     pub fn null_counts(&self) -> Option<&Vec<i64>> {
         match self {
-            Self::NONE => None,
             Self::BOOLEAN(index) => index.null_counts.as_ref(),
             Self::INT32(index) => index.null_counts.as_ref(),
             Self::INT64(index) => index.null_counts.as_ref(),
@@ -636,7 +620,6 @@ impl ColumnIndexMetaData {
     /// Returns `None` if no NaN counts have been set in the index
     pub fn nan_counts(&self) -> Option<&Vec<i64>> {
         match self {
-            Self::NONE => None,
             Self::BOOLEAN(index) => index.nan_counts.as_ref(),
             Self::INT32(index) => index.nan_counts.as_ref(),
             Self::INT64(index) => index.nan_counts.as_ref(),
@@ -752,7 +735,6 @@ impl WriteThrift for ColumnIndexMetaData {
             ColumnIndexMetaData::DOUBLE(index) => index.write_thrift(writer),
             ColumnIndexMetaData::BYTE_ARRAY(index) => index.write_thrift(writer),
             ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => index.write_thrift(writer),
-            ColumnIndexMetaData::NONE => Err(general_err!("Cannot serialize NONE index")),
         }
     }
 }

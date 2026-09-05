@@ -362,74 +362,92 @@ impl<W: Write + Send> ArrowWriter<W> {
             return Ok(());
         }
 
-        let in_progress = match &mut self.in_progress {
-            Some(in_progress) => in_progress,
-            x => x.insert(
-                self.row_group_writer_factory
-                    .create_row_group_writer(self.writer.flushed_row_groups().len())?,
-            ),
-        };
+        // Rows not yet handed to a row group writer. Splitting iterates here instead of
+        // recursing, so a small row group limit over a large batch cannot exhaust the stack.
+        let mut remaining = batch.clone();
 
-        if let Some(max_rows) = self.max_row_group_row_count
-            && in_progress.buffered_rows + batch.num_rows() > max_rows
-        {
-            let to_write = max_rows - in_progress.buffered_rows;
-            let a = batch.slice(0, to_write);
-            let b = batch.slice(to_write, batch.num_rows() - to_write);
-            self.write(&a)?;
-            return self.write(&b);
-        }
+        loop {
+            let in_progress = match &mut self.in_progress {
+                Some(in_progress) => in_progress,
+                x => x.insert(
+                    self.row_group_writer_factory
+                        .create_row_group_writer(self.writer.flushed_row_groups().len())?,
+                ),
+            };
+            let buffered_rows = in_progress.buffered_rows;
 
-        // Check byte limit: if we have buffered data, use measured average row size
-        // to split batch proactively before exceeding byte limit
-        if let Some(max_bytes) = self.max_row_group_bytes
-            && in_progress.buffered_rows > 0
-        {
-            let current_bytes = in_progress.get_estimated_total_bytes();
+            // Leading rows of `remaining` that still fit in the current row group, when the
+            // rest has to go to a later one.
+            let mut split_at = match self.max_row_group_row_count {
+                Some(max_rows) if buffered_rows + remaining.num_rows() > max_rows => {
+                    Some(max_rows - buffered_rows)
+                }
+                _ => None,
+            };
 
-            if current_bytes >= max_bytes {
-                self.flush()?;
-                return self.write(batch);
-            }
+            // Check byte limit: if we have buffered data, use measured average row size
+            // to split batch proactively before exceeding byte limit. Both limits apply to
+            // the same rows, so measure against whatever the row limit already trimmed
+            // `remaining` down to; otherwise the row limit would always win.
+            let candidate_rows = split_at.unwrap_or_else(|| remaining.num_rows());
 
-            if let Some(avg_row_bytes) = current_bytes
-                .checked_div(in_progress.buffered_rows)
-                .filter(|avg_row_bytes| *avg_row_bytes > 0)
+            if let Some(max_bytes) = self.max_row_group_bytes
+                && buffered_rows > 0
             {
-                // At this point, `current_bytes < max_bytes` (checked above)
-                let remaining_bytes = max_bytes - current_bytes;
-                let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+                let current_bytes = in_progress.get_estimated_total_bytes();
 
-                if batch.num_rows() > rows_that_fit {
-                    if rows_that_fit > 0 {
-                        let a = batch.slice(0, rows_that_fit);
-                        let b = batch.slice(rows_that_fit, batch.num_rows() - rows_that_fit);
-                        self.write(&a)?;
-                        return self.write(&b);
-                    } else {
-                        self.flush()?;
-                        return self.write(batch);
+                if current_bytes >= max_bytes {
+                    self.flush()?;
+                    continue;
+                }
+
+                if let Some(avg_row_bytes) = current_bytes
+                    .checked_div(buffered_rows)
+                    .filter(|avg_row_bytes| *avg_row_bytes > 0)
+                {
+                    // At this point, `current_bytes < max_bytes` (checked above)
+                    let remaining_bytes = max_bytes - current_bytes;
+                    let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
+
+                    if candidate_rows > rows_that_fit {
+                        if rows_that_fit > 0 {
+                            split_at = Some(rows_that_fit);
+                        } else {
+                            self.flush()?;
+                            continue;
+                        }
                     }
                 }
             }
-        }
 
-        match self.cdc_chunkers.as_mut() {
-            Some(chunkers) => in_progress.write_with_chunkers(batch, chunkers)?,
-            None => in_progress.write(batch)?,
-        }
+            let rest = split_at.map(|to_write| {
+                let rest = remaining.slice(to_write, remaining.num_rows() - to_write);
+                remaining = remaining.slice(0, to_write);
+                rest
+            });
 
-        let should_flush = self
-            .max_row_group_row_count
-            .is_some_and(|max| in_progress.buffered_rows >= max)
-            || self
-                .max_row_group_bytes
-                .is_some_and(|max| in_progress.get_estimated_total_bytes() >= max);
+            let in_progress = self.in_progress.as_mut().unwrap();
+            match self.cdc_chunkers.as_mut() {
+                Some(chunkers) => in_progress.write_with_chunkers(&remaining, chunkers)?,
+                None => in_progress.write(&remaining)?,
+            }
 
-        if should_flush {
-            self.flush()?
+            let should_flush = self
+                .max_row_group_row_count
+                .is_some_and(|max| in_progress.buffered_rows >= max)
+                || self
+                    .max_row_group_bytes
+                    .is_some_and(|max| in_progress.get_estimated_total_bytes() >= max);
+
+            if should_flush {
+                self.flush()?
+            }
+
+            match rest {
+                Some(rest) => remaining = rest,
+                None => return Ok(()),
+            }
         }
-        Ok(())
     }
 
     /// Writes the given buf bytes to the internal buffer.
@@ -1168,6 +1186,11 @@ impl ArrowColumnWriter {
     }
 
     /// Close this column returning the written [`ArrowColumnChunk`]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the column could not be finalised, or if another thread
+    /// panicked while holding the column chunk. The caller cannot cause either.
     pub fn close(self) -> Result<ArrowColumnChunk> {
         let distinct_count = self
             .distinct_values_seen
@@ -1188,8 +1211,12 @@ impl ArrowColumnWriter {
                 c.close()?
             }
         };
-        let chunk = Arc::try_unwrap(self.chunk).ok().unwrap();
-        let data = chunk.into_inner().unwrap();
+        // Closing the writer above dropped the only other handle on the chunk.
+        let chunk = Arc::try_unwrap(self.chunk)
+            .map_err(|_| general_err!("Internal Error: the column chunk is still shared"))?;
+        let data = chunk
+            .into_inner()
+            .map_err(|_| general_err!("The column chunk lock is poisoned"))?;
         Ok(ArrowColumnChunk { data, close })
     }
 
@@ -2197,6 +2224,7 @@ mod tests {
     /// no offset index to rebuild). Spans multiple data pages so the
     /// dictionary-first reordering is exercised.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn dictionary_column_round_trips_with_offset_index_disabled() {
         let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, true)]));
 
@@ -2378,6 +2406,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_non_null() {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
@@ -2388,6 +2417,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list() {
         // define schema
         let schema = Schema::new(vec![Field::new(
@@ -2423,6 +2453,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_non_null() {
         // define schema
         let schema = Schema::new(vec![Field::new(
@@ -2457,6 +2488,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2481,6 +2513,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view_non_null() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2505,6 +2538,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view_out_of_order() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2529,6 +2563,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_large_list_view() {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let schema = Schema::new(vec![Field::new(
@@ -2553,6 +2588,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_list_view_with_struct() {
         // Test ListView containing Struct: ListView<Struct<Int32, Utf8>>
         let struct_fields = Fields::from(vec![
@@ -2593,6 +2629,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_binary() {
         let raw_string_values = vec!["foo", "bar", "baz", "quux"];
         let raw_binary_values = [
@@ -2616,6 +2653,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_binary_view() {
         let raw_string_values = vec!["foo", "bar", "large payload over 12 bytes", "lulu"];
         let raw_binary_values = vec![
@@ -2637,6 +2675,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_binary_view_long_value() {
         // There is special case validation for long values (greater than 128)
         // 128 encodes as 0x80 0x00 0x00 0x00 in little endian, which should
@@ -2655,6 +2694,32 @@ mod tests {
         RoundTripTest::new(Arc::clone(&binary_view_values))
             .with_nullable(false)
             .run();
+    }
+
+    /// Test round-trip of Dictionary<UInt32, Utf8View> and
+    /// Dictionary<UInt32, BinaryView> typed columns.
+    #[test]
+    fn arrow_writer_string_view_dictionary() {
+        let raw_string_values = vec!["a", "b", "large payload over 12 bytes"];
+        let raw_binary_values = vec![
+            b"a".to_vec(),
+            b"b".to_vec(),
+            b"large payload over 12 bytes".to_vec(),
+        ];
+
+        let keys = UInt32Array::from(vec![Some(0), None, Some(2), Some(1), None]);
+
+        let string_view_values = Arc::new(StringViewArray::from(raw_string_values));
+        let string_dict: ArrayRef = Arc::new(
+            DictionaryArray::<UInt32Type>::try_new(keys.clone(), string_view_values).unwrap(),
+        );
+
+        let binary_view_values = Arc::new(BinaryViewArray::from_iter_values(raw_binary_values));
+        let binary_dict: ArrayRef =
+            Arc::new(DictionaryArray::<UInt32Type>::try_new(keys, binary_view_values).unwrap());
+
+        RoundTripTest::new(string_dict).run();
+        RoundTripTest::new(binary_dict).run();
     }
 
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
@@ -2685,6 +2750,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_complex() {
         // define schema
         let struct_field_d = Arc::new(Field::new("d", DataType::Float64, true));
@@ -3119,10 +3185,13 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        assert!(reader.metadata().offset_index().is_some());
-        let offset_indexes = &reader.metadata().offset_index().unwrap()[0];
-
-        let page_locations = offset_indexes[0].page_locations.clone();
+        let page_index = reader
+            .metadata()
+            .page_index()
+            .expect("page index should be present");
+        let page_locations = page_index
+            .page_locations(0, 0)
+            .expect("page locations should exist");
 
         // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
         // so we expect one dictionary encoded page and then a page per row thereafter.
@@ -3134,6 +3203,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn arrow_writer_float_nans() {
         let f16_field = Field::new("a", DataType::Float16, false);
         let f32_field = Field::new("b", DataType::Float32, false);
@@ -3336,7 +3406,7 @@ mod tests {
                     Encoding::BYTE_STREAM_SPLIT,
                 ],
                 DataType::Float32 | DataType::Float64 => {
-                    vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT]
+                    vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT, Encoding::ALP]
                 }
                 _ => vec![Encoding::PLAIN],
             };
@@ -3468,11 +3538,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn all_null_primitive_single_column() {
         let values = Arc::new(Int32Array::from(vec![None; SMALL_SIZE]));
         RoundTripTest::new(values).run();
     }
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn null_single_column() {
         let values = Arc::new(NullArray::new(SMALL_SIZE));
         RoundTripTest::new(values).run();
@@ -3480,6 +3552,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn bool_single_column() {
         required_and_optional::<BooleanArray, _>(
             [true, false].iter().cycle().copied().take(SMALL_SIZE),
@@ -3487,6 +3560,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn bool_large_single_column() {
         let values = Arc::new(
             [None, Some(true), Some(false)]
@@ -3526,10 +3600,12 @@ mod tests {
                 assert!(column.column_index_length().is_some());
             }
         }
-        assert!(file_meta_data.column_index().is_some());
-        if let Some(col_indexes) = file_meta_data.column_index() {
-            for rg_idx in col_indexes {
-                for idx in rg_idx {
+        if let Some(page_index) = file_meta_data.page_index() {
+            for rg in 0..file_meta_data.num_row_groups() {
+                for col in 0..file_meta_data.row_group(rg).num_columns() {
+                    let idx = page_index
+                        .column_index(rg, col)
+                        .expect("column index should exist");
                     assert!(idx.nan_counts().is_some());
                     let ColumnIndexMetaData::DOUBLE(float_idx) = idx else {
                         panic!("expected double statistics")
@@ -3547,6 +3623,8 @@ mod tests {
                     }
                 }
             }
+        } else {
+            panic!("page index should be present");
         }
     }
 
@@ -3604,12 +3682,12 @@ mod tests {
         assert_eq!(col_stats.min_bytes_opt(), Some((-1.0f64).as_bytes()));
         assert_eq!(col_stats.max_bytes_opt(), Some(1.0f64.as_bytes()));
 
-        assert!(file_meta_data.column_index().is_some());
-        let col_idx = &file_meta_data.column_index().as_ref().unwrap()[0][0];
-        assert_eq!(col_idx.num_pages(), 4);
+        assert!(file_meta_data.page_index().is_some());
+        let col_idx = &file_meta_data.page_index().unwrap().column_index(0, 0);
+        assert_eq!(col_idx.as_ref().unwrap().num_pages(), 4);
 
         // test each page
-        let ColumnIndexMetaData::DOUBLE(float_idx) = col_idx else {
+        let Some(ColumnIndexMetaData::DOUBLE(float_idx)) = col_idx else {
             panic!("expected double statistics")
         };
 
@@ -3637,51 +3715,61 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i8_single_column() {
         required_and_optional::<Int8Array, _>(0..SMALL_SIZE as i8);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i16_single_column() {
         required_and_optional::<Int16Array, _>(0..SMALL_SIZE as i16);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i32_single_column() {
         required_and_optional::<Int32Array, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i64_single_column() {
         required_and_optional::<Int64Array, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u8_single_column() {
         required_and_optional::<UInt8Array, _>(0..SMALL_SIZE as u8);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u16_single_column() {
         required_and_optional::<UInt16Array, _>(0..SMALL_SIZE as u16);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u32_single_column() {
         required_and_optional::<UInt32Array, _>(0..SMALL_SIZE as u32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u64_single_column() {
         required_and_optional::<UInt64Array, _>(0..SMALL_SIZE as u64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn f32_single_column() {
         required_and_optional::<Float32Array, _>((0..SMALL_SIZE).map(|i| i as f32));
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn f64_single_column() {
         required_and_optional::<Float64Array, _>((0..SMALL_SIZE).map(|i| i as f64));
     }
@@ -3691,6 +3779,7 @@ mod tests {
     // RoundTripTest manually instead of calling required_and_optional for these tests.
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn timestamp_second_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampSecondArray::from(raw_values));
@@ -3699,6 +3788,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn timestamp_millisecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMillisecondArray::from(raw_values));
@@ -3707,6 +3797,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn timestamp_microsecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMicrosecondArray::from(raw_values));
@@ -3715,6 +3806,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn timestamp_nanosecond_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampNanosecondArray::from(raw_values));
@@ -3723,11 +3815,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn date32_single_column() {
         required_and_optional::<Date32Array, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn date64_single_column() {
         // Date64 must be a multiple of 86400000, see ARROW-10925
         required_and_optional::<Date64Array, _>(
@@ -3736,51 +3830,61 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn time32_second_single_column() {
         required_and_optional::<Time32SecondArray, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn time32_millisecond_single_column() {
         required_and_optional::<Time32MillisecondArray, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn time64_microsecond_single_column() {
         required_and_optional::<Time64MicrosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn time64_nanosecond_single_column() {
         required_and_optional::<Time64NanosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn duration_second_single_column() {
         required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn duration_millisecond_single_column() {
         required_and_optional::<DurationMillisecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn duration_microsecond_single_column() {
         required_and_optional::<DurationMicrosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn duration_nanosecond_single_column() {
         required_and_optional::<DurationNanosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn interval_year_month_single_column() {
         required_and_optional::<IntervalYearMonthArray, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn interval_day_time_single_column() {
         required_and_optional::<IntervalDayTimeArray, _>(vec![
             IntervalDayTime::new(0, 1),
@@ -3804,6 +3908,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn binary_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
         let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
@@ -3814,6 +3919,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn binary_view_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
         let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
@@ -3824,6 +3930,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i32_column_bloom_filter_at_end() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
         let files = RoundTripTest::new(array)
@@ -3841,6 +3948,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i32_column_bloom_filter() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
         let files = RoundTripTest::new(array)
@@ -3861,6 +3969,7 @@ mod tests {
     /// A large NDV means a larger initial filter that gets folded down;
     /// a small NDV means a smaller initial filter.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i32_column_bloom_filter_fixed_ndv() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
 
@@ -3894,6 +4003,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn binary_column_bloom_filter() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
         let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
@@ -3914,6 +4024,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn empty_string_null_column_bloom_filter() {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
@@ -3934,6 +4045,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn large_binary_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
         let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
@@ -3944,6 +4056,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fixed_size_binary_single_column() {
         let mut builder = FixedSizeBinaryBuilder::new(4);
         builder.append_value(b"0123").unwrap();
@@ -3956,6 +4069,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn string_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
@@ -3964,6 +4078,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn large_string_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
@@ -3972,6 +4087,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn string_view_single_column() {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
@@ -4015,6 +4131,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
@@ -4038,6 +4155,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn large_list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets = arrow::buffer::Buffer::from([0i64, 1, 3, 3, 6, 10].to_byte_slice());
@@ -4063,6 +4181,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn list_nested_nulls() {
         use arrow::datatypes::Int32Type;
         let data = vec![
@@ -4082,6 +4201,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn list_utf8_view_selective_padding_roundtrip() {
         let item = Arc::new(Field::new_list_field(DataType::Utf8View, true));
         let mut builder = ListBuilder::new(StringViewBuilder::new()).with_field(item);
@@ -4099,6 +4219,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn struct_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let struct_field_a = Arc::new(Field::new("f", DataType::Int32, false));
@@ -4163,6 +4284,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fallback_flush_data_page() {
         //tests if the Fallback::flush_data_page clears all buffers correctly
         let raw_values: Vec<_> = (0..MEDIUM_SIZE).map(|i| i.to_string()).collect();
@@ -4205,6 +4327,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_string_dictionary() {
         // define schema
         #[expect(deprecated)]
@@ -4458,6 +4581,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_primitive_dictionary() {
         // define schema
         #[expect(deprecated)]
@@ -4481,6 +4605,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_decimal32_dictionary() {
         let integers = vec![12345, 56789, 34567];
 
@@ -4502,6 +4627,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_decimal64_dictionary() {
         let integers = vec![12345, 56789, 34567];
 
@@ -4523,6 +4649,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_decimal128_dictionary() {
         let integers = vec![12345, 56789, 34567];
 
@@ -4544,6 +4671,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_decimal256_dictionary() {
         let integers = vec![
             i256::from_i128(12345),
@@ -4569,6 +4697,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_string_dictionary_unsigned_index() {
         // define schema
         #[expect(deprecated)]
@@ -4590,6 +4719,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u32_min_max() {
         // check values roundtrip through parquet
         let src = [
@@ -4636,6 +4766,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn u64_min_max() {
         // check values roundtrip through parquet
         let src = [
@@ -4682,6 +4813,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn statistics_null_counts_only_nulls() {
         // check that null-count statistics for "only NULL"-columns are correct
         let values = Arc::new(UInt64Array::from(vec![None, None]));
@@ -4701,6 +4833,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_list_of_struct_roundtrip() {
         // define schema
         let int_field = Field::new("a", DataType::Int32, true);
@@ -5099,12 +5232,10 @@ mod tests {
         let bytes = Bytes::from(buf);
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(bytes, options).unwrap();
-        let index = reader.metadata().offset_index().unwrap();
+        let index = reader.metadata().page_index().unwrap();
 
-        assert_eq!(index.len(), 1);
-        assert_eq!(index[0].len(), 2); // 2 columns
-        assert_eq!(index[0][0].page_locations().len(), 1); // 1 page
-        assert_eq!(index[0][1].page_locations().len(), 1); // 1 page
+        assert_eq!(index.num_data_pages(0, 0), Some(1)); // 1 page
+        assert_eq!(index.num_data_pages(0, 1), Some(1)); // 1 page
     }
 
     #[test]
@@ -5165,21 +5296,15 @@ mod tests {
         // The column chunk for column "b" shouldn't have statistics
         assert!(b_col.statistics().is_none());
 
-        let offset_index = reader.metadata().offset_index().unwrap();
-        assert_eq!(offset_index.len(), 1); // 1 row group
-        assert_eq!(offset_index[0].len(), 2); // 2 columns
+        let page_index = reader.metadata().page_index().unwrap();
 
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1); // 1 row group
-        assert_eq!(column_index[0].len(), 2); // 2 columns
-
-        let a_idx = &column_index[0][0];
+        let a_idx = page_index.column_index(0, 0);
         assert!(
-            matches!(a_idx, ColumnIndexMetaData::BYTE_ARRAY(_)),
+            matches!(a_idx, Some(ColumnIndexMetaData::BYTE_ARRAY(_))),
             "{a_idx:?}"
         );
-        let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        let b_idx = page_index.column_index(0, 1);
+        assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
     #[test]
@@ -5240,14 +5365,12 @@ mod tests {
         // The column chunk for column "b"  shouldn't have statistics
         assert!(b_col.statistics().is_none());
 
-        let column_index = reader.metadata().column_index().unwrap();
-        assert_eq!(column_index.len(), 1); // 1 row group
-        assert_eq!(column_index[0].len(), 2); // 2 columns
+        let page_index = reader.metadata().page_index().unwrap();
 
-        let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, ColumnIndexMetaData::NONE), "{a_idx:?}");
-        let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        let a_idx = page_index.column_index(0, 0);
+        assert!(a_idx.is_none(), "{a_idx:?}");
+        let b_idx = page_index.column_index(0, 1);
+        assert!(b_idx.is_none(), "{b_idx:?}");
     }
 
     #[test]
@@ -5552,6 +5675,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_different_dict_page_size_limit() {
         let array = Arc::new(Int64Array::from_iter(0..1024 * 1024));
         let schema = Arc::new(Schema::new(vec![
@@ -5590,6 +5714,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_arrow_writer_granular_mode_roundtrip() {
         // Granular mode subdivides chunks and writes more pages than the
         // default batched path. Make sure the data we write back is
@@ -5792,6 +5917,35 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    // A row limit far smaller than the batch splits it many times over; the split must not
+    // consume stack proportional to the number of row groups.
+    fn test_row_group_limit_rows_only_many_splits() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(1))
+            .set_max_row_group_bytes(None)
+            .build();
+
+        let rows = 50_000;
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 1,
+                rows_per_batch: rows,
+                row_size: 4,
+            },
+            props,
+        );
+
+        let sizes = row_group_sizes(builder.metadata());
+        assert_eq!(sizes.len(), rows, "Every row should get its own row group");
+        assert_eq!(
+            sizes.iter().sum::<i64>(),
+            rows as i64,
+            "Total rows should be preserved"
+        );
+    }
+
+    #[test]
     // When only max_row_group_bytes is set, respect the byte limit
     fn test_row_group_limit_bytes_only() {
         let props = WriterProperties::builder()
@@ -5945,6 +6099,31 @@ mod tests {
 
         let total_rows: i64 = sizes.iter().sum();
         assert_eq!(total_rows, 100, "Total rows should be preserved");
+    }
+
+    #[test]
+    // Both limits can apply to the same batch: the row limit trims it to 5 rows, and the
+    // byte limit then trims those 5 down to 4.
+    fn test_row_group_limit_both_apply_to_same_batch() {
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(15))
+            .set_max_row_group_bytes(Some(1500))
+            .build();
+
+        let builder = write_batches(
+            WriteBatchesShape {
+                num_batches: 2,
+                rows_per_batch: 10,
+                row_size: 100,
+            },
+            props,
+        );
+
+        assert_eq!(
+            &row_group_sizes(builder.metadata()),
+            &[14, 6],
+            "Byte limit should still apply to a batch the row limit already split"
+        );
     }
 
     #[test]
@@ -6180,6 +6359,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_number_distinct_values_exact_count() {
         // 50 distinct Int32 values repeated across 100k rows, with every 7th row null.
         // Nulls must not be counted as a distinct value.

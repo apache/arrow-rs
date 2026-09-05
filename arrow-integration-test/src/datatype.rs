@@ -19,6 +19,15 @@ use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit, UnionMod
 use arrow::error::{ArrowError, Result};
 use std::sync::Arc;
 
+/// Read a JSON number as an integer of type `T`.
+fn json_int<T: TryFrom<i64>>(what: &str, value: &serde_json::Value) -> Result<T> {
+    let int = value
+        .as_i64()
+        .ok_or_else(|| ArrowError::ParseError(format!("Expecting {what} to be an integer")))?;
+    T::try_from(int)
+        .map_err(|_| ArrowError::ParseError(format!("{what} is out of range for its type: {int}")))
+}
+
 /// Parse a data type from a JSON representation.
 pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
     use serde_json::Value;
@@ -36,7 +45,10 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             Some(s) if s == "fixedsizebinary" => {
                 // return a list with any type as its child isn't defined in the map
                 if let Some(Value::Number(size)) = map.get("byteWidth") {
-                    Ok(DataType::FixedSizeBinary(size.as_i64().unwrap() as i32))
+                    Ok(DataType::FixedSizeBinary(json_int(
+                        "byteWidth",
+                        &Value::Number(size.clone()),
+                    )?))
                 } else {
                     Err(ArrowError::ParseError(
                         "Expecting a byteWidth for fixedsizebinary".to_string(),
@@ -46,19 +58,19 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             Some(s) if s == "decimal" => {
                 // return a list with any type as its child isn't defined in the map
                 let precision = match map.get("precision") {
-                    Some(p) => Ok(p.as_u64().unwrap().try_into().unwrap()),
+                    Some(p) => json_int("precision", p),
                     None => Err(ArrowError::ParseError(
                         "Expecting a precision for decimal".to_string(),
                     )),
                 }?;
                 let scale = match map.get("scale") {
-                    Some(s) => Ok(s.as_u64().unwrap().try_into().unwrap()),
+                    Some(s) => json_int("scale", s),
                     _ => Err(ArrowError::ParseError(
                         "Expecting a scale for decimal".to_string(),
                     )),
                 }?;
                 let bit_width: usize = match map.get("bitWidth") {
-                    Some(b) => b.as_u64().unwrap() as usize,
+                    Some(b) => json_int("bitWidth", b)?,
                     _ => 128, // Default bit width
                 };
 
@@ -197,7 +209,7 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                 if let Some(Value::Number(size)) = map.get("listSize") {
                     Ok(DataType::FixedSizeList(
                         default_field,
-                        size.as_i64().unwrap() as i32,
+                        json_int("listSize", &Value::Number(size.clone()))?,
                     ))
                 } else {
                     Err(ArrowError::ParseError(
@@ -238,10 +250,14 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                         )));
                     };
                     if let Some(values) = map.get("typeIds") {
-                        let values = values.as_array().unwrap();
+                        let values = values.as_array().ok_or_else(|| {
+                            ArrowError::ParseError("Expecting typeIds to be an array".to_string())
+                        })?;
                         let fields = values
                             .iter()
-                            .map(|t| (t.as_i64().unwrap() as i8, default_field.clone()))
+                            .map(|t| Ok((json_int::<i8>("a type id", t)?, default_field.clone())))
+                            .collect::<Result<Vec<_>>>()?
+                            .into_iter()
                             .collect();
 
                         Ok(DataType::Union(fields, union_mode))

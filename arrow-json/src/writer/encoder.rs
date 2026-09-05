@@ -139,10 +139,15 @@ impl EncoderOptions {
     }
 }
 
-/// A trait to create custom encoders for specific data types.
+/// Creates custom encoders for specific data types when writing JSON data.
 ///
-/// This allows overriding the default encoders for specific data types,
-/// or adding new encoders for custom data types.
+/// This trait allows customizing JSON encoding for specific data types,
+/// or adding new encoders for unsupported or custom data types.
+///
+/// You can register an implementation of this trait using
+/// [`WriterBuilder::with_encoder_factory`].
+///
+/// [`WriterBuilder::with_encoder_factory`]: crate::writer::WriterBuilder::with_encoder_factory
 ///
 /// # Examples
 ///
@@ -180,9 +185,9 @@ impl EncoderOptions {
 /// }
 ///
 /// #[derive(Debug)]
-/// struct IntArayBinaryEncoderFactory;
+/// struct IntArrayBinaryEncoderFactory;
 ///
-/// impl EncoderFactory for IntArayBinaryEncoderFactory {
+/// impl EncoderFactory for IntArrayBinaryEncoderFactory {
 ///     fn make_default_encoder<'a>(
 ///         &self,
 ///         _field: &'a FieldRef,
@@ -220,7 +225,7 @@ impl EncoderOptions {
 /// let json_value: Value = {
 ///     let mut buf = Vec::new();
 ///     let mut writer = WriterBuilder::new()
-///         .with_encoder_factory(Arc::new(IntArayBinaryEncoderFactory))
+///         .with_encoder_factory(Arc::new(IntArrayBinaryEncoderFactory))
 ///         .build::<_, JsonArray>(&mut buf);
 ///     writer.write_batches(&[&batch]).unwrap();
 ///     writer.finish().unwrap();

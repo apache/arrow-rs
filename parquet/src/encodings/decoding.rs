@@ -26,6 +26,7 @@ use super::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
+use crate::encodings::decoding::alp_decoder::AlpDecoder;
 use crate::encodings::decoding::byte_stream_split_decoder::{
     ByteStreamSplitDecoder, VariableWidthByteStreamSplitDecoder,
 };
@@ -33,6 +34,7 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{self, BitReader, FromBitpacked};
 
+pub(crate) mod alp_decoder;
 mod byte_stream_split_decoder;
 
 pub(crate) mod private {
@@ -63,7 +65,8 @@ pub(crate) mod private {
             Encoding::RLE
             | Encoding::DELTA_BINARY_PACKED
             | Encoding::DELTA_BYTE_ARRAY
-            | Encoding::DELTA_LENGTH_BYTE_ARRAY => Err(general_err!(
+            | Encoding::DELTA_LENGTH_BYTE_ARRAY
+            | Encoding::ALP => Err(general_err!(
                 "Encoding {} is not supported for type",
                 encoding
             )),
@@ -116,6 +119,7 @@ pub(crate) mod private {
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
                 Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
+                Encoding::ALP => Ok(Box::new(AlpDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -127,6 +131,7 @@ pub(crate) mod private {
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
                 Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
+                Encoding::ALP => Ok(Box::new(AlpDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -1298,6 +1303,8 @@ mod tests {
         create_and_check_decoder::<ByteArrayType>(Encoding::DELTA_LENGTH_BYTE_ARRAY, None);
         create_and_check_decoder::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY, None);
         create_and_check_decoder::<BoolType>(Encoding::RLE, None);
+        create_and_check_decoder::<FloatType>(Encoding::ALP, None);
+        create_and_check_decoder::<DoubleType>(Encoding::ALP, None);
 
         // error when initializing
         create_and_check_decoder::<Int32Type>(
@@ -1989,6 +1996,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_delta_bit_packed_int32_single_value_skip_large() {
         let block_data = vec![3; 10240];
         test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
@@ -2002,6 +2010,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_delta_bit_packed_int32_increasing_value_skip_large() {
         let block_data = (0i32..10240).collect::<Vec<i32>>();
         test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
@@ -2015,6 +2024,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_delta_bit_packed_int32_stepped_value_skip_large() {
         let block_data = (0i32..10240).map(|i| i / 2).collect::<Vec<i32>>();
         test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 50);

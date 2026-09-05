@@ -133,7 +133,6 @@
 //! ```
 //!
 
-use std::borrow::Cow;
 use std::io::BufRead;
 use std::sync::Arc;
 
@@ -141,7 +140,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader, downcast_integer};
-use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
 use chrono::Utc;
 use serde_core::Serialize;
 
@@ -161,10 +160,12 @@ use crate::reader::run_end_array::RunEndEncodedArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
-use crate::reader::tape::{Tape, TapeDecoder};
+use crate::reader::tape::{TapeDecoder, TapeDecoderOptions};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
 pub use schema::*;
+// `mod tape` stays private so `TapeDecoder` does not become public API
+pub use tape::{Tape, TapeElement};
 pub use value_iter::ValueIter;
 
 mod binary_array;
@@ -185,6 +186,7 @@ mod timestamp_array;
 mod value_iter;
 
 /// A builder for [`Reader`] and [`Decoder`]
+#[derive(Clone)]
 pub struct ReaderBuilder {
     batch_size: usize,
     coerce_primitive: bool,
@@ -192,7 +194,8 @@ pub struct ReaderBuilder {
     ignore_type_conflicts: bool,
     is_field: bool,
     struct_mode: StructMode,
-
+    flatten_top_level_arrays: bool,
+    decoder_factory: Option<Arc<dyn DecoderFactory>>,
     schema: SchemaRef,
 }
 
@@ -213,6 +216,8 @@ impl ReaderBuilder {
             ignore_type_conflicts: false,
             is_field: false,
             struct_mode: Default::default(),
+            flatten_top_level_arrays: false,
+            decoder_factory: None,
             schema,
         }
     }
@@ -255,6 +260,8 @@ impl ReaderBuilder {
             ignore_type_conflicts: false,
             is_field: true,
             struct_mode: Default::default(),
+            flatten_top_level_arrays: false,
+            decoder_factory: None,
             schema: Arc::new(Schema::new([field.into()])),
         }
     }
@@ -313,6 +320,37 @@ impl ReaderBuilder {
             ..self
         }
     }
+    /// Sets whether to flatten top-level arrays.
+    ///
+    /// * When `true`, each element of a top-level array will be treated as its own row.
+    /// * When `false` (the default), the entire top-level array will be treated as one row.
+    ///
+    /// For example, consider this input file:
+    /// ```text
+    /// [{ "a": 1 }, { "a": 2 }, { "b": 3 }]
+    /// [{ "a": 4 }, { "a": 5 }, { "b": 6 }]
+    /// ```
+    ///
+    /// By default, this would be parsed as two rows, each an array containing three elements.
+    /// With this option set to `true`, however, this would be parsed as six rows.
+    ///
+    /// Note that even with this option set to `true`, top-level objects are still permitted
+    /// and will be parsed as individual rows in the exact same manner as when this option is
+    /// set to `false`. It is even possible to mix top-level arrays with top-level objects.
+    pub fn with_flatten(self, flatten_top_level_arrays: bool) -> Self {
+        Self {
+            flatten_top_level_arrays,
+            ..self
+        }
+    }
+
+    /// Set a hook for customizing decoding behavior. See [`DecoderFactory`].
+    pub fn with_decoder_factory(self, decoder_factory: Arc<dyn DecoderFactory>) -> Self {
+        Self {
+            decoder_factory: Some(decoder_factory),
+            ..self
+        }
+    }
 
     /// Create a [`Reader`] with the provided [`BufRead`]
     pub fn build<R: BufRead>(self, reader: R) -> Result<Reader<R>, ArrowError> {
@@ -324,13 +362,14 @@ impl ReaderBuilder {
 
     /// Create a [`Decoder`]
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
-        let (data_type, nullable) = if self.is_field {
-            let field = &self.schema.fields[0];
-            let data_type = Cow::Borrowed(field.data_type());
-            (data_type, field.is_nullable())
+        let (field, nullable) = if self.is_field {
+            let field = self.schema.fields[0].clone();
+            let nullable = field.is_nullable();
+            (field, nullable)
         } else {
-            let data_type = Cow::Owned(DataType::Struct(self.schema.fields.clone()));
-            (data_type, false)
+            // The root has no field of its own; synthesize a nameless one
+            let data_type = DataType::Struct(self.schema.fields.clone());
+            (Arc::new(Field::new("", data_type, false)), false)
         };
 
         let ctx = DecoderContext {
@@ -338,15 +377,20 @@ impl ReaderBuilder {
             strict_mode: self.strict_mode,
             struct_mode: self.struct_mode,
             ignore_type_conflicts: self.ignore_type_conflicts,
+            decoder_factory: self.decoder_factory,
         };
-        let decoder = ctx.make_decoder(data_type.as_ref(), nullable)?;
+        let decoder = ctx.make_decoder(&field, nullable)?;
 
         let num_fields = self.schema.flattened_fields().len();
 
         Ok(Decoder {
             decoder,
             is_field: self.is_field,
-            tape_decoder: TapeDecoder::new(self.batch_size, num_fields),
+            tape_decoder: TapeDecoder::new(TapeDecoderOptions {
+                batch_size: self.batch_size,
+                num_fields,
+                flatten_top_level_arrays: self.flatten_top_level_arrays,
+            }),
             batch_size: self.batch_size,
             schema: self.schema,
         })
@@ -683,12 +727,12 @@ impl Decoder {
 
         // First offset is null sentinel
         let mut next_object = 1;
-        let pos: Vec<_> = (0..tape.num_rows())
+        let pos = (0..tape.num_rows())
             .map(|_| {
-                let next = tape.next(next_object, "row").unwrap();
-                std::mem::replace(&mut next_object, next)
+                let next = tape.next(next_object, "row")?;
+                Ok(std::mem::replace(&mut next_object, next))
             })
-            .collect();
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         let decoded = self.decoder.decode(&tape, &pos)?;
         self.tape_decoder.clear();
@@ -704,9 +748,206 @@ impl Decoder {
     }
 }
 
-trait ArrayDecoder: Send {
+/// Decodes a column of JSON values from a [`Tape`] into an [`ArrayRef`]
+///
+/// Implement alongside [`DecoderFactory`] to override or add support for a type.
+pub trait ArrayDecoder: Send {
     /// Decode elements from `tape` starting at the indexes contained in `pos`
+    ///
+    /// `pos` contains one tape index per output row, so the returned array must have
+    /// exactly `pos.len()` elements and the field's data type. A row's value may be
+    /// [`TapeElement::Null`].
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError>;
+}
+
+/// A trait to create custom decoders for specific data types.
+///
+/// Overrides the reader's decoder for a data type, or adds support for one it does not
+/// handle. The reader-side counterpart of [`EncoderFactory`]; register an
+/// implementation with [`ReaderBuilder::with_decoder_factory`].
+///
+/// # Examples
+///
+/// Decodes `Binary` from a JSON array of integers rather than the default hex string.
+///
+/// ```
+/// use std::sync::Arc;
+/// use arrow_array::{Array, ArrayRef, BinaryArray};
+/// use arrow_array::types::Float64Type;
+/// use arrow_array::cast::AsArray;
+/// use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape, TapeElement};
+/// use arrow_json::ReaderBuilder;
+/// use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema};
+/// use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
+/// use arrow_array::StringArray;
+///
+/// /// Decodes `[104, 105]` into the bytes `b"hi"`
+/// struct IntArrayBinaryDecoder;
+///
+/// impl ArrayDecoder for IntArrayBinaryDecoder {
+///     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+///         let mut values: Vec<Option<Vec<u8>>> = Vec::with_capacity(pos.len());
+///         for p in pos {
+///             match tape.get(*p) {
+///                 TapeElement::Null => values.push(None),
+///                 TapeElement::StartList(end) => {
+///                     let mut bytes = Vec::new();
+///                     let mut cur = p + 1;
+///                     while cur < end {
+///                         match tape.get(cur) {
+///                             // JSON text yields `Number`; serde yields `I32`
+///                             TapeElement::Number(idx) => {
+///                                 let s = tape.get_string(idx);
+///                                 bytes.push(s.parse::<u8>().map_err(|e| {
+///                                     ArrowError::JsonError(format!("invalid byte {s}: {e}"))
+///                                 })?);
+///                             }
+///                             TapeElement::I32(v) => bytes.push(v as u8),
+///                             _ => return Err(tape.error(cur, "byte")),
+///                         }
+///                         cur = tape.next(cur, "byte")?;
+///                     }
+///                     values.push(Some(bytes));
+///                 }
+///                 _ => return Err(tape.error(*p, "list of bytes")),
+///             }
+///         }
+///         Ok(Arc::new(BinaryArray::from_iter(values.iter().map(|v| v.as_deref()))))
+///     }
+/// }
+///
+/// /// Upper-cases whatever the reader's own decoder produced
+/// struct ShoutDecoder(Box<dyn ArrayDecoder>);
+///
+/// impl ArrayDecoder for ShoutDecoder {
+///     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+///         let inner = self.0.decode(tape, pos)?;
+///         let values = inner.as_string::<i32>();
+///         Ok(Arc::new(StringArray::from_iter(
+///             values.iter().map(|v| v.map(str::to_uppercase)),
+///         )))
+///     }
+/// }
+///
+/// #[derive(Debug)]
+/// struct IntArrayBinaryDecoderFactory;
+///
+/// impl DecoderFactory for IntArrayBinaryDecoderFactory {
+///     fn make_default_decoder(
+///         &self,
+///         ctx: &DecoderContext,
+///         field: &FieldRef,
+///         is_nullable: bool,
+///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+///         // Selection can key off metadata, e.g. to recognise an extension type, and
+///         // build on the reader's own decoder for the very same field
+///         if field.metadata().get(EXTENSION_TYPE_NAME_KEY).map(String::as_str)
+///             == Some("apache.shout")
+///         {
+///             let inner = ctx.make_builtin_decoder(field, is_nullable)?;
+///             return Ok(Some(Box::new(ShoutDecoder(inner))));
+///         }
+///
+///         match field.data_type() {
+///             DataType::Binary => Ok(Some(Box::new(IntArrayBinaryDecoder))),
+///             // Returning `None` uses the reader's default decoder
+///             _ => Ok(None),
+///         }
+///     }
+/// }
+///
+/// let nested = Fields::from(vec![Field::new("inner", DataType::Binary, true)]);
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("bytes", DataType::Binary, true),
+///     Field::new("float", DataType::Float64, true),
+///     Field::new("nested", DataType::Struct(nested), true),
+///     Field::new("shout", DataType::Utf8, true)
+///         .with_metadata([(EXTENSION_TYPE_NAME_KEY, "apache.shout")]),
+/// ]));
+///
+/// let json = r#"{"bytes": [104, 105], "float": 1.0, "nested": {"inner": [104, 105]}, "shout": "hi"}
+/// {"float": 2.3}
+/// {"bytes": [98], "nested": {"inner": [98]}}
+/// "#;
+///
+/// let batch = ReaderBuilder::new(schema)
+///     .with_decoder_factory(Arc::new(IntArrayBinaryDecoderFactory))
+///     .build(json.as_bytes())
+///     .unwrap()
+///     .next()
+///     .unwrap()
+///     .unwrap();
+///
+/// let bytes = batch.column(0).as_binary::<i32>();
+/// assert_eq!(bytes.value(0), b"hi");
+/// assert!(bytes.is_null(1));
+/// assert_eq!(bytes.value(2), b"b");
+///
+/// // The override applies wherever `Binary` appears, including nested, while types
+/// // the factory declines are decoded as usual
+/// let inner = batch.column(2).as_struct().column(0).as_binary::<i32>();
+/// assert_eq!(inner.value(0), b"hi");
+/// assert_eq!(batch.column(1).as_primitive::<Float64Type>().value(0), 1.0);
+///
+/// // Dispatched on metadata, and decoded by the reader's own `Utf8` decoder
+/// assert_eq!(batch.column(3).as_string::<i32>().value(0), "HI");
+/// ```
+///
+/// [`EncoderFactory`]: crate::EncoderFactory
+pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
+    /// Make a decoder for `field`, or `Ok(None)` to use the reader's default.
+    ///
+    /// Receives the [`FieldRef`] rather than just its [`DataType`] so decoder
+    /// selection can consider the field's metadata, e.g. to identify [extension
+    /// types]. The root of a [`ReaderBuilder::new`] schema is presented as a
+    /// synthesized nameless `Struct` field.
+    ///
+    /// Use [`DecoderContext::make_decoder`] on `ctx` to build child decoders, and
+    /// [`DecoderContext::make_builtin_decoder`] to build on the reader's own decoder
+    /// for this field. Calling `make_decoder` with the field this was invoked with
+    /// recurses back here and loops.
+    ///
+    /// `is_nullable` folds in ancestor nullability, so it may differ from
+    /// `field.is_nullable()` in either direction: a nullable struct widens its
+    /// children, while a run-end encoded array narrows its values.
+    ///
+    /// [extension types]: https://arrow.apache.org/docs/format/Columnar.html#extension-types
+    fn make_default_decoder(
+        &self,
+        _ctx: &DecoderContext,
+        _field: &FieldRef,
+        _is_nullable: bool,
+    ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+        Ok(None)
+    }
+}
+
+/// Validates the output of a [`DecoderFactory`] decoder before it reaches the arrays
+/// built from it, some of which are constructed without further checks.
+struct CheckedDecoder {
+    inner: Box<dyn ArrayDecoder>,
+    data_type: DataType,
+}
+
+impl ArrayDecoder for CheckedDecoder {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+        let array = self.inner.decode(tape, pos)?;
+        if array.data_type() != &self.data_type {
+            return Err(ArrowError::JsonError(format!(
+                "custom decoder returned {} for a field of type {}",
+                array.data_type(),
+                self.data_type
+            )));
+        }
+        if array.len() != pos.len() {
+            return Err(ArrowError::JsonError(format!(
+                "custom decoder returned {} values for {} rows",
+                array.len(),
+                pos.len()
+            )));
+        }
+        Ok(array)
+    }
 }
 
 /// Context for decoder creation, containing configuration.
@@ -722,6 +963,8 @@ pub struct DecoderContext {
     struct_mode: StructMode,
     /// Whether to treat columns with incompatible types as missing (i.e. NULL)
     ignore_type_conflicts: bool,
+    /// An optional hook for customizing decoding behavior
+    decoder_factory: Option<Arc<dyn DecoderFactory>>,
 }
 
 impl DecoderContext {
@@ -745,24 +988,61 @@ impl DecoderContext {
         self.ignore_type_conflicts
     }
 
+    /// Returns the optional hook for customizing decoding behavior
+    pub fn decoder_factory(&self) -> Option<&Arc<dyn DecoderFactory>> {
+        self.decoder_factory.as_ref()
+    }
+
     /// Create a decoder for a type.
     ///
     /// This is the standard way to create child decoders from within a decoder
     /// implementation.
-    fn make_decoder(
+    pub fn make_decoder(
         &self,
-        data_type: &DataType,
+        field: &FieldRef,
         is_nullable: bool,
     ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
-        make_decoder(self, data_type, is_nullable)
+        make_decoder(self, field, is_nullable)
+    }
+
+    /// Create the decoder the reader would use for `field`, ignoring any
+    /// [`DecoderFactory`].
+    ///
+    /// Lets a factory build on the reader's own decoder, including for the field it was
+    /// asked about — which [`Self::make_decoder`] cannot do without looping.
+    pub fn make_builtin_decoder(
+        &self,
+        field: &FieldRef,
+        is_nullable: bool,
+    ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+        make_builtin_decoder(self, field, is_nullable)
     }
 }
 
 fn make_decoder(
     ctx: &DecoderContext,
-    data_type: &DataType,
+    field: &FieldRef,
     is_nullable: bool,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+    if let Some(factory) = ctx.decoder_factory()
+        && let Some(decoder) = factory.make_default_decoder(ctx, field, is_nullable)?
+    {
+        return Ok(Box::new(CheckedDecoder {
+            inner: decoder,
+            data_type: field.data_type().clone(),
+        }));
+    }
+
+    make_builtin_decoder(ctx, field, is_nullable)
+}
+
+fn make_builtin_decoder(
+    ctx: &DecoderContext,
+    field: &FieldRef,
+    is_nullable: bool,
+) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+    let data_type = field.data_type();
+
     macro_rules! primitive_decoder {
         ($t:ty, $data_type:expr) => {
             Ok(Box::new(PrimitiveArrayDecoder::<$t>::new(ctx, $data_type)))
@@ -867,6 +1147,7 @@ mod tests {
     use serde_json::json;
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
+    use std::sync::Mutex;
 
     use super::*;
 
@@ -877,13 +1158,21 @@ mod tests {
         strict_mode: bool,
         schema: SchemaRef,
     ) -> Vec<RecordBatch> {
+        let config = ReaderBuilder::new(schema)
+            .with_batch_size(batch_size)
+            .with_strict_mode(strict_mode)
+            .with_coerce_primitive(coerce_primitive);
+        do_read_config(buf, config)
+    }
+
+    fn do_read_config(buf: &str, builder: ReaderBuilder) -> Vec<RecordBatch> {
         let mut unbuffered = vec![];
 
         // Test with different batch sizes to test for boundary conditions
-        for batch_size in [1, 3, 100, batch_size] {
-            unbuffered = ReaderBuilder::new(schema.clone())
+        for batch_size in [1, 3, 100, builder.batch_size] {
+            unbuffered = builder
+                .clone()
                 .with_batch_size(batch_size)
-                .with_coerce_primitive(coerce_primitive)
                 .build(Cursor::new(buf.as_bytes()))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
@@ -895,10 +1184,9 @@ mod tests {
 
             // Test with different buffer sizes to test for boundary conditions
             for b in [1, 3, 5] {
-                let buffered = ReaderBuilder::new(schema.clone())
+                let buffered = builder
+                    .clone()
                     .with_batch_size(batch_size)
-                    .with_coerce_primitive(coerce_primitive)
-                    .with_strict_mode(strict_mode)
                     .build(BufReader::with_capacity(b, Cursor::new(buf.as_bytes())))
                     .unwrap()
                     .collect::<Result<Vec<_>, _>>()
@@ -1456,7 +1744,7 @@ mod tests {
         assert!(col1.is_null(5));
         assert_eq!(
             col1.values(),
-            &[100, 200, 204, 1103420, 0, 0].map(T::Native::usize_as)
+            &[100, 200, 205, 1103420, 0, 0].map(T::Native::usize_as)
         );
 
         let col2 = batches[0].column(1).as_primitive::<T>();
@@ -1476,8 +1764,98 @@ mod tests {
         assert!(col3.is_null(5));
         assert_eq!(
             col3.values(),
-            &[3830, 12345, 0, 0, 0, 0].map(T::Native::usize_as)
+            &[3830, 12346, 0, 0, 0, 0].map(T::Native::usize_as)
         );
+    }
+
+    #[test]
+    fn test_decimal_number_formats() {
+        // Rounding half away from zero, exponent notation (a valid JSON
+        // number syntax), surrounding whitespace in strings and negative
+        // scales are all accepted
+        let buf = r#"
+        {"a": 0e0, "b": " 1.5 ", "c": 1234.5}
+        {"a": 1.5E2, "b": "-0.005", "c": -150}
+        {"a": 1e-3, "b": "1e2", "c": 1E2}
+        {"a": -0E+0, "b": "+.5", "c": 5}
+        "#;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Decimal128(10, 2), true),
+            Field::new("b", DataType::Decimal64(18, 2), true),
+            Field::new("c", DataType::Decimal128(10, -2), true),
+        ]));
+        let batches = do_read(buf, 1024, true, false, schema);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(
+            batches[0]
+                .column(0)
+                .as_primitive::<Decimal128Type>()
+                .values(),
+            &[0, 15000, 0, 0]
+        );
+        assert_eq!(
+            batches[0]
+                .column(1)
+                .as_primitive::<Decimal64Type>()
+                .values(),
+            &[150, -1, 10000, 50]
+        );
+        assert_eq!(
+            batches[0]
+                .column(2)
+                .as_primitive::<Decimal128Type>()
+                .values(),
+            &[12, -2, 1, 0]
+        );
+
+        // Invalid and out-of-range values are errors (or nulls when type
+        // conflicts are ignored), never panics
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Decimal128(5, 2),
+            true,
+        )]));
+        let long = "1".repeat(300);
+        for (buf, expected) in [
+            (
+                r#"{"a": "abc"}"#.to_string(),
+                "Invalid decimal format: \"abc\"",
+            ),
+            (
+                r#"{"a": 123456789}"#.to_string(),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                r#"{"a": 1e99999}"#.to_string(),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                format!(r#"{{"a": {long}}}"#),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                r#"{"a": 4825037936439135476.2609835314269495255615E-14}"#.to_string(),
+                "does not fit in Decimal128(5, 2)",
+            ),
+        ] {
+            let err = ReaderBuilder::new(schema.clone())
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(expected), "{buf}: {err}");
+
+            let batch = ReaderBuilder::new(schema.clone())
+                .with_ignore_type_conflicts(true)
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert!(batch.column(0).is_null(0), "{buf}");
+        }
     }
 
     #[test]
@@ -3670,6 +4048,45 @@ mod tests {
     }
 
     #[test]
+    fn test_read_run_end_encoded_nullability() {
+        for field_nullable in [false, true] {
+            for values_nullable in [false, true] {
+                let ree_type = DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Utf8, values_nullable)),
+                );
+                let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, field_nullable)]));
+
+                for buf in [
+                    r#"{"a": "x"}
+                    {"a": null}
+                    {"a": "y"}"#,
+                    r#"{"a": "x"}
+                    {}
+                    {"a": "y"}"#,
+                ] {
+                    let mut decoder = ReaderBuilder::new(schema.clone()).build_decoder().unwrap();
+                    let result = decoder.decode(buf.as_bytes()).and_then(|_| decoder.flush());
+
+                    if field_nullable && values_nullable {
+                        result.expect("REE field and values are both nullable");
+                    } else {
+                        let err = result.expect_err(
+                            "REE nulls require both the field and values to be nullable",
+                        );
+                        assert!(
+                            err.to_string().contains(
+                                "Encountered nulls in non-nullable values of RunEndEncoded"
+                            ),
+                            "unexpected error: {err}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_read_run_end_encoded_all_unique() {
         let buf = r#"
         {"a": 1}
@@ -3753,5 +4170,159 @@ mod tests {
         assert_eq!(nested_values.len(), 2);
         assert_eq!(nested_values.value(0), "x");
         assert_eq!(nested_values.value(1), "y");
+    }
+
+    #[test]
+    fn test_flatten_top_level_arrays() {
+        let buf = r#"
+            [
+                {"a": 1},
+                {"a": 2}
+            ]
+            {"a": 3}
+            [{"a": 4}, {"a": 5}, {"a": 6}]
+            "#;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let batches = do_read_config(buf, ReaderBuilder::new(schema).with_flatten(true));
+        assert_eq!(batches.len(), 1);
+
+        let col = batches[0].column(0);
+        let col = col.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(col.len(), 6);
+        for i in 0..6 {
+            assert_eq!(col.value(i), (i as i32) + 1);
+        }
+    }
+
+    /// Declining everything must be indistinguishable from no factory at all.
+    #[test]
+    fn test_decoder_factory_declining_everything_is_transparent() {
+        #[derive(Debug, Default)]
+        struct DeclineAll {
+            seen: Mutex<Vec<FieldRef>>,
+        }
+
+        impl DecoderFactory for DeclineAll {
+            fn make_default_decoder(
+                &self,
+                _ctx: &DecoderContext,
+                field: &FieldRef,
+                _is_nullable: bool,
+            ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+                self.seen.lock().unwrap().push(field.clone());
+                Ok(None)
+            }
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new_list("c", Field::new("item", DataType::Float64, true), true),
+        ]));
+        let buf = r#"{"a": 1, "b": "x", "c": [1.5, 2.5]}
+        {"a": null, "c": []}
+        "#;
+
+        let read = |factory: Option<Arc<dyn DecoderFactory>>| {
+            let mut builder = ReaderBuilder::new(schema.clone());
+            if let Some(factory) = factory {
+                builder = builder.with_decoder_factory(factory);
+            }
+            builder
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+        };
+
+        let factory = Arc::new(DeclineAll::default());
+        assert_eq!(read(None), read(Some(factory.clone())));
+
+        // Consulted for the root struct and every leaf, with names attached; the
+        // root is the documented synthesized nameless struct
+        let seen = factory.seen.lock().unwrap();
+        assert!(
+            matches!(seen[0].data_type(), DataType::Struct(_)),
+            "{seen:?}"
+        );
+        assert_eq!(seen[0].name(), "", "root field should be nameless");
+
+        let by_name: Vec<(&str, &DataType)> = seen
+            .iter()
+            .map(|f| (f.name().as_str(), f.data_type()))
+            .collect();
+        for expected in [
+            ("a", &DataType::Int32),
+            ("b", &DataType::Utf8),
+            ("item", &DataType::Float64),
+        ] {
+            assert!(
+                by_name.contains(&expected),
+                "{expected:?} missing from {by_name:?}"
+            );
+        }
+    }
+
+    /// A custom decoder's output is not trusted: the arrays built from it are
+    /// constructed without further validation, so a mismatch must be caught here.
+    #[test]
+    fn test_decoder_factory_output_is_validated() {
+        /// Returns either the wrong data type or the wrong number of rows
+        struct Bad {
+            wrong_type: bool,
+        }
+
+        impl ArrayDecoder for Bad {
+            fn decode(&mut self, _tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+                Ok(match self.wrong_type {
+                    true => Arc::new(StringViewArray::from(vec!["x"; pos.len()])) as ArrayRef,
+                    false => Arc::new(StringArray::from(Vec::<&str>::new())),
+                })
+            }
+        }
+
+        #[derive(Debug)]
+        struct BadFactory {
+            wrong_type: bool,
+        }
+
+        impl DecoderFactory for BadFactory {
+            fn make_default_decoder(
+                &self,
+                _ctx: &DecoderContext,
+                field: &FieldRef,
+                _is_nullable: bool,
+            ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+                match field.data_type() {
+                    DataType::Utf8 => Ok(Some(Box::new(Bad {
+                        wrong_type: self.wrong_type,
+                    }))),
+                    _ => Ok(None),
+                }
+            }
+        }
+
+        let read = |wrong_type: bool| {
+            let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
+            ReaderBuilder::new(schema)
+                .with_decoder_factory(Arc::new(BadFactory { wrong_type }))
+                .build(Cursor::new(br#"{"s": "hello"}"#.as_slice()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+        };
+
+        let err = read(true);
+        assert!(
+            err.contains("returned Utf8View for a field of type Utf8"),
+            "{err}"
+        );
+
+        let err = read(false);
+        assert!(err.contains("returned 0 values for 1 rows"), "{err}");
     }
 }

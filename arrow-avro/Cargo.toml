@@ -93,7 +93,7 @@ criterion = { workspace = true, default-features = false }
 tempfile = "3.3"
 futures = "0.3.31"
 async-stream = "0.3.6"
-apache-avro = "0.21.0"
+apache-avro = "0.22.0"
 object_store = { workspace = true, features = ["fs"] }
 once_cell = "1.21.3"
 half = { version = "2.1", default-features = false }

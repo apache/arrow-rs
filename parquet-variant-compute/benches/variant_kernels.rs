@@ -18,7 +18,7 @@
 use arrow::array::{Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, StringArray, StructArray};
 use arrow::buffer::Buffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields};
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantPath};
 use parquet_variant_compute::{
     GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, variant_get,
@@ -33,6 +33,23 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 const VARIANT_GET_UNSHREDDED_OBJECT_ROWS: usize = 262_144;
+const VARIANT_ARRAY_BUILD_ROWS: usize = 262_144;
+
+fn variant_array_builder_build_bench(c: &mut Criterion) {
+    c.bench_function("variant_array_builder_build_262k_small_values", |b| {
+        b.iter_batched(
+            || {
+                let mut builder = VariantArrayBuilder::new(VARIANT_ARRAY_BUILD_ROWS);
+                for value in 0..VARIANT_ARRAY_BUILD_ROWS {
+                    builder.append_variant(Variant::Int8((value % 128) as i8));
+                }
+                builder
+            },
+            |builder| std::hint::black_box(builder.build()),
+            BatchSize::LargeInput,
+        )
+    });
+}
 
 fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     let input_array = StringArray::from_iter_values(json_repeated_struct(8000));
@@ -189,6 +206,7 @@ criterion_group!(
     variant_get_bench,
     variant_get_shredded_utf8_bench,
     variant_get_unshredded_object_path_bench,
+    variant_array_builder_build_bench,
     benchmark_batch_json_string_to_variant
 );
 criterion_main!(benches);
