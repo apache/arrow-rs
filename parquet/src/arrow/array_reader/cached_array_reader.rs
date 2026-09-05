@@ -189,8 +189,10 @@ impl CachedArrayReader {
         if end <= self.cleaned_up_to {
             return;
         }
+        let start = self.cleaned_up_to;
+        self.cleaned_up_to = end;
         let mut cache = self.shared_cache.write().unwrap();
-        for batch_id_to_remove in self.cleaned_up_to..end {
+        for batch_id_to_remove in start..end {
             cache.remove(
                 self.column_idx,
                 BatchID {
@@ -198,8 +200,6 @@ impl CachedArrayReader {
                 },
             );
         }
-        drop(cache);
-        self.cleaned_up_to = end;
     }
 }
 
