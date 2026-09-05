@@ -15,7 +15,109 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
+
 use crate::cast::*;
+
+/// Returns a clone of `values` with parent nulls propagated to the child elements.
+pub(crate) fn mask_fixed_size_list_values(array: &FixedSizeListArray) -> ArrayRef {
+    let size = array.value_length() as usize;
+    let Some(nulls) = array.nulls() else {
+        return Arc::clone(array.values());
+    };
+    if size == 0 {
+        return Arc::clone(array.values());
+    }
+
+    let parent_nulls = nulls.expand(size);
+    let combined_nulls = NullBuffer::union(Some(&parent_nulls), array.values().nulls());
+    if combined_nulls.as_ref() != array.values().nulls() {
+        let data = array
+            .values()
+            .to_data()
+            .into_builder()
+            .nulls(combined_nulls)
+            .build();
+        match data {
+            Ok(d) => make_array(d),
+            Err(_) => Arc::clone(array.values()),
+        }
+    } else {
+        Arc::clone(array.values())
+    }
+}
+
+/// Returns a clone of `values` with parent nulls propagated to the child elements for a ListArray.
+pub(crate) fn mask_list_values<O: OffsetSizeTrait>(array: &GenericListArray<O>) -> ArrayRef {
+    if array.null_count() == 0 || array.values().is_empty() {
+        return Arc::clone(array.values());
+    }
+
+    let mut builder = BooleanBufferBuilder::new(array.values().len());
+    let offsets = array.value_offsets();
+    for i in 0..array.len() {
+        let is_valid = array.is_valid(i);
+        let len = offsets[i + 1].as_usize() - offsets[i].as_usize();
+        builder.append_n(len, is_valid);
+    }
+    if builder.len() < array.values().len() {
+        builder.append_n(array.values().len() - builder.len(), false);
+    }
+    let parent_nulls = NullBuffer::from(builder.finish());
+    let combined_nulls = NullBuffer::union(Some(&parent_nulls), array.values().nulls());
+    if combined_nulls.as_ref() != array.values().nulls() {
+        let data = array
+            .values()
+            .to_data()
+            .into_builder()
+            .nulls(combined_nulls)
+            .build();
+        match data {
+            Ok(d) => make_array(d),
+            Err(_) => Arc::clone(array.values()),
+        }
+    } else {
+        Arc::clone(array.values())
+    }
+}
+
+/// Returns a clone of `values` with parent nulls propagated to the child elements for a ListViewArray.
+pub(crate) fn mask_list_view_values<O: OffsetSizeTrait>(
+    array: &GenericListViewArray<O>,
+) -> ArrayRef {
+    if array.null_count() == 0 || array.values().is_empty() {
+        return Arc::clone(array.values());
+    }
+
+    let values_len = array.values().len();
+    let mut valid_mask = BooleanBufferBuilder::new(values_len);
+    valid_mask.append_n(values_len, false);
+    for i in 0..array.len() {
+        if array.is_valid(i) {
+            let offset = array.value_offset(i).as_usize();
+            let size = array.value_size(i).as_usize();
+            for j in offset..(offset + size).min(values_len) {
+                valid_mask.set_bit(j, true);
+            }
+        }
+    }
+    let parent_nulls = NullBuffer::from(valid_mask.finish());
+    let combined_nulls = NullBuffer::union(Some(&parent_nulls), array.values().nulls());
+    if combined_nulls.as_ref() != array.values().nulls() {
+        let data = array
+            .values()
+            .to_data()
+            .into_builder()
+            .nulls(combined_nulls)
+            .build();
+        match data {
+            Ok(d) => make_array(d),
+            Err(_) => Arc::clone(array.values()),
+        }
+    } else {
+        Arc::clone(array.values())
+    }
+}
 
 /// Converts a non-list array to a list array where every element is a single element
 /// list. `NULL`s in the original array become `[NULL]` (i.e. output list array
@@ -76,8 +178,9 @@ pub(crate) fn cast_single_element_fixed_size_list_to_values(
     to: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let values = array.as_fixed_size_list().values();
-    cast_with_options(values, to, cast_options)
+    let array = array.as_fixed_size_list();
+    let values = mask_fixed_size_list_values(array);
+    cast_with_options(&values, to, cast_options)
 }
 
 fn cast_fixed_size_list_to_list_inner<OffsetSize: OffsetSizeTrait, const IS_LIST_VIEW: bool>(
@@ -289,7 +392,12 @@ pub(crate) fn cast_list_values<O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list::<O>();
-    let values = cast_with_options(list.values(), to.data_type(), cast_options)?;
+    let values = if to.is_nullable() {
+        mask_list_values(list)
+    } else {
+        Arc::clone(list.values())
+    };
+    let values = cast_with_options(&values, to.data_type(), cast_options)?;
     Ok(Arc::new(GenericListArray::<O>::try_new(
         to.clone(),
         list.offsets().clone(),
@@ -305,7 +413,12 @@ pub(crate) fn cast_list_view_values<O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list_view::<O>();
-    let values = cast_with_options(list.values(), to.data_type(), cast_options)?;
+    let values = if to.is_nullable() {
+        mask_list_view_values(list)
+    } else {
+        Arc::clone(list.values())
+    };
+    let values = cast_with_options(&values, to.data_type(), cast_options)?;
     Ok(Arc::new(GenericListViewArray::<O>::try_new(
         to.clone(),
         list.offsets().clone(),
@@ -322,7 +435,11 @@ pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list::<I>();
-    let values = list.values();
+    let values = if field.is_nullable() {
+        mask_list_values(list)
+    } else {
+        Arc::clone(list.values())
+    };
     let offsets = list.offsets();
     let nulls = list.nulls().cloned();
 
@@ -335,7 +452,7 @@ pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     }
 
     // Recursively cast values
-    let values = cast_with_options(values, field.data_type(), cast_options)?;
+    let values = cast_with_options(&values, field.data_type(), cast_options)?;
     let offsets: Vec<_> = offsets.iter().map(|x| O::usize_as(x.as_usize())).collect();
 
     // Safety: valid offsets and checked for overflow
@@ -416,9 +533,14 @@ pub(crate) fn cast_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let list_view = array.as_list_view::<I>();
+    let values = if to_field.is_nullable() {
+        mask_list_view_values(list_view)
+    } else {
+        Arc::clone(list_view.values())
+    };
 
     // Recursively cast values
-    let values = cast_with_options(list_view.values(), to_field.data_type(), cast_options)?;
+    let values = cast_with_options(&values, to_field.data_type(), cast_options)?;
 
     let offsets = list_view
         .offsets()
@@ -467,6 +589,11 @@ pub(crate) fn cast_list_to_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list::<I>();
     let (_field, offsets, values, nulls) = list.clone().into_parts();
+    let values = if to_field.is_nullable() {
+        mask_list_values(list)
+    } else {
+        values
+    };
 
     let len = offsets.len() - 1;
     let mut sizes = Vec::with_capacity(len);

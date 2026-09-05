@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
+
 use crate::cast::*;
 
 /// Helper function that takes a map container and casts the inner datatype.
@@ -37,8 +39,53 @@ pub(crate) fn cast_map_values(
         "map is missing value field".to_string(),
     ))?;
 
-    let key_array = cast_with_options(from.keys(), key_field.data_type(), cast_options)?;
-    let value_array = cast_with_options(from.values(), value_field.data_type(), cast_options)?;
+    let keys = from.keys();
+    let values = from.values();
+
+    let (keys, values) = if from.null_count() > 0 && !keys.is_empty() {
+        let mut builder = BooleanBufferBuilder::new(keys.len());
+        let offsets = from.offsets();
+        for i in 0..from.len() {
+            let is_valid = from.is_valid(i);
+            let len = offsets[i + 1].as_usize() - offsets[i].as_usize();
+            builder.append_n(len, is_valid);
+        }
+        if builder.len() < keys.len() {
+            builder.append_n(keys.len() - builder.len(), false);
+        }
+        let parent_nulls = NullBuffer::from(builder.finish());
+
+        let k = if key_field.is_nullable() {
+            let combined_k = NullBuffer::union(Some(&parent_nulls), keys.nulls());
+            if combined_k.as_ref() != keys.nulls() {
+                let data = keys.to_data().into_builder().nulls(combined_k).build()?;
+                make_array(data)
+            } else {
+                Arc::clone(keys)
+            }
+        } else {
+            Arc::clone(keys)
+        };
+
+        let v = if value_field.is_nullable() {
+            let combined_v = NullBuffer::union(Some(&parent_nulls), values.nulls());
+            if combined_v.as_ref() != values.nulls() {
+                let data = values.to_data().into_builder().nulls(combined_v).build()?;
+                make_array(data)
+            } else {
+                Arc::clone(values)
+            }
+        } else {
+            Arc::clone(values)
+        };
+
+        (k, v)
+    } else {
+        (Arc::clone(keys), Arc::clone(values))
+    };
+
+    let key_array = cast_with_options(&keys, key_field.data_type(), cast_options)?;
+    let value_array = cast_with_options(&values, value_field.data_type(), cast_options)?;
 
     Ok(Arc::new(MapArray::try_new(
         entries_field.clone(),

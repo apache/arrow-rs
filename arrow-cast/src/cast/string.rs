@@ -364,7 +364,21 @@ pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(
                 extend_valid_utf8(&mut builder, array.iter());
                 Ok(Arc::new(builder.finish()))
             }
-            false => Err(e),
+            false => {
+                if array.null_count() > 0 {
+                    for val in array.iter().flatten() {
+                        std::str::from_utf8(val)?;
+                    }
+                    let mut builder = GenericStringBuilder::<O>::with_capacity(
+                        array.len(),
+                        array.value_data().len(),
+                    );
+                    extend_valid_utf8(&mut builder, array.iter());
+                    Ok(Arc::new(builder.finish()))
+                } else {
+                    Err(e)
+                }
+            }
         },
     }
 }
@@ -383,7 +397,18 @@ pub(crate) fn cast_binary_view_to_string_view(
                 extend_valid_utf8(&mut builder, array.iter());
                 Ok(Arc::new(builder.finish()))
             }
-            false => Err(error),
+            false => {
+                if array.null_count() > 0 {
+                    for val in array.iter().flatten() {
+                        std::str::from_utf8(val)?;
+                    }
+                    let mut builder = StringViewBuilder::with_capacity(array.len());
+                    extend_valid_utf8(&mut builder, array.iter());
+                    Ok(Arc::new(builder.finish()))
+                } else {
+                    Err(error)
+                }
+            }
         },
     }
 }
