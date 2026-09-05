@@ -741,7 +741,7 @@ impl MutableBuffer {
     /// # Panics
     ///
     /// Panics if the backing storage for `len` bits cannot be allocated. Use
-    /// [`MutableBuffer::try_collect_bool`] when `len` comes from untrusted input.
+    /// [`MutableBuffer::try_collect_bool`] for a fallible version.
     #[inline]
     pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, f: F) -> Self {
         Self::try_collect_bool(len, f).unwrap_or_else(|e| panic!("{e}"))
