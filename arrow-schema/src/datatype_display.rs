@@ -177,12 +177,13 @@ impl Display for DataType {
                 let default_names = run_ends_field.name() == Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME
                     && values_field.name() == Field::REE_VALUES_FIELD_DEFAULT_NAME;
                 write!(f, "RunEndEncoded(")?;
+                let re_null = format_nullability(run_ends_field);
                 let v_null = format_nullability(values_field);
                 let v_meta = format_metadata(values_field.metadata());
                 if default_names {
                     write!(
                         f,
-                        "{}, {v_null}{}{})",
+                        "{re_null}{}, {v_null}{}{})",
                         run_ends_field.data_type(),
                         values_field.data_type(),
                         v_meta,
@@ -506,7 +507,7 @@ mod tests {
             true,
         ));
         let ree = DataType::RunEndEncoded(run_ends_field.clone(), values_field.clone());
-        assert_eq!(ree.to_string(), "RunEndEncoded(UInt32, Int32)");
+        assert_eq!(ree.to_string(), "RunEndEncoded(non-null UInt32, Int32)");
 
         // Compact form: non-null values
         let run_ends_field = Arc::new(Field::new(
@@ -520,7 +521,10 @@ mod tests {
             false,
         ));
         let ree2 = DataType::RunEndEncoded(run_ends_field, values_field_str);
-        assert_eq!(ree2.to_string(), "RunEndEncoded(Int32, non-null Utf8)");
+        assert_eq!(
+            ree2.to_string(),
+            "RunEndEncoded(non-null Int32, non-null Utf8)"
+        );
 
         // Compact form: with metadata on values field
         let run_ends_field = Arc::new(Field::new(
@@ -534,7 +538,7 @@ mod tests {
         let ree_meta = DataType::RunEndEncoded(run_ends_field, Arc::new(values_with_meta));
         assert_eq!(
             ree_meta.to_string(),
-            "RunEndEncoded(Int32, Utf8, metadata: {\"k\": \"v\"})"
+            "RunEndEncoded(non-null Int32, Utf8, metadata: {\"k\": \"v\"})"
         );
 
         // Verbose form: non-default field name on values

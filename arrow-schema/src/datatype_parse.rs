@@ -612,7 +612,7 @@ impl<'a> Parser<'a> {
 
     /// Parses the next RunEndEncoded (called after `RunEndEncoded` has been consumed).
     ///
-    /// Compact form (default field names): `RunEndEncoded(Int32, non-null Utf8)`
+    /// Compact form (default field names): `RunEndEncoded(non-null Int32, non-null Utf8)`
     /// Verbose form (custom field names):  `RunEndEncoded("re": Int32, "v": non-null Utf8)`
     fn parse_run_end_encoded(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
@@ -629,6 +629,7 @@ impl<'a> Parser<'a> {
             let values = self.parse_ree_verbose_field()?;
             (run_ends.with_nullable(false), values)
         } else {
+            self.parse_opt_nullable(); // run_ends is always non-null; consume the token if present
             let re_type = self.parse_next_type()?;
             self.expect_token(Token::Comma)?;
             let v_nullable = self.parse_opt_nullable();
