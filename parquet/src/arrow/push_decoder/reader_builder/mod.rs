@@ -878,9 +878,17 @@ impl RowGroupReaderBuilder {
             cached_bytes += col.uncompressed_size();
             has_byte_array |= col.column_descr().physical_type() == PhysicalType::BYTE_ARRAY;
         }
-        if !has_byte_array
-            || (cached_bytes as usize).saturating_mul(2) > self.max_predicate_cache_size
-        {
+        // Cap the coarse entry's size rather than merely fitting the budget.
+        // Two reasons, both measured: (1) multi-megabyte one-shot decode
+        // allocations cost more than the rewrite they save when the query's
+        // output is sparse (URL at ~40MB/row-group regressed ~2% while
+        // SearchPhrase at ~9MB won 6-15%); output selectivity is unknowable
+        // here, so entry size is the proxy. (2) Entries near the cache budget
+        // start failing inserts, pushing consumers onto the re-decode
+        // fallback at whole-row-group granularity.
+        const COARSE_ENTRY_MAX_BYTES: usize = 16 * 1024 * 1024;
+        let cap = COARSE_ENTRY_MAX_BYTES.min(self.max_predicate_cache_size / 2);
+        if !has_byte_array || cached_bytes as usize > cap {
             return self.batch_size;
         }
         row_count.max(self.batch_size)
