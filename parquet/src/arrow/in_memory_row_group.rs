@@ -84,10 +84,10 @@ impl InMemoryRowGroup<'_> {
                     // If the first page does not start at the beginning of the column,
                     // then we need to also fetch a dictionary page.
                     let mut ranges: Vec<Range<u64>> = vec![];
-                    let (start, _len) = chunk_meta.byte_range();
+                    let (start, len) = chunk_meta.byte_range();
                     let Some(offset_idx) = offset_index[idx].as_ref() else {
                         // No offset index for this column, fetch the entire column
-                        ranges.push(start..start + _len);
+                        ranges.push(start..start + len);
                         return ranges;
                     };
 

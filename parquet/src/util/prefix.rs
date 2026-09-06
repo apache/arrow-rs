@@ -83,6 +83,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_common_prefix_length_around_block_boundaries() {
         // Mismatches placed on, either side of, and well past the 32-byte
         // block boundary the scan steps in.
@@ -105,6 +106,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_common_prefix_length_unequal_lengths() {
         // Result is capped by the shorter value even when the longer one
         // continues to match, across block boundaries.

@@ -211,7 +211,7 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
     }
 
     // SAFETY: all `len` elements have been initialized
-    debug_assert!(base == len);
+    debug_assert_eq!(base, len);
     unsafe { output.set_len(len) };
 
     let array = PrimitiveArray::<T>::try_new(output.into(), interleaved.nulls)?;

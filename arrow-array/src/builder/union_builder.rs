@@ -297,6 +297,7 @@ impl UnionBuilder {
                         mut null_buffer_builder,
                     },
                 )| {
+                    // SAFETY: builder is constructed from valid value buffer, slot count, and null buffer maintained by the builder
                     let array_ref = make_array(unsafe {
                         ArrayDataBuilder::new(data_type.clone())
                             .add_buffer(values_buffer.finish())
@@ -334,6 +335,7 @@ impl UnionBuilder {
                     null_buffer_builder,
                 } = field_data;
 
+                // SAFETY: builder is constructed from valid value buffer, slot count, and null buffer maintained by the builder
                 let array_ref = make_array(unsafe {
                     ArrayDataBuilder::new(data_type.clone())
                         .add_buffer(values_buffer.finish_cloned())

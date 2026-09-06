@@ -17,8 +17,8 @@
 
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
-    first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice,
-    try_binary_search_range_by,
+    first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
+    string_from_slice, try_binary_search_range_by,
 };
 
 use arrow_schema::ArrowError;
@@ -115,7 +115,7 @@ impl VariantMetadataHeader {
 /// - first offset is zero
 /// - last offset is in-bounds
 /// - all other offsets are in-bounds (*)
-/// - all offsets are monotonically increasing (*)
+/// - all offsets are non-decreasing (*)
 /// - all values are valid utf-8 (*)
 ///
 /// NOTE: [`Self::new`] only skips expensive (non-constant cost) validation checks (marked by `(*)`
@@ -284,13 +284,13 @@ impl<'m> VariantMetadata<'m> {
                 string_from_slice(self.bytes, 0, self.first_value_byte as _..self.bytes.len())?;
 
             let mut offsets = map_bytes_to_offsets(offset_bytes, self.header.offset_size);
+            let mut current_offset = offsets.next().unwrap_or(0);
 
             if self.header.is_sorted {
                 // Validate the dictionary values are unique and lexicographically sorted
                 //
                 // Since we use the offsets to access dictionary values, this also validates
                 // offsets are in-bounds and monotonically increasing
-                let mut current_offset = offsets.next().unwrap_or(0);
                 let mut prev_value: Option<&str> = None;
                 for next_offset in offsets {
                     let current_value = value_buffer.get(current_offset..next_offset).ok_or_else(
@@ -313,15 +313,18 @@ impl<'m> VariantMetadata<'m> {
                     current_offset = next_offset;
                 }
             } else {
-                // Validate offsets are in-bounds and monotonically increasing
-                //
-                // Since shallow validation ensures the first and last offsets are in bounds,
-                // we can also verify all offsets are in-bounds by checking if
-                // offsets are monotonically increasing
-                if !offsets.is_sorted_by(|a, b| a < b) {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "offsets not monotonically increasing".to_string(),
-                    ));
+                // Slicing each dictionary value validates that offsets are in-bounds, non-decreasing,
+                // and land on UTF-8 character boundaries. Equal offsets are legal: they encode an
+                // empty dictionary entry.
+                for next_offset in offsets {
+                    value_buffer
+                        .get(current_offset..next_offset)
+                        .ok_or_else(|| {
+                            ArrowError::InvalidArgumentError(format!(
+                                "range {current_offset}..{next_offset} is invalid or out of bounds"
+                            ))
+                        })?;
+                    current_offset = next_offset;
                 }
             }
 
@@ -365,7 +368,20 @@ impl<'m> VariantMetadata<'m> {
     /// [invalid]: Self#Validation
     pub fn get(&self, i: usize) -> Result<&'m str, ArrowError> {
         let byte_range = self.get_offset(i)? as _..self.get_offset(i + 1)? as _;
-        string_from_slice(self.bytes, self.first_value_byte as _, byte_range)
+        if !self.validated {
+            return string_from_slice(self.bytes, self.first_value_byte as _, byte_range);
+        }
+
+        // Full validation already proved every dictionary entry is valid UTF-8, so validating
+        // again here would charge that cost once per field access instead of once per buffer.
+        let value_bytes =
+            slice_from_slice_at_offset(self.bytes, self.first_value_byte as _, byte_range)?;
+
+        debug_assert!(std::str::from_utf8(value_bytes).is_ok());
+
+        // SAFETY: `validated` is set only by `with_full_validation`, which proved that every
+        // dictionary entry, including this one, is valid UTF-8.
+        Ok(unsafe { str::from_utf8_unchecked(value_bytes) })
     }
 
     // Helper method used by our `impl Index` and also by `get_entry`. Panics if the underlying
@@ -619,6 +635,19 @@ mod tests {
             matches!(err, ArrowError::InvalidArgumentError(_)),
             "unexpected error: {err:?}"
         );
+
+        let bytes = &[
+            0b0000_0001, // header: offset_size_minus_one=0, ordered=0, version=1
+            2,
+            0x00,
+            0x02,
+            0x02, // an unsorted dict may hold an empty string anywhere
+            b'h',
+            b'i',
+        ];
+        let metadata = VariantMetadata::try_new(bytes).unwrap();
+        assert_eq!(&metadata[0], "hi");
+        assert_eq!(&metadata[1], "");
     }
 
     #[test]
@@ -673,5 +702,94 @@ mod tests {
         let m2 = VariantMetadata::new(&m);
 
         assert_eq!(m1, m2);
+    }
+
+    #[test]
+    fn test_empty_string_field_names() {
+        // Field names are added to the dictionary in insertion order, so this dictionary is
+        // unsorted, and the empty field name makes its last two offsets equal.
+        let mut b = VariantBuilder::new().with_field_names(["b", "a", ""]);
+        let mut o = b.new_object();
+
+        o.insert("b", false);
+        o.insert("a", false);
+        o.insert("", false);
+
+        o.finish();
+
+        let (m, _) = b.finish();
+
+        let metadata = VariantMetadata::try_new(&m).unwrap();
+        assert!(!metadata.is_sorted());
+        assert_eq!(metadata.iter().collect::<Vec<_>>(), vec!["b", "a", ""]);
+    }
+
+    /// Builds a metadata buffer directly, so that offsets which a builder would never emit can be
+    /// exercised. `values` is the raw dictionary value region.
+    fn raw_metadata(is_sorted: bool, offsets: &[u8], values: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0x01 | (u8::from(is_sorted) << 4)];
+        bytes.push(offsets.len() as u8 - 1); // dictionary_size
+        bytes.extend_from_slice(offsets);
+        bytes.extend_from_slice(values);
+        bytes
+    }
+
+    /// `get` skips UTF-8 revalidation once the metadata is fully validated, so full validation has
+    /// to reject offsets that split a multi-byte character. Otherwise a validated instance could
+    /// hand out a `&str` over a partial character.
+    #[test]
+    fn full_validation_rejects_offsets_splitting_a_character() {
+        // "é" is two bytes, so an offset of 1 lands inside it. The value region as a whole is
+        // still valid UTF-8, so only the per-entry check can catch this.
+        for is_sorted in [false, true] {
+            let bytes = raw_metadata(is_sorted, &[0, 1, 2], "é".as_bytes());
+
+            // Shallow validation looks only at the first and last offset, so it accepts.
+            let shallow = VariantMetadata::try_new_with_shallow_validation(&bytes).unwrap();
+            assert!(!shallow.is_fully_validated());
+            // ... and the fallible accessor reports the bad entry rather than panicking.
+            assert!(shallow.get(0).is_err());
+
+            // Full validation must reject the buffer outright.
+            assert!(
+                VariantMetadata::try_new(&bytes).is_err(),
+                "is_sorted={is_sorted}: full validation accepted offsets splitting a character"
+            );
+        }
+    }
+
+    /// Validated and unvalidated instances must agree on every entry, including multi-byte
+    /// characters and empty entries, since they take different code paths inside `get`.
+    #[test]
+    fn validated_and_unvalidated_get_agree() {
+        // Unsorted so that the dictionary order below is preserved verbatim.
+        let values = "aé€\u{10348}"; // 1, 2, 3 and 4 byte characters
+        let offsets: &[u8] = &[0, 1, 1, 3, 6, 10]; // note the repeated 1: an empty entry
+        let bytes = raw_metadata(false, offsets, values.as_bytes());
+
+        let validated = VariantMetadata::try_new(&bytes).unwrap();
+        assert!(validated.is_fully_validated());
+        let unvalidated = VariantMetadata::try_new_with_shallow_validation(&bytes).unwrap();
+        assert!(!unvalidated.is_fully_validated());
+
+        let expected = ["a", "", "é", "€", "\u{10348}"];
+        assert_eq!(validated.len(), expected.len());
+        for (i, want) in expected.iter().enumerate() {
+            assert_eq!(validated.get(i).unwrap(), *want, "validated get({i})");
+            assert_eq!(unvalidated.get(i).unwrap(), *want, "unvalidated get({i})");
+        }
+
+        // Out of bounds stays an error on both paths, rather than reading past the offset array.
+        assert!(validated.get(expected.len()).is_err());
+        assert!(unvalidated.get(expected.len()).is_err());
+    }
+
+    /// An unvalidated instance still reports invalid UTF-8 through the fallible accessor.
+    #[test]
+    fn unvalidated_get_still_reports_invalid_utf8() {
+        let bytes = raw_metadata(false, &[0, 1], &[0xFF]);
+        let unvalidated = VariantMetadata::try_new_with_shallow_validation(&bytes).unwrap();
+        assert!(unvalidated.get(0).is_err());
+        assert!(VariantMetadata::try_new(&bytes).is_err());
     }
 }

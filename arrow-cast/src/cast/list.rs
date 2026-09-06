@@ -326,7 +326,7 @@ pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     let offsets = list.offsets();
     let nulls = list.nulls().cloned();
 
-    if offsets.last().unwrap().as_usize() > O::MAX_OFFSET {
+    if offsets.last().as_usize() > O::MAX_OFFSET {
         return Err(ArrowError::ComputeError(format!(
             "Offset overflow when casting from {} to {}",
             array.data_type(),

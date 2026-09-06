@@ -1649,7 +1649,7 @@ mod test {
 
     // We append null values if type miss match happens in safe mode
     perfectly_shredded_to_arrow_primitive_test!(
-        get_variant_perfectly_shredded_null_with_type_missmatch_in_safe_mode,
+        get_variant_perfectly_shredded_null_with_type_mismatch_in_safe_mode,
         DataType::Null,
         perfectly_shredded_null_variant_array_with_int,
         arrow::array::NullArray::new(3)
@@ -1657,7 +1657,7 @@ mod test {
 
     // We'll return an error if type miss match happens in strict mode
     #[test]
-    fn get_variant_perfectly_shredded_null_as_null_with_type_missmatch_in_strict_mode() {
+    fn get_variant_perfectly_shredded_null_as_null_with_type_mismatch_in_strict_mode() {
         let array = perfectly_shredded_null_variant_array_with_int();
         let field = Field::new("typed_value", DataType::Null, true);
         let options = GetOptions::new()

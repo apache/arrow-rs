@@ -16,7 +16,7 @@
 // under the License.
 
 //! Interoperability test for https://github.com/apache/parquet-format/pull/514.
-//! Demonstrate reading NaN statstics and counts from a file generated with
+//! Demonstrate reading NaN statistics and counts from a file generated with
 //! parquet-java, and show that on write we produce the same statistics.
 
 use bytes::Bytes;
@@ -254,6 +254,7 @@ fn test_ieee754_interop() {
 // This test replicates the data produced by the parquet-java code that generated
 // parquet-testing/data/floating_orders_nan_count.parquet
 #[test]
+#[cfg_attr(miri, ignore)] // inline assembly is not supported
 fn test_ieee754_interop2() {
     // define schema
     let schema = Schema::new(vec![

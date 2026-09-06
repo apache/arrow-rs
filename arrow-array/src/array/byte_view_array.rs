@@ -878,8 +878,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 impl<T: ByteViewType + ?Sized> Debug for GenericByteViewArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}ViewArray\n[\n", T::PREFIX)?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }
@@ -1037,10 +1037,7 @@ where
     fn from(byte_array: &GenericByteArray<FROM>) -> Self {
         let offsets = byte_array.offsets();
 
-        let can_reuse_buffer = match offsets.last() {
-            Some(offset) => offset.as_usize() < u32::MAX as usize,
-            None => true,
-        };
+        let can_reuse_buffer = offsets.last().as_usize() < u32::MAX as usize;
 
         if can_reuse_buffer {
             // build views directly pointing to the existing buffer

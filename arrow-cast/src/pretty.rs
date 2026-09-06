@@ -24,10 +24,13 @@
 
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{ArrowError, SchemaRef};
-use comfy_table::{Cell, Table};
+use comfy_table::{Cell, LineStyle, Table, TableStyle, presets::ASCII_FULL_CONDENSED};
 use std::fmt::Display;
 
 use crate::display::{ArrayFormatter, FormatOptions, make_array_formatter};
+
+const TABLE_STYLE: TableStyle =
+    ASCII_FULL_CONDENSED.header_separator(LineStyle::new('+', '-', '+', '+'));
 
 /// Create a visual representation of [`RecordBatch`]es
 ///
@@ -175,7 +178,7 @@ fn create_table(
     options: &FormatOptions,
 ) -> Result<Table, ArrowError> {
     let mut table = Table::new();
-    table.load_preset("||--+-++|    ++++++");
+    table.load_style(TABLE_STYLE);
 
     let schema_opt = schema_opt.or_else(|| {
         if results.is_empty() {
@@ -242,7 +245,7 @@ fn create_column(
     options: &FormatOptions,
 ) -> Result<Table, ArrowError> {
     let mut table = Table::new();
-    table.load_preset("||--+-++|    ++++++");
+    table.load_style(TABLE_STYLE);
 
     if columns.is_empty() {
         return Ok(table);

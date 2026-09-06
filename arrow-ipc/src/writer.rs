@@ -469,14 +469,17 @@ impl IpcWriteOptions {
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
     ) -> Result<Self, ArrowError> {
-        let is_alignment_valid =
-            alignment == 8 || alignment == 16 || alignment == 32 || alignment == 64;
-        if !is_alignment_valid {
-            return Err(ArrowError::InvalidArgumentError(
-                "Alignment should be 8, 16, 32, or 64.".to_string(),
-            ));
-        }
-        let alignment: u8 = u8::try_from(alignment).expect("range already checked");
+        let alignment: u8 = match alignment {
+            8 => 8,
+            16 => 16,
+            32 => 32,
+            64 => 64,
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Alignment should be 8, 16, 32, or 64.".to_string(),
+                ));
+            }
+        };
         match metadata_version {
             crate::MetadataVersion::V1
             | crate::MetadataVersion::V2
@@ -1546,11 +1549,11 @@ fn compare_dictionaries(old: &ArrayData, new: &ArrayData) -> DictionaryCompariso
     let existing_len = old.len();
     let new_len = new.len();
     if existing_len == new_len {
-        if *old == *new {
-            return DictionaryComparison::Equal;
+        return if *old == *new {
+            DictionaryComparison::Equal
         } else {
-            return DictionaryComparison::NotEqual;
-        }
+            DictionaryComparison::NotEqual
+        };
     }
 
     // Can't be a delta if the new is shorter than the existing
@@ -3669,7 +3672,7 @@ mod tests {
         ensure_roundtrip(Arc::new(ls.finish()));
     }
 
-    /// Read/write a record batch to a File and Stream and ensure it is the same at the outout
+    /// Read/write a record batch to a File and Stream and ensure it is the same at the output
     fn ensure_roundtrip(array: ArrayRef) {
         let num_rows = array.len();
         let orig_batch = RecordBatch::try_from_iter(vec![("a", array)]).unwrap();

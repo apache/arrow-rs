@@ -248,7 +248,7 @@ impl BatchCoalescer {
     /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
     /// coalescer.push_batch_with_filter(batch1, &filter);
     /// coalescer.push_batch_with_filter(batch2, &filter);
-    /// // finsh and retrieve the created batch
+    /// // finish and retrieve the created batch
     /// coalescer.finish_buffered_batch().unwrap();
     /// let completed_batch = coalescer.next_completed_batch().unwrap();
     /// // filtered out 2 and 5:
@@ -280,7 +280,7 @@ impl BatchCoalescer {
     /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
     /// coalescer.push_batch(batch1);
     /// coalescer.push_batch_with_indices(batch2, &indices);
-    /// // finsh and retrieve the created batch
+    /// // finish and retrieve the created batch
     /// coalescer.finish_buffered_batch().unwrap();
     /// let completed_batch = coalescer.next_completed_batch().unwrap();
     /// let expected_batch = record_batch!(("a", Int32, [0, 0, 0, 1, 1, 1, 4, 4, 5])).unwrap();
@@ -316,7 +316,7 @@ impl BatchCoalescer {
     /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
     /// coalescer.push_batch(batch1);
     /// coalescer.push_batch(batch2);
-    /// // finsh and retrieve the created batch
+    /// // finish and retrieve the created batch
     /// coalescer.finish_buffered_batch().unwrap();
     /// let completed_batch = coalescer.next_completed_batch().unwrap();
     /// let expected_batch = record_batch!(("a", Int32, [1, 2, 3, 4, 5, 6])).unwrap();
@@ -2024,7 +2024,7 @@ mod tests {
         RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
     }
 
-    /// Return a RecordBatch with a StringArrary with values `value0`, `value1`, ...
+    /// Return a RecordBatch with a StringArray with values `value0`, `value1`, ...
     /// and every third value is `None`.
     fn utf8_batch(range: Range<u32>) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Utf8, true)]));

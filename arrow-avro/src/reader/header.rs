@@ -134,7 +134,7 @@ impl Header {
 /// Header information for an Avro OCF file.
 ///
 /// The header can be parsed once and shared to construct multiple readers
-/// for the same file, and so this struct is designed to be cheaply clonable.
+/// for the same file, and so this struct is designed to be cheaply cloneable.
 #[derive(Clone)]
 pub struct HeaderInfo(Arc<HeaderInfoInner>);
 
