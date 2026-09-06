@@ -318,18 +318,14 @@ impl ArrowPredicate for FusedPredicate {
                 continue;
             }
 
-            let predicate_selection = adapt_fusion_selection(
-                RowSelection::from_boolean_buffer(filter.values().clone()),
-                self.row_selection_policy,
-            );
-            let combined_selection = match selection {
-                Some(selection) => selection.and_then(&predicate_selection),
+            let predicate_selection = RowSelection::from_boolean_buffer(filter.values().clone());
+            selection = Some(match selection.take() {
+                // Only the accumulated selection drives the composition
+                // algorithm, so adapt it once, right before it is used.
+                Some(prev) => adapt_fusion_selection(prev, self.row_selection_policy)
+                    .and_then(&predicate_selection),
                 None => predicate_selection,
-            };
-            selection = Some(adapt_fusion_selection(
-                combined_selection,
-                self.row_selection_policy,
-            ));
+            });
             if idx != last_predicate_idx {
                 filtered_batch = narrow_batch(&filtered_batch, &filter, true_count)?;
             }
