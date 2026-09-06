@@ -158,7 +158,10 @@ where
 /// This design has a couple of implications:
 ///
 /// * [`RowFilter`] can be used to skip entire pages, and thus IO, in addition to CPU decode overheads
-/// * Columns may be decoded multiple times if they appear in multiple [`ProjectionMask`]
+/// * Columns may be decoded multiple times if they appear in multiple [`ProjectionMask`].
+///   Consecutive predicates whose projection is the same single top-level, non-repeated
+///   column are evaluated together on one decoded stream, so ordering such predicates
+///   next to each other avoids decoding that column again
 /// * IO will be deferred until needed by a [`ProjectionMask`]
 ///
 /// As such there is a trade-off between a single large predicate, or multiple predicates,
