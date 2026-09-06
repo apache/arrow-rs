@@ -27,21 +27,10 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer, bit_util}
 use std::cmp::Ordering;
 use std::iter::Peekable;
 
-// Policy for the word-at-a-time expansion in `and_then_dense_masks`.
-//
-// The dense path costs a fixed amount per 64-bit output word, independent of
-// how many inner rows survive. The set-index path instead walks the outer set
-// bits up to the last inner survivor and appends each survivor individually,
-// so it wins when the outer mask is sparse, or when only a few inner rows
-// survive and they sit near the start of the selection (for example, a
-// clustered page-level filter). The thresholds below keep the set-index path
-// for those inputs:
-//
-// - `MIN_LEN`: the outer mask must have at least this many rows.
-// - `MAX_DROPPED_FRACTION` is a divisor: at most `1 / 4` of the outer rows may
-//   be unset, i.e. roughly 75% outer selectivity or more.
-// - `MIN_INNER_FRACTION` is a divisor: at least `1 / 20` of the selected rows
-//   must survive the inner selection, i.e. roughly 5% inner selectivity or more.
+// Use word-at-a-time expansion for masks with at least 8192 rows, roughly
+// 75% outer selectivity and 5% inner selectivity. Smaller or sparser inputs
+// use set indices to avoid scanning every output word.
+// The selectivity constants are divisors: at most 1/4 dropped, at least 1/20 kept.
 const AND_THEN_DENSE_MASK_MIN_LEN: usize = 8192;
 const AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION: usize = 4;
 const AND_THEN_DENSE_MASK_MIN_INNER_FRACTION: usize = 20;
@@ -453,10 +442,7 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     builder.finish()
 }
 
-/// Returns whether `and_then_masks` should take the dense path for an outer
-/// mask of `mask_len` rows with `selected_count` set bits, given that
-/// `other_true_count` of those rows survive the inner selection. See the
-/// `AND_THEN_DENSE_MASK_*` constants for the rationale behind each threshold.
+/// Checks the length and selectivity thresholds for dense expansion.
 #[inline]
 fn should_use_dense_mask(mask_len: usize, selected_count: usize, other_true_count: usize) -> bool {
     mask_len >= AND_THEN_DENSE_MASK_MIN_LEN
@@ -464,12 +450,8 @@ fn should_use_dense_mask(mask_len: usize, selected_count: usize, other_true_coun
         && other_true_count >= selected_count / AND_THEN_DENSE_MASK_MIN_INNER_FRACTION
 }
 
-/// Expands `other` into the set positions of a dense `mask`, processing one
-/// output word at a time. Each output word takes the next
-/// `mask_word.count_ones()` bits of `other` and scatters them into the set
-/// positions of `mask_word`, so this is the inverse of compressing `mask` down
-/// to its selected rows. Callers must have validated that `other.len()` equals
-/// the number of set bits in `mask`.
+/// Scatters the next `mask_word.count_ones()` bits of `other` into each mask word.
+/// Requires `other.len() == mask.count_set_bits()`.
 #[inline(never)]
 fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
     let mut other_chunks = other.bit_chunks().iter_padded();
@@ -506,19 +488,17 @@ fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanB
     BooleanBuffer::new(output.into(), 0, mask.len())
 }
 
-/// Deposits the least-significant bits of `values` into the set positions of
-/// `mask`, i.e. a software `pdep`. Bits of `values` above the
-/// `mask.count_ones()` meaningful ones are ignored.
-///
-/// Iterates over whichever side of `mask` has fewer bits: for a dense mask,
-/// insert a zero bit at each unset position, lowest first; otherwise scatter
-/// the low bits of `values` to each set position, lowest first.
+/// Software `pdep`: scatters the lowest `mask.count_ones()` bits of `values`
+/// into `mask`'s set positions. Visits whichever is fewer: unset or set bits.
 #[inline]
 fn deposit_u64(mut values: u64, mask: u64) -> u64 {
+    if values == 0 {
+        return 0;
+    }
+
     let mut zeros = !mask;
     if zeros.count_ones() <= 32 {
-        // Inserting a zero shifts the bits above it up by one, so the garbage
-        // bits above the meaningful ones fall off the top.
+        // Insert zeros from low to high; excess input bits shift out.
         while zeros != 0 {
             let lower = (1_u64 << zeros.trailing_zeros()) - 1;
             values = (values & lower) | ((values & !lower) << 1);
@@ -1230,6 +1210,44 @@ mod tests {
                 &expected_combined(&l_bits, &r_bits, |a, b| a || b),
                 "union",
             );
+        }
+    }
+
+    #[test]
+    fn dense_composition_with_zero_words_and_offsets() {
+        for mask_len in [8192, 8193, 65537] {
+            for (mask_offset, inner_offset) in [(0, 0), (3, 5), (63, 65), (65, 129)] {
+                for stride in [4, 100] {
+                    let mask =
+                        BooleanBuffer::from_iter((0..mask_offset + mask_len + 73).map(|i| {
+                            !(mask_offset..mask_offset + mask_len).contains(&i)
+                                || (i - mask_offset) % stride != 0
+                        }))
+                        .slice(mask_offset, mask_len);
+                    let len = mask.count_set_bits();
+                    for start in [0, 63, len / 2] {
+                        for select_last in [false, true] {
+                            let count = len / 10;
+                            let inner =
+                                BooleanBuffer::from_iter((0..inner_offset + len + 73).map(|i| {
+                                    if !(inner_offset..inner_offset + len).contains(&i) {
+                                        return true;
+                                    }
+                                    let j = i - inner_offset;
+                                    (start..start + count).contains(&j)
+                                        || select_last && j == len - 1
+                                }))
+                                .slice(inner_offset, len);
+                            let mut values = inner.iter();
+                            let expected = BooleanBuffer::from_iter(
+                                mask.iter().map(|v| v && values.next().unwrap()),
+                            );
+                            assert_eq!(and_then_masks(&mask, &inner), expected);
+                            assert_eq!(and_then_dense_masks(&mask, &inner), expected);
+                        }
+                    }
+                }
+            }
         }
     }
 }
