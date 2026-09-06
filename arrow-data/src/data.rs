@@ -964,15 +964,6 @@ impl ArrayData {
                 )));
             }
 
-            let actual_len = nulls.validity().len();
-            // ArrayData::offset does not apply to the null buffer, which carries its own offset
-            let needed_len = bit_util::ceil(nulls.offset() + nulls.len(), 8);
-            if actual_len < needed_len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "null_bit_buffer size too small. got {actual_len} needed {needed_len}",
-                )));
-            }
-
             if nulls.len() != self.len {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "null buffer incorrect size. got {} expected {}",
