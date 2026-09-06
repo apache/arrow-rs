@@ -200,11 +200,6 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
     // Benchmarks for different scalar combinations
     for (description, truthy, falsy) in &[
         ("null_vs_non_null_scalar", &null_scalar, &non_null_scalar_1),
-        (
-            "non_null_scalar_vs_null_scalar",
-            &non_null_scalar_1,
-            &null_scalar,
-        ),
         ("non_nulls_scalars", &non_null_scalar_1, &non_null_scalar_2),
     ] {
         bench_zip_input_on_all_masks(
@@ -259,7 +254,6 @@ fn bench_zip_input_on_all_masks(
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    // Primitive
     bench_zip_on_input_generator(
         c,
         &GeneratePrimitive::<Int32Type> {
@@ -268,42 +262,11 @@ fn add_benchmark(c: &mut Criterion) {
         },
     );
 
-    // Short strings
     bench_zip_on_input_generator(
         c,
         &GenerateBytes::<GenericStringType<i32>> {
-            description: "short strings (3..10)".to_string(),
-            range_length: 3..10,
-            _marker: std::marker::PhantomData,
-        },
-    );
-
-    // Long strings
-    bench_zip_on_input_generator(
-        c,
-        &GenerateBytes::<GenericStringType<i32>> {
-            description: "long strings (100..400)".to_string(),
-            range_length: 100..400,
-            _marker: std::marker::PhantomData,
-        },
-    );
-
-    // Short Bytes
-    bench_zip_on_input_generator(
-        c,
-        &GenerateBytes::<GenericBinaryType<i32>> {
-            description: "short bytes (3..10)".to_string(),
-            range_length: 3..10,
-            _marker: std::marker::PhantomData,
-        },
-    );
-
-    // Long Bytes
-    bench_zip_on_input_generator(
-        c,
-        &GenerateBytes::<GenericBinaryType<i32>> {
-            description: "long bytes (100..400)".to_string(),
-            range_length: 100..400,
+            description: "strings (3..20)".to_string(),
+            range_length: 3..20,
             _marker: std::marker::PhantomData,
         },
     );
@@ -311,17 +274,8 @@ fn add_benchmark(c: &mut Criterion) {
     bench_zip_on_input_generator(
         c,
         &GenerateStringView {
-            description: "string_views size (3..10)".to_string(),
-            range: 3..10,
-            _marker: std::marker::PhantomData,
-        },
-    );
-
-    bench_zip_on_input_generator(
-        c,
-        &GenerateStringView {
-            description: "string_views size (10..100)".to_string(),
-            range: 10..100,
+            description: "string_views size (3..20)".to_string(),
+            range: 3..20,
             _marker: std::marker::PhantomData,
         },
     );

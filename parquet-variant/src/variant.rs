@@ -20,7 +20,7 @@ pub use self::list::VariantList;
 pub use self::metadata::{EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES, VariantMetadata};
 pub use self::object::VariantObject;
 
-// Publically export types used in the API
+// Publicly export types used in the API
 pub use half::f16;
 pub use uuid::Uuid;
 

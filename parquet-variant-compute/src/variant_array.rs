@@ -1064,7 +1064,7 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Varian
             let value = boolean_array.value(index);
             Ok(Variant::from(value))
         }
-        // 16-byte FixedSizeBinary alway corresponds to a UUID; all other sizes are illegal.
+        // 16-byte FixedSizeBinary always corresponds to a UUID; all other sizes are illegal.
         DataType::FixedSizeBinary(16) => {
             let array = typed_value.as_fixed_size_binary();
             let value = array.value(index);
@@ -1937,7 +1937,7 @@ mod test {
     }
 
     invalid_variant_array_test!(
-        test_variant_array_invalide_time,
+        test_variant_array_invalid_time,
         Time64MicrosecondArray::from(vec![Some(86401000000)]),
         "Cast error: Cast failed at index 0 (array type: Time64(µs)): Invalid microsecond from midnight: 86401000000"
     );

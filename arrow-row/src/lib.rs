@@ -1051,12 +1051,12 @@ impl RowConverter {
                 columns.len()
             )));
         }
-        for colum in columns.iter().skip(1) {
-            if colum.len() != columns[0].len() {
+        for column in columns.iter().skip(1) {
+            if column.len() != columns[0].len() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "RowConverter columns must all have the same length, expected {} got {}",
                     columns[0].len(),
-                    colum.len()
+                    column.len()
                 )));
             }
         }

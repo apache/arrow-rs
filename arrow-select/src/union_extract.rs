@@ -188,7 +188,7 @@ fn extract_sparse(
 
                     Ok(make_array(data))
                 } else {
-                    // case 4.2: target can't containt a null mask, zip the values that match with a null value
+                    // case 4.2: target can't contain a null mask, zip the values that match with a null value
                     Ok(crate::zip::zip(
                         &BooleanArray::new(selected, None),
                         target,
@@ -223,9 +223,9 @@ fn extract_dense(
     } else if target.null_count() == target.len() || target.data_type().is_null() {
         // case 3: since all values on our target are null, regardless of selected type ids and offsets, the result is a null array
         match target.len().cmp(&union_array.len()) {
-            // case 3.1: since the target is smaller than the union, allocate a new correclty sized null array
+            // case 3.1: since the target is smaller than the union, allocate a new correctly sized null array
             Ordering::Less => Ok(new_null_array(target.data_type(), union_array.len())),
-            // case 3.2: target equals the union len, return it direcly
+            // case 3.2: target equals the union len, return it directly
             Ordering::Equal => Ok(Arc::clone(target)),
             // case 3.3: target len is bigger than the union len, slice it
             Ordering::Greater => Ok(target.slice(0, union_array.len())),
@@ -252,7 +252,7 @@ fn extract_dense(
                 // Non empty target without any selected value may happen after slicing the parent union,
                 // since only type_ids and offsets are sliced, not the children
                 match (target.len().cmp(&union_array.len()), layout(target.data_type()).can_contain_null_mask) {
-                    (Ordering::Less, _) // case 5.1A: our target is smaller than the parent union, allocate a new correclty sized null array
+                    (Ordering::Less, _) // case 5.1A: our target is smaller than the parent union, allocate a new correctly sized null array
                     | (_, false) => { // case 5.1B: target array can't contain a null mask
                         Ok(new_null_array(target.data_type(), union_array.len()))
                     }
@@ -312,7 +312,7 @@ fn extract_dense_all_selected(
         // case 2: All offsets are sequential, but our target is bigger than our union, slice it, starting at the first offset
         Ok(target.slice(offsets[0] as usize, union_array.len()))
     } else {
-        // case 3: Since offsets are not sequential, take them from the child to a new sequential and correcly sized array
+        // case 3: Since offsets are not sequential, take them from the child to a new sequential and correctly sized array
         let indices = Int32Array::try_new(offsets.clone(), None)?;
 
         Ok(take(target, &indices, None)?)
@@ -327,7 +327,7 @@ enum BoolValue {
     /// If true, all type_ids matches the target type_id
     /// If false, none type_ids matches the target type_id
     Scalar(bool),
-    /// A mask represeting which type_ids matches the target type_id
+    /// A mask representing which type_ids matches the target type_id
     Buffer(BooleanBuffer),
 }
 

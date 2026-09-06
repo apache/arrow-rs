@@ -288,7 +288,7 @@ mod test {
         assert!(!accumulator.is_valid());
         assert!(accumulator.finish().is_none());
 
-        // Check that we return None if the type is not geometry or goegraphy
+        // Check that we return None if the type is not geometry or geography
         let parquet_type = Type::primitive_type_builder("geom", crate::basic::Type::BYTE_ARRAY)
             .build()
             .unwrap();

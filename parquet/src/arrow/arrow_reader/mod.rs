@@ -4911,7 +4911,7 @@ pub(crate) mod tests {
                 .expect("page index should be present");
             let num_columns = builder.metadata().row_group(0).num_columns();
             let offset_indexes = page_index.offset_indexes_for_rowgroup(0);
-            assert!(offset_indexes.is_some_and(|ois| ois.len() == num_columns));
+            assert!(offset_indexes.is_some_and(|offset_idxs| offset_idxs.len() == num_columns));
             let column_indexes = page_index.offset_indexes_for_rowgroup(0);
             assert!(column_indexes.is_some_and(|cis| cis.len() == num_columns));
             assert!(page_index.offset_index(0, 0).is_some());
@@ -4932,7 +4932,7 @@ pub(crate) mod tests {
                 ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
-            // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
+            // Although `Vec<Vec<PageLocation>>` of each row group is empty,
             // we should read the file successfully.
             assert!(builder.metadata().page_index().is_none());
             let reader = builder.build().unwrap();

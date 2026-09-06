@@ -1298,18 +1298,20 @@ impl ArrayData {
             }
             DataType::Struct(fields) => {
                 self.validate_num_child_data(fields.len())?;
+                let len_plus_offset =
+                    checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
                 for (i, field) in fields.iter().enumerate() {
                     let field_data = self.get_valid_child_data(i, field.data_type())?;
 
                     // Ensure child field has sufficient size
-                    if field_data.len < self.len {
+                    if field_data.len < len_plus_offset {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "{} child array #{} for field {} has length smaller than expected for struct array ({} < {})",
                             self.data_type,
                             i,
                             field.name(),
                             field_data.len,
-                            self.len
+                            len_plus_offset
                         )));
                     }
                 }
@@ -2444,6 +2446,7 @@ pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
 mod tests {
     use super::*;
     use crate::ByteView;
+    use crate::transform::MutableArrayData;
     use arrow_buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
 
@@ -2509,6 +2512,82 @@ mod tests {
         assert_eq!(5, arr_data.len());
         assert_eq!(1, arr_data.child_data().len());
         assert_eq!(child_arr_data, arr_data.child_data()[0]);
+    }
+
+    #[test]
+    fn test_struct_validation_accounts_for_parent_offset() {
+        let data_type =
+            DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, false)]));
+        let child = ArrayData::builder(DataType::Int32)
+            .len(5)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4]))
+            .build()
+            .unwrap();
+
+        // The parent needs child elements 1..6, but the child only has five.
+        let err = ArrayData::builder(data_type)
+            .len(5)
+            .offset(1)
+            .add_child_data(child)
+            .build()
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains(
+            "child array #0 for field x has length smaller than expected for struct array (5 < 6)"
+        ));
+    }
+
+    #[test]
+    fn test_struct_equal_accounts_for_parent_offset() {
+        let data_type =
+            DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, false)]));
+
+        let child1 = ArrayData::builder(DataType::Int32)
+            .len(5)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4]))
+            .build()
+            .unwrap();
+        let child2 = child1.slice(1, 4);
+
+        // data1 has offset at parent level; data2 has offset at child level.
+        let data1 = ArrayData::builder(data_type.clone())
+            .len(4)
+            .offset(1)
+            .add_child_data(child1)
+            .build()
+            .unwrap();
+        let data2 = ArrayData::builder(data_type)
+            .len(4)
+            .add_child_data(child2)
+            .build()
+            .unwrap();
+
+        assert_eq!(data1, data2);
+    }
+
+    #[test]
+    fn test_extend_struct_accounts_for_parent_offset() {
+        let data_type =
+            DataType::Struct(Fields::from(vec![Field::new("x", DataType::Int32, false)]));
+        let child = ArrayData::builder(DataType::Int32)
+            .len(5)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4]))
+            .build()
+            .unwrap();
+
+        let data = ArrayData::builder(data_type)
+            .len(4)
+            .offset(1)
+            .add_child_data(child)
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&data], false, data.len());
+        mutable.try_extend(0, 0, data.len()).unwrap();
+        let output = mutable.freeze();
+
+        assert_eq!(output.child_data()[0].buffer::<i32>(0), &[1, 2, 3, 4]);
     }
 
     #[test]

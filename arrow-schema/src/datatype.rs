@@ -319,7 +319,7 @@ pub enum DataType {
     /// A list of some logical data type with variable length.
     ///
     /// Logically the same as [`List`], but the internal representation differs in how child
-    /// data is referenced, allowing flexibility in how data is layed out.
+    /// data is referenced, allowing flexibility in how data is laid out.
     ///
     /// [`List`]: Self::List
     ListView(FieldRef),
@@ -332,7 +332,7 @@ pub enum DataType {
     /// A list of some logical data type with variable length and 64-bit offsets.
     ///
     /// Logically the same as [`LargeList`], but the internal representation differs in how child
-    /// data is referenced, allowing flexibility in how data is layed out.
+    /// data is referenced, allowing flexibility in how data is laid out.
     ///
     /// [`LargeList`]: Self::LargeList
     LargeListView(FieldRef),
