@@ -38,7 +38,7 @@
 //! `[AlpInfo][ForInfo][PackedValues][ExceptionPositions][ExceptionValues]`.
 
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::{FromBitpacked, FromBytes};
+use crate::util::bit_util::{BitPacking, FromBytes};
 
 pub(crate) const ALP_HEADER_SIZE: usize = 7;
 pub(crate) const ALP_COMPRESSION_MODE: u8 = 0;
@@ -245,11 +245,9 @@ impl<Exact: AlpExact> ForInfo<Exact> {
 /// unsigned wrapping arithmetic: this avoids signed overflow when a vector's
 /// range exceeds the signed maximum, and unpacking needs no sign extension.
 /// Signed interpretation is applied later during decimal reconstruction.
-pub(crate) trait AlpExact:
-    Copy + std::fmt::Debug + PartialEq + FromBitpacked + Default
-{
+pub(crate) trait AlpExact: Copy + std::fmt::Debug + PartialEq + BitPacking + Default {
     const WIDTH: usize;
-    type Signed: Copy + Ord + std::fmt::Debug + Send;
+    type Signed: BitPacking + Copy + Ord + std::fmt::Debug + Send;
     fn from_le_slice(slice: &[u8]) -> Self;
     fn wrapping_add(self, rhs: Self) -> Self;
     fn wrapping_sub(self, rhs: Self) -> Self;
