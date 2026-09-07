@@ -204,6 +204,18 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Treat incompatible physical/logical type combinations as an unknown
+    /// logical type when reading (parquet-format GH-607).
+    ///
+    /// Default is `false`: such combinations return an error. When `true`, the
+    /// column is exposed as its physical type with no logical annotation, and
+    /// column statistics are ignored.
+    pub fn with_coerce_incompatible_logical_types(mut self, coerce: bool) -> Self {
+        self.metadata_options
+            .set_coerce_incompatible_logical_types(coerce);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self

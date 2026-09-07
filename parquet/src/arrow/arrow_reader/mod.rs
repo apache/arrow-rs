@@ -826,6 +826,18 @@ impl ArrowReaderOptions {
         self
     }
 
+    /// Treat incompatible physical/logical type combinations as an unknown
+    /// logical type when reading (parquet-format GH-607).
+    ///
+    /// Default is `false`: such combinations return an error. When `true`, the
+    /// column is exposed as its physical type with no logical annotation, and
+    /// column statistics are ignored.
+    pub fn with_coerce_incompatible_logical_types(mut self, coerce: bool) -> Self {
+        self.metadata_options
+            .set_coerce_incompatible_logical_types(coerce);
+        self
+    }
+
     /// Provide the file decryption properties to use when reading encrypted parquet files.
     ///
     /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
@@ -1809,7 +1821,7 @@ pub(crate) mod tests {
         virtual_type::{RowGroupIndex, RowNumber},
     };
     use crate::arrow::{ArrowWriter, ProjectionMask};
-    use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
+    use crate::basic::{ConvertedType, Encoding, LogicalType, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, DoubleType, FixedLenByteArray,
@@ -6154,5 +6166,90 @@ pub(crate) mod tests {
         let metadata = writer.close().expect("Could not close writer");
 
         (Bytes::from(buf), metadata)
+    }
+
+    fn parquet_file_with_int32_uuid_logical_type() -> Vec<u8> {
+        let field = Type::primitive_type_builder("id", PhysicalType::INT32)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::Uuid))
+            .with_skip_logical_physical_validation(true)
+            .build()
+            .unwrap();
+        let schema = Arc::new(
+            Type::group_type_builder("schema")
+                .with_fields(vec![Arc::new(field)])
+                .build()
+                .unwrap(),
+        );
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .build(),
+        );
+
+        let mut buf = Vec::new();
+        let mut writer = SerializedFileWriter::new(&mut buf, schema, props).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+        let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
+        col_writer
+            .typed::<Int32Type>()
+            .write_batch(&[1, 2, 3], None, None)
+            .unwrap();
+        col_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        let written = writer.close().unwrap();
+        assert!(
+            written.row_group(0).column(0).statistics().is_some(),
+            "test fixture must write column statistics so ignore-on-read can be asserted"
+        );
+        buf
+    }
+
+    #[test]
+    fn test_int32_uuid_logical_type_errors_by_default() {
+        let file = Bytes::from(parquet_file_with_int32_uuid_logical_type());
+        let err = ParquetRecordBatchReaderBuilder::try_new(file).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot annotate Uuid from INT32 for field 'id'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_int32_uuid_logical_type_coerced_with_option() {
+        let file = Bytes::from(parquet_file_with_int32_uuid_logical_type());
+        let options = ArrowReaderOptions::new().with_coerce_incompatible_logical_types(true);
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+
+        let parquet_col = builder.metadata().file_metadata().schema_descr().column(0);
+        assert_eq!(parquet_col.physical_type(), PhysicalType::INT32);
+        assert_eq!(parquet_col.logical_type_ref(), None);
+        assert!(
+            parquet_col
+                .get_basic_info()
+                .incompatible_logical_type_coerced()
+        );
+        assert!(
+            builder
+                .metadata()
+                .row_group(0)
+                .column(0)
+                .statistics()
+                .is_none(),
+            "GH-607: statistics for coerced columns must be ignored"
+        );
+
+        let schema = builder.schema();
+        assert_eq!(schema.field(0).data_type(), &ArrowDataType::Int32);
+
+        let mut reader = builder.build().unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        assert!(reader.next().is_none());
+        assert_eq!(batch.num_rows(), 3);
+        let values = batch
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(values.values(), &[1, 2, 3]);
     }
 }
