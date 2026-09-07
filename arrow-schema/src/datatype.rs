@@ -915,11 +915,14 @@ impl DataType {
                         .all(|(fa, fb)| fields_eq(fa, fb, options))
             }
             (DataType::Union(a, mode_a), DataType::Union(b, mode_b)) => {
+                // Match by type ID rather than position so that unions with the same
+                // fields in a different order are still correctly considered semantically equal.
                 mode_a == mode_b
                     && a.len() == b.len()
-                    && a.iter()
-                        .zip(b.iter())
-                        .all(|((id_a, fa), (id_b, fb))| id_a == id_b && fields_eq(fa, fb, options))
+                    && a.iter().all(|(id_a, fa)| {
+                        b.iter()
+                            .any(|(id_b, fb)| id_a == id_b && fields_eq(fa, fb, options))
+                    })
             }
             (DataType::Map(a, sorted_a), DataType::Map(b, sorted_b)) => {
                 sorted_a == sorted_b && fields_eq(a, b, options)
@@ -1423,5 +1426,55 @@ mod tests {
 
         assert!(a.semantic_equality(&matching, &gauge));
         assert!(!a.semantic_equality(&mismatched, &gauge));
+    }
+
+    #[test]
+    fn test_semantic_equality_union_matches_by_type_id_not_position() {
+        // Two unions with the same (id, field) pairs but listed in different order must
+        // be semantically equal; matching by zip position would incorrectly return false.
+        let options = SemanticEqualityOptions {
+            check_nullability: true,
+            check_field_name: true,
+            check_metadata: true,
+        };
+
+        let a = DataType::Union(
+            UnionFields::try_new(
+                vec![0, 1],
+                vec![
+                    Field::new("x", DataType::Int32, false),
+                    Field::new("y", DataType::Utf8, false),
+                ],
+            )
+            .unwrap(),
+            UnionMode::Dense,
+        );
+        // Same fields, reversed order.
+        let b = DataType::Union(
+            UnionFields::try_new(
+                vec![1, 0],
+                vec![
+                    Field::new("y", DataType::Utf8, false),
+                    Field::new("x", DataType::Int32, false),
+                ],
+            )
+            .unwrap(),
+            UnionMode::Dense,
+        );
+        // Different type IDs — must not be equal.
+        let c = DataType::Union(
+            UnionFields::try_new(
+                vec![0, 2],
+                vec![
+                    Field::new("x", DataType::Int32, false),
+                    Field::new("y", DataType::Utf8, false),
+                ],
+            )
+            .unwrap(),
+            UnionMode::Dense,
+        );
+
+        assert!(a.semantic_equality(&b, &options));
+        assert!(!a.semantic_equality(&c, &options));
     }
 }
