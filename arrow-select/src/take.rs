@@ -339,20 +339,18 @@ fn take_impl<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
             }
         }
         DataType::Union(fields, UnionMode::Sparse) => {
-            if indices.null_count() > 0 && fields.iter().any(|(_, field)| !field.is_nullable()) {
-                return Err(ArrowError::ComputeError(
-                    "Cannot take null indices from a sparse union with non-nullable fields".into(),
-                ));
-            }
-
-            let mut children = Vec::with_capacity(fields.len());
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
             let type_ids = take_union_type_ids(fields, values.type_ids(), indices)?;
-            for (type_id, _field) in fields.iter() {
-                let values = values.child(type_id);
-                let values = take_impl::<_, CHECKED>(values, indices)?;
-                children.push(values);
-            }
+            let children = fields
+                .iter()
+                .map(|(type_id, field)| {
+                    take_sparse_union_child::<_, CHECKED>(
+                        values.child(type_id),
+                        field.is_nullable(),
+                        indices,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             let array = UnionArray::try_new(fields.clone(), type_ids, None, children)?;
             Ok(Arc::new(array))
         }
@@ -441,6 +439,58 @@ fn take_union_type_ids<IndexType: ArrowPrimitiveType>(
         })
         .collect::<ScalarBuffer<_>>();
     Ok(type_ids)
+}
+
+/// Takes a sparse union child for `indices`.
+///
+/// Null take indices are represented by selecting a nullable child
+/// ([`take_union_type_ids`]). Values in the other children at those positions are
+/// unspecified, so a non-nullable child is taken with dummy indices instead of
+/// introducing nulls that would contradict its field metadata.
+fn take_sparse_union_child<IndexType: ArrowPrimitiveType, const CHECKED: bool>(
+    values: &dyn Array,
+    nullable: bool,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<ArrayRef, ArrowError> {
+    if nullable || indices.null_count() == 0 {
+        return take_impl::<_, CHECKED>(values, indices);
+    }
+
+    if values.is_empty() {
+        // Null indices would otherwise take dummy index 0, which is OOB.
+        return non_null_unspecified_values(values.data_type(), indices.len());
+    }
+
+    take_impl::<_, CHECKED>(values, &indices_without_nulls(indices))
+}
+
+/// Replaces null take indices with `0` and drops the null bitmap.
+fn indices_without_nulls<IndexType: ArrowPrimitiveType>(
+    indices: &PrimitiveArray<IndexType>,
+) -> PrimitiveArray<IndexType> {
+    let dummy = IndexType::Native::from_usize(0).unwrap();
+    let mut values = indices.values().to_vec();
+    if let Some(nulls) = indices.nulls() {
+        for (idx, value) in values.iter_mut().enumerate() {
+            if nulls.is_null(idx) {
+                *value = dummy;
+            }
+        }
+    }
+    PrimitiveArray::new(ScalarBuffer::from(values), None)
+}
+
+/// Builds an all-valid array of `len` whose values are unspecified.
+///
+/// Used for unused sparse-union child slots when the source child is empty.
+fn non_null_unspecified_values(data_type: &DataType, len: usize) -> Result<ArrayRef, ArrowError> {
+    Ok(make_array(
+        new_null_array(data_type, len)
+            .to_data()
+            .into_builder()
+            .nulls(None)
+            .build()?,
+    ))
 }
 
 /// Options that define how `take` should behave
@@ -3532,7 +3582,7 @@ mod tests {
     }
 
     #[test]
-    fn test_take_sparse_union_null_indices_non_nullable_fields() {
+    fn test_take_sparse_union_null_indices_uses_nullable_field() {
         let fields = UnionFields::try_new(
             vec![0, 1],
             vec![
@@ -3552,11 +3602,84 @@ mod tests {
         )
         .unwrap();
 
+        let taken = take(&union, &UInt32Array::from(vec![Some(0), None]), None).unwrap();
+        let taken = taken.as_union();
+        assert_eq!(taken.type_ids(), &ScalarBuffer::from(vec![0_i8, 1]));
+        assert_eq!(taken.logical_null_count(), 1);
+        assert_eq!(
+            taken
+                .child(0)
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(10), Some(10)]
+        );
+        assert_eq!(
+            taken
+                .child(1)
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(20), None]
+        );
+    }
+
+    #[test]
+    fn test_take_sparse_union_null_indices_no_nullable_fields() {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8]),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![10])),
+                Arc::new(Int32Array::from(vec![20])),
+            ],
+        )
+        .unwrap();
+
         let error = take(&union, &UInt32Array::from(vec![None]), None).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Compute error: Cannot take null indices from a sparse union with non-nullable fields"
+            "Compute error: Cannot take null indices from a union with no nullable fields"
         );
+    }
+
+    #[test]
+    fn test_take_empty_sparse_union_null_indices_mixed_nullability() {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("non_nullable", DataType::Int32, false),
+                Field::new("nullable", DataType::Int32, true),
+            ],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            ScalarBuffer::<i8>::from(vec![]),
+            None,
+            vec![
+                Arc::new(Int32Array::from(Vec::<i32>::new())),
+                Arc::new(Int32Array::from(Vec::<i32>::new())),
+            ],
+        )
+        .unwrap();
+
+        let taken = take(&union, &UInt32Array::from(vec![None]), None).unwrap();
+        let taken = taken.as_union();
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken.type_id(0), 1);
+        assert_eq!(taken.logical_null_count(), 1);
+        assert!(!taken.child(0).is_null(0));
+        assert!(taken.child(1).is_null(0));
     }
 
     #[test]
