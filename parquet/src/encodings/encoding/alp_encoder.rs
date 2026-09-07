@@ -387,8 +387,8 @@ fn encode_vector<F: AlpFloat>(
         // Reuse their allocation for deltas; signed BitPacking preserves the
         // underlying two's-complement bit patterns.
         for encoded_value in encoded.iter_mut() {
-            let delta = F::Exact::reinterpret_from_signed(*encoded_value)
-                .wrapping_sub(frame_of_reference);
+            let delta =
+                F::Exact::reinterpret_from_signed(*encoded_value).wrapping_sub(frame_of_reference);
             *encoded_value = delta.reinterpret_as_signed();
         }
         let mut writer = BitWriter::new_from_buf(std::mem::take(out));
