@@ -259,6 +259,8 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) metrics: ArrowReaderMetrics,
 
     pub(crate) max_predicate_cache_size: usize,
+
+    pub(crate) skip_utf8_validation: bool,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -299,7 +301,20 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
+            skip_utf8_validation: true,
         }
+    }
+
+    /// Skip UTF-8 validation for string columns (defaults to `false`).
+    ///
+    /// See [`ArrowReaderOptions::with_skip_utf8_validation`] for details.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that all string columns contain valid UTF-8.
+    pub unsafe fn with_skip_utf8_validation(mut self, skip: bool) -> Self {
+        self.skip_utf8_validation = skip;
+        self
     }
 
     /// Returns a reference to the [`ParquetMetaData`] for this parquet file
@@ -587,6 +602,12 @@ impl<T> ArrowReaderBuilder<T> {
 pub struct ArrowReaderOptions {
     /// Should the reader strip any user defined metadata from the Arrow schema
     skip_arrow_metadata: bool,
+    /// Skip UTF-8 validation for string columns (default: false).
+    ///
+    /// When false (the default), columns annotated as UTF-8 in the Parquet schema are
+    /// validated on read. Set to true to skip validation for a performance gain when the
+    /// data is known to be valid.
+    pub(crate) skip_utf8_validation: bool,
     /// If provided, used as the schema hint when determining the Arrow schema,
     /// otherwise the schema hint is read from the [ARROW_SCHEMA_META_KEY]
     ///
@@ -620,6 +641,23 @@ impl ArrowReaderOptions {
     pub fn with_skip_arrow_metadata(self, skip_arrow_metadata: bool) -> Self {
         Self {
             skip_arrow_metadata,
+            ..self
+        }
+    }
+
+    /// Skip UTF-8 validation for string columns (defaults to `false`).
+    ///
+    /// When enabled, columns annotated as UTF-8 in the Parquet schema are read without
+    /// checking that the bytes are valid UTF-8. Useful when the data is known to be valid
+    /// and the validation overhead is measurable.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that all string columns in the file contain valid UTF-8.
+    /// Passing invalid UTF-8 to Arrow string arrays is undefined behavior.
+    pub unsafe fn with_skip_utf8_validation(self, skip_utf8_validation: bool) -> Self {
+        Self {
+            skip_utf8_validation,
             ..self
         }
     }
@@ -1208,8 +1246,12 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// Use this method if you want to control the options for reading the
     /// [`ParquetMetaData`]
     pub fn try_new_with_options(reader: T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ArrowReaderMetadata::load(&reader, options)?;
-        Ok(Self::new_with_metadata(reader, metadata))
+        let skip = options.skip_utf8_validation;
+        ArrowReaderMetadata::load(&reader, options).map(|metadata| {
+            // Safety: the caller already upheld the contract when constructing
+            // ArrowReaderOptions::with_skip_utf8_validation (also unsafe).
+            unsafe { Self::new_with_metadata(reader, metadata).with_skip_utf8_validation(skip) }
+        })
     }
 
     /// Create a [`ParquetRecordBatchReaderBuilder`] from the provided [`ArrowReaderMetadata`]
@@ -1338,6 +1380,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
+            skip_utf8_validation,
         } = self;
 
         // Try to avoid allocate large buffer
@@ -1371,6 +1414,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
                     .with_batch_size(batch_size)
                     .with_parquet_metadata(&reader.metadata)
+                    .with_skip_utf8_validation(skip_utf8_validation)
                     .build_array_reader(fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
@@ -1380,6 +1424,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
             .with_batch_size(batch_size)
             .with_parquet_metadata(&reader.metadata)
+            .with_skip_utf8_validation(skip_utf8_validation)
             .build_array_reader(fields.as_deref(), &projection)?;
 
         let read_plan = plan_builder

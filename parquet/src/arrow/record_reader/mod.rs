@@ -85,6 +85,8 @@ pub struct GenericRecordReader<V, CV> {
     /// as the valid_mask for `pad_nulls` (via `as_slice()`) and as the null
     /// bitmap consumed by the leaf reader (via `consume_compact_bitmap`).
     compact_bitmap: Option<BooleanBufferBuilder>,
+    /// When true, overrides the decoder's default UTF-8 validation to disabled.
+    skip_utf8_validation: bool,
 }
 
 impl<V, CV> GenericRecordReader<V, CV>
@@ -114,13 +116,25 @@ where
             values_written: 0,
             padding_threshold: None,
             compact_bitmap: None,
+            skip_utf8_validation: false,
         }
+    }
+
+    /// Disable UTF-8 validation for string columns.
+    ///
+    /// When set, overrides the decoder's schema-derived `validate_utf8` flag to `false`.
+    pub fn with_skip_utf8_validation(mut self, skip: bool) -> Self {
+        self.skip_utf8_validation = skip;
+        self
     }
 
     /// Set the current page reader.
     pub fn set_page_reader(&mut self, page_reader: Box<dyn PageReader>) -> Result<()> {
         let descr = &self.column_desc;
-        let values_decoder = CV::new(descr);
+        let mut values_decoder = CV::new(descr);
+        if self.skip_utf8_validation {
+            values_decoder.set_validate_utf8(false);
+        }
 
         let def_level_decoder = (descr.max_def_level() != 0).then(|| {
             DefinitionLevelBufferDecoder::new(descr.max_def_level(), packed_null_mask(descr))

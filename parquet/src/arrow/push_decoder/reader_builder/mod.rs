@@ -271,6 +271,9 @@ pub(crate) struct RowGroupReaderBuilder {
 
     /// The underlying data store
     buffers: PushBuffers,
+
+    /// Skip UTF-8 validation for string columns
+    skip_utf8_validation: bool,
 }
 
 /// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
@@ -290,6 +293,7 @@ pub(crate) struct RowGroupReaderBuilderParts {
     /// Bytes already pushed into the decoder, carried across a rebuild so they
     /// are not re-requested.
     pub buffers: PushBuffers,
+    pub skip_utf8_validation: bool,
 }
 
 impl RowGroupReaderBuilder {
@@ -305,6 +309,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        skip_utf8_validation: bool,
     ) -> Self {
         Self {
             batch_size,
@@ -317,6 +322,7 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
+            skip_utf8_validation,
         }
     }
 
@@ -337,6 +343,7 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: _,
             buffers,
+            skip_utf8_validation,
         } = self;
         RowGroupReaderBuilderParts {
             batch_size,
@@ -347,6 +354,7 @@ impl RowGroupReaderBuilder {
             metrics,
             row_selection_policy,
             buffers,
+            skip_utf8_validation,
         }
     }
 
@@ -617,6 +625,7 @@ impl RowGroupReaderBuilder {
                     .with_batch_size(self.batch_size)
                     .with_cache_options(Some(&cache_options))
                     .with_parquet_metadata(&self.metadata)
+                    .with_skip_utf8_validation(self.skip_utf8_validation)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
                 // Auto resolution and loaded ranges are projection-specific, so restore the
@@ -791,7 +800,8 @@ impl RowGroupReaderBuilder {
                 // if we have any cached results, connect them up
                 let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_batch_size(self.batch_size)
-                    .with_parquet_metadata(&self.metadata);
+                    .with_parquet_metadata(&self.metadata)
+                    .with_skip_utf8_validation(self.skip_utf8_validation);
                 let array_reader = if let Some(cache_info) = cache_info.as_ref() {
                     let cache_options: CacheOptions = cache_info.builder().consumer();
                     array_reader_builder

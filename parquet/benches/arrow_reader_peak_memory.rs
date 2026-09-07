@@ -499,7 +499,8 @@ fn string_list_wrapper(
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     let child =
-        make_byte_array_reader(pages, column_desc, None, DEFAULT_BATCH_SIZE, Some(2)).unwrap();
+        make_byte_array_reader(pages, column_desc, None, DEFAULT_BATCH_SIZE, Some(2), false)
+            .unwrap();
     let field = Field::new_list_field(DataType::Utf8, true);
     let data_type = DataType::List(Arc::new(field));
     Box::new(ListArrayReader::<i32>::new(

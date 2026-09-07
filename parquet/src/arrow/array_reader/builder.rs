@@ -99,6 +99,8 @@ pub struct ArrayReaderBuilder<'a> {
     metrics: &'a ArrowReaderMetrics,
     /// Batch size hint for pre-allocating internal buffers (see [`Self::with_batch_size`])
     batch_size: usize,
+    /// Skip UTF-8 validation for string columns
+    skip_utf8_validation: bool,
 }
 
 /// Arguments threaded through the recursive `build_*_reader` calls.
@@ -148,6 +150,7 @@ impl<'a> ArrayReaderBuilder<'a> {
             parquet_metadata: None,
             metrics,
             batch_size: DEFAULT_BATCH_SIZE,
+            skip_utf8_validation: false,
         }
     }
 
@@ -173,6 +176,12 @@ impl<'a> ArrayReaderBuilder<'a> {
     /// Add parquet metadata to the builder for computing virtual column values
     pub fn with_parquet_metadata(mut self, parquet_metadata: &'a ParquetMetaData) -> Self {
         self.parquet_metadata = Some(parquet_metadata);
+        self
+    }
+
+    /// Skip UTF-8 validation for string columns.
+    pub fn with_skip_utf8_validation(mut self, skip: bool) -> Self {
+        self.skip_utf8_validation = skip;
         self
     }
 
@@ -543,6 +552,7 @@ impl<'a> ArrayReaderBuilder<'a> {
                     arrow_type,
                     self.batch_size,
                     padding_threshold,
+                    self.skip_utf8_validation,
                 )?,
                 Some(DataType::Utf8View | DataType::BinaryView) => make_byte_view_array_reader(
                     page_iterator,
@@ -550,6 +560,7 @@ impl<'a> ArrayReaderBuilder<'a> {
                     arrow_type,
                     self.batch_size,
                     padding_threshold,
+                    self.skip_utf8_validation,
                 )?,
                 _ => make_byte_array_reader(
                     page_iterator,
@@ -557,6 +568,7 @@ impl<'a> ArrayReaderBuilder<'a> {
                     arrow_type,
                     self.batch_size,
                     padding_threshold,
+                    self.skip_utf8_validation,
                 )?,
             },
             PhysicalType::FIXED_LEN_BYTE_ARRAY => match arrow_type {
@@ -566,6 +578,7 @@ impl<'a> ArrayReaderBuilder<'a> {
                     arrow_type,
                     self.batch_size,
                     padding_threshold,
+                    self.skip_utf8_validation,
                 )?,
                 _ => make_fixed_len_byte_array_reader(
                     page_iterator,

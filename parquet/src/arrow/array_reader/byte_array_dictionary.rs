@@ -43,14 +43,15 @@ use crate::util::bit_util::FromBitpacked;
 /// A macro to reduce verbosity of [`make_byte_array_dictionary_reader`]
 macro_rules! make_reader {
     (
-        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr) => match ($k:expr, $v:expr) {
+        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr, $skip_utf8_validation:expr) => match ($k:expr, $v:expr) {
             $(($key_arrow:pat, $value_arrow:pat) => ($key_type:ty, $value_type:ty),)+
         }
     ) => {
         match ($k, $v) {
             $(
                 ($key_arrow, $value_arrow) => {
-                    let mut reader = GenericRecordReader::new($column_desc, $batch_size);
+                    let mut reader = GenericRecordReader::new($column_desc, $batch_size)
+                        .with_skip_utf8_validation($skip_utf8_validation);
                     if let Some(threshold) = $padding_threshold {
                         reader.set_padding_threshold(threshold);
                     }
@@ -84,6 +85,7 @@ pub fn make_byte_array_dictionary_reader(
     arrow_type: Option<ArrowType>,
     batch_size: usize,
     padding_threshold: Option<i16>,
+    skip_utf8_validation: bool,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -96,7 +98,7 @@ pub fn make_byte_array_dictionary_reader(
     match &data_type {
         ArrowType::Dictionary(key_type, value_type) => {
             make_reader! {
-                (pages, column_desc, data_type, batch_size, padding_threshold) => match (key_type.as_ref(), value_type.as_ref()) {
+                (pages, column_desc, data_type, batch_size, padding_threshold, skip_utf8_validation) => match (key_type.as_ref(), value_type.as_ref()) {
                     (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u8, i32),
                     (ArrowType::UInt8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u8, i64),
                     (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i8, i32),
@@ -464,6 +466,10 @@ where
                 decoder.skip(num_values)
             }
         }
+    }
+
+    fn set_validate_utf8(&mut self, validate: bool) {
+        self.validate_utf8 = validate;
     }
 }
 

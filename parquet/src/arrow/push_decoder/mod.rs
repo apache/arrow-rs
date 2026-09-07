@@ -318,6 +318,7 @@ impl ParquetPushDecoderBuilder {
             metrics,
             row_selection_policy,
             max_predicate_cache_size,
+            skip_utf8_validation,
         } = self;
 
         let has_predicates = filter
@@ -337,6 +338,7 @@ impl ParquetPushDecoderBuilder {
             max_predicate_cache_size,
             buffers,
             row_selection_policy,
+            skip_utf8_validation,
         );
 
         // Initialize the decoder with the configured options
@@ -379,6 +381,7 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
         metrics,
         row_selection_policy,
         buffers,
+        skip_utf8_validation,
     } = reader_builder;
 
     ArrowReaderBuilder {
@@ -395,6 +398,7 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
         offset,
         metrics,
         max_predicate_cache_size,
+        skip_utf8_validation,
     }
     // Carry the decoder's already-fetched bytes across the rebuild so the new
     // decoder does not re-request them.

@@ -47,6 +47,7 @@ pub fn make_byte_view_array_reader(
     arrow_type: Option<ArrowType>,
     batch_size: usize,
     padding_threshold: Option<i16>,
+    skip_utf8_validation: bool,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -59,7 +60,9 @@ pub fn make_byte_view_array_reader(
 
     match data_type {
         ArrowType::BinaryView | ArrowType::Utf8View => {
-            let mut reader = GenericRecordReader::new(column_desc, batch_size);
+            let is_string = matches!(data_type, ArrowType::Utf8View);
+            let mut reader = GenericRecordReader::new(column_desc, batch_size)
+                .with_skip_utf8_validation(skip_utf8_validation && is_string);
             if let Some(threshold) = padding_threshold {
                 reader.set_padding_threshold(threshold);
             }
@@ -218,6 +221,10 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             .ok_or_else(|| general_err!("no decoder set"))?;
 
         decoder.skip(num_values, self.dict.as_ref())
+    }
+
+    fn set_validate_utf8(&mut self, validate: bool) {
+        self.validate_utf8 = validate;
     }
 }
 

@@ -132,6 +132,11 @@ pub trait ColumnValueDecoder {
     ///
     /// Returns the number of values skipped
     fn skip_values(&mut self, num_values: usize) -> Result<usize>;
+
+    /// Override whether UTF-8 validation is performed.
+    ///
+    /// Only meaningful for byte-array decoders; the default implementation is a no-op.
+    fn set_validate_utf8(&mut self, _validate: bool) {}
 }
 
 /// Bucket-based storage for decoder instances keyed by `Encoding`.
