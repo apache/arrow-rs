@@ -595,6 +595,9 @@ impl BitWriter {
     pub fn put_batch<T: BitPacking>(&mut self, batch: &[T], num_bits: usize) {
         assert_ne!(T::BIT_CAPACITY, 0);
         assert!(num_bits <= T::BIT_CAPACITY);
+        if batch.is_empty() || num_bits == 0 {
+            return;
+        }
 
         let mask = match num_bits {
             64 => u64::MAX,
