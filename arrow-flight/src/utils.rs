@@ -83,7 +83,7 @@ pub fn flight_data_to_arrow_batch(
 /// Convert `RecordBatch`es to wire protocol `FlightData`s
 pub fn batches_to_flight_data(
     schema: &Schema,
-    batches: Vec<RecordBatch>,
+    batches: impl Iterator<Item = RecordBatch>,
 ) -> Result<Vec<FlightData>, ArrowError> {
     let options = IpcWriteOptions::default();
     let schema_flight_data: FlightData = SchemaAsIpc::new(schema, &options).into();
@@ -94,9 +94,9 @@ pub fn batches_to_flight_data(
     let mut dictionary_tracker = writer::DictionaryTracker::new(false);
     let mut ipc_write_context = IpcWriteContext::default();
 
-    for batch in &batches {
+    for batch in batches {
         let (encoded_dictionaries, encoded_batch) = data_gen.encode(
-            batch,
+            &batch,
             &mut dictionary_tracker,
             &options,
             &mut ipc_write_context,
