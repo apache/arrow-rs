@@ -49,6 +49,7 @@ use arrow_array::{Array, ArrayRef, Int32Array, OffsetSizeTrait, RunArray, downca
 use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
+use arrow_select::take::take;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -70,7 +71,7 @@ fn expand_typed_ree<R: RunEndIndexType>(run_array: &RunArray<R>) -> Result<Array
     let indices: Int32Array = (0..len)
         .map(|i| run_ends.get_physical_index(i) as i32)
         .collect();
-    arrow_select::take::take(values.as_ref(), &indices, None)
+    take(values.as_ref(), &indices, None)
         .map_err(|e| arrow_err!("Failed to expand REE array: {}", e))
 }
 
@@ -185,9 +186,31 @@ enum LevelInfoBuilder {
 /// see <https://github.com/apache/arrow-rs/pull/9967> for the rationale.
 const BULK_FILL_MIN_LEN: usize = 64;
 
+fn logical_type(mut data_type: &DataType) -> (&DataType, bool) {
+    let mut nullable = false;
+    loop {
+        match data_type {
+            DataType::Dictionary(_, value) => data_type = value,
+            DataType::RunEndEncoded(_, value) => {
+                nullable |= value.is_nullable();
+                data_type = value.data_type();
+            }
+            _ => return (data_type, nullable),
+        }
+    }
+}
+
 impl LevelInfoBuilder {
     /// Create a new [`LevelInfoBuilder`] for the given [`Field`] and parent [`LevelContext`]
     fn try_new(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
+        let (data_type, nullable) = logical_type(field.data_type());
+        if data_type != field.data_type() {
+            let field = field
+                .clone()
+                .with_data_type(data_type.clone())
+                .with_nullable(field.is_nullable() || nullable);
+            return Self::try_new(&field, parent_ctx, array);
+        }
         if !Self::types_compatible(field.data_type(), array.data_type()) {
             return Err(arrow_err!(format!(
                 "Incompatible type. Field '{}' has type {}, array has type {}",
@@ -208,16 +231,19 @@ impl LevelInfoBuilder {
                 let levels = ArrayLevels::new(parent_ctx, is_nullable, array.clone());
                 Ok(Self::Primitive(levels))
             }
-            DataType::RunEndEncoded(_, value_field) => {
+            DataType::RunEndEncoded(_, _) => {
                 let flat = expand_ree_array(array)?;
-                let flat_field = Field::new(
-                    field.name(),
-                    value_field.data_type().clone(),
-                    field.is_nullable(),
-                );
-                Self::try_new(&flat_field, parent_ctx, &flat)
+                Self::try_new(field, parent_ctx, &flat)
             }
-            DataType::Struct(children) => {
+            DataType::Dictionary(_, _) => {
+                let dictionary = array.as_any_dictionary();
+                let flat = take(dictionary.values(), dictionary.keys(), None)?;
+                Self::try_new(field, parent_ctx, &flat)
+            }
+            DataType::Struct(_) => {
+                let DataType::Struct(children) = field.data_type() else {
+                    unreachable!()
+                };
                 let array = array.as_struct();
                 let def_level = match is_nullable {
                     true => parent_ctx.def_level + 1,
@@ -237,12 +263,21 @@ impl LevelInfoBuilder {
 
                 Ok(Self::Struct(children, ctx, array.nulls().cloned()))
             }
-            DataType::List(child)
-            | DataType::LargeList(child)
-            | DataType::Map(child, _)
-            | DataType::FixedSizeList(child, _)
-            | DataType::ListView(child)
-            | DataType::LargeListView(child) => {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::Map(_, _)
+            | DataType::FixedSizeList(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => {
+                let (DataType::List(child)
+                | DataType::LargeList(child)
+                | DataType::Map(child, _)
+                | DataType::FixedSizeList(child, _)
+                | DataType::ListView(child)
+                | DataType::LargeListView(child)) = field.data_type()
+                else {
+                    unreachable!()
+                };
                 let def_level = match is_nullable {
                     true => parent_ctx.def_level + 2,
                     false => parent_ctx.def_level + 1,
@@ -927,48 +962,52 @@ impl LevelInfoBuilder {
         }
     }
 
-    /// Determine if the fields are compatible for purposes of constructing `LevelBuilderInfo`.
+    /// Determine if the logical types are compatible for constructing [`LevelInfoBuilder`].
     ///
-    /// Fields are compatible if they're the same type. Otherwise if one of them is a dictionary
-    /// and the other is a native array, the dictionary values must have the same type as the
-    /// native array
-    fn types_compatible(a: &DataType, b: &DataType) -> bool {
-        // if the Arrow data types are equal, the types are deemed compatible
-        if a.equals_datatype(b) {
-            return true;
-        }
-
-        // get the values out of the dictionaries
-        let (a, b) = match (a, b) {
-            (DataType::Dictionary(_, va), DataType::Dictionary(_, vb)) => {
-                (va.as_ref(), vb.as_ref())
+    /// Resolve dictionary and REE wrappers at each logical node, including nested children.
+    /// Container variants must match, as must fixed-size list lengths and map sortedness.
+    /// String and binary leaves may use different offset widths or view layouts. Child field
+    /// names, metadata, and nullability are ignored here: the writer's target fields determine
+    /// nullability and the resulting levels.
+    fn types_compatible(left: &DataType, right: &DataType) -> bool {
+        let (left, _) = logical_type(left);
+        let (right, _) = logical_type(right);
+        match (left, right) {
+            (DataType::Struct(left_fields), DataType::Struct(right_fields)) => {
+                left_fields.len() == right_fields.len()
+                    && left_fields
+                        .iter()
+                        .zip(right_fields)
+                        .all(|(left_field, right_field)| {
+                            Self::types_compatible(left_field.data_type(), right_field.data_type())
+                        })
             }
-            (DataType::Dictionary(_, v), b) => (v.as_ref(), b),
-            (a, DataType::Dictionary(_, v)) => (a, v.as_ref()),
-            _ => (a, b),
-        };
-
-        // now that we've got the values from one/both dictionaries, if the values
-        // have the same Arrow data type, they're compatible
-        if a == b {
-            return true;
-        }
-
-        // here we have different Arrow data types, but if the array contains the same type of data
-        // then we consider the type compatible
-        match a {
-            // String, StringView and LargeString are compatible
-            DataType::Utf8 => matches!(b, DataType::LargeUtf8 | DataType::Utf8View),
-            DataType::Utf8View => matches!(b, DataType::LargeUtf8 | DataType::Utf8),
-            DataType::LargeUtf8 => matches!(b, DataType::Utf8 | DataType::Utf8View),
-
-            // Binary, BinaryView and LargeBinary are compatible
-            DataType::Binary => matches!(b, DataType::LargeBinary | DataType::BinaryView),
-            DataType::BinaryView => matches!(b, DataType::LargeBinary | DataType::Binary),
-            DataType::LargeBinary => matches!(b, DataType::Binary | DataType::BinaryView),
-
-            // otherwise we have incompatible types
-            _ => false,
+            (DataType::List(left_field), DataType::List(right_field))
+            | (DataType::LargeList(left_field), DataType::LargeList(right_field))
+            | (DataType::ListView(left_field), DataType::ListView(right_field))
+            | (DataType::LargeListView(left_field), DataType::LargeListView(right_field)) => {
+                Self::types_compatible(left_field.data_type(), right_field.data_type())
+            }
+            (
+                DataType::FixedSizeList(left_field, left_len),
+                DataType::FixedSizeList(right_field, right_len),
+            ) if left_len == right_len => {
+                Self::types_compatible(left_field.data_type(), right_field.data_type())
+            }
+            (DataType::Map(left_field, left_sorted), DataType::Map(right_field, right_sorted))
+                if left_sorted == right_sorted =>
+            {
+                Self::types_compatible(left_field.data_type(), right_field.data_type())
+            }
+            (
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+            )
+            | (
+                DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
+                DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
+            ) => true,
+            _ => left.equals_datatype(right),
         }
     }
 }
