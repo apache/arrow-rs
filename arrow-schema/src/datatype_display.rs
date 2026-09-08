@@ -176,24 +176,27 @@ impl Display for DataType {
             Self::RunEndEncoded(run_ends_field, values_field) => {
                 let default_names = run_ends_field.name() == Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME
                     && values_field.name() == Field::REE_VALUES_FIELD_DEFAULT_NAME;
+                let no_metadata =
+                    run_ends_field.metadata().is_empty() && values_field.metadata().is_empty();
                 write!(f, "RunEndEncoded(")?;
                 let re_null = format_nullability(run_ends_field);
                 let v_null = format_nullability(values_field);
+                let re_meta = format_metadata(run_ends_field.metadata());
                 let v_meta = format_metadata(values_field.metadata());
-                if default_names {
+                if default_names && no_metadata {
                     write!(
                         f,
-                        "{re_null}{}, {v_null}{}{})",
+                        "{re_null}{}, {v_null}{})",
                         run_ends_field.data_type(),
                         values_field.data_type(),
-                        v_meta,
                     )?;
                 } else {
                     write!(
                         f,
-                        "\"{}\": {}, \"{}\": {v_null}{}{})",
+                        "\"{}\": {re_null}{}{}, \"{}\": {v_null}{}{})",
                         run_ends_field.name(),
                         run_ends_field.data_type(),
+                        re_meta,
                         values_field.name(),
                         values_field.data_type(),
                         v_meta,
@@ -526,7 +529,7 @@ mod tests {
             "RunEndEncoded(non-null Int32, non-null Utf8)"
         );
 
-        // Compact form: with metadata on values field
+        // Verbose form: metadata on values field triggers verbose form
         let run_ends_field = Arc::new(Field::new(
             Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
             DataType::Int32,
@@ -538,7 +541,7 @@ mod tests {
         let ree_meta = DataType::RunEndEncoded(run_ends_field, Arc::new(values_with_meta));
         assert_eq!(
             ree_meta.to_string(),
-            "RunEndEncoded(non-null Int32, Utf8, metadata: {\"k\": \"v\"})"
+            "RunEndEncoded(\"run_ends\": non-null Int32, \"values\": Utf8, metadata: {\"k\": \"v\"})"
         );
 
         // Verbose form: non-default field name on values
@@ -551,7 +554,7 @@ mod tests {
         let ree3 = DataType::RunEndEncoded(run_ends_field, named_values);
         assert_eq!(
             ree3.to_string(),
-            "RunEndEncoded(\"run_ends\": Int32, \"named_values\": non-null Utf8)"
+            "RunEndEncoded(\"run_ends\": non-null Int32, \"named_values\": non-null Utf8)"
         );
 
         // Verbose form: non-default field name on run_ends
@@ -564,7 +567,27 @@ mod tests {
         let ree4 = DataType::RunEndEncoded(custom_re, values_field);
         assert_eq!(
             ree4.to_string(),
-            "RunEndEncoded(\"re\": Int32, \"values\": Int32)"
+            "RunEndEncoded(\"re\": non-null Int32, \"values\": Int32)"
+        );
+
+        // Verbose form: metadata on both fields
+        let mut run_ends_with_meta = Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        );
+        run_ends_with_meta.set_metadata(HashMap::from([(
+            "source".to_string(),
+            "encoder".to_string(),
+        )]));
+        let mut values_with_meta2 =
+            Field::new(Field::REE_VALUES_FIELD_DEFAULT_NAME, DataType::Utf8, true);
+        values_with_meta2.set_metadata(HashMap::from([("locale".to_string(), "en".to_string())]));
+        let ree5 =
+            DataType::RunEndEncoded(Arc::new(run_ends_with_meta), Arc::new(values_with_meta2));
+        assert_eq!(
+            ree5.to_string(),
+            "RunEndEncoded(\"run_ends\": non-null Int32, metadata: {\"source\": \"encoder\"}, \"values\": Utf8, metadata: {\"locale\": \"en\"})"
         );
     }
 
