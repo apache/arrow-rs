@@ -337,7 +337,10 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 ///
 /// **NOTE:**
 /// The serialization of custom [`PageIndexProvider`]s is not currently supported.
-/// The only supported page index structure is [`PageIndex`].
+/// The only supported page index structure is [`PageIndex`]. If the metadata
+/// contains any other [`PageIndexProvider`] implementation, the [`ColumnIndex`]
+/// and [`OffsetIndex`] structures are silently omitted from the output. See
+/// <https://github.com/apache/arrow-rs/issues/11030> for more details.
 ///
 /// </div>
 ///
@@ -461,12 +464,9 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             self.write_path_in_schema,
         );
 
-        // Downcast to PageIndex to access raw index structures for serialization
-        // TODO: rework the encoder to work with the PageIndexProvider API to
-        // remove the need for this cast. Because the page index is a dyn trait,
-        // it can't be cloned. An implementation would have to create a new
-        // `PageIndex` from the current `PageIndexProvider` and pass that to
-        // the encoder.
+        // Downcast to PageIndex to access raw index structures for serialization.
+        // Page indexes from custom PageIndexProviders are not written. See
+        // <https://github.com/apache/arrow-rs/issues/11030>
         if let Some(page_index_arc) = self.metadata.page_index.as_ref()
             && let Some(page_index) = page_index_arc
                 .as_any()
