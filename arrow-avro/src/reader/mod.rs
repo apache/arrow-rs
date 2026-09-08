@@ -3765,12 +3765,13 @@ mod test {
         for (tid, f) in fields.iter() {
             match f.data_type() {
                 DataType::Dictionary(_, _) => tid_enum = Some(tid),
-                DataType::Struct(childs) => {
-                    if childs.len() == 2 && childs[0].name() == "a" && childs[1].name() == "b" {
+                DataType::Struct(children) => {
+                    if children.len() == 2 && children[0].name() == "a" && children[1].name() == "b"
+                    {
                         tid_rec_a = Some(tid);
-                    } else if childs.len() == 2
-                        && childs[0].name() == "x"
-                        && childs[1].name() == "y"
+                    } else if children.len() == 2
+                        && children[0].name() == "x"
+                        && children[1].name() == "y"
                     {
                         tid_rec_b = Some(tid);
                     }
@@ -4513,11 +4514,11 @@ mod test {
                     Arc::new(ListArray::try_new(field.clone(), offsets, values, None).unwrap())
                 }
                 DataType::Map(entry_field, ordered) => {
-                    let DataType::Struct(childs) = entry_field.data_type() else {
+                    let DataType::Struct(children) = entry_field.data_type() else {
                         panic!("map entries must be struct")
                     };
-                    let key_field = &childs[0];
-                    let val_field = &childs[1];
+                    let key_field = &children[0];
+                    let val_field = &children[1];
                     assert_eq!(key_field.data_type(), &DataType::Utf8);
                     let keys = StringArray::from(Vec::<&str>::new());
                     let vals: ArrayRef = match val_field.data_type() {
@@ -8202,10 +8203,10 @@ mod test {
             for (tid, f) in uf.iter() {
                 match f.data_type() {
                     DataType::Dictionary(_, _) => tid_enum = Some(tid),
-                    DataType::Struct(childs)
-                        if childs.len() == 2
-                            && childs[0].name() == "a"
-                            && childs[1].name() == "b" =>
+                    DataType::Struct(children)
+                        if children.len() == 2
+                            && children[0].name() == "a"
+                            && children[1].name() == "b" =>
                     {
                         tid_rec_a = Some(tid)
                     }

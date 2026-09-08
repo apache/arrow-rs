@@ -3027,7 +3027,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     #[should_panic(
         expected = "Cannot cast to Decimal128(20, 3). Overflowing on 57896044618658097711785492504343953926634992332820282019728792003956564819967"
     )]
@@ -3064,7 +3063,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     fn test_cast_decimal_to_decimal_round() {
         let array = vec![
             Some(1123454),
@@ -4395,7 +4393,7 @@ mod tests {
     fn test_cast_numeric_to_decimal128() {
         let decimal_type = DataType::Decimal128(38, 6);
         // u8, u16, u32, u64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(UInt8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4426,7 +4424,7 @@ mod tests {
             ])) as ArrayRef, // u64
         ];
 
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal128Array,
@@ -4442,7 +4440,7 @@ mod tests {
         }
 
         // i8, i16, i32, i64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(Int8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4472,7 +4470,7 @@ mod tests {
                 Some(5),
             ])) as ArrayRef, // i64
         ];
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal128Array,
@@ -4561,7 +4559,7 @@ mod tests {
     fn test_cast_numeric_to_decimal256() {
         let decimal_type = DataType::Decimal256(76, 6);
         // u8, u16, u32, u64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(UInt8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4592,7 +4590,7 @@ mod tests {
             ])) as ArrayRef, // u64
         ];
 
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal256Array,
@@ -4608,7 +4606,7 @@ mod tests {
         }
 
         // i8, i16, i32, i64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(Int8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4638,7 +4636,7 @@ mod tests {
                 Some(5),
             ])) as ArrayRef, // i64
         ];
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal256Array,
@@ -7645,7 +7643,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bianry_to_view() {
+    fn test_binary_to_view() {
         _test_binary_to_view::<i32>();
         _test_binary_to_view::<i64>();
     }
@@ -12943,7 +12941,7 @@ mod tests {
                 output_scale: 2,
                 expected_output_repr: Ok(10000), // 100.00
             },
-            // increase precision, decrease scale, no rouding
+            // increase precision, decrease scale, no rounding
             DecimalCastTestConfig {
                 input_prec: 5,
                 input_scale: 3,

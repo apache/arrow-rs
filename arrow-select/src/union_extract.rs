@@ -225,7 +225,7 @@ fn extract_dense(
         match target.len().cmp(&union_array.len()) {
             // case 3.1: since the target is smaller than the union, allocate a new correctly sized null array
             Ordering::Less => Ok(new_null_array(target.data_type(), union_array.len())),
-            // case 3.2: target equals the union len, return it direcly
+            // case 3.2: target equals the union len, return it directly
             Ordering::Equal => Ok(Arc::clone(target)),
             // case 3.3: target len is bigger than the union len, slice it
             Ordering::Greater => Ok(target.slice(0, union_array.len())),
@@ -403,22 +403,17 @@ fn is_sequential_generic<const N: usize>(offsets: &[i32]) -> bool {
         return false;
     }
 
-    let chunks = offsets.chunks_exact(N);
-
-    let remainder = chunks.remainder();
-
-    chunks.enumerate().all(|(i, chunk)| {
-        let chunk_array = <&[i32; N]>::try_from(chunk).unwrap();
-
+    let (chunks, remainder) = offsets.as_chunks::<N>();
+    chunks.iter().enumerate().all(|(i, chunk)| {
         //checks if values within chunk are sequential
-        chunk_array
+        chunk
             .iter()
             .copied()
             .enumerate()
             .fold(true, |acc, (i, offset)| {
-                acc & (offset == chunk_array[0] + i as i32)
+                acc & (offset == chunk[0] + i as i32)
             })
-            && offsets[0] + (i * N) as i32 == chunk_array[0] //checks if chunk is sequential relative to the first offset
+            && offsets[0] + (i * N) as i32 == chunk[0] //checks if chunk is sequential relative to the first offset
     }) && remainder
         .iter()
         .copied()

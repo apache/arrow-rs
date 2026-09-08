@@ -116,7 +116,7 @@ impl Datum for &dyn Array {
 /// // Create a (typed) scalar for Int32Array for the value 42
 /// let scalar = Scalar::new(Int32Array::from(vec![42]));
 ///
-/// // Create a scalar using PrimtiveArray::scalar
+/// // Create a scalar using PrimitiveArray::scalar
 /// let scalar = Int32Array::new_scalar(42);
 ///
 /// // create a scalar from an ArrayRef (for dynamic typed Arrays)

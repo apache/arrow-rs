@@ -585,14 +585,11 @@ impl UnionArray {
             .map(|(type_id, bit_chunks)| (*type_id, bit_chunks.iter()))
             .collect::<Vec<_>>();
 
-        let chunks_exact = self.type_ids.chunks_exact(64);
-        let remainder = chunks_exact.remainder();
+        let (chunks_exact, remainder) = self.type_ids.as_chunks::<64>();
 
-        let chunks = chunks_exact.map(|type_ids_chunk| {
-            let type_ids_chunk_array = <&[i8; 64]>::try_from(type_ids_chunk).unwrap();
-
-            mask_chunk(type_ids_chunk_array, &mut nulls_masks_iter)
-        });
+        let chunks = chunks_exact
+            .iter()
+            .map(|type_ids_chunk| mask_chunk(type_ids_chunk, &mut nulls_masks_iter));
 
         // SAFETY:
         // chunks is a ChunksExact iterator, which implements TrustedLen, and correctly reports its length
@@ -1973,7 +1970,7 @@ mod tests {
             vec![1, 1].into(),
             None,
             vec![
-                // every children is completly null
+                // every child is completely null
                 Arc::new(Int8Array::new_null(2)), // all null, same len as it's parent
                 Arc::new(Int8Array::new_null(2)), // all null, same len as it's parent
             ],
@@ -1987,7 +1984,7 @@ mod tests {
             vec![1, 1].into(),
             Some(vec![0, 1].into()),
             vec![
-                // every children is completly null
+                // every child is completely null
                 Arc::new(Int8Array::new_null(3)), // bigger that parent
                 Arc::new(Int8Array::new_null(3)), // bigger that parent
             ],
@@ -2048,7 +2045,7 @@ mod tests {
             array.mask_sparse_all_with_nulls_skip_one(array.fields_logical_nulls())
         );
 
-        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        //like above, but repeated to generate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::new_null(len);
@@ -2098,7 +2095,7 @@ mod tests {
             array.mask_sparse_skip_without_nulls(array.fields_logical_nulls())
         );
 
-        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        //like above, but repeated to generate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::from_value(2, len);
@@ -2153,7 +2150,7 @@ mod tests {
             array.mask_sparse_skip_fully_null(array.fields_logical_nulls())
         );
 
-        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        //like above, but repeated to generate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::new_null(len);
