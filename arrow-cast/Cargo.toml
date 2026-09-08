@@ -83,3 +83,7 @@ harness = false
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "format_decimal"
+harness = false
