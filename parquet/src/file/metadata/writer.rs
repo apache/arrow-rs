@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::file::metadata::page_index::{PageIndexBuilder, PageIndexProvider};
 use crate::file::metadata::thrift::FileMeta;
 use crate::file::metadata::{ColumnChunkMetaData, PageIndex, RowGroupMetaData};
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor};
@@ -54,8 +55,7 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     buf: &'a mut TrackedWrite<W>,
     schema_descr: &'a SchemaDescPtr,
     row_groups: Vec<RowGroupMetaData>,
-    column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
-    offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
+    page_index: Option<Arc<dyn PageIndexProvider>>,
     key_value_metadata: Option<Vec<KeyValue>>,
     created_by: Option<String>,
     object_writer: MetadataObjectWriter,
@@ -71,14 +71,21 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// of the serialized offset indexes.
     fn write_offset_indexes(
         &mut self,
-        offset_indexes: &[Vec<Option<OffsetIndexMetaData>>],
-    ) -> Result<()> {
+        page_index: &Arc<dyn PageIndexProvider>,
+    ) -> Result<Option<Vec<Vec<Option<OffsetIndexMetaData>>>>> {
+        let mut offset_indexes =
+            PageIndexBuilder::empty_index(self.row_groups.len(), self.schema_descr.num_columns());
+        let offidx_vec = offset_indexes.as_mut().unwrap();
+
+        // we've already checked before calling that the offset indexes are populated
+        assert!(page_index.has_offset_indexes());
+
         // iter row group
         // iter each column
         // write offset index to the file
         for (row_group_idx, row_group) in self.row_groups.iter_mut().enumerate() {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
-                if let Some(offset_index) = &offset_indexes[row_group_idx][column_idx] {
+                if let Some(offset_index) = page_index.offset_index(row_group_idx, column_idx) {
                     let start_offset = self.buf.bytes_written();
                     self.object_writer.write_offset_index(
                         offset_index,
@@ -91,10 +98,11 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                     // set offset and index for offset index
                     column_metadata.offset_index_offset = Some(start_offset as i64);
                     column_metadata.offset_index_length = Some((end_offset - start_offset) as i32);
+                    offidx_vec[row_group_idx][column_idx] = Some(offset_index.clone());
                 }
             }
         }
-        Ok(())
+        Ok(offset_indexes)
     }
 
     /// Serialize all the column indexes to the `self.buf`
@@ -104,14 +112,21 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// of the serialized column indexes.
     fn write_column_indexes(
         &mut self,
-        column_indexes: &[Vec<Option<ColumnIndexMetaData>>],
-    ) -> Result<()> {
+        page_index: &Arc<dyn PageIndexProvider>,
+    ) -> Result<Option<Vec<Vec<Option<ColumnIndexMetaData>>>>> {
+        let mut column_indexes =
+            PageIndexBuilder::empty_index(self.row_groups.len(), self.schema_descr.num_columns());
+        let colidx_vec = column_indexes.as_mut().unwrap();
+
+        // we've already checked before calling that the column indexes are populated
+        assert!(page_index.has_column_indexes());
+
         // iter row group
         // iter each column
         // write column index to the file
         for (row_group_idx, row_group) in self.row_groups.iter_mut().enumerate() {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
-                if let Some(column_index) = &column_indexes[row_group_idx][column_idx] {
+                if let Some(column_index) = page_index.column_index(row_group_idx, column_idx) {
                     let start_offset = self.buf.bytes_written();
                     // only update column_metadata if the write succeeds
                     if self.object_writer.write_column_index(
@@ -127,20 +142,27 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                         column_metadata.column_index_length =
                             Some((end_offset - start_offset) as i32);
                     }
+                    colidx_vec[row_group_idx][column_idx] = Some(column_index.clone());
                 }
             }
         }
-        Ok(())
+        Ok(column_indexes)
     }
 
-    /// Serialize the column indexes and transform to `Option<ParquetColumnIndex>`
-    fn finalize_column_indexes(&mut self) -> Result<Option<Vec<Vec<Option<ColumnIndexMetaData>>>>> {
-        let column_indexes = std::mem::take(&mut self.column_indexes);
-
-        // Write column indexes to file
-        if let Some(column_indexes) = column_indexes.as_ref() {
-            self.write_column_indexes(column_indexes)?;
+    /// Serialize the column indexes and transform to `Option<Vec<Vec<Option<ColumnIndexMetaData>>>>`
+    fn finalize_column_indexes(
+        &mut self,
+        page_index: &Option<Arc<dyn PageIndexProvider>>,
+    ) -> Result<Option<Vec<Vec<Option<ColumnIndexMetaData>>>>> {
+        if page_index
+            .as_ref()
+            .is_none_or(|pi| !pi.has_column_indexes())
+        {
+            return Ok(None);
         }
+
+        // Write column indexes to file while assembling a column index
+        let column_indexes = self.write_column_indexes(page_index.as_ref().unwrap())?;
 
         // check to see if the index is `None` for every row group and column chunk
         let all_none = column_indexes
@@ -155,13 +177,19 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     /// Serialize the offset indexes and transform to `Option<ParquetOffsetIndex>`
-    fn finalize_offset_indexes(&mut self) -> Result<Option<Vec<Vec<Option<OffsetIndexMetaData>>>>> {
-        let offset_indexes = std::mem::take(&mut self.offset_indexes);
+    fn finalize_offset_indexes(
+        &mut self,
+        page_index: &Option<Arc<dyn PageIndexProvider>>,
+    ) -> Result<Option<Vec<Vec<Option<OffsetIndexMetaData>>>>> {
+        if page_index
+            .as_ref()
+            .is_none_or(|pi| !pi.has_offset_indexes())
+        {
+            return Ok(None);
+        }
 
         // Write offset indexes to file
-        if let Some(offset_indexes) = offset_indexes.as_ref() {
-            self.write_offset_indexes(offset_indexes)?;
-        }
+        let offset_indexes = self.write_offset_indexes(page_index.as_ref().unwrap())?;
 
         // check to see if the index is `None` for every row group and column chunk
         let all_none = offset_indexes
@@ -180,8 +208,9 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         let num_rows = self.row_groups.iter().map(|x| x.num_rows).sum();
 
         // serialize page indexes and transform to the proper form for use in ParquetMetaData
-        let column_indexes = self.finalize_column_indexes()?;
-        let offset_indexes = self.finalize_offset_indexes()?;
+        let page_index = self.page_index.take();
+        let column_indexes = self.finalize_column_indexes(&page_index)?;
+        let offset_indexes = self.finalize_offset_indexes(&page_index)?;
 
         // We only include ColumnOrder for leaf nodes.
         let column_orders = self
@@ -275,8 +304,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             buf,
             schema_descr,
             row_groups,
-            column_indexes: None,
-            offset_indexes: None,
+            page_index: None,
             key_value_metadata: None,
             created_by,
             object_writer: Default::default(),
@@ -285,19 +313,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         }
     }
 
-    pub fn with_column_indexes(
-        mut self,
-        column_indexes: Vec<Vec<Option<ColumnIndexMetaData>>>,
-    ) -> Self {
-        self.column_indexes = Some(column_indexes);
-        self
-    }
-
-    pub fn with_offset_indexes(
-        mut self,
-        offset_indexes: Vec<Vec<Option<OffsetIndexMetaData>>>,
-    ) -> Self {
-        self.offset_indexes = Some(offset_indexes);
+    pub fn with_page_index(mut self, page_index: Arc<dyn PageIndexProvider>) -> Self {
+        self.page_index = Some(page_index);
         self
     }
 
@@ -332,17 +349,6 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// BloomFilters, write the bloom filters into the buffer before creating the
 /// metadata writer. Then set the corresponding `bloom_filter_offset` and
 /// `bloom_filter_length` on [`ColumnChunkMetaData`] passed to this writer.
-///
-/// <div class="warning">
-///
-/// **NOTE:**
-/// The serialization of custom [`PageIndexProvider`]s is not currently supported.
-/// The only supported page index structure is [`PageIndex`]. If the metadata
-/// contains any other [`PageIndexProvider`] implementation, the [`ColumnIndex`]
-/// and [`OffsetIndex`] structures are silently omitted from the output. See
-/// <https://github.com/apache/arrow-rs/issues/11030> for more details.
-///
-/// </div>
 ///
 /// # Output Format
 ///
@@ -464,21 +470,10 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             self.write_path_in_schema,
         );
 
-        // Downcast to PageIndex to access raw index structures for serialization.
-        // Page indexes from custom PageIndexProviders are not written. See
-        // <https://github.com/apache/arrow-rs/issues/11030>
         if let Some(page_index_arc) = self.metadata.page_index.as_ref()
-            && let Some(page_index) = page_index_arc
-                .as_any()
-                .downcast_ref::<crate::file::metadata::PageIndex>()
+            && (page_index_arc.has_column_indexes() || page_index_arc.has_offset_indexes())
         {
-            if let Some(column_indexes) = page_index.column_indexes_raw() {
-                encoder = encoder.with_column_indexes(column_indexes.clone());
-            }
-
-            if let Some(offset_indexes) = page_index.offset_indexes_raw() {
-                encoder = encoder.with_offset_indexes(offset_indexes.clone());
-            }
+            encoder = encoder.with_page_index(page_index_arc.clone());
         }
 
         if let Some(key_value_metadata) = key_value_metadata {
