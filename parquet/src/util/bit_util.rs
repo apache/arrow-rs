@@ -21,7 +21,10 @@ use bytes::Bytes;
 
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_pack::{unpack8, unpack16, unpack32, unpack64};
+use crate::util::bit_pack::{
+    unpack8, unpack8_blocks, unpack16, unpack16_blocks, unpack32, unpack32_blocks, unpack64,
+    unpack64_blocks,
+};
 
 #[inline]
 fn array_from_slice<const N: usize>(bs: &[u8]) -> Result<[u8; N]> {
@@ -66,6 +69,30 @@ pub trait FromBitpacked {
     fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize)
     where
         Self: Sized;
+
+    /// Unpacks complete `BATCH_SIZE` blocks from `input` into `output`.
+    fn unpack_batches(input: &[u8], output: &mut [Self], num_bits: usize)
+    where
+        Self: Sized,
+    {
+        let batch_size = Self::BATCH_SIZE;
+        let blocks = output.len() / batch_size;
+        if num_bits == 0 {
+            for output in output[..blocks * batch_size].chunks_exact_mut(batch_size) {
+                Self::unpack_batch(&[], output, 0);
+            }
+            return;
+        }
+
+        let block_bytes = num_bits * batch_size / 8;
+        assert!(input.len() >= blocks * block_bytes);
+        for (input, output) in input
+            .chunks_exact(block_bytes)
+            .zip(output.chunks_exact_mut(batch_size))
+        {
+            Self::unpack_batch(input, output, num_bits);
+        }
+    }
 }
 
 macro_rules! from_le_bytes {
@@ -85,7 +112,7 @@ macro_rules! from_le_bytes {
 }
 
 macro_rules! from_bitpacked {
-    ($($ty: ty => $unpack: path),*) => {
+    ($($ty: ty => ($unpack: path, $unpack_blocks: path)),*) => {
         $(
             impl FromBitpacked for $ty {
                 const BIT_CAPACITY: usize = std::mem::size_of::<$ty>() * 8;
@@ -100,6 +127,11 @@ macro_rules! from_bitpacked {
                 #[inline]
                 fn unpack_batch(input: &[u8], output: &mut [Self], num_bits: usize) {
                     $unpack(input, (&mut output[..Self::BATCH_SIZE]).try_into().unwrap(), num_bits)
+                }
+
+                #[inline]
+                fn unpack_batches(input: &[u8], output: &mut [Self], num_bits: usize) {
+                    $unpack_blocks(input, output, num_bits)
                 }
             }
         )*
@@ -133,13 +165,33 @@ macro_rules! from_bitpacked_delegate {
                     let output: &mut [$delegate] = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<$delegate>(), output.len()) };
                     <$delegate>::unpack_batch(input, output, num_bits);
                 }
+
+                #[inline]
+                fn unpack_batches(input: &[u8], output: &mut [Self], num_bits: usize) {
+                    // Guard against misusages of this macro, due to the const block this will fail
+                    // already at compile-time if the types are not compatible.
+                    const {
+                        assert!(
+                            std::mem::size_of::<$ty>() == std::mem::size_of::<$delegate>()
+                            && std::mem::align_of::<$ty>() == std::mem::align_of::<$delegate>(),
+                            "types need to have the same size and alignment"
+                        );
+                    }
+                    // Safety: ty and delegate have the same size and alignment, and this macro is only used for types that have transmutable bit patterns.
+                    let output: &mut [$delegate] = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<$delegate>(), output.len()) };
+                    <$delegate>::unpack_batches(input, output, num_bits);
+                }
             }
         )*
     }
 }
 
 from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64 }
-from_bitpacked!(u8 => unpack8, u16 => unpack16, u32 => unpack32);
+from_bitpacked!(
+    u8 => (unpack8, unpack8_blocks),
+    u16 => (unpack16, unpack16_blocks),
+    u32 => (unpack32, unpack32_blocks)
+);
 
 // `u64` is written out by hand: the `as` cast the macro uses would be a no-op here,
 // and it is the only instantiation for which that is true.
@@ -160,6 +212,11 @@ impl FromBitpacked for u64 {
             (&mut output[..Self::BATCH_SIZE]).try_into().unwrap(),
             num_bits,
         )
+    }
+
+    #[inline]
+    fn unpack_batches(input: &[u8], output: &mut [Self], num_bits: usize) {
+        unpack64_blocks(input, output, num_bits)
     }
 }
 from_bitpacked_delegate!(i8 => u8, i16 => u16, i32 => u32, i64 => u64);
@@ -183,6 +240,18 @@ impl FromBitpacked for bool {
             std::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<u8>(), output.len())
         };
         u8::unpack_batch(input, output, num_bits);
+    }
+
+    #[inline]
+    fn unpack_batches(input: &[u8], output: &mut [Self], num_bits: usize) {
+        assert_eq!(num_bits, 1);
+        // Safety:
+        //   we asserted that we will only decode with a bitwidth of 1,
+        //   so the u8 can only be 0 or 1, which are the valid representations of a bool.
+        let output: &mut [u8] = unsafe {
+            std::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<u8>(), output.len())
+        };
+        u8::unpack_batches(input, output, num_bits);
     }
 }
 
@@ -740,12 +809,25 @@ impl BitReader {
         assert_ne!(T::BIT_CAPACITY, 0);
         assert!(num_bits <= T::BIT_CAPACITY);
 
-        // Read directly into output buffer
-        while values_to_read - i >= T::BATCH_SIZE {
-            T::unpack_batch(&self.buffer[self.byte_offset..], &mut batch[i..], num_bits);
-            self.byte_offset += num_bits * T::BATCH_SIZE / 8;
-            i += T::BATCH_SIZE;
+        // Read complete blocks directly into the output buffer
+        let blocks = (values_to_read - i) / T::BATCH_SIZE;
+        let block_values = blocks * T::BATCH_SIZE;
+        let block_bytes = num_bits * block_values / 8;
+        if blocks == 1 {
+            T::unpack_batch(
+                &self.buffer[self.byte_offset..self.byte_offset + block_bytes],
+                &mut batch[i..i + block_values],
+                num_bits,
+            );
+        } else if blocks > 1 {
+            T::unpack_batches(
+                &self.buffer[self.byte_offset..self.byte_offset + block_bytes],
+                &mut batch[i..i + block_values],
+                num_bits,
+            );
         }
+        self.byte_offset += block_bytes;
+        i += block_values;
 
         // Try to read smaller batches if possible
         if size_of::<T>() > 4 && values_to_read - i >= 32 && num_bits <= 32 {
