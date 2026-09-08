@@ -17,7 +17,7 @@
 
 use bytes::Bytes;
 
-use crate::basic::{Encoding, EncodingMask};
+use crate::basic::{Encoding, EncodingMask, Type};
 use crate::data_type::DataType;
 use crate::encodings::{
     decoding::{Decoder, DictDecoder, PlainDecoder, get_decoder},
@@ -134,6 +134,37 @@ pub trait ColumnValueDecoder {
     fn skip_values(&mut self, num_values: usize) -> Result<usize>;
 }
 
+/// Validate a decompressed PLAIN fixed-width value section, excluding level data.
+/// Both dictionary entries and non-null data-page values have no length prefixes.
+pub(crate) fn validate_fixed_len_byte_array_payload(
+    actual_len: usize,
+    num_values: usize,
+    type_length: usize,
+    page: &str,
+) -> Result<()> {
+    let expected_len = num_values.checked_mul(type_length).ok_or_else(|| {
+        general_err!(
+            "FIXED_LEN_BYTE_ARRAY {} payload size overflow: {} values of {} bytes",
+            page,
+            num_values,
+            type_length
+        )
+    })?;
+    if actual_len != expected_len {
+        return Err(general_err!(
+            "Invalid FIXED_LEN_BYTE_ARRAY {} payload length: expected {} bytes \
+             ({} values of {} bytes), got {}. Length-prefixed BYTE_ARRAY payloads \
+             are not supported.",
+            page,
+            expected_len,
+            num_values,
+            type_length,
+            actual_len
+        ));
+    }
+    Ok(())
+}
+
 /// Bucket-based storage for decoder instances keyed by `Encoding`.
 ///
 /// This replaces `HashMap` lookups with direct indexing to avoid hashing overhead in the
@@ -180,6 +211,14 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         }
 
         if encoding == Encoding::RLE_DICTIONARY {
+            if self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY {
+                validate_fixed_len_byte_array_payload(
+                    buf.len(),
+                    num_values as usize,
+                    self.descr.type_length() as usize,
+                    "dictionary page",
+                )?;
+            }
             let mut dictionary = PlainDecoder::<T>::new(self.descr.type_length());
             dictionary.set_data(buf, num_values as usize)?;
 
@@ -492,6 +531,19 @@ mod tests {
     use super::*;
     use crate::encodings::rle::RleEncoder;
     use rand::{prelude::*, rng};
+
+    #[test]
+    fn fixed_len_payload_checked_size() {
+        for page in ["dictionary page", "PLAIN data page"] {
+            validate_fixed_len_byte_array_payload(12, 3, 4, page).unwrap();
+            validate_fixed_len_byte_array_payload(0, 0, 4, page).unwrap();
+            let err = validate_fixed_len_byte_array_payload(0, usize::MAX, 2, page)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("payload size overflow"), "{err}");
+            assert!(err.contains(page), "{err}");
+        }
+    }
 
     #[test]
     fn test_skip_padding() {

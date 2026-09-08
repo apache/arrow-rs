@@ -143,7 +143,7 @@ fn test_arrow_gh_47662() {
     let err = read_file("ARROW-GH-47662.parquet").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External: Parquet argument error: Parquet error: insufficient values read from column - expected: 100, got: 91"
+        "External: Parquet argument error: Parquet error: Invalid FIXED_LEN_BYTE_ARRAY PLAIN data page payload length: expected 400 bytes (100 values of 4 bytes), got 364. Length-prefixed BYTE_ARRAY payloads are not supported."
     );
 }
 
