@@ -83,7 +83,7 @@ pub fn flight_data_to_arrow_batch(
 /// Convert `RecordBatch`es to wire protocol `FlightData`s
 pub fn batches_to_flight_data<'a>(
     schema: &Schema,
-    batches: impl Iterator<Item = &'a RecordBatch>,
+    batches: impl IntoIterator<Item = &'a RecordBatch>,
 ) -> Result<Vec<FlightData>, ArrowError> {
     let options = IpcWriteOptions::default();
     let schema_flight_data: FlightData = SchemaAsIpc::new(schema, &options).into();
