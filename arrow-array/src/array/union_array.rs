@@ -585,14 +585,11 @@ impl UnionArray {
             .map(|(type_id, bit_chunks)| (*type_id, bit_chunks.iter()))
             .collect::<Vec<_>>();
 
-        let chunks_exact = self.type_ids.chunks_exact(64);
-        let remainder = chunks_exact.remainder();
+        let (chunks_exact, remainder) = self.type_ids.as_chunks::<64>();
 
-        let chunks = chunks_exact.map(|type_ids_chunk| {
-            let type_ids_chunk_array = <&[i8; 64]>::try_from(type_ids_chunk).unwrap();
-
-            mask_chunk(type_ids_chunk_array, &mut nulls_masks_iter)
-        });
+        let chunks = chunks_exact
+            .iter()
+            .map(|type_ids_chunk| mask_chunk(type_ids_chunk, &mut nulls_masks_iter));
 
         // SAFETY:
         // chunks is a ChunksExact iterator, which implements TrustedLen, and correctly reports its length
