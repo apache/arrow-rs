@@ -25,6 +25,19 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Implementation of struct array reader.
+///
+/// Reconstructs a `Struct` from its children's definition and repetition
+/// levels. See [`ArrayReader`] for how `struct_def_level` (`D`) and
+/// `struct_rep_level` (`R`) below are interpreted. Structs only use two
+/// definition states:
+///
+/// ```text
+/// d >= D   struct row is valid
+/// d <  D   struct row is null
+/// ```
+///
+/// where `d` is the per-row minimum definition level across the children
+/// (children share the same view of the parent, so the first child suffices).
 pub struct StructArrayReader {
     children: Vec<Box<dyn ArrayReader>>,
     data_type: ArrowType,
