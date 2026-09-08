@@ -4911,7 +4911,7 @@ pub(crate) mod tests {
                 .expect("page index should be present");
             let num_columns = builder.metadata().row_group(0).num_columns();
             let offset_indexes = page_index.offset_indexes_for_rowgroup(0);
-            assert!(offset_indexes.is_some_and(|ois| ois.len() == num_columns));
+            assert!(offset_indexes.is_some_and(|offset_idxs| offset_idxs.len() == num_columns));
             let column_indexes = page_index.offset_indexes_for_rowgroup(0);
             assert!(column_indexes.is_some_and(|cis| cis.len() == num_columns));
             assert!(page_index.offset_index(0, 0).is_some());

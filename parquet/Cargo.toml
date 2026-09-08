@@ -52,7 +52,7 @@ object_store = { workspace = true, optional = true, features = ["tokio"] }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 snap = { version = "1.0", default-features = false, optional = true }
-brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
+brotli = { version = "9.0", default-features = false, features = ["std"], optional = true }
 # To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backend` backends
 flate2 = { version = "1.1", default-features = false, optional = true }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame"], optional = true }
@@ -81,7 +81,7 @@ criterion = { workspace = true, default-features = false, features = ["async_fut
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 insta = { workspace = true, default-features = true }
-brotli = { version = "8.0", default-features = false, features = ["std"] }
+brotli = { version = "9.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame"] }
 zstd = { version = "0.13", default-features = false }
@@ -276,6 +276,11 @@ harness = false
 
 [[bench]]
 name = "encoding"
+required-features = ["experimental", "default"]
+harness = false
+
+[[bench]]
+name = "alp"
 required-features = ["experimental", "default"]
 harness = false
 
