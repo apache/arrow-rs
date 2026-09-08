@@ -1922,9 +1922,8 @@ mod tests {
         // https://github.com/apache/arrow-rs/issues/11018.
         let header = vec![
             128, 8, // block_size = 1024
-            4,   // mini_blocks_per_block = 4
-            128 + 44,
-            2, // total_values = 300
+            4, // mini_blocks_per_block = 4
+            172, 2, // total_values = 300
             0, // first_value = 0
         ];
 
