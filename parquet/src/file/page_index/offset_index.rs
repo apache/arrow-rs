@@ -50,7 +50,7 @@ thrift_struct!(
 ///
 /// See [`PageIndex`] for more information.
 ///
-/// [`PageIndex`]: crate::file::metadata::PageIndex
+/// [`PageIndex`]: crate::file::metadata::page_index::PageIndex
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct OffsetIndexMetaData {
   /// Vector of [`PageLocation`] objects, one per page in the chunk.

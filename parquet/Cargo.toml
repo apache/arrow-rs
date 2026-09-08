@@ -163,6 +163,11 @@ name = "object_store"
 required-features = ["arrow", "async"]
 path = "./examples/object_store.rs"
 
+[[example]]
+name = "custom_page_index"
+required-features = ["arrow"]
+path = "./examples/custom_page_index.rs"
+
 [[test]]
 name = "arrow_reader"
 required-features = ["arrow"]
