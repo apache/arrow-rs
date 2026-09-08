@@ -1534,7 +1534,7 @@ impl ArrowColumnWriterFactory {
                     out.push(bytes(leaves.next().unwrap())?)
                 }
                 ArrowDataType::FixedSizeBinary(_) => out.push(col(leaves.next().unwrap())?),
-                _ => out.push(col(leaves.next().unwrap())?),
+                _ => self.get_arrow_column_writer(value_type, props, leaves, out)?,
             },
             ArrowDataType::RunEndEncoded(_, value_field) => {
                 self.get_arrow_column_writer(value_field.data_type(), props, leaves, out)?
@@ -2511,6 +2511,186 @@ mod tests {
         // fixed_length_byte_array to store the decimal value
         let batch_fixed_len_byte_array_decimal = get_decimal_batch(30, 2);
         roundtrip(batch_fixed_len_byte_array_decimal, Some(SMALL_SIZE / 2));
+    }
+
+    fn read_column(file: Vec<u8>) -> ArrayRef {
+        let reader = ParquetRecordBatchReader::try_new(Bytes::from(file), 4096).unwrap();
+        let batches: Vec<RecordBatch> = reader.map(|b| b.unwrap()).collect();
+        let arrays: Vec<&dyn Array> = batches.iter().map(|b| b.column(0).as_ref()).collect();
+        arrow_select::concat::concat(&arrays).unwrap()
+    }
+
+    fn roundtrip_compatible_column(field: Field, col: ArrayRef) -> ArrayRef {
+        let writer_schema = Arc::new(Schema::new(vec![field]));
+        let batch_schema = Arc::new(Schema::new(vec![Field::new(
+            "c",
+            col.data_type().clone(),
+            col.logical_null_count() != 0,
+        )]));
+        let batch = RecordBatch::try_new(batch_schema, vec![col]).unwrap();
+        let options = ArrowWriterOptions::new().with_skip_arrow_metadata(true);
+        let mut file = vec![];
+        let mut writer =
+            ArrowWriter::try_new_with_options(&mut file, writer_schema, options).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        read_column(file)
+    }
+
+    #[test]
+    fn arrow_writer_dense_batches_under_nested_wrapper_schemas() {
+        let run_ends = || Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let ree = |value: DataType, nullable| {
+            DataType::RunEndEncoded(run_ends(), Arc::new(Field::new("values", value, nullable)))
+        };
+        let assert_unified = |field: Field, actual: ArrayRef, expected: &ArrayRef| {
+            assert!(!compute_leaves(&field, &actual).unwrap().is_empty());
+            assert_eq!(
+                roundtrip_compatible_column(field, actual).as_ref(),
+                expected.as_ref()
+            );
+        };
+
+        let item = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            item.clone(),
+            OffsetBuffer::new(vec![0_i32, 2, 3].into()),
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])),
+            None,
+        ));
+
+        // A dense list under an REE<List> schema uses range traversal; the
+        // schema wrapper is physical, not a second logical list node.
+        let ree_list_field = Field::new("c", ree(list.data_type().clone(), false), false);
+        assert_unified(ree_list_field, list.clone(), &list);
+
+        // Dictionary<List> has the same dense logical shape and follows the
+        // same list traversal after schema normalization.
+        let dictionary_list = Field::new(
+            "c",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(list.data_type().clone())),
+            false,
+        );
+        assert_unified(dictionary_list, list.clone(), &list);
+
+        let dense: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None, Some(9)]));
+        let nested_ree = Field::new("c", ree(ree(DataType::Int32, true), false), false);
+        assert_unified(nested_ree, dense.clone(), &dense);
+
+        let dictionary_ree = Field::new(
+            "c",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ree(DataType::Int32, true)),
+            ),
+            false,
+        );
+        assert_unified(dictionary_ree, dense.clone(), &dense);
+
+        // The inverse wrapper order must hoist REE value nullability before
+        // peeling the dictionary; the dense batch contains an actual null.
+        let ree_dictionary = Field::new(
+            "c",
+            ree(
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+                true,
+            ),
+            false,
+        );
+        assert_unified(ree_dictionary, dense.clone(), &dense);
+
+        // Wrapper normalization is per logical node: a wrapper nested under a
+        // struct child must not make the enclosing struct incompatible.
+        let struct_fields = Fields::from(vec![Field::new("value", DataType::Int32, true)]);
+        let dense_struct: ArrayRef =
+            Arc::new(StructArray::new(struct_fields, vec![dense.clone()], None));
+        let wrapped_struct = Field::new(
+            "c",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "value",
+                ree(DataType::Int32, true),
+                false,
+            )])),
+            false,
+        );
+        assert_unified(wrapped_struct, dense_struct.clone(), &dense_struct);
+
+        // The same recursive compatibility is required for list children.
+        let wrapped_list = Field::new(
+            "c",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                ree(DataType::Int32, true),
+                false,
+            ))),
+            false,
+        );
+        assert_unified(wrapped_list, list.clone(), &list);
+
+        // Nested scalar dictionaries may alternate with their dense logical
+        // value in either direction between writer schema and batch.
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(
+            Int8Array::from(vec![Some(0), None, Some(1)]),
+            Arc::new(Int32Array::from(vec![1, 3])),
+        ));
+        let dict_list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(dict.data_type().clone(), true)),
+            OffsetBuffer::new(vec![0_i32, 2, 3].into()),
+            dict,
+            None,
+        ));
+        let list_of_dictionary = Field::new(
+            "c",
+            DataType::List(Arc::new(Field::new_list_field(
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+                true,
+            ))),
+            false,
+        );
+        assert_unified(list_of_dictionary, list.clone(), &list);
+        assert_unified(
+            Field::new("c", list.data_type().clone(), false),
+            dict_list,
+            &list,
+        );
+
+        // A wrapper below a Map value is validated at the value node, after
+        // walking through the repeated entries struct.
+        let key_field = Arc::new(Field::new("keys", DataType::Utf8, false));
+        let entries = StructArray::new(
+            Fields::from(vec![
+                key_field.clone(),
+                Arc::new(Field::new("values", DataType::Int32, true)),
+            ]),
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef,
+                dense.clone(),
+            ],
+            None,
+        );
+        let map: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::new(vec![0_i32, 2, 3].into()),
+            entries,
+            None,
+            false,
+        ));
+        let wrapped_map = Field::new(
+            "c",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        key_field,
+                        Arc::new(Field::new("values", ree(DataType::Int32, true), false)),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            false,
+        );
+        assert_unified(wrapped_map, map.clone(), &map);
     }
 
     #[test]
