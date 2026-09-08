@@ -152,7 +152,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// Serialize the column indexes and transform to `Option<Vec<Vec<Option<ColumnIndexMetaData>>>>`
     fn finalize_column_indexes(
         &mut self,
-        page_index: &Option<Arc<dyn PageIndexProvider>>,
+        page_index: Option<&Arc<dyn PageIndexProvider>>,
     ) -> Result<Option<Vec<Vec<Option<ColumnIndexMetaData>>>>> {
         if page_index
             .as_ref()
@@ -179,7 +179,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// Serialize the offset indexes and transform to `Option<ParquetOffsetIndex>`
     fn finalize_offset_indexes(
         &mut self,
-        page_index: &Option<Arc<dyn PageIndexProvider>>,
+        page_index: Option<&Arc<dyn PageIndexProvider>>,
     ) -> Result<Option<Vec<Vec<Option<OffsetIndexMetaData>>>>> {
         if page_index
             .as_ref()
@@ -209,8 +209,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         // serialize page indexes and transform to the proper form for use in ParquetMetaData
         let page_index = self.page_index.take();
-        let column_indexes = self.finalize_column_indexes(&page_index)?;
-        let offset_indexes = self.finalize_offset_indexes(&page_index)?;
+        let column_indexes = self.finalize_column_indexes(page_index.as_ref())?;
+        let offset_indexes = self.finalize_offset_indexes(page_index.as_ref())?;
 
         // We only include ColumnOrder for leaf nodes.
         let column_orders = self
