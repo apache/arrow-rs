@@ -515,6 +515,11 @@ where
 // ----------------------------------------------------------------------
 // DELTA_BINARY_PACKED Decoding
 
+/// Upper bound on the scratch buffer [`DeltaBitPackDecoder::skip`] decodes into.
+/// Matches the widest miniblock this crate writes, and the widest unpack
+/// [`BitReader::get_batch`] performs in one step for a 64 bit type.
+const MAX_SKIP_BUFFER_VALUES: usize = 64;
+
 /// Delta binary packed decoder.
 /// Supports INT32 and INT64 types.
 /// See [`DeltaBitPackEncoder`](crate::encoding::DeltaBitPackEncoder) for more
@@ -852,23 +857,13 @@ where
         }
 
         // See https://github.com/apache/arrow-rs/pull/9794.
-        // The parquet spec actually allows for miniblock sizes other than 32 or 64, but
-        // no current writers use anything else. Using values_per_mini_block directly
-        // for the skip_buffer doesn't allow stack allocation and leads to a significant
-        // drop in performance. We'll settle for erroring out here and come up with a
-        // better fix if writers ever start getting creative with block sizes.
-        let mini_block_batch_size = match self.values_per_mini_block {
-            32 => 32,
-            64 => 64,
-            _ => {
-                return Err(general_err!(
-                    "cannot skip miniblock of size {}",
-                    self.values_per_mini_block
-                ));
-            }
-        };
-
-        let mut skip_buffer = vec![T::T::default(); mini_block_batch_size];
+        // The parquet spec allows miniblock sizes other than the 32 and 64 this crate
+        // writes, and sizing skip_buffer off values_per_mini_block would mean a large
+        // allocation on pages written with big miniblocks. The buffer only exists to
+        // walk last_value forward, so keep it at the size the common cases need and
+        // consume wider miniblocks a chunk at a time.
+        let mut skip_buffer =
+            vec![T::T::default(); self.values_per_mini_block.min(MAX_SKIP_BUFFER_VALUES)];
         while skip < to_skip {
             if self.mini_block_remaining == 0 {
                 self.next_mini_block()?;
@@ -894,30 +889,37 @@ where
                 // bit_width=0 payloads occupy zero bytes; no bit_reader advancement needed.
             } else {
                 // bw>0: must decode to track last_value for subsequent get() calls.
-                let skip_count = self
-                    .bit_reader
-                    .get_batch(&mut skip_buffer[0..mini_block_to_skip], bit_width);
+                let mut skipped_in_mini_block = 0;
+                while skipped_in_mini_block < mini_block_to_skip {
+                    let batch_to_skip =
+                        (mini_block_to_skip - skipped_in_mini_block).min(skip_buffer.len());
+                    let skip_count = self
+                        .bit_reader
+                        .get_batch(&mut skip_buffer[0..batch_to_skip], bit_width);
 
-                if skip_count != mini_block_to_skip {
-                    return Err(general_err!(
-                        "Expected to skip {} values from mini block got {}.",
-                        mini_block_to_skip,
-                        skip_count
-                    ));
-                }
+                    if skip_count != batch_to_skip {
+                        return Err(general_err!(
+                            "Expected to skip {} values from mini block got {}.",
+                            batch_to_skip,
+                            skip_count
+                        ));
+                    }
 
-                if min_delta == 0 {
-                    for v in &mut skip_buffer[0..skip_count] {
-                        *v = v.wrapping_add(&self.last_value);
-                        self.last_value = *v;
+                    if min_delta == 0 {
+                        for v in &mut skip_buffer[0..skip_count] {
+                            *v = v.wrapping_add(&self.last_value);
+                            self.last_value = *v;
+                        }
+                    } else {
+                        for v in &mut skip_buffer[0..skip_count] {
+                            *v = v
+                                .wrapping_add(&self.min_delta)
+                                .wrapping_add(&self.last_value);
+                            self.last_value = *v;
+                        }
                     }
-                } else {
-                    for v in &mut skip_buffer[0..skip_count] {
-                        *v = v
-                            .wrapping_add(&self.min_delta)
-                            .wrapping_add(&self.last_value);
-                        self.last_value = *v;
-                    }
+
+                    skipped_in_mini_block += batch_to_skip;
                 }
             }
 
@@ -1910,6 +1912,57 @@ mod tests {
         decoder.get(&mut result).unwrap();
         assert_eq!(decoder.get_offset(), 34);
         assert_eq!(result, vec![29, 43, 89]);
+    }
+
+    #[test]
+    fn test_delta_bit_packed_skip_wide_miniblocks() {
+        // 1024 values per block over 4 miniblocks is 256 values per miniblock, which is
+        // spec legal but wider than anything this crate writes. Databricks Photon 0.2
+        // emits pages shaped like this. See
+        // https://github.com/apache/arrow-rs/issues/11018.
+        let header = vec![
+            128, 8, // block_size = 1024
+            4,   // mini_blocks_per_block = 4
+            128 + 44,
+            2, // total_values = 300
+            0, // first_value = 0
+        ];
+
+        let block_header = vec![
+            0, // min_delta = 0
+            1, 0, 0, 0, // bit widths
+        ];
+
+        // Miniblock 1 - bit width 1, all deltas 1 => 256 bits
+        // Miniblocks 2 to 4 - bit width 0 => no bytes
+        let block = vec![0xFF; 32];
+
+        let data: Vec<u8> = header
+            .into_iter()
+            .chain(block_header)
+            .chain(block)
+            .collect();
+        let data = Bytes::from(data);
+
+        // Values are 0..=256 followed by 43 more copies of 256.
+        let expected: Vec<i32> = (200..=256).chain(std::iter::repeat_n(256, 43)).collect();
+
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        decoder.set_data(data.clone(), 0).unwrap();
+        assert_eq!(decoder.skip(200).unwrap(), 200);
+
+        let mut output = vec![0_i32; 100];
+        assert_eq!(decoder.get(&mut output).unwrap(), 100);
+        assert_eq!(output, expected);
+
+        // Skipping across the miniblock boundary must leave last_value on the plateau.
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        decoder.set_data(data, 0).unwrap();
+        assert_eq!(decoder.skip(299).unwrap(), 299);
+
+        let mut output = vec![0_i32; 1];
+        assert_eq!(decoder.get(&mut output).unwrap(), 1);
+        assert_eq!(output, vec![256]);
     }
 
     #[test]
