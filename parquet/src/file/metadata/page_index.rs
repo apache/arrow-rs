@@ -249,22 +249,16 @@ pub trait PageIndexProvider: Send + Sync + std::fmt::Debug {
 ///
 /// ```
 /// use parquet::file::metadata::ParquetMetaData;
-/// use parquet::file::metadata::page_index::RowGroupPageIndex;
 /// # use parquet::errors::Result;
 ///
 /// fn process_row_group_pages(metadata: &ParquetMetaData, row_group_idx: usize) -> Result<()> {
-///     if let Some(page_index) = metadata.page_index() {
-///         // Create a row-group-specific view
-///         let rg_page_index = RowGroupPageIndex::new(
-///             row_group_idx,
-///             metadata.page_index().cloned(),
-///         );
+///     // Create a row-group-specific view of the page index
+///     let rg_page_index = metadata.page_index_for_row_group(row_group_idx);
 ///
-///         // Now access column indexes without specifying row_group_idx each time
-///         for col_idx in 0..metadata.file_metadata().schema_descr().num_columns() {
-///             if let Some(col_idx_data) = rg_page_index.column_index(col_idx) {
-///                 println!("Column {} has {} pages", col_idx, col_idx_data.num_pages());
-///             }
+///     // Now access column indexes without specifying row_group_idx each time
+///     for col_idx in 0..metadata.file_metadata().schema_descr().num_columns() {
+///         if let Some(col_idx_data) = rg_page_index.column_index(col_idx) {
+///             println!("Column {} has {} pages", col_idx, col_idx_data.num_pages());
 ///         }
 ///     }
 ///     Ok(())
@@ -603,8 +597,8 @@ impl PageIndexBuilder {
 
     /// Sets the column index for a specific row group and column
     ///
-    /// If column indexes were not allocated (policy was `Skip`), this method does nothing.
-    /// If the row group or column index is out of bounds, this method does nothing.
+    /// If column indexes were not allocated (see [`Self::allocate_column_indexes`]),
+    /// or the row group or column index is out of bounds, this method does nothing.
     pub fn put_column_index(
         &mut self,
         column_index: ColumnIndexMetaData,
@@ -621,8 +615,8 @@ impl PageIndexBuilder {
 
     /// Sets the offset index for a specific row group and column
     ///
-    /// If offset indexes were not allocated (policy was `Skip`), this method does nothing.
-    /// If the row group or column index is out of bounds, this method does nothing.
+    /// If offset indexes were not allocated (see [`Self::allocate_offset_indexes`]),
+    /// or the row group or column index is out of bounds, this method does nothing.
     pub fn put_offset_index(
         &mut self,
         offset_index: OffsetIndexMetaData,

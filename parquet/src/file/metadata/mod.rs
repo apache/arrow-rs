@@ -271,6 +271,11 @@ impl PartialEq for ParquetMetaData {
             return false;
         }
 
+        #[cfg(feature = "encryption")]
+        if self.file_decryptor != other.file_decryptor {
+            return false;
+        }
+
         // Compare page_index by downcasting to PageIndex and comparing
         match (&self.page_index, &other.page_index) {
             (None, None) => true,
@@ -371,7 +376,7 @@ impl ParquetMetaDataBuilder {
     ///
     /// For an example see [`custom_page_index.rs`]
     ///
-    /// [`custom_page_index.rs`]: https://github.com/apache/arrow-rs/tree/master/parquet/examples/custom_page_index.rs
+    /// [`custom_page_index.rs`]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/custom_page_index.rs
     pub fn set_page_index(mut self, page_index: Option<Arc<dyn PageIndexProvider>>) -> Self {
         self.0.page_index = page_index;
         self
@@ -2220,7 +2225,7 @@ mod tests {
     }
 
     #[test]
-    fn test_page_index_builder_skip_policy() {
+    fn test_page_index_builder_partial_population() {
         let mut builder = PageIndexBuilder::new(1, 1);
 
         // Add an offset index
