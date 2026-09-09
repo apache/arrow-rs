@@ -29,7 +29,7 @@ use arrow_flight::sql::client::FlightSqlServiceClient;
 use arrow_flight::sql::server::{FlightSqlService, PeekableFlightDataStream};
 use arrow_flight::sql::{
     ActionBeginTransactionRequest, ActionBeginTransactionResult, ActionEndTransactionRequest,
-    CommandStatementIngest, EndTransaction, FallibleRequestStream, ProstMessageExt, SqlInfo,
+    CommandStatementIngest, EndTransaction, FallibleRequestStream, ProstMessageExt,
     TableDefinitionOptions, TableExistsOption, TableNotExistOption,
 };
 use arrow_flight::{Action, FlightData, FlightDescriptor};
@@ -280,8 +280,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         }
         Ok(())
     }
-
-    async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
 
     async fn do_put_statement_ingest(
         &self,

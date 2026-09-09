@@ -570,7 +570,11 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
     }
 
     /// Register a new SqlInfo result, making it available when calling GetSqlInfo.
-    async fn register_sql_info(&self, id: i32, result: &SqlInfo);
+    #[deprecated(
+        since = "60.0.0",
+        note = "Not used in request handling and doesn't accept a value to register. Use `SqlInfoDataBuilder::append` instead"
+    )]
+    async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}
 }
 
 /// Implements the lower level interface to handle FlightSQL
