@@ -171,7 +171,9 @@ impl<T: DataType> TypedColumnChunkEncoder<T> {
                 extrema.observe(ctx, value, value_is_nan);
             }
         }
-        if let Some(bloom) = bloom_filter.as_mut() {
+        if !matches!(encoding_family, NumericEncodingFamily::Dictionary(_))
+            && let Some(bloom) = bloom_filter.as_mut()
+        {
             for &value in values {
                 bloom.insert(&value);
             }

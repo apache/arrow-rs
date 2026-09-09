@@ -19,7 +19,7 @@ use bytes::Bytes;
 
 use super::{
     DeltaBitPackEncoder, DictEncoder, DictionaryStorage, DictionaryValue, Encoder, EncodingFamily,
-    unsupported_column_encoding,
+    FixedLenByteArrayEncoder, PackedFixedLenByteArrayBatch, unsupported_column_encoding,
 };
 use crate::basic::{Encoding, Type};
 use crate::data_type::private::byte_array_length;
@@ -214,6 +214,31 @@ impl Default for ByteArrayDeltaEncoder {
 }
 
 impl ByteArrayDeltaEncoder {
+    /// Encode a borrowed batch while retaining only its final value for the
+    /// next batch's prefix comparison.
+    #[inline(always)]
+    pub(crate) fn put_values<'a>(
+        &mut self,
+        values: impl IntoIterator<Item = &'a [u8]>,
+    ) -> Result<i64> {
+        let mut previous = self.last_value.as_slice();
+        let mut last = None;
+        let mut unencoded_value_bytes = 0i64;
+        for value in values {
+            let prefix_length = common_prefix_length(previous, value);
+            self.prefix_lengths.put_i64(prefix_length as i64)?;
+            self.suffixes.put_value(&value[prefix_length..])?;
+            unencoded_value_bytes += value.len() as i64;
+            previous = value;
+            last = Some(value);
+        }
+        if let Some(last) = last {
+            self.last_value.clear();
+            self.last_value.extend_from_slice(last);
+        }
+        Ok(unencoded_value_bytes)
+    }
+
     #[inline(always)]
     pub(crate) fn put_value(&mut self, value: &[u8]) -> Result<()> {
         let prefix_length = common_prefix_length(&self.last_value, value);
@@ -271,6 +296,18 @@ impl Encoder<FixedLenByteArrayType> for ByteArrayDeltaEncoder {
     }
 }
 
+impl FixedLenByteArrayEncoder for ByteArrayDeltaEncoder {
+    fn put_fixed_len_byte_array_batch(
+        &mut self,
+        values: PackedFixedLenByteArrayBatch<'_>,
+    ) -> Result<()> {
+        for value in values.iter() {
+            self.put_value(value)?;
+        }
+        Ok(())
+    }
+}
+
 impl ByteArrayEncodingFamily {
     fn from_encoding(encoding: Encoding, _descr: &ColumnDescPtr) -> Result<Self> {
         match encoding {
@@ -285,7 +322,9 @@ impl ByteArrayEncodingFamily {
 impl<D: DataType<T = ByteArray>> Encoder<D> for ByteArrayEncodingFamily {
     fn put(&mut self, values: &[ByteArray]) -> Result<()> {
         match self {
-            Self::Dictionary(encoder) => Encoder::<ByteArrayType>::put(encoder, values),
+            Self::Dictionary(_) => {
+                unreachable!("dictionary variant is not routed through Encoder")
+            }
             Self::Plain(encoder) => {
                 let mut payload = 0usize;
                 for value in values {
@@ -315,7 +354,9 @@ impl<D: DataType<T = ByteArray>> Encoder<D> for ByteArrayEncodingFamily {
 
     fn encoding(&self) -> Encoding {
         match self {
-            Self::Dictionary(encoder) => Encoder::<ByteArrayType>::encoding(encoder),
+            Self::Dictionary(_) => {
+                unreachable!("dictionary variant is not routed through Encoder")
+            }
             Self::Plain(_) => Encoding::PLAIN,
             Self::DeltaLength(_) => Encoding::DELTA_LENGTH_BYTE_ARRAY,
             Self::Delta(_) => Encoding::DELTA_BYTE_ARRAY,
@@ -324,8 +365,8 @@ impl<D: DataType<T = ByteArray>> Encoder<D> for ByteArrayEncodingFamily {
 
     fn estimated_data_encoded_size(&self) -> usize {
         match self {
-            Self::Dictionary(encoder) => {
-                Encoder::<ByteArrayType>::estimated_data_encoded_size(encoder)
+            Self::Dictionary(_) => {
+                unreachable!("dictionary variant is not routed through Encoder")
             }
             Self::Plain(encoder) => encoder.estimated_data_encoded_size(),
             Self::DeltaLength(encoder) => encoder.estimated_data_encoded_size(),
@@ -335,7 +376,9 @@ impl<D: DataType<T = ByteArray>> Encoder<D> for ByteArrayEncodingFamily {
 
     fn estimated_memory_size(&self) -> usize {
         match self {
-            Self::Dictionary(encoder) => Encoder::<ByteArrayType>::estimated_memory_size(encoder),
+            Self::Dictionary(_) => {
+                unreachable!("dictionary variant is not routed through Encoder")
+            }
             Self::Plain(encoder) => encoder.estimated_memory_size(),
             Self::DeltaLength(encoder) => encoder.estimated_memory_size(),
             Self::Delta(encoder) => encoder.estimated_memory_size(),
@@ -344,7 +387,9 @@ impl<D: DataType<T = ByteArray>> Encoder<D> for ByteArrayEncodingFamily {
 
     fn flush_buffer(&mut self) -> Result<Bytes> {
         match self {
-            Self::Dictionary(encoder) => Encoder::<ByteArrayType>::flush_buffer(encoder),
+            Self::Dictionary(_) => {
+                unreachable!("dictionary variant is not routed through Encoder")
+            }
             Self::Plain(encoder) => Ok(encoder.flush_buffer()),
             Self::DeltaLength(encoder) => encoder.flush_buffer(),
             Self::Delta(encoder) => encoder.flush_buffer(),

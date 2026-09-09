@@ -49,6 +49,7 @@ pub(crate) use boolean::{BoolBatch, BoolEncoder};
 #[cfg(feature = "experimental")]
 #[expect(deprecated, reason = "Preserve the experimental concrete encoder API")]
 pub use compatibility::{DeltaByteArrayEncoder, DeltaLengthByteArrayEncoder, PlainEncoder};
+pub(crate) use fixed_len_byte_array::{FixedLenByteArrayEncoder, PackedFixedLenByteArrayBatch};
 pub use numeric::DeltaBitPackEncoder;
 
 // ----------------------------------------------------------------------
@@ -169,35 +170,35 @@ macro_rules! encoding_family_enum {
         {
             fn put(&mut self, values: &[D::T]) -> Result<()> {
                 match self {
-                    $(Self::$dict_variant(e) => Encoder::<$ty>::put(e, values),)?
+                    $(Self::$dict_variant(_) => unreachable!("dictionary variant is not routed through Encoder"),)?
                     $(Self::$variant(e) => e.put(values)),+
                 }
             }
 
             fn encoding(&self) -> Encoding {
                 match self {
-                    $(Self::$dict_variant(e) => Encoder::<$ty>::encoding(e),)?
+                    $(Self::$dict_variant(_) => unreachable!("dictionary variant is not routed through Encoder"),)?
                     $(Self::$variant(e) => e.encoding()),+
                 }
             }
 
             fn estimated_data_encoded_size(&self) -> usize {
                 match self {
-                    $(Self::$dict_variant(e) => Encoder::<$ty>::estimated_data_encoded_size(e),)?
+                    $(Self::$dict_variant(_) => unreachable!("dictionary variant is not routed through Encoder"),)?
                     $(Self::$variant(e) => e.estimated_data_encoded_size()),+
                 }
             }
 
             fn estimated_memory_size(&self) -> usize {
                 match self {
-                    $(Self::$dict_variant(e) => Encoder::<$ty>::estimated_memory_size(e),)?
+                    $(Self::$dict_variant(_) => unreachable!("dictionary variant is not routed through Encoder"),)?
                     $(Self::$variant(e) => e.estimated_memory_size()),+
                 }
             }
 
             fn flush_buffer(&mut self) -> Result<Bytes> {
                 match self {
-                    $(Self::$dict_variant(e) => Encoder::<$ty>::flush_buffer(e),)?
+                    $(Self::$dict_variant(_) => unreachable!("dictionary variant is not routed through Encoder"),)?
                     $(Self::$variant(e) => e.flush_buffer()),+
                 }
             }
@@ -298,7 +299,10 @@ macro_rules! impl_dictionary_encoding_family {
 }
 
 mod byte_array;
-pub(crate) use byte_array::{ByteArrayDeltaEncoder, ByteArrayEncodingFamily};
+pub(crate) use byte_array::{
+    ByteArrayDeltaEncoder, ByteArrayDeltaLengthEncoder, ByteArrayEncodingFamily,
+    ByteArrayPlainEncoder,
+};
 
 /// Defines a flat encoding-family enum with dictionary lifecycle handling.
 macro_rules! dictionary_encoding_family {

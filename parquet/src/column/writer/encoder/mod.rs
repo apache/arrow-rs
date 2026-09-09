@@ -15,30 +15,36 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::column::value_batch::{BatchSink, ValueProducer, gather_tiled};
-use crate::encodings::encoding::{BoolBatch, BoolEncoder, PlainEncoderType};
-use crate::schema::types::ColumnDescriptor;
 use bytes::Bytes;
-mod boolean;
-mod numeric;
-use numeric::NumericBatch;
 
+use self::byte_array::encode_byte_slice;
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::{compare_greater, is_nan};
+use crate::column::value_batch::{BatchSink, ValueProducer, gather_tiled};
+use crate::column::writer::{compare_greater_byte_array, is_f16_nan};
 use crate::column::writer::{fallback_encoding, has_dictionary_support, update_max, update_min};
+use crate::data_type::FixedLenByteArrayType;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::{ByteArray, DataType, FixedLenByteArray, Int96};
+use crate::encodings::encoding::FixedLenByteArrayEncoder;
+use crate::encodings::encoding::{BoolBatch, BoolEncoder};
 use crate::encodings::encoding::{
-    BoolEncodingFamily, ByteArrayEncodingFamily, DictionaryValue, Encoder, EncodingFamily,
-    FixedLenByteArrayEncodingFamily, NumericEncodingFamily,
+    BoolEncodingFamily, ByteArrayEncodingFamily, DictEncoder, DictionaryValue, Encoder,
+    EncodingFamily, FixedLenByteArrayEncodingFamily, NumericEncodingFamily, PlainEncoderType,
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, ResolvedColumnProperties, WriterProperties};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
-use crate::schema::types::{BasicTypeInfo, ColumnDescPtr};
+use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 
+mod boolean;
+pub(super) mod byte_array;
+mod fixed_len_byte_array;
+mod numeric;
+
+use fixed_len_byte_array::encode_fixed_len_byte_array_slice;
+use numeric::NumericBatch;
 /// A collection of [`ParquetValueType`] encoded by a [`ColumnChunkEncoder`]
 pub trait ColumnValues {
     /// The number of values in this collection
@@ -203,7 +209,6 @@ pub trait ColumnWriterValue: DictionaryValue + Sized {
     fn encode_slice<D>(enc: &mut TypedColumnChunkEncoder<D>, values: &[Self]) -> Result<()>
     where
         D: DataType<T = Self>;
-
     fn encode_gather<D>(
         enc: &mut TypedColumnChunkEncoder<D>,
         values: &[Self],
@@ -285,7 +290,7 @@ impl ColumnWriterValue for FixedLenByteArray {
     where
         D: DataType<T = Self>,
     {
-        enc.write_generic_slice(values)
+        encode_fixed_len_byte_array_slice(enc, values)
     }
 }
 
@@ -299,7 +304,7 @@ impl ColumnWriterValue for ByteArray {
     where
         D: DataType<T = Self>,
     {
-        enc.write_generic_slice(values)
+        encode_byte_slice(enc, values)
     }
 }
 
@@ -328,51 +333,16 @@ pub struct TypedColumnChunkEncoder<T: DataType> {
     /// [`EncodingFamily::take_dict_page`] uses it to build the fallback encoder
     /// when dictionary encoding is abandoned.
     fallback_encoding: Encoding,
+    /// Reusable extrema buffers for fixed-length byte-array writes. Empty for
+    /// every other physical type.
+    fixed_len_byte_array_scratch: FixedLenByteArrayScratch,
 }
 
-impl<T: DataType> TypedColumnChunkEncoder<T> {
-    fn is_floating_point_column(&self) -> bool {
-        matches!(self.descr.physical_type(), Type::FLOAT | Type::DOUBLE)
-            || self.descr.logical_type_ref() == Some(&LogicalType::Float16)
-    }
-
-    /// Fold statistics, bloom filter and encoded bytes for a dense slice of
-    /// values. Every physical type shares this path until its own batch sink
-    /// takes over.
-    fn write_generic_slice(&mut self, slice: &[T::T]) -> Result<()> {
-        self.num_values += slice.len();
-        if self.statistics_enabled != EnabledStatistics::None
-            // INTERVAL, Geometry, and Geography have undefined sort order, so don't write min/max stats for them
-            && self.descr.converted_type() != ConvertedType::INTERVAL
-        {
-            if let Some(accumulator) = self.geo_stats_accumulator.as_deref_mut() {
-                update_geo_stats_accumulator(accumulator, slice.iter());
-            } else if let Some((min, max, nan_count)) =
-                get_min_max(self.descr.get_basic_info(), slice.iter())
-            {
-                update_min(&self.descr, &min, &mut self.min_value);
-                update_max(&self.descr, &max, &mut self.max_value);
-                if self.is_floating_point_column() {
-                    *self.nan_count.get_or_insert(0) += nan_count;
-                }
-            }
-
-            if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
-                *self.variable_length_bytes.get_or_insert(0) += var_bytes;
-            }
-        }
-
-        // Dictionary values are hashed once at dictionary flush, not once per row.
-        if !self.encoding_family.is_dictionary()
-            && let Some(bloom_filter) = &mut self.bloom_filter
-        {
-            for value in slice {
-                bloom_filter.insert(value);
-            }
-        }
-
-        self.encoding_family.put(slice)
-    }
+/// Reusable storage for extrema copied from transient fixed-length byte-array batches.
+#[derive(Default)]
+struct FixedLenByteArrayScratch {
+    min: Vec<u8>,
+    max: Vec<u8>,
 }
 
 impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {
@@ -480,6 +450,7 @@ impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {
             variable_length_bytes: None,
             geo_stats_accumulator,
             fallback_encoding,
+            fixed_len_byte_array_scratch: FixedLenByteArrayScratch::default(),
         })
     }
 
@@ -508,7 +479,9 @@ impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {
         // The running column min/max pin their values' heap bytes through page
         // flush — for byte arrays that can be two full values
         // (zero for the fixed-width scalars, whose `variable_length_bytes` is
-        // `None`).
+        // `None`). The fixed-length byte-array scratch accumulator is folded in
+        // the same way; it
+        // stays empty for every other family.
         let stats_size = [&self.min_value, &self.max_value]
             .into_iter()
             .flatten()
@@ -516,7 +489,9 @@ impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {
                 <T::T as ParquetValueType>::variable_length_bytes(std::slice::from_ref(v))
                     .unwrap_or(0) as usize
             })
-            .sum::<usize>();
+            .sum::<usize>()
+            + self.fixed_len_byte_array_scratch.min.capacity()
+            + self.fixed_len_byte_array_scratch.max.capacity();
 
         encoder_size + bloom_filter_size + stats_size
     }
@@ -536,8 +511,9 @@ impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {
             ));
         }
         if let Some(bloom_filter) = &mut self.bloom_filter {
+            let mut batch = bloom_filter.batch();
             self.encoding_family
-                .visit_dictionary_values(|value| bloom_filter.insert(value));
+                .visit_dictionary_values(|value| batch.insert(value));
         }
         // `take_dict_page` serializes the dictionary page and transitions the encoder
         // to the fallback encoding (dictionary fallback); `None` when not dictionary.
@@ -567,64 +543,6 @@ impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {
 
     fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {
         self.geo_stats_accumulator.as_mut().map(|a| a.finish())?
-    }
-}
-
-// Get min and max values for all values in `iter`.
-//
-// For floating point we need to compare NaN values until we encounter a non-NaN
-// value which then becomes the new min/max. After this, only non-NaN values are
-// evaluated. If all values are NaN, then the min/max NaNs as determined by
-// IEEE 754 total order are returned.
-fn get_min_max<'a, T, I>(basic_type_info: &BasicTypeInfo, mut iter: I) -> Option<(T, T, u64)>
-where
-    T: ParquetValueType + 'a,
-    I: Iterator<Item = &'a T>,
-{
-    let first = iter.next()?;
-    let mut min_max_nan = is_nan(basic_type_info, first);
-    let mut nan_count = min_max_nan as u64;
-
-    let mut min = first;
-    let mut max = first;
-    for val in iter {
-        match (min_max_nan, is_nan(basic_type_info, val)) {
-            // skip NaNs if we've encounter non-NaN
-            (false, true) => {
-                nan_count += 1;
-            }
-            // if min/max are NaN, check for non-NaN and reset
-            (true, false) => {
-                min = val;
-                max = val;
-                min_max_nan = false;
-            }
-            // both are NaN or non-NaN, so do the comparison
-            (_, val_is_nan) => {
-                nan_count += val_is_nan as u64;
-                // we've already initialized min and max, so a single value can't be both
-                // extremes
-                if compare_greater(basic_type_info, min, val) {
-                    min = val;
-                } else if compare_greater(basic_type_info, val, max) {
-                    max = val;
-                }
-            }
-        }
-    }
-
-    Some((min.clone(), max.clone(), nan_count))
-}
-
-fn update_geo_stats_accumulator<'a, T, I>(bounder: &mut dyn GeoStatsAccumulator, iter: I)
-where
-    T: ParquetValueType + 'a,
-    I: Iterator<Item = &'a T>,
-{
-    if bounder.is_valid() {
-        for val in iter {
-            bounder.update_wkb(val.as_bytes());
-        }
     }
 }
 
@@ -662,8 +580,11 @@ fn int64_greater(unsigned: bool, a: i64, b: i64) -> bool {
     }
 }
 
-/// Min/max folding for numeric scalars. Strategies retain scalar values;
-/// `Owned` is the materialized column statistic.
+/// Min/max folding for numeric scalars and variable-width byte arrays. Numeric
+/// strategies retain scalar values; the byte strategy retains sized `&[u8]`
+/// handles to variable-width payloads without per-value allocation. `Owned` is
+/// the materialized column statistic. Fixed-length byte arrays use a separate owned accumulator
+/// because its computed values can borrow transient tiles.
 ///
 /// Integer columns need descriptor-derived context because Parquet min/max for
 /// unsigned logical types must compare the stored bits as unsigned values.
@@ -691,6 +612,40 @@ pub(crate) trait MinMaxStrategy<'v> {
     fn is_nan(_ctx: Self::Ctx, _value: Self::Elem) -> bool {
         false
     }
+    /// Materialize an accumulated element into the owned column statistic.
+    fn to_owned(value: Self::Elem) -> Self::Owned;
+
+    /// Fold one value into the running `(min, max)`.
+    #[inline(always)]
+    fn observe(
+        ctx: Self::Ctx,
+        value: Self::Elem,
+        min: &mut Option<Self::Elem>,
+        max: &mut Option<Self::Elem>,
+    ) {
+        let value_is_nan = Self::is_nan(ctx, value);
+        match min {
+            None => *min = Some(value),
+            Some(current) => match (Self::is_nan(ctx, *current), value_is_nan) {
+                // Once a non-NaN is observed, later NaNs do not participate in extrema.
+                (false, true) => {}
+                // The first non-NaN replaces an all-NaN running extremum.
+                (true, false) => *current = value,
+                // Both values are NaN or both are non-NaN.
+                _ if Self::greater(ctx, *current, value) => *current = value,
+                _ => {}
+            },
+        }
+        match max {
+            None => *max = Some(value),
+            Some(current) => match (Self::is_nan(ctx, *current), value_is_nan) {
+                (false, true) => {}
+                (true, false) => *current = value,
+                _ if Self::greater(ctx, value, *current) => *current = value,
+                _ => {}
+            },
+        }
+    }
 }
 
 impl MinMaxStrategy<'_> for i32 {
@@ -705,6 +660,10 @@ impl MinMaxStrategy<'_> for i32 {
     fn greater(unsigned: bool, a: i32, b: i32) -> bool {
         int32_greater(unsigned, a, b)
     }
+    #[inline(always)]
+    fn to_owned(v: i32) -> i32 {
+        v
+    }
 }
 
 impl MinMaxStrategy<'_> for i64 {
@@ -718,6 +677,10 @@ impl MinMaxStrategy<'_> for i64 {
     #[inline(always)]
     fn greater(unsigned: bool, a: i64, b: i64) -> bool {
         int64_greater(unsigned, a, b)
+    }
+    #[inline(always)]
+    fn to_owned(v: i64) -> i64 {
+        v
     }
 }
 
@@ -736,6 +699,10 @@ impl MinMaxStrategy<'_> for f32 {
     fn is_nan((): (), value: f32) -> bool {
         value.is_nan()
     }
+    #[inline(always)]
+    fn to_owned(v: f32) -> f32 {
+        v
+    }
 }
 
 impl MinMaxStrategy<'_> for f64 {
@@ -753,6 +720,10 @@ impl MinMaxStrategy<'_> for f64 {
     fn is_nan((): (), value: f64) -> bool {
         value.is_nan()
     }
+    #[inline(always)]
+    fn to_owned(v: f64) -> f64 {
+        v
+    }
 }
 
 impl MinMaxStrategy<'_> for Int96 {
@@ -766,6 +737,10 @@ impl MinMaxStrategy<'_> for Int96 {
         // INT96 min/max use the timestamp `(days, nanos)` order (`Int96: Ord`),
         // matching the descriptor-driven `compare_greater` merge in `merge_batch_stats`.
         a > b
+    }
+    #[inline(always)]
+    fn to_owned(v: Int96) -> Int96 {
+        v
     }
 }
 
