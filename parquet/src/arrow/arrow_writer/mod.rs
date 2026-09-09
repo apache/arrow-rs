@@ -17,7 +17,7 @@
 
 //! Contains writer which writes arrow data into parquet data.
 
-use crate::column::chunker::ContentDefinedChunker;
+use crate::column::chunker::CdcFramer;
 
 use bytes::Bytes;
 use half::f16;
@@ -224,8 +224,8 @@ pub struct ArrowWriter<W: Write> {
     /// The maximum size in bytes for a row group, or None for unlimited
     max_row_group_bytes: Option<usize>,
 
-    /// CDC chunkers persisted across row groups (one per leaf column).
-    cdc_chunkers: Option<Vec<ContentDefinedChunker>>,
+    /// CDC framers persisted across row groups (one per leaf column).
+    cdc_framers: Option<Vec<CdcFramer>>,
 }
 
 impl<W: Write + Send> std::fmt::Debug for ArrowWriter<W> {
@@ -302,14 +302,14 @@ impl<W: Write + Send> ArrowWriter<W> {
                 row_group_writer_factory.with_page_store_factory(page_store_factory);
         }
 
-        let cdc_chunkers = props_ptr
+        let cdc_framers = props_ptr
             .content_defined_chunking()
             .map(|opts| {
                 file_writer
                     .schema_descr()
                     .columns()
                     .iter()
-                    .map(|desc| ContentDefinedChunker::new(desc, opts))
+                    .map(|desc| CdcFramer::new(desc, opts))
                     .collect::<Result<Vec<_>>>()
             })
             .transpose()?;
@@ -321,7 +321,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             row_group_writer_factory,
             max_row_group_row_count,
             max_row_group_bytes,
-            cdc_chunkers,
+            cdc_framers,
         })
     }
 
@@ -450,8 +450,8 @@ impl<W: Write + Send> ArrowWriter<W> {
             });
 
             let in_progress = self.in_progress.as_mut().unwrap();
-            match self.cdc_chunkers.as_mut() {
-                Some(chunkers) => in_progress.write_with_chunkers(&remaining, chunkers)?,
+            match self.cdc_framers.as_mut() {
+                Some(framers) => in_progress.write_with_framers(&remaining, framers)?,
                 None => in_progress.write(&remaining)?,
             }
 
@@ -1061,6 +1061,58 @@ fn write_tree(tree: &LevelTree, writers: &mut [ArrowColumnWriter]) -> Result<()>
     Ok(())
 }
 
+/// As [`write_tree`], with each leaf's pages framed by content-defined chunking.
+fn write_tree_with_framers(
+    tree: &LevelTree,
+    writers: &mut [ArrowColumnWriter],
+    framers: &mut [CdcFramer],
+) -> Result<()> {
+    let Some(first) = writers.first() else {
+        return Ok(());
+    };
+    let cursor_row_limit = first.cursor_row_limit;
+    if writers.len() == 1 {
+        writers[0].writer.start_arrow_source();
+        return write_leaf_window(tree, 0, cursor_row_limit, |batch| {
+            writers[0].write_cdc_batch(batch, &mut framers[0])
+        });
+    }
+    let Some(windows) = tree.write_windows() else {
+        for ((leaf, writer), framer) in writers.iter_mut().enumerate().zip(&mut *framers) {
+            writer.writer.start_arrow_source();
+            write_leaf_window(tree, leaf as u32, cursor_row_limit, |batch| {
+                writer.write_cdc_batch(batch, framer)
+            })?;
+        }
+        return Ok(());
+    };
+    for writer in &mut *writers {
+        writer.writer.start_arrow_source();
+    }
+
+    for window in windows {
+        if window.len() == 1 {
+            let leaf = window.start as usize;
+            write_leaf_window(tree, leaf as u32, cursor_row_limit, |batch| {
+                writers[leaf].write_cdc_batch(batch, &mut framers[leaf])
+            })?;
+            continue;
+        }
+
+        let mut cursor = tree.cursor(window.clone(), CURSOR_TARGET_SLOTS, cursor_row_limit)?;
+        while let Some(tiles) = cursor.next_tiles()? {
+            for offset in 0..tiles.len() {
+                let leaf = window.start as usize + offset;
+                writers[leaf].write_cdc_batch(
+                    tiles.leaf(offset, tree.terminal(leaf as u32)),
+                    &mut framers[leaf],
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn shared_cursor_tree(leaves: &[ArrowLeafColumn]) -> Option<&LevelTree> {
     let ArrowLeafPlan::Cursor {
         tree,
@@ -1093,6 +1145,18 @@ fn write_direct_group_batches(
         return Ok(false);
     };
     write_tree(tree, writers)?;
+    Ok(true)
+}
+
+fn write_direct_group_batches_with_framers(
+    leaves: &[ArrowLeafColumn],
+    writers: &mut [ArrowColumnWriter],
+    framers: &mut [CdcFramer],
+) -> Result<bool> {
+    let Some(tree) = shared_cursor_tree(leaves) else {
+        return Ok(false);
+    };
+    write_tree_with_framers(tree, writers, framers)?;
     Ok(true)
 }
 
@@ -1297,34 +1361,28 @@ impl ArrowColumnWriter {
         })
     }
 
-    /// Write with content-defined chunking, inserting page flushes at chunk boundaries.
-    fn write_with_chunker(
-        &mut self,
-        levels: &ArrayLevels,
-        chunker: &mut ContentDefinedChunker,
-    ) -> Result<()> {
-        levels.validate()?;
+    /// Write through a content-defined framer, inserting page flushes at its
+    /// stream boundaries.
+    fn write_with_framer(&mut self, col: &ArrowLeafColumn, framer: &mut CdcFramer) -> Result<()> {
         self.writer.start_arrow_source();
-        let chunks = chunker.get_arrow_chunks(
-            levels.def_level_data().as_ref(),
-            levels.rep_level_data().as_ref(),
-            levels.array(),
+        let cursor_row_limit = self.cursor_row_limit;
+        col.try_for_each_batch(cursor_row_limit, |batch| {
+            self.write_cdc_batch(batch, framer)
+        })
+    }
+
+    fn write_cdc_batch(&mut self, batch: LeafBatch<'_>, framer: &mut CdcFramer) -> Result<()> {
+        let spans = framer.split_arrow_batch(
+            batch.def_level_data(),
+            batch.rep_level_data(),
+            batch.value_selection(),
+            batch.array(),
         )?;
-
-        let num_chunks = chunks.len();
-        for (i, chunk) in chunks.iter().enumerate() {
-            let chunk_levels = levels
-                .leaf_batch()
-                .slice(crate::column::writer::LevelValueWindow {
-                    levels: chunk.level_offset..chunk.level_offset + chunk.num_levels,
-                    values: chunk.value_offset..chunk.value_offset + chunk.num_values,
-                });
-            self.write_leaf_batch(chunk_levels)?;
-
-            // Add a page break after each chunk except the last
-            if i + 1 < num_chunks {
-                self.writer.add_data_page()?;
+        for span in spans {
+            if span.starts_chunk {
+                self.writer.flush_data_page()?;
             }
+            self.write_leaf_batch(batch.slice(span.window))?;
         }
         Ok(())
     }
@@ -1505,30 +1563,29 @@ impl ArrowRowGroupWriter {
         Ok(())
     }
 
-    fn write_with_chunkers(
-        &mut self,
-        batch: &RecordBatch,
-        chunkers: &mut [ContentDefinedChunker],
-    ) -> Result<()> {
-        self.validate_batch_shape(batch, Some(chunkers.len()))?;
+    fn write_with_framers(&mut self, batch: &RecordBatch, framers: &mut [CdcFramer]) -> Result<()> {
+        self.validate_batch_shape(batch, Some(framers.len()))?;
         self.buffered_rows += batch.num_rows();
 
         for (column_idx, field) in self.schema_plan.fields.iter().enumerate() {
-            let leaves = calculate_array_levels(batch.column(column_idx), field.field.as_ref())?;
+            let leaves = compute_leaves(field.field.as_ref(), batch.column(column_idx))?;
             self.validate_leaf_count(field, leaves.len())?;
+            if write_direct_group_batches_with_framers(
+                &leaves,
+                &mut self.writers[field.leaf_range.clone()],
+                &mut framers[field.leaf_range.clone()],
+            )? {
+                continue;
+            }
             for (offset, leaf) in leaves.into_iter().enumerate() {
                 let leaf_idx = field.leaf_range.start + offset;
-                self.writers[leaf_idx].write_with_chunker(&leaf, &mut chunkers[leaf_idx])?;
+                self.writers[leaf_idx].write_with_framer(&leaf, &mut framers[leaf_idx])?;
             }
         }
         Ok(())
     }
 
-    fn validate_batch_shape(
-        &self,
-        batch: &RecordBatch,
-        chunker_count: Option<usize>,
-    ) -> Result<()> {
+    fn validate_batch_shape(&self, batch: &RecordBatch, framer_count: Option<usize>) -> Result<()> {
         if batch.num_columns() != self.schema_plan.fields.len() {
             return Err(ParquetError::ArrowError(format!(
                 "Incompatible schema: writer has {} top-level fields but batch has {} columns",
@@ -1543,11 +1600,11 @@ impl ArrowRowGroupWriter {
                 self.schema_plan.leaves.len()
             )));
         }
-        if let Some(actual) = chunker_count
+        if let Some(actual) = framer_count
             && actual != self.schema_plan.leaves.len()
         {
             return Err(ParquetError::General(format!(
-                "content-defined chunking has {actual} chunkers for {} planned leaves",
+                "content-defined chunking has {actual} framers for {} planned leaves",
                 self.schema_plan.leaves.len()
             )));
         }
@@ -2603,6 +2660,16 @@ mod tests {
         arrow_select::concat::concat(&arrays).unwrap()
     }
 
+    fn roundtrip_column(field: Field, col: ArrayRef, props: Option<WriterProperties>) -> ArrayRef {
+        let schema = Arc::new(Schema::new(vec![field]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![col]).unwrap();
+        let mut file = vec![];
+        let mut writer = ArrowWriter::try_new(&mut file, schema, props).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        read_column(file)
+    }
+
     fn roundtrip_compatible_column(field: Field, col: ArrayRef) -> ArrayRef {
         let writer_schema = Arc::new(Schema::new(vec![field]));
         let batch_schema = Arc::new(Schema::new(vec![Field::new(
@@ -3297,7 +3364,7 @@ mod tests {
                     .build();
                 let mut writer =
                     ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
-                let mut chunkers = writer.cdc_chunkers.take();
+                let mut chunkers = writer.cdc_framers.take();
                 let (_file, factory) = writer.into_serialized_writer().unwrap();
                 let mut columns = factory.create_column_writers(0).unwrap();
                 let before = (
@@ -3305,10 +3372,7 @@ mod tests {
                     columns[0].get_estimated_total_bytes(),
                 );
                 let result = match &mut chunkers {
-                    Some(chunkers) => columns[0].write_with_chunker(
-                        &calculate_array_levels(&array, &target).unwrap()[0],
-                        &mut chunkers[0],
-                    ),
+                    Some(chunkers) => columns[0].write_with_framer(&leaves[0], &mut chunkers[0]),
                     None => columns[0].write(&leaves[0]),
                 };
                 if invalid {
@@ -3329,10 +3393,7 @@ mod tests {
                     let valid_leaves = compute_leaves(&target, &valid).unwrap();
                     match &mut chunkers {
                         Some(chunkers) => columns[0]
-                            .write_with_chunker(
-                                &calculate_array_levels(&valid, &target).unwrap()[0],
-                                &mut chunkers[0],
-                            )
+                            .write_with_framer(&valid_leaves[0], &mut chunkers[0])
                             .unwrap(),
                         None => columns[0].write(&valid_leaves[0]).unwrap(),
                     }
@@ -3413,10 +3474,10 @@ mod tests {
         let mut group = factory.create_row_group_writer(0).unwrap();
         assert!(
             group
-                .write_with_chunkers(&batch, &mut [])
+                .write_with_framers(&batch, &mut [])
                 .unwrap_err()
                 .to_string()
-                .contains("chunkers")
+                .contains("framers")
         );
         assert_eq!(group.buffered_rows, 0);
         group.writers.clear();
@@ -4716,9 +4777,19 @@ mod tests {
         values.append(true);
         list_builder.append(true);
 
-        let array = Arc::new(list_builder.finish());
+        let array: ArrayRef = Arc::new(list_builder.finish());
 
-        RoundTripTest::new(array).run();
+        RoundTripTest::new(array.clone()).run();
+
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(2)
+            .set_content_defined_chunking(Some(CdcOptions::default()))
+            .build();
+        roundtrip_column(
+            Field::new("col", array.data_type().clone(), true),
+            array,
+            Some(props),
+        );
     }
 
     fn row_group_sizes(metadata: &ParquetMetaData) -> Vec<i64> {
@@ -7267,5 +7338,68 @@ mod tests {
             roundtrip_opts(&batch, props);
         }
         roundtrip(batch, None);
+    }
+
+    #[test]
+    fn ordinary_cdc_is_invariant_across_cursor_and_batch_boundaries() {
+        let lengths: Vec<usize> = (0..4100)
+            .map(|row| if row == 997 { 1300 } else { row % 5 })
+            .collect();
+        let count: usize = lengths.iter().sum();
+        let array: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::from_lengths(lengths),
+            Arc::new(Int32Array::from(
+                (0..count)
+                    .map(|i| (i % 7 != 0).then_some((i % 17) as i32))
+                    .collect::<Vec<_>>(),
+            )),
+            Some(NullBuffer::from(
+                (0..4100).map(|i| i % 11 != 0).collect::<Vec<_>>(),
+            )),
+        ));
+        for array in [
+            array.clone(),
+            array.slice(3, 4000),
+            new_null_array(array.data_type(), 4100),
+        ] {
+            for dictionary in [false, true] {
+                let props = WriterProperties::builder()
+                    .set_dictionary_enabled(dictionary)
+                    .set_content_defined_chunking(Some(CdcOptions {
+                        min_chunk_size: 64,
+                        max_chunk_size: 256,
+                        norm_level: 0,
+                    }))
+                    .build();
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "c",
+                    array.data_type().clone(),
+                    true,
+                )]));
+                let batch = RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
+                let write = |partition: usize| {
+                    let mut bytes = Vec::new();
+                    let mut writer =
+                        ArrowWriter::try_new(&mut bytes, schema.clone(), Some(props.clone()))
+                            .unwrap();
+                    for start in (0..batch.num_rows()).step_by(partition) {
+                        writer
+                            .write(&batch.slice(start, partition.min(batch.num_rows() - start)))
+                            .unwrap();
+                    }
+                    writer.close().unwrap();
+                    bytes
+                };
+                let one_batch = write(batch.num_rows());
+                for partition in [1, 997] {
+                    assert_eq!(
+                        one_batch,
+                        write(partition),
+                        "partition={partition}, dictionary={dictionary}"
+                    );
+                }
+            }
+        }
     }
 }

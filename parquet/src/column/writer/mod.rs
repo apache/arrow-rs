@@ -133,13 +133,20 @@ impl ColumnWriter<'_> {
         downcast_writer!(self, typed, typed.get_estimated_total_bytes())
     }
 
-    /// Finalize the currently buffered values as a data page.
+    /// Finalize the currently buffered values as a data page. This is a no-op
+    /// when the page is already empty.
     ///
-    /// This is used by content-defined chunking to force a page boundary at
+    /// Content-defined framing uses this to force page boundaries at
     /// content-determined positions.
     #[cfg(feature = "arrow")]
-    pub(crate) fn add_data_page(&mut self) -> Result<()> {
-        downcast_writer!(self, typed, typed.add_data_page())
+    pub(crate) fn flush_data_page(&mut self) -> Result<()> {
+        downcast_writer!(self, typed, {
+            if typed.page_metrics.num_buffered_values == 0 {
+                Ok(())
+            } else {
+                typed.add_data_page()
+            }
+        })
     }
 
     /// Sets a pre-computed distinct count on this column writer.
@@ -465,7 +472,7 @@ impl<'a> LevelDataRef<'a> {
         }
     }
 
-    #[cfg(feature = "arrow")]
+    #[cfg(all(feature = "arrow", test))]
     #[inline]
     pub(crate) fn value_at(self, idx: usize) -> Option<i16> {
         match self {
@@ -6858,5 +6865,13 @@ mod tests {
                 "Parquet error: Record contains more than {MAX_DATA_PAGE_VALUE_COUNT} values and cannot fit in a Parquet data page"
             )
         );
+    }
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn test_flush_empty_data_page_is_noop() {
+        let descr = Arc::new(get_test_column_descr::<Int32Type>(0, 0));
+        let mut writer = get_column_writer(descr, Default::default(), get_test_page_writer());
+        writer.flush_data_page().unwrap();
+        assert_eq!(writer.close().unwrap().bytes_written, 0);
     }
 }

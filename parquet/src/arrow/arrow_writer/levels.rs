@@ -40,8 +40,6 @@
 //!
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
-#[cfg(test)]
-use crate::column::chunker::CdcChunk;
 use crate::column::value_selection::ValueSelectionRef;
 use crate::column::writer::{LevelDataRef, RunLevelsRef};
 pub(crate) mod cursor;
@@ -1107,21 +1105,6 @@ impl LevelData {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn slice(&self, offset: usize, len: usize) -> Self {
-        match self {
-            Self::Absent => Self::Absent,
-            Self::Materialized(values) => Self::Materialized(values[offset..offset + len].to_vec()),
-            Self::Uniform { value, .. } => Self::Uniform {
-                value: *value,
-                count: len,
-            },
-            Self::Runs(_) => {
-                Self::Materialized(self.as_ref().slice(offset, len).cursor().collect())
-            }
-        }
-    }
-
     pub(crate) fn len(&self) -> usize {
         match self {
             Self::Absent => 0,
@@ -1408,18 +1391,6 @@ impl ArrayLevels {
         }
     }
 
-    pub fn array(&self) -> &ArrayRef {
-        &self.array
-    }
-
-    pub(crate) fn def_level_data(&self) -> &LevelData {
-        &self.def_levels
-    }
-
-    pub(crate) fn rep_level_data(&self) -> &LevelData {
-        &self.rep_levels
-    }
-
     /// Present this batch to the column writer: the leaf array, its level
     /// streams, and the selection of values those levels refer to.
     pub(crate) fn leaf_batch(&self) -> LeafBatch<'_> {
@@ -1454,42 +1425,6 @@ impl ArrayLevels {
                 }
             }
             _ => ValueSelectionRef::Sparse(indices),
-        }
-    }
-
-    /// Create a sliced view of this `ArrayLevels` for a CDC chunk.
-    ///
-    /// The chunk's `value_offset`/`num_values` select the relevant slice of
-    /// `non_null_indices`. The array is sliced to the range covered by
-    /// those indices, and they are shifted to be relative to the slice.
-    #[cfg(test)]
-    pub(crate) fn slice_for_chunk(&self, chunk: &CdcChunk) -> Self {
-        let def_levels = self.def_levels.slice(chunk.level_offset, chunk.num_levels);
-        let rep_levels = self.rep_levels.slice(chunk.level_offset, chunk.num_levels);
-
-        // Select the non-null indices for this chunk.
-        let nni = &self.non_null_indices[chunk.value_offset..chunk.value_offset + chunk.num_values];
-        // Compute the array range spanned by the non-null indices.
-        // When nni is empty (all-null chunk), start=0, end=0 → zero-length
-        // array slice; write_batch_internal will process only the def/rep
-        // levels and write no values.
-        let start = nni.first().copied().unwrap_or(0);
-        let end = nni.last().map_or(0, |&i| i + 1);
-        // Shift indices to be relative to the sliced array.
-        let non_null_indices = nni.iter().map(|&idx| idx - start).collect();
-        // Slice the array to the computed range.
-        let array = self.array.slice(start, end - start);
-        let logical_nulls = array.logical_nulls();
-
-        Self {
-            def_levels,
-            rep_levels,
-            non_null_indices,
-            max_def_level: self.max_def_level,
-            max_rep_level: self.max_rep_level,
-            array,
-            logical_nulls,
-            validation_error: None,
         }
     }
 
@@ -1553,7 +1488,7 @@ mod tests {
 
     use super::*;
     #[cfg(test)]
-    use crate::column::chunker::CdcChunk;
+    use crate::column::writer::LevelValueWindow;
 
     use arrow_array::builder::*;
     use arrow_array::types::Int32Type;
@@ -2879,40 +2814,42 @@ mod tests {
         LevelInfoBuilder::try_new(field, Default::default(), &v).unwrap()
     }
 
+    fn materialized_levels(levels: LevelDataRef<'_>) -> Vec<i16> {
+        (0..levels.len())
+            .map(|index| levels.value_at(index).unwrap())
+            .collect()
+    }
+
+    fn selected_indices(values: ValueSelectionRef<'_>) -> Vec<usize> {
+        (0..values.len())
+            .map(|index| values.index_at(index))
+            .collect()
+    }
+
     #[test]
     fn test_slice_for_chunk_flat() {
-        // Case 1: required field (max_def_level=0, no def/rep levels stored).
-        // Array has 6 values; all are non-null so non_null_indices covers every position.
-        // value_offset=2, num_values=3 → non_null_indices[2..5] = [2,3,4].
-        // Array is sliced (no def_levels → write_batch_internal uses values.len()).
+        // Required field: values 2..5 select source indices [2, 3, 4]. The
+        // zero-copy slice retains the complete source array and keeps indices
+        // absolute rather than rebasing them.
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
-        let logical_nulls = array.logical_nulls();
-        let levels = ArrayLevels {
-            def_levels: LevelData::Absent,
-            rep_levels: LevelData::Absent,
-            non_null_indices: vec![0, 1, 2, 3, 4, 5],
-            max_def_level: 0,
-            max_rep_level: 0,
-            array,
-            logical_nulls,
-            validation_error: None,
-        };
-        let sliced = levels.slice_for_chunk(&CdcChunk {
-            level_offset: 0,
-            num_levels: 0,
-            value_offset: 2,
-            num_values: 3,
+        let indices = [0, 1, 2, 3, 4, 5];
+        let batch = LeafBatch::new(
+            array.as_ref(),
+            LevelDataRef::Absent,
+            LevelDataRef::Absent,
+            ValueSelectionRef::Sparse(&indices),
+        );
+        let sliced = batch.slice(LevelValueWindow {
+            levels: 0..0,
+            values: 2..5,
         });
-        assert!(matches!(sliced.def_levels, LevelData::Absent));
-        assert!(matches!(sliced.rep_levels, LevelData::Absent));
-        assert_eq!(sliced.non_null_indices, vec![0, 1, 2]);
-        assert_eq!(sliced.array.len(), 3);
+        assert!(matches!(sliced.def_level_data(), LevelDataRef::Absent));
+        assert!(matches!(sliced.rep_level_data(), LevelDataRef::Absent));
+        assert_eq!(selected_indices(sliced.value_selection()), vec![2, 3, 4]);
+        assert_eq!(sliced.array().len(), 6);
 
-        // Case 2: optional field (max_def_level=1, def levels present, no rep levels).
-        // Array: [Some(1), None, Some(3), None, Some(5), Some(6)]
-        // non_null_indices: [0, 2, 4, 5]
-        // value_offset=1, num_values=1 → non_null_indices[1..2] = [2].
-        // Array is not sliced (def_levels present → num_levels from def_levels.len()).
+        // Optional field: the level window covers [null, 3, null], for which
+        // the selected-value window contains absolute source index 2.
         let array: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),
             None,
@@ -2921,27 +2858,22 @@ mod tests {
             Some(5),
             Some(6),
         ]));
-        let logical_nulls = array.logical_nulls();
-        let levels = ArrayLevels {
-            def_levels: LevelData::Materialized(vec![1, 0, 1, 0, 1, 1]),
-            rep_levels: LevelData::Absent,
-            non_null_indices: vec![0, 2, 4, 5],
-            max_def_level: 1,
-            max_rep_level: 0,
-            array,
-            logical_nulls,
-            validation_error: None,
-        };
-        let sliced = levels.slice_for_chunk(&CdcChunk {
-            level_offset: 1,
-            num_levels: 3,
-            value_offset: 1,
-            num_values: 1,
+        let def_levels = [1, 0, 1, 0, 1, 1];
+        let indices = [0, 2, 4, 5];
+        let batch = LeafBatch::new(
+            array.as_ref(),
+            LevelDataRef::Materialized(&def_levels),
+            LevelDataRef::Absent,
+            ValueSelectionRef::Sparse(&indices),
+        );
+        let sliced = batch.slice(LevelValueWindow {
+            levels: 1..4,
+            values: 1..2,
         });
-        assert_eq!(sliced.def_levels, LevelData::Materialized(vec![0, 1, 0]));
-        assert!(matches!(sliced.rep_levels, LevelData::Absent));
-        assert_eq!(sliced.non_null_indices, vec![0]); // [2] shifted by -2 (nni[0])
-        assert_eq!(sliced.array.len(), 1);
+        assert_eq!(materialized_levels(sliced.def_level_data()), vec![0, 1, 0]);
+        assert!(matches!(sliced.rep_level_data(), LevelDataRef::Absent));
+        assert_eq!(selected_indices(sliced.value_selection()), vec![2]);
+        assert_eq!(sliced.array().len(), 6);
     }
 
     #[test]
@@ -2962,7 +2894,7 @@ mod tests {
         //
         // def_levels: [3,  0,  3, 2,  0,  3, 3]
         // rep_levels: [0,  0,  0, 1,  0,  0, 1]
-        // non_null_indices: [0, 3, 8, 9]
+        // selected indices: [0, 3, 8, 9]
         //   gaps in array: 0→3 (skip 1,2), 3→8 (skip 5,6,7)
         let array: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1), // 0: row 0
@@ -2976,74 +2908,73 @@ mod tests {
             Some(4), // 8: row 4
             Some(5), // 9: row 4
         ]));
-        let logical_nulls = array.logical_nulls();
-        let levels = ArrayLevels {
-            def_levels: LevelData::Materialized(vec![3, 0, 3, 2, 0, 3, 3]),
-            rep_levels: LevelData::Materialized(vec![0, 0, 0, 1, 0, 0, 1]),
-            non_null_indices: vec![0, 3, 8, 9],
-            max_def_level: 3,
-            max_rep_level: 1,
-            array,
-            logical_nulls,
-            validation_error: None,
-        };
+        let def_levels = [3, 0, 3, 2, 0, 3, 3];
+        let rep_levels = [0, 0, 0, 1, 0, 0, 1];
+        let indices = [0, 3, 8, 9];
+        let batch = LeafBatch::new(
+            array.as_ref(),
+            LevelDataRef::Materialized(&def_levels),
+            LevelDataRef::Materialized(&rep_levels),
+            ValueSelectionRef::Sparse(&indices),
+        );
 
-        // Chunk 0: rows 0-1, nni=[0] → array sliced to [0..1]
-        let chunk0 = levels.slice_for_chunk(&CdcChunk {
-            level_offset: 0,
-            num_levels: 2,
-            value_offset: 0,
-            num_values: 1,
-        });
-        assert_eq!(chunk0.non_null_indices, vec![0]);
-        assert_eq!(chunk0.array.len(), 1);
-
-        // Chunk 1: rows 2-3, nni=[3] → array sliced to [3..4]
-        let chunk1 = levels.slice_for_chunk(&CdcChunk {
-            level_offset: 2,
-            num_levels: 3,
-            value_offset: 1,
-            num_values: 1,
-        });
-        assert_eq!(chunk1.non_null_indices, vec![0]);
-        assert_eq!(chunk1.array.len(), 1);
-
-        // Chunk 2: row 4, nni=[8, 9] → array sliced to [8..10]
-        let chunk2 = levels.slice_for_chunk(&CdcChunk {
-            level_offset: 5,
-            num_levels: 2,
-            value_offset: 2,
-            num_values: 2,
-        });
-        assert_eq!(chunk2.non_null_indices, vec![0, 1]);
-        assert_eq!(chunk2.array.len(), 2);
+        for (window, expected_def, expected_rep, expected_indices) in [
+            (
+                LevelValueWindow {
+                    levels: 0..2,
+                    values: 0..1,
+                },
+                vec![3, 0],
+                vec![0, 0],
+                vec![0],
+            ),
+            (
+                LevelValueWindow {
+                    levels: 2..5,
+                    values: 1..2,
+                },
+                vec![3, 2, 0],
+                vec![0, 1, 0],
+                vec![3],
+            ),
+            (
+                LevelValueWindow {
+                    levels: 5..7,
+                    values: 2..4,
+                },
+                vec![3, 3],
+                vec![0, 1],
+                vec![8, 9],
+            ),
+        ] {
+            let sliced = batch.slice(window);
+            assert_eq!(materialized_levels(sliced.def_level_data()), expected_def);
+            assert_eq!(materialized_levels(sliced.rep_level_data()), expected_rep);
+            assert_eq!(selected_indices(sliced.value_selection()), expected_indices);
+            assert_eq!(sliced.array().len(), 10);
+        }
     }
 
     #[test]
     fn test_slice_for_chunk_all_null() {
-        // All-null chunk: num_values=0 → empty nni slice → zero-length array.
+        // The level window contains only null rows, so its selected-value
+        // window is empty. The zero-copy slice still retains the source array.
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, None, Some(4)]));
-        let logical_nulls = array.logical_nulls();
-        let levels = ArrayLevels {
-            def_levels: LevelData::Materialized(vec![1, 0, 0, 1]),
-            rep_levels: LevelData::Absent,
-            non_null_indices: vec![0, 3],
-            max_def_level: 1,
-            max_rep_level: 0,
-            array,
-            logical_nulls,
-            validation_error: None,
-        };
-        // Chunk covering only the two null rows (levels 1..3), zero non-null values.
-        let sliced = levels.slice_for_chunk(&CdcChunk {
-            level_offset: 1,
-            num_levels: 2,
-            value_offset: 1,
-            num_values: 0,
+        let def_levels = [1, 0, 0, 1];
+        let indices = [0, 3];
+        let batch = LeafBatch::new(
+            array.as_ref(),
+            LevelDataRef::Materialized(&def_levels),
+            LevelDataRef::Absent,
+            ValueSelectionRef::Sparse(&indices),
+        );
+        let sliced = batch.slice(LevelValueWindow {
+            levels: 1..3,
+            values: 1..1,
         });
-        assert_eq!(sliced.def_levels, LevelData::Materialized(vec![0, 0]));
-        assert_eq!(sliced.non_null_indices, Vec::<usize>::new());
-        assert_eq!(sliced.array.len(), 0);
+        assert_eq!(materialized_levels(sliced.def_level_data()), vec![0, 0]);
+        assert!(selected_indices(sliced.value_selection()).is_empty());
+        assert_eq!(sliced.array().len(), 4);
     }
 
     #[test]
