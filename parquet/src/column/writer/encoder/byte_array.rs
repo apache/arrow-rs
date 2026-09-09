@@ -29,6 +29,8 @@ use crate::column::value_batch::{BatchSink, ValueProducer, gather_tiled};
 use crate::column::writer::{compare_greater_byte_array_decimals, compare_greater_f16};
 use crate::data_type::private::byte_array_length;
 use crate::data_type::{AsBytes, ByteArray, ByteArrayType, DataType};
+#[cfg(feature = "arrow")]
+use crate::encodings::encoding::DictionaryStorage;
 #[cfg(test)]
 use crate::encodings::encoding::Encoder;
 use crate::encodings::encoding::{
@@ -634,6 +636,40 @@ impl<'batch, 'source: 'batch> BatchSink<ByteArrayBatch<'batch, 'source>>
 
 #[cfg(feature = "arrow")]
 impl<'source> ByteArraySink<'source, '_> {
+    /// Whether dictionary encoding is active for this write window.
+    #[cfg(feature = "arrow")]
+    #[inline]
+    pub(crate) fn is_dictionary(&self) -> bool {
+        matches!(self.target, ByteArraySinkTarget::Dictionary(_))
+    }
+
+    /// Encode a mapped Arrow dictionary source, caching the Parquet dictionary
+    /// index by Arrow physical value index for the lifetime of this binding.
+    #[cfg(feature = "arrow")]
+    #[inline]
+    pub(crate) fn push_dictionary_source(
+        &mut self,
+        indices: impl ValueProducer<usize>,
+        value: impl Fn(usize) -> &'source [u8] + Copy,
+    ) -> Result<()> {
+        let (mut observer, target, unencoded_value_bytes) = self.parts();
+        let ByteArraySinkTarget::Dictionary(encoder) = target else {
+            unreachable!("Arrow dictionary cache selected without a dictionary encoder")
+        };
+        let mut source_bytes = 0;
+        indices.try_for_each(|index| {
+            let bytes = value(index);
+            observer.observe(bytes);
+            encoder.put_arrow_dictionary(index, |dictionary| {
+                dictionary.intern_bytes(bytes, || bytes.to_vec().into())
+            })?;
+            source_bytes += bytes.len() as i64;
+            Ok::<(), ParquetError>(())
+        })?;
+        *unencoded_value_bytes += source_bytes;
+        Ok(())
+    }
+
     /// Encode a selection over inline Arrow byte-view descriptors without
     /// first gathering temporary `&[u8]` handles.
     ///
@@ -804,6 +840,14 @@ impl<'a, T: AsBytes> ByteArraySource<'a> for &'a [T] {}
 /// sources use bounded gathered batches. The sink retains borrowed min/max and
 /// the unencoded value-byte total until the complete source has been encoded.
 impl<D: DataType<T = ByteArray>> TypedColumnChunkEncoder<D> {
+    #[cfg(feature = "arrow")]
+    pub(crate) fn has_arrow_dictionary(&self, index: usize) -> bool {
+        match &self.encoding_family {
+            ByteArrayEncodingFamily::Dictionary(dict) => dict.has_arrow_dictionary(index),
+            _ => false,
+        }
+    }
+
     /// Encode a selected byte-value source.
     pub(crate) fn write_byte_array_source<'a, S>(&mut self, values: S) -> Result<()>
     where
