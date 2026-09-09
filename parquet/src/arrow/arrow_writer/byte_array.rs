@@ -533,8 +533,21 @@ fn max_view_value_len(buffers: &[Buffer]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::column::value_selection::ValueSelectionRef;
+    use crate::column::value_selection::{RangesSelectionRef, SelectionRange, ValueSelectionRef};
     use arrow_array::{LargeStringArray, StringArray};
+
+    fn count_selection(
+        values: &dyn Array,
+        selection: ValueSelectionRef<'_>,
+        budget: usize,
+    ) -> usize {
+        let storage = ByteArrayStorage::bind(values).unwrap();
+        with_byte_array_access!(storage.kind, |values| count_selection_within_byte_budget(
+            PhysicalValueSelection::identity(selection),
+            values,
+            budget,
+        ))
+    }
 
     fn direct_batch<'a>(
         values: &'a dyn Array,
@@ -580,6 +593,33 @@ mod tests {
             .map(|offset| &data[offset[0] as usize..offset[1] as usize])
             .collect();
         assert_eq!(selected, [b"bb".as_slice(), b"ccc".as_slice()]);
+    }
+
+    #[test]
+    fn range_byte_budget_includes_crossing_value() {
+        // Encoded sizes are 5, 6, 8, and 7 bytes for the selected values.
+        // The first value fits exactly and the crossing value is included.
+        let values = StringArray::from(vec!["a", "bb", "cccc", "not selected", "ddd"]);
+        let ranges = [SelectionRange::new(0..3, 3), SelectionRange::new(4..5, 4)];
+        let selection = ValueSelectionRef::Ranges(RangesSelectionRef::new(&ranges, 4));
+        assert_eq!(count_selection(&values, selection, 5), 2);
+
+        // The first range costs 11 bytes. The first value in the second range
+        // costs 7, exactly consuming the 18-byte budget; the following value
+        // does not fit.
+        let values = LargeStringArray::from(vec![
+            "a",
+            "bb",
+            "not selected",
+            "also not selected",
+            "ccc",
+            "dddd",
+            "eeeee",
+        ]);
+        let ranges = [SelectionRange::new(0..2, 2), SelectionRange::new(4..7, 5)];
+        let selection = ValueSelectionRef::Ranges(RangesSelectionRef::new(&ranges, 5));
+
+        assert_eq!(count_selection(&values, selection, 18), 4);
     }
 
     #[test]

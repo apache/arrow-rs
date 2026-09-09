@@ -21,17 +21,161 @@
 //! planning. [`PhysicalValueSelection`] maps those positions through optional
 //! dictionary keys to the physical value array.
 
+#[cfg(test)]
+use std::slice;
 use std::{mem::MaybeUninit, ops::Range};
 
 use arrow_buffer::ArrowNativeType;
 
 use crate::column::value_batch::ValueProducer;
+use crate::errors::Result;
+
+/// One contiguous source run in a range-based value selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SelectionRange {
+    /// First source position. The source length is the difference between this
+    /// range's cumulative end and the preceding range's cumulative end. This
+    /// keeps range metadata to the same two words as `Range<usize>` while
+    /// retaining logarithmic value-space slicing.
+    pub(crate) source_start: usize,
+    /// Exclusive end in the concatenated selected-value stream.
+    pub(crate) selected_end: usize,
+}
+
+impl SelectionRange {
+    #[cfg(test)]
+    pub(crate) fn new(source: Range<usize>, selected_end: usize) -> Self {
+        Self {
+            source_start: source.start,
+            selected_end,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RangesSelectionRef<'a> {
+    ranges: &'a [SelectionRange],
+    /// Number of values skipped from the concatenated range stream.
+    offset: usize,
+    len: usize,
+}
+
+#[cfg(test)]
+impl<'a> RangesSelectionRef<'a> {
+    pub(crate) fn new(ranges: &'a [SelectionRange], len: usize) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            let mut selected_start = 0;
+            let mut previous_source_end = None;
+            for range in ranges {
+                debug_assert!(range.selected_end > selected_start, "empty selection range");
+                let source_end = range
+                    .source_start
+                    .checked_add(range.selected_end - selected_start)
+                    .expect("selection range source end overflow");
+                if let Some(previous_end) = previous_source_end {
+                    debug_assert!(
+                        range.source_start > previous_end,
+                        "selection ranges must be ordered, disjoint, and coalesced"
+                    );
+                }
+                selected_start = range.selected_end;
+                previous_source_end = Some(source_end);
+            }
+            debug_assert_eq!(selected_start, len);
+            debug_assert_eq!(ranges.is_empty(), len == 0);
+        }
+        Self {
+            ranges,
+            offset: 0,
+            len,
+        }
+    }
+}
+
+impl RangesSelectionRef<'_> {
+    pub(crate) fn slice(self, offset: usize, len: usize) -> Self {
+        debug_assert!(offset <= self.len && len <= self.len - offset);
+        Self {
+            offset: self.offset + offset,
+            len,
+            ..self
+        }
+    }
+
+    #[inline(always)]
+    fn range_index(self, selected: usize) -> usize {
+        self.ranges
+            .partition_point(|range| range.selected_end <= selected)
+    }
+
+    #[inline(always)]
+    fn selected_start(self, range_index: usize) -> usize {
+        range_index
+            .checked_sub(1)
+            .map_or(0, |previous| self.ranges[previous].selected_end)
+    }
+
+    fn single_range(self) -> Option<Range<usize>> {
+        if self.len == 0 {
+            return None;
+        }
+        let first_selected = self.offset;
+        let last_selected = self.offset + self.len - 1;
+        let first_range = self.range_index(first_selected);
+        let last_range = self.range_index(last_selected);
+        if first_range != last_range {
+            return None;
+        }
+        let selected_start = self.selected_start(first_range);
+        let start = self.ranges[first_range].source_start + first_selected - selected_start;
+        Some(start..start + self.len)
+    }
+
+    #[inline]
+    pub(crate) fn index_at(self, index: usize) -> usize {
+        debug_assert!(index < self.len);
+        let selected = self.offset + index;
+        let range_index = self.range_index(selected);
+        let selected_start = self.selected_start(range_index);
+        self.ranges[range_index].source_start + selected - selected_start
+    }
+
+    #[inline]
+    pub(crate) fn try_for_each_range<E>(
+        self,
+        mut f: impl FnMut(usize, usize) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let mut selected = self.offset;
+        let mut remaining = self.len;
+        let mut range_index = self.range_index(selected);
+        while remaining != 0 {
+            let range = &self.ranges[range_index];
+            let selected_start = self.selected_start(range_index);
+            let skip = selected - selected_start;
+            let start = range.source_start + skip;
+            let len = (range.selected_end - selected).min(remaining);
+            f(start, len)?;
+            remaining -= len;
+            selected += len;
+            range_index += 1;
+        }
+        debug_assert_eq!(remaining, 0, "range selection exceeded stored ranges");
+        Ok(())
+    }
+}
 
 /// Borrowed view of a selected set of values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValueSelectionRef<'a> {
     Empty,
-    Dense { offset: usize, len: usize },
+    Dense {
+        offset: usize,
+        len: usize,
+    },
+    /// Ordered contiguous source ranges. The view may begin/end inside the
+    /// first/last stored range after value-space slicing.
+    Ranges(RangesSelectionRef<'a>),
     Sparse(&'a [usize]),
 }
 
@@ -40,6 +184,7 @@ impl ValueSelectionRef<'_> {
         match self {
             Self::Empty => 0,
             Self::Dense { len, .. } => len,
+            Self::Ranges(ranges) => ranges.len,
             Self::Sparse(indices) => indices.len(),
         }
     }
@@ -64,6 +209,7 @@ impl ValueSelectionRef<'_> {
                     len,
                 }
             }
+            Self::Ranges(ranges) => Self::Ranges(ranges.slice(offset, len)),
             Self::Sparse(indices) => Self::Sparse(&indices[offset..offset + len]),
         }
     }
@@ -74,6 +220,7 @@ impl ValueSelectionRef<'_> {
         match self {
             Self::Empty => unreachable!("empty value selection has no values"),
             Self::Dense { offset, .. } => offset + idx,
+            Self::Ranges(ranges) => ranges.index_at(idx),
             Self::Sparse(indices) => indices[idx],
         }
     }
@@ -91,6 +238,12 @@ impl ValueSelectionRef<'_> {
                 }
                 Ok(())
             }
+            Self::Ranges(ranges) => ranges.try_for_each_range(|start, len| {
+                for idx in start..start + len {
+                    f(idx)?;
+                }
+                Ok(())
+            }),
             Self::Sparse(indices) => {
                 for &idx in indices {
                     f(idx)?;
@@ -98,6 +251,131 @@ impl ValueSelectionRef<'_> {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl<'a> ValueSelectionRef<'a> {
+    pub(crate) fn cursor(self) -> ValueSelectionCursor<'a> {
+        match self {
+            Self::Empty => ValueSelectionCursor::Empty,
+            Self::Dense { offset, len } => ValueSelectionCursor::Dense(offset..offset + len),
+            Self::Ranges(ranges) => {
+                ValueSelectionCursor::Ranges(RangesSelectionCursor::new(ranges))
+            }
+            Self::Sparse(indices) => ValueSelectionCursor::Sparse(indices.iter()),
+        }
+    }
+}
+
+/// Exact-size sequential traversal of a value selection. This is deliberately
+/// separate from the encoder-facing `ValueProducer`: it yields source positions
+/// while CDC zips positions with definition and repetition levels.
+#[cfg(test)]
+pub(crate) enum ValueSelectionCursor<'a> {
+    Empty,
+    Dense(std::ops::Range<usize>),
+    Ranges(RangesSelectionCursor<'a>),
+    Sparse(slice::Iter<'a, usize>),
+}
+
+#[cfg(test)]
+impl Iterator for ValueSelectionCursor<'_> {
+    type Item = usize;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Empty => None,
+            Self::Dense(range) => range.next(),
+            Self::Ranges(ranges) => ranges.next(),
+            Self::Sparse(indices) => indices.next().copied(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+#[cfg(test)]
+impl ExactSizeIterator for ValueSelectionCursor<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Dense(range) => range.len(),
+            Self::Ranges(ranges) => ranges.len(),
+            Self::Sparse(indices) => indices.len(),
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct RangesSelectionCursor<'a> {
+    ranges: &'a [SelectionRange],
+    range_index: usize,
+    position: usize,
+    range_end: usize,
+    remaining: usize,
+}
+
+#[cfg(test)]
+impl<'a> RangesSelectionCursor<'a> {
+    pub(crate) fn new(selection: RangesSelectionRef<'a>) -> Self {
+        let range_index = selection.range_index(selection.offset);
+        let selected_start = selection.selected_start(range_index);
+        let skip = selection.offset - selected_start;
+        let (position, range_end) = if selection.len != 0 {
+            let range = &selection.ranges[range_index];
+            (
+                range.source_start + skip,
+                range.source_start + (range.selected_end - selected_start),
+            )
+        } else {
+            (0, 0)
+        };
+        Self {
+            ranges: selection.ranges,
+            range_index,
+            position,
+            range_end,
+            remaining: selection.len,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Iterator for RangesSelectionCursor<'_> {
+    type Item = usize;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        while self.position == self.range_end {
+            self.range_index += 1;
+            let range = &self.ranges[self.range_index];
+            let selected_start = self.ranges[self.range_index - 1].selected_end;
+            self.position = range.source_start;
+            self.range_end = range.source_start + (range.selected_end - selected_start);
+        }
+        let value = self.position;
+        self.position += 1;
+        self.remaining -= 1;
+        Some(value)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+#[cfg(test)]
+impl ExactSizeIterator for RangesSelectionCursor<'_> {
+    fn len(&self) -> usize {
+        self.remaining
     }
 }
 
@@ -280,6 +558,7 @@ impl<'a> PhysicalValueSelection<'a> {
         match self.dictionary {
             None => match self.selection {
                 ValueSelectionRef::Dense { offset, len } => Some(offset..offset + len),
+                ValueSelectionRef::Ranges(ranges) => ranges.single_range(),
                 ValueSelectionRef::Sparse([index]) => Some(*index..*index + 1),
                 _ => None,
             },
@@ -303,6 +582,9 @@ impl<'a> PhysicalValueSelection<'a> {
             None => match self.selection {
                 ValueSelectionRef::Empty => {}
                 ValueSelectionRef::Dense { offset, len } => f(offset..offset + len)?,
+                ValueSelectionRef::Ranges(ranges) => {
+                    ranges.try_for_each_range(|start, len| f(start..start + len))?
+                }
                 ValueSelectionRef::Sparse([index]) => f(*index..*index + 1)?,
                 ValueSelectionRef::Sparse(_) => return Ok(false),
             },
@@ -324,6 +606,8 @@ impl<'a> PhysicalValueSelection<'a> {
                     }
                     Ok(())
                 }
+                ValueSelectionRef::Ranges(ranges) => ranges
+                    .try_for_each_range(|start, len| f(PhysicalValueSpan::Range { start, len })),
                 ValueSelectionRef::Sparse(indices) => {
                     if !indices.is_empty() {
                         f(PhysicalValueSpan::Gather(indices))?;
@@ -472,6 +756,19 @@ mod tests {
         spans
     }
 
+    fn expand_spans(spans: &[PhysicalValueSpan<'_>]) -> Vec<usize> {
+        let mut values = Vec::new();
+        for &span in spans {
+            match span {
+                PhysicalValueSpan::Range { start, len } => {
+                    values.extend(start..start + len);
+                }
+                PhysicalValueSpan::Gather(indices) => values.extend_from_slice(indices),
+            }
+        }
+        values
+    }
+
     fn physical_indices(selection: PhysicalValueSelection<'_>) -> Vec<usize> {
         let mut values = Vec::new();
         selection
@@ -493,21 +790,18 @@ mod tests {
             spans.iter().map(|span| span.len()).sum::<usize>(),
             selection.len()
         );
-        let expanded: Vec<usize> = spans
-            .iter()
-            .flat_map(|span| match span {
-                PhysicalValueSpan::Range { start, len } => {
-                    (*start..*start + *len).collect::<Vec<_>>()
-                }
-                PhysicalValueSpan::Gather(indices) => indices.to_vec(),
-            })
-            .collect();
-        assert_eq!(expanded, expected);
+        assert_eq!(expand_spans(&spans), expected);
         assert_eq!(physical_indices(selection), expected);
     }
 
     #[test]
-    fn physical_identity_dense_sparse_and_slices() {
+    fn physical_identity_dense_ranges_sparse_and_slices() {
+        let empty_ranges = RangesSelectionRef::new(&[], 0);
+        assert_eq!(
+            PhysicalValueSelection::identity(ValueSelectionRef::Ranges(empty_ranges))
+                .direct_physical_range(),
+            None
+        );
         assert!(
             physical_spans(PhysicalValueSelection::identity(ValueSelectionRef::Dense {
                 offset: 3,
@@ -525,8 +819,26 @@ mod tests {
         assert_eq!(dense.direct_physical_range(), Some(10..18));
         assert_eq!(physical_spans(dense.slice(2, 4)), [range(12, 4)]);
 
+        let stored_ranges = [SelectionRange::new(2..5, 3), SelectionRange::new(8..12, 7)];
+        let ranges = PhysicalValueSelection::identity(ValueSelectionRef::Ranges(
+            RangesSelectionRef::new(&stored_ranges, 7),
+        ));
+        assert_eq!(ranges.direct_physical_range(), None);
+        assert_eq!(ranges.slice(1, 2).direct_physical_range(), Some(3..5));
+        assert_eq!(
+            physical_spans(ranges.slice(2, 4)),
+            [range(4, 1), range(8, 3)]
+        );
+        assert_physical_selection(ranges, &[2, 3, 4, 8, 9, 10, 11]);
+
         let sparse_values = [3, 4, 4, 5, 9, 9, 8, 1, 2];
         let sparse = PhysicalValueSelection::identity(ValueSelectionRef::Sparse(&sparse_values));
+        // Sparse selections must stay a single span. The tiled gather relies on
+        // it to fill a batch with one counted loop.
+        assert_eq!(
+            physical_spans(sparse.slice(1, 7)),
+            [PhysicalValueSpan::Gather(&sparse_values[1..8])]
+        );
         assert_physical_selection(sparse, &sparse_values);
         assert_physical_selection(sparse.slice(1, 7), &sparse_values[1..8]);
     }
@@ -613,10 +925,43 @@ mod tests {
             assert_eq!(non_contiguous.direct_physical_range(), None);
         }
 
+        let ranges = [SelectionRange::new(1..3, 2), SelectionRange::new(4..5, 3)];
         let mapped = PhysicalValueSelection::dictionary(
-            ValueSelectionRef::Sparse(&selected),
+            ValueSelectionRef::Ranges(RangesSelectionRef::new(&ranges, 3)),
             DictionaryKeys::I32(&keys),
         );
         assert_physical_selection(mapped, &[4, 5, 6]);
+    }
+
+    #[test]
+    fn value_selection_cursor_matches_callback_traversal() {
+        let stored_ranges = [SelectionRange::new(2..5, 3), SelectionRange::new(8..12, 7)];
+        let ranges = RangesSelectionRef::new(&stored_ranges, 7);
+        for selection in [
+            ValueSelectionRef::Empty,
+            ValueSelectionRef::Dense { offset: 3, len: 5 },
+            ValueSelectionRef::Ranges(ranges),
+            ValueSelectionRef::Ranges(ranges.slice(2, 4)),
+            ValueSelectionRef::Ranges(ranges.slice(0, 0)),
+            ValueSelectionRef::Sparse(&[4, 1, 4, 9]),
+        ] {
+            let mut expected = Vec::new();
+            selection
+                .try_for_each(|idx| -> Result<(), ()> {
+                    expected.push(idx);
+                    Ok(())
+                })
+                .unwrap();
+            let mut cursor = selection.cursor();
+            assert_eq!(cursor.len(), expected.len());
+            assert_eq!(cursor.size_hint(), (expected.len(), Some(expected.len())));
+            for (position, expected_index) in expected.iter().enumerate() {
+                assert_eq!(cursor.next(), Some(*expected_index));
+                let remaining = expected.len() - position - 1;
+                assert_eq!(cursor.len(), remaining);
+                assert_eq!(cursor.size_hint(), (remaining, Some(remaining)));
+            }
+            assert_eq!(cursor.next(), None);
+        }
     }
 }
