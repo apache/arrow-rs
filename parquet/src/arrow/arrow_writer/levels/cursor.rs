@@ -303,6 +303,7 @@ impl LevelTree {
                 debug_assert_eq!(leaves.len(), 1);
                 Ok(IndexedState {
                     bound: bind_indexed_branch(self, &leaves[0])?,
+                    probe: RepeatProbe::new(self, &leaves[0])?,
                 })
             })
             .transpose()?;
@@ -368,6 +369,7 @@ impl LevelTree {
 /// Per-cursor state for a branch that must be walked one row at a time.
 struct IndexedState<'a> {
     bound: Box<[BoundNode<'a>]>,
+    probe: RepeatProbe<'a>,
 }
 
 /// A resolved direct branch. Flat leaves stay inline; nested branches pay one
@@ -589,6 +591,223 @@ fn bind_list_bounds(kind: ListKind, array: &dyn Array) -> (ListBounds, ArrayRef)
     }
 }
 
+/// The loop-invariant part of bounding a run of identical top-level records.
+///
+/// Descending a struct child preserves the row index space, so the structural
+/// facts of a node under a chain of structs still bound top-level rows. The
+/// chain is resolved when the cursor is created.
+#[derive(Debug)]
+struct RepeatProbe<'a> {
+    /// Validity of the nullable structs above `node`, outermost first.
+    parents: Vec<&'a NullBuffer>,
+    /// The node whose own structure can bound a run of identical records,
+    /// with its layout already resolved.
+    node: Option<ProbeBound<'a>>,
+}
+
+impl<'a> RepeatProbe<'a> {
+    fn new(tree: &'a LevelTree, leaf: &TreeLeaf) -> Result<Self> {
+        let mut parents = Vec::new();
+        let mut node = None;
+        for index in leaf.branch.iter().copied() {
+            let current = &tree.nodes[index as usize];
+            match current.kind {
+                TreeKind::RunEndEncoded | TreeKind::List(_) => {
+                    node = Some(current.array.as_ref());
+                    break;
+                }
+                TreeKind::Struct => {
+                    if let Some(nulls) = current.array.nulls() {
+                        parents.push(nulls);
+                    }
+                }
+                _ => break,
+            }
+        }
+        let node = match node {
+            Some(node) => ProbeBound::bind(node)?,
+            None => None,
+        };
+        Ok(Self { parents, node })
+    }
+
+    /// Return the bounded end of a run of identical top-level leaf records.
+    fn repeat_end(&self, row: usize, limit: usize) -> Option<usize> {
+        let node = self.node.as_ref();
+        if self.parents.is_empty() {
+            return node?.repeat_end(row, limit);
+        }
+        if row + 1 >= limit {
+            return None;
+        }
+
+        // Outermost first: below the first null ancestor nothing is emitted, so
+        // deeper validity is not consulted. A validity change at `row + 1`
+        // cannot yield a copy, so bail before paying for any run scan.
+        let mut null_depth = None;
+        for (depth, nulls) in self.parents.iter().enumerate() {
+            let valid = nulls.is_valid(row);
+            if valid != nulls.is_valid(row + 1) {
+                return None;
+            }
+            if !valid {
+                null_depth = Some(depth);
+                break;
+            }
+        }
+
+        // The node or null-ancestor run supplies the initial bound. Each
+        // enclosing parent validity run then clamps it further.
+        let mut end = match null_depth {
+            // A null struct emits one bare definition level and descends
+            // nowhere, so its whole clear-bit run is one repeated record.
+            Some(depth) => bit_run_end(self.parents[depth], row, limit, false),
+            None => node?.repeat_end(row, limit)?,
+        };
+        for nulls in &self.parents[..null_depth.unwrap_or(self.parents.len())] {
+            end = bit_run_end(nulls, row, end, true);
+        }
+        Some(end)
+    }
+}
+
+/// End of the run of `valid` bits starting at `row`, bounded by `limit`.
+fn bit_run_end(nulls: &NullBuffer, row: usize, limit: usize, valid: bool) -> usize {
+    let mut end = row + 1;
+    while end < limit && nulls.is_valid(end) == valid {
+        end += 1;
+    }
+    end
+}
+
+/// What `RepeatProbe` needs from the bounding node, resolved once per cursor.
+///
+/// Resolving the layout here avoids repeating downcasts in [`Self::repeat_end`].
+#[derive(Debug)]
+enum ProbeBound<'a> {
+    /// A run-end-encoded node bounds a run directly.
+    Runs {
+        ends: RunEnds<'a>,
+        base: usize,
+        len: usize,
+    },
+    /// A list over a run-end-encoded child: equal-width rows falling wholly
+    /// inside one child run invoke the same physical block the same number of
+    /// times. Lists over anything else cannot bound a run and are not bound.
+    ListOfRuns {
+        offsets: ProbeOffsets<'a>,
+        nulls: Option<&'a NullBuffer>,
+        child_ends: RunEnds<'a>,
+        child_base: usize,
+        child_len: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ProbeOffsets<'a> {
+    I32(&'a [i32]),
+    I64(&'a [i64]),
+}
+
+impl ProbeOffsets<'_> {
+    #[inline(always)]
+    fn at(self, row: usize) -> usize {
+        match self {
+            Self::I32(offsets) => offsets[row] as usize,
+            Self::I64(offsets) => offsets[row] as usize,
+        }
+    }
+}
+
+impl<'a> ProbeBound<'a> {
+    /// Resolve the bounding node's layout, or `None` if it cannot bound a run.
+    fn bind(array: &'a dyn Array) -> Result<Option<Self>> {
+        Ok(match array.data_type() {
+            DataType::RunEndEncoded(_, _) => {
+                let (ends, base, _) = super::super::run_ends_of(array)?;
+                Some(Self::Runs {
+                    ends,
+                    base,
+                    len: array.len(),
+                })
+            }
+            DataType::List(_) | DataType::LargeList(_) => {
+                let (offsets, child) = match array.data_type() {
+                    DataType::List(_) => {
+                        let list = array.as_list::<i32>();
+                        (ProbeOffsets::I32(list.value_offsets()), list.values())
+                    }
+                    _ => {
+                        let list = array.as_list::<i64>();
+                        (ProbeOffsets::I64(list.value_offsets()), list.values())
+                    }
+                };
+                if !matches!(child.data_type(), DataType::RunEndEncoded(_, _)) {
+                    return Ok(None);
+                }
+                let (child_ends, child_base, _) = super::super::run_ends_of(child.as_ref())?;
+                Some(Self::ListOfRuns {
+                    offsets,
+                    nulls: array.nulls(),
+                    child_ends,
+                    child_base,
+                    child_len: child.len(),
+                })
+            }
+            _ => None,
+        })
+    }
+
+    /// The bounded end of the run of identical records starting at `row`.
+    fn repeat_end(&self, row: usize, limit: usize) -> Option<usize> {
+        match self {
+            Self::Runs { ends, base, len } => {
+                let run = ends.run_of(base + row);
+                Some((ends.end_of(run) - base).min(*len).min(limit))
+            }
+            Self::ListOfRuns {
+                offsets,
+                nulls,
+                child_ends,
+                child_base,
+                child_len,
+            } => {
+                let is_null = |row: usize| bound_is_null(*nulls, row);
+                if is_null(row) {
+                    return None;
+                }
+                let start = offsets.at(row);
+                let end = offsets.at(row + 1);
+                if start == end {
+                    return None;
+                }
+                // Require a second candidate row before resolving the child run.
+                // `limit <= list.len()` keeps the `row + 2` offset and validity
+                // probe in bounds.
+                let width = end - start;
+                if row + 1 >= limit || is_null(row + 1) || offsets.at(row + 2) - end != width {
+                    return None;
+                }
+                let run = child_ends.run_of(child_base + start);
+                let run_end = (child_ends.end_of(run) - child_base).min(*child_len);
+                if end > run_end {
+                    return None;
+                }
+                let mut row_end = row + 1;
+                while row_end < limit && !is_null(row_end) {
+                    let next_start = offsets.at(row_end);
+                    let next_end = offsets.at(row_end + 1);
+                    if next_end - next_start != width || next_end > run_end {
+                        break;
+                    }
+                    row_end += 1;
+                }
+                Some(row_end)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ListKind {
     List,
@@ -724,6 +943,31 @@ impl ScalarLevels {
             None => self.values.push(value),
         }
         self.len += 1;
+    }
+
+    fn set(&mut self, index: usize, value: i16) {
+        if !self.enabled || self.uniform == Some(value) {
+            return;
+        }
+        if let Some(uniform) = self.uniform.take() {
+            self.values.resize(self.len, uniform);
+        }
+        self.values[index] = value;
+    }
+
+    #[inline]
+    fn repeat_range(&mut self, start: usize, len: usize, copies: usize) {
+        if !self.enabled || copies == 0 {
+            return;
+        }
+        if self.uniform.is_none() {
+            let end = start + len;
+            self.values.reserve(len * copies);
+            for _ in 0..copies {
+                self.values.extend_from_within(start..end);
+            }
+        }
+        self.len += len * copies;
     }
 
     fn len(&self) -> usize {
@@ -869,6 +1113,82 @@ impl LeafTile {
         }
     }
 
+    /// Repeat the leaf output appended since the slot and value checkpoints
+    /// without walking its Arrow hierarchy again.
+    fn repeat_since(&mut self, slot_checkpoint: usize, value_checkpoint: usize, copies: usize) {
+        if copies == 0 {
+            return;
+        }
+
+        let appended_slots = self.slots - slot_checkpoint;
+        self.def_levels
+            .repeat_range(slot_checkpoint, appended_slots, copies);
+        self.rep_levels
+            .repeat_range(slot_checkpoint, appended_slots, copies);
+        self.slots += appended_slots * copies;
+
+        debug_assert!(self.indexed_traversal);
+        let value_end = self.value_ends.last().copied().unwrap_or(0);
+        if value_checkpoint == value_end {
+            return;
+        }
+        let first_group = self
+            .value_ends
+            .partition_point(|&end| end <= value_checkpoint);
+        let group_end = self.value_indices.len();
+        if first_group + 1 == group_end {
+            self.push_group(
+                self.value_indices[first_group],
+                (value_end - value_checkpoint) * copies,
+            );
+            return;
+        }
+
+        // The source prefix remains immutable while a multi-group pattern is
+        // appended; adjacent duplicate groups are then coalesced.
+        for _ in 0..copies {
+            for group in first_group..group_end {
+                let start = if group == 0 {
+                    0
+                } else {
+                    self.value_ends[group - 1]
+                };
+                let len = self.value_ends[group].min(value_end) - start.max(value_checkpoint);
+                if len != 0 {
+                    let end = self.value_ends.last().copied().unwrap_or(0) + len;
+                    self.value_indices.push(self.value_indices[group]);
+                    self.value_ends.push(end);
+                }
+            }
+        }
+        if self.value_indices[first_group] == self.value_indices[group_end - 1] {
+            self.coalesce_groups();
+        }
+    }
+
+    fn coalesce_groups(&mut self) {
+        let mut write = 0;
+        let mut source_start = 0;
+        for read in 0..self.value_indices.len() {
+            let source_end = self.value_ends[read];
+            let len = source_end - source_start;
+            source_start = source_end;
+            if write != 0 && self.value_indices[write - 1] == self.value_indices[read] {
+                self.value_ends[write - 1] += len;
+            } else {
+                self.value_indices[write] = self.value_indices[read];
+                let end = write
+                    .checked_sub(1)
+                    .map_or(0, |previous| self.value_ends[previous])
+                    + len;
+                self.value_ends[write] = end;
+                write += 1;
+            }
+        }
+        self.value_indices.truncate(write);
+        self.value_ends.truncate(write);
+    }
+
     fn batch<'a>(
         &'a self,
         terminal: &'a (dyn Array + 'static),
@@ -999,6 +1319,14 @@ impl LeafCursor<'_> {
                     && tile.slots < self.target_slots
                     && self.next_row - first_row < rows_to_boundary
                 {
+                    let repeat_limit = self
+                        .next_row
+                        .saturating_add(self.target_slots.saturating_add(1))
+                        .min(first_row + rows_to_boundary)
+                        .min(len);
+                    let run_end = state.probe.repeat_end(self.next_row, repeat_limit);
+                    let slot_checkpoint = tile.slots;
+                    let value_checkpoint = tile.value_ends.last().copied().unwrap_or(0);
                     visit_node(
                         self.next_row,
                         LevelContext::default(),
@@ -1007,6 +1335,19 @@ impl LeafCursor<'_> {
                         tile,
                     )?;
                     self.next_row += 1;
+
+                    if let Some(run_end) = run_end {
+                        let appended_slots = tile.slots - slot_checkpoint;
+                        let rows_within_slot_limit = self
+                            .target_slots
+                            .saturating_sub(tile.slots)
+                            .div_ceil(appended_slots);
+                        let copies = (run_end - self.next_row)
+                            .min(first_row + rows_to_boundary - self.next_row)
+                            .min(rows_within_slot_limit);
+                        tile.repeat_since(slot_checkpoint, value_checkpoint, copies);
+                        self.next_row += copies;
+                    }
                 }
             }
         }
@@ -1698,7 +2039,8 @@ fn patch_list_starts(
 ///
 /// The indexed walker visits a single row per call, so every downcast it would
 /// otherwise repeat for each row is resolved once here. This is the same trick
-/// [`TreeNode`] plays for the range walker; indexed branches bind the same buffers once.
+/// [`TreeNode`] plays for the range walker and [`RepeatProbe`] for the run
+/// bound; the per-row walker is simply the one that needs it most.
 #[derive(Debug)]
 struct BoundNode<'a> {
     kind: BoundKind<'a>,
@@ -1731,6 +2073,17 @@ enum BoundKind<'a> {
     Struct,
     /// A list-like node, descended over each row's value range.
     List { bounds: BoundList<'a> },
+}
+
+impl BoundKind<'_> {
+    /// The run boundaries when this node is run-end encoded.
+    #[inline]
+    fn run_ends(&self) -> Option<(RunEnds<'_>, usize)> {
+        match self {
+            Self::RunEnds { ends, base } => Some((*ends, *base)),
+            _ => None,
+        }
+    }
 }
 
 /// The list layouts, reduced to the row-bounds query the walkers actually make.
@@ -1935,10 +2288,37 @@ fn visit_list(
         def_level: list_def + 1,
         rep_level: ctx.rep_level + 1,
     };
-    let mut child_rep = rep;
-    for child_index in start..end {
+    // A run-encoded child invokes the same physical block for every element of
+    // a run, so walk it once per run and repeat the emitted leaf segment. The
+    // elements are emitted as interior repetitions, and the list row's first
+    // repetition level is fixed once at the end.
+    let child_runs = path[0].kind.run_ends();
+    let depth = out.ree_depth;
+    let row_slot = out.slots;
+    // Single-element rows can never repeat, so they keep emitting the row's
+    // repetition level directly and leave a uniform buffer uniform.
+    let patch_first_rep_level = child_runs.is_some() && end - start > 1;
+    let mut child_rep = if patch_first_rep_level {
+        child_ctx.rep_level
+    } else {
+        rep
+    };
+    let mut child_index = start;
+    while child_index < end {
+        let slot_checkpoint = out.slots;
+        let value_checkpoint = out.value_ends.last().copied().unwrap_or(0);
         visit_node(child_index, child_ctx, child_rep, path, out)?;
         child_rep = child_ctx.rep_level;
+        child_index += 1;
+        if let Some((run_ends, base)) = child_runs {
+            let run_end = run_ends.end_of(out.ree_runs[depth]).saturating_sub(base);
+            let copies = run_end.min(end) - child_index;
+            out.repeat_since(slot_checkpoint, value_checkpoint, copies);
+            child_index += copies;
+        }
+    }
+    if patch_first_rep_level {
+        out.rep_levels.set(row_slot, rep);
     }
     Ok(())
 }
@@ -2051,6 +2431,44 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn repeated_multi_group_patterns_coalesce_boundaries() {
+        let mut tile = LeafTile::new(0, 0, true, None, None);
+        tile.push_group(1, 2);
+        tile.push_group(2, 1);
+        tile.push_group(1, 2);
+
+        tile.repeat_since(0, 0, 2);
+
+        assert_eq!(tile.value_indices, [1, 2, 1, 2, 1, 2, 1]);
+        assert_eq!(tile.value_ends, [2, 3, 7, 8, 12, 13, 15]);
+    }
+
+    #[test]
+    fn scalar_levels_guard_and_materialization_paths() {
+        let mut disabled = ScalarLevels::new(false);
+        disabled.set(0, 1);
+        disabled.repeat_range(0, 0, 1);
+        assert_eq!(disabled.as_ref(), LevelDataRef::Absent);
+
+        let mut levels = ScalarLevels::new(true);
+        levels.push(1);
+        levels.push(1);
+        levels.set(0, 1);
+        levels.repeat_range(0, 2, 0);
+        assert_eq!(
+            levels.as_ref(),
+            LevelDataRef::Uniform { value: 1, count: 2 }
+        );
+
+        levels.set(1, 2);
+        levels.repeat_range(0, 2, 2);
+        assert_eq!(
+            levels.as_ref(),
+            LevelDataRef::Materialized(&[1, 2, 1, 2, 1, 2])
+        );
     }
 
     #[test]
