@@ -94,6 +94,8 @@ enum TreeKind {
     Leaf,
     Null,
     DictionaryLeaf,
+    /// A dictionary over a non-leaf. Indexed traversal only.
+    Dictionary,
     /// Run-end encoded. Indexed traversal only.
     RunEndEncoded,
     Struct,
@@ -519,11 +521,19 @@ impl TreeBuilder {
                 self.fill(children_start, values, contract, ctx, true, groups)?;
                 TreeKind::RunEndEncoded
             }
+            NodeKind::Dictionary => {
+                let values = array.as_any_dictionary().values().clone();
+                child_count = 1;
+                self.nodes.push(None);
+                self.fill(children_start, values, contract, ctx, true, groups)?;
+                TreeKind::Dictionary
+            }
         };
 
         // A range walk never reaches a run-end or dictionary node, and asking
         // one for its logical validity would expand a bitmap it will not read.
-        let range_walked = !indexed && !matches!(kind, TreeKind::RunEndEncoded);
+        let range_walked =
+            !indexed && !matches!(kind, TreeKind::RunEndEncoded | TreeKind::Dictionary);
         let nulls = range_walked
             .then(|| array.logical_nulls())
             .flatten()
@@ -642,6 +652,7 @@ impl ListKind {
 #[derive(Debug, Clone, Copy)]
 enum NodeKind {
     RunEndEncoded,
+    Dictionary,
     Null,
     Leaf,
     DictionaryLeaf,
@@ -651,15 +662,14 @@ enum NodeKind {
 
 fn classify_node(array: &dyn Array, contract: FieldContract<'_>) -> Result<NodeKind> {
     Ok(match array.data_type() {
-        DataType::RunEndEncoded(_, values) if super::super::native_ree_leaf(values.data_type()) => {
-            NodeKind::RunEndEncoded
-        }
+        DataType::RunEndEncoded(_, _) => NodeKind::RunEndEncoded,
         DataType::Dictionary(_, value) if is_leaf(value) => {
             if !leaf_types_compatible(contract.data_type, value) {
                 return Err(incompatible(contract, value));
             }
             NodeKind::DictionaryLeaf
         }
+        DataType::Dictionary(_, _) => NodeKind::Dictionary,
         actual if is_leaf(actual) => {
             if !leaf_types_compatible(contract.data_type, actual) {
                 return Err(incompatible(contract, actual));
@@ -1112,7 +1122,7 @@ fn visit_branch(
                 })
             }
         },
-        TreeKind::RunEndEncoded => {
+        TreeKind::RunEndEncoded | TreeKind::Dictionary => {
             unreachable!("an indexed node is never reached by a range walk")
         }
     }
@@ -1244,7 +1254,7 @@ fn visit_range_inner<'a>(
                 })
             }
         },
-        TreeKind::RunEndEncoded => {
+        TreeKind::RunEndEncoded | TreeKind::Dictionary => {
             unreachable!("an indexed node is never reached by a range walk")
         }
     }
@@ -1735,8 +1745,12 @@ enum BoundKind<'a> {
         value_nulls: Option<&'a NullBuffer>,
         null_values: bool,
     },
+    /// A dictionary over a non-leaf: resolve the key, then descend.
+    Dictionary { keys: DictionaryKeys<'a> },
     /// Run-end encoded: map the row to its physical run, then descend.
     RunEnds { ends: RunEnds<'a>, base: usize },
+    /// A struct. The selected child is already the next bound node.
+    Struct,
 }
 
 /// Bind one leaf's branch to the Arrow buffers the tree already owns.
@@ -1749,8 +1763,8 @@ fn bind_indexed_branch<'a>(tree: &'a LevelTree, leaf: &TreeLeaf) -> Result<Box<[
     for index in leaf.branch.iter().copied() {
         let node = &tree.nodes[index as usize];
         let array = node.array.as_ref();
-        let dictionary =
-            matches!(node.kind, TreeKind::DictionaryLeaf).then(|| array.as_any_dictionary());
+        let dictionary = matches!(node.kind, TreeKind::Dictionary | TreeKind::DictionaryLeaf)
+            .then(|| array.as_any_dictionary());
         let nulls = match dictionary {
             Some(dictionary) => dictionary.keys().nulls(),
             None => array.nulls(),
@@ -1767,13 +1781,15 @@ fn bind_indexed_branch<'a>(tree: &'a LevelTree, leaf: &TreeLeaf) -> Result<Box<[
                     null_values: matches!(values.data_type(), DataType::Null),
                 }
             }
+            TreeKind::Dictionary => BoundKind::Dictionary {
+                keys: super::super::dictionary_keys(dictionary.unwrap().keys()),
+            },
             TreeKind::RunEndEncoded => {
                 let (ends, base, _) = super::super::run_ends_of(array)?;
                 BoundKind::RunEnds { ends, base }
             }
-            TreeKind::Struct | TreeKind::List(_) => {
-                unreachable!("nested indexed binding remains eager")
-            }
+            TreeKind::Struct => BoundKind::Struct,
+            TreeKind::List(_) => unreachable!("indexed list binding remains eager"),
         };
         bound.push(BoundNode {
             kind,
@@ -1837,6 +1853,12 @@ fn visit_node(
             out.push_value(ctx.def_level + node.nullable as i16, rep, index);
             Ok(())
         }
+        BoundKind::Dictionary { keys } => {
+            if bound_is_null(node.nulls, index) {
+                return emit_null(node, ctx, rep, index, out);
+            }
+            visit_node(keys.key_at(index), ctx, rep, child_path, out)
+        }
         BoundKind::Null => emit_null(node, ctx, rep, index, out),
         BoundKind::Leaf => {
             if bound_is_null(node.nulls, index) {
@@ -1845,6 +1867,21 @@ fn visit_node(
                 out.push_value(ctx.def_level + node.nullable as i16, rep, index);
                 Ok(())
             }
+        }
+        BoundKind::Struct => {
+            if bound_is_null(node.nulls, index) {
+                return emit_null(node, ctx, rep, index, out);
+            }
+            visit_node(
+                index,
+                LevelContext {
+                    def_level: ctx.def_level + node.nullable as i16,
+                    ..ctx
+                },
+                rep,
+                child_path,
+                out,
+            )
         }
     }
 }
@@ -1873,9 +1910,10 @@ fn incompatible(contract: FieldContract<'_>, actual: &DataType) -> ParquetError 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::types::Int32Type;
     use arrow_array::{
-        DictionaryArray, Int32Array, Int32RunArray, ListArray, MapArray, StringArray, StructArray,
-        make_array,
+        DictionaryArray, Int32Array, Int32RunArray, ListArray, MapArray, RunArray, StringArray,
+        StructArray, make_array,
     };
     use arrow_buffer::Buffer;
     use arrow_data::ArrayDataBuilder;
@@ -2207,5 +2245,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn shared_prefix_is_preserved_across_an_indexed_sibling() {
+        let a_field = Arc::new(Field::new("a", DataType::Int32, false));
+        let a = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let b_field = Arc::new(Field::new("b", DataType::Int32, false));
+        let b = Arc::new(Int32Array::from(vec![4, 5, 6])) as ArrayRef;
+        let direct = Arc::new(StructArray::from(vec![(a_field, a), (b_field, b)])) as ArrayRef;
+        let direct_field = Arc::new(Field::new("direct", direct.data_type().clone(), false));
+
+        let c_field = Arc::new(Field::new("c", DataType::Int32, false));
+        let c = Arc::new(Int32Array::from(vec![7])) as ArrayRef;
+        let d_field = Arc::new(Field::new("d", DataType::Int32, false));
+        let d = Arc::new(Int32Array::from(vec![8])) as ArrayRef;
+        let run_values = StructArray::from(vec![(c_field, c), (d_field, d)]);
+        let run_ends = Int32Array::from(vec![3]);
+        let indexed =
+            Arc::new(RunArray::<Int32Type>::try_new(&run_ends, &run_values).unwrap()) as ArrayRef;
+        let indexed_field = Arc::new(Field::new("indexed", indexed.data_type().clone(), false));
+
+        let outer = Arc::new(StructArray::from((
+            vec![(direct_field, direct), (indexed_field, indexed)],
+            Buffer::from([0b00000101]),
+        ))) as ArrayRef;
+        let field = Field::new("root", outer.data_type().clone(), true);
+        let tree = tree_of(&field, outer);
+
+        assert_eq!(tree.write_windows().unwrap(), [0..2, 2..3, 3..4]);
     }
 }
