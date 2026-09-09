@@ -94,10 +94,10 @@ pub trait BitPacking {
         let block_bytes = num_bits * Self::BATCH_SIZE / 8;
         let blocks = input.len() / Self::BATCH_SIZE;
         assert!(output.len() >= blocks * block_bytes);
-        for (input, output) in input
-            .chunks_exact(Self::BATCH_SIZE)
-            .zip(output.chunks_exact_mut(block_bytes))
-        {
+        #[expect(clippy::chunks_exact_to_as_chunks)]
+        // Requires using an associated constant in const operations: generic_const_exprs
+        let input_chunks = input.chunks_exact(Self::BATCH_SIZE);
+        for (input, output) in input_chunks.zip(output.chunks_exact_mut(block_bytes)) {
             Self::pack_batch(input, output, num_bits);
         }
     }
