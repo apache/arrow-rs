@@ -18,7 +18,7 @@
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::encoder::{
-    ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
+    ColumnChunkEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
 };
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
@@ -432,8 +432,8 @@ pub struct ByteArrayEncoder {
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
 
-impl ColumnValueEncoder for ByteArrayEncoder {
-    type T = ByteArray;
+impl ColumnChunkEncoder for ByteArrayEncoder {
+    type Value = ByteArray;
     type Values = dyn Array;
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         let mut sbbf = self.bloom_filter.take()?;
