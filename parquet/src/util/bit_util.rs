@@ -21,7 +21,10 @@ use bytes::Bytes;
 
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_pack::{pack8, pack16, pack32, pack64, unpack8, unpack16, unpack32, unpack64};
+use crate::util::bit_pack::{
+    pack8, pack8_blocks, pack16, pack16_blocks, pack32, pack32_blocks, pack64, pack64_blocks,
+    unpack8, unpack16, unpack32, unpack64,
+};
 
 #[inline]
 fn array_from_slice<const N: usize>(bs: &[u8]) -> Result<[u8; N]> {
@@ -79,6 +82,25 @@ pub trait BitPacking {
     fn pack_batch(input: &[Self], output: &mut [u8], num_bits: usize)
     where
         Self: Sized;
+
+    /// Packs all complete `BATCH_SIZE` blocks in `input` into `output`.
+    fn pack_batches(input: &[Self], output: &mut [u8], num_bits: usize)
+    where
+        Self: Sized,
+    {
+        if num_bits == 0 {
+            return;
+        }
+        let block_bytes = num_bits * Self::BATCH_SIZE / 8;
+        let blocks = input.len() / Self::BATCH_SIZE;
+        assert!(output.len() >= blocks * block_bytes);
+        for (input, output) in input
+            .chunks_exact(Self::BATCH_SIZE)
+            .zip(output.chunks_exact_mut(block_bytes))
+        {
+            Self::pack_batch(input, output, num_bits);
+        }
+    }
 }
 
 macro_rules! from_le_bytes {
@@ -98,7 +120,7 @@ macro_rules! from_le_bytes {
 }
 
 macro_rules! bit_packing {
-    ($($ty: ty => ($unpack: path, $pack: path)),*) => {
+    ($($ty: ty => ($unpack: path, $pack: path, $pack_blocks: path)),*) => {
         $(
             impl BitPacking for $ty {
                 const BIT_CAPACITY: usize = std::mem::size_of::<$ty>() * 8;
@@ -123,6 +145,11 @@ macro_rules! bit_packing {
                 #[inline]
                 fn pack_batch(input: &[Self], output: &mut [u8], num_bits: usize) {
                     $pack((&input[..Self::BATCH_SIZE]).try_into().unwrap(), output, num_bits)
+                }
+
+                #[inline]
+                fn pack_batches(input: &[Self], output: &mut [u8], num_bits: usize) {
+                    $pack_blocks(input, output, num_bits)
                 }
             }
         )*
@@ -167,6 +194,13 @@ macro_rules! bit_packing_delegate {
                     let input: &[$delegate] = unsafe { std::slice::from_raw_parts(input.as_ptr().cast::<$delegate>(), input.len()) };
                     <$delegate>::pack_batch(input, output, num_bits);
                 }
+
+                #[inline]
+                fn pack_batches(input: &[Self], output: &mut [u8], num_bits: usize) {
+                    // Safety: ty and delegate have the same size and alignment, and this macro is only used for types that have transmutable bit patterns.
+                    let input: &[$delegate] = unsafe { std::slice::from_raw_parts(input.as_ptr().cast::<$delegate>(), input.len()) };
+                    <$delegate>::pack_batches(input, output, num_bits);
+                }
             }
         )*
     }
@@ -174,9 +208,9 @@ macro_rules! bit_packing_delegate {
 
 from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64 }
 bit_packing!(
-    u8 => (unpack8, pack8),
-    u16 => (unpack16, pack16),
-    u32 => (unpack32, pack32)
+    u8 => (unpack8, pack8, pack8_blocks),
+    u16 => (unpack16, pack16, pack16_blocks),
+    u32 => (unpack32, pack32, pack32_blocks)
 );
 
 // `u64` is written out by hand: the `as` casts the macro uses would be no-ops here,
@@ -212,6 +246,11 @@ impl BitPacking for u64 {
             output,
             num_bits,
         )
+    }
+
+    #[inline]
+    fn pack_batches(input: &[Self], output: &mut [u8], num_bits: usize) {
+        pack64_blocks(input, output, num_bits)
     }
 }
 bit_packing_delegate!(i8 => u8, i16 => u16, i32 => u32, i64 => u64);
@@ -250,6 +289,16 @@ impl BitPacking for bool {
         let input: &[u8] =
             unsafe { std::slice::from_raw_parts(input.as_ptr().cast::<u8>(), input.len()) };
         u8::pack_batch(input, output, num_bits);
+    }
+
+    #[inline]
+    fn pack_batches(input: &[Self], output: &mut [u8], num_bits: usize) {
+        assert_eq!(num_bits, 1);
+        // Safety: bool is a single byte that is guaranteed to be 0 or 1, so it
+        // can always be read as a u8.
+        let input: &[u8] =
+            unsafe { std::slice::from_raw_parts(input.as_ptr().cast::<u8>(), input.len()) };
+        u8::pack_batches(input, output, num_bits);
     }
 }
 
@@ -623,13 +672,17 @@ impl BitWriter {
         // Pack whole blocks directly into the buffer
         let blocks = (batch.len() - i) / T::BATCH_SIZE;
         let block_bytes = num_bits * T::BATCH_SIZE / 8;
-        let mut offset = self.buffer.len();
+        let offset = self.buffer.len();
         self.buffer.resize(offset + blocks * block_bytes, 0);
-        for _ in 0..blocks {
-            T::pack_batch(&batch[i..], &mut self.buffer[offset..], num_bits);
-            offset += block_bytes;
-            i += T::BATCH_SIZE;
+        let block_values = blocks * T::BATCH_SIZE;
+        if blocks != 0 {
+            T::pack_batches(
+                &batch[i..i + block_values],
+                &mut self.buffer[offset..offset + blocks * block_bytes],
+                num_bits,
+            );
         }
+        i += block_values;
 
         // Try to write smaller batches if possible
         if size_of::<T>() > 4 && batch.len() - i >= 32 && num_bits <= 32 {

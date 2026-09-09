@@ -97,6 +97,7 @@ unpack!(unpack64, u64, 8, 64);
 /// Macro that generates a pack function taking the number of bits as a const generic
 macro_rules! pack_impl {
     ($t:ty, $bytes:literal, $bits:tt) => {
+        #[inline(never)]
         pub fn pack<const NUM_BITS: usize>(input: &[$t; $bits], output: &mut [u8]) {
             if NUM_BITS == 0 {
                 return;
@@ -137,12 +138,27 @@ macro_rules! pack_impl {
                 }
             });
         }
+
+        pub fn pack_blocks<const NUM_BITS: usize>(input: &[$t], output: &mut [u8]) {
+            if NUM_BITS == 0 {
+                return;
+            }
+            let block_bytes = NUM_BITS * $bytes;
+            let blocks = input.len() / $bits;
+            assert!(output.len() >= blocks * block_bytes);
+            for (input, output) in input
+                .chunks_exact($bits)
+                .zip(output.chunks_exact_mut(block_bytes))
+            {
+                pack::<NUM_BITS>(input.try_into().unwrap(), output);
+            }
+        }
     };
 }
 
 /// Macro that generates pack functions that accept num_bits as a parameter
 macro_rules! pack {
-    ($name:ident, $t:ty, $bytes:literal, $bits:tt) => {
+    ($name:ident, $blocks:ident, $t:ty, $bytes:literal, $bits:tt) => {
         mod $name {
             pack_impl!($t, $bytes, $bits);
         }
@@ -160,13 +176,23 @@ macro_rules! pack {
             });
             unreachable!("invalid num_bits {}", num_bits);
         }
+
+        #[inline(never)]
+        pub(crate) fn $blocks(input: &[$t], output: &mut [u8], num_bits: usize) {
+            seq_macro::seq!(i in 0..=$bits {
+                if i == num_bits {
+                    return $name::pack_blocks::<i>(input, output);
+                }
+            });
+            unreachable!("invalid num_bits {}", num_bits);
+        }
     };
 }
 
-pack!(pack8, u8, 1, 8);
-pack!(pack16, u16, 2, 16);
-pack!(pack32, u32, 4, 32);
-pack!(pack64, u64, 8, 64);
+pack!(pack8, pack8_blocks, u8, 1, 8);
+pack!(pack16, pack16_blocks, u16, 2, 16);
+pack!(pack32, pack32_blocks, u32, 4, 32);
+pack!(pack64, pack64_blocks, u64, 8, 64);
 
 #[cfg(test)]
 mod tests {
