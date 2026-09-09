@@ -229,7 +229,8 @@ fn criterion_benchmark(c: &mut Criterion) {
                         let page_index = reader
                             .metadata()
                             .page_index()
-                            .expect("File should have page indices");
+                            .expect("File should have page indices")
+                            .as_ref();
 
                         let _ = converter.data_page_mins(page_index, &row_group_indices);
                         let _ = converter.data_page_maxes(page_index, &row_group_indices);
