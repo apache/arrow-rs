@@ -1264,10 +1264,6 @@ impl ArrayLevels {
         &self.rep_levels
     }
 
-    pub fn non_null_indices(&self) -> &[usize] {
-        &self.non_null_indices
-    }
-
     /// Present this batch to the column writer: the leaf array, its level
     /// streams, and the selection of values those levels refer to.
     pub(crate) fn leaf_batch(&self) -> LeafBatch<'_> {
