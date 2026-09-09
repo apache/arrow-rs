@@ -2345,6 +2345,14 @@ fn incompatible(contract: FieldContract<'_>, actual: &DataType) -> ParquetError 
 }
 
 #[cfg(test)]
+impl LevelTree {
+    pub(super) fn leaf_max_levels_for_test(&self, leaf: u32) -> (i16, i16) {
+        let leaf = &self.leaves[leaf as usize];
+        (leaf.max_def_level, leaf.max_rep_level)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::types::Int32Type;

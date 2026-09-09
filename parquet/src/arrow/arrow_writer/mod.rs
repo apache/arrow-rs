@@ -70,8 +70,8 @@ use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
+use levels::LeafBatch;
 use levels::cursor::LevelTree;
-use levels::{ArrayLevels, LeafBatch, calculate_array_levels};
 
 mod boolean;
 mod byte_array;
@@ -152,6 +152,8 @@ pub use crate::column::page_store::{
 ///
 /// The writer supports writing all Arrow [`DataType`]s that have a direct mapping to
 /// Parquet types including  [`StructArray`] and [`ListArray`].
+/// `RunEndEncoded` (REE) arrays are supported when their value type has a Parquet
+/// representation.
 ///
 /// The following are not supported:
 ///
@@ -173,8 +175,8 @@ pub use crate::column::page_store::{
 /// * String, LargeString, StringView
 /// * Binary, LargeBinary, BinaryView
 ///
-/// The writer can will also accept both native and dictionary encoded arrays if the dictionaries
-/// contain compatible values.
+/// The writer will also accept native, dictionary encoded, and `RunEndEncoded` (REE) arrays if
+/// they contain compatible values.
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_array::{DictionaryArray, LargeStringArray, RecordBatch, StringArray, UInt8Array};
@@ -952,16 +954,12 @@ impl PageWriter for ArrowPageWriter {
     }
 }
 
-/// How one leaf's levels are produced.
-#[derive(Debug)]
-enum ArrowLeafPlan {
-    Cursor { tree: Arc<LevelTree>, leaf: u32 },
-    Legacy(Box<ArrayLevels>),
-}
-
 /// A leaf column that can be encoded by [`ArrowColumnWriter`]
 #[derive(Debug)]
-pub struct ArrowLeafColumn(ArrowLeafPlan);
+pub struct ArrowLeafColumn {
+    tree: Arc<LevelTree>,
+    leaf: u32,
+}
 
 const CURSOR_TARGET_SLOTS: usize = 1024;
 
@@ -972,53 +970,7 @@ impl ArrowLeafColumn {
         cursor_row_limit: usize,
         emit: impl for<'a> FnMut(LeafBatch<'a>) -> Result<()>,
     ) -> Result<()> {
-        match &self.0 {
-            ArrowLeafPlan::Cursor { tree, leaf } => {
-                write_leaf_window(tree, *leaf, cursor_row_limit, emit)
-            }
-            ArrowLeafPlan::Legacy(levels) => {
-                levels.validate()?;
-                let mut emit = emit;
-                emit(levels.leaf_batch())
-            }
-        }
-    }
-}
-// Temporary individual-column fallback boundary; P25 retires the eager reference.
-fn native_indexed_without_lists(data_type: &ArrowDataType) -> bool {
-    match data_type {
-        ArrowDataType::List(_)
-        | ArrowDataType::LargeList(_)
-        | ArrowDataType::ListView(_)
-        | ArrowDataType::LargeListView(_)
-        | ArrowDataType::FixedSizeList(_, _)
-        | ArrowDataType::Map(_, _) => false,
-        ArrowDataType::RunEndEncoded(_, values) => native_indexed_without_lists(values.data_type()),
-        ArrowDataType::Dictionary(_, values) => native_indexed_without_lists(values),
-        ArrowDataType::Struct(fields) => fields
-            .iter()
-            .all(|field| native_indexed_without_lists(field.data_type())),
-        _ => true,
-    }
-}
-
-/// Whether a shape still needs the materializing level builder.
-fn needs_legacy_levels(data_type: &ArrowDataType) -> bool {
-    match data_type {
-        ArrowDataType::RunEndEncoded(..) => true,
-        ArrowDataType::Dictionary(_, value) => {
-            !levels::is_leaf(value) || needs_legacy_levels(value)
-        }
-        ArrowDataType::List(field)
-        | ArrowDataType::LargeList(field)
-        | ArrowDataType::ListView(field)
-        | ArrowDataType::LargeListView(field)
-        | ArrowDataType::FixedSizeList(field, _)
-        | ArrowDataType::Map(field, _) => needs_legacy_levels(field.data_type()),
-        ArrowDataType::Struct(fields) => fields
-            .iter()
-            .any(|field| needs_legacy_levels(field.data_type())),
-        _ => false,
+        write_leaf_window(&self.tree, self.leaf, cursor_row_limit, emit)
     }
 }
 
@@ -1038,6 +990,10 @@ fn write_leaf_window(
 }
 
 /// Write every leaf of `tree`, sharing structural walks where useful.
+///
+/// Each planned window shares list-row or nullable-ancestor work. Leaves with
+/// no work to amortize, and leaves behind indexed barriers, keep their own
+/// cursors.
 fn write_tree(tree: &LevelTree, writers: &mut [ArrowColumnWriter]) -> Result<()> {
     let Some(first) = writers.first() else {
         return Ok(());
@@ -1144,20 +1100,11 @@ fn write_tree_with_framers(
 /// Structural compatibility is checked here. A logical null reachable at a
 /// non-nullable `field` returns an error when the leaf is written.
 pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafColumn>> {
-    if !native_indexed_without_lists(array.data_type()) && needs_legacy_levels(array.data_type()) {
-        validate_map_key_type(field.data_type())?;
-        return Ok(calculate_array_levels(array, field)?
-            .into_iter()
-            .map(|levels| ArrowLeafColumn(ArrowLeafPlan::Legacy(Box::new(levels))))
-            .collect());
-    }
     let tree = Arc::new(LevelTree::build(field, array)?);
     Ok((0..tree.leaf_count() as u32)
-        .map(|leaf| {
-            ArrowLeafColumn(ArrowLeafPlan::Cursor {
-                tree: Arc::clone(&tree),
-                leaf,
-            })
+        .map(|leaf| ArrowLeafColumn {
+            tree: Arc::clone(&tree),
+            leaf,
         })
         .collect())
 }
@@ -1335,17 +1282,6 @@ impl ArrowColumnWriter {
         col.try_for_each_batch(cursor_row_limit, |batch| {
             self.write_leaf_batch(batch)?;
             Ok(())
-        })
-    }
-
-    /// Write through a content-defined framer, inserting page flushes at its
-    /// stream boundaries.
-    #[cfg(test)]
-    fn write_with_framer(&mut self, col: &ArrowLeafColumn, framer: &mut CdcFramer) -> Result<()> {
-        self.writer.start_arrow_source();
-        let cursor_row_limit = self.cursor_row_limit;
-        col.try_for_each_batch(cursor_row_limit, |batch| {
-            self.write_cdc_batch(batch, framer)
         })
     }
 
@@ -2173,7 +2109,6 @@ mod tests {
         roundtrip_opts_with_array_validation,
     };
     use super::*;
-    use crate::file::properties::CdcOptions;
     use std::cmp::Ordering;
     use std::collections::HashMap;
 
@@ -2202,7 +2137,7 @@ mod tests {
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::{
-        BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
+        BloomFilterPosition, CdcOptions, EnabledStatistics, ReaderProperties, WriterVersion,
     };
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
@@ -2539,6 +2474,7 @@ mod tests {
         concat(&arrays).unwrap()
     }
 
+    /// Write a single column and read every row back as one array.
     fn roundtrip_column(field: Field, col: ArrayRef, props: Option<WriterProperties>) -> ArrayRef {
         let schema = Arc::new(Schema::new(vec![field]));
         let batch = RecordBatch::try_new(schema.clone(), vec![col]).unwrap();
@@ -2549,6 +2485,8 @@ mod tests {
         read_column(file)
     }
 
+    /// Write a batch whose dense physical schema is logically compatible with
+    /// a wrapper-bearing writer schema.
     fn roundtrip_compatible_column(field: Field, col: ArrayRef) -> ArrayRef {
         let writer_schema = Arc::new(Schema::new(vec![field]));
         let batch_schema = Arc::new(Schema::new(vec![Field::new(
@@ -2892,7 +2830,9 @@ mod tests {
                     columns[0].get_estimated_total_bytes(),
                 );
                 let result = match &mut framers {
-                    Some(framers) => columns[0].write_with_framer(&leaves[0], &mut framers[0]),
+                    Some(framers) => {
+                        write_tree_with_framers(&leaves[0].tree, &mut columns, framers)
+                    }
                     None => columns[0].write(&leaves[0]),
                 };
                 if invalid {
@@ -2912,9 +2852,10 @@ mod tests {
                     // This early rejection leaves no encoded values behind.
                     let valid_leaves = compute_leaves(&target, &valid).unwrap();
                     match &mut framers {
-                        Some(framers) => columns[0]
-                            .write_with_framer(&valid_leaves[0], &mut framers[0])
-                            .unwrap(),
+                        Some(framers) => {
+                            write_tree_with_framers(&valid_leaves[0].tree, &mut columns, framers)
+                                .unwrap()
+                        }
                         None => columns[0].write(&valid_leaves[0]).unwrap(),
                     }
                     assert_eq!(
@@ -3086,6 +3027,9 @@ mod tests {
         assert_compatible_roundtrip(field, list.clone(), &list);
     }
 
+    /// An REE writer field can be required while its value field is nullable.
+    /// Dense batches written to that schema still need definition levels because
+    /// the Parquet leaf is optional.
     #[test]
     fn arrow_writer_dense_list_under_dictionary_child_schema() {
         let list = nullable_int32_list();
@@ -3215,6 +3159,9 @@ mod tests {
         assert_eq!(decoded, vec![batch]);
     }
 
+    /// REE null runs can be written through a dense nullable schema, but must be
+    /// rejected for a dense required schema because the target Parquet leaf has
+    /// no definition level to represent them.
     #[test]
     fn arrow_writer_rejects_missing_or_extra_top_level_columns_cleanly() {
         let one_field = Arc::new(Schema::new(vec![Field::new(
@@ -6308,6 +6255,8 @@ mod tests {
         roundtrip_opts(&batch, props);
     }
 
+    /// Dictionaries whose values are `Utf8View` or `BinaryView` round-trip
+    /// through the byte-array writer.
     #[test]
     fn arrow_writer_dictionary_of_view_roundtrip() {
         fn check(flat_type: DataType, nullable: bool, dict: ArrayRef, expected: ArrayRef) {
@@ -6419,7 +6368,6 @@ mod tests {
         fixed.append_value([3, 4]).unwrap();
         check_required_dict_null_value(Arc::new(fixed.finish()));
     }
-
     #[test]
     fn arrow_writer_rejects_null_dictionary_key_for_required_column() {
         let values: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
@@ -6448,6 +6396,7 @@ mod tests {
         assert!(err.to_string().contains("Found null"), "{err}");
     }
 
+    /// Binary and LargeBinary dictionaries round-trip.
     #[test]
     fn arrow_writer_low_cardinality_binary_dictionary() {
         let dict_vals: Vec<&[u8]> = vec![b"alpha".as_ref(), b"beta", b"gamma", b"delta"];
@@ -6464,6 +6413,7 @@ mod tests {
         RoundTripTest::new(Arc::new(lbin)).run();
     }
 
+    /// Dictionary columns round-trip with bloom filters enabled.
     #[test]
     fn arrow_writer_low_cardinality_dictionary_with_bloom_filter() {
         let keys = Int32Array::from_iter_values((0..64).map(|i| i % 4));
@@ -6678,6 +6628,7 @@ mod tests {
         assert_eq!(idx.min_value(1), Some(b"m".as_slice()));
         assert_eq!(idx.max_value(1), Some(b"z".as_slice()));
     }
+
     #[test]
     fn dense_dictionary_source_changes_preserve_cache_and_pages() {
         let sources: Vec<(ArrayRef, ArrayRef)> = vec![
@@ -6833,6 +6784,7 @@ mod tests {
         roundtrip_opts(&batch, props);
     }
 
+    /// Plain Decimal32 and Decimal64 columns round-trip.
     #[test]
     fn arrow_writer_decimal32_decimal64_plain_column() {
         let d32 = Decimal32Array::from(vec![Some(12345), Some(56789), Some(34567)])
@@ -7026,6 +6978,7 @@ mod tests {
             .page_locations()
             .len()
     }
+
     #[test]
     fn arrow_writer_clustered_nullable_ranges_roundtrip_all_families() {
         const ROWS: usize = 80;
