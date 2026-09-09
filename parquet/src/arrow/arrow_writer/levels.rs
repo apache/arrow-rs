@@ -44,6 +44,7 @@
 use crate::column::chunker::CdcChunk;
 use crate::column::value_selection::ValueSelectionRef;
 use crate::column::writer::{LevelDataRef, RunLevelsRef};
+pub(crate) mod cursor;
 mod plan;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
@@ -87,43 +88,61 @@ pub(crate) fn calculate_array_levels(array: &ArrayRef, field: &Field) -> Result<
     Ok(builder.finish())
 }
 
-/// Returns true if the DataType can be represented as a primitive parquet column,
-/// i.e. a leaf array with no children
-fn is_leaf(data_type: &DataType) -> bool {
-    matches!(
+/// Returns true if the DataType can be represented as a primitive parquet column.
+pub(super) fn is_leaf(data_type: &DataType) -> bool {
+    data_type.is_primitive()
+        || matches!(
+            data_type,
+            DataType::Null
+                | DataType::Boolean
+                | DataType::Utf8
+                | DataType::Utf8View
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+                | DataType::FixedSizeBinary(_)
+        )
+}
+
+#[derive(Clone, Copy)]
+struct FieldContract<'a> {
+    data_type: &'a DataType,
+    nullable: bool,
+    name: &'a str,
+}
+
+/// Erase schema-only dictionary and REE wrappers. REE value-field
+/// nullability belongs to the logical node it exposes.
+fn normalized(field: &Field) -> FieldContract<'_> {
+    let (data_type, nullable) = logical_type(field.data_type());
+    FieldContract {
         data_type,
-        DataType::Null
-            | DataType::Boolean
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Utf8
-            | DataType::Utf8View
-            | DataType::LargeUtf8
-            | DataType::Timestamp(_, _)
-            | DataType::Date32
-            | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Time64(_)
-            | DataType::Duration(_)
-            | DataType::Interval(_)
-            | DataType::Binary
-            | DataType::LargeBinary
-            | DataType::BinaryView
-            | DataType::Decimal32(_, _)
-            | DataType::Decimal64(_, _)
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _)
-            | DataType::FixedSizeBinary(_)
-    )
+        nullable: field.is_nullable() || nullable,
+        name: field.name(),
+    }
+}
+
+fn leaf_types_compatible(expected: &DataType, actual: &DataType) -> bool {
+    is_leaf(expected)
+        && is_leaf(actual)
+        && (expected.equals_datatype(actual)
+            || matches!(
+                (expected, actual),
+                (
+                    DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                    DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+                ) | (
+                    DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
+                    DataType::Binary | DataType::BinaryView | DataType::LargeBinary
+                )
+            ))
+}
+
+fn required_null(field: &str, index: usize) -> ParquetError {
+    ParquetError::ArrowError(format!(
+        "Found null at index {index} for required field '{field}'"
+    ))
 }
 
 /// The definition and repetition level of an array within a potentially nested hierarchy
@@ -1103,6 +1122,46 @@ impl LevelData {
         }
     }
 
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Absent => 0,
+            Self::Materialized(values) => values.len(),
+            Self::Uniform { count, .. } => *count,
+            Self::Runs(runs) => runs.len(),
+        }
+    }
+
+    /// Append `count` repetitions of `value` straight into a materialized
+    /// buffer, skipping the compact representations.
+    ///
+    /// For a stream that a later pass has to index into — repetition levels,
+    /// which `patch_list_starts` rewrites per list row — the compact forms are
+    /// pure overhead: they would be built, re-checked on every append, and then
+    /// converted back. `Absent` stays absent, so this is a no-op for a column
+    /// that has no such stream.
+    #[inline]
+    pub(super) fn append_dense_run(&mut self, value: i16, count: usize) {
+        if count == 0 {
+            return;
+        }
+        if let Some(values) = self.materialize_mut() {
+            values.extend(std::iter::repeat_n(value, count));
+        }
+    }
+
+    #[inline]
+    pub(super) fn clear(&mut self) {
+        match self {
+            Self::Absent => {}
+            Self::Materialized(values) => values.clear(),
+            Self::Uniform { .. } => *self = Self::Materialized(Vec::new()),
+            Self::Runs(runs) => {
+                runs.ends.clear();
+                runs.values.clear();
+            }
+        }
+    }
+
     pub(crate) fn as_ref(&self) -> LevelDataRef<'_> {
         match self {
             Self::Absent => LevelDataRef::Absent,
@@ -1451,6 +1510,47 @@ impl ArrayLevels {
 
 #[cfg(test)]
 mod tests {
+    fn calculate_array_levels(array: &ArrayRef, field: &Field) -> Result<Vec<ArrayLevels>> {
+        let eager = super::calculate_array_levels(array, field)?;
+        for leaf in &eager {
+            leaf.validate()?;
+        }
+        if !super::super::needs_legacy_levels(array.data_type()) {
+            let tree = cursor::LevelTree::build(field, array)?;
+            assert_eq!(tree.leaf_count(), eager.len());
+            for limit in [1, 7, 1024] {
+                let mut cursor = tree.cursor(0..tree.leaf_count() as u32, limit, limit)?;
+                let mut actual = vec![(Vec::new(), Vec::new(), Vec::new()); eager.len()];
+                while let Some(tiles) = cursor.next_tiles()? {
+                    for (leaf, output) in actual.iter_mut().enumerate() {
+                        let batch = tiles.leaf(leaf, tree.terminal(leaf as u32));
+                        output.0.extend(batch.def_level_data().cursor());
+                        output.1.extend(batch.rep_level_data().cursor());
+                        output.2.extend(batch.value_selection().cursor());
+                        assert_eq!(batch.array(), eager[leaf].array.as_ref());
+                    }
+                }
+                for (leaf, (defs, reps, values)) in eager.iter().zip(actual) {
+                    assert_eq!(
+                        defs,
+                        leaf.def_levels.as_ref().cursor().collect::<Vec<_>>(),
+                        "definition levels, tile limit {limit}"
+                    );
+                    assert_eq!(
+                        reps,
+                        leaf.rep_levels.as_ref().cursor().collect::<Vec<_>>(),
+                        "repetition levels, tile limit {limit}"
+                    );
+                    assert_eq!(
+                        values, leaf.non_null_indices,
+                        "selected values, tile limit {limit}"
+                    );
+                }
+            }
+        }
+        Ok(eager)
+    }
+
     use super::*;
     #[cfg(test)]
     use crate::column::chunker::CdcChunk;
@@ -2464,13 +2564,11 @@ mod tests {
         builder.append(true);
         builder.values().append_slice(&[9, 10]);
         builder.append(false);
-        let a = builder.finish();
-        let values = a.values().clone();
-
+        let a: ArrayRef = Arc::new(builder.finish());
         let item_field = Field::new_list_field(a.data_type().clone(), true);
-        let mut builder = levels(&item_field, a);
-        builder.write(1..4);
-        let levels = builder.finish();
+        let sliced = a.slice(1, 3);
+        let values = sliced.as_fixed_size_list().values().clone();
+        let levels = calculate_array_levels(&sliced, &item_field).unwrap();
 
         assert_eq!(levels.len(), 1);
 
@@ -2480,7 +2578,7 @@ mod tests {
         let expected_level = ArrayLevels {
             def_levels: LevelData::Materialized(vec![0, 0, 3, 3]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 1]),
-            non_null_indices: vec![6, 7],
+            non_null_indices: vec![4, 5],
             max_def_level: 3,
             max_rep_level: 1,
             array: values,
@@ -2976,6 +3074,13 @@ mod tests {
             validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
+
+        let required = Field::new("list", array.data_type().clone(), false);
+        let error = calculate_array_levels(&array, &required).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Arrow: Found null at index 0 for required field 'list'"
+        );
     }
 
     #[test]
@@ -3037,6 +3142,13 @@ mod tests {
             validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
+
+        let required = Field::new("a", a_array.data_type().clone(), false);
+        let error = calculate_array_levels(&a_array, &required).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Arrow: Found null at index 0 for required field 'a'"
+        );
     }
 
     #[test]
