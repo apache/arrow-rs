@@ -224,18 +224,23 @@ impl LevelTree {
         }
         let (&last, parents) = branch.split_last().expect("a leaf has a bound branch");
         let node = &self.nodes[last as usize];
-        // Struct-only unmasked paths preserve the root row coordinates. The
-        // bound leaf validity already includes dictionary-key and value nulls.
+        // Struct-only paths preserve root row coordinates. With at most one
+        // validity mask, its cached null count describes the full selection.
         if !self.leaves[leaf as usize].indexed
             && terminal.len() == self.root.len()
             && matches!(node.kind, TreeKind::Leaf | TreeKind::DictionaryLeaf)
-            && parents.iter().all(|&parent| {
-                let node = &self.nodes[parent as usize];
-                matches!(node.kind, TreeKind::Struct) && node.nulls.is_none()
-            })
+            && parents
+                .iter()
+                .all(|&parent| matches!(self.nodes[parent as usize].kind, TreeKind::Struct))
         {
-            let nulls = node.nulls.as_ref().map_or(0, NullBuffer::null_count);
-            return Ok((terminal.len() - nulls).min(limit));
+            let mut masks = branch
+                .iter()
+                .filter_map(|&node| self.nodes[node as usize].nulls.as_ref());
+            let first = masks.next();
+            if masks.next().is_none() {
+                let nulls = first.map_or(0, NullBuffer::null_count);
+                return Ok((terminal.len() - nulls).min(limit));
+            }
         }
 
         let mut count = 0usize;
@@ -2380,6 +2385,14 @@ fn incompatible(contract: FieldContract<'_>, actual: &DataType) -> ParquetError 
 }
 
 #[cfg(test)]
+impl LevelTree {
+    pub(super) fn leaf_max_levels_for_test(&self, leaf: u32) -> (i16, i16) {
+        let leaf = &self.leaves[leaf as usize];
+        (leaf.max_def_level, leaf.max_rep_level)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::types::Int32Type;
@@ -2416,8 +2429,17 @@ mod tests {
             dictionary.clone(),
             Some(NullBuffer::from(vec![true, false])),
         ));
+        let parent_mask_only: ArrayRef = Arc::new(StructArray::new(
+            vec![field.clone()].into(),
+            vec![Arc::new(DictionaryArray::new(
+                Int32Array::from(vec![0; 5]),
+                Arc::new(StringArray::from(vec!["a"])),
+            ))],
+            Some(NullBuffer::from(vec![true, false, true, false, true])),
+        ));
         let arrays = [
             (dictionary.clone(), 3usize),
+            (parent_mask_only, 3),
             (dictionary.slice(0, 0), 0),
             (structure(None), 3),
             (structure(Some(NullBuffer::new_valid(5))), 3),
