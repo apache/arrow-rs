@@ -133,6 +133,8 @@ struct LevelContext {
 /// A helper to construct [`ArrayLevels`] from a potentially nested [`Field`]
 #[derive(Debug)]
 enum LevelInfoBuilder {
+    // Eager staging only: check reachable slots while preserving leaf-write error timing.
+    Required(Box<LevelInfoBuilder>, NullBuffer, String),
     /// A primitive, leaf array
     Primitive(ArrayLevels),
     /// A list array
@@ -202,6 +204,37 @@ fn logical_type(mut data_type: &DataType) -> (&DataType, bool) {
 impl LevelInfoBuilder {
     /// Create a new [`LevelInfoBuilder`] for the given [`Field`] and parent [`LevelContext`]
     fn try_new(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
+        let builder = Self::build(field, parent_ctx, array)?;
+        let (_, nullable) = logical_type(field.data_type());
+        if !field.is_nullable()
+            && !nullable
+            && !matches!(
+                array.data_type(),
+                DataType::RunEndEncoded(_, _) | DataType::Dictionary(_, _)
+            )
+            && let Some(nulls) = array.logical_nulls().filter(|n| n.null_count() != 0)
+        {
+            Ok(Self::Required(
+                Box::new(builder),
+                nulls,
+                field.name().clone(),
+            ))
+        } else if !field.is_nullable()
+            && !nullable
+            && matches!(array.data_type(), DataType::Dictionary(_, value) if is_leaf(value))
+            && let Some(nulls) = array.logical_nulls().filter(|n| n.null_count() != 0)
+        {
+            Ok(Self::Required(
+                Box::new(builder),
+                nulls,
+                field.name().clone(),
+            ))
+        } else {
+            Ok(builder)
+        }
+    }
+
+    fn build(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
         let (data_type, nullable) = logical_type(field.data_type());
         if data_type != field.data_type() {
             let field = field
@@ -350,6 +383,7 @@ impl LevelInfoBuilder {
     /// as enumerated by a depth-first search
     fn finish(self) -> Vec<ArrayLevels> {
         match self {
+            LevelInfoBuilder::Required(v, _, _) => v.finish(),
             LevelInfoBuilder::Primitive(v) => vec![v],
             LevelInfoBuilder::List(v, _, _, _, _)
             | LevelInfoBuilder::LargeList(v, _, _, _, _)
@@ -363,6 +397,20 @@ impl LevelInfoBuilder {
     /// Given an `array`, write the level data for the elements in `range`
     fn write(&mut self, range: Range<usize>) {
         match self {
+            LevelInfoBuilder::Required(child, nulls, name) => {
+                if let Some(index) = range.clone().find(|&index| nulls.is_null(index)) {
+                    let message =
+                        format!("Found null at index {index} for required field '{name}'");
+                    child.visit_leaves(|leaf| {
+                        if leaf.validation_error.is_none() {
+                            leaf.validation_error = Some(message.clone());
+                        }
+                    });
+                }
+                // Parents still need the child levels to backfill list boundaries;
+                // the recorded error prevents these invalid values from being encoded.
+                child.write(range);
+            }
             LevelInfoBuilder::Primitive(info) => Self::write_leaf(info, range),
             LevelInfoBuilder::List(child, ctx, offsets, nulls, is_last) => {
                 Self::write_list(child, ctx, offsets, nulls.as_ref(), range, *is_last)
@@ -947,6 +995,7 @@ impl LevelInfoBuilder {
     /// Visits all children of this node in depth first order
     fn visit_leaves(&mut self, visit: impl Fn(&mut ArrayLevels) + Copy) {
         match self {
+            LevelInfoBuilder::Required(child, _, _) => child.visit_leaves(visit),
             LevelInfoBuilder::Primitive(info) => visit(info),
             LevelInfoBuilder::List(c, _, _, _, _)
             | LevelInfoBuilder::LargeList(c, _, _, _, _)
@@ -1155,6 +1204,7 @@ pub(crate) struct ArrayLevels {
 
     /// cached logical nulls of the array.
     logical_nulls: Option<NullBuffer>,
+    validation_error: Option<String>,
 }
 
 impl PartialEq for ArrayLevels {
@@ -1171,6 +1221,13 @@ impl PartialEq for ArrayLevels {
 impl Eq for ArrayLevels {}
 
 impl ArrayLevels {
+    pub(crate) fn validate(&self) -> Result<()> {
+        match &self.validation_error {
+            Some(message) => Err(ParquetError::ArrowError(message.clone())),
+            None => Ok(()),
+        }
+    }
+
     fn new(ctx: LevelContext, is_nullable: bool, array: ArrayRef) -> Self {
         let max_rep_level = ctx.rep_level;
         let max_def_level = match is_nullable {
@@ -1188,6 +1245,7 @@ impl ArrayLevels {
             max_rep_level,
             array,
             logical_nulls,
+            validation_error: None,
         }
     }
 
@@ -1238,6 +1296,7 @@ impl ArrayLevels {
             max_rep_level: self.max_rep_level,
             array,
             logical_nulls,
+            validation_error: None,
         }
     }
 
@@ -1311,6 +1370,7 @@ mod tests {
             max_rep_level: 2,
             array: Arc::new(primitives),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -1332,6 +1392,7 @@ mod tests {
             max_rep_level: 0,
             array,
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1360,6 +1421,7 @@ mod tests {
             max_rep_level: 0,
             array,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1395,6 +1457,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(leaf_array),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
 
@@ -1429,6 +1492,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(leaf_array),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1479,6 +1543,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(leaf),
             logical_nulls: None,
+            validation_error: None,
         };
 
         assert_eq!(&levels[0], &expected_levels);
@@ -1530,6 +1595,7 @@ mod tests {
             max_rep_level: 2,
             array: Arc::new(leaf),
             logical_nulls: None,
+            validation_error: None,
         };
 
         assert_eq!(&levels[0], &expected_levels);
@@ -1568,6 +1634,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(leaf),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
 
@@ -1601,6 +1668,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(leaf),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
 
@@ -1654,6 +1722,7 @@ mod tests {
             max_rep_level: 2,
             array: Arc::new(leaf),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1695,6 +1764,7 @@ mod tests {
             max_rep_level: 0,
             array: leaf,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1735,6 +1805,7 @@ mod tests {
             max_rep_level: 1,
             array: Arc::new(a_values),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -1828,6 +1899,7 @@ mod tests {
             max_rep_level: 0,
             array: Arc::new(a),
             logical_nulls: None,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
 
@@ -1843,6 +1915,7 @@ mod tests {
             max_rep_level: 0,
             array: Arc::new(b),
             logical_nulls: b_logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
 
@@ -1858,6 +1931,7 @@ mod tests {
             max_rep_level: 0,
             array: Arc::new(d),
             logical_nulls: d_logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
 
@@ -1873,6 +1947,7 @@ mod tests {
             max_rep_level: 0,
             array: Arc::new(f),
             logical_nulls: f_logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -1985,6 +2060,7 @@ mod tests {
             max_rep_level: 1,
             array: map.keys().clone(),
             logical_nulls: map_keys_logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
 
@@ -2000,6 +2076,7 @@ mod tests {
             max_rep_level: 1,
             array: map.values().clone(),
             logical_nulls: map_values_logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -2087,6 +2164,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(list_level, &expected_level);
@@ -2129,6 +2207,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(&levels[0], &expected_level);
@@ -2216,6 +2295,7 @@ mod tests {
             max_rep_level: 2,
             array: a1_values,
             logical_nulls: a1_logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(&levels[0], &expected_level);
@@ -2229,6 +2309,7 @@ mod tests {
             max_rep_level: 1,
             array: a2_values,
             logical_nulls: a2_logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(&levels[1], &expected_level);
@@ -2269,6 +2350,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -2421,6 +2503,7 @@ mod tests {
             max_rep_level: 1,
             array: values_a,
             logical_nulls: values_a_logical_nulls,
+            validation_error: None,
         };
         // [[{b: 2}, null], null, [null, null], [{b: 3}, {b: 4}]]
         let values_b_logical_nulls = values_b.logical_nulls();
@@ -2432,6 +2515,7 @@ mod tests {
             max_rep_level: 1,
             array: values_b,
             logical_nulls: values_b_logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(a_levels, &expected_a);
@@ -2465,6 +2549,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -2502,6 +2587,7 @@ mod tests {
             max_rep_level: 2,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
 
         assert_eq!(levels[0], expected_level);
@@ -2535,6 +2621,7 @@ mod tests {
             max_rep_level: 0,
             array: Arc::new(dict),
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(levels[0], expected_level);
     }
@@ -2575,6 +2662,7 @@ mod tests {
             max_rep_level: 0,
             array,
             logical_nulls,
+            validation_error: None,
         };
         let sliced = levels.slice_for_chunk(&CdcChunk {
             level_offset: 0,
@@ -2609,6 +2697,7 @@ mod tests {
             max_rep_level: 0,
             array,
             logical_nulls,
+            validation_error: None,
         };
         let sliced = levels.slice_for_chunk(&CdcChunk {
             level_offset: 1,
@@ -2663,6 +2752,7 @@ mod tests {
             max_rep_level: 1,
             array,
             logical_nulls,
+            validation_error: None,
         };
 
         // Chunk 0: rows 0-1, nni=[0] → array sliced to [0..1]
@@ -2709,6 +2799,7 @@ mod tests {
             max_rep_level: 0,
             array,
             logical_nulls,
+            validation_error: None,
         };
         // Chunk covering only the two null rows (levels 1..3), zero non-null values.
         let sliced = levels.slice_for_chunk(&CdcChunk {
@@ -2747,6 +2838,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -2776,6 +2868,7 @@ mod tests {
             max_rep_level: 1,
             array: values,
             logical_nulls,
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -2806,6 +2899,7 @@ mod tests {
             max_rep_level: 0,
             array: leaf,
             logical_nulls: Some(NullBuffer::new_null(4)),
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -2840,6 +2934,7 @@ mod tests {
             max_rep_level: 0,
             array: leaf,
             logical_nulls: Some(NullBuffer::new_null(3)),
+            validation_error: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -2874,6 +2969,7 @@ mod tests {
                 max_rep_level: 0,
                 array: leaf,
                 logical_nulls: Some(NullBuffer::new_null(2)),
+                validation_error: None,
             };
             assert_eq!(&levels[i], &expected, "leaf {i} mismatch");
         }
