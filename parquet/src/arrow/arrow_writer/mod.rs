@@ -21,6 +21,7 @@ use crate::column::chunker::ContentDefinedChunker;
 
 use bytes::Bytes;
 use std::io::Write;
+use std::ops::Range;
 use std::slice::Iter;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
@@ -32,7 +33,9 @@ use arrow_schema::{
     ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef, TimeUnit,
 };
 
-use super::schema::{add_encoded_arrow_schema_to_metadata, decimal_length_from_precision};
+use super::schema::{
+    add_encoded_arrow_schema_to_metadata, decimal_length_from_precision, validate_map_key_type,
+};
 
 use crate::arrow::ArrowSchemaConverter;
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
@@ -245,6 +248,9 @@ impl<W: Write + Send> ArrowWriter<W> {
         arrow_schema: SchemaRef,
         options: ArrowWriterOptions,
     ) -> Result<Self> {
+        for field in arrow_schema.fields() {
+            validate_map_key_type(field.data_type())?;
+        }
         let mut props = options.properties;
 
         let schema = if let Some(parquet_schema) = options.schema_descr {
@@ -1103,6 +1109,7 @@ enum ArrowColumnWriterImpl {
 impl ArrowColumnWriter {
     /// Write an [`ArrowLeafColumn`]
     pub fn write(&mut self, col: &ArrowLeafColumn) -> Result<()> {
+        col.0.validate()?;
         self.write_internal(&col.0)
     }
 
@@ -1113,6 +1120,7 @@ impl ArrowColumnWriter {
         chunker: &mut ContentDefinedChunker,
     ) -> Result<()> {
         let levels = &col.0;
+        levels.validate()?;
         let chunks = chunker.get_arrow_chunks(
             levels.def_level_data().as_ref(),
             levels.rep_level_data().as_ref(),
@@ -1243,6 +1251,20 @@ impl ArrowColumnWriter {
     }
 }
 
+fn arrow_leaf_ranges(schema: &SchemaRef) -> Result<Vec<Range<usize>>> {
+    let mut count = 0;
+    schema
+        .fields
+        .iter()
+        .map(|field| {
+            validate_map_key_type(field.data_type())?;
+            let start = count;
+            count += compute_leaves(field, &arrow_array::new_empty_array(field.data_type()))?.len();
+            Ok(start..count)
+        })
+        .collect()
+}
+
 /// Encodes [`RecordBatch`] to a parquet row group
 ///
 /// Note: this structure is created by [`ArrowRowGroupWriterFactory`] internally used to
@@ -1266,11 +1288,13 @@ impl ArrowRowGroupWriter {
     }
 
     fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        let ranges = self.validate_batch_shape(batch, None)?;
         self.buffered_rows += batch.num_rows();
-        let mut writers = self.writers.iter_mut();
-        for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
-            for leaf in compute_leaves(field.as_ref(), column)? {
-                writers.next().unwrap().write(&leaf)?;
+        for (column_idx, (field, range)) in self.schema.fields.iter().zip(ranges).enumerate() {
+            let leaves = compute_leaves(field, batch.column(column_idx))?;
+            Self::validate_leaf_count(field, &range, leaves.len())?;
+            for (offset, leaf) in leaves.into_iter().enumerate() {
+                self.writers[range.start + offset].write(&leaf)?;
             }
         }
         Ok(())
@@ -1281,16 +1305,57 @@ impl ArrowRowGroupWriter {
         batch: &RecordBatch,
         chunkers: &mut [ContentDefinedChunker],
     ) -> Result<()> {
+        let ranges = self.validate_batch_shape(batch, Some(chunkers.len()))?;
         self.buffered_rows += batch.num_rows();
-        let mut writers = self.writers.iter_mut();
-        let mut chunkers = chunkers.iter_mut();
-        for (field, column) in self.schema.fields().iter().zip(batch.columns()) {
-            for leaf in compute_leaves(field.as_ref(), column)? {
-                writers
-                    .next()
-                    .unwrap()
-                    .write_with_chunker(&leaf, chunkers.next().unwrap())?;
+        for (column_idx, (field, range)) in self.schema.fields.iter().zip(ranges).enumerate() {
+            let leaves = compute_leaves(field, batch.column(column_idx))?;
+            Self::validate_leaf_count(field, &range, leaves.len())?;
+            for (offset, leaf) in leaves.into_iter().enumerate() {
+                let index = range.start + offset;
+                self.writers[index].write_with_chunker(&leaf, &mut chunkers[index])?;
             }
+        }
+        Ok(())
+    }
+
+    fn validate_batch_shape(
+        &self,
+        batch: &RecordBatch,
+        chunker_count: Option<usize>,
+    ) -> Result<Vec<Range<usize>>> {
+        if batch.num_columns() != self.schema.fields.len() {
+            return Err(ParquetError::ArrowError(format!(
+                "Incompatible schema: writer has {} top-level fields but batch has {} columns",
+                self.schema.fields.len(),
+                batch.num_columns()
+            )));
+        }
+        let ranges = arrow_leaf_ranges(&self.schema)?;
+        let leaf_count = ranges.last().map_or(0, |r| r.end);
+        if self.writers.len() != leaf_count {
+            return Err(ParquetError::General(format!(
+                "Arrow row-group writer has {} column writers for {} planned leaves",
+                self.writers.len(),
+                leaf_count
+            )));
+        }
+        if let Some(actual) = chunker_count
+            && actual != leaf_count
+        {
+            return Err(ParquetError::General(format!(
+                "content-defined chunking has {actual} chunkers for {leaf_count} planned leaves"
+            )));
+        }
+        Ok(ranges)
+    }
+
+    fn validate_leaf_count(field: &Field, range: &Range<usize>, actual: usize) -> Result<()> {
+        let expected = range.len();
+        if actual != expected {
+            return Err(ParquetError::ArrowError(format!(
+                "Incompatible schema: field '{}' produced {actual} leaf columns but writer expects {expected}",
+                field.name()
+            )));
         }
         Ok(())
     }
@@ -1361,6 +1426,15 @@ impl ArrowRowGroupWriterFactory {
 
     /// Create column writers for a new row group, with the given row group index
     pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
+        let ranges = arrow_leaf_ranges(&self.arrow_schema)?;
+        let leaf_count = ranges.last().map_or(0, |r| r.end);
+        if leaf_count != self.schema.num_columns() {
+            return Err(ParquetError::General(format!(
+                "Arrow schema maps to {} leaf columns but Parquet schema has {}",
+                leaf_count,
+                self.schema.num_columns()
+            )));
+        }
         let mut writers = Vec::with_capacity(self.arrow_schema.fields.len());
         let mut leaves = self.schema.columns().iter();
         let column_factory = self.column_writer_factory(row_group_index);
@@ -2691,6 +2765,655 @@ mod tests {
             false,
         );
         assert_unified(wrapped_map, map.clone(), &map);
+    }
+
+    #[test]
+    fn arrow_writer_rejects_missing_or_extra_top_level_columns_cleanly() {
+        let one_field = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        let two_fields = Arc::new(Schema::new(vec![
+            Field::new("a", ArrowDataType::Int32, false),
+            Field::new("b", ArrowDataType::Int32, false),
+        ]));
+        let one_column = RecordBatch::try_new(
+            Arc::clone(&one_field),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        let two_columns = RecordBatch::try_new(
+            Arc::clone(&two_fields),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Int32Array::from(vec![2])),
+            ],
+        )
+        .unwrap();
+
+        let mut writer = ArrowWriter::try_new(Vec::new(), Arc::clone(&two_fields), None).unwrap();
+        let err = writer.write(&one_column).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("writer has 2 top-level fields but batch has 1 columns"),
+            "{err}"
+        );
+        assert_eq!(writer.in_progress_rows(), 0);
+
+        let mut writer = ArrowWriter::try_new(Vec::new(), Arc::clone(&one_field), None).unwrap();
+        let err = writer.write(&two_columns).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("writer has 1 top-level fields but batch has 2 columns"),
+            "{err}"
+        );
+        assert_eq!(writer.in_progress_rows(), 0);
+    }
+
+    #[test]
+    fn arrow_row_group_factory_rejects_parquet_leaf_count_mismatch_cleanly() {
+        let one_field = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        let two_fields = Arc::new(Schema::new(vec![
+            Field::new("a", ArrowDataType::Int32, false),
+            Field::new("b", ArrowDataType::Int32, false),
+        ]));
+        let parquet = ArrowSchemaConverter::new().convert(&one_field).unwrap();
+        let props = Arc::new(WriterProperties::default());
+        let file_writer =
+            SerializedFileWriter::new(Vec::new(), parquet.root_schema_ptr(), Arc::clone(&props))
+                .unwrap();
+
+        let factory = ArrowRowGroupWriterFactory::new(&file_writer, Arc::clone(&two_fields));
+        let Err(err) = factory.create_column_writers(0) else {
+            panic!("mismatched schemas should not create column writers")
+        };
+        assert!(
+            err.to_string()
+                .contains("Arrow schema maps to 2 leaf columns but Parquet schema has 1"),
+            "{err}"
+        );
+
+        let parquet = ArrowSchemaConverter::new().convert(&two_fields).unwrap();
+        let file_writer =
+            SerializedFileWriter::new(Vec::new(), parquet.root_schema_ptr(), props).unwrap();
+        let factory = ArrowRowGroupWriterFactory::new(&file_writer, one_field);
+        let Err(err) = factory.create_column_writers(0) else {
+            panic!("mismatched schemas should not create column writers")
+        };
+        assert!(
+            err.to_string()
+                .contains("Arrow schema maps to 1 leaf columns but Parquet schema has 2"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn arrow_writer_required_map_keys_reject_only_reachable_nulls() {
+        let keys: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![1, 0, 1]),
+            Arc::new(Int32Array::from(vec![None, Some(7)])),
+        ));
+        let values = Int32Array::from(vec![Some(10), Some(20), None]);
+        let fields = Fields::from(vec![
+            Field::new("key", keys.data_type().clone(), false),
+            Field::new("value", DataType::Int32, true),
+        ]);
+        assert!(
+            StructArray::try_new(
+                fields.clone(),
+                vec![keys.clone(), Arc::new(values.clone())],
+                None
+            )
+            .is_err()
+        );
+
+        // ArrayData validates physical nulls, not null dictionary values. This
+        // safe construction reaches the writer with a logically null map key.
+        let data = ArrayData::builder(DataType::Struct(fields))
+            .len(3)
+            .add_child_data(keys.to_data())
+            .add_child_data(values.to_data())
+            .build()
+            .unwrap();
+        data.validate_full().unwrap();
+        let entries = StructArray::from(data);
+        let entries_field = Arc::new(Field::new("entries", entries.data_type().clone(), false));
+        let offsets = OffsetBuffer::new(vec![0i32, 1, 2, 3].into());
+        let map = MapArray::try_new(
+            entries_field.clone(),
+            offsets.clone(),
+            entries.clone(),
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(map.keys().logical_null_count(), 1);
+        let masked = MapArray::try_new(
+            entries_field,
+            offsets,
+            entries,
+            Some(NullBuffer::from(vec![true, false, true])),
+            false,
+        )
+        .unwrap();
+        let writer_schema = Arc::new(Schema::new(vec![Field::new(
+            "map",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Field::new("key", DataType::Int32, false),
+                            Field::new("value", DataType::Int32, true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            ),
+            true,
+        )]));
+        for cdc in [false, true] {
+            let props = WriterProperties::builder()
+                .set_content_defined_chunking(cdc.then(Default::default))
+                .build();
+            for (array, expected_keys, expected_null_maps) in [
+                (map.clone(), None, 0),
+                (map.slice(0, 1), Some(1), 0),
+                (map.slice(2, 1), Some(1), 0),
+                (masked.clone(), Some(2), 1),
+            ] {
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "map",
+                    array.data_type().clone(),
+                    true,
+                )]));
+                let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+                let mut bytes = Vec::new();
+                let mut writer =
+                    ArrowWriter::try_new(&mut bytes, writer_schema.clone(), Some(props.clone()))
+                        .unwrap();
+                let result = writer.write(&batch);
+                let Some(expected_keys) = expected_keys else {
+                    let err = result.unwrap_err();
+                    assert!(
+                        err.to_string().contains("Found null")
+                            && err.to_string().contains("required field 'key'"),
+                        "{err}"
+                    );
+                    continue;
+                };
+                result.unwrap();
+                writer.close().unwrap();
+                let actual = ParquetRecordBatchReader::try_new(Bytes::from(bytes), 1024)
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .unwrap();
+                let actual = actual.column(0).as_map();
+                assert_eq!(actual.null_count(), expected_null_maps);
+                assert_eq!(
+                    actual.keys().as_primitive::<Int32Type>().values().as_ref(),
+                    vec![7; expected_keys]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn arrow_writer_rejects_nullable_map_key_schemas_early() {
+        let schema_with_key = |key| {
+            Arc::new(Schema::new(vec![Field::new(
+                "map",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(
+                            vec![key, Field::new("value", DataType::Int32, true)].into(),
+                        ),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
+            )]))
+        };
+        let required = schema_with_key(Field::new("key", DataType::Int32, false));
+        let parquet = ArrowSchemaConverter::new().convert(&required).unwrap();
+        let ree = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        for key in [
+            Field::new("key", DataType::Int32, true),
+            Field::new("key", ree.clone(), false),
+            Field::new(
+                "key",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(ree)),
+                false,
+            ),
+        ] {
+            let schema = schema_with_key(key);
+            for explicit_schema in [false, true] {
+                for skip_metadata in [false, true] {
+                    let mut options =
+                        ArrowWriterOptions::new().with_skip_arrow_metadata(skip_metadata);
+                    if explicit_schema {
+                        options = options.with_parquet_schema(parquet.clone());
+                    }
+                    let mut bytes = Vec::new();
+                    let err =
+                        ArrowWriter::try_new_with_options(&mut bytes, schema.clone(), options)
+                            .unwrap_err();
+                    assert!(
+                        err.to_string()
+                            .contains("Map key field 'key' must be non-nullable"),
+                        "{err}"
+                    );
+                    assert!(
+                        bytes.is_empty(),
+                        "schema rejection must precede file initialization"
+                    );
+                }
+            }
+            let file = SerializedFileWriter::new(
+                Vec::new(),
+                parquet.root_schema_ptr(),
+                Arc::new(WriterProperties::default()),
+            )
+            .unwrap();
+            let factory = ArrowRowGroupWriterFactory::new(&file, schema);
+            let Err(err) = factory.create_column_writers(0) else {
+                panic!("nullable map-key schema should not create column writers")
+            };
+            assert!(
+                err.to_string()
+                    .contains("Map key field 'key' must be non-nullable"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn ree_required_schema_writes_dense_int32_batch() {
+        let run_ends = Int32Array::from(vec![1]);
+        let values = Int32Array::from(vec![7]);
+        let ree = Int32RunArray::try_new(&run_ends, &values).unwrap();
+        let writer_schema = Arc::new(Schema::new(vec![Field::new(
+            "c",
+            ree.data_type().clone(),
+            false,
+        )]));
+
+        let dense_schema = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, false)]));
+        let dense_batch =
+            RecordBatch::try_new(dense_schema, vec![Arc::new(Int32Array::from(vec![3, 4]))])
+                .unwrap();
+
+        let mut file = vec![];
+        let mut writer = ArrowWriter::try_new(&mut file, writer_schema, None).unwrap();
+        writer.write(&dense_batch).unwrap();
+        writer.close().unwrap();
+
+        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(file), 1024).unwrap();
+        let actual = reader.next().unwrap().unwrap();
+        assert_eq!(
+            actual.column(0).as_primitive::<Int32Type>().values(),
+            &[3, 4]
+        );
+    }
+
+    #[test]
+    fn ree_nulls_respect_dense_schema_nullability() {
+        let run_ends = Int32Array::from(vec![2, 4, 5]);
+        let values = Int32Array::from(vec![Some(1), None, Some(2)]);
+        let ree: ArrayRef = Arc::new(Int32RunArray::try_new(&run_ends, &values).unwrap());
+        let ree_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "c",
+                ree.data_type().clone(),
+                true,
+            )])),
+            vec![ree.clone()],
+        )
+        .unwrap();
+
+        let nullable_schema = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, true)]));
+        let mut file = vec![];
+        let mut writer = ArrowWriter::try_new(&mut file, nullable_schema, None).unwrap();
+        writer.write(&ree_batch).unwrap();
+        writer.close().unwrap();
+
+        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(file), 1024).unwrap();
+        let actual = reader.next().unwrap().unwrap();
+        assert_eq!(
+            actual.column(0).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![Some(1), Some(1), None, None, Some(2)])
+        );
+
+        let required_schema = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, false)]));
+        let mut writer = ArrowWriter::try_new(Vec::new(), required_schema, None).unwrap();
+        let err = writer.write(&ree_batch).unwrap_err();
+        assert!(
+            err.to_string().contains("required field") && err.to_string().contains("Found null"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn eager_required_null_validation_respects_reachability_and_write_timing() {
+        let required = Field::new("c", DataType::Int32, false);
+        let nullable: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
+        let leaves = compute_leaves(&required, &nullable).unwrap();
+        let schema = Arc::new(Schema::new(vec![required.clone()]));
+        let writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        let (_file, factory) = writer.into_serialized_writer().unwrap();
+        let mut columns = factory.create_column_writers(0).unwrap();
+        assert!(
+            columns[0]
+                .write(&leaves[0])
+                .unwrap_err()
+                .to_string()
+                .contains("required field 'c'")
+        );
+
+        // Only a referenced logical dictionary null is invalid, not an unused value.
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None]));
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(
+            Int8Array::from(vec![0, 0]),
+            values.clone(),
+        ));
+        assert_eq!(
+            roundtrip_compatible_column(required.clone(), dict).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![7, 7])
+        );
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(Int8Array::from(vec![0, 1]), values));
+        let leaves = compute_leaves(&required, &dict).unwrap();
+        assert!(leaves[0].0.validate().is_err());
+
+        // A nullable ancestor masks an otherwise required child null.
+        let actual_fields = Fields::from(vec![Field::new("source_child", DataType::Int32, true)]);
+        let array: ArrayRef = Arc::new(StructArray::new(
+            actual_fields,
+            vec![nullable.clone()],
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+        let target = Field::new(
+            "c",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "target_child",
+                DataType::Int32,
+                false,
+            )])),
+            true,
+        );
+        let leaves = compute_leaves(&target, &array).unwrap();
+        assert!(leaves[0].0.validate().is_ok());
+        let result = roundtrip_compatible_column(target, array);
+        assert_eq!(result.as_struct().fields()[0].name(), "target_child");
+        assert!(result.is_null(1));
+
+        // Unused list child slots and out-of-slice scalar nulls are unreachable.
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![None, Some(9), None]));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![1_i32, 2].into()),
+            values,
+            None,
+        ));
+        let target = Field::new(
+            "c",
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
+            false,
+        );
+        assert!(
+            compute_leaves(&target, &list).unwrap()[0]
+                .0
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            roundtrip_compatible_column(required, nullable.slice(0, 1)).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![1])
+        );
+    }
+
+    // Temporary eager-path coverage; P20-P25 replace this with target cursor tests.
+    fn check_eager_required_list_validation(list_type: fn(Arc<Field>) -> DataType) {
+        let make_array = |values: Vec<Option<i32>>,
+                          offsets: Vec<i32>,
+                          sizes: Vec<i32>,
+                          nulls: Option<NullBuffer>| {
+            let child = Arc::new(Field::new("source_child", DataType::Int32, true));
+            let values: ArrayRef = Arc::new(Int32Array::from(values));
+            match list_type(child.clone()) {
+                DataType::List(_) => Arc::new(ListArray::new(
+                    child,
+                    OffsetBuffer::new(offsets.into()),
+                    values,
+                    nulls,
+                )) as ArrayRef,
+                DataType::LargeList(_) => Arc::new(LargeListArray::new(
+                    child,
+                    OffsetBuffer::new(
+                        offsets
+                            .into_iter()
+                            .map(i64::from)
+                            .collect::<Vec<_>>()
+                            .into(),
+                    ),
+                    values,
+                    nulls,
+                )) as ArrayRef,
+                DataType::ListView(_) => Arc::new(ListViewArray::new(
+                    child,
+                    offsets.into(),
+                    sizes.into(),
+                    values,
+                    nulls,
+                )) as ArrayRef,
+                DataType::LargeListView(_) => Arc::new(LargeListViewArray::new(
+                    child,
+                    offsets
+                        .into_iter()
+                        .map(i64::from)
+                        .collect::<Vec<_>>()
+                        .into(),
+                    sizes.into_iter().map(i64::from).collect::<Vec<_>>().into(),
+                    values,
+                    nulls,
+                )) as ArrayRef,
+                _ => unreachable!(),
+            }
+        };
+        let is_view = matches!(
+            list_type(Arc::new(Field::new("item", DataType::Int32, true))),
+            DataType::ListView(_) | DataType::LargeListView(_)
+        );
+        let offsets = |starts: Vec<i32>, end: i32| {
+            let mut result = starts;
+            if !is_view {
+                result.push(end);
+            }
+            result
+        };
+        let target = Field::new(
+            "c",
+            list_type(Arc::new(Field::new("target_child", DataType::Int32, false))),
+            true,
+        );
+        let invalid = make_array(vec![None, Some(7)], offsets(vec![0], 2), vec![2], None);
+        let valid = make_array(vec![Some(7), Some(8)], offsets(vec![0], 2), vec![2], None);
+        let masked = make_array(
+            vec![None, Some(7)],
+            offsets(vec![0, 1], 2),
+            vec![1, 1],
+            Some(NullBuffer::from(vec![false, true])),
+        );
+        let unused = make_array(
+            vec![None, Some(7), None],
+            offsets(vec![1], 2),
+            vec![1],
+            None,
+        );
+        let empty = make_array(vec![None], offsets(vec![0], 0), vec![0], None);
+        let sliced = make_array(
+            vec![None, Some(7)],
+            offsets(vec![0, 1], 2),
+            vec![1, 1],
+            None,
+        )
+        .slice(1, 1);
+        let schema = Arc::new(Schema::new(vec![target.clone()]));
+
+        // Binding must succeed even for invalid input; only an individual write rejects it.
+        for (name, array, invalid) in [
+            ("reachable null", invalid, true),
+            ("valid required child", valid.clone(), false),
+            ("null ancestor", masked, false),
+            ("unused child slots", unused, false),
+            ("empty list", empty, false),
+            ("out-of-slice null", sliced, false),
+        ] {
+            let leaves = compute_leaves(&target, &array).unwrap();
+            assert_eq!(leaves.len(), 1);
+            for cdc in [false, true] {
+                let props = WriterProperties::builder()
+                    .set_content_defined_chunking(cdc.then(Default::default))
+                    .build();
+                let mut writer =
+                    ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
+                let mut chunkers = writer.cdc_chunkers.take();
+                let (_file, factory) = writer.into_serialized_writer().unwrap();
+                let mut columns = factory.create_column_writers(0).unwrap();
+                let before = (
+                    columns[0].memory_size(),
+                    columns[0].get_estimated_total_bytes(),
+                );
+                let result = match &mut chunkers {
+                    Some(chunkers) => columns[0].write_with_chunker(&leaves[0], &mut chunkers[0]),
+                    None => columns[0].write(&leaves[0]),
+                };
+                if invalid {
+                    let error = result.unwrap_err().to_string();
+                    assert!(
+                        error.contains("Found null at index 0 for required field 'target_child'"),
+                        "{name}, cdc={cdc}: {error}"
+                    );
+                    assert_eq!(
+                        before,
+                        (
+                            columns[0].memory_size(),
+                            columns[0].get_estimated_total_bytes()
+                        ),
+                        "invalid leaf must be rejected before encoding"
+                    );
+                    // The rejected write must leave no encoded values behind.
+                    let valid_leaves = compute_leaves(&target, &valid).unwrap();
+                    match &mut chunkers {
+                        Some(chunkers) => columns[0]
+                            .write_with_chunker(&valid_leaves[0], &mut chunkers[0])
+                            .unwrap(),
+                        None => columns[0].write(&valid_leaves[0]).unwrap(),
+                    }
+                    assert_eq!(
+                        columns
+                            .pop()
+                            .unwrap()
+                            .close()
+                            .unwrap()
+                            .close
+                            .metadata
+                            .num_values(),
+                        2
+                    );
+                } else {
+                    result.unwrap();
+                    columns.pop().unwrap().close().unwrap();
+                }
+
+                // Exercise the ordinary and CDC row-group driving entry points as well.
+                let batch = RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![Field::new(
+                        "c",
+                        array.data_type().clone(),
+                        true,
+                    )])),
+                    vec![array.clone()],
+                )
+                .unwrap();
+                let props = WriterProperties::builder()
+                    .set_content_defined_chunking(cdc.then(Default::default))
+                    .build();
+                let mut writer =
+                    ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
+                let result = writer.write(&batch);
+                if invalid {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("required field 'target_child'")
+                    );
+                } else {
+                    result.unwrap();
+                    writer.close().unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eager_required_list_validation_preserves_level_generation() {
+        check_eager_required_list_validation(DataType::List);
+    }
+
+    #[test]
+    fn eager_required_large_list_validation_preserves_level_generation() {
+        check_eager_required_list_validation(DataType::LargeList);
+    }
+
+    #[test]
+    fn eager_required_list_view_validation_preserves_level_generation() {
+        check_eager_required_list_validation(DataType::ListView);
+    }
+
+    #[test]
+    fn eager_required_large_list_view_validation_preserves_level_generation() {
+        check_eager_required_list_validation(DataType::LargeListView);
+    }
+
+    #[test]
+    fn eager_row_group_validation_rejects_writer_and_chunker_count_mismatches() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1]))])
+            .unwrap();
+        let writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        let (_file, factory) = writer.into_serialized_writer().unwrap();
+        let mut group = factory.create_row_group_writer(0).unwrap();
+        assert!(
+            group
+                .write_with_chunkers(&batch, &mut [])
+                .unwrap_err()
+                .to_string()
+                .contains("chunkers")
+        );
+        assert_eq!(group.buffered_rows, 0);
+        group.writers.clear();
+        assert!(
+            group
+                .write(&batch)
+                .unwrap_err()
+                .to_string()
+                .contains("column writers")
+        );
+        assert_eq!(group.buffered_rows, 0);
     }
 
     #[test]
