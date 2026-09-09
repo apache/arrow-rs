@@ -20,6 +20,8 @@
 use std::{cmp, marker::PhantomData};
 
 use crate::basic::*;
+#[cfg(all(feature = "arrow", test))]
+use crate::column::value_selection::GroupedSelectionRef;
 #[cfg(feature = "arrow")]
 use crate::column::value_selection::{
     PhysicalValueSelection, PhysicalValueSpan, ValueSelectionRef,
@@ -35,10 +37,11 @@ use crate::util::bit_util::{BitWriter, num_required_bits};
 
 #[cfg(feature = "arrow")]
 use crate::util::bit_util::get_bit;
+#[cfg(feature = "arrow")]
+pub(crate) use alp_family::AlpRunEncoder;
 pub(crate) use alp_family::AlpValue;
 #[cfg(feature = "arrow")]
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
-
 use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
@@ -54,6 +57,8 @@ mod dict_encoder;
 mod fixed_len_byte_array;
 mod numeric;
 
+#[cfg(all(feature = "arrow", test))]
+use boolean::BoolBatchSelection;
 pub(crate) use boolean::{BoolBatch, BoolEncoder};
 #[cfg(feature = "experimental")]
 #[expect(deprecated, reason = "Preserve the experimental concrete encoder API")]
@@ -584,20 +589,106 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
 mod tests {
     #[cfg(feature = "arrow")]
     use super::PlainEncoderImpl as PlainEncoder;
-    #[cfg(feature = "arrow")]
-    use super::boolean::BoolBatchSelection;
     use super::*;
-    #[cfg(feature = "arrow")]
-    use crate::column::value_selection::{DictionaryKeys, RangesSelectionRef, SelectionRange};
 
     use std::sync::Arc;
 
+    #[cfg(feature = "arrow")]
+    use crate::column::value_selection::{DictionaryKeys, RangesSelectionRef, SelectionRange};
     use crate::encodings::decoding::{Decoder, DictDecoder, PlainDecoder, get_decoder};
     use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
     use crate::util::bit_util;
     use crate::util::test_common::rand_gen::{RandGen, random_bytes};
 
     const TEST_SET_SIZE: usize = 1024;
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn physical_boolean_dictionary_streams_sliced_keys_directly() {
+        let bit_offset = 5;
+        let bits = [0b1011_0101, 0b0101_1010];
+        let mut keys = Vec::with_capacity(160);
+        for row in 0..160 {
+            keys.push((row % 6) as i16);
+        }
+        let selection = PhysicalValueSelection::dictionary(
+            ValueSelectionRef::Dense {
+                offset: 0,
+                len: keys.len(),
+            },
+            DictionaryKeys::I16(&keys),
+        )
+        .slice(7, 137);
+        let packed = BoolBatch::new_physical(&bits, bit_offset, selection);
+        assert!(matches!(
+            packed.selection,
+            BoolBatchSelection::Physical { scalar: true, .. }
+        ));
+
+        let expected = (7..144)
+            .map(|row| bit_util::get_bit(&bits, bit_offset + keys[row] as usize))
+            .collect::<Vec<_>>();
+        let mut actual = Vec::new();
+        packed.for_each(|value| actual.push(value));
+        assert_eq!(actual, expected);
+        assert_eq!(
+            packed.true_count(),
+            expected.iter().filter(|&&value| value).count()
+        );
+
+        let mut encoder = PlainEncoder::<BoolType>::new();
+        encoder.put_bool_batch(packed).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+        assert_eq!(encoded.len(), expected.len().div_ceil(8));
+        for (index, expected) in expected.into_iter().enumerate() {
+            assert_eq!(bit_util::get_bit(&encoded, index), expected);
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn physical_boolean_identity_descriptors() {
+        let bits = [0b1010_1101, 0b0111_0010, 0b1100_1001];
+        let selection =
+            PhysicalValueSelection::identity(ValueSelectionRef::Dense { offset: 3, len: 14 });
+        let packed = BoolBatch::new_physical(&bits, 2, selection);
+
+        assert!(matches!(packed.selection, BoolBatchSelection::Dense { .. }));
+        assert_eq!(
+            packed.true_count(),
+            (3..17)
+                .filter(|&index| bit_util::get_bit(&bits, 2 + index))
+                .count()
+        );
+
+        let indices = [0, 2, 5, 9];
+        let selection = PhysicalValueSelection::identity(ValueSelectionRef::Sparse(&indices));
+        let packed = BoolBatch::new_physical(&bits, 2, selection);
+        assert!(matches!(
+            packed.selection,
+            BoolBatchSelection::Sparse { .. }
+        ));
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn physical_boolean_grouped_identity_preserves_repeat_counts() {
+        let bits = [0b0000_0001];
+        let indices = [0_usize, 1, 2];
+        let ends = [2, 5, 6];
+        let selection = PhysicalValueSelection::identity(ValueSelectionRef::Grouped(
+            GroupedSelectionRef::new(&indices, &ends),
+        ));
+        let packed = BoolBatch::new_physical(&bits, 0, selection);
+        assert!(matches!(
+            packed.selection,
+            BoolBatchSelection::Physical { scalar: false, .. }
+        ));
+        let mut groups = Vec::new();
+        packed.for_each_run_group(|value, count| groups.push((value, count)));
+        assert_eq!(groups, [(true, 2), (false, 3), (false, 1)]);
+        assert_eq!(packed.true_count(), 2);
+    }
 
     #[test]
     fn test_get_encoders() {
@@ -794,6 +885,76 @@ mod tests {
         BoolType::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         BoolType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
         BoolType::test(Encoding::RLE, TEST_SET_SIZE, -1);
+    }
+
+    #[cfg(feature = "arrow")]
+    fn assert_plain_packed_bool<'a>(
+        input: &'a [u8],
+        bit_offset: usize,
+        selection: PhysicalValueSelection<'a>,
+        expected_indices: &[usize],
+    ) {
+        let values = BoolBatch::new_physical(input, bit_offset, selection);
+        assert_eq!(
+            values.true_count(),
+            expected_indices
+                .iter()
+                .filter(|&&idx| bit_util::get_bit(input, bit_offset + idx))
+                .count()
+        );
+
+        let mut encoder = PlainEncoder::<BoolType>::new();
+        encoder.put_bool_batch(values).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+        assert_eq!(encoded.len(), expected_indices.len().div_ceil(8));
+        for (out_idx, &input_idx) in expected_indices.iter().enumerate() {
+            assert_eq!(
+                bit_util::get_bit(&encoded, out_idx),
+                bit_util::get_bit(input, bit_offset + input_idx),
+                "mismatch at output bit {out_idx}"
+            );
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn test_plain_encoder_selected_packed_bool() {
+        let input = [
+            0b1010_1101,
+            0b0111_0010,
+            0b1100_1001,
+            0b0011_1110,
+            0b0101_0101,
+            0b1000_1111,
+            0b1111_0000,
+            0b0001_1011,
+            0b1011_0110,
+            0b0100_1001,
+            0b1110_0011,
+            0b0010_1100,
+            0b1001_0111,
+            0b0110_1010,
+        ];
+        let indices: Vec<_> = (0..93).filter(|idx| idx % 3 != 1).collect();
+        assert_plain_packed_bool(
+            &input,
+            5,
+            PhysicalValueSelection::identity(ValueSelectionRef::Sparse(&indices)),
+            &indices,
+        );
+
+        let spans = [
+            SelectionRange::new(2..11, 9),
+            SelectionRange::new(17..33, 25),
+        ];
+        let ranges = RangesSelectionRef::new(&spans, 25);
+        let indices = (2..11).chain(17..33).collect::<Vec<_>>();
+        assert_plain_packed_bool(
+            &input,
+            3,
+            PhysicalValueSelection::identity(ValueSelectionRef::Ranges(ranges)),
+            &indices,
+        );
     }
 
     #[test]
@@ -1183,142 +1344,5 @@ mod tests {
 
     fn create_test_dict_decoder<T: DataType>() -> DictDecoder<T> {
         DictDecoder::<T>::new()
-    }
-
-    #[cfg(feature = "arrow")]
-    #[test]
-    fn physical_boolean_identity_descriptors() {
-        let bits = [0b1010_1101, 0b0111_0010, 0b1100_1001];
-        let selection =
-            PhysicalValueSelection::identity(ValueSelectionRef::Dense { offset: 3, len: 14 });
-        let packed = BoolBatch::new_physical(&bits, 2, selection);
-
-        assert!(matches!(packed.selection, BoolBatchSelection::Dense { .. }));
-        assert_eq!(
-            packed.true_count(),
-            (3..17)
-                .filter(|&index| bit_util::get_bit(&bits, 2 + index))
-                .count()
-        );
-
-        let indices = [0, 2, 5, 9];
-        let selection = PhysicalValueSelection::identity(ValueSelectionRef::Sparse(&indices));
-        let packed = BoolBatch::new_physical(&bits, 2, selection);
-        assert!(matches!(
-            packed.selection,
-            BoolBatchSelection::Sparse { .. }
-        ));
-    }
-
-    #[cfg(feature = "arrow")]
-    #[test]
-    fn physical_boolean_dictionary_streams_sliced_keys_directly() {
-        let bit_offset = 5;
-        let bits = [0b1011_0101, 0b0101_1010];
-        let mut keys = Vec::with_capacity(160);
-        for row in 0..160 {
-            keys.push((row % 6) as i16);
-        }
-        let selection = PhysicalValueSelection::dictionary(
-            ValueSelectionRef::Dense {
-                offset: 0,
-                len: keys.len(),
-            },
-            DictionaryKeys::I16(&keys),
-        )
-        .slice(7, 137);
-        let packed = BoolBatch::new_physical(&bits, bit_offset, selection);
-        assert!(matches!(
-            packed.selection,
-            BoolBatchSelection::Physical { scalar: true, .. }
-        ));
-
-        let expected = (7..144)
-            .map(|row| bit_util::get_bit(&bits, bit_offset + keys[row] as usize))
-            .collect::<Vec<_>>();
-        let mut actual = Vec::new();
-        packed.for_each(|value| actual.push(value));
-        assert_eq!(actual, expected);
-        assert_eq!(
-            packed.true_count(),
-            expected.iter().filter(|&&value| value).count()
-        );
-
-        let mut encoder = PlainEncoder::<BoolType>::new();
-        encoder.put_bool_batch(packed).unwrap();
-        let encoded = encoder.flush_buffer().unwrap();
-        assert_eq!(encoded.len(), expected.len().div_ceil(8));
-        for (index, expected) in expected.into_iter().enumerate() {
-            assert_eq!(bit_util::get_bit(&encoded, index), expected);
-        }
-    }
-    #[cfg(feature = "arrow")]
-    fn assert_plain_packed_bool<'a>(
-        input: &'a [u8],
-        bit_offset: usize,
-        selection: PhysicalValueSelection<'a>,
-        expected_indices: &[usize],
-    ) {
-        let values = BoolBatch::new_physical(input, bit_offset, selection);
-        assert_eq!(
-            values.true_count(),
-            expected_indices
-                .iter()
-                .filter(|&&idx| bit_util::get_bit(input, bit_offset + idx))
-                .count()
-        );
-
-        let mut encoder = PlainEncoder::<BoolType>::new();
-        encoder.put_bool_batch(values).unwrap();
-        let encoded = encoder.flush_buffer().unwrap();
-        assert_eq!(encoded.len(), expected_indices.len().div_ceil(8));
-        for (out_idx, &input_idx) in expected_indices.iter().enumerate() {
-            assert_eq!(
-                bit_util::get_bit(&encoded, out_idx),
-                bit_util::get_bit(input, bit_offset + input_idx),
-                "mismatch at output bit {out_idx}"
-            );
-        }
-    }
-
-    #[cfg(feature = "arrow")]
-    #[test]
-    fn test_plain_encoder_selected_packed_bool() {
-        let input = [
-            0b1010_1101,
-            0b0111_0010,
-            0b1100_1001,
-            0b0011_1110,
-            0b0101_0101,
-            0b1000_1111,
-            0b1111_0000,
-            0b0001_1011,
-            0b1011_0110,
-            0b0100_1001,
-            0b1110_0011,
-            0b0010_1100,
-            0b1001_0111,
-            0b0110_1010,
-        ];
-        let indices: Vec<_> = (0..93).filter(|idx| idx % 3 != 1).collect();
-        assert_plain_packed_bool(
-            &input,
-            5,
-            PhysicalValueSelection::identity(ValueSelectionRef::Sparse(&indices)),
-            &indices,
-        );
-
-        let spans = [
-            SelectionRange::new(2..11, 9),
-            SelectionRange::new(17..33, 25),
-        ];
-        let ranges = RangesSelectionRef::new(&spans, 25);
-        let indices = (2..11).chain(17..33).collect::<Vec<_>>();
-        assert_plain_packed_bool(
-            &input,
-            3,
-            PhysicalValueSelection::identity(ValueSelectionRef::Ranges(ranges)),
-            &indices,
-        );
     }
 }

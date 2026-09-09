@@ -40,13 +40,28 @@ pub(super) enum BoolBatchSelection<'a> {
     },
     /// A recursively lowered Arrow selection. Flat dictionaries use scalar
     /// traversal to avoid span-coalescing overhead for alternating keys; other
-    /// selections use spans for packed copies and popcounts.
+    /// selections use spans for packed copies, popcounts, and repeated runs.
     #[cfg(feature = "arrow")]
     Physical {
         bit_offset: usize,
         selection: PhysicalValueSelection<'a>,
         scalar: bool,
     },
+}
+
+#[cfg(feature = "arrow")]
+#[inline]
+fn put_repeated_bit(bit_writer: &mut BitWriter, bit: bool, count: usize) {
+    let word = if bit { u64::MAX } else { 0 };
+    let mut remaining = count;
+    while remaining >= 64 {
+        bit_writer.put_value(word, 64);
+        remaining -= 64;
+    }
+    if remaining != 0 {
+        let tail = if bit { (1_u64 << remaining) - 1 } else { 0 };
+        bit_writer.put_value(tail, remaining);
+    }
 }
 
 /// Borrowed packed boolean values.
@@ -93,7 +108,7 @@ impl<'a> BoolBatch<'a> {
                 _ => BoolBatchSelection::Physical {
                     bit_offset,
                     selection,
-                    scalar: selection.has_dictionary_mapping(),
+                    scalar: selection.has_dictionary_mapping() && !selection.is_grouped(),
                 },
             },
         };
@@ -152,6 +167,29 @@ impl<'a> BoolBatch<'a> {
         }
     }
 
+    /// Yield source-provided run groups. Run-end input can produce multi-bit
+    /// groups; every other selection emits one group per bit. Adjacent groups
+    /// may contain the same value because grouping follows storage, not value
+    /// equality.
+    #[inline]
+    pub(super) fn for_each_run_group(self, mut f: impl FnMut(bool, usize)) {
+        match self.selection {
+            #[cfg(feature = "arrow")]
+            BoolBatchSelection::Physical {
+                bit_offset,
+                selection,
+                ..
+            } if selection.is_grouped() => {
+                let bytes = self.bytes;
+                let _ = selection.try_for_each_index_group(|index, count| -> Result<(), ()> {
+                    f(get_bit(bytes, bit_offset + index), count);
+                    Ok(())
+                });
+            }
+            _ => self.for_each(|b| f(b, 1)),
+        }
+    }
+
     #[inline]
     fn put_indexed_packed(self, bit_writer: &mut BitWriter) {
         #[cfg(feature = "arrow")]
@@ -169,6 +207,10 @@ impl<'a> BoolBatch<'a> {
                     match span {
                         PhysicalValueSpan::Range { start, len } => {
                             bit_writer.put_bits(self.bytes, bit_offset + start, len);
+                        }
+                        PhysicalValueSpan::Repeat { index, count } => {
+                            let bit = get_bit(self.bytes, bit_offset + index);
+                            put_repeated_bit(bit_writer, bit, count);
                         }
                         PhysicalValueSpan::Gather(indices) => {
                             for &index in indices {
@@ -231,6 +273,12 @@ impl<'a> BoolBatch<'a> {
                         PhysicalValueSpan::Range { start, len } => {
                             count += UnalignedBitChunk::new(self.bytes, bit_offset + start, len)
                                 .count_ones();
+                        }
+                        PhysicalValueSpan::Repeat {
+                            index,
+                            count: repeated,
+                        } => {
+                            count += repeated * get_bit(self.bytes, bit_offset + index) as usize;
                         }
                         PhysicalValueSpan::Gather(indices) => {
                             count += indices
@@ -318,68 +366,9 @@ impl BoolEncoder for RleValueEncoder<BoolType> {
             RleEncoder::new_from_buf(1, buffer)
         });
 
-        values.for_each(|b| rle_encoder.put(b as u64));
+        // Run-end input emits one O(1) put per selected run group; every other
+        // selection emits per-bit puts.
+        values.for_each_run_group(|b, n| rle_encoder.put_run(b as u64, n));
         Ok(())
-    }
-}
-
-// Temporary direct/legacy equivalence control; P22 retires with counted delivery.
-#[cfg(all(test, feature = "arrow"))]
-mod direct_tests {
-    use super::*;
-    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
-    use std::sync::Arc;
-
-    #[test]
-    fn packed_boolean_slices_match_scalar_encoding() {
-        let bytes = [0xa5u8; 40];
-        let sparse = [0, 2, 7, 8, 63, 64, 64, 127];
-        for encoding in [Encoding::PLAIN, Encoding::RLE] {
-            for offset in [0, 1, 3, 7, 8] {
-                for selection in [
-                    ValueSelectionRef::Empty,
-                    ValueSelectionRef::Dense { offset: 0, len: 1 },
-                    ValueSelectionRef::Dense {
-                        offset: 2,
-                        len: 200,
-                    },
-                    ValueSelectionRef::Sparse(&sparse),
-                ] {
-                    let selection = PhysicalValueSelection::identity(selection);
-                    let batch = BoolBatch::new_physical(&bytes, offset, selection);
-                    let mut expected = Vec::new();
-                    selection
-                        .try_for_each_index(|i| {
-                            expected.push(get_bit(&bytes, offset + i));
-                            Ok::<(), ()>(())
-                        })
-                        .unwrap();
-                    assert_eq!(batch.true_count(), expected.iter().filter(|&&v| v).count());
-                    let desc = Arc::new(ColumnDescriptor::new(
-                        Arc::new(
-                            SchemaType::primitive_type_builder("b", Type::BOOLEAN)
-                                .build()
-                                .unwrap(),
-                        ),
-                        0,
-                        0,
-                        ColumnPath::from("b"),
-                    ));
-                    let mut native = BoolEncodingFamily::from_encoding(encoding, &desc).unwrap();
-                    let mut scalar = BoolEncodingFamily::from_encoding(encoding, &desc).unwrap();
-                    for _ in 0..2 {
-                        native.put_bool_batch(batch).unwrap();
-                        <BoolEncodingFamily as Encoder<BoolType>>::put(&mut scalar, &expected)
-                            .unwrap();
-                    }
-                    assert_eq!(
-                        <BoolEncodingFamily as Encoder<BoolType>>::flush_buffer(&mut native)
-                            .unwrap(),
-                        <BoolEncodingFamily as Encoder<BoolType>>::flush_buffer(&mut scalar)
-                            .unwrap()
-                    );
-                }
-            }
-        }
     }
 }

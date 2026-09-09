@@ -19,7 +19,7 @@
 
 use super::*;
 #[cfg(feature = "arrow")]
-use crate::encodings::encoding::DictionaryStorage;
+use crate::encodings::encoding::AlpRunEncoder;
 
 /// Maximum values per gathered or expanded numeric batch.
 #[cfg(feature = "arrow")]
@@ -29,6 +29,8 @@ const NUMERIC_BATCH_VALUES: usize = 64;
 #[derive(Clone, Copy)]
 pub(super) enum NumericBatch<'a, T> {
     Flat(&'a [T]),
+    #[cfg(feature = "arrow")]
+    RunGroups(RunBatch<'a, T>),
 }
 
 /// Running numeric extrema and whether they still consist entirely of NaNs.
@@ -146,11 +148,26 @@ where
         }
     }
 
+    fn write_grouped_to<S>(self, sink: &mut S) -> Result<()>
+    where
+        T: 'static,
+        S: for<'batch> BatchSink<NumericBatch<'batch, T>>,
+    {
+        debug_assert!(self.selection.is_grouped());
+        let data = self.data;
+        let cast = self.cast;
+        let mapped = map_values(self.selection, move |index| cast(data[index]));
+        gather_run_groups_tiled::<NUMERIC_BATCH_VALUES, _, _>(mapped, |values, counts| {
+            sink.push_batch(NumericBatch::RunGroups(RunBatch { values, counts }))
+        })
+    }
+
     fn write_ungrouped_to<S>(self, sink: &mut S) -> Result<()>
     where
         T: 'static,
         S: for<'batch> BatchSink<NumericBatch<'batch, T>>,
     {
+        debug_assert!(!self.selection.is_grouped());
         let data = self.data;
         let cast = self.cast;
         let mapped = map_values(self.selection, move |index| cast(data[index]));
@@ -185,6 +202,14 @@ where
             NumericBatch::Flat(values) => {
                 self.encode_flat(values, ctx, should_update_stats, &mut extrema)?
             }
+            #[cfg(feature = "arrow")]
+            NumericBatch::RunGroups(values) => self.encode_run_groups(
+                values.values,
+                values.counts,
+                ctx,
+                should_update_stats,
+                &mut extrema,
+            )?,
         }
         self.merge_batch_stats(extrema.min, extrema.max);
         Ok(())
@@ -208,10 +233,15 @@ impl<T: DataType> TypedColumnChunkEncoder<T> {
             return Ok(());
         }
         let selection = values.selection;
+        let grouped = selection.is_grouped();
         if !selection.should_cache_dictionary(values.data.len())
             || !matches!(self.encoding_family, NumericEncodingFamily::Dictionary(_))
         {
-            return values.write_ungrouped_to(self);
+            return if grouped {
+                values.write_grouped_to(self)
+            } else {
+                values.write_ungrouped_to(self)
+            };
         }
         let should_update_stats = self.statistics_enabled != EnabledStatistics::None
             && self.descr.converted_type() != ConvertedType::INTERVAL;
@@ -221,10 +251,10 @@ impl<T: DataType> TypedColumnChunkEncoder<T> {
             unreachable!()
         };
         self.num_values += selection.len();
-        let bloom = &mut self.bloom_filter;
         let nan_count = &mut self.nan_count;
-        // Duplicate observations within one write are idempotent for min/max
-        // and Bloom state; NaN counts, however, follow logical multiplicity.
+        // Duplicate observations within one write are idempotent for min/max;
+        // NaN counts follow logical multiplicity. Bloom values are visited at
+        // dictionary flush, without per-row or per-source hashing.
         // The call-local mask cannot suppress later pages.
         let mut observed = (values.data.len() <= u64::BITS as usize).then_some(0_u64);
         let mut observe = |index, multiplicity: usize| {
@@ -237,21 +267,25 @@ impl<T: DataType> TypedColumnChunkEncoder<T> {
                 *observed |= bit;
                 first
             });
-            if first {
-                if should_update_stats {
-                    extrema.observe(ctx, value, value_is_nan);
-                }
-                if let Some(bloom) = bloom.as_mut() {
-                    bloom.insert(&value);
-                }
+            if first && should_update_stats {
+                extrema.observe(ctx, value, value_is_nan);
             }
             value
         };
-        dict.reserve(selection.len());
-        selection.try_for_each_index(|index| {
-            let value = observe(index, 1);
-            dict.put_arrow_dictionary(index, |dictionary| dictionary.intern(&value))
-        })?;
+        if grouped {
+            selection.try_for_each_index_group(|index, count| {
+                let value = observe(index, count);
+                dict.put_arrow_dictionary(index, Some(count), |dictionary| {
+                    dictionary.intern(&value)
+                })
+            })?;
+        } else {
+            dict.reserve(selection.len());
+            selection.try_for_each_index(|index| {
+                let value = observe(index, 1);
+                dict.put_arrow_dictionary(index, None, |dictionary| dictionary.intern(&value))
+            })?;
+        }
         self.merge_batch_stats(extrema.min, extrema.max);
         Ok(())
     }
@@ -304,6 +338,10 @@ impl<T: DataType> TypedColumnChunkEncoder<T> {
         *num_values += values.len();
         match encoding_family {
             NumericEncodingFamily::Dictionary(dict) => {
+                // `reserve` flushes any run-buffered indices
+                // (`RunIndexBuffer::reserve` -> `materialize`), satisfying
+                // `put_one`'s flushed-runs precondition; a separate flush here
+                // is a redundant no-op.
                 dict.reserve(values.len());
                 for &value in values {
                     dict.put_one(&value)?;
@@ -311,6 +349,94 @@ impl<T: DataType> TypedColumnChunkEncoder<T> {
                 Ok(())
             }
             other => <NumericEncodingFamily<T> as Encoder<T>>::put(other, values),
+        }
+    }
+
+    /// Encode one run-group batch: `values[i]` spans `counts[i]` logical outputs.
+    /// Selection planning already removed nulls, so every group is observed and
+    /// every count is non-zero.
+    #[cfg(feature = "arrow")]
+    #[inline(never)]
+    fn encode_run_groups(
+        &mut self,
+        values: &[T::T],
+        counts: &[usize],
+        ctx: <T::T as MinMaxStrategy<'static>>::Ctx,
+        should_update_stats: bool,
+        extrema: &mut NumericExtrema<T::T>,
+    ) -> Result<()>
+    where
+        T: PlainEncoderType,
+        T::T: ColumnWriterValue<Family<T> = NumericEncodingFamily<T>>,
+        T::T: Copy + 'static + for<'v> MinMaxStrategy<'v, Elem = T::T, Owned = T::T>,
+    {
+        let Self {
+            encoding_family,
+            num_values,
+            nan_count,
+            bloom_filter,
+            ..
+        } = self;
+        match encoding_family {
+            NumericEncodingFamily::Dictionary(dict) => {
+                for (&value, &run_len) in values.iter().zip(counts) {
+                    if should_update_stats {
+                        let value_is_nan = classify_and_count_nan(ctx, value, run_len, nan_count);
+                        extrema.observe(ctx, value, value_is_nan);
+                    }
+                    *num_values += run_len;
+                    dict.put_value_run(&value, run_len)?;
+                }
+                Ok(())
+            }
+            NumericEncodingFamily::Alp(encoder) => {
+                for (&value, &run_len) in values.iter().zip(counts) {
+                    if should_update_stats {
+                        let value_is_nan = classify_and_count_nan(ctx, value, run_len, nan_count);
+                        extrema.observe(ctx, value, value_is_nan);
+                    }
+                    if let Some(bloom) = bloom_filter.as_mut() {
+                        bloom.insert(&value);
+                    }
+                    *num_values += run_len;
+                    encoder.put_repeated(value, run_len)?;
+                }
+                Ok(())
+            }
+            other => {
+                // PLAIN writes every value: expand each group to its logical
+                // outputs, buffering into bounded batches for bulk `put`.
+                let mut buf = [MaybeUninit::<T::T>::uninit(); NUMERIC_BATCH_VALUES];
+                let mut filled = 0usize;
+                for (&value, &run_len) in values.iter().zip(counts) {
+                    if should_update_stats {
+                        let value_is_nan = classify_and_count_nan(ctx, value, run_len, nan_count);
+                        extrema.observe(ctx, value, value_is_nan);
+                    }
+                    if let Some(bloom) = bloom_filter.as_mut() {
+                        bloom.insert(&value);
+                    }
+                    *num_values += run_len;
+                    for _ in 0..run_len {
+                        buf[filled].write(value);
+                        filled += 1;
+                        if filled == buf.len() {
+                            // SAFETY: every slot has just been initialized.
+                            <NumericEncodingFamily<T> as Encoder<T>>::put(other, unsafe {
+                                assume_init_prefix(&buf, filled)
+                            })?;
+                            filled = 0;
+                        }
+                    }
+                }
+                if filled > 0 {
+                    // SAFETY: values are written sequentially through `filled`.
+                    <NumericEncodingFamily<T> as Encoder<T>>::put(other, unsafe {
+                        assume_init_prefix(&buf, filled)
+                    })?;
+                }
+                Ok(())
+            }
         }
     }
 }

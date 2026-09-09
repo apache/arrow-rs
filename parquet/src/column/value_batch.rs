@@ -29,6 +29,13 @@ pub(crate) trait BatchSink<B> {
     fn push_batch(&mut self, batch: B) -> Result<()>;
 }
 
+/// A bounded batch of source-provided values and their logical run lengths.
+#[derive(Clone, Copy)]
+pub(crate) struct RunBatch<'a, T> {
+    pub(crate) values: &'a [T],
+    pub(crate) counts: &'a [usize],
+}
+
 /// A copyable source that emits logical values in output order.
 ///
 /// Non-contiguous and computed sources can be gathered into bounded batches;
@@ -47,9 +54,16 @@ pub(crate) trait ValueProducer<T: Copy>: Copy {
     /// Emit values in output order, for consumers that stream each value into
     /// an encoder rather than buffering batches.
     fn try_for_each<E>(self, f: impl FnMut(T) -> Result<(), E>) -> Result<(), E>;
+
+    /// Emit source-provided run groups. The default emits one group per item.
+    #[inline]
+    fn for_each_run_group<E>(self, mut f: impl FnMut(T, usize) -> Result<(), E>) -> Result<(), E> {
+        self.try_for_each(|value| f(value, 1))
+    }
 }
 
-/// Projects a physical value selection through a copyable mapping.
+/// Projects a physical value selection through a copyable mapping while
+/// preserving run groups.
 #[cfg(feature = "arrow")]
 #[derive(Clone, Copy)]
 pub(crate) struct MappedValueProducer<'a, F> {
@@ -82,6 +96,11 @@ where
 
     fn try_for_each<E>(self, mut f: impl FnMut(T) -> Result<(), E>) -> Result<(), E> {
         self.source.try_for_each_index(|index| f((self.map)(index)))
+    }
+
+    fn for_each_run_group<E>(self, mut f: impl FnMut(T, usize) -> Result<(), E>) -> Result<(), E> {
+        self.source
+            .try_for_each_index_group(|index, count| f((self.map)(index), count))
     }
 }
 
@@ -117,6 +136,48 @@ where
         // SAFETY: `fill` initializes the leading `filled` slots of `batch`.
         flush(unsafe { assume_init_prefix(&batch, filled) })?;
     }
+}
+
+/// Gather run groups into bounded `(value, count)` stack batches.
+#[inline(always)]
+pub(crate) fn gather_run_groups_tiled<const N: usize, T, Flush>(
+    values: impl ValueProducer<T>,
+    mut flush: Flush,
+) -> Result<()>
+where
+    T: Copy,
+    Flush: FnMut(&[T], &[usize]) -> Result<()>,
+{
+    let mut value_batch = [MaybeUninit::<T>::uninit(); N];
+    let mut count_batch = [MaybeUninit::<usize>::uninit(); N];
+    let mut filled = 0;
+    values.for_each_run_group(
+        #[inline(always)]
+        |value, count| -> Result<()> {
+            value_batch[filled].write(value);
+            count_batch[filled].write(count);
+            filled += 1;
+            if filled == N {
+                // SAFETY: both arrays are initialized at the current slot before
+                // `filled` advances, so their initialized prefixes match.
+                flush(
+                    unsafe { assume_init_prefix(&value_batch, filled) },
+                    unsafe { assume_init_prefix(&count_batch, filled) },
+                )?;
+                filled = 0;
+            }
+            Ok(())
+        },
+    )?;
+    if filled != 0 {
+        // SAFETY: both arrays are initialized at the current slot before
+        // `filled` advances, so their initialized prefixes match.
+        flush(
+            unsafe { assume_init_prefix(&value_batch, filled) },
+            unsafe { assume_init_prefix(&count_batch, filled) },
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -210,6 +271,101 @@ mod tests {
         }
 
         let error = gather_tiled::<2, _, _, _>(SliceProducer(&[1_u32, 2, 3]), |_| {
+            Err(ParquetError::General("stop".to_string()))
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Parquet error: stop");
+    }
+
+    #[derive(Clone, Copy)]
+    struct RunGroupProducer<'a> {
+        values: &'a [&'a [u8]],
+        counts: &'a [usize],
+        consumed: usize,
+    }
+
+    impl<'a> ValueProducer<&'a [u8]> for RunGroupProducer<'a> {
+        fn len(self) -> usize {
+            self.counts.iter().sum()
+        }
+
+        fn fill(&mut self, out: &mut [MaybeUninit<&'a [u8]>]) -> usize {
+            let mut filled = 0;
+            while filled != out.len() && !self.counts.is_empty() {
+                let taken = (self.counts[0] - self.consumed).min(out.len() - filled);
+                out[filled..filled + taken].fill(MaybeUninit::new(self.values[0]));
+                filled += taken;
+                self.consumed += taken;
+                if self.consumed == self.counts[0] {
+                    self.values = &self.values[1..];
+                    self.counts = &self.counts[1..];
+                    self.consumed = 0;
+                }
+            }
+            filled
+        }
+
+        fn try_for_each<E>(self, mut f: impl FnMut(&'a [u8]) -> Result<(), E>) -> Result<(), E> {
+            for (&value, &count) in self.values.iter().zip(self.counts) {
+                for _ in 0..count {
+                    f(value)?;
+                }
+            }
+            Ok(())
+        }
+
+        fn for_each_run_group<E>(
+            self,
+            mut f: impl FnMut(&'a [u8], usize) -> Result<(), E>,
+        ) -> Result<(), E> {
+            for (&value, &count) in self.values.iter().zip(self.counts) {
+                f(value, count)?;
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn gather_run_groups_tiled_initializes_matching_prefixes() {
+        for len in [0usize, 3, 4, 5, 8, 9] {
+            let storage: Vec<_> = (0..len).map(|value| vec![value as u8]).collect();
+            let values: Vec<&[u8]> = storage.iter().map(Vec::as_slice).collect();
+            let counts: Vec<_> = (1..=values.len()).collect();
+            let mut value_batches = Vec::new();
+            let mut count_batches = Vec::new();
+
+            gather_run_groups_tiled::<4, _, _>(
+                RunGroupProducer {
+                    values: &values,
+                    counts: &counts,
+                    consumed: 0,
+                },
+                |batch_values, batch_counts| {
+                    assert_eq!(batch_values.len(), batch_counts.len());
+                    value_batches.push(batch_values.to_vec());
+                    count_batches.push(batch_counts.to_vec());
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+            assert_tiled_batches::<4, _>(&value_batches, &values);
+            assert_tiled_batches::<4, _>(&count_batches, &counts);
+        }
+
+        let input = [1_u32, 2, 3, 4, 5];
+        let mut values = Vec::new();
+        let mut counts = Vec::new();
+        gather_run_groups_tiled::<4, _, _>(SliceProducer(&input), |batch, batch_counts| {
+            values.extend_from_slice(batch);
+            counts.extend_from_slice(batch_counts);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(values, input);
+        assert_eq!(counts, [1; 5]);
+
+        let error = gather_run_groups_tiled::<2, _, _>(SliceProducer(&input), |_, _| {
             Err(ParquetError::General("stop".to_string()))
         })
         .unwrap_err();

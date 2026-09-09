@@ -18,8 +18,6 @@
 //! Fixed-length byte-array sources, batches, and write-scoped encoding state.
 
 use super::*;
-#[cfg(feature = "arrow")]
-use crate::encodings::encoding::DictionaryStorage;
 
 /// Retains a source's physical fixed-length byte-array layout until the active encoder is known.
 pub(crate) trait FixedLenByteArraySource {
@@ -332,63 +330,28 @@ impl FixedLenByteArraySink<'_> {
         observer.bloom = bloom;
         result
     }
-}
 
-#[cfg_attr(not(feature = "arrow"), allow(dead_code))]
-pub(crate) enum FixedLenByteArrayBatch<'a> {
-    Packed(PackedFixedLenByteArrayBatch<'a>),
-}
-
-impl<'batch> BatchSink<FixedLenByteArrayBatch<'batch>> for FixedLenByteArraySink<'_> {
     #[inline(never)]
-    fn push_batch(&mut self, values: FixedLenByteArrayBatch<'batch>) -> Result<()> {
-        match values {
-            FixedLenByteArrayBatch::Packed(values) => self.encode_packed(values),
-        }
-    }
-}
-
-impl FixedLenByteArraySource for &[FixedLenByteArray] {
-    fn len(&self) -> usize {
-        <[FixedLenByteArray]>::len(self)
-    }
-
-    fn validate_width(&self, expected_width: usize) -> Result<()> {
-        if let Some(value) = self
-            .iter()
-            .find(|value| value.data().len() != expected_width)
-        {
-            return Err(general_err!(
-                "Mismatched FixedLenByteArray sizes: {} != {}",
-                value.data().len(),
-                expected_width
-            ));
+    fn encode_run_groups(&mut self, values: &[&[u8]], counts: &[usize]) -> Result<()> {
+        for (&value, &count) in values.iter().zip(counts) {
+            if count == 0 {
+                continue;
+            }
+            self.observer.observe(value, count);
+            match &mut self.target {
+                FixedLenByteArraySinkTarget::Dictionary(dict) => {
+                    dict.put_value_bytes_run(value, count, || value.to_vec().into())?
+                }
+                FixedLenByteArraySinkTarget::Fallback(encoder) => {
+                    for _ in 0..count {
+                        encoder.append_fixed_len_value(value)?;
+                    }
+                }
+            }
         }
         Ok(())
     }
 
-    fn write_to(self, sink: &mut FixedLenByteArraySink<'_>) -> Result<()> {
-        sink.push_selected(self)
-    }
-}
-
-pub(super) fn encode_fixed_len_byte_array_slice<D: DataType<T = FixedLenByteArray>>(
-    enc: &mut TypedColumnChunkEncoder<D>,
-    values: &[FixedLenByteArray],
-) -> Result<()> {
-    enc.write_fixed_len_byte_array_source(values)
-}
-
-fn raw_fixed_len_min_max_values(
-    _descr: &ColumnDescriptor,
-    min: &[u8],
-    max: &[u8],
-) -> (FixedLenByteArray, FixedLenByteArray) {
-    (min.to_vec().into(), max.to_vec().into())
-}
-
-#[cfg(feature = "arrow")]
-impl FixedLenByteArraySink<'_> {
     /// Consume a reused physical source, or pre-observe it for fallback.
     #[cfg(feature = "arrow")]
     pub(crate) fn try_consume_physical_source(
@@ -396,6 +359,7 @@ impl FixedLenByteArraySink<'_> {
         physical_len: usize,
         indices: impl ValueProducer<usize>,
         width: usize,
+        grouped: bool,
         write_at: impl Fn(usize, &mut [u8]),
     ) -> Result<bool> {
         debug_assert!(width <= FIXED_LEN_BYTE_ARRAY_MAX_WIDTH);
@@ -448,11 +412,72 @@ impl FixedLenByteArraySink<'_> {
                 let bytes = &value[..width];
                 DictionaryStorage::intern_bytes(dictionary, bytes, || bytes.to_vec().into())
             };
-            dict.put_arrow_dictionary(index, intern)
+            dict.put_arrow_dictionary(index, grouped.then_some(count), intern)
         };
-        indices.try_for_each(|index| push(index, 1))?;
+        if grouped {
+            indices.for_each_run_group(&mut push)?;
+        } else {
+            indices.try_for_each(|index| push(index, 1))?;
+        }
         Ok(true)
     }
+}
+
+#[cfg_attr(not(feature = "arrow"), allow(dead_code))]
+pub(crate) enum FixedLenByteArrayBatch<'a> {
+    Packed(PackedFixedLenByteArrayBatch<'a>),
+    RunGroups(RunBatch<'a, &'a [u8]>),
+}
+
+impl<'batch> BatchSink<FixedLenByteArrayBatch<'batch>> for FixedLenByteArraySink<'_> {
+    #[inline(never)]
+    fn push_batch(&mut self, values: FixedLenByteArrayBatch<'batch>) -> Result<()> {
+        match values {
+            FixedLenByteArrayBatch::Packed(values) => self.encode_packed(values),
+            FixedLenByteArrayBatch::RunGroups(values) => {
+                self.encode_run_groups(values.values, values.counts)
+            }
+        }
+    }
+}
+
+impl FixedLenByteArraySource for &[FixedLenByteArray] {
+    fn len(&self) -> usize {
+        <[FixedLenByteArray]>::len(self)
+    }
+
+    fn validate_width(&self, expected_width: usize) -> Result<()> {
+        if let Some(value) = self
+            .iter()
+            .find(|value| value.data().len() != expected_width)
+        {
+            return Err(general_err!(
+                "Mismatched FixedLenByteArray sizes: {} != {}",
+                value.data().len(),
+                expected_width
+            ));
+        }
+        Ok(())
+    }
+
+    fn write_to(self, sink: &mut FixedLenByteArraySink<'_>) -> Result<()> {
+        sink.push_selected(self)
+    }
+}
+
+pub(super) fn encode_fixed_len_byte_array_slice<D: DataType<T = FixedLenByteArray>>(
+    enc: &mut TypedColumnChunkEncoder<D>,
+    values: &[FixedLenByteArray],
+) -> Result<()> {
+    enc.write_fixed_len_byte_array_source(values)
+}
+
+fn raw_fixed_len_min_max_values(
+    _descr: &ColumnDescriptor,
+    min: &[u8],
+    max: &[u8],
+) -> (FixedLenByteArray, FixedLenByteArray) {
+    (min.to_vec().into(), max.to_vec().into())
 }
 
 #[cfg(test)]

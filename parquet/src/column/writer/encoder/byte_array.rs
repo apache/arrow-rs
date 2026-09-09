@@ -25,7 +25,9 @@ use std::mem::MaybeUninit;
 use super::{ColumnChunkEncoder, MinMaxStrategy, TypedColumnChunkEncoder};
 use crate::basic::{ConvertedType, LogicalType};
 use crate::bloom_filter::Sbbf;
-use crate::column::value_batch::{BatchSink, ValueProducer, gather_tiled};
+use crate::column::value_batch::{
+    BatchSink, RunBatch, ValueProducer, gather_run_groups_tiled, gather_tiled,
+};
 use crate::column::writer::{compare_greater_byte_array_decimals, compare_greater_f16};
 use crate::data_type::private::byte_array_length;
 use crate::data_type::{AsBytes, ByteArray, ByteArrayType, DataType};
@@ -33,7 +35,7 @@ use crate::data_type::{AsBytes, ByteArray, ByteArrayType, DataType};
 use crate::encodings::encoding::Encoder;
 use crate::encodings::encoding::{
     ByteArrayDeltaEncoder, ByteArrayDeltaLengthEncoder, ByteArrayEncodingFamily,
-    ByteArrayPlainEncoder, DictEncoder,
+    ByteArrayPlainEncoder, DictEncoder, EncodingFamily,
 };
 #[cfg(feature = "arrow")]
 use crate::errors::ParquetError;
@@ -439,10 +441,27 @@ pub(crate) const BYTE_ARRAY_BATCH_VALUES: usize = 64;
 
 /// Produces byte values as bounded gathered batches or contiguous offset ranges.
 pub(crate) trait ByteArraySource<'source>: ValueProducer<&'source [u8]> {
+    /// Whether this source carries native run groups.
+    #[inline]
+    fn is_grouped(self) -> bool {
+        false
+    }
+
     #[inline(always)]
     fn write_flat_to(self, sink: &mut ByteArraySink<'source, '_>) -> Result<()> {
         gather_tiled::<BYTE_ARRAY_BATCH_VALUES, _, _, _>(self, |values| {
             sink.push_batch(ByteArrayBatch::Gathered(values))
+        })
+    }
+
+    #[inline(always)]
+    fn write_run_groups_to(self, sink: &mut ByteArraySink<'source, '_>) -> Result<()> {
+        self.write_run_groups_fallback_to(sink)
+    }
+
+    fn write_run_groups_fallback_to(self, sink: &mut ByteArraySink<'source, '_>) -> Result<()> {
+        gather_run_groups_tiled::<BYTE_ARRAY_BATCH_VALUES, _, _>(self, |values, counts| {
+            sink.push_batch(RunBatch { values, counts })
         })
     }
 }
@@ -649,6 +668,7 @@ impl<'source> ByteArraySink<'source, '_> {
     pub(crate) fn push_dictionary_source(
         &mut self,
         indices: impl ValueProducer<usize>,
+        grouped: bool,
         value: impl Fn(usize) -> &'source [u8] + Copy,
     ) -> Result<()> {
         let (mut observer, target, unencoded_value_bytes) = self.parts();
@@ -656,16 +676,21 @@ impl<'source> ByteArraySink<'source, '_> {
             unreachable!("Arrow dictionary cache selected without a dictionary encoder")
         };
         let mut source_bytes = 0;
-        indices.try_for_each(|index| {
+        let mut push = |index, count| {
             let bytes = value(index);
             observer.observe(bytes);
             byte_array_length(bytes.len())?;
-            encoder.put_arrow_dictionary(index, |dictionary| {
+            encoder.put_arrow_dictionary(index, grouped.then_some(count), |dictionary| {
                 Ok(Interner::intern(dictionary, bytes))
             })?;
-            source_bytes += bytes.len() as i64;
+            source_bytes += (bytes.len() as i64).saturating_mul(count as i64);
             Ok::<(), ParquetError>(())
-        })?;
+        };
+        if grouped {
+            indices.for_each_run_group(&mut push)?;
+        } else {
+            indices.try_for_each(|index| push(index, 1))?;
+        }
         *unencoded_value_bytes += source_bytes;
         Ok(())
     }
@@ -798,6 +823,38 @@ impl<'source> ByteArraySink<'source, '_> {
         *unencoded_value_bytes += source_bytes;
         Ok(())
     }
+
+    #[inline(never)]
+    fn push_grouped_batch(&mut self, values: &[&'source [u8]], counts: &[usize]) -> Result<()> {
+        debug_assert!(self.accumulator.is_none());
+        if self.collect_stats {
+            let order = self.order;
+            for &value in values {
+                <ByteMinMax as MinMaxStrategy<'_>>::observe(
+                    order,
+                    value,
+                    &mut self.min,
+                    &mut self.max,
+                );
+            }
+        }
+        if let Some(bloom) = self.bloom.as_deref_mut() {
+            for &value in values {
+                bloom.insert(value);
+            }
+        }
+
+        let ByteArraySinkTarget::Dictionary(encoder) = &mut self.target else {
+            unreachable!("grouped byte batch emitted without a dictionary encoder")
+        };
+        for (&value, &count) in values.iter().zip(counts) {
+            encoder.put_value_bytes_run(value, count, || value.to_vec().into())?;
+            self.unencoded_value_bytes = self
+                .unencoded_value_bytes
+                .saturating_add((value.len() as i64).saturating_mul(count as i64));
+        }
+        Ok(())
+    }
 }
 
 /// The order-preserving key used by Arrow for inline byte views.
@@ -805,6 +862,15 @@ impl<'source> ByteArraySink<'source, '_> {
 #[inline(always)]
 fn inline_view_key(raw: u128) -> u128 {
     (raw.swap_bytes() << 32) | raw as u32 as u128
+}
+
+impl<'batch, 'source: 'batch> BatchSink<RunBatch<'batch, &'source [u8]>>
+    for ByteArraySink<'source, '_>
+{
+    #[inline(always)]
+    fn push_batch(&mut self, values: RunBatch<'batch, &'source [u8]>) -> Result<()> {
+        self.push_grouped_batch(values.values, values.counts)
+    }
 }
 
 /// Independently allocated byte values supplied by the low-level slice API are
@@ -850,13 +916,17 @@ impl<D: DataType<T = ByteArray>> TypedColumnChunkEncoder<D> {
         }
     }
 
-    /// Encode a selected byte-value source.
+    /// Encode a selected byte-value source, preserving native run groups for
+    /// dictionary encoding when the source and active observations allow it.
     pub(crate) fn write_byte_array_source<'a, S>(&mut self, values: S) -> Result<()>
     where
         S: ByteArraySource<'a>,
     {
         let len = values.len();
         let collect_stats = self.statistics_enabled != EnabledStatistics::None;
+        let use_grouped_dictionary_encoding = values.is_grouped()
+            && <ByteArrayEncodingFamily as EncodingFamily<D>>::is_dictionary(&self.encoding_family)
+            && self.geo_stats_accumulator.is_none();
 
         let (min, max, unencoded_value_bytes) = {
             // Hash dictionary entries only when the dictionary is flushed.
@@ -867,8 +937,12 @@ impl<D: DataType<T = ByteArray>> TypedColumnChunkEncoder<D> {
             };
             let target = match &mut self.encoding_family {
                 ByteArrayEncodingFamily::Dictionary(dict_encoder) => {
-                    // Reserve once for the complete logical source.
-                    dict_encoder.reserve(len);
+                    // A flat write materializes any pending run-buffered
+                    // indices before the first new value and reserves once for
+                    // the complete logical source.
+                    if !use_grouped_dictionary_encoding {
+                        dict_encoder.reserve(len);
+                    }
                     ByteArraySinkTarget::Dictionary(dict_encoder)
                 }
                 other => ByteArraySinkTarget::Fallback(other),
@@ -883,7 +957,11 @@ impl<D: DataType<T = ByteArray>> TypedColumnChunkEncoder<D> {
                 bloom,
                 target,
             };
-            values.write_flat_to(&mut sink)?;
+            if use_grouped_dictionary_encoding {
+                values.write_run_groups_to(&mut sink)?;
+            } else {
+                values.write_flat_to(&mut sink)?;
+            }
             (sink.min, sink.max, sink.unencoded_value_bytes)
         };
 

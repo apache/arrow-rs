@@ -59,13 +59,17 @@ use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 mod byte_budget_chunker;
 pub(crate) mod encoder;
 
+#[cfg(feature = "arrow")]
+pub(crate) use encoder::{ByteArrayBatch, ByteArraySink, ByteArraySource};
+
 use byte_budget_chunker::{ByteBudgetChunker, SubBatchStrategy};
 
 /// Page value counts are serialized as signed Thrift `i32` fields.
 const MAX_DATA_PAGE_VALUE_COUNT: u32 = i32::MAX as u32;
 
-/// Checked page value-count increment: the page format cannot represent more
-/// than `i32::MAX` values in one data page.
+/// Validate a page-count increment and return it in the page metric's `u32`
+/// representation.
+#[inline]
 fn checked_page_value_increment(buffered: u32, additional: usize) -> Result<u32> {
     if additional > MAX_DATA_PAGE_VALUE_COUNT.saturating_sub(buffered) as usize {
         return Err(general_err!(

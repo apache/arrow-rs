@@ -15,14 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "arrow")]
+use std::mem::MaybeUninit;
+
 use bytes::Bytes;
 
 use self::byte_array::encode_byte_slice;
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
-use crate::column::value_batch::{BatchSink, ValueProducer};
+use crate::column::value_batch::{BatchSink, RunBatch, ValueProducer};
 #[cfg(feature = "arrow")]
-use crate::column::value_batch::{gather_tiled, map_values};
+use crate::column::value_batch::{
+    assume_init_prefix, gather_run_groups_tiled, gather_tiled, map_values,
+};
 #[cfg(feature = "arrow")]
 use crate::column::value_selection::PhysicalValueSelection;
 use crate::column::writer::{compare_greater_byte_array, is_f16_nan};
@@ -30,6 +35,8 @@ use crate::column::writer::{fallback_encoding, has_dictionary_support, update_ma
 use crate::data_type::FixedLenByteArrayType;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::{BoolType, ByteArray, DataType, FixedLenByteArray, Int96};
+#[cfg(feature = "arrow")]
+use crate::encodings::encoding::DictionaryStorage;
 use crate::encodings::encoding::{BoolBatch, BoolEncoder};
 use crate::encodings::encoding::{
     BoolEncodingFamily, ByteArrayEncodingFamily, DictEncoder, DictionaryValue, Encoder,
@@ -41,26 +48,27 @@ use crate::file::properties::{EnabledStatistics, ResolvedColumnProperties, Write
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
-#[cfg(feature = "arrow")]
-pub(crate) use byte_array::{ByteArrayBatch, ByteArraySink, ByteArraySource};
 
 mod boolean;
 pub(super) mod byte_array;
 mod fixed_len_byte_array;
-#[cfg(feature = "arrow")]
-pub(crate) use fixed_len_byte_array::FIXED_LEN_BYTE_ARRAY_MAX_WIDTH;
 mod numeric;
 
 #[cfg(feature = "arrow")]
-pub(crate) use fixed_len_byte_array::FixedLenByteArrayBatchPacker;
+pub(crate) use byte_array::{ByteArrayBatch, ByteArraySink, ByteArraySource};
 use fixed_len_byte_array::encode_fixed_len_byte_array_slice;
 #[cfg(feature = "arrow")]
+pub(crate) use fixed_len_byte_array::{
+    FIXED_LEN_BYTE_ARRAY_BATCH_VALUES, FIXED_LEN_BYTE_ARRAY_MAX_WIDTH, FixedLenByteArrayBatchPacker,
+};
+#[cfg(any(feature = "arrow", test))]
 pub(crate) use fixed_len_byte_array::{
     FixedLenByteArrayBatch, FixedLenByteArraySink, FixedLenByteArraySource,
 };
 use numeric::NumericBatch;
 #[cfg(feature = "arrow")]
 pub(crate) use numeric::PhysicalNumericSource;
+
 /// The encoded data for a dictionary page
 pub struct DictionaryPage {
     pub buf: Bytes,
@@ -695,13 +703,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::fixed_len_byte_array::{
-        FixedLenByteArrayBatch, FixedLenByteArraySink, FixedLenByteArraySource,
-    };
-    use super::*;
-    use crate::encodings::encoding::PackedFixedLenByteArrayBatch;
-    use crate::schema::types::{ColumnPath, Type as SchemaType};
     use std::sync::Arc;
+
+    use super::*;
+    use crate::data_type::FixedLenByteArrayType;
+    use crate::schema::types::{ColumnPath, Type as SchemaType};
+
     #[test]
     fn packed_fixed_len_byte_array_batches_merge_statistics() {
         let primitive = SchemaType::primitive_type_builder("col", Type::FIXED_LEN_BYTE_ARRAY)

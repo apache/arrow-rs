@@ -135,47 +135,105 @@ typed_dictionary_value!(bool, i32, i64, Int96, f32, f64);
 
 /// The buffered dictionary indices of one column chunk's data page.
 ///
-/// Input appends one index per value to `indices`.
+/// Flat input appends one index per value to `indices`. Grouped input
+/// appends `(index, count)` pairs to `index_runs` — a run of `count` identical
+/// logical values shares one dictionary entry — so grouped chunks stay
+/// O(runs). The two buffers preserve append order: if dense values follow
+/// buffered runs, the runs are materialized into `indices` first.
 #[derive(Debug, Default)]
 pub(crate) struct RunIndexBuffer {
     /// The buffered indices, one per value (the dense path).
     indices: Vec<u64>,
+    /// Run-buffered indices `(index, count)` for grouped input.
+    index_runs: Vec<(u64, u64)>,
+    /// Logical value count buffered in `index_runs` (the sum of its run
+    /// lengths), tracked so size/length queries stay O(1).
+    run_value_count: usize,
 }
 
 impl RunIndexBuffer {
-    /// Append one dense index.
+    /// Append one dense index. Any run-buffered indices must already have been
+    /// materialized; see [`Self::materialize`].
     #[inline]
     pub(crate) fn push(&mut self, index: u64) {
+        debug_assert!(
+            self.index_runs.is_empty(),
+            "dense push after buffered run without materialize would reorder RLE_DICTIONARY values"
+        );
         self.indices.push(index);
     }
 
-    /// Reserve capacity for `additional` more dense indices.
+    /// Append a run of `count` identical logical values sharing dictionary
+    /// `index`, without materializing one index per value.
+    #[inline]
+    pub(crate) fn push_run(&mut self, index: u64, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.index_runs.push((index, count as u64));
+        self.run_value_count += count;
+    }
+
+    /// Materialize pending run-buffered indices into the dense index buffer.
+    /// This preserves append order when a column chunk mixes grouped and flat
+    /// batches.
+    #[inline]
+    pub(crate) fn materialize(&mut self) {
+        if !self.index_runs.is_empty() {
+            self.materialize_cold();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn materialize_cold(&mut self) {
+        self.indices.reserve(self.run_value_count);
+        for &(index, count) in &self.index_runs {
+            self.indices
+                .extend(std::iter::repeat_n(index, count as usize));
+        }
+        self.index_runs.clear();
+        self.run_value_count = 0;
+    }
+
+    /// Reserve capacity for `additional` more dense indices, materializing any
+    /// pending runs first.
     pub(crate) fn reserve(&mut self, additional: usize) {
+        self.materialize();
         self.indices.reserve(additional);
     }
 
-    /// Logical value count buffered.
+    /// Logical value count buffered (dense indices plus run lengths).
     pub(crate) fn num_values(&self) -> usize {
-        self.indices.len()
+        self.indices.len() + self.run_value_count
     }
 
     /// Serialize and reset the buffered indices as an `RLE_DICTIONARY` data
-    /// page: the bit width in the first byte followed by every index. Shared by
-    /// both dictionary encoders so the page framing lives in one place.
+    /// page: the bit width in the first byte, followed by the dense indices
+    /// and then the buffered runs. [`RleEncoder::put_run`] encodes each counted
+    /// group without expanding its indices. Shared by both dictionary encoders
+    /// so the page framing lives in one place.
     pub(crate) fn write_indices(&mut self, bit_width: u8) -> Result<Bytes> {
         // One byte for the bit width and the encoded indices.
-        let mut buffer =
-            Vec::with_capacity(1 + RleEncoder::max_buffer_size(bit_width, self.indices.len()));
+        let mut buffer = Vec::with_capacity(
+            1 + RleEncoder::max_buffer_size(bit_width, self.indices.len() + self.index_runs.len()),
+        );
         buffer.push(bit_width);
         let mut encoder = RleEncoder::new_from_buf(bit_width, buffer);
         encoder.put_batch(&self.indices);
+        for &(index, count) in &self.index_runs {
+            encoder.put_run(index, count as usize);
+        }
         self.indices.clear();
+        self.index_runs.clear();
+        self.run_value_count = 0;
         Ok(encoder.consume().into())
     }
 
     /// Heap footprint of the buffered indices.
     pub(crate) fn estimated_memory_size(&self) -> usize {
         self.indices.capacity() * std::mem::size_of::<u64>()
+            + self.index_runs.capacity() * std::mem::size_of::<(u64, u64)>()
     }
 }
 
@@ -192,7 +250,7 @@ impl RunIndexBuffer {
 pub struct DictEncoder<T: DataType> {
     dictionary: <T::T as DictionaryValue>::Storage,
 
-    /// The buffered dense data-page indices.
+    /// The buffered data-page indices (dense and run-buffered).
     indices: RunIndexBuffer,
 
     #[cfg(feature = "arrow")]
@@ -252,22 +310,43 @@ impl<T: DataType> DictEncoder<T> {
         self.indices.write_indices(self.bit_width())
     }
 
+    /// Intern `value` and append it as a run of `count` repetitions. Used by
+    /// the grouped write path so the index buffer is O(groups), not
+    /// O(rows).
+    #[cfg(feature = "arrow")]
+    #[inline]
+    pub(crate) fn put_value_run(&mut self, value: &T::T, count: usize) -> Result<()> {
+        if count == 0 {
+            return Ok(());
+        }
+        let index = self.dictionary.intern(value)?;
+        self.indices.push_run(index, count);
+        Ok(())
+    }
+
     /// Intern `value` and append its dictionary index to the dense `indices`
-    /// buffer.
+    /// buffer. Any run-buffered indices must first be materialized through
+    /// [`DictEncoder::reserve`]; debug builds assert this precondition in
+    /// [`RunIndexBuffer::push`].
     #[inline]
     pub(crate) fn put_one(&mut self, value: &T::T) -> Result<()> {
         self.indices.push(self.dictionary.intern(value)?);
         Ok(())
     }
 
-    /// Cache an Arrow physical slot's Parquet dictionary index.
+    /// Cache an Arrow physical slot's Parquet dictionary index. `count` is
+    /// `None` for a flat index and `Some` for a run-group index.
     #[cfg(feature = "arrow")]
     #[inline(always)]
     pub(crate) fn put_arrow_dictionary(
         &mut self,
         physical_index: usize,
+        count: Option<usize>,
         intern: impl FnOnce(&mut <T::T as DictionaryValue>::Storage) -> Result<u64>,
     ) -> Result<()> {
+        if count == Some(0) {
+            return Ok(());
+        }
         if physical_index >= self.arrow_indices.len() {
             self.arrow_indices.resize(physical_index + 1, 0);
         }
@@ -279,7 +358,10 @@ impl<T: DataType> DictEncoder<T> {
         } else {
             cached - 1
         };
-        self.indices.push(index);
+        match count {
+            Some(count) => self.indices.push_run(index, count),
+            None => self.indices.push(index),
+        }
         Ok(())
     }
 
@@ -306,6 +388,24 @@ impl<T: DataType> DictEncoder<T> {
     ) -> Result<()> {
         self.indices
             .push(self.dictionary.intern_bytes(bytes, make)?);
+        Ok(())
+    }
+
+    /// Intern a byte-backed value and append it as a run of `count` repetitions.
+    /// Run-end input only comes from Arrow.
+    #[cfg_attr(not(feature = "arrow"), allow(dead_code))]
+    #[inline]
+    pub(crate) fn put_value_bytes_run(
+        &mut self,
+        bytes: &[u8],
+        count: usize,
+        make: impl FnOnce() -> T::T,
+    ) -> Result<()> {
+        if count == 0 {
+            return Ok(());
+        }
+        let index = self.dictionary.intern_bytes(bytes, make)?;
+        self.indices.push_run(index, count);
         Ok(())
     }
 
@@ -369,6 +469,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn push_run_keeps_grouped_metadata_constant_size() {
+        let mut indices = RunIndexBuffer::default();
+        indices.push(7);
+        indices.push_run(7, 1_000_000);
+        assert_eq!(indices.num_values(), 1_000_001);
+        assert_eq!(indices.indices, [7]);
+        assert_eq!(indices.index_runs, [(7, 1_000_000)]);
+
+        // A following dense write materializes in output order only when that
+        // representation is actually required. Use a small second fixture so
+        // this assertion doesn't itself allocate the million-row expansion.
+        let mut ordered = RunIndexBuffer::default();
+        ordered.push(7);
+        ordered.push_run(7, 3);
+        ordered.reserve(1);
+        ordered.push(8);
+        assert!(ordered.index_runs.is_empty());
+        assert_eq!(ordered.indices, [7, 7, 7, 7, 8]);
+    }
+
+    #[test]
     fn dictionary_storage_contract() {
         use crate::data_type::ByteArray;
         let desc = make_col_desc::<ByteArrayType>();
@@ -430,12 +551,16 @@ mod tests {
         let mut encoder = DictEncoder::<ByteArrayType>::new(make_col_desc::<ByteArrayType>());
         for &(index, value) in &[(0, b"same".as_slice()), (0, b"same"), (1, b"same")] {
             encoder
-                .put_arrow_dictionary(index, |dictionary| Ok(Interner::intern(dictionary, value)))
+                .put_arrow_dictionary(index, None, |dictionary| {
+                    Ok(Interner::intern(dictionary, value))
+                })
                 .unwrap();
         }
         encoder.start_arrow_source();
         encoder
-            .put_arrow_dictionary(0, |dictionary| Ok(Interner::intern(dictionary, b"other")))
+            .put_arrow_dictionary(0, None, |dictionary| {
+                Ok(Interner::intern(dictionary, b"other"))
+            })
             .unwrap();
 
         assert_eq!(encoder.num_entries(), 2);
@@ -444,15 +569,18 @@ mod tests {
         let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
         for (index, value) in [(0, 42), (0, 42), (1, 42)] {
             encoder
-                .put_arrow_dictionary(index, |dictionary| Ok(dictionary.intern(&value)))
+                .put_arrow_dictionary(index, None, |dictionary| Ok(dictionary.intern(&value)))
                 .unwrap();
         }
         encoder.start_arrow_source();
-        encoder
-            .put_arrow_dictionary(0, |dictionary| Ok(dictionary.intern(&99)))
-            .unwrap();
+        for count in [None, Some(3)] {
+            encoder
+                .put_arrow_dictionary(0, count, |dictionary| Ok(dictionary.intern(&99)))
+                .unwrap();
+        }
         assert_eq!(encoder.num_entries(), 2);
         assert_eq!(encoder.indices.indices, [0, 0, 0, 1]);
+        assert_eq!(encoder.indices.index_runs, [(1, 3)]);
     }
 
     use crate::data_type::{
