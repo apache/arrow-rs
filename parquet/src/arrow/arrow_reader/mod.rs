@@ -3375,7 +3375,7 @@ pub(crate) mod tests {
     /// `ParquetFileArrowReader` using a standard set of parameters
     /// `opts`.
     ///
-    /// `rand_max` represents the maximum size of value to pass to to
+    /// `rand_max` represents the maximum size of value to pass to
     /// value generator
     fn run_single_column_reader_tests<T, F, G>(
         rand_max: i32,

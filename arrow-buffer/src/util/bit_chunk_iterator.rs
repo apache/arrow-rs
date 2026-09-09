@@ -38,7 +38,7 @@ pub struct UnalignedBitChunk<'a> {
 }
 
 impl<'a> UnalignedBitChunk<'a> {
-    /// Create a from a byte array, and and an offset and length in bits
+    /// Create a from a byte array, and an offset and length in bits
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         if len == 0 {
             return Self {
