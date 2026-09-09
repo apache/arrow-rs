@@ -6550,7 +6550,6 @@ mod tests {
                 self.max_rep_level,
                 Arc::new(self.props),
             );
-
             writer
                 .write_batch_internal(
                     self.values,
@@ -6864,6 +6863,7 @@ mod tests {
         assert_eq!(empty.next(), None);
         assert_eq!(empty.len(), 0);
     }
+
     #[cfg(feature = "arrow")]
     #[test]
     fn level_runs_slice_matrix_matches_materialized() {
@@ -6895,6 +6895,7 @@ mod tests {
             }
         }
     }
+
     #[cfg(feature = "arrow")]
     #[test]
     fn level_runs_encoding_matches_materialized_for_every_slice() {
@@ -6933,6 +6934,7 @@ mod tests {
             }
         }
     }
+
     #[cfg(feature = "arrow")]
     #[test]
     fn level_runs_record_boundary_extension_matches_materialized() {
@@ -6978,6 +6980,7 @@ mod tests {
             );
         }
     }
+
     #[cfg(feature = "arrow")]
     #[test]
     fn repeated_records_respect_the_hard_page_value_limit() {
@@ -7037,6 +7040,7 @@ mod tests {
             )
         );
     }
+
     #[cfg(feature = "arrow")]
     #[test]
     fn test_flush_empty_data_page_is_noop() {

@@ -17,6 +17,7 @@
 
 //! Tests for [`ArrowWriter`]
 
+mod fixed_width;
 mod layout;
 mod roundtrip;
 mod roundtrip_helpers;
