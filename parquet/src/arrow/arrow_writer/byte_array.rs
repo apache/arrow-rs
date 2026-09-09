@@ -9,9 +9,8 @@ use crate::column::value_batch::{BatchSink, ValueProducer};
 #[cfg(test)]
 use crate::column::value_selection::DictionaryKeys;
 use crate::column::value_selection::{PhysicalValueSelection, PhysicalValueSpan};
-use crate::column::writer::ByteBudgetTarget;
 use crate::column::writer::encoder::TypedColumnChunkEncoder;
-use crate::column::writer::encoder::{ByteArrayBatch, ByteArraySink, ByteArraySource};
+use crate::column::writer::{ByteArrayBatch, ByteArraySink, ByteArraySource, ByteBudgetTarget};
 use crate::data_type::ByteArrayType as ParquetByteArrayType;
 use crate::errors::{ParquetError, Result};
 
@@ -36,6 +35,19 @@ trait ByteArrayValueAccess<'a>: Copy {
     #[inline]
     fn value_len(self, index: usize) -> usize {
         self.value(index).len()
+    }
+
+    #[inline]
+    fn try_for_each_range<E>(
+        self,
+        start: usize,
+        len: usize,
+        mut f: impl FnMut(&'a [u8]) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
+        for index in start..start + len {
+            f(self.value(index))?;
+        }
+        Ok(())
     }
 
     /// Exact encoded size of a contiguous range, when the layout has prefix
@@ -124,6 +136,20 @@ impl<'a, O: ByteArrayOffset> ByteArrayValueAccess<'a> for OffsetByteArrayAccess<
     }
 
     #[inline]
+    fn try_for_each_range<E>(
+        self,
+        start: usize,
+        len: usize,
+        mut f: impl FnMut(&'a [u8]) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
+        let data = self.data;
+        for window in self.offsets[start..start + len + 1].windows(2) {
+            f(&data[window[0].as_usize()..window[1].as_usize()])?;
+        }
+        Ok(())
+    }
+
+    #[inline]
     fn exact_range_encoded_size(self, start: usize, len: usize) -> Option<usize> {
         let payload = (self.offsets[start + len] - self.offsets[start]).as_usize();
         Some(payload.saturating_add(len.saturating_mul(std::mem::size_of::<u32>())))
@@ -191,7 +217,8 @@ where
     }
 }
 
-/// Byte-value producer driven by a physical selection.
+/// Byte-value producer driven by a physical selection. Grouped dictionary input
+/// remains compact through `for_each_run_group`.
 #[derive(Clone, Copy)]
 struct PhysicalByteArraySource<'a, A> {
     selection: PhysicalValueSelection<'a>,
@@ -216,8 +243,36 @@ where
 
     #[inline]
     fn try_for_each<E>(self, mut f: impl FnMut(&'a [u8]) -> Result<(), E>) -> Result<(), E> {
+        if !self.selection.is_grouped() {
+            return self
+                .selection
+                .try_for_each_index(|index| f(self.values.value(index)));
+        }
+
+        self.selection.try_for_each_span(|span| match span {
+            PhysicalValueSpan::Range { start, len } => {
+                self.values.try_for_each_range(start, len, &mut f)
+            }
+            PhysicalValueSpan::Repeat { index, count } => {
+                let value = self.values.value(index);
+                for _ in 0..count {
+                    f(value)?;
+                }
+                Ok(())
+            }
+            PhysicalValueSpan::Gather(indices) => indices
+                .iter()
+                .try_for_each(|&index| f(self.values.value(index))),
+        })
+    }
+
+    #[inline]
+    fn for_each_run_group<E>(
+        self,
+        mut f: impl FnMut(&'a [u8], usize) -> Result<(), E>,
+    ) -> Result<(), E> {
         self.selection
-            .try_for_each_index(|index| f(self.values.value(index)))
+            .try_for_each_index_group(|index, count| f(self.values.value(index), count))
     }
 }
 
@@ -226,11 +281,17 @@ where
     A: ByteArrayValueAccess<'a> + 'a,
 {
     #[inline]
+    fn is_grouped(self) -> bool {
+        self.selection.is_grouped()
+    }
+
+    #[inline]
     fn write_flat_to(self, sink: &mut ByteArraySink<'a, '_>) -> Result<()> {
         // Even consecutive keys can reuse slots interned by an earlier write.
         if self.selection.has_dictionary_mapping() && sink.uses_arrow_dictionary_cache() {
-            return sink
-                .push_dictionary_source(self.selection, move |index| self.values.value(index));
+            return sink.push_dictionary_source(self.selection, false, move |index| {
+                self.values.value(index)
+            });
         }
 
         // Offset layouts can lend every selected range directly. Other
@@ -256,6 +317,15 @@ where
         }
 
         sink.push_source(self)
+    }
+
+    #[inline]
+    fn write_run_groups_to(self, sink: &mut ByteArraySink<'a, '_>) -> Result<()> {
+        if self.selection.has_dictionary_mapping() && sink.uses_arrow_dictionary_cache() {
+            sink.push_dictionary_source(self.selection, true, move |index| self.values.value(index))
+        } else {
+            self.write_run_groups_fallback_to(sink)
+        }
     }
 }
 
@@ -421,31 +491,33 @@ fn count_dictionary_values_within_byte_budget<'a, A: ByteArrayValueAccess<'a>>(
     let mut seen = None;
     let mut remaining = budget;
     let mut count = 0;
-    let _: std::result::Result<(), ()> = selection.try_for_each_index(|index| {
-        if !cached(index) {
-            // Reused slots need neither payload sizing nor a dictionary-sized scratch bitmap.
-            let seen = seen.get_or_insert_with(|| vec![false; values.len()]);
-            if !seen[index] {
-                seen[index] = true;
-                let encoded = values
-                    .value_len(index)
-                    .saturating_add(std::mem::size_of::<u32>());
-                if encoded > remaining {
-                    count += 1;
-                    return Err(());
+    let _: std::result::Result<(), ()> =
+        selection.try_for_each_index_group(|index, occurrences| {
+            if !cached(index) {
+                // Reused slots need neither payload sizing nor a dictionary-sized scratch bitmap.
+                let seen = seen.get_or_insert_with(|| vec![false; values.len()]);
+                if !seen[index] {
+                    seen[index] = true;
+                    let encoded = values
+                        .value_len(index)
+                        .saturating_add(std::mem::size_of::<u32>());
+                    if encoded > remaining {
+                        count += occurrences;
+                        return Err(());
+                    }
+                    remaining -= encoded;
                 }
-                remaining -= encoded;
             }
-        }
-        count += 1;
-        Ok(())
-    });
+            count += occurrences;
+            Ok(())
+        });
     count
 }
 
-/// Count leading physical-selection values within a PLAIN byte budget. Range
-/// spans over offset arrays cost O(1). The first value crossing the budget is
-/// included so the post-write check flushes at this mini-batch boundary.
+/// Count the leading physical-selection values within a PLAIN byte budget. Range
+/// spans over offset arrays cost O(1); repeat spans charge `(len + 4) * count`
+/// without expanding the run. The first value that crosses the budget is included
+/// so the writer's post-write check flushes at this mini-batch boundary.
 fn count_selection_within_byte_budget<'a, A: ByteArrayValueAccess<'a>>(
     selection: PhysicalValueSelection<'a>,
     values: A,
@@ -484,6 +556,21 @@ fn count_selection_within_byte_budget<'a, A: ByteArrayValueAccess<'a>>(
                 remaining -= encoded;
             }
             Ok(())
+        }
+        PhysicalValueSpan::Repeat {
+            index,
+            count: span_count,
+        } => {
+            let encoded = values.value_len(index).saturating_add(prefix);
+            let span_bytes = encoded.saturating_mul(span_count);
+            if span_bytes <= remaining {
+                remaining -= span_bytes;
+                count += span_count;
+                return Ok(());
+            }
+
+            count += (remaining / encoded).saturating_add(1).min(span_count);
+            Err(())
         }
         PhysicalValueSpan::Gather(indices) => {
             for &index in indices {

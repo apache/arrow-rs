@@ -29,10 +29,10 @@ use crate::arrow::arrow_writer::byte_array::ByteArrayStorage;
 use crate::basic::PageType;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
-use crate::column::value_batch::{BatchSink, map_values};
+use crate::column::value_batch::{BatchSink, RunBatch, gather_run_groups_tiled, map_values};
 use crate::column::value_selection::{DictionaryKeys, PhysicalValueSelection, ValueSelectionRef};
-use crate::column::writer::encoder::ColumnChunkEncoder;
 use crate::column::writer::encoder::{
+    ColumnChunkEncoder, FIXED_LEN_BYTE_ARRAY_BATCH_VALUES, FIXED_LEN_BYTE_ARRAY_MAX_WIDTH,
     FixedLenByteArrayBatch, FixedLenByteArrayBatchPacker, FixedLenByteArraySink,
     FixedLenByteArraySource, PhysicalNumericSource, TypedColumnChunkEncoder,
 };
@@ -2198,7 +2198,7 @@ fn update_distinct_values_seen(
         mut hash_at: impl FnMut(usize) -> u64,
     ) {
         selection
-            .try_for_each_index(|row| -> Result<(), std::convert::Infallible> {
+            .try_for_each_index_group(|row, _count| -> Result<(), std::convert::Infallible> {
                 if array.is_valid(row) {
                     seen.insert(hash_at(row));
                 }
