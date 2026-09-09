@@ -72,7 +72,24 @@ impl std::fmt::Debug for i256 {
 
 impl std::fmt::Display for i256 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", BigInt::from_signed_bytes_le(&self.to_le_bytes()))
+        if let Some(v) = Self::to_i128(*self) {
+            return write!(f, "{v}");
+        }
+
+        // The magnitude has up to 77 digits, so it splits into at most three
+        // chunks of 38 digits that each fit an i128. It is taken as unsigned
+        // limbs, which also holds the magnitude of i256::MIN.
+        let chunk = Self::from_i128(10_i128.pow(38)).as_digits();
+        let (high, low) = div_rem(&self.wrapping_abs().as_digits(), &chunk);
+        let (top, mid) = div_rem(&high, &chunk);
+        let [top, mid, low] = [top, mid, low].map(|digits| Self::from_digits(digits).as_i128());
+
+        let sign = if self.is_negative() { "-" } else { "" };
+        if top != 0 {
+            write!(f, "{sign}{top}{mid:038}{low:038}")
+        } else {
+            write!(f, "{sign}{mid}{low:038}")
+        }
     }
 }
 
@@ -732,14 +749,14 @@ impl i256 {
             // self is between 10^64 and 10^77 (~i256::MAX).
             // `value` is 14 digits max (10^77 / 10^64 = 10^13),
             // so it fits to `low` u128
-            debug_assert!(value.high == 0);
+            debug_assert_eq!(value.high, 0);
             Some(64 + value.low.checked_ilog10()?)
         } else if self >= POW10_32 {
             let value = self.checked_div(POW10_32)?;
             // self is between 10^32 and 10^64.
             // `value` is 33 digits max (10^64/10^32=10^32)
             // so it fits to `low` 128-bit value
-            debug_assert!(value.high == 0);
+            debug_assert_eq!(value.high, 0);
             Some(32 + value.low.checked_ilog10()?)
         } else {
             // self fits within u128 (high == 0 and self > 0).
@@ -1737,6 +1754,41 @@ mod tests {
             let formatted = case.to_string();
             let back: i256 = formatted.parse().unwrap();
             assert_eq!(case, back);
+        }
+    }
+
+    #[test]
+    fn test_display_matches_bigint() {
+        let ten_pow_38 = i256::from_i128(10_i128.pow(38));
+        let mut cases = vec![
+            i256::ZERO,
+            i256::ONE,
+            i256::MINUS_ONE,
+            i256::from_i128(i128::MAX),
+            i256::from_i128(i128::MIN),
+            i256::from_i128(i128::MAX).wrapping_add(i256::ONE),
+            i256::from_i128(i128::MIN).wrapping_sub(i256::ONE),
+            ten_pow_38,
+            ten_pow_38.wrapping_sub(i256::ONE),
+            ten_pow_38.wrapping_neg(),
+            ten_pow_38.wrapping_mul(ten_pow_38),
+            ten_pow_38.wrapping_mul(ten_pow_38).wrapping_neg(),
+            ten_pow_38.wrapping_mul(ten_pow_38).wrapping_add(i256::ONE),
+            i256::MAX,
+            i256::MIN,
+            i256::MIN.wrapping_add(i256::ONE),
+        ];
+        // Every digit count, with and without zeros in the lower chunks
+        let mut value = i256::ONE;
+        while value != i256::ZERO {
+            cases.push(value);
+            cases.push(value.wrapping_sub(i256::ONE));
+            cases.push(value.wrapping_neg());
+            value = value.wrapping_mul(i256::from_i128(10));
+        }
+        for case in cases {
+            let expected = BigInt::from_signed_bytes_le(&case.to_le_bytes()).to_string();
+            assert_eq!(case.to_string(), expected);
         }
     }
 

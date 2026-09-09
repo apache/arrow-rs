@@ -71,7 +71,7 @@ jobs:
           rustup override set nightly
           cargo miri setup
       - name: Set up nextest
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc  # v2.86.7
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
         with:
           tool: nextest
       - name: Run Miri Checks

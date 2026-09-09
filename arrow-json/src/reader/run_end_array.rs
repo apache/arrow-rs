@@ -47,7 +47,7 @@ impl<R: RunEndIndexType> RunEndEncodedArrayDecoder<R> {
             unreachable!()
         };
         let values_nullable = values_field.is_nullable() && is_nullable;
-        let decoder = ctx.make_decoder(values_field.data_type(), values_nullable)?;
+        let decoder = ctx.make_decoder(values_field, values_nullable)?;
 
         Ok(Self {
             data_type: data_type.clone(),

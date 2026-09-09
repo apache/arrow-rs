@@ -758,7 +758,7 @@ mod tests {
 
         let (metadata, value) = builder.finish();
 
-        // note, object fields are now sorted lexigraphically by field name
+        // note, object fields are now sorted lexicographically by field name
         /*
          {
             "a": false,

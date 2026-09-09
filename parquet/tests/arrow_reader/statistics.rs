@@ -260,7 +260,8 @@ impl Test<'_> {
             let page_index = reader
                 .metadata()
                 .page_index()
-                .expect("File should have page indices");
+                .expect("File should have page indices")
+                .as_ref();
 
             let row_group_indices: Vec<_> = (0..row_groups.len()).collect();
 
@@ -645,7 +646,7 @@ async fn test_data_page_stats_with_all_null_page() {
 
 /////////////// MORE GENERAL TESTS //////////////////////
 // . Many columns in a file
-// . Differnet data types
+// . Different data types
 // . Different row group sizes
 
 // Four different integer types
@@ -2077,7 +2078,7 @@ async fn test_decimal128() {
 #[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_decimal_256() {
-    // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precicion 9, scale 2
+    // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precision 9, scale 2
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
         scenario: Scenario::Decimal256,
@@ -2988,7 +2989,8 @@ mod test {
         let row_group_indices = [0];
         let page_index = metadata
             .page_index()
-            .expect("file should have page indices");
+            .expect("file should have page indices")
+            .as_ref();
 
         let DataType::Struct(fields) = schema.field_with_name("c1").unwrap().data_type() else {
             unreachable!("c1 must be a struct field")
@@ -3226,10 +3228,10 @@ mod test {
 
     fn timestamp_nanoseconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampNanosecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }

@@ -159,13 +159,6 @@ PR be sure to run the following and check for lint issues:
 cargo +stable fmt --all -- --check
 ```
 
-Note that currently the above will not check all source files in the parquet crate. To check all
-parquet files run the following from the top-level `arrow-rs` directory:
-
-```bash
-cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
-```
-
 ## Miri
 
 Run tests under [`Miri`](https://github.com/rust-lang/miri) like so, assuming
@@ -242,6 +235,49 @@ Search for `expect(clippy::` in the codebase to identify lints that are intentio
 - If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
 - If you have several lints on a function or module, you may disable the lint on the function or module.
 - If a lint is pervasive across multiple modules, you may disable it at the crate level.
+
+## Spell Checking
+
+We use [`typos`](https://github.com/crate-ci/typos) to catch spelling mistakes in source code and
+comments. CI runs a spell check on every pull request.
+
+### Running locally
+
+Install `typos` and run it from the repo root:
+
+```bash
+cargo install typos-cli
+typos --config typos.toml
+```
+
+### Adding a pre-commit hook
+
+To catch typos before they reach CI, add `typos` as a Git pre-commit hook:
+
+```bash
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/sh
+typos --config typos.toml
+EOF
+chmod +x .git/hooks/pre-commit
+```
+
+After that, `typos` will run automatically on every `git commit`. If it finds an issue, the commit
+is blocked until you fix or allowlist the word.
+
+### Allowlisting false positives
+
+If `typos` flags a word that is intentionally spelled that way (a test value, a domain-specific
+term, a crate name, etc.), add it to `[default.extend-words]` in `typos.toml` at the repo root
+with a short comment explaining why:
+
+```toml
+[default.extend-words]
+flate = "flate"  # flate2 is the crate name for the deflate/inflate compression library
+```
+
+Prefer renaming variables over adding allowlist entries when the flagged word is just a local
+identifier that can be changed without affecting test semantics.
 
 ## Performance Improvements
 

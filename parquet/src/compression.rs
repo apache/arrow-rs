@@ -146,6 +146,13 @@ pub(crate) trait CompressionLevel<T: std::fmt::Display + std::cmp::PartialOrd> {
 /// Given the compression type `codec`, returns a codec used to compress and decompress
 /// bytes for the compression type.
 /// This returns `None` if the codec type is `UNCOMPRESSED`.
+#[cfg_attr(
+    any(feature = "lz4", test),
+    expect(
+        clippy::used_underscore_binding,
+        reason = "`_options` is only read when the `lz4` feature is on"
+    )
+)]
 pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<Box<dyn Codec>>> {
     #[cfg_attr(
         any(
@@ -340,7 +347,7 @@ pub use gzip_codec::*;
 /// - `zlib` supports levels from 0 to 9.
 /// - `miniz_oxide` supports levels from 0 to 10.
 ///
-/// `arrow` uses `flate` with `rust_backend` feature,
+/// `arrow` uses `flate2` with `rust_backend` feature,
 /// which provides `miniz_oxide` as the backend.
 /// Therefore 0-10 levels are supported.
 ///
