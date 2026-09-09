@@ -42,9 +42,7 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let operator = Operator::new(Memory::default())
-        .map_err(to_parquet_err)?
-        .finish();
+    let operator = Operator::new(Memory::default()).map_err(to_parquet_err)?;
     let path = "example.parquet";
     let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
     let batch = RecordBatch::try_from_iter([("col", col)]).unwrap();

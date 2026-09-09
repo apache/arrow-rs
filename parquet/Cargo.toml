@@ -91,7 +91,7 @@ arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs", "sync"] }
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { workspace = true, features = ["azure", "fs"] }
-opendal = { version = "0.59", default-features = false, features = ["services-memory"] }
+opendal = { version = "0.59.1", default-features = false, features = ["services-memory"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
