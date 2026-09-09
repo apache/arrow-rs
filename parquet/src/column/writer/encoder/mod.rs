@@ -42,6 +42,8 @@ use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accu
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 
+#[cfg(feature = "arrow")]
+pub(crate) use byte_array::{ByteArrayBatch, ByteArraySink, ByteArraySource};
 mod boolean;
 pub(super) mod byte_array;
 mod fixed_len_byte_array;

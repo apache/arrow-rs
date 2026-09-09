@@ -39,7 +39,8 @@ use super::schema::{
 };
 
 use crate::arrow::ArrowSchemaConverter;
-use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
+use crate::arrow::arrow_writer::byte_array::ByteArrayStorage;
+use crate::arrow::arrow_writer::legacy_byte_array::ByteArrayEncoder;
 use crate::basic::PageType;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
@@ -74,6 +75,7 @@ use levels::{ArrayLevels, LeafBatch, calculate_array_levels};
 mod boolean;
 mod byte_array;
 mod fixed_len_byte_array;
+mod legacy_byte_array;
 mod levels;
 mod numeric;
 
@@ -1205,7 +1207,7 @@ impl ArrowColumnWriter {
             ArrowColumnWriterImpl::ByteArray(c) => {
                 let batch = levels.leaf_batch();
                 c.write_batch_internal(
-                    byte_array::ByteArrayGatherSource::new(
+                    legacy_byte_array::ByteArrayGatherSource::new(
                         batch.array(),
                         levels.non_null_indices(),
                     ),
@@ -1690,7 +1692,7 @@ impl ArrowColumnWriterFactory {
             | ArrowDataType::Utf8
             | ArrowDataType::LargeUtf8
             | ArrowDataType::BinaryView
-            | ArrowDataType::Utf8View => out.push(bytes(leaves.next().unwrap())?),
+            | ArrowDataType::Utf8View => out.push(col(leaves.next().unwrap())?),
             ArrowDataType::List(f)
             | ArrowDataType::LargeList(f)
             | ArrowDataType::FixedSizeList(f, _)
@@ -1900,9 +1902,7 @@ macro_rules! dispatch_leaf_writer {
             }
             ColumnWriter::FloatColumnWriter(typed) => $phys!(Float32Storage<'_>, typed),
             ColumnWriter::DoubleColumnWriter(typed) => $phys!(Float64Storage<'_>, typed),
-            ColumnWriter::ByteArrayColumnWriter(_typed) => {
-                unreachable!("byte arrays are written by ArrowColumnWriterImpl::ByteArray")
-            }
+            ColumnWriter::ByteArrayColumnWriter(typed) => $phys!(ByteArrayStorage<'_>, typed),
             ColumnWriter::FixedLenByteArrayColumnWriter(typed) => {
                 $phys!(FixedLenByteArrayStorage<'_>, typed)
             }
@@ -2403,8 +2403,20 @@ mod tests {
         assert_eq!(string_values.null_count(), 0);
         assert_eq!(binary_values.null_count(), 0);
 
-        RoundTripTest::new(Arc::new(string_values)).run();
-        RoundTripTest::new(Arc::new(binary_values)).run();
+        RoundTripTest::new(Arc::new(string_values.clone())).run();
+        RoundTripTest::new(Arc::new(binary_values.clone())).run();
+
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let binary_field = Field::new("b", DataType::Binary, false);
+        let schema = Schema::new(vec![string_field, binary_field]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(string_values), Arc::new(binary_values)],
+        )
+        .unwrap();
+
+        roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -2424,14 +2436,36 @@ mod tests {
         let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
         let nullable_string_view_values = StringViewArray::from(nullable_string_values);
 
-        RoundTripTest::new(Arc::new(string_view_values)).run();
-        RoundTripTest::new(Arc::new(binary_view_values)).run();
-        RoundTripTest::new(Arc::new(nullable_string_view_values)).run();
+        RoundTripTest::new(Arc::new(string_view_values.clone())).run();
+        RoundTripTest::new(Arc::new(binary_view_values.clone())).run();
+        RoundTripTest::new(Arc::new(nullable_string_view_values.clone())).run();
+
+        let string_field = Field::new("a", DataType::Utf8View, false);
+        let binary_field = Field::new("b", DataType::BinaryView, false);
+        let nullable_string_field = Field::new("a", DataType::Utf8View, true);
+        let schema = Schema::new(vec![string_field, binary_field, nullable_string_field]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(string_view_values),
+                Arc::new(binary_view_values),
+                Arc::new(nullable_string_view_values),
+            ],
+        )
+        .unwrap();
+
+        roundtrip(batch.clone(), Some(SMALL_SIZE / 2));
+        roundtrip(batch, None);
     }
 
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_binary_view_long_value() {
+        let string_field = Field::new("a", DataType::Utf8View, false);
+        let binary_field = Field::new("b", DataType::BinaryView, false);
+        let schema = Schema::new(vec![string_field, binary_field]);
+
         // There is special case validation for long values (greater than 128)
         // 128 encodes as 0x80 0x00 0x00 0x00 in little endian, which should
         // trigger the long-string UTF-8 validation branch in the plain decoder.
@@ -2449,6 +2483,21 @@ mod tests {
         RoundTripTest::new(Arc::clone(&binary_view_values))
             .with_nullable(false)
             .run();
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![string_view_values, binary_view_values],
+        )
+        .unwrap();
+
+        // Disable dictionary to exercise plain encoding paths in the reader.
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let props = WriterProperties::builder()
+                .set_writer_version(version)
+                .set_dictionary_enabled(false)
+                .build();
+            roundtrip_opts(&batch, props);
+        }
     }
 
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
@@ -4887,6 +4936,56 @@ mod tests {
         assert!(writer.bytes_written() > pre_flush_bytes_written);
 
         writer.close().unwrap();
+
+        fn check(values: ArrayRef, props: WriterProperties) {
+            let batch = RecordBatch::try_from_iter([("a", values)]).unwrap();
+            let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            assert!(writer.memory_size() >= writer.in_progress_size());
+            writer.flush().unwrap();
+            assert_eq!(writer.memory_size(), 0);
+            writer.close().unwrap();
+        }
+
+        check(
+            Arc::new(BooleanArray::from(vec![true, false, true])),
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_encoding(Encoding::RLE)
+                .set_statistics_enabled(EnabledStatistics::None)
+                .build(),
+        );
+        check(
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_encoding(Encoding::DELTA_BINARY_PACKED)
+                .build(),
+        );
+        check(
+            Arc::new(StringArray::from(vec!["prefix-a", "prefix-b"])),
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+                .build(),
+        );
+        let fixed =
+            FixedSizeBinaryArray::try_from_iter([[1, 2, 3, 4], [5, 6, 7, 8]].into_iter()).unwrap();
+        check(
+            Arc::new(fixed),
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_encoding(Encoding::BYTE_STREAM_SPLIT)
+                .build(),
+        );
+        for limit in [usize::MAX, 1] {
+            check(
+                Arc::new(StringArray::from(vec!["dictionary-a", "dictionary-b"])),
+                WriterProperties::builder()
+                    .set_dictionary_page_size_limit(limit)
+                    .build(),
+            );
+        }
     }
 
     #[test]
@@ -6357,5 +6456,53 @@ mod tests {
             .with_precision_and_scale(12, 2)
             .unwrap();
         RoundTripTest::new(Arc::new(d64n)).run();
+    }
+
+    #[test]
+    fn string_view_fallback_observes_across_gathered_tiles() {
+        let mut raw_values = (0..130)
+            .map(|i| format!("middle-{i:03}"))
+            .collect::<Vec<_>>();
+        raw_values[63] = "aaa-min".to_string();
+        raw_values[64] = "zzz-max".to_string();
+
+        let values: ArrayRef = Arc::new(StringViewArray::from_iter_values(
+            raw_values.iter().map(String::as_str),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            values.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+
+        for encoding in [
+            Encoding::PLAIN,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ] {
+            let props = WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_2_0)
+                .set_dictionary_enabled(false)
+                .set_encoding(encoding)
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .set_bloom_filter_enabled(true)
+                .build();
+            let file = roundtrip_opts(&batch, props);
+            let reader = SerializedFileReader::new(file.clone()).unwrap();
+            let column = reader.metadata().row_group(0).column(0);
+            let Statistics::ByteArray(stats) = column.statistics().unwrap() else {
+                panic!("expected byte-array statistics for {encoding:?}");
+            };
+            assert_eq!(stats.min_opt().unwrap().as_bytes(), b"aaa-min");
+            assert_eq!(stats.max_opt().unwrap().as_bytes(), b"zzz-max");
+
+            check_bloom_filter(
+                vec![file],
+                "col".to_string(),
+                vec!["middle-000", "aaa-min", "zzz-max", "middle-129"],
+                Vec::<&str>::new(),
+            );
+        }
     }
 }

@@ -130,6 +130,19 @@ impl ByteArrayPlainEncoder {
         append_plain_value(&mut self.buffer, value);
     }
 
+    /// Append an inline Arrow byte-view value directly from its physical descriptor.
+    ///
+    /// Inline Arrow views start with the same bytes as a Parquet PLAIN byte
+    /// array: a little-endian `u32` length followed by the value bytes.
+    #[cfg(feature = "arrow")]
+    #[inline(always)]
+    pub(crate) fn put_inline_view(&mut self, view: u128) {
+        let len = view as u32 as usize;
+        debug_assert!(len <= 12);
+        let encoded = view.to_le_bytes();
+        self.buffer.extend_from_slice(&encoded[..4 + len]);
+    }
+
     #[inline(always)]
     pub(crate) fn reserve(&mut self, additional: usize) {
         self.buffer.reserve(additional);

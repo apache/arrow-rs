@@ -17,7 +17,8 @@
 
 //! Byte-array sources, batches, and write-scoped encoding state.
 //!
-//! Sources gather borrowed values into bounded `&[u8]` batches.
+//! Sources can provide contiguous Arrow offset ranges directly or gather
+//! non-contiguous values into bounded `&[u8]` batches.
 
 use std::mem::MaybeUninit;
 
@@ -34,12 +35,20 @@ use crate::encodings::encoding::{
     ByteArrayDeltaEncoder, ByteArrayDeltaLengthEncoder, ByteArrayEncodingFamily,
     ByteArrayPlainEncoder, DictEncoder,
 };
+#[cfg(feature = "arrow")]
+use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::file::properties::EnabledStatistics;
 use crate::geospatial::accumulator::GeoStatsAccumulator;
 use crate::schema::types::ColumnDescriptor;
+#[cfg(feature = "arrow")]
+use arrow_buffer::ArrowNativeType;
+
 /// Observation performed alongside byte-array encoding.
 trait ByteArrayValueObserver<'a> {
+    #[cfg(feature = "arrow")]
+    fn observe(&mut self, value: &'a [u8]);
+
     fn observe_batch<'batch>(&mut self, values: ByteArrayBatch<'batch, 'a>) -> Result<()>
     where
         'a: 'batch;
@@ -86,6 +95,25 @@ impl ByteArrayValueConsumer<'_> for DeltaLengthEncode<'_> {
         self.encoder.put_value(value)?;
         self.unencoded_value_bytes += value.len() as i64;
         Ok(())
+    }
+}
+
+#[cfg(feature = "arrow")]
+struct ObserveAndConsume<'state, O, C> {
+    observer: &'state mut O,
+    consumer: &'state mut C,
+}
+
+#[cfg(feature = "arrow")]
+impl<'source, O, C> ByteArrayValueConsumer<'source> for ObserveAndConsume<'_, O, C>
+where
+    O: ByteArrayValueObserver<'source>,
+    C: ByteArrayValueConsumer<'source>,
+{
+    #[inline(always)]
+    fn consume(&mut self, value: &'source [u8]) -> Result<()> {
+        self.observer.observe(value);
+        self.consumer.consume(value)
     }
 }
 
@@ -209,7 +237,9 @@ fn prepare_plain_values<'batch, 'source: 'batch>(
     encoder: &mut ByteArrayPlainEncoder,
     values: ByteArrayBatch<'batch, 'source>,
 ) -> Result<i64> {
-    // Validate value lengths before mutating the encoding buffer.
+    // Dense small-offset sources provide an exact O(1) reservation and
+    // intrinsically valid u32 lengths. Other sources retain the full
+    // validation pass before the buffer is mutated.
     let unencoded_value_bytes = if let Some((payload, encoded)) = values.exact_plain_size() {
         encoder.reserve(encoded);
         payload
@@ -271,6 +301,18 @@ where
 {
     observer.observe_batch(values)?;
     let unencoded_value_bytes = match values {
+        #[cfg(feature = "arrow")]
+        ByteArrayBatch::Offset32 { offsets, data } => encoder.put_values(
+            offsets
+                .windows(2)
+                .map(|w| &data[w[0].as_usize()..w[1].as_usize()]),
+        )?,
+        #[cfg(feature = "arrow")]
+        ByteArrayBatch::Offset64 { offsets, data } => encoder.put_values(
+            offsets
+                .windows(2)
+                .map(|w| &data[w[0].as_usize()..w[1].as_usize()]),
+        )?,
         ByteArrayBatch::Gathered(values) => encoder.put_values(values.iter().copied())?,
     };
     Ok(unencoded_value_bytes)
@@ -278,9 +320,20 @@ where
 
 /// A batch of byte values supplied to the column encoder.
 ///
-/// Values are supplied as a bounded slice of borrowed payloads.
+/// Offset arrays retain their borrowed representation. Other sources use a
+/// bounded slice of borrowed values.
 #[derive(Clone, Copy)]
 pub(crate) enum ByteArrayBatch<'batch, 'source> {
+    #[cfg(feature = "arrow")]
+    Offset32 {
+        offsets: &'source [i32],
+        data: &'source [u8],
+    },
+    #[cfg(feature = "arrow")]
+    Offset64 {
+        offsets: &'source [i64],
+        data: &'source [u8],
+    },
     Gathered(&'batch [&'source [u8]]),
 }
 
@@ -288,6 +341,10 @@ impl<'batch, 'source: 'batch> ByteArrayBatch<'batch, 'source> {
     #[inline(always)]
     pub(crate) fn len(self) -> usize {
         match self {
+            #[cfg(feature = "arrow")]
+            Self::Offset32 { offsets, .. } => offsets.len().saturating_sub(1),
+            #[cfg(feature = "arrow")]
+            Self::Offset64 { offsets, .. } => offsets.len().saturating_sub(1),
             Self::Gathered(values) => values.len(),
         }
     }
@@ -297,7 +354,17 @@ impl<'batch, 'source: 'batch> ByteArrayBatch<'batch, 'source> {
     /// `u32` prefix.
     #[inline(always)]
     pub(crate) fn exact_plain_size(self) -> Option<(usize, usize)> {
-        None
+        match self {
+            #[cfg(feature = "arrow")]
+            Self::Offset32 { offsets, .. } => {
+                let payload = (*offsets.last()? - *offsets.first()?) as usize;
+                Some((
+                    payload,
+                    payload.saturating_add(self.len().saturating_mul(std::mem::size_of::<u32>())),
+                ))
+            }
+            _ => None,
+        }
     }
 
     /// Visit logical values using the batch's physical representation.
@@ -307,11 +374,16 @@ impl<'batch, 'source: 'batch> ByteArrayBatch<'batch, 'source> {
         C: ByteArrayValueConsumer<'source>,
     {
         match self {
+            #[cfg(feature = "arrow")]
+            Self::Offset32 { offsets, data } => walk_offsets(offsets, data, consumer),
+            #[cfg(feature = "arrow")]
+            Self::Offset64 { offsets, data } => walk_offsets(offsets, data, consumer),
             Self::Gathered(values) => walk_gathered(values, consumer),
         }
     }
 
-    /// Observe one gathered batch before consuming its values.
+    /// Observe and consume one batch. Gathered values are observed before they
+    /// are consumed; offset spans are observed and consumed together.
     #[inline(always)]
     fn try_for_each_observed<C, O>(self, observer: &mut O, consumer: &mut C) -> Result<()>
     where
@@ -323,8 +395,27 @@ impl<'batch, 'source: 'batch> ByteArrayBatch<'batch, 'source> {
                 observer.observe_batch(Self::Gathered(values))?;
                 walk_gathered(values, consumer)
             }
+            #[cfg(feature = "arrow")]
+            values => values.try_for_each(&mut ObserveAndConsume { observer, consumer }),
         }
     }
+}
+
+#[cfg(feature = "arrow")]
+#[inline(always)]
+fn walk_offsets<'source, O, C>(
+    offsets: &'source [O],
+    data: &'source [u8],
+    consumer: &mut C,
+) -> Result<()>
+where
+    O: ArrowNativeType,
+    C: ByteArrayValueConsumer<'source>,
+{
+    for window in offsets.windows(2) {
+        consumer.consume(&data[window[0].as_usize()..window[1].as_usize()])?;
+    }
+    Ok(())
 }
 
 #[inline(always)]
@@ -344,7 +435,7 @@ where
 /// Maximum number of non-contiguous values in one gathered batch.
 pub(crate) const BYTE_ARRAY_BATCH_VALUES: usize = 64;
 
-/// Produces byte values as bounded gathered batches.
+/// Produces byte values as bounded gathered batches or contiguous offset ranges.
 pub(crate) trait ByteArraySource<'source>: ValueProducer<&'source [u8]> {
     #[inline(always)]
     fn write_flat_to(self, sink: &mut ByteArraySink<'source, '_>) -> Result<()> {
@@ -449,6 +540,23 @@ impl<'source> ByteArrayObserver<'source, '_> {
 }
 
 impl<'source> ByteArrayValueObserver<'source> for ByteArrayObserver<'source, '_> {
+    #[cfg(feature = "arrow")]
+    #[inline(always)]
+    fn observe(&mut self, value: &'source [u8]) {
+        if self.collect_stats {
+            if let Some(accumulator) = self.accumulator.as_mut() {
+                if accumulator.is_valid() {
+                    accumulator.update_wkb(value);
+                }
+            } else {
+                <ByteMinMax as MinMaxStrategy<'_>>::observe(self.order, value, self.min, self.max);
+            }
+        }
+        if let Some(bloom) = self.bloom.as_mut() {
+            bloom.insert(value);
+        }
+    }
+
     #[inline(always)]
     fn observe_batch<'batch>(&mut self, values: ByteArrayBatch<'batch, 'source>) -> Result<()>
     where
@@ -458,7 +566,33 @@ impl<'source> ByteArrayValueObserver<'source> for ByteArrayObserver<'source, '_>
     }
 }
 
-impl ByteArraySink<'_, '_> {}
+impl<'source, 'encoder> ByteArraySink<'source, 'encoder> {
+    #[inline(always)]
+    #[cfg(feature = "arrow")]
+    fn parts(
+        &mut self,
+    ) -> (
+        ByteArrayObserver<'source, '_>,
+        &mut ByteArraySinkTarget<'encoder>,
+        &mut i64,
+    ) {
+        (
+            ByteArrayObserver {
+                collect_stats: self.collect_stats,
+                order: self.order,
+                min: &mut self.min,
+                max: &mut self.max,
+                accumulator: self
+                    .accumulator
+                    .as_deref_mut()
+                    .map(|accumulator| accumulator.as_mut()),
+                bloom: self.bloom.as_deref_mut(),
+            },
+            &mut self.target,
+            &mut self.unencoded_value_bytes,
+        )
+    }
+}
 
 impl<'batch, 'source: 'batch> BatchSink<ByteArrayBatch<'batch, 'source>>
     for ByteArraySink<'source, '_>
@@ -498,6 +632,144 @@ impl<'batch, 'source: 'batch> BatchSink<ByteArrayBatch<'batch, 'source>>
     }
 }
 
+impl<'source> ByteArraySink<'source, '_> {
+    /// Encode a selection over inline Arrow byte-view descriptors without
+    /// first gathering temporary `&[u8]` handles.
+    ///
+    /// The raw descriptors provide both an order-preserving comparison key and
+    /// the complete Parquet PLAIN bytes. The generic path remains responsible
+    /// for indirect views and non-standard byte ordering.
+    #[cfg(feature = "arrow")]
+    #[inline]
+    pub(crate) fn try_push_inline_view_source(
+        &mut self,
+        indices: impl ValueProducer<usize>,
+        views: &'source [u128],
+        value: impl Fn(usize) -> &'source [u8] + Copy,
+    ) -> Result<bool> {
+        // Arrow strings and binary values use unsigned byte ordering. Keep
+        // DECIMAL/FLOAT16, geospatial accumulation, disabled statistics, and
+        // delta encodings on the generic byte-value path.
+        if !self.collect_stats
+            || self.order != ByteMinMaxOrder::Unsigned
+            || self.accumulator.is_some()
+            || !matches!(
+                self.target,
+                ByteArraySinkTarget::Dictionary(_)
+                    | ByteArraySinkTarget::Fallback(ByteArrayEncodingFamily::Plain(_))
+            )
+        {
+            return Ok(false);
+        }
+
+        let Self {
+            order,
+            min,
+            max,
+            unencoded_value_bytes,
+            bloom,
+            target,
+            ..
+        } = self;
+
+        let mut payload_bytes = 0usize;
+        let mut native_min: Option<(u128, usize)> = None;
+        let mut native_max: Option<(u128, usize)> = None;
+
+        match target {
+            ByteArraySinkTarget::Dictionary(encoder) => {
+                indices.try_for_each(|index| {
+                    let raw = views[index];
+                    payload_bytes = payload_bytes.saturating_add(raw as u32 as usize);
+                    let key = inline_view_key(raw);
+                    if native_min.is_none_or(|(current, _)| key < current) {
+                        native_min = Some((key, index));
+                    }
+                    if native_max.is_none_or(|(current, _)| key > current) {
+                        native_max = Some((key, index));
+                    }
+                    let bytes = value(index);
+                    if let Some(bloom) = bloom.as_deref_mut() {
+                        bloom.insert(bytes);
+                    }
+                    encoder.put_value_bytes(bytes, || bytes.to_vec().into())
+                })?;
+            }
+            ByteArraySinkTarget::Fallback(ByteArrayEncodingFamily::Plain(encoder)) => {
+                indices.try_for_each(|index| {
+                    let raw = views[index];
+                    payload_bytes = payload_bytes.saturating_add(raw as u32 as usize);
+                    let key = inline_view_key(raw);
+                    if native_min.is_none_or(|(current, _)| key < current) {
+                        native_min = Some((key, index));
+                    }
+                    if native_max.is_none_or(|(current, _)| key > current) {
+                        native_max = Some((key, index));
+                    }
+                    if let Some(bloom) = bloom.as_deref_mut() {
+                        bloom.insert(value(index));
+                    }
+                    Ok::<(), ParquetError>(())
+                })?;
+
+                encoder.reserve(
+                    payload_bytes.saturating_add(indices.len().saturating_mul(size_of::<u32>())),
+                );
+                indices.try_for_each(|index| {
+                    encoder.put_inline_view(views[index]);
+                    Ok::<(), ParquetError>(())
+                })?;
+            }
+            ByteArraySinkTarget::Fallback(_) => {
+                unreachable!("unsupported view sink target was filtered above")
+            }
+        }
+
+        // Only the two winning native extrema need slice resolution.
+        if let Some((_, index)) = native_min {
+            <ByteMinMax as MinMaxStrategy<'_>>::observe(*order, value(index), min, max);
+        }
+        if let Some((_, index)) = native_max {
+            <ByteMinMax as MinMaxStrategy<'_>>::observe(*order, value(index), min, max);
+        }
+        *unencoded_value_bytes += payload_bytes as i64;
+        Ok(true)
+    }
+
+    /// Stream a non-contiguous source directly while dictionary encoding is
+    /// active. Fallback encoders retain their bounded gathered path.
+    #[cfg(feature = "arrow")]
+    #[inline]
+    pub(crate) fn push_source(&mut self, values: impl ValueProducer<&'source [u8]>) -> Result<()> {
+        if matches!(self.target, ByteArraySinkTarget::Fallback(_)) {
+            return gather_tiled::<BYTE_ARRAY_BATCH_VALUES, _, _, _>(values, |values| {
+                self.push_batch(ByteArrayBatch::Gathered(values))
+            });
+        }
+
+        let (mut observer, target, unencoded_value_bytes) = self.parts();
+        let ByteArraySinkTarget::Dictionary(encoder) = target else {
+            unreachable!()
+        };
+        let mut source_bytes = 0;
+        values.try_for_each(|value| {
+            observer.observe(value);
+            encoder.put_value_bytes(value, || value.to_vec().into())?;
+            source_bytes += value.len() as i64;
+            Ok::<(), ParquetError>(())
+        })?;
+        *unencoded_value_bytes += source_bytes;
+        Ok(())
+    }
+}
+
+/// The order-preserving key used by Arrow for inline byte views.
+#[cfg(feature = "arrow")]
+#[inline(always)]
+fn inline_view_key(raw: u128) -> u128 {
+    (raw.swap_bytes() << 32) | raw as u32 as u128
+}
+
 /// Independently allocated byte values supplied by the low-level slice API are
 /// already a dense source descriptor.
 impl<'a, T: AsBytes> ValueProducer<&'a [u8]> for &'a [T] {
@@ -528,9 +800,10 @@ impl<'a, T: AsBytes> ValueProducer<&'a [u8]> for &'a [T] {
 
 impl<'a, T: AsBytes> ByteArraySource<'a> for &'a [T] {}
 
-/// The byte-array encoder drives one write-scoped [`ByteArraySink`] with
-/// bounded gathered batches. The sink retains borrowed min/max and the
-/// unencoded value-byte total until the complete source has been encoded.
+/// The byte-array encoder drives one write-scoped [`ByteArraySink`]. Contiguous
+/// offset-array spans cross it as native borrowed batches; non-contiguous
+/// sources use bounded gathered batches. The sink retains borrowed min/max and
+/// the unencoded value-byte total until the complete source has been encoded.
 impl<D: DataType<T = ByteArray>> TypedColumnChunkEncoder<D> {
     /// Encode a selected byte-value source.
     pub(crate) fn write_byte_array_source<'a, S>(&mut self, values: S) -> Result<()>
@@ -604,8 +877,10 @@ impl<D: DataType<T = ByteArray>> TypedColumnChunkEncoder<D> {
     }
 }
 
-/// Slice `write_batch(&[ByteArray])`: drive borrowed values through
-/// `write_byte_array_source` in bounded gathered batches.
+/// Slice `write_batch(&[ByteArray])`: drive the dense values through the same
+/// `write_byte_array_source` engine as Arrow input. The values are separate
+/// `ByteArray`s (not a contiguous packed run), so this takes the bounded
+/// gathered path.
 pub(super) fn encode_byte_slice<D: DataType<T = ByteArray>>(
     enc: &mut TypedColumnChunkEncoder<D>,
     values: &[ByteArray],
@@ -616,6 +891,9 @@ pub(super) fn encode_byte_slice<D: DataType<T = ByteArray>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "arrow")]
+    use arrow_array::{Array, BinaryViewArray};
 
     #[test]
     fn fallback_memory_size_accounts_for_retained_allocations() {
@@ -640,5 +918,52 @@ mod tests {
                 0
             );
         }
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn inline_view_key_matches_byte_lexical_order() {
+        let input: &[&[u8]] = &[
+            b"",
+            b"a",
+            b"a\0",
+            b"aa",
+            b"abcd",
+            b"abcde",
+            b"abcdefghijk",
+            b"abcdefghijkl",
+            b"b",
+            &[0x7f],
+            &[0x80],
+            &[0xff],
+        ];
+        let values = BinaryViewArray::from_iter_values(input.iter().copied());
+        assert!(values.lengths().all(|len| len <= 12));
+
+        for left in 0..values.len() {
+            for right in 0..values.len() {
+                assert_eq!(
+                    inline_view_key(values.views()[left])
+                        .cmp(&inline_view_key(values.views()[right])),
+                    values.value(left).cmp(values.value(right)),
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn inline_view_plain_encoding_matches_value_encoding() {
+        let input: &[&[u8]] = &[b"", b"a", b"four", b"abcdefghijkl", b"tail"];
+        let values = BinaryViewArray::from_iter_values(input.iter().copied());
+        let mut views = ByteArrayPlainEncoder::default();
+        let mut ordinary = ByteArrayPlainEncoder::default();
+
+        for index in 0..values.len() {
+            views.put_inline_view(values.views()[index]);
+            ordinary.put_value(values.value(index));
+        }
+
+        assert_eq!(views.flush_buffer(), ordinary.flush_buffer());
     }
 }
