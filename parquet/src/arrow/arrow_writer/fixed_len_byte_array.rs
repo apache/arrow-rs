@@ -18,6 +18,8 @@
 //! Fixed-length byte-array physical storage and Arrow writer bridge.
 
 use super::*;
+use crate::column::writer::encoder::FIXED_LEN_BYTE_ARRAY_MAX_WIDTH;
+use arrow_array::Array;
 
 /// Already-downcast storage for Arrow types represented by fixed-length byte arrays.
 #[derive(Clone, Copy)]
@@ -45,6 +47,19 @@ pub(super) enum FixedLenByteArrayStorage<'a> {
 }
 
 impl FixedLenByteArrayStorage<'_> {
+    fn len(self) -> usize {
+        match self {
+            Self::Fixed(values) => values.len(),
+            Self::YearMonth(values) => values.len(),
+            Self::DayTime(values) => values.len(),
+            Self::Decimal32 { values, .. } => values.len(),
+            Self::Decimal64 { values, .. } => values.len(),
+            Self::Decimal128 { values, .. } => values.len(),
+            Self::Decimal256 { values, .. } => values.len(),
+            Self::Float16(values) => values.len(),
+        }
+    }
+
     fn width(self) -> usize {
         match self {
             Self::Fixed(values) => values.value_size(),
@@ -111,6 +126,18 @@ impl FixedLenByteArraySource for PhysicalFixedLenByteArraySource<'_> {
 
     fn write_to(self, sink: &mut FixedLenByteArraySink<'_>) -> Result<()> {
         let Self(storage, selection) = self;
+        if selection.should_cache_dictionary(storage.len())
+            && storage.width() <= FIXED_LEN_BYTE_ARRAY_MAX_WIDTH
+            && sink.try_consume_physical_source(
+                storage.len(),
+                selection,
+                storage.width(),
+                move |index, dest| storage.write_at(index, dest),
+            )?
+        {
+            return Ok(());
+        }
+
         if let FixedLenByteArrayStorage::Fixed(array) = storage {
             let bytes = array.value_data();
             let width = array.value_size();

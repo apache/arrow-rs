@@ -114,6 +114,11 @@ pub enum ColumnWriter<'a> {
 }
 
 impl ColumnWriter<'_> {
+    #[cfg(feature = "arrow")]
+    pub(crate) fn start_arrow_source(&mut self) {
+        downcast_writer!(self, typed, typed.encoder.start_arrow_source())
+    }
+
     /// Returns the estimated total memory usage
     #[cfg(feature = "arrow")]
     pub(crate) fn memory_size(&self) -> usize {

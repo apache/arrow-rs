@@ -18,10 +18,12 @@
 //! Logical value selections and their mapping to physical value storage.
 //!
 //! [`ValueSelectionRef`] describes selected logical value positions after level
-//! planning. [`PhysicalValueSelection`] maps those positions onto the physical
-//! value array.
+//! planning. [`PhysicalValueSelection`] maps those positions through optional
+//! dictionary keys to the physical value array.
 
 use std::{mem::MaybeUninit, ops::Range};
+
+use arrow_buffer::ArrowNativeType;
 
 use crate::column::value_batch::ValueProducer;
 
@@ -66,6 +68,16 @@ impl ValueSelectionRef<'_> {
         }
     }
 
+    #[inline(always)]
+    pub(crate) fn index_at(self, idx: usize) -> usize {
+        debug_assert!(idx < self.len());
+        match self {
+            Self::Empty => unreachable!("empty value selection has no values"),
+            Self::Dense { offset, .. } => offset + idx,
+            Self::Sparse(indices) => indices[idx],
+        }
+    }
+
     #[inline]
     pub(crate) fn try_for_each<E>(
         self,
@@ -89,9 +101,112 @@ impl ValueSelectionRef<'_> {
     }
 }
 
-/// A compact output-order span of physical value indices: a sequence of
-/// consecutive indices. The span length always contributes to the selection's
-/// logical length.
+/// Borrowed, type-erased Arrow dictionary keys for the eight legal key widths.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DictionaryKeys<'a> {
+    I8(&'a [i8]),
+    I16(&'a [i16]),
+    I32(&'a [i32]),
+    I64(&'a [i64]),
+    U8(&'a [u8]),
+    U16(&'a [u16]),
+    U32(&'a [u32]),
+    U64(&'a [u64]),
+}
+
+impl<'a> DictionaryKeys<'a> {
+    /// Number of keys, i.e. logical values in the bound source.
+    fn len(self) -> usize {
+        match self {
+            Self::I8(keys) => keys.len(),
+            Self::I16(keys) => keys.len(),
+            Self::I32(keys) => keys.len(),
+            Self::I64(keys) => keys.len(),
+            Self::U8(keys) => keys.len(),
+            Self::U16(keys) => keys.len(),
+            Self::U32(keys) => keys.len(),
+            Self::U64(keys) => keys.len(),
+        }
+    }
+
+    fn contiguous_range(self, selection: ValueSelectionRef<'_>) -> Option<Range<usize>> {
+        match self {
+            Self::I8(keys) => contiguous_key_range(keys, selection),
+            Self::I16(keys) => contiguous_key_range(keys, selection),
+            Self::I32(keys) => contiguous_key_range(keys, selection),
+            Self::I64(keys) => contiguous_key_range(keys, selection),
+            Self::U8(keys) => contiguous_key_range(keys, selection),
+            Self::U16(keys) => contiguous_key_range(keys, selection),
+            Self::U32(keys) => contiguous_key_range(keys, selection),
+            Self::U64(keys) => contiguous_key_range(keys, selection),
+        }
+    }
+
+    /// Visit selected dictionary values.
+    #[inline]
+    fn try_for_each<E>(
+        self,
+        selection: ValueSelectionRef<'a>,
+        mut f: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<(), E> {
+        macro_rules! visit {
+            ($keys:expr) => {
+                selection.try_for_each(|row| f($keys[row].as_usize()))
+            };
+        }
+        match self {
+            Self::I8(keys) => visit!(keys),
+            Self::I16(keys) => visit!(keys),
+            Self::I32(keys) => visit!(keys),
+            Self::I64(keys) => visit!(keys),
+            Self::U8(keys) => visit!(keys),
+            Self::U16(keys) => visit!(keys),
+            Self::U32(keys) => visit!(keys),
+            Self::U64(keys) => visit!(keys),
+        }
+    }
+}
+
+/// Return the mapped range when selected dictionary keys are consecutive.
+/// First/last/middle probes reject cyclic and low-cardinality maps before the
+/// full scan used by the high-cardinality identity-like case.
+fn contiguous_key_range<K: ArrowNativeType>(
+    keys: &[K],
+    selection: ValueSelectionRef<'_>,
+) -> Option<Range<usize>> {
+    let len = selection.len();
+    if len == 0 {
+        return None;
+    }
+    let first = keys[selection.index_at(0)].as_usize();
+    let end = first.checked_add(len)?;
+    let expected_last = end - 1;
+    if keys[selection.index_at(len - 1)].as_usize() != expected_last {
+        return None;
+    }
+    let middle = len / 2;
+    if keys[selection.index_at(middle)].as_usize() != first + middle {
+        return None;
+    }
+
+    let mut expected = first;
+    selection
+        .try_for_each(|row| -> Result<(), ()> {
+            if keys[row].as_usize() != expected {
+                return Err(());
+            }
+            expected += 1;
+            Ok(())
+        })
+        .ok()?;
+    debug_assert_eq!(expected, end);
+    Some(first..end)
+}
+
+/// A compact output-order span of physical value indices.
+///
+/// `Range` is a sequence of consecutive indices; `Gather` borrows explicit
+/// indices. The span count contributes to the selection's logical length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PhysicalValueSpan<'a> {
     Range { start: usize, len: usize },
@@ -108,20 +223,33 @@ impl PhysicalValueSpan<'_> {
     }
 }
 
-/// Allocation-free view of a value selection in physical value coordinates.
+/// Allocation-free composition of a value selection with an optional physical
+/// dictionary mapping.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PhysicalValueSelection<'a> {
     selection: ValueSelectionRef<'a>,
+    dictionary: Option<DictionaryKeys<'a>>,
 }
 
 impl<'a> PhysicalValueSelection<'a> {
     pub(crate) fn identity(selection: ValueSelectionRef<'a>) -> Self {
-        Self { selection }
+        Self {
+            selection,
+            dictionary: None,
+        }
+    }
+
+    pub(crate) fn dictionary(selection: ValueSelectionRef<'a>, keys: DictionaryKeys<'a>) -> Self {
+        Self {
+            selection,
+            dictionary: Some(keys),
+        }
     }
 
     pub(crate) fn slice(self, offset: usize, len: usize) -> Self {
         Self {
             selection: self.selection.slice(offset, len),
+            ..self
         }
     }
 
@@ -129,17 +257,33 @@ impl<'a> PhysicalValueSelection<'a> {
         self.selection.len()
     }
 
-    /// Return the source-coordinate selection.
+    /// Return the source-coordinate selection when no dictionary mapping is
+    /// present.
     pub(crate) fn unmapped_selection(self) -> Option<ValueSelectionRef<'a>> {
-        Some(self.selection)
+        self.dictionary.is_none().then_some(self.selection)
     }
 
-    /// Return the directly borrowable physical range.
+    pub(crate) fn has_dictionary_mapping(self) -> bool {
+        self.dictionary.is_some()
+    }
+
+    /// Whether caching one index per physical dictionary value is expected to
+    /// avoid at least as many lookups as it introduces.
+    pub(crate) fn should_cache_dictionary(self, physical_len: usize) -> bool {
+        self.dictionary
+            .is_some_and(|keys| physical_len.saturating_mul(2) <= keys.len())
+    }
+
+    /// Return the directly borrowable physical range, including a dictionary
+    /// selection whose keys are consecutive.
     pub(crate) fn direct_physical_range(self) -> Option<Range<usize>> {
-        match self.selection {
-            ValueSelectionRef::Dense { offset, len } => Some(offset..offset + len),
-            ValueSelectionRef::Sparse([index]) => Some(*index..*index + 1),
-            _ => None,
+        match self.dictionary {
+            None => match self.selection {
+                ValueSelectionRef::Dense { offset, len } => Some(offset..offset + len),
+                ValueSelectionRef::Sparse([index]) => Some(*index..*index + 1),
+                _ => None,
+            },
+            Some(keys) => keys.contiguous_range(self.selection),
         }
     }
 
@@ -149,34 +293,50 @@ impl<'a> PhysicalValueSelection<'a> {
         self,
         mut f: impl FnMut(Range<usize>) -> Result<(), E>,
     ) -> Result<bool, E> {
-        match self.selection {
-            ValueSelectionRef::Empty => {}
-            ValueSelectionRef::Dense { offset, len } => f(offset..offset + len)?,
-            ValueSelectionRef::Sparse([index]) => f(*index..*index + 1)?,
-            ValueSelectionRef::Sparse(_) => return Ok(false),
+        match self.dictionary {
+            Some(keys) => {
+                let Some(range) = keys.contiguous_range(self.selection) else {
+                    return Ok(false);
+                };
+                f(range)?;
+            }
+            None => match self.selection {
+                ValueSelectionRef::Empty => {}
+                ValueSelectionRef::Dense { offset, len } => f(offset..offset + len)?,
+                ValueSelectionRef::Sparse([index]) => f(*index..*index + 1)?,
+                ValueSelectionRef::Sparse(_) => return Ok(false),
+            },
         }
         Ok(true)
     }
 
-    /// Visit producer-provided ranges in output order.
+    /// Visit physical ranges and gathers in output order.
     pub(crate) fn try_for_each_span<E>(
         self,
         mut f: impl FnMut(PhysicalValueSpan<'a>) -> Result<(), E>,
     ) -> Result<(), E> {
-        match self.selection {
-            ValueSelectionRef::Empty => Ok(()),
-            ValueSelectionRef::Dense { offset, len } => {
-                if len != 0 {
-                    f(PhysicalValueSpan::Range { start: offset, len })?;
+        match self.dictionary {
+            None => match self.selection {
+                ValueSelectionRef::Empty => Ok(()),
+                ValueSelectionRef::Dense { offset, len } => {
+                    if len != 0 {
+                        f(PhysicalValueSpan::Range { start: offset, len })?;
+                    }
+                    Ok(())
                 }
-                Ok(())
-            }
-            ValueSelectionRef::Sparse(indices) => {
-                if !indices.is_empty() {
-                    f(PhysicalValueSpan::Gather(indices))?;
+                ValueSelectionRef::Sparse(indices) => {
+                    if !indices.is_empty() {
+                        f(PhysicalValueSpan::Gather(indices))?;
+                    }
+                    Ok(())
                 }
-                Ok(())
-            }
+            },
+            Some(keys) => keys.try_for_each(self.selection, |index| {
+                f(PhysicalValueSpan::Range {
+                    start: index,
+                    len: 1,
+                })
+            }),
         }
     }
 
@@ -223,7 +383,10 @@ impl<'a> PhysicalValueSelection<'a> {
         self,
         f: impl FnMut(usize) -> Result<(), E>,
     ) -> Result<(), E> {
-        self.selection.try_for_each(f)
+        match self.dictionary {
+            None => self.selection.try_for_each(f),
+            Some(keys) => keys.try_for_each(self.selection, f),
+        }
     }
 }
 
@@ -280,6 +443,22 @@ mod tests {
                 })
                 .unwrap()
         );
+
+        let keys = [2_i32, 3, 4];
+        let mapped = PhysicalValueSelection::dictionary(
+            ValueSelectionRef::Dense { offset: 0, len: 3 },
+            DictionaryKeys::I32(&keys),
+        );
+        ranges.clear();
+        assert!(
+            mapped
+                .try_for_each_borrowable_range(|range| {
+                    ranges.push((range.start, range.end));
+                    Ok::<_, ()>(())
+                })
+                .unwrap()
+        );
+        assert_eq!(ranges, [(2, 5)]);
     }
 
     fn physical_spans(selection: PhysicalValueSelection<'_>) -> Vec<PhysicalValueSpan<'_>> {
@@ -368,5 +547,76 @@ mod tests {
                 assert_physical_selection(selection, &indices);
             }
         }
+    }
+
+    #[test]
+    fn physical_dictionary_widths_preserve_mapped_order() {
+        macro_rules! assert_widths {
+            ($($width:ty => $variant:ident),+ $(,)?) => {
+                $({
+                    let keys: [$width; 3] = [2, 0, 1];
+                    let selection = PhysicalValueSelection::dictionary(
+                        ValueSelectionRef::Dense { offset: 0, len: 3 },
+                        DictionaryKeys::$variant(&keys),
+                    );
+                    assert_eq!(selection.direct_physical_range(), None);
+                    assert_physical_selection(selection, &[2, 0, 1]);
+                })+
+            };
+        }
+        assert_widths!(
+            i8 => I8,
+            i16 => I16,
+            i32 => I32,
+            i64 => I64,
+            u8 => U8,
+            u16 => U16,
+            u32 => U32,
+            u64 => U64,
+        );
+
+        let keys = [4u8, 5, 6, 6, 7];
+        let selection = PhysicalValueSelection::dictionary(
+            ValueSelectionRef::Dense {
+                offset: 0,
+                len: keys.len(),
+            },
+            DictionaryKeys::U8(&keys),
+        );
+        assert_eq!(selection.unmapped_selection(), None);
+        assert!(selection.has_dictionary_mapping());
+        assert_physical_selection(selection, &[4, 5, 6, 6, 7]);
+        let present = selection.slice(0, 4);
+        assert_eq!(present.direct_physical_range(), None);
+        let mut flat = Vec::new();
+        present
+            .try_for_each_index(|index| -> Result<(), ()> {
+                flat.push(index);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(flat, [4, 5, 6, 6]);
+
+        let keys = [99_i32, 4, 5, 99, 6];
+        let selected = [1_usize, 2, 4];
+        let contiguous = PhysicalValueSelection::dictionary(
+            ValueSelectionRef::Sparse(&selected),
+            DictionaryKeys::I32(&keys),
+        );
+        assert_eq!(contiguous.direct_physical_range(), Some(4..7));
+
+        for keys in [[4_i32, 5, 9, 7, 8], [4, 9, 6, 7, 8]] {
+            let non_contiguous = PhysicalValueSelection::dictionary(
+                ValueSelectionRef::Dense { offset: 0, len: 5 },
+                DictionaryKeys::I32(&keys),
+            );
+            assert_eq!(non_contiguous.direct_physical_range(), None);
+        }
+
+        let mapped = PhysicalValueSelection::dictionary(
+            ValueSelectionRef::Sparse(&selected),
+            DictionaryKeys::I32(&keys),
+        );
+        assert_physical_selection(mapped, &[4, 5, 6]);
     }
 }

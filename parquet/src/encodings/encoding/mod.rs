@@ -138,6 +138,8 @@ mod encoding_family_private {
         }
         /// Visit dictionary values directly from their physical storage, when active.
         fn visit_dictionary_values(&self, _visit: impl FnMut(&[u8])) {}
+        #[cfg(feature = "arrow")]
+        fn start_arrow_source(&mut self) {}
         /// If dictionary-encoding, serialize the dictionary page as `(buf, num_values,
         /// is_sorted)` and transition in place to the fallback encoding (dictionary
         /// fallback); otherwise `None`.
@@ -245,6 +247,14 @@ macro_rules! impl_dictionary_encoding_family {
             fn visit_dictionary_values(&self, visit: impl FnMut(&[u8])) {
                 if let Self::Dictionary(dict) = self {
                     dict.visit_uniques(visit);
+                }
+            }
+
+            #[cfg(feature = "arrow")]
+            fn start_arrow_source(&mut self) {
+                if let Self::Dictionary(dict) = self {
+                    dict.start_arrow_source()
+
                 }
             }
 
@@ -573,8 +583,12 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "arrow")]
+    use super::PlainEncoderImpl as PlainEncoder;
+    #[cfg(feature = "arrow")]
     use super::boolean::BoolBatchSelection;
     use super::*;
+    #[cfg(feature = "arrow")]
+    use crate::column::value_selection::DictionaryKeys;
 
     use std::sync::Arc;
 
@@ -1194,5 +1208,48 @@ mod tests {
             packed.selection,
             BoolBatchSelection::Sparse { .. }
         ));
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn physical_boolean_dictionary_streams_sliced_keys_directly() {
+        let bit_offset = 5;
+        let bits = [0b1011_0101, 0b0101_1010];
+        let mut keys = Vec::with_capacity(160);
+        for row in 0..160 {
+            keys.push((row % 6) as i16);
+        }
+        let selection = PhysicalValueSelection::dictionary(
+            ValueSelectionRef::Dense {
+                offset: 0,
+                len: keys.len(),
+            },
+            DictionaryKeys::I16(&keys),
+        )
+        .slice(7, 137);
+        let packed = BoolBatch::new_physical(&bits, bit_offset, selection);
+        assert!(matches!(
+            packed.selection,
+            BoolBatchSelection::Physical { scalar: true, .. }
+        ));
+
+        let expected = (7..144)
+            .map(|row| bit_util::get_bit(&bits, bit_offset + keys[row] as usize))
+            .collect::<Vec<_>>();
+        let mut actual = Vec::new();
+        packed.for_each(|value| actual.push(value));
+        assert_eq!(actual, expected);
+        assert_eq!(
+            packed.true_count(),
+            expected.iter().filter(|&&value| value).count()
+        );
+
+        let mut encoder = PlainEncoder::<BoolType>::new();
+        encoder.put_bool_batch(packed).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+        assert_eq!(encoded.len(), expected.len().div_ceil(8));
+        for (index, expected) in expected.into_iter().enumerate() {
+            assert_eq!(bit_util::get_bit(&encoded, index), expected);
+        }
     }
 }

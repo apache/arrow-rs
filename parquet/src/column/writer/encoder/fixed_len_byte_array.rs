@@ -18,6 +18,8 @@
 //! Fixed-length byte-array sources, batches, and write-scoped encoding state.
 
 use super::*;
+#[cfg(feature = "arrow")]
+use crate::encodings::encoding::DictionaryStorage;
 
 /// Retains a source's physical fixed-length byte-array layout until the active encoder is known.
 pub(crate) trait FixedLenByteArraySource {
@@ -383,6 +385,74 @@ fn raw_fixed_len_min_max_values(
     max: &[u8],
 ) -> (FixedLenByteArray, FixedLenByteArray) {
     (min.to_vec().into(), max.to_vec().into())
+}
+
+#[cfg(feature = "arrow")]
+impl FixedLenByteArraySink<'_> {
+    /// Consume a reused physical source, or pre-observe it for fallback.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn try_consume_physical_source(
+        &mut self,
+        physical_len: usize,
+        indices: impl ValueProducer<usize>,
+        width: usize,
+        write_at: impl Fn(usize, &mut [u8]),
+    ) -> Result<bool> {
+        debug_assert!(width <= FIXED_LEN_BYTE_ARRAY_MAX_WIDTH);
+        // NaN counts follow logical multiplicity, so the unique-physical-value
+        // shortcut cannot be used for Float16 statistics.
+        if self.observer.collect_stats && self.observer.is_float16 {
+            return Ok(false);
+        }
+        let dictionary = matches!(self.target, FixedLenByteArraySinkTarget::Dictionary(_));
+        let observe = self.observer.collect_stats || self.observer.bloom.is_some();
+        if !dictionary && (!observe || physical_len > u64::BITS as usize) {
+            return Ok(false);
+        }
+        let mut observed = (physical_len <= u64::BITS as usize).then_some(0_u64);
+        let mut value = [0_u8; FIXED_LEN_BYTE_ARRAY_MAX_WIDTH];
+        let mut first = |index| {
+            observed.as_mut().is_none_or(|observed| {
+                let bit = 1_u64 << index;
+                let first = *observed & bit == 0;
+                *observed |= bit;
+                first
+            })
+        };
+        if !dictionary {
+            indices.try_for_each(|index| {
+                if first(index) {
+                    write_at(index, &mut value[..width]);
+                    self.observer.observe(&value[..width], 1);
+                }
+                Ok::<_, ParquetError>(())
+            })?;
+            self.observer.collect_stats = false;
+            self.observer.bloom = None;
+            return Ok(false);
+        }
+        let mut push = |index: usize, count: usize| {
+            let mut rendered = false;
+            if observe && first(index) {
+                write_at(index, &mut value[..width]);
+                rendered = true;
+                self.observer.observe(&value[..width], count);
+            }
+            let FixedLenByteArraySinkTarget::Dictionary(dict) = &mut self.target else {
+                unreachable!("physical dictionary source requires dictionary encoding")
+            };
+            let intern = |dictionary: &mut <FixedLenByteArray as DictionaryValue>::Storage| {
+                if !rendered {
+                    write_at(index, &mut value[..width]);
+                }
+                let bytes = &value[..width];
+                DictionaryStorage::intern_bytes(dictionary, bytes, || bytes.to_vec().into())
+            };
+            dict.put_arrow_dictionary(index, intern)
+        };
+        indices.try_for_each(|index| push(index, 1))?;
+        Ok(true)
+    }
 }
 
 #[cfg(test)]

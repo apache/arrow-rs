@@ -18,6 +18,8 @@
 //! Numeric sources, batches, and encoding.
 
 use super::*;
+#[cfg(feature = "arrow")]
+use crate::encodings::encoding::DictionaryStorage;
 
 /// Maximum values per gathered or expanded numeric batch.
 #[cfg(feature = "arrow")]
@@ -205,7 +207,53 @@ impl<T: DataType> TypedColumnChunkEncoder<T> {
         if values.selection.len() == 0 {
             return Ok(());
         }
-        values.write_ungrouped_to(self)
+        let selection = values.selection;
+        if !selection.should_cache_dictionary(values.data.len())
+            || !matches!(self.encoding_family, NumericEncodingFamily::Dictionary(_))
+        {
+            return values.write_ungrouped_to(self);
+        }
+        let should_update_stats = self.statistics_enabled != EnabledStatistics::None
+            && self.descr.converted_type() != ConvertedType::INTERVAL;
+        let ctx = <T::T as MinMaxStrategy<'static>>::ctx(&self.descr);
+        let mut extrema = NumericExtrema::new();
+        let NumericEncodingFamily::Dictionary(dict) = &mut self.encoding_family else {
+            unreachable!()
+        };
+        self.num_values += selection.len();
+        let bloom = &mut self.bloom_filter;
+        let nan_count = &mut self.nan_count;
+        // Duplicate observations within one write are idempotent for min/max
+        // and Bloom state; NaN counts, however, follow logical multiplicity.
+        // The call-local mask cannot suppress later pages.
+        let mut observed = (values.data.len() <= u64::BITS as usize).then_some(0_u64);
+        let mut observe = |index, multiplicity: usize| {
+            let value = (values.cast)(values.data[index]);
+            let value_is_nan =
+                should_update_stats && classify_and_count_nan(ctx, value, multiplicity, nan_count);
+            let first = observed.as_mut().is_none_or(|observed| {
+                let bit = 1_u64 << index;
+                let first = *observed & bit == 0;
+                *observed |= bit;
+                first
+            });
+            if first {
+                if should_update_stats {
+                    extrema.observe(ctx, value, value_is_nan);
+                }
+                if let Some(bloom) = bloom.as_mut() {
+                    bloom.insert(&value);
+                }
+            }
+            value
+        };
+        dict.reserve(selection.len());
+        selection.try_for_each_index(|index| {
+            let value = observe(index, 1);
+            dict.put_arrow_dictionary(index, |dictionary| dictionary.intern(&value))
+        })?;
+        self.merge_batch_stats(extrema.min, extrema.max);
+        Ok(())
     }
 
     #[inline(never)]

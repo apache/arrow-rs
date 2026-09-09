@@ -194,6 +194,9 @@ pub struct DictEncoder<T: DataType> {
 
     /// The buffered dense data-page indices.
     indices: RunIndexBuffer,
+
+    #[cfg(feature = "arrow")]
+    arrow_indices: Vec<u64>,
 }
 
 impl<T: DataType> DictEncoder<T> {
@@ -202,6 +205,8 @@ impl<T: DataType> DictEncoder<T> {
         Self {
             dictionary: DictionaryStorage::new(&desc),
             indices: RunIndexBuffer::default(),
+            #[cfg(feature = "arrow")]
+            arrow_indices: vec![],
         }
     }
 
@@ -253,6 +258,42 @@ impl<T: DataType> DictEncoder<T> {
     pub(crate) fn put_one(&mut self, value: &T::T) -> Result<()> {
         self.indices.push(self.dictionary.intern(value)?);
         Ok(())
+    }
+
+    /// Cache an Arrow physical slot's Parquet dictionary index.
+    #[cfg(feature = "arrow")]
+    #[inline(always)]
+    pub(crate) fn put_arrow_dictionary(
+        &mut self,
+        physical_index: usize,
+        intern: impl FnOnce(&mut <T::T as DictionaryValue>::Storage) -> Result<u64>,
+    ) -> Result<()> {
+        if physical_index >= self.arrow_indices.len() {
+            self.arrow_indices.resize(physical_index + 1, 0);
+        }
+        let cached = self.arrow_indices[physical_index];
+        let index = if cached == 0 {
+            let index = intern(&mut self.dictionary)?;
+            self.arrow_indices[physical_index] = index + 1;
+            index
+        } else {
+            cached - 1
+        };
+        self.indices.push(index);
+        Ok(())
+    }
+
+    #[cfg(feature = "arrow")]
+    #[inline]
+    pub(crate) fn has_arrow_dictionary(&self, physical_index: usize) -> bool {
+        self.arrow_indices
+            .get(physical_index)
+            .is_some_and(|&index| index != 0)
+    }
+
+    #[cfg(feature = "arrow")]
+    pub(crate) fn start_arrow_source(&mut self) {
+        self.arrow_indices.clear();
     }
 
     /// Intern raw bytes. Typed storage invokes `make` only on a miss; byte-array
@@ -312,7 +353,11 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
     ///
     /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
     fn estimated_memory_size(&self) -> usize {
-        self.dictionary.estimated_memory_size() + self.indices.estimated_memory_size()
+        #[cfg(feature = "arrow")]
+        let arrow = self.arrow_indices.capacity() * std::mem::size_of::<u64>();
+        #[cfg(not(feature = "arrow"))]
+        let arrow = 0;
+        self.dictionary.estimated_memory_size() + self.indices.estimated_memory_size() + arrow
     }
 }
 
@@ -322,29 +367,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-
-    use crate::data_type::{
-        ByteArray, ByteArrayType, FixedLenByteArray, FixedLenByteArrayType, Int32Type,
-    };
-    use crate::encodings::encoding::Encoder;
-    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
-
-    fn make_col_desc<T: DataType>() -> ColumnDescPtr {
-        make_col_desc_with_length::<T>(-1)
-    }
-
-    fn make_col_desc_with_length<T: DataType>(type_length: i32) -> ColumnDescPtr {
-        let ty = SchemaType::primitive_type_builder("col", T::get_physical_type())
-            .with_length(type_length)
-            .build()
-            .unwrap();
-        Arc::new(ColumnDescriptor::new(
-            Arc::new(ty),
-            0,
-            0,
-            ColumnPath::new(vec![]),
-        ))
-    }
 
     #[test]
     fn dictionary_storage_contract() {
@@ -400,6 +422,60 @@ mod tests {
         assert_eq!(encoder.num_entries(), 3);
         encoder.flush_buffer().unwrap();
         assert_eq!(encoder.into_dict_page().unwrap().as_ref(), expected);
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn arrow_cache_reuses_indices_and_resets_between_sources() {
+        let mut encoder = DictEncoder::<ByteArrayType>::new(make_col_desc::<ByteArrayType>());
+        for &(index, value) in &[(0, b"same".as_slice()), (0, b"same"), (1, b"same")] {
+            encoder
+                .put_arrow_dictionary(index, |dictionary| Ok(Interner::intern(dictionary, value)))
+                .unwrap();
+        }
+        encoder.start_arrow_source();
+        encoder
+            .put_arrow_dictionary(0, |dictionary| Ok(Interner::intern(dictionary, b"other")))
+            .unwrap();
+
+        assert_eq!(encoder.num_entries(), 2);
+        assert_eq!(encoder.indices.indices, [0, 0, 0, 1]);
+
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        for (index, value) in [(0, 42), (0, 42), (1, 42)] {
+            encoder
+                .put_arrow_dictionary(index, |dictionary| Ok(dictionary.intern(&value)))
+                .unwrap();
+        }
+        encoder.start_arrow_source();
+        encoder
+            .put_arrow_dictionary(0, |dictionary| Ok(dictionary.intern(&99)))
+            .unwrap();
+        assert_eq!(encoder.num_entries(), 2);
+        assert_eq!(encoder.indices.indices, [0, 0, 0, 1]);
+    }
+
+    use crate::data_type::{
+        ByteArray, ByteArrayType, FixedLenByteArray, FixedLenByteArrayType, Int32Type,
+    };
+    use crate::encodings::encoding::Encoder;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
+
+    fn make_col_desc<T: DataType>() -> ColumnDescPtr {
+        make_col_desc_with_length::<T>(-1)
+    }
+
+    fn make_col_desc_with_length<T: DataType>(type_length: i32) -> ColumnDescPtr {
+        let ty = SchemaType::primitive_type_builder("col", T::get_physical_type())
+            .with_length(type_length)
+            .build()
+            .unwrap();
+        Arc::new(ColumnDescriptor::new(
+            Arc::new(ty),
+            0,
+            0,
+            ColumnPath::new(vec![]),
+        ))
     }
 
     #[test]

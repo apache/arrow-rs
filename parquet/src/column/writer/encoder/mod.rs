@@ -41,12 +41,14 @@ use crate::file::properties::{EnabledStatistics, ResolvedColumnProperties, Write
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
-
 #[cfg(feature = "arrow")]
 pub(crate) use byte_array::{ByteArrayBatch, ByteArraySink, ByteArraySource};
+
 mod boolean;
 pub(super) mod byte_array;
 mod fixed_len_byte_array;
+#[cfg(feature = "arrow")]
+pub(crate) use fixed_len_byte_array::FIXED_LEN_BYTE_ARRAY_MAX_WIDTH;
 mod numeric;
 
 #[cfg(feature = "arrow")]
@@ -274,6 +276,13 @@ pub struct TypedColumnChunkEncoder<T: DataType> {
 struct FixedLenByteArrayScratch {
     min: Vec<u8>,
     max: Vec<u8>,
+}
+
+impl<T: DataType> TypedColumnChunkEncoder<T> {
+    #[cfg(feature = "arrow")]
+    pub(crate) fn start_arrow_source(&mut self) {
+        self.encoding_family.start_arrow_source()
+    }
 }
 
 impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {

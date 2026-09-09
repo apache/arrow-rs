@@ -23,7 +23,6 @@ use bytes::Bytes;
 use half::f16;
 use std::io::Write;
 use std::ops::Range;
-use std::slice::Iter;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
@@ -40,12 +39,11 @@ use super::schema::{
 
 use crate::arrow::ArrowSchemaConverter;
 use crate::arrow::arrow_writer::byte_array::ByteArrayStorage;
-use crate::arrow::arrow_writer::legacy_byte_array::ByteArrayEncoder;
 use crate::basic::PageType;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
 use crate::column::value_batch::{BatchSink, map_values};
-use crate::column::value_selection::{PhysicalValueSelection, ValueSelectionRef};
+use crate::column::value_selection::{DictionaryKeys, PhysicalValueSelection, ValueSelectionRef};
 use crate::column::writer::encoder::ColumnChunkEncoder;
 use crate::column::writer::encoder::{
     FixedLenByteArrayBatch, FixedLenByteArrayBatchPacker, FixedLenByteArraySink,
@@ -75,7 +73,6 @@ use levels::{ArrayLevels, LeafBatch, calculate_array_levels};
 mod boolean;
 mod byte_array;
 mod fixed_len_byte_array;
-mod legacy_byte_array;
 mod levels;
 mod numeric;
 
@@ -1109,7 +1106,7 @@ impl ArrowColumnChunk {
 /// assert_eq!(metadata.file_metadata().num_rows(), 3);
 /// ```
 pub struct ArrowColumnWriter {
-    writer: ArrowColumnWriterImpl,
+    writer: ColumnWriter<'static>,
     chunk: SharedColumnChunk,
     /// Non-null value hashes accumulated across all writes for this column's row group.
     /// `None` when tracking is disabled via [`WriterProperties::write_row_group_number_distinct_values`].
@@ -1122,15 +1119,11 @@ impl std::fmt::Debug for ArrowColumnWriter {
     }
 }
 
-enum ArrowColumnWriterImpl {
-    ByteArray(GenericColumnWriter<'static, ByteArrayEncoder>),
-    Column(ColumnWriter<'static>),
-}
-
 impl ArrowColumnWriter {
     /// Write an [`ArrowLeafColumn`]
     pub fn write(&mut self, col: &ArrowLeafColumn) -> Result<()> {
         col.0.validate()?;
+        self.writer.start_arrow_source();
         self.write_internal(&col.0)
     }
 
@@ -1142,6 +1135,7 @@ impl ArrowColumnWriter {
     ) -> Result<()> {
         let levels = &col.0;
         levels.validate()?;
+        self.writer.start_arrow_source();
         let chunks = chunker.get_arrow_chunks(
             levels.def_level_data().as_ref(),
             levels.rep_level_data().as_ref(),
@@ -1155,70 +1149,20 @@ impl ArrowColumnWriter {
 
             // Add a page break after each chunk except the last
             if i + 1 < num_chunks {
-                match &mut self.writer {
-                    ArrowColumnWriterImpl::Column(c) => c.add_data_page()?,
-                    ArrowColumnWriterImpl::ByteArray(c) => c.add_data_page()?,
-                }
+                self.writer.add_data_page()?;
             }
         }
         Ok(())
     }
 
     fn write_internal(&mut self, levels: &ArrayLevels) -> Result<()> {
+        let batch = levels.leaf_batch();
         if let Some(seen) = &mut self.distinct_values_seen {
-            let array = levels.array();
-            let non_null = levels.non_null_indices();
-            match array.as_any_dictionary_opt() {
-                Some(dict) => {
-                    // Hash referenced values, not key indices: keys can map to different
-                    // values across batches, and unreferenced values must not count toward NDV.
-                    let values = dict.values();
-                    let keys = dict.normalized_keys();
-                    let referenced_value_indices: Vec<usize> = non_null
-                        .iter()
-                        .map(|&pos| keys[pos])
-                        .filter(|&val_idx| values.is_valid(val_idx))
-                        .collect();
-                    update_distinct_values_seen(values.as_ref(), &referenced_value_indices, seen);
-                }
-                // For plain arrays, hash the actual values directly.
-                None => update_distinct_values_seen(array.as_ref(), non_null, seen),
-            }
+            let (array, selection) =
+                dispatch_physical_input(batch.array(), batch.value_selection());
+            update_distinct_values_seen(array, selection, seen);
         }
-
-        match &mut self.writer {
-            ArrowColumnWriterImpl::Column(c) => {
-                let leaf = levels.array();
-                match leaf.as_any_dictionary_opt() {
-                    Some(dictionary) => {
-                        let materialized =
-                            arrow_select::take::take(dictionary.values(), dictionary.keys(), None)?;
-                        let batch = LeafBatch::new(
-                            materialized.as_ref(),
-                            levels.def_level_data().as_ref(),
-                            levels.rep_level_data().as_ref(),
-                            ValueSelectionRef::Sparse(levels.non_null_indices()),
-                        );
-                        write_leaf(c, batch)?
-                    }
-                    None => write_leaf(c, levels.leaf_batch())?,
-                };
-            }
-            ArrowColumnWriterImpl::ByteArray(c) => {
-                let batch = levels.leaf_batch();
-                c.write_batch_internal(
-                    legacy_byte_array::ByteArrayGatherSource::new(
-                        batch.array(),
-                        levels.non_null_indices(),
-                    ),
-                    batch.def_level_data(),
-                    batch.rep_level_data(),
-                    None,
-                    None,
-                    None,
-                )?;
-            }
-        }
+        write_leaf(&mut self.writer, batch)?;
         Ok(())
     }
 
@@ -1228,27 +1172,13 @@ impl ArrowColumnWriter {
     ///
     /// Returns an error if the column could not be finalised, or if another thread
     /// panicked while holding the column chunk. The caller cannot cause either.
-    pub fn close(self) -> Result<ArrowColumnChunk> {
-        let distinct_count = self
-            .distinct_values_seen
-            .as_ref()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.len() as u64);
-        let close = match self.writer {
-            ArrowColumnWriterImpl::ByteArray(mut c) => {
-                if let Some(count) = distinct_count {
-                    c.set_distinct_count_override(count);
-                }
-                c.close()?
-            }
-            ArrowColumnWriterImpl::Column(mut c) => {
-                if let Some(count) = distinct_count {
-                    c.set_distinct_count_override(count);
-                }
-                c.close()?
-            }
-        };
-        // Closing the writer above dropped the only other handle on the chunk.
+    pub fn close(mut self) -> Result<ArrowColumnChunk> {
+        if let Some(seen) = &self.distinct_values_seen
+            && !seen.is_empty()
+        {
+            self.writer.set_distinct_count_override(seen.len() as u64);
+        }
+        let close = self.writer.close()?;
         let chunk = Arc::try_unwrap(self.chunk)
             .map_err(|_| general_err!("Internal Error: the column chunk is still shared"))?;
         let data = chunk
@@ -1268,10 +1198,7 @@ impl ArrowColumnWriter {
     ///
     /// This value should be greater than or equal to [`Self::get_estimated_total_bytes`]
     pub fn memory_size(&self) -> usize {
-        match &self.writer {
-            ArrowColumnWriterImpl::ByteArray(c) => c.memory_size(),
-            ArrowColumnWriterImpl::Column(c) => c.memory_size(),
-        }
+        self.writer.memory_size()
     }
 
     /// Returns the estimated total encoded bytes for this column writer.
@@ -1282,10 +1209,7 @@ impl ArrowColumnWriter {
     ///
     /// This value should be less than or equal to [`Self::memory_size`]
     pub fn get_estimated_total_bytes(&self) -> usize {
-        match &self.writer {
-            ArrowColumnWriterImpl::ByteArray(c) => c.get_estimated_total_bytes() as _,
-            ArrowColumnWriterImpl::Column(c) => c.get_estimated_total_bytes() as _,
-        }
+        self.writer.get_estimated_total_bytes() as _
     }
 }
 
@@ -1548,18 +1472,8 @@ impl ArrowRowGroupWriterFactory {
         row_group_index: usize,
         schema_plan: &ArrowWriteSchemaPlan,
     ) -> Result<Vec<ArrowColumnWriter>> {
-        let mut writers = Vec::with_capacity(schema_plan.leaves.len());
-        let mut leaves = schema_plan.leaves.iter();
-        let column_factory = self.column_writer_factory(row_group_index);
-        for field in &schema_plan.fields {
-            column_factory.get_arrow_column_writer(
-                field.field.data_type(),
-                &self.props,
-                &mut leaves,
-                &mut writers,
-            )?;
-        }
-        Ok(writers)
+        self.column_writer_factory(row_group_index)
+            .create_column_writers(&schema_plan.leaves, &self.props)
     }
 
     #[cfg(feature = "encryption")]
@@ -1647,92 +1561,34 @@ impl ArrowColumnWriterFactory {
         Ok(Box::new(ArrowPageWriter::new(store)))
     }
 
-    /// Gets an [`ArrowColumnWriter`] for the given `data_type`, appending the
-    /// output ColumnDesc to `leaves` and the column writers to `out`
-    fn get_arrow_column_writer(
+    fn create_column_writers(
         &self,
-        data_type: &ArrowDataType,
+        descriptors: &[ColumnDescPtr],
         props: &WriterPropertiesPtr,
-        leaves: &mut Iter<'_, ColumnDescPtr>,
-        out: &mut Vec<ArrowColumnWriter>,
-    ) -> Result<()> {
-        let write_distinct_values = props.write_row_group_number_distinct_values();
-
-        // Instantiate writers for normal columns
-        let col = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
-            let page_writer = self.create_page_writer(desc, out.len())?;
-            let chunk = page_writer.buffer.clone();
-            let writer = get_column_writer(desc.clone(), props.clone(), page_writer);
-            Ok(ArrowColumnWriter {
-                chunk,
-                writer: ArrowColumnWriterImpl::Column(writer),
-                distinct_values_seen: write_distinct_values.then(HashSet::new),
-            })
-        };
-
-        // Instantiate writers for byte arrays (e.g. Utf8,  Binary, etc)
-        let bytes = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
-            let page_writer = self.create_page_writer(desc, out.len())?;
-            let chunk = page_writer.buffer.clone();
-            let writer = GenericColumnWriter::new(desc.clone(), props.clone(), page_writer);
-            Ok(ArrowColumnWriter {
-                chunk,
-                writer: ArrowColumnWriterImpl::ByteArray(writer),
-                distinct_values_seen: write_distinct_values.then(HashSet::new),
-            })
-        };
-
-        match data_type {
-            _ if data_type.is_primitive() => out.push(col(leaves.next().unwrap())?),
-            ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => {
-                out.push(col(leaves.next().unwrap())?)
-            }
-            ArrowDataType::LargeBinary
-            | ArrowDataType::Binary
-            | ArrowDataType::Utf8
-            | ArrowDataType::LargeUtf8
-            | ArrowDataType::BinaryView
-            | ArrowDataType::Utf8View => out.push(col(leaves.next().unwrap())?),
-            ArrowDataType::List(f)
-            | ArrowDataType::LargeList(f)
-            | ArrowDataType::FixedSizeList(f, _)
-            | ArrowDataType::ListView(f)
-            | ArrowDataType::LargeListView(f) => {
-                self.get_arrow_column_writer(f.data_type(), props, leaves, out)?
-            }
-            ArrowDataType::Struct(fields) => {
-                for field in fields {
-                    self.get_arrow_column_writer(field.data_type(), props, leaves, out)?
-                }
-            }
-            ArrowDataType::Map(f, _) => match f.data_type() {
-                ArrowDataType::Struct(f) => {
-                    self.get_arrow_column_writer(f[0].data_type(), props, leaves, out)?;
-                    self.get_arrow_column_writer(f[1].data_type(), props, leaves, out)?
-                }
-                _ => unreachable!("invalid map type"),
-            },
-            ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
-                ArrowDataType::Utf8
-                | ArrowDataType::LargeUtf8
-                | ArrowDataType::Binary
-                | ArrowDataType::LargeBinary => out.push(bytes(leaves.next().unwrap())?),
-                ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
-                    out.push(bytes(leaves.next().unwrap())?)
-                }
-                ArrowDataType::FixedSizeBinary(_) => out.push(col(leaves.next().unwrap())?),
-                _ => self.get_arrow_column_writer(value_type, props, leaves, out)?,
-            },
-            ArrowDataType::RunEndEncoded(_, value_field) => {
-                self.get_arrow_column_writer(value_field.data_type(), props, leaves, out)?
-            }
-            _ => {
-                return Err(ParquetError::NYI(format!(
-                    "Attempting to write an Arrow type {data_type} to parquet that is not yet implemented"
-                )));
-            }
+    ) -> Result<Vec<ArrowColumnWriter>> {
+        let mut out = Vec::with_capacity(descriptors.len());
+        for (column_index, descriptor) in descriptors.iter().enumerate() {
+            out.push(self.create_column_writer(descriptor, props, column_index)?);
         }
-        Ok(())
+        Ok(out)
+    }
+
+    fn create_column_writer(
+        &self,
+        descriptor: &ColumnDescPtr,
+        props: &WriterPropertiesPtr,
+        column_index: usize,
+    ) -> Result<ArrowColumnWriter> {
+        let page_writer = self.create_page_writer(descriptor, column_index)?;
+        let chunk = page_writer.buffer.clone();
+        let writer = get_column_writer(Arc::clone(descriptor), Arc::clone(props), page_writer);
+        Ok(ArrowColumnWriter {
+            writer,
+            chunk,
+            distinct_values_seen: props
+                .write_row_group_number_distinct_values()
+                .then(HashSet::new),
+        })
     }
 }
 
@@ -1910,11 +1766,38 @@ macro_rules! dispatch_leaf_writer {
     };
 }
 
+fn dictionary_keys(keys: &dyn arrow_array::Array) -> DictionaryKeys<'_> {
+    macro_rules! extract {
+        ($ty:ty, $variant:ident) => {
+            DictionaryKeys::$variant(keys.as_primitive::<$ty>().values().as_ref())
+        };
+    }
+    match keys.data_type() {
+        ArrowDataType::UInt8 => extract!(UInt8Type, U8),
+        ArrowDataType::UInt16 => extract!(UInt16Type, U16),
+        ArrowDataType::UInt32 => extract!(UInt32Type, U32),
+        ArrowDataType::UInt64 => extract!(UInt64Type, U64),
+        ArrowDataType::Int8 => extract!(Int8Type, I8),
+        ArrowDataType::Int16 => extract!(Int16Type, I16),
+        ArrowDataType::Int32 => extract!(Int32Type, I32),
+        ArrowDataType::Int64 => extract!(Int64Type, I64),
+        key_type => unreachable!("unsupported dictionary key type {key_type}"),
+    }
+}
+
 fn dispatch_physical_input<'a>(
     column: &'a dyn arrow_array::Array,
     selection: ValueSelectionRef<'a>,
 ) -> (&'a dyn arrow_array::Array, PhysicalValueSelection<'a>) {
-    (column, PhysicalValueSelection::identity(selection))
+    if let Some(dictionary) = column.as_any_dictionary_opt() {
+        let keys = dictionary_keys(dictionary.keys());
+        (
+            dictionary.values().as_ref(),
+            PhysicalValueSelection::dictionary(selection, keys),
+        )
+    } else {
+        (column, PhysicalValueSelection::identity(selection))
+    }
 }
 
 fn primitive_values<T: ArrowPrimitiveType>(column: &dyn arrow_array::Array) -> &[T::Native] {
@@ -1962,76 +1845,81 @@ fn fixed_byte_width(dt: &ArrowDataType) -> Option<usize> {
     }
 }
 
-/// Hash the non-null values in `array` (at `non_null_indices`) into `seen`.
-///
-/// Handles primitive, boolean, fixed-size-binary, and variable-length (Utf8/Binary)
-/// arrays. Unsupported types are silently skipped, leaving `seen` unchanged for
-/// those values (NDV is best-effort).
+/// Hash selected non-null physical values without materializing dictionary keys
+/// or a gathered index vector. Dictionary mappings are applied by the same
+/// borrowed selection used by the native writer, so unused entries never count.
 fn update_distinct_values_seen(
     array: &dyn arrow_array::Array,
-    non_null_indices: &[usize],
+    selection: PhysicalValueSelection<'_>,
     seen: &mut DistinctValuesSet,
 ) {
+    fn collect(
+        array: &dyn arrow_array::Array,
+        selection: PhysicalValueSelection<'_>,
+        seen: &mut DistinctValuesSet,
+        mut hash_at: impl FnMut(usize) -> u64,
+    ) {
+        selection
+            .try_for_each_index(|row| -> Result<(), std::convert::Infallible> {
+                if array.is_valid(row) {
+                    seen.insert(hash_at(row));
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+
     let data = array.to_data();
     let offset = data.offset();
-
     match array.data_type() {
         ArrowDataType::Boolean => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<arrow_array::BooleanArray>()
-                .unwrap();
-            for &row in non_null_indices {
-                seen.insert(arr.value(row) as u64);
-            }
+            let arr = array.as_boolean();
+            collect(array, selection, seen, |row| arr.value(row) as u64);
         }
         ArrowDataType::Utf8 | ArrowDataType::Binary => {
             let offsets = data.buffers()[0].typed_data::<i32>();
             let values = data.buffers()[1].as_slice();
-            for &row in non_null_indices {
+            collect(array, selection, seen, |row| {
                 let start = offsets[offset + row] as usize;
                 let end = offsets[offset + row + 1] as usize;
-                seen.insert(hash_bytes(&values[start..end]));
-            }
+                hash_bytes(&values[start..end])
+            });
         }
         ArrowDataType::LargeUtf8 | ArrowDataType::LargeBinary => {
             let offsets = data.buffers()[0].typed_data::<i64>();
             let values = data.buffers()[1].as_slice();
-            for &row in non_null_indices {
+            collect(array, selection, seen, |row| {
                 let start = offsets[offset + row] as usize;
                 let end = offsets[offset + row + 1] as usize;
-                seen.insert(hash_bytes(&values[start..end]));
-            }
+                hash_bytes(&values[start..end])
+            });
         }
-        ArrowDataType::FixedSizeBinary(byte_width) => {
-            let byte_width = *byte_width as usize;
+        ArrowDataType::FixedSizeBinary(width) => {
+            let width = *width as usize;
             let buffer = data.buffers()[0].as_slice();
-            for &row in non_null_indices {
-                let start = (offset + row) * byte_width;
-                seen.insert(hash_bytes(&buffer[start..start + byte_width]));
-            }
+            collect(array, selection, seen, |row| {
+                let start = (offset + row) * width;
+                hash_bytes(&buffer[start..start + width])
+            });
         }
         ArrowDataType::Utf8View => {
-            let string_view_array = array.as_string_view();
-            for &row in non_null_indices {
-                seen.insert(hash_bytes(string_view_array.value(row).as_bytes()));
-            }
+            let values = array.as_string_view();
+            collect(array, selection, seen, |row| {
+                hash_bytes(values.value(row).as_bytes())
+            });
         }
         ArrowDataType::BinaryView => {
-            let binary_view_array = array.as_binary_view();
-            for &row in non_null_indices {
-                seen.insert(hash_bytes(binary_view_array.value(row)));
-            }
+            let values = array.as_binary_view();
+            collect(array, selection, seen, |row| hash_bytes(values.value(row)));
         }
         data_type => {
             if let Some(width) = fixed_byte_width(data_type) {
                 let buffer = data.buffers()[0].as_slice();
-                for &row in non_null_indices {
-                    let pos = (offset + row) * width;
-                    seen.insert(hash_bytes(&buffer[pos..pos + width]));
-                }
+                collect(array, selection, seen, |row| {
+                    let start = (offset + row) * width;
+                    hash_bytes(&buffer[start..start + width])
+                });
             }
-            // nested types (List, LargeList, etc.) are Parquet groups, not leaf columns: skip
         }
     }
 }
@@ -2051,6 +1939,7 @@ mod tests {
         roundtrip_opts_with_array_validation,
     };
     use super::*;
+    use crate::file::properties::CdcOptions;
     use std::cmp::Ordering;
     use std::collections::HashMap;
 
@@ -6388,6 +6277,507 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_binary_in_dict_cache_width_boundary() {
+        for width in [32, 33, 64] {
+            let keys = UInt8Array::from(vec![0, 0]);
+            let values =
+                FixedSizeBinaryArray::try_from_iter([vec![42; width]].into_iter()).unwrap();
+            let data = DictionaryArray::<UInt8Type>::new(keys, Arc::new(values));
+            let batch = RecordBatch::try_from_iter([("a", Arc::new(data) as ArrayRef)]).unwrap();
+
+            roundtrip(batch.clone(), None);
+            if width == 32 {
+                for (dictionary, statistics) in [
+                    (true, EnabledStatistics::None),
+                    (false, EnabledStatistics::Chunk),
+                    (false, EnabledStatistics::None),
+                ] {
+                    let props = WriterProperties::builder()
+                        .set_dictionary_enabled(dictionary)
+                        .set_statistics_enabled(statistics)
+                        .build();
+                    roundtrip_opts(&batch, props);
+                }
+            }
+        }
+
+        let keys = UInt8Array::from_iter_values((0..130).map(|index| (index % 65) as u8));
+        let values = FixedSizeBinaryArray::try_from_iter(
+            (0..65_u32).map(|value| value.to_be_bytes().to_vec()),
+        )
+        .unwrap();
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(DictionaryArray::<UInt8Type>::new(keys, Arc::new(values))) as ArrayRef,
+        )])
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_bloom_filter_enabled(true)
+            .build();
+        roundtrip_opts(&batch, props);
+    }
+
+    #[test]
+    fn arrow_writer_dictionary_of_view_roundtrip() {
+        fn check(flat_type: DataType, nullable: bool, dict: ArrayRef, expected: ArrayRef) {
+            let writer_schema = Arc::new(Schema::new(vec![Field::new(
+                "d",
+                flat_type.clone(),
+                nullable,
+            )]));
+            let batch_schema = Arc::new(Schema::new(vec![Field::new(
+                "d",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(flat_type)),
+                nullable,
+            )]));
+            let batch = RecordBatch::try_new(batch_schema, vec![dict]).unwrap();
+
+            let mut file = vec![];
+            let mut writer = ArrowWriter::try_new(&mut file, writer_schema.clone(), None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+
+            let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(file), 1024).unwrap();
+            let actual = reader.next().unwrap().unwrap();
+            let expected = RecordBatch::try_new(writer_schema, vec![expected]).unwrap();
+            assert_eq!(actual, expected);
+        }
+
+        // A value longer than 12 bytes forces the view array's out-of-line buffer.
+        let long = "a longer payload that exceeds twelve bytes";
+
+        // Required Utf8View dictionary with repeated keys.
+        check(
+            DataType::Utf8View,
+            false,
+            Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(vec![0, 1, 0, 2, 1]),
+                Arc::new(StringViewArray::from(vec!["alpha", long, "beta"])),
+            )),
+            Arc::new(StringViewArray::from(vec![
+                "alpha", long, "alpha", "beta", long,
+            ])),
+        );
+
+        // Required BinaryView dictionary with an out-of-line value.
+        check(
+            DataType::BinaryView,
+            false,
+            Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(vec![1, 0, 1]),
+                Arc::new(BinaryViewArray::from_iter_values(vec![
+                    b"x".as_slice(),
+                    long.as_bytes(),
+                ])),
+            )),
+            Arc::new(BinaryViewArray::from_iter_values(vec![
+                long.as_bytes(),
+                b"x".as_slice(),
+                long.as_bytes(),
+            ])),
+        );
+
+        // Nullable Utf8View dictionary with a null key.
+        check(
+            DataType::Utf8View,
+            true,
+            Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::new(
+                    vec![0, 1, 2, 0].into(),
+                    Some(NullBuffer::from(vec![true, false, true, true])),
+                ),
+                Arc::new(StringViewArray::from(vec!["x", "unused", long])),
+            )),
+            Arc::new(StringViewArray::from(vec![
+                Some("x"),
+                None,
+                Some(long),
+                Some("x"),
+            ])),
+        );
+    }
+
+    fn check_required_dict_null_value(values: ArrayRef) {
+        let value_type = values.data_type().clone();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            value_type.clone(),
+            false,
+        )]));
+        let batch_schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type)),
+            true,
+        )]));
+        let keys = Int32Array::from(vec![0, 1, 2]);
+        let array = DictionaryArray::<Int32Type>::new(keys, values);
+        let batch = RecordBatch::try_new(batch_schema, vec![Arc::new(array)]).unwrap();
+
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        let err = writer.write(&batch).unwrap_err();
+        assert!(err.to_string().contains("Found null"), "{err}");
+    }
+
+    #[test]
+    fn arrow_writer_rejects_null_dictionary_value_for_required_column() {
+        check_required_dict_null_value(Arc::new(Int32Array::from(vec![Some(10), None, Some(20)])));
+
+        let mut fixed = FixedSizeBinaryBuilder::new(2);
+        fixed.append_value([1, 2]).unwrap();
+        fixed.append_null();
+        fixed.append_value([3, 4]).unwrap();
+        check_required_dict_null_value(Arc::new(fixed.finish()));
+    }
+
+    #[test]
+    fn arrow_writer_rejects_null_dictionary_key_for_required_column() {
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "dictionary",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32)),
+                true,
+            )])),
+            vec![Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::new(
+                    vec![0, 99, 1].into(),
+                    Some(NullBuffer::from(vec![true, false, true])),
+                ),
+                values,
+            ))],
+        )
+        .unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "dictionary",
+            DataType::Int32,
+            false,
+        )]));
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        let err = writer.write(&batch).unwrap_err();
+        assert!(err.to_string().contains("Found null"), "{err}");
+    }
+
+    #[test]
+    fn arrow_writer_low_cardinality_binary_dictionary() {
+        let dict_vals: Vec<&[u8]> = vec![b"alpha".as_ref(), b"beta", b"gamma", b"delta"];
+        let keys = Int32Array::from_iter_values((0..64).map(|i| i % 4));
+        let bin = DictionaryArray::<Int32Type>::new(
+            keys.clone(),
+            Arc::new(BinaryArray::from_iter_values(dict_vals.clone())),
+        );
+        RoundTripTest::new(Arc::new(bin)).run();
+        let lbin = DictionaryArray::<Int32Type>::new(
+            keys,
+            Arc::new(LargeBinaryArray::from_iter_values(dict_vals)),
+        );
+        RoundTripTest::new(Arc::new(lbin)).run();
+    }
+
+    #[test]
+    fn arrow_writer_low_cardinality_dictionary_with_bloom_filter() {
+        let keys = Int32Array::from_iter_values((0..64).map(|i| i % 4));
+        let values = StringArray::from(vec!["alpha", "beta", "gamma", "delta"]);
+        let dict = DictionaryArray::<Int32Type>::new(keys, Arc::new(values));
+        RoundTripTest::new(Arc::new(dict))
+            .with_bloom_filter(true)
+            .run();
+    }
+
+    #[test]
+    fn arrow_writer_non_byte_dictionary_physical_types() {
+        fn roundtrip_with_native_schema(
+            values: ArrayRef,
+            native_type: DataType,
+            expected: ArrayRef,
+        ) {
+            let writer_schema = Arc::new(Schema::new(vec![Field::new("col", native_type, true)]));
+            let batch_schema = Arc::new(Schema::new(vec![Field::new(
+                "col",
+                values.data_type().clone(),
+                true,
+            )]));
+            let batch = RecordBatch::try_new(batch_schema, vec![values]).unwrap();
+
+            let mut file = vec![];
+            let mut writer = ArrowWriter::try_new(&mut file, writer_schema.clone(), None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+
+            let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(file), 1024).unwrap();
+            let actual = reader.next().unwrap().unwrap();
+            let expected = RecordBatch::try_new(writer_schema, vec![expected]).unwrap();
+            assert_eq!(actual, expected);
+        }
+
+        let keys = UInt8Array::from(vec![Some(0), Some(1), None, Some(0), Some(1)]);
+
+        let bool_values = BooleanArray::from(vec![Some(true), Some(false), None]);
+        let array = DictionaryArray::new(
+            UInt8Array::from(vec![Some(0), Some(1), None, Some(2), Some(0)]),
+            Arc::new(bool_values),
+        );
+        roundtrip_with_native_schema(
+            Arc::new(array),
+            DataType::Boolean,
+            Arc::new(BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                None,
+                None,
+                Some(true),
+            ])),
+        );
+
+        let float_values = Float32Array::from(vec![1.25, -2.5]);
+        let array = DictionaryArray::new(keys.clone(), Arc::new(float_values));
+        roundtrip_with_native_schema(
+            Arc::new(array),
+            DataType::Float32,
+            Arc::new(Float32Array::from(vec![
+                Some(1.25),
+                Some(-2.5),
+                None,
+                Some(1.25),
+                Some(-2.5),
+            ])),
+        );
+
+        let double_values = Float64Array::from(vec![1.25, -2.5]);
+        let array = DictionaryArray::new(keys.clone(), Arc::new(double_values));
+        roundtrip_with_native_schema(
+            Arc::new(array),
+            DataType::Float64,
+            Arc::new(Float64Array::from(vec![
+                Some(1.25),
+                Some(-2.5),
+                None,
+                Some(1.25),
+                Some(-2.5),
+            ])),
+        );
+
+        let int64_values = Int64Array::from(vec![1234567890123, -987654321098]);
+        let array = DictionaryArray::new(keys, Arc::new(int64_values));
+        roundtrip_with_native_schema(
+            Arc::new(array),
+            DataType::Int64,
+            Arc::new(Int64Array::from(vec![
+                Some(1234567890123),
+                Some(-987654321098),
+                None,
+                Some(1234567890123),
+                Some(-987654321098),
+            ])),
+        );
+
+        let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
+        let decimal = Decimal128Array::from(vec![12345, 56789, 34567])
+            .with_precision_and_scale(30, 2)
+            .unwrap();
+        roundtrip_with_native_schema(
+            Arc::new(DictionaryArray::new(keys.clone(), Arc::new(decimal))),
+            DataType::Decimal128(30, 2),
+            Arc::new(
+                Decimal128Array::from(vec![
+                    Some(12345),
+                    None,
+                    Some(56789),
+                    Some(34567),
+                    Some(56789),
+                ])
+                .with_precision_and_scale(30, 2)
+                .unwrap(),
+            ),
+        );
+
+        let values = [1.25, -2.5, 4.0].map(f16::from_f32);
+        roundtrip_with_native_schema(
+            Arc::new(DictionaryArray::new(
+                keys,
+                Arc::new(Float16Array::from(values.to_vec())),
+            )),
+            DataType::Float16,
+            Arc::new(Float16Array::from(vec![
+                Some(values[0]),
+                None,
+                Some(values[1]),
+                Some(values[2]),
+                Some(values[1]),
+            ])),
+        );
+    }
+
+    #[test]
+    fn arrow_writer_primitive_dictionary_with_cdc() {
+        #[expect(deprecated)]
+        let schema = Arc::new(Schema::new(vec![Field::new_dict(
+            "dictionary",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
+            true,
+            42,
+            true,
+        )]));
+
+        let keys = UInt8Array::from(
+            (0..1024)
+                .map(|i| {
+                    if i % 11 == 0 {
+                        None
+                    } else {
+                        Some((i % 4) as u8)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        );
+        let values = UInt32Array::from(vec![12345678, 22345678, 32345678, 42345678]);
+        let array = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+        let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_batch_size(64)
+            .set_content_defined_chunking(Some(CdcOptions {
+                min_chunk_size: 64,
+                max_chunk_size: 256,
+                norm_level: 0,
+            }))
+            .build();
+
+        roundtrip_opts(&batch, props);
+    }
+
+    #[test]
+    fn arrow_writer_byte_dictionary_per_page_stats() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let values = StringArray::from(vec!["a", "m", "z"]);
+        let keys = UInt8Array::from(vec![0, 1, 0, 1, 0, 1, 0, 1, 1, 2, 1, 2, 1, 2, 1, 2]);
+        let dict = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_batch_size(8)
+            .set_data_page_row_count_limit(8)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build();
+
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(Bytes::from(buf), options).unwrap();
+        let column_index = reader
+            .metadata()
+            .page_index()
+            .unwrap()
+            .column_index(0, 0)
+            .unwrap();
+        let ColumnIndexMetaData::BYTE_ARRAY(idx) = column_index else {
+            panic!("expected BYTE_ARRAY column index, got {column_index:?}");
+        };
+
+        assert_eq!(idx.min_values_iter().count(), 2, "expected two data pages");
+        assert_eq!(idx.min_value(0), Some(b"a".as_slice()));
+        assert_eq!(idx.max_value(0), Some(b"m".as_slice()));
+        assert_eq!(idx.min_value(1), Some(b"m".as_slice()));
+        assert_eq!(idx.max_value(1), Some(b"z".as_slice()));
+    }
+    #[test]
+    fn dense_dictionary_source_changes_preserve_cache_and_pages() {
+        let sources: Vec<(ArrayRef, ArrayRef)> = vec![
+            (
+                Arc::new(StringArray::from(vec!["alpha", "beta"])),
+                Arc::new(StringArray::from(vec!["changed", "different"])),
+            ),
+            (
+                Arc::new(Int32Array::from(vec![11, 22])),
+                Arc::new(Int32Array::from(vec![33, 44])),
+            ),
+            (
+                Arc::new(Float32Array::from(vec![1.25, -2.5])),
+                Arc::new(Float32Array::from(vec![3.5, -4.75])),
+            ),
+            (
+                Arc::new(
+                    FixedSizeBinaryArray::try_from_iter([b"abcd", b"efgh"].into_iter()).unwrap(),
+                ),
+                Arc::new(
+                    FixedSizeBinaryArray::try_from_iter([b"ijkl", b"mnop"].into_iter()).unwrap(),
+                ),
+            ),
+        ];
+        for (first, second) in sources {
+            for cdc in [false, true] {
+                for budget in [32, 1024] {
+                    let schema = Arc::new(Schema::new(vec![Field::new(
+                        "a",
+                        first.data_type().clone(),
+                        true,
+                    )]));
+                    let keys =
+                        Int32Array::from_iter((0..90).map(|i| (i % 11 != 0).then_some(i % 2)));
+                    let dict1: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+                        keys.clone(),
+                        first.clone(),
+                    ));
+                    let dict2: ArrayRef =
+                        Arc::new(DictionaryArray::<Int32Type>::new(keys, second.clone()));
+                    let dict1 = dict1.slice(1, 65);
+                    let dict2 = dict2.slice(2, 66);
+                    let dense = arrow_cast::cast(dict1.as_ref(), first.data_type()).unwrap();
+                    let mut props = WriterProperties::builder()
+                        .set_write_batch_size(7)
+                        .set_data_page_row_count_limit(16)
+                        .set_dictionary_page_size_limit(budget)
+                        .set_bloom_filter_enabled(true)
+                        .set_statistics_enabled(EnabledStatistics::Page);
+                    if cdc {
+                        props = props.set_content_defined_chunking(Some(CdcOptions {
+                            min_chunk_size: 32,
+                            max_chunk_size: 128,
+                            norm_level: 0,
+                        }));
+                    }
+                    let mut writer =
+                        ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props.build()))
+                            .unwrap();
+                    let mut expected = Vec::new();
+                    for array in [dict1, dense, dict2] {
+                        expected.push(arrow_cast::cast(array.as_ref(), first.data_type()).unwrap());
+                        let batch = RecordBatch::try_from_iter([("a", array)]).unwrap();
+                        writer.write(&batch).unwrap();
+                    }
+                    let bytes = Bytes::from(writer.into_inner().unwrap());
+                    let parquet = SerializedFileReader::new(bytes.clone()).unwrap();
+                    assert_eq!(
+                        parquet.metadata().row_groups()[0].column(0).num_values(),
+                        196
+                    );
+                    let actual = ParquetRecordBatchReaderBuilder::try_new(bytes)
+                        .unwrap()
+                        .with_batch_size(1024)
+                        .build()
+                        .unwrap()
+                        .next()
+                        .unwrap()
+                        .unwrap();
+                    let expected = arrow_select::concat::concat(
+                        &expected.iter().map(|a| a.as_ref()).collect::<Vec<_>>(),
+                    )
+                    .unwrap();
+                    assert_eq!(actual.column(0).as_ref(), expected.as_ref());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_fixed_size_binary_zero_width_write() {
         let mut builder = FixedSizeBinaryBuilder::new(0);
         builder.append_value(b"").unwrap();
@@ -6504,5 +6894,131 @@ mod tests {
                 Vec::<&str>::new(),
             );
         }
+    }
+
+    #[test]
+    fn bound_physical_sources_slice_the_selection_without_retaining_arrays() {
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+        let keys = Int32Array::from(vec![2, 0, 1, 2]);
+        let dictionary: ArrayRef =
+            Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values.clone()).unwrap());
+        let value_refs = Arc::strong_count(&values);
+        let dictionary_refs = Arc::strong_count(&dictionary);
+
+        {
+            let binding = ArrowPhysicalBinding::<Int32Storage<'_>>::bind(
+                dictionary.as_ref(),
+                ValueSelectionRef::Dense { offset: 0, len: 4 },
+            )
+            .unwrap();
+            let source = binding.source();
+            assert_eq!(Arc::strong_count(&values), value_refs);
+            assert_eq!(Arc::strong_count(&dictionary), dictionary_refs);
+            assert_eq!(source.len(), 4);
+            assert!(matches!(binding.storage, Int32Storage::Identity(_)));
+
+            let sliced = source.slice(1, 2);
+            let mut physical = Vec::new();
+            sliced
+                .selection()
+                .try_for_each_index(|index| -> Result<()> {
+                    physical.push(index);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(physical, [0, 1]);
+        }
+        assert_eq!(Arc::strong_count(&values), value_refs);
+        assert_eq!(Arc::strong_count(&dictionary), dictionary_refs);
+
+        let byte_values: ArrayRef = Arc::new(StringArray::from(vec!["a", "bb", "ccc"]));
+        let byte_keys = Int32Array::from(vec![2, 0, 1, 2]);
+        let byte_dictionary: ArrayRef = Arc::new(
+            DictionaryArray::<Int32Type>::try_new(byte_keys, byte_values.clone()).unwrap(),
+        );
+        let byte_value_refs = Arc::strong_count(&byte_values);
+        let byte_dictionary_refs = Arc::strong_count(&byte_dictionary);
+
+        {
+            let _binding = ArrowPhysicalBinding::<ByteArrayStorage<'_>>::bind(
+                byte_dictionary.as_ref(),
+                ValueSelectionRef::Dense { offset: 0, len: 4 },
+            )
+            .unwrap();
+            assert_eq!(Arc::strong_count(&byte_values), byte_value_refs);
+            assert_eq!(Arc::strong_count(&byte_dictionary), byte_dictionary_refs);
+        }
+        assert_eq!(Arc::strong_count(&byte_values), byte_value_refs);
+        assert_eq!(Arc::strong_count(&byte_dictionary), byte_dictionary_refs);
+    }
+
+    #[test]
+    fn arrow_writer_caps_page_size_for_fixed_len_decimal_inputs() {
+        const ROWS: usize = 4000;
+        let precision = 30u8;
+        assert_eq!(decimal_length_from_precision(precision), 13);
+
+        let values = Arc::new(
+            Decimal128Array::from((0..ROWS as i128).collect::<Vec<_>>())
+                .with_precision_and_scale(precision, 2)
+                .unwrap(),
+        );
+        let writer_schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            values.data_type().clone(),
+            false,
+        )]));
+        let dense = RecordBatch::try_new(writer_schema.clone(), vec![values.clone()]).unwrap();
+        let batch_schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Decimal128(precision, 2)),
+            ),
+            false,
+        )]));
+        let dictionary = RecordBatch::try_new(
+            batch_schema,
+            vec![Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from_iter_values(0..ROWS as i32),
+                values,
+            ))],
+        )
+        .unwrap();
+
+        let data_page_size_limit = 4096;
+        for (kind, batch) in [("dense", dense), ("dictionary", dictionary)] {
+            let props = WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_data_page_size_limit(data_page_size_limit)
+                .set_data_page_row_count_limit(ROWS + 1)
+                .set_write_batch_size(ROWS)
+                .build();
+            let pages = data_page_count(writer_schema.clone(), &batch, props);
+            assert!(
+                pages > 1,
+                "expected the {data_page_size_limit}-byte page budget to split the \
+                 13-byte FLBA {kind} decimal column, got {pages} page(s)",
+            );
+        }
+    }
+
+    fn data_page_count(schema: SchemaRef, batch: &RecordBatch, props: WriterProperties) -> usize {
+        let file = tempfile::tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), schema, Some(props)).unwrap();
+        writer.write(batch).unwrap();
+        writer.close().unwrap();
+
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+        reader
+            .metadata()
+            .page_index()
+            .unwrap()
+            .offset_index(0, 0)
+            .expect("offset index")
+            .page_locations()
+            .len()
     }
 }
