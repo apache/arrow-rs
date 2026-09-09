@@ -1144,8 +1144,13 @@ impl ArrowColumnWriter {
 
         let num_chunks = chunks.len();
         for (i, chunk) in chunks.iter().enumerate() {
-            let chunk_levels = levels.slice_for_chunk(chunk);
-            self.write_internal(&chunk_levels)?;
+            let chunk_levels = levels
+                .leaf_batch()
+                .slice(crate::column::writer::LevelValueWindow {
+                    levels: chunk.level_offset..chunk.level_offset + chunk.num_levels,
+                    values: chunk.value_offset..chunk.value_offset + chunk.num_values,
+                });
+            write_leaf(&mut self.writer, chunk_levels)?;
 
             // Add a page break after each chunk except the last
             if i + 1 < num_chunks {

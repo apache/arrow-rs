@@ -40,9 +40,10 @@
 //!
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
+#[cfg(test)]
 use crate::column::chunker::CdcChunk;
 use crate::column::value_selection::ValueSelectionRef;
-use crate::column::writer::LevelDataRef;
+use crate::column::writer::{LevelDataRef, RunLevelsRef};
 mod plan;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
@@ -52,6 +53,7 @@ use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
 pub(crate) use plan::LeafBatch;
+use plan::{LEVEL_RUN_PROBE_SIZE, MIN_AVERAGE_LEVEL_RUN_LENGTH};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -1060,30 +1062,18 @@ pub(crate) enum LevelData {
     Absent,
     Materialized(Vec<i16>),
     Uniform { value: i16, count: usize },
+    Runs(LevelRuns),
 }
 
 // Compare logical level contents rather than physical representation, so a
-// uniform run compares equal to the equivalent materialized buffer.
+// uniform or run-encoded stream compares equal to the equivalent materialized
+// buffer.
 impl PartialEq for LevelData {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Absent, Self::Absent) => true,
-            (Self::Materialized(a), Self::Materialized(b)) => a == b,
-            (Self::Uniform { value: v, count: n }, Self::Materialized(b))
-            | (Self::Materialized(b), Self::Uniform { value: v, count: n }) => {
-                b.len() == *n && b.iter().all(|x| x == v)
-            }
-            (
-                Self::Uniform {
-                    value: v1,
-                    count: n1,
-                },
-                Self::Uniform {
-                    value: v2,
-                    count: n2,
-                },
-            ) => v1 == v2 && n1 == n2,
-            _ => false,
+            (Self::Absent, _) | (_, Self::Absent) => false,
+            _ => self.as_ref().cursor().eq(other.as_ref().cursor()),
         }
     }
 }
@@ -1091,10 +1081,25 @@ impl PartialEq for LevelData {
 impl Eq for LevelData {}
 
 impl LevelData {
-    fn new(present: bool) -> Self {
+    pub(super) fn new(present: bool) -> Self {
         match present {
             true => Self::Materialized(Vec::new()),
             false => Self::Absent,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn slice(&self, offset: usize, len: usize) -> Self {
+        match self {
+            Self::Absent => Self::Absent,
+            Self::Materialized(values) => Self::Materialized(values[offset..offset + len].to_vec()),
+            Self::Uniform { value, .. } => Self::Uniform {
+                value: *value,
+                count: len,
+            },
+            Self::Runs(_) => {
+                Self::Materialized(self.as_ref().slice(offset, len).cursor().collect())
+            }
         }
     }
 
@@ -1106,25 +1111,24 @@ impl LevelData {
                 value: *value,
                 count: *count,
             },
+            Self::Runs(runs) => LevelDataRef::Runs(RunLevelsRef::from_level_runs(
+                &runs.ends,
+                &runs.values,
+                0,
+                runs.len(),
+            )),
         }
     }
 
-    pub(crate) fn slice(&self, offset: usize, len: usize) -> Self {
-        match self {
-            Self::Absent => Self::Absent,
-            Self::Materialized(values) => Self::Materialized(values[offset..offset + len].to_vec()),
-            Self::Uniform { value, .. } => Self::Uniform {
-                value: *value,
-                count: len,
-            },
-        }
-    }
-
-    fn append_run(&mut self, value: i16, count: usize) {
+    /// Append `count` repetitions of `value`, keeping the most compact
+    /// representation that still describes the stream exactly: a single value,
+    /// then cumulative runs, and finally a materialized buffer once the runs
+    /// stop paying for themselves.
+    #[inline]
+    pub(super) fn append_run(&mut self, value: i16, count: usize) {
         if count == 0 {
             return;
         }
-
         match self {
             // No physical level stream exists for this schema. Higher-level
             // traversal may still append implicit levels, so this remains a no-op.
@@ -1134,49 +1138,142 @@ impl LevelData {
             Self::Materialized(values) if values.is_empty() => {
                 *self = Self::Uniform { value, count };
             }
+            Self::Materialized(values) if count == 1 => values.push(value),
             // Already materialized, so preserve the buffer representation and append.
             Self::Materialized(values) => values.extend(std::iter::repeat_n(value, count)),
             // Preserve the compact representation while the appended run has
             // the same value.
             Self::Uniform {
-                value: uniform_value,
-                count: uniform_count,
-            } if *uniform_value == value => {
-                *uniform_count += count;
+                value: uniform,
+                count: len,
+            } if *uniform == value => *len += count,
+            // A different value breaks the uniform representation. Switch to
+            // cumulative runs, unless the runs are already too short to pay for
+            // themselves.
+            Self::Uniform {
+                value: uniform,
+                count: len,
+            } => {
+                let runs = LevelRuns::from_two_runs(*uniform, *len, value, count);
+                *self = if runs.should_materialize() {
+                    Self::Materialized(runs.into_materialized())
+                } else {
+                    Self::Runs(runs)
+                };
             }
-            // A different value breaks the uniform representation. Materialize
-            // the existing run, then append the new run to the buffer.
-            Self::Uniform { .. } => {
-                let values = self.materialize_mut().unwrap();
-                values.extend(std::iter::repeat_n(value, count));
+            Self::Runs(runs) => {
+                runs.append_run(value, count);
+                if runs.should_materialize() {
+                    let Self::Runs(runs) = std::mem::replace(self, Self::Absent) else {
+                        unreachable!()
+                    };
+                    *self = Self::Materialized(runs.into_materialized());
+                }
             }
         }
     }
 
+    #[inline(never)]
     fn extend_from_iter<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = i16>,
     {
-        if let Some(values) = self.materialize_mut() {
-            values.extend(iter);
+        match self {
+            Self::Absent => {}
+            Self::Materialized(values) => values.extend(iter),
+            _ => self.materialize_mut().unwrap().extend(iter),
         }
     }
 
-    /// Convert a uniform run into a materialized buffer if needed, then return
-    /// the mutable level buffer. Returns `None` when no physical level stream exists.
-    fn materialize_mut(&mut self) -> Option<&mut Vec<i16>> {
+    /// Every dense append goes through here, and the stream is already
+    /// materialized for all but the first of them. Keep that check inline and
+    /// leave the conversion itself out of line.
+    #[inline]
+    pub(super) fn materialize_mut(&mut self) -> Option<&mut Vec<i16>> {
         match self {
-            Self::Absent => None,
-            Self::Materialized(values) => Some(values),
-            Self::Uniform { value, count } => {
-                let values = vec![*value; *count];
-                *self = Self::Materialized(values);
-                match self {
-                    Self::Materialized(values) => Some(values),
-                    _ => unreachable!(),
-                }
-            }
+            Self::Absent => return None,
+            Self::Materialized(_) => {}
+            _ => self.materialize_compact(),
         }
+        let Self::Materialized(values) = self else {
+            unreachable!()
+        };
+        Some(values)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn materialize_compact(&mut self) {
+        let values = match self {
+            Self::Uniform { value, count } => vec![*value; *count],
+            Self::Runs(_) => {
+                let Self::Runs(runs) = std::mem::replace(self, Self::Absent) else {
+                    unreachable!()
+                };
+                runs.into_materialized()
+            }
+            _ => unreachable!("only compact representations are converted"),
+        };
+        *self = Self::Materialized(values);
+    }
+}
+
+/// Cumulative-end run representation for definition and repetition levels.
+#[derive(Debug, Clone)]
+pub(crate) struct LevelRuns {
+    ends: Vec<usize>,
+    values: Vec<i16>,
+}
+
+impl LevelRuns {
+    fn from_two_runs(first: i16, first_count: usize, second: i16, second_count: usize) -> Self {
+        let mut runs = Self {
+            ends: vec![first_count],
+            values: vec![first],
+        };
+        runs.append_run(second, second_count);
+        runs
+    }
+
+    fn len(&self) -> usize {
+        self.ends.last().copied().unwrap_or(0)
+    }
+
+    #[inline]
+    fn append_run(&mut self, value: i16, count: usize) {
+        debug_assert_ne!(count, 0);
+        let end = self
+            .len()
+            .checked_add(count)
+            .expect("level stream length overflow");
+        if self.values.last().copied() == Some(value) {
+            *self.ends.last_mut().unwrap() = end;
+        } else {
+            self.ends.push(end);
+            self.values.push(value);
+        }
+    }
+
+    /// Runs stop paying for themselves once the stream is long enough to
+    /// measure and the average run falls below the configured threshold.
+    fn should_materialize(&self) -> bool {
+        let len = self.len();
+        len >= LEVEL_RUN_PROBE_SIZE
+            && self
+                .values
+                .len()
+                .saturating_mul(MIN_AVERAGE_LEVEL_RUN_LENGTH)
+                > len
+    }
+
+    fn into_materialized(self) -> Vec<i16> {
+        let mut materialized = Vec::with_capacity(self.len());
+        let mut start = 0;
+        for (end, value) in self.ends.into_iter().zip(self.values) {
+            materialized.extend(std::iter::repeat_n(value, end - start));
+            start = end;
+        }
+        materialized
     }
 }
 
@@ -1306,6 +1403,7 @@ impl ArrayLevels {
     /// The chunk's `value_offset`/`num_values` select the relevant slice of
     /// `non_null_indices`. The array is sliced to the range covered by
     /// those indices, and they are shifted to be relative to the slice.
+    #[cfg(test)]
     pub(crate) fn slice_for_chunk(&self, chunk: &CdcChunk) -> Self {
         let def_levels = self.def_levels.slice(chunk.level_offset, chunk.num_levels);
         let rep_levels = self.rep_levels.slice(chunk.level_offset, chunk.num_levels);
@@ -1354,6 +1452,7 @@ impl ArrayLevels {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::column::chunker::CdcChunk;
 
     use arrow_array::builder::*;
@@ -3009,5 +3108,31 @@ mod tests {
             };
             assert_eq!(&levels[i], &expected, "leaf {i} mismatch");
         }
+    }
+
+    #[test]
+    fn compact_level_data_transitions_and_overflow() {
+        let mut data = LevelData::new(true);
+        data.append_run(2, 64);
+        data.append_run(0, 64);
+        assert!(matches!(data, LevelData::Runs(_)));
+        assert_eq!(
+            data.as_ref().cursor().collect::<Vec<_>>(),
+            [vec![2; 64], vec![0; 64]].concat()
+        );
+        data.append_run(0, 16);
+        assert_eq!(data.as_ref().value_count(144, 2), 64);
+        for i in 0..128 {
+            data.append_run(i % 2, 1);
+        }
+        assert!(matches!(data, LevelData::Materialized(_)));
+        let mut absent = LevelData::new(false);
+        absent.append_run(1, 99);
+        assert_eq!(absent, LevelData::Absent);
+        let overflow = std::panic::catch_unwind(|| {
+            let mut runs = LevelRuns::from_two_runs(0, usize::MAX - 1, 1, 1);
+            runs.append_run(2, 1);
+        });
+        assert!(overflow.is_err());
     }
 }
