@@ -46,6 +46,8 @@ pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Pag
 pub const DEFAULT_WRITE_PAGE_HEADER_STATISTICS: bool = false;
 /// Default value for [`WriterProperties::max_row_group_row_count`]
 pub const DEFAULT_MAX_ROW_GROUP_ROW_COUNT: usize = 1024 * 1024;
+/// Default value for [`WriterProperties::bloom_filter_for_dictionary_encoded_chunks`]
+pub const DEFAULT_BLOOM_FILTER_FOR_DICTIONARY_ENCODED_CHUNKS: bool = true;
 /// Default value for [`WriterProperties::bloom_filter_position`]
 pub const DEFAULT_BLOOM_FILTER_POSITION: BloomFilterPosition = BloomFilterPosition::AfterRowGroup;
 /// Default value for [`WriterProperties::created_by`]
@@ -246,6 +248,7 @@ pub struct WriterProperties {
     max_row_group_row_count: Option<usize>,
     max_row_group_bytes: Option<usize>,
     bloom_filter_position: BloomFilterPosition,
+    bloom_filter_for_dictionary_encoded_chunks: bool,
     writer_version: WriterVersion,
     created_by: String,
     offset_index_setting: OffsetIndexSetting,
@@ -367,6 +370,14 @@ impl WriterProperties {
     /// For more details see [`WriterPropertiesBuilder::set_bloom_filter_position`]
     pub fn bloom_filter_position(&self) -> BloomFilterPosition {
         self.bloom_filter_position
+    }
+
+    /// Returns whether a column chunk whose data pages are all dictionary encoded gets a
+    /// bloom filter.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_bloom_filter_for_dictionary_encoded_chunks`]
+    pub fn bloom_filter_for_dictionary_encoded_chunks(&self) -> bool {
+        self.bloom_filter_for_dictionary_encoded_chunks
     }
 
     /// Returns configured writer version.
@@ -599,6 +610,7 @@ pub struct WriterPropertiesBuilder {
     max_row_group_row_count: Option<usize>,
     max_row_group_bytes: Option<usize>,
     bloom_filter_position: BloomFilterPosition,
+    bloom_filter_for_dictionary_encoded_chunks: bool,
     writer_version: WriterVersion,
     created_by: String,
     offset_index_disabled: bool,
@@ -625,6 +637,8 @@ impl Default for WriterPropertiesBuilder {
             max_row_group_row_count: Some(DEFAULT_MAX_ROW_GROUP_ROW_COUNT),
             max_row_group_bytes: None,
             bloom_filter_position: DEFAULT_BLOOM_FILTER_POSITION,
+            bloom_filter_for_dictionary_encoded_chunks:
+                DEFAULT_BLOOM_FILTER_FOR_DICTIONARY_ENCODED_CHUNKS,
             writer_version: DEFAULT_WRITER_VERSION,
             created_by: DEFAULT_CREATED_BY.to_string(),
             offset_index_disabled: DEFAULT_OFFSET_INDEX_DISABLED,
@@ -681,6 +695,8 @@ impl WriterPropertiesBuilder {
             max_row_group_row_count: self.max_row_group_row_count,
             max_row_group_bytes: self.max_row_group_bytes,
             bloom_filter_position: self.bloom_filter_position,
+            bloom_filter_for_dictionary_encoded_chunks: self
+                .bloom_filter_for_dictionary_encoded_chunks,
             writer_version: self.writer_version,
             created_by: self.created_by,
             offset_index_setting,
@@ -785,6 +801,16 @@ impl WriterPropertiesBuilder {
     /// [`AfterRowGroup`]: BloomFilterPosition::AfterRowGroup
     pub fn set_bloom_filter_position(mut self, value: BloomFilterPosition) -> Self {
         self.bloom_filter_position = value;
+        self
+    }
+
+    /// Sets whether a column chunk whose data pages are all dictionary encoded gets a bloom
+    /// filter (defaults to `true` via [`DEFAULT_BLOOM_FILTER_FOR_DICTIONARY_ENCODED_CHUNKS`]).
+    ///
+    /// The dictionary page of such a chunk already holds every distinct value, so its bloom
+    /// filter is redundant; set this to `false` to skip writing it and save the space.
+    pub fn set_bloom_filter_for_dictionary_encoded_chunks(mut self, value: bool) -> Self {
+        self.bloom_filter_for_dictionary_encoded_chunks = value;
         self
     }
 
@@ -1374,6 +1400,8 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             max_row_group_row_count: props.max_row_group_row_count,
             max_row_group_bytes: props.max_row_group_bytes,
             bloom_filter_position: props.bloom_filter_position,
+            bloom_filter_for_dictionary_encoded_chunks: props
+                .bloom_filter_for_dictionary_encoded_chunks,
             writer_version: props.writer_version,
             created_by: props.created_by,
             offset_index_disabled: !matches!(
