@@ -691,7 +691,9 @@ mod tests {
 
     #[test]
     fn delta_layout_survives_dictionary_fallback_and_page_flushes() {
-        use crate::column::writer::encoder::{ColumnChunkEncoder, TypedColumnChunkEncoder};
+        use crate::column::writer::encoder::{
+            ColumnChunkEncoder, ColumnWriterValue, TypedColumnChunkEncoder,
+        };
 
         fn check<T: DataType>(encoding: Encoding, type_length: i32, values: &[T::T]) {
             let desc = create_test_col_desc_ptr(type_length, T::get_physical_type());
@@ -716,15 +718,17 @@ mod tests {
                             .unwrap();
                     assert_eq!(writer.has_dictionary(), dictionary);
                     if dictionary {
-                        writer.write(values, 0, values.len()).unwrap();
+                        <T::T as ColumnWriterValue>::encode_slice(&mut writer, values).unwrap();
                         let page = writer.flush_data_page().unwrap();
                         assert_eq!(page.encoding, Encoding::RLE_DICTIONARY);
                         assert!(writer.flush_dict_page().unwrap().is_some());
                         assert!(!writer.has_dictionary());
                     }
                     for _ in 0..2 {
-                        writer.write(values, 0, 13).unwrap();
-                        writer.write(values, 13, values.len() - 13).unwrap();
+                        <T::T as ColumnWriterValue>::encode_slice(&mut writer, &values[..13])
+                            .unwrap();
+                        <T::T as ColumnWriterValue>::encode_slice(&mut writer, &values[13..])
+                            .unwrap();
                         let page = writer.flush_data_page().unwrap();
                         assert_eq!(page.encoding, encoding);
                         assert_eq!(page.num_values, values.len());

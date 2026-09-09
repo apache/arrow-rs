@@ -321,6 +321,14 @@ impl Iterator for BitIndexIterator<'_> {
             self.chunk_offset += 64;
         }
     }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let current = self.current_chunk.count_ones() as usize;
+        let (_, remaining_chunks) = self.iter.size_hint();
+        let upper = remaining_chunks.map(|chunks| current + chunks.saturating_mul(64));
+        (current, upper)
+    }
 }
 
 /// An iterator of u32 whose index in a provided bitmask is true
@@ -373,6 +381,14 @@ impl Iterator for BitIndexU32Iterator<'_> {
             self.chunk_offset += 64;
             self.curr = next_chunk;
         }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let current = self.curr.count_ones() as usize;
+        let (_, remaining_chunks) = self.iter.size_hint();
+        let upper = remaining_chunks.map(|chunks| current + chunks.saturating_mul(64));
+        (current, upper)
     }
 }
 
@@ -502,6 +518,32 @@ mod tests {
             .map(|i| i as u32)
             .collect();
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_bit_index_iterators_size_hint() {
+        let mut mask = [0_u8; 16];
+        mask[0] = 0b0010_0010; // 1, 5
+        mask[8] = 0b0100_0000; // 70
+        mask[11] = 0b0000_0100; // 90
+
+        macro_rules! assert_hints {
+            ($iter:expr) => {{
+                let mut iter = $iter;
+                assert_eq!(iter.size_hint(), (2, Some(66)));
+                assert_eq!(iter.next(), Some(1));
+                assert_eq!(iter.size_hint(), (1, Some(65)));
+                assert_eq!(iter.next(), Some(5));
+                assert_eq!(iter.size_hint(), (0, Some(64)));
+                assert_eq!(iter.next(), Some(70));
+                assert_eq!(iter.size_hint(), (1, Some(1)));
+                assert_eq!(iter.next(), Some(90));
+                assert_eq!(iter.size_hint(), (0, Some(0)));
+            }};
+        }
+
+        assert_hints!(BitIndexIterator::new(&mask, 0, 128));
+        assert_hints!(BitIndexU32Iterator::new(&mask, 0, 128));
     }
 
     #[test]
