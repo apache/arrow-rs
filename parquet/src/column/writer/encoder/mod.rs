@@ -19,19 +19,21 @@ use bytes::Bytes;
 
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::{
-    compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
-};
-use crate::data_type::DataType;
+use crate::column::writer::{compare_greater, is_nan};
+use crate::column::writer::{fallback_encoding, has_dictionary_support, update_max, update_min};
 use crate::data_type::private::ParquetValueType;
-use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
+use crate::data_type::{ByteArray, DataType, FixedLenByteArray, Int96};
+use crate::encodings::encoding::{
+    BoolEncodingFamily, ByteArrayEncodingFamily, DictionaryValue, Encoder, EncodingFamily,
+    FixedLenByteArrayEncodingFamily, NumericEncodingFamily,
+};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, ResolvedColumnProperties, WriterProperties};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{BasicTypeInfo, ColumnDescPtr};
 
-/// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
+/// A collection of [`ParquetValueType`] encoded by a [`ColumnChunkEncoder`]
 pub trait ColumnValues {
     /// The number of values in this collection
     fn len(&self) -> usize;
@@ -68,21 +70,15 @@ pub struct DataPageValues<T> {
     pub variable_length_bytes: Option<i64>,
 }
 
-/// A generic encoder of [`ColumnValues`] to data and dictionary pages used by
-/// [`super::GenericColumnWriter`]
-pub trait ColumnValueEncoder {
-    /// The underlying value type of [`Self::Values`]
-    ///
-    /// Note: this avoids needing to fully qualify `<Self::Values as ColumnValues>::T`
-    type T: ParquetValueType;
+/// Column-chunk encoding state used by [`super::GenericColumnWriter`].
+pub trait ColumnChunkEncoder {
+    /// The underlying value type encoded by this encoder.
+    type Value: ParquetValueType;
 
     /// The values encoded by this encoder
     type Values: ColumnValues + ?Sized;
 
-    /// Create a new [`ColumnValueEncoder`]
-    ///
-    /// `column_props` holds the settings in `props` that apply specifically to
-    /// `descr`, already resolved by the caller.
+    /// Create a new [`ColumnChunkEncoder`] using already-resolved per-column settings.
     #[expect(
         private_interfaces,
         reason = "this trait is not nameable outside the crate"
@@ -95,10 +91,10 @@ pub trait ColumnValueEncoder {
     where
         Self: Sized;
 
-    /// Write the corresponding values to this [`ColumnValueEncoder`]
+    /// Write the corresponding values to this [`ColumnChunkEncoder`]
     fn write(&mut self, values: &Self::Values, offset: usize, len: usize) -> Result<()>;
 
-    /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
+    /// Write the values at the indexes in `indices` to this [`ColumnChunkEncoder`]
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
 
     /// Returns the largest `k` such that the first `k` values in
@@ -112,11 +108,6 @@ pub trait ColumnValueEncoder {
     /// `None` means "no cheap estimate available"; the caller stays on
     /// the batched fast path and lets the post-write
     /// `should_add_data_page` check handle bounding.
-    ///
-    /// Implementations should short-circuit aggressively: the typical
-    /// case is "everything fits, return `len`", and the next-most-common
-    /// case is "one wide value, return 1." The variable-width walk only
-    /// needs to be precise when the chunk is genuinely near the budget.
     fn count_values_within_byte_budget(
         _values: &Self::Values,
         _offset: usize,
@@ -177,15 +168,15 @@ pub trait ColumnValueEncoder {
     /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_page_size(&self) -> usize;
 
-    /// Flush the dictionary page for this column chunk if any. Any subsequent calls to
-    /// [`Self::write`] will not be dictionary encoded
+    /// Flush the dictionary page for this column chunk, if any. Subsequent
+    /// writes use non-dictionary encoding.
     ///
     /// Note: [`Self::flush_data_page`] must be called first, as this will error if there
     /// are any pending page values
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>>;
 
     /// Flush the next data page for this column chunk
-    fn flush_data_page(&mut self) -> Result<DataPageValues<Self::T>>;
+    fn flush_data_page(&mut self) -> Result<DataPageValues<Self::Value>>;
 
     /// Flushes bloom filter if enabled and returns it, otherwise returns `None`. Subsequent writes
     /// will *not* be tracked by the bloom filter as it is empty since. This should be called once
@@ -197,9 +188,97 @@ pub trait ColumnValueEncoder {
     fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>>;
 }
 
-pub struct ColumnValueEncoderImpl<T: DataType> {
-    encoder: Box<dyn Encoder<T>>,
-    dict_encoder: Option<DictEncoder<T>>,
+/// Writer-specific encoding and dictionary policy for a physical value type.
+pub trait ColumnWriterValue: DictionaryValue + Sized {
+    type Family<D>: EncodingFamily<D> + Encoder<D> + 'static
+    where
+        D: DataType<T = Self>;
+
+    fn encode_slice<D>(enc: &mut TypedColumnChunkEncoder<D>, values: &[Self]) -> Result<()>
+    where
+        D: DataType<T = Self>;
+}
+
+/// Resolves the encoding family selected by [`DataType::T`].
+pub(crate) type EncodingFamilyFor<D> = <<D as DataType>::T as ColumnWriterValue>::Family<D>;
+
+macro_rules! impl_numeric_encoder_dispatch {
+    ($value:ty) => {
+        impl ColumnWriterValue for $value {
+            type Family<D>
+                = NumericEncodingFamily<D>
+            where
+                D: DataType<T = Self>;
+
+            fn encode_slice<D>(enc: &mut TypedColumnChunkEncoder<D>, values: &[Self]) -> Result<()>
+            where
+                D: DataType<T = Self>,
+            {
+                enc.write_generic_slice(values)
+            }
+        }
+    };
+}
+
+impl ColumnWriterValue for bool {
+    type Family<D>
+        = BoolEncodingFamily
+    where
+        D: DataType<T = Self>;
+
+    fn encode_slice<D>(enc: &mut TypedColumnChunkEncoder<D>, values: &[Self]) -> Result<()>
+    where
+        D: DataType<T = Self>,
+    {
+        enc.write_generic_slice(values)
+    }
+}
+
+impl_numeric_encoder_dispatch!(i32);
+impl_numeric_encoder_dispatch!(i64);
+impl_numeric_encoder_dispatch!(Int96);
+impl_numeric_encoder_dispatch!(f32);
+impl_numeric_encoder_dispatch!(f64);
+
+impl ColumnWriterValue for FixedLenByteArray {
+    type Family<D>
+        = FixedLenByteArrayEncodingFamily
+    where
+        D: DataType<T = Self>;
+
+    fn encode_slice<D>(enc: &mut TypedColumnChunkEncoder<D>, values: &[Self]) -> Result<()>
+    where
+        D: DataType<T = Self>,
+    {
+        enc.write_generic_slice(values)
+    }
+}
+
+impl ColumnWriterValue for ByteArray {
+    type Family<D>
+        = ByteArrayEncodingFamily
+    where
+        D: DataType<T = Self>;
+
+    fn encode_slice<D>(enc: &mut TypedColumnChunkEncoder<D>, values: &[Self]) -> Result<()>
+    where
+        D: DataType<T = Self>,
+    {
+        enc.write_generic_slice(values)
+    }
+}
+
+/// Concrete [`ColumnChunkEncoder`] implementation for one Parquet physical type.
+///
+/// This owns the physical encoder together with the state accumulated while a
+/// column chunk is being written: dictionary adoption/fallback, value count,
+/// statistics, bloom filter state, variable-length byte totals and geospatial
+/// statistics. Slice-based writers call the trait methods directly; with the
+/// `arrow` feature, numeric writers can feed values directly from Arrow buffers.
+pub struct TypedColumnChunkEncoder<T: DataType> {
+    /// The active encoding family. Dictionary fallback is a variant transition
+    /// inside [`EncodingFamily::take_dict_page`].
+    encoding_family: EncodingFamilyFor<T>,
     descr: ColumnDescPtr,
     num_values: usize,
     statistics_enabled: EnabledStatistics,
@@ -210,15 +289,22 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     bloom_filter_target_fpp: f64,
     variable_length_bytes: Option<i64>,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
+    /// The non-dictionary page encoding selected from the writer properties.
+    /// [`EncodingFamily::take_dict_page`] uses it to build the fallback encoder
+    /// when dictionary encoding is abandoned.
+    fallback_encoding: Encoding,
 }
 
-impl<T: DataType> ColumnValueEncoderImpl<T> {
+impl<T: DataType> TypedColumnChunkEncoder<T> {
     fn is_floating_point_column(&self) -> bool {
         matches!(self.descr.physical_type(), Type::FLOAT | Type::DOUBLE)
             || self.descr.logical_type_ref() == Some(&LogicalType::Float16)
     }
 
-    fn write_slice(&mut self, slice: &[T::T]) -> Result<()> {
+    /// Fold statistics, bloom filter and encoded bytes for a dense slice of
+    /// values. Every physical type shares this path until its own batch sink
+    /// takes over.
+    fn write_generic_slice(&mut self, slice: &[T::T]) -> Result<()> {
         if self.statistics_enabled != EnabledStatistics::None
             // INTERVAL, Geometry, and Geography have undefined sort order, so don't write min/max stats for them
             && self.descr.converted_type() != ConvertedType::INTERVAL
@@ -240,75 +326,23 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             }
         }
 
-        // While a dictionary is in use the filter is populated from its distinct values
-        // in `flush_dict_page`, so each value is hashed once rather than once per row.
-        match &mut self.dict_encoder {
-            Some(encoder) => encoder.put(slice),
-            _ => {
-                if let Some(bloom_filter) = &mut self.bloom_filter {
-                    for value in slice {
-                        bloom_filter.insert(value);
-                    }
-                }
-                self.encoder.put(slice)
+        // Dictionary values are hashed once at dictionary flush, not once per row.
+        if !self.encoding_family.is_dictionary()
+            && let Some(bloom_filter) = &mut self.bloom_filter
+        {
+            for value in slice {
+                bloom_filter.insert(value);
             }
         }
+
+        self.encoding_family.put(slice)
     }
 }
 
-impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
-    type T = T::T;
+impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {
+    type Value = T::T;
 
     type Values = [T::T];
-
-    fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
-        let mut sbbf = self.bloom_filter.take()?;
-        sbbf.fold_to_target_fpp(self.bloom_filter_target_fpp);
-        Some(sbbf)
-    }
-
-    #[expect(
-        private_interfaces,
-        reason = "this trait is not nameable outside the crate"
-    )]
-    fn try_new(
-        descr: &ColumnDescPtr,
-        props: &WriterProperties,
-        column_props: &ResolvedColumnProperties,
-    ) -> Result<Self> {
-        let dict_supported = column_props.dictionary_enabled
-            && has_dictionary_support(T::get_physical_type(), props);
-        let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
-
-        // Set either main encoder or fallback encoder.
-        let encoder = get_encoder(
-            column_props
-                .encoding
-                .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props)),
-            descr,
-        )?;
-
-        let statistics_enabled = column_props.statistics_enabled;
-
-        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(column_props)?;
-
-        let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
-
-        Ok(Self {
-            encoder,
-            dict_encoder,
-            descr: descr.clone(),
-            num_values: 0,
-            statistics_enabled,
-            bloom_filter,
-            bloom_filter_target_fpp,
-            min_value: None,
-            max_value: None,
-            nan_count: None,
-            variable_length_bytes: None,
-            geo_stats_accumulator,
-        })
-    }
 
     fn write(&mut self, values: &[T::T], offset: usize, len: usize) -> Result<()> {
         self.num_values += len;
@@ -321,13 +355,13 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             )
         })?;
 
-        self.write_slice(slice)
+        <T::T as ColumnWriterValue>::encode_slice(self, slice)
     }
 
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
         self.num_values += indices.len();
         let slice: Vec<_> = indices.iter().map(|idx| values[*idx].clone()).collect();
-        self.write_slice(&slice)
+        <T::T as ColumnWriterValue>::encode_slice(self, &slice)
     }
 
     fn count_values_within_byte_budget(
@@ -363,28 +397,75 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         )
     }
 
+    fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
+        let mut sbbf = self.bloom_filter.take()?;
+        sbbf.fold_to_target_fpp(self.bloom_filter_target_fpp);
+        Some(sbbf)
+    }
+
+    #[expect(
+        private_interfaces,
+        reason = "this trait is not nameable outside the crate"
+    )]
+    fn try_new(
+        descr: &ColumnDescPtr,
+        props: &WriterProperties,
+        column_props: &ResolvedColumnProperties,
+    ) -> Result<Self> {
+        let dict_supported = column_props.dictionary_enabled
+            && has_dictionary_support(T::get_physical_type(), props);
+
+        // The non-dictionary page encoding comes from writer properties so
+        // `flush_dict_page` can build the fallback lazily.
+        let fallback_encoding = column_props
+            .encoding
+            .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props));
+
+        // Encoding families validate the fallback even when starting with a
+        // dictionary because dictionary fallback constructs it lazily.
+        let encoding_family = <EncodingFamilyFor<T> as EncodingFamily<T>>::try_new(
+            dict_supported,
+            fallback_encoding,
+            descr,
+        )?;
+
+        let statistics_enabled = column_props.statistics_enabled;
+
+        let (bloom_filter, bloom_filter_target_fpp) = create_bloom_filter(column_props)?;
+
+        let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
+
+        Ok(Self {
+            encoding_family,
+            descr: descr.clone(),
+            num_values: 0,
+            statistics_enabled,
+            bloom_filter,
+            bloom_filter_target_fpp,
+            min_value: None,
+            max_value: None,
+            nan_count: None,
+            variable_length_bytes: None,
+            geo_stats_accumulator,
+            fallback_encoding,
+        })
+    }
+
     fn num_values(&self) -> usize {
         self.num_values
     }
 
     fn has_dictionary(&self) -> bool {
-        self.dict_encoder.is_some()
+        self.encoding_family.is_dictionary()
     }
 
     fn compresses_against_previous_value(&self) -> bool {
-        // While dictionary encoding is active `self.encoder` is unused: the
-        // data page holds RLE indices, which carry no cross-value state.
-        self.dict_encoder.is_none() && self.encoder.encoding() == Encoding::DELTA_BYTE_ARRAY
+        !self.encoding_family.is_dictionary()
+            && self.encoding_family.encoding() == Encoding::DELTA_BYTE_ARRAY
     }
 
     fn estimated_memory_size(&self) -> usize {
-        let encoder_size = self.encoder.estimated_memory_size();
-
-        let dict_encoder_size = self
-            .dict_encoder
-            .as_ref()
-            .map(|encoder| encoder.estimated_memory_size())
-            .unwrap_or_default();
+        let encoder_size = self.encoding_family.memory_size();
 
         let bloom_filter_size = self
             .bloom_filter
@@ -392,52 +473,54 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             .map(|bf| bf.estimated_memory_size())
             .unwrap_or_default();
 
-        encoder_size + dict_encoder_size + bloom_filter_size
+        // The running column min/max pin their values' heap bytes through page
+        // flush — for byte arrays that can be two full values
+        // (zero for the fixed-width scalars, whose `variable_length_bytes` is
+        // `None`).
+        let stats_size = [&self.min_value, &self.max_value]
+            .into_iter()
+            .flatten()
+            .map(|v| {
+                <T::T as ParquetValueType>::variable_length_bytes(std::slice::from_ref(v))
+                    .unwrap_or(0) as usize
+            })
+            .sum::<usize>();
+
+        encoder_size + bloom_filter_size + stats_size
     }
 
     fn estimated_dict_page_size(&self) -> Option<usize> {
-        Some(self.dict_encoder.as_ref()?.dict_encoded_size())
+        self.encoding_family.dict_page_size()
     }
 
     fn estimated_data_page_size(&self) -> usize {
-        match &self.dict_encoder {
-            Some(encoder) => encoder.estimated_data_encoded_size(),
-            _ => self.encoder.estimated_data_encoded_size(),
-        }
+        self.encoding_family.data_page_size()
     }
 
     fn flush_dict_page(&mut self) -> Result<Option<DictionaryPage>> {
-        match self.dict_encoder.take() {
-            Some(encoder) => {
-                if self.num_values != 0 {
-                    return Err(general_err!(
-                        "Must flush data pages before flushing dictionary"
-                    ));
-                }
-
-                if let Some(bloom_filter) = &mut self.bloom_filter {
-                    encoder.visit_uniques(|value| bloom_filter.insert(value));
-                }
-
-                let num_values = encoder.num_entries();
-                let is_sorted = encoder.is_sorted();
-                let buf = encoder.into_dict_page()?;
-
-                Ok(Some(DictionaryPage {
-                    buf,
-                    num_values,
-                    is_sorted,
-                }))
-            }
-            _ => Ok(None),
+        if self.encoding_family.is_dictionary() && self.num_values != 0 {
+            return Err(general_err!(
+                "Must flush data pages before flushing dictionary"
+            ));
         }
+        if let Some(bloom_filter) = &mut self.bloom_filter {
+            self.encoding_family
+                .visit_dictionary_values(|value| bloom_filter.insert(value));
+        }
+        // `take_dict_page` serializes the dictionary page and transitions the encoder
+        // to the fallback encoding (dictionary fallback); `None` when not dictionary.
+        Ok(self
+            .encoding_family
+            .take_dict_page(self.fallback_encoding, &self.descr)?
+            .map(|(buf, num_values, is_sorted)| DictionaryPage {
+                buf,
+                num_values,
+                is_sorted,
+            }))
     }
 
     fn flush_data_page(&mut self) -> Result<DataPageValues<T::T>> {
-        let (buf, encoding) = match &mut self.dict_encoder {
-            Some(encoder) => (encoder.write_indices()?, Encoding::RLE_DICTIONARY),
-            _ => (self.encoder.flush_buffer()?, self.encoder.encoding()),
-        };
+        let (buf, encoding) = self.encoding_family.flush_data_page()?;
 
         Ok(DataPageValues {
             buf,
@@ -501,6 +584,18 @@ where
     Some((min.clone(), max.clone(), nan_count))
 }
 
+fn update_geo_stats_accumulator<'a, T, I>(bounder: &mut dyn GeoStatsAccumulator, iter: I)
+where
+    T: ParquetValueType + 'a,
+    I: Iterator<Item = &'a T>,
+{
+    if bounder.is_valid() {
+        for val in iter {
+            bounder.update_wkb(val.as_bytes());
+        }
+    }
+}
+
 /// Creates a bloom filter sized for the column's configured NDV, returning the filter
 /// and the target FPP for folding.
 pub(crate) fn create_bloom_filter(
@@ -515,18 +610,6 @@ pub(crate) fn create_bloom_filter(
     }
 }
 
-fn update_geo_stats_accumulator<'a, T, I>(bounder: &mut dyn GeoStatsAccumulator, iter: I)
-where
-    T: ParquetValueType + 'a,
-    I: Iterator<Item = &'a T>,
-{
-    if bounder.is_valid() {
-        for val in iter {
-            bounder.update_wkb(val.as_bytes());
-        }
-    }
-}
-
 /// Plain-encoded byte cost of a single value of type `T::T`.
 ///
 /// Derived from [`ParquetValueType::dict_encoding_size`] (which returns
@@ -534,19 +617,13 @@ where
 /// per-value-size hook to the trait. Mirrors the dispatch in
 /// `KeyStorage::push` (`encodings/encoding/dict_encoder.rs`).
 ///
-/// Placed at the end of the module deliberately. Inserting it above the
-/// `ColumnValueEncoder` trait shifts the trait and `ColumnValueEncoderImpl`
-/// within the compiled module enough to perturb downstream code placement,
-/// which measurably regresses unrelated arrow-writer string benchmarks
-/// (~5-9% on `string` / `string_and_binary_view`). Defining it last keeps
-/// the hot encoder code at the offsets it has on `main`.
 #[inline]
 fn plain_encoded_byte_size<T: DataType>(value: &T::T) -> usize {
     let (overhead, bytes) = value.dict_encoding_size();
     match <T::T as ParquetValueType>::PHYSICAL_TYPE {
         // Plain BYTE_ARRAY = 4-byte length prefix + payload.
         Type::BYTE_ARRAY => overhead + bytes,
-        // Plain FLBA = raw bytes only; `dict_encoding_size`'s length prefix
+        // Plain fixed-length byte arrays are raw bytes only; `dict_encoding_size`'s length prefix
         // is irrelevant here, so the encoder passes `type_length` directly.
         Type::FIXED_LEN_BYTE_ARRAY => bytes,
         // Numeric/bool are short-circuited by the caller via
@@ -556,21 +633,6 @@ fn plain_encoded_byte_size<T: DataType>(value: &T::T) -> usize {
     }
 }
 
-/// How many leading values fit in `byte_budget` bytes, shared by the two
-/// `ColumnValueEncoder::count_values_within_byte_budget*` methods (one walks a
-/// contiguous slice, the other gathers by index).
-///
-/// `n` is the answer when everything fits; `vals` yields each candidate value,
-/// or `None` for a position that should still be counted but contributes no
-/// bytes (an out-of-range gather index). The boundary value that crosses the
-/// budget is included in the count so the caller's page-flush check trips on
-/// this mini-batch rather than leaving a sliver for the next page; this also
-/// catches a lone outlier wherever it lands among small values.
-///
-/// Defined at the end of the module alongside `plain_encoded_byte_size` for
-/// the same reason — see that function's note on code placement and the
-/// `string` / `string_and_binary_view` benchmarks.
-#[inline]
 fn count_within_budget<'a, T: DataType>(
     n: usize,
     byte_budget: usize,

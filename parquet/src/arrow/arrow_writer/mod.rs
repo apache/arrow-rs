@@ -42,7 +42,7 @@ use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
 use crate::basic::PageType;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
-use crate::column::writer::encoder::ColumnValueEncoder;
+use crate::column::writer::encoder::ColumnChunkEncoder;
 use crate::column::writer::{
     ColumnCloseResult, ColumnWriter, GenericColumnWriter, get_column_writer,
 };
@@ -1962,7 +1962,7 @@ fn write_leaf(
     }
 }
 
-fn write_primitive<E: ColumnValueEncoder>(
+fn write_primitive<E: ColumnChunkEncoder>(
     writer: &mut GenericColumnWriter<E>,
     values: &E::Values,
     levels: &ArrayLevels,

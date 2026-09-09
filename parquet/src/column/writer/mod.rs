@@ -32,7 +32,7 @@ use crate::basic::{
     SortOrder, Type,
 };
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
-use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
+use crate::column::writer::encoder::{ColumnChunkEncoder, ColumnValues, TypedColumnChunkEncoder};
 use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
@@ -261,7 +261,7 @@ struct PageMetrics {
     /// because they belong to the page's mandatory first value and cannot be
     /// moved elsewhere. Zero unless that value alone exceeded the limit
     /// *and* the encoding compresses against the preceding value; see
-    /// [`ColumnValueEncoder::compresses_against_previous_value`].
+    /// [`ColumnChunkEncoder::compresses_against_previous_value`].
     page_size_exemption: usize,
     num_page_nulls: u64,
     num_page_nans: Option<u64>,
@@ -451,10 +451,10 @@ impl LevelDataRef<'_> {
 }
 
 /// Typed column writer for a primitive column.
-pub type ColumnWriterImpl<'a, T> = GenericColumnWriter<'a, ColumnValueEncoderImpl<T>>;
+pub type ColumnWriterImpl<'a, T> = GenericColumnWriter<'a, TypedColumnChunkEncoder<T>>;
 
 /// Generic column writer for a primitive Parquet column
-pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
+pub struct GenericColumnWriter<'a, E: ColumnChunkEncoder> {
     // Column writer properties
     descr: ColumnDescPtr,
     props: WriterPropertiesPtr,
@@ -470,7 +470,7 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
 
     page_metrics: PageMetrics,
     // Metrics per column writer
-    column_metrics: ColumnMetrics<E::T>,
+    column_metrics: ColumnMetrics<E::Value>,
 
     /// Pre-computed distinct count to write into column chunk statistics.
     /// When set, takes precedence over `column_metrics.column_distinct_count`.
@@ -493,10 +493,10 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     data_page_boundary_ascending: bool,
     data_page_boundary_descending: bool,
     /// (min, max)
-    last_non_null_data_page_min_max: Option<(E::T, E::T)>,
+    last_non_null_data_page_min_max: Option<(E::Value, E::Value)>,
 }
 
-impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
+impl<'a, E: ColumnChunkEncoder> GenericColumnWriter<'a, E> {
     /// Returns a new instance of [`GenericColumnWriter`].
     pub fn new(
         descr: ColumnDescPtr,
@@ -516,7 +516,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         encodings.insert(Encoding::RLE);
 
         let mut page_metrics = PageMetrics::new();
-        let mut column_metrics = ColumnMetrics::<E::T>::new();
+        let mut column_metrics = ColumnMetrics::<E::Value>::new();
 
         // Initialize level histograms if collecting page or chunk statistics
         if statistics_enabled != EnabledStatistics::None {
@@ -581,8 +581,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         value_indices: Option<&[usize]>,
         def_levels: LevelDataRef<'_>,
         rep_levels: LevelDataRef<'_>,
-        min: Option<&E::T>,
-        max: Option<&E::T>,
+        min: Option<&E::Value>,
+        max: Option<&E::Value>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
         // Check if number of definition levels is the same as number of repetition levels.
@@ -741,8 +741,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         values: &E::Values,
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
-        min: Option<&E::T>,
-        max: Option<&E::T>,
+        min: Option<&E::Value>,
+        max: Option<&E::Value>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
         self.write_batch_internal(
@@ -1253,7 +1253,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Update the column index and offset index when adding the data page
     fn update_column_offset_index(
         &mut self,
-        page_statistics: Option<&ValueStatistics<E::T>>,
+        page_statistics: Option<&ValueStatistics<E::Value>>,
         page_variable_length_bytes: Option<i64>,
     ) {
         // update the column index
@@ -1267,7 +1267,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 vec![],
                 vec![],
                 self.page_metrics.num_page_nulls as i64,
-                self.get_nan_count::<E::T>(),
+                self.get_nan_count::<E::Value>(),
             );
         } else if self.column_index_builder.valid() {
             // from page statistics
@@ -1316,7 +1316,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             )
                             .0,
                             self.page_metrics.num_page_nulls as i64,
-                            self.get_nan_count::<E::T>(),
+                            self.get_nan_count::<E::Value>(),
                         );
                     } else {
                         self.column_index_builder.append(
@@ -1324,7 +1324,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             stat.min_bytes_opt().unwrap().to_vec(),
                             stat.max_bytes_opt().unwrap().to_vec(),
                             self.page_metrics.num_page_nulls as i64,
-                            self.get_nan_count::<E::T>(),
+                            self.get_nan_count::<E::Value>(),
                         );
                     }
                 }
@@ -1690,7 +1690,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             let distinct_count = self
                 .distinct_count_override
                 .or(self.column_metrics.column_distinct_count);
-            let statistics = ValueStatistics::<E::T>::new(
+            let statistics = ValueStatistics::<E::Value>::new(
                 self.column_metrics.min_column_value.clone(),
                 self.column_metrics.max_column_value.clone(),
                 distinct_count,
@@ -2120,7 +2120,7 @@ mod tests {
 
     use crate::column::{
         page::PageReader,
-        reader::{ColumnReaderImpl, get_column_reader, get_typed_column_reader},
+        reader::{ColumnReader, ColumnReaderImpl, get_column_reader, get_typed_column_reader},
     };
     use crate::file::writer::TrackedWrite;
     use crate::file::{
@@ -6019,5 +6019,108 @@ mod tests {
                 .with_expected_def_levels(&expected_def_levels)
                 .run();
         }
+    }
+
+    #[derive(Clone)]
+    struct CustomInt32Type;
+
+    impl DataType for CustomInt32Type {
+        type T = i32;
+
+        fn get_type_size() -> usize {
+            std::mem::size_of::<Self::T>()
+        }
+
+        // `ColumnReader` and `ColumnWriter` contain only the built-in marker
+        // variants, so a custom marker has no corresponding enum downcast.
+        fn get_column_reader(_: ColumnReader) -> Option<ColumnReaderImpl<Self>> {
+            None
+        }
+
+        fn get_column_writer(_: ColumnWriter<'_>) -> Option<ColumnWriterImpl<'_, Self>> {
+            None
+        }
+
+        fn get_column_writer_ref<'a, 'b: 'a>(
+            _: &'b ColumnWriter<'a>,
+        ) -> Option<&'b ColumnWriterImpl<'a, Self>> {
+            None
+        }
+
+        fn get_column_writer_mut<'a, 'b: 'a>(
+            _: &'a mut ColumnWriter<'b>,
+        ) -> Option<&'a mut ColumnWriterImpl<'b, Self>> {
+            None
+        }
+    }
+
+    // The distinct implementations verify that `ColumnWriterImpl` retains its
+    // `DataType` marker as part of the public alias's type identity.
+    trait MarkerSpecificColumnWriter {}
+
+    impl MarkerSpecificColumnWriter for ColumnWriterImpl<'_, Int32Type> {}
+    impl MarkerSpecificColumnWriter for ColumnWriterImpl<'_, CustomInt32Type> {}
+
+    fn generic_typed_writer<T: DataType>(writer: ColumnWriter<'_>) -> ColumnWriterImpl<'_, T> {
+        get_typed_column_writer::<T>(writer)
+    }
+
+    fn generic_typed_writer_ref<'a, 'b: 'a, T: DataType>(
+        writer: &'b ColumnWriter<'a>,
+    ) -> &'b ColumnWriterImpl<'a, T> {
+        get_typed_column_writer_ref::<T>(writer)
+    }
+
+    fn generic_typed_writer_mut<'a, 'b: 'a, T: DataType>(
+        writer: &'a mut ColumnWriter<'b>,
+    ) -> &'a mut ColumnWriterImpl<'b, T> {
+        get_typed_column_writer_mut::<T>(writer)
+    }
+
+    fn generic_serialized_typed_writer<'a, 'b, T: DataType>(
+        writer: &'b mut crate::file::writer::SerializedColumnWriter<'a>,
+    ) -> &'b mut ColumnWriterImpl<'a, T> {
+        writer.typed::<T>()
+    }
+
+    fn generic_write_batch<T: DataType>(
+        writer: &mut ColumnWriterImpl<'_, T>,
+        values: &[T::T],
+    ) -> Result<usize> {
+        writer.write_batch(values, None, None)
+    }
+
+    #[test]
+    fn test_data_type_bound_supports_typed_writer_api() {
+        let new_writer = || {
+            let descr = Arc::new(get_test_column_descr::<Int32Type>(0, 0));
+            get_column_writer(descr, Default::default(), get_test_page_writer())
+        };
+
+        let _: ColumnWriterImpl<'_, Int32Type> = generic_typed_writer::<Int32Type>(new_writer());
+
+        let mut writer = new_writer();
+        let _: &ColumnWriterImpl<'_, Int32Type> = generic_typed_writer_ref::<Int32Type>(&writer);
+        let _: &mut ColumnWriterImpl<'_, Int32Type> =
+            generic_typed_writer_mut::<Int32Type>(&mut writer);
+
+        let mut writer = crate::file::writer::SerializedColumnWriter::new(new_writer(), None);
+        let _: &mut ColumnWriterImpl<'_, Int32Type> =
+            generic_serialized_typed_writer::<Int32Type>(&mut writer);
+    }
+
+    #[test]
+    fn test_custom_data_type_supports_column_writer() {
+        fn assert_marker_specific<T: MarkerSpecificColumnWriter>() {}
+        assert_marker_specific::<ColumnWriterImpl<'_, Int32Type>>();
+        assert_marker_specific::<ColumnWriterImpl<'_, CustomInt32Type>>();
+
+        let descr = Arc::new(get_test_column_descr::<CustomInt32Type>(0, 0));
+        let mut writer: ColumnWriterImpl<'_, CustomInt32Type> =
+            GenericColumnWriter::new(descr, Default::default(), get_test_page_writer());
+
+        generic_write_batch::<CustomInt32Type>(&mut writer, &[1, 2, 3, 4]).unwrap();
+        let result = writer.close().unwrap();
+        assert_eq!(result.rows_written, 4);
     }
 }

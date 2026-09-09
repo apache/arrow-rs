@@ -210,6 +210,7 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
         };
         // split_streams_const() is faster up to type_width == 8
         match type_size {
+            0 => {}
             2 => split_streams_const::<2>(&self.buffer, &mut encoded),
             3 => split_streams_const::<3>(&self.buffer, &mut encoded),
             4 => split_streams_const::<4>(&self.buffer, &mut encoded),
@@ -227,5 +228,20 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
     /// return the estimated memory size of this encoder.
     fn estimated_memory_size(&self) -> usize {
         self.buffer.capacity() * std::mem::size_of::<u8>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::data_type::{ByteArray, FixedLenByteArray, FixedLenByteArrayType};
+
+    #[test]
+    #[should_panic(expected = "Mismatched FixedLenByteArray sizes: 3 != 2")]
+    fn byte_stream_split_slice_rejects_mismatched_width() {
+        let mut encoder = VariableWidthByteStreamSplitEncoder::<FixedLenByteArrayType>::new(2);
+        let malformed = FixedLenByteArray::from(ByteArray::from(vec![1_u8, 2, 3]));
+        encoder.put(&[malformed]).unwrap();
     }
 }

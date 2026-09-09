@@ -602,6 +602,10 @@ impl<F: AlpFloat> StreamingPage<F> {
 /// candidate `(exponent, factor)` set, which needs all of the page's data. Once
 /// that preset is fixed, later pages are encoded incrementally, a vector at a
 /// time, without ever holding the whole page of raw floats (see [`StreamingPage`]).
+#[expect(
+    private_bounds,
+    reason = "ALP capabilities are sealed; concrete types are exposed through AlpValue"
+)]
 pub struct AlpEncoder<T: DataType>
 where
     T::T: AlpFloat,
@@ -618,6 +622,10 @@ where
     streaming: StreamingPage<T::T>,
 }
 
+#[expect(
+    private_bounds,
+    reason = "ALP capabilities are sealed; concrete types are exposed through AlpValue"
+)]
 impl<T: DataType> AlpEncoder<T>
 where
     T::T: AlpFloat,

@@ -280,7 +280,8 @@ pub struct PlainDecoderDetails {
 ///
 /// Values are encoded back to back. For native types, data is encoded as little endian.
 /// Floating point types are encoded in IEEE.
-/// See [`PlainEncoder`](crate::encoding::PlainEncoder) for more information.
+/// With the `experimental` feature, use `parquet::encoding::get_encoder` with
+/// [`Encoding::PLAIN`] to construct the corresponding encoder.
 pub struct PlainDecoder<T: DataType> {
     // The binary details needed for decoding
     inner: PlainDecoderDetails,
@@ -938,8 +939,8 @@ where
 ///
 /// Only applied to byte arrays to separate the length values and the data, the lengths
 /// are encoded using DELTA_BINARY_PACKED encoding.
-/// See [`DeltaLengthByteArrayEncoder`](crate::encoding::DeltaLengthByteArrayEncoder)
-/// for more information.
+/// With the `experimental` feature, use `parquet::encoding::get_encoder` with
+/// [`Encoding::DELTA_LENGTH_BYTE_ARRAY`] to construct the corresponding encoder.
 pub struct DeltaLengthByteArrayDecoder<T: DataType> {
     // Lengths for each byte array in `data`
     // TODO: add memory tracker to this
@@ -1067,8 +1068,8 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
 ///
 /// Prefix lengths are encoded using `DELTA_BINARY_PACKED` encoding, Suffixes are stored
 /// using `DELTA_LENGTH_BYTE_ARRAY` encoding.
-/// See [`DeltaByteArrayEncoder`](crate::encoding::DeltaByteArrayEncoder) for more
-/// information.
+/// With the `experimental` feature, use `parquet::encoding::get_encoder` with
+/// [`Encoding::DELTA_BYTE_ARRAY`] to construct the corresponding encoder.
 pub struct DeltaByteArrayDecoder<T: DataType> {
     // Prefix lengths for each byte array
     // TODO: add memory tracker to this
