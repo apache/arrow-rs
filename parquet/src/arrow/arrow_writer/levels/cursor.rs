@@ -134,6 +134,19 @@ enum ListBounds {
     },
 }
 
+impl ListBounds {
+    /// Borrow the bounds as the per-row query the indexed walker makes.
+    fn as_bound(&self) -> BoundList<'_> {
+        match self {
+            Self::Offsets32(offsets) => BoundList::Offsets32(offsets),
+            Self::Offsets64(offsets) => BoundList::Offsets64(offsets),
+            Self::Fixed(width) => BoundList::Fixed(*width),
+            Self::View32 { offsets, sizes } => BoundList::View32 { offsets, sizes },
+            Self::View64 { offsets, sizes } => BoundList::View64 { offsets, sizes },
+        }
+    }
+}
+
 impl LevelTree {
     /// Resolve `array` against `field` into the tree its leaves are written from.
     pub(crate) fn build(field: &Field, array: &ArrayRef) -> Result<Self> {
@@ -1716,6 +1729,46 @@ enum BoundKind<'a> {
     RunEnds { ends: RunEnds<'a>, base: usize },
     /// A struct. The selected child is already the next bound node.
     Struct,
+    /// A list-like node, descended over each row's value range.
+    List { bounds: BoundList<'a> },
+}
+
+/// The list layouts, reduced to the row-bounds query the walkers actually make.
+#[derive(Debug, Clone, Copy)]
+enum BoundList<'a> {
+    Offsets32(&'a [i32]),
+    Offsets64(&'a [i64]),
+    Fixed(usize),
+    View32 {
+        offsets: &'a [i32],
+        sizes: &'a [i32],
+    },
+    View64 {
+        offsets: &'a [i64],
+        sizes: &'a [i64],
+    },
+}
+
+impl BoundList<'_> {
+    #[inline(always)]
+    fn row(self, row: usize) -> (usize, usize) {
+        match self {
+            Self::Offsets32(offsets) => (offsets[row].as_usize(), offsets[row + 1].as_usize()),
+            Self::Offsets64(offsets) => (offsets[row].as_usize(), offsets[row + 1].as_usize()),
+            Self::Fixed(width) => {
+                let start = row * width;
+                (start, start + width)
+            }
+            Self::View32 { offsets, sizes } => {
+                let start = offsets[row].as_usize();
+                (start, start + sizes[row].as_usize())
+            }
+            Self::View64 { offsets, sizes } => {
+                let start = offsets[row].as_usize();
+                (start, start + sizes[row].as_usize())
+            }
+        }
+    }
 }
 
 /// Bind one leaf's branch to the Arrow buffers the tree already owns.
@@ -1754,7 +1807,9 @@ fn bind_indexed_branch<'a>(tree: &'a LevelTree, leaf: &TreeLeaf) -> Result<Box<[
                 BoundKind::RunEnds { ends, base }
             }
             TreeKind::Struct => BoundKind::Struct,
-            TreeKind::List(_) => unreachable!("indexed list binding remains eager"),
+            TreeKind::List(bounds) => BoundKind::List {
+                bounds: bounds.as_bound(),
+            },
         };
         bound.push(BoundNode {
             kind,
@@ -1848,7 +1903,44 @@ fn visit_node(
                 out,
             )
         }
+        BoundKind::List { bounds } => {
+            let (start, end) = bounds.row(index);
+            visit_list(node, index, start, end, ctx, rep, child_path, out)
+        }
     }
+}
+
+#[expect(clippy::too_many_arguments)]
+fn visit_list(
+    node: &BoundNode<'_>,
+    row: usize,
+    start: usize,
+    end: usize,
+    ctx: LevelContext,
+    rep: i16,
+    path: &[BoundNode<'_>],
+    out: &mut LeafTile,
+) -> Result<()> {
+    if bound_is_null(node.nulls, row) {
+        return emit_null(node, ctx, rep, row, out);
+    }
+
+    let list_def = ctx.def_level + node.nullable as i16;
+    if start == end {
+        out.push_level(list_def, rep);
+        return Ok(());
+    }
+
+    let child_ctx = LevelContext {
+        def_level: list_def + 1,
+        rep_level: ctx.rep_level + 1,
+    };
+    let mut child_rep = rep;
+    for child_index in start..end {
+        visit_node(child_index, child_ctx, child_rep, path, out)?;
+        child_rep = child_ctx.rep_level;
+    }
+    Ok(())
 }
 
 fn emit_null(
