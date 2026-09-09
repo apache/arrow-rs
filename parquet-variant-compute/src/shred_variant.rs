@@ -528,9 +528,9 @@ impl IntoShreddingField for (DataType, bool) {
 /// should be shredded and with what types. Fields are nullable by default; pass
 /// a `(data_type, nullable)` pair or a `FieldRef` to control nullability.
 ///
-/// The index `0` represents the shared element schema of a list, so
-/// `items[0].id` and `items[0].name` describe fields on the same list element
-/// struct. Non-zero indexes are rejected.
+/// `[*]` represents the shared element schema of a list, so `items[*].id` and
+/// `items[*].name` describe fields on the same list element struct. Numeric
+/// indexes refer to concrete list elements and are rejected by this builder.
 ///
 /// # Example
 ///
@@ -557,8 +557,8 @@ impl IntoShreddingField for (DataType, bool) {
 ///         VariantPath::from_iter([VariantPathElement::from("metrics.cpu")]),
 ///         &DataType::Float64,
 ///     )?
-///     // index 0 describes the shared schema for every element of a list
-///     .with_path("items[0].id", &DataType::Int64)?
+///     // [*] describes the shared schema for every element of a list
+///     .with_path("items[*].id", &DataType::Int64)?
 ///     .build();
 ///    Ok(())
 /// }
@@ -588,7 +588,7 @@ impl ShreddedSchemaBuilder {
     /// * `field` - Anything convertible via [`IntoShreddingField`] (e.g. `FieldRef`,
     ///   `&DataType`, or `(&DataType, bool)` to control nullability)
     ///
-    /// List paths must use index `0`; non-zero indexes return an error.
+    /// List schema paths must use `[*]`; numeric indexes return an error.
     pub fn with_path<'a, P, F>(mut self, path: P, field: F) -> Result<Self>
     where
         P: TryInto<VariantPath<'a>>,
@@ -664,7 +664,7 @@ impl VariantSchemaNode {
                     .or_default()
                     .insert_path_elements(tail, field)
             }
-            VariantPathElement::Index { index: 0 } => {
+            VariantPathElement::ListElement => {
                 let element = match self {
                     Self::List(element) => element,
                     _ => {
@@ -679,7 +679,7 @@ impl VariantSchemaNode {
                 element.insert_path_elements(tail, field)
             }
             VariantPathElement::Index { index } => Err(ArrowError::InvalidArgumentError(format!(
-                "Only list index [0] is supported, got [{index}]"
+                "List indexes are not supported in schema paths; use [*], got [{index}]"
             ))),
         }
     }
@@ -1871,9 +1871,9 @@ mod tests {
 
         // Target schema is List<Struct<id:int64,name:utf8>>
         let list_schema = ShreddedSchemaBuilder::default()
-            .with_path("[0].id", &DataType::Int64)
+            .with_path("[*].id", &DataType::Int64)
             .unwrap()
-            .with_path("[0].name", &DataType::Utf8)
+            .with_path("[*].name", &DataType::Utf8)
             .unwrap()
             .build();
         let result = shred_variant(&input, &list_schema).unwrap();
@@ -2920,8 +2920,8 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_list() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("items[0].id", &DataType::Int64)?
-            .with_path("items[0].name", &DataType::Utf8)?
+            .with_path("items[*].id", &DataType::Int64)?
+            .with_path("items[*].name", &DataType::Utf8)?
             .build();
 
         assert_eq!(
@@ -2945,7 +2945,7 @@ mod tests {
     #[test]
     fn test_variant_schema_builder_nested_lists() -> Result<()> {
         let shredding_type = ShreddedSchemaBuilder::default()
-            .with_path("matrix[0][0]", (&DataType::Float64, false))?
+            .with_path("matrix[*][*]", (&DataType::Float64, false))?
             .build();
 
         assert_eq!(
@@ -2961,8 +2961,8 @@ mod tests {
     }
 
     #[test]
-    fn test_variant_schema_builder_rejects_non_zero_list_indexes() {
-        for (path, index) in [("items[1].id", 1), ("items[42].name", 42)] {
+    fn test_variant_schema_builder_rejects_list_indexes() {
+        for (path, index) in [("items[0].id", 0), ("items[42].name", 42)] {
             let error = ShreddedSchemaBuilder::default()
                 .with_path(path, &DataType::Int64)
                 .err()
@@ -2973,7 +2973,7 @@ mod tests {
             };
             assert_eq!(
                 message,
-                format!("Only list index [0] is supported, got [{index}]")
+                format!("List indexes are not supported in schema paths; use [*], got [{index}]")
             );
         }
     }
