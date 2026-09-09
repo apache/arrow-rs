@@ -858,11 +858,11 @@ where
 
         // See https://github.com/apache/arrow-rs/pull/9794.
         // The parquet spec allows miniblock sizes other than the 32 and 64 this crate
-        // writes, and sizing skip_buffer off values_per_mini_block would mean a large
-        // allocation on pages written with big miniblocks. The buffer only exists to
-        // walk last_value forward, so keep it at the size the common cases need and
+        // writes, and sizing skip_buffer off values_per_mini_block costs us the stack
+        // allocation that keeps skip fast. The buffer only exists to walk last_value
+        // forward, so keep it fixed at the widest size the common cases need and
         // consume wider miniblocks a chunk at a time.
-        let mut skip_buffer =  vec![T::T::default(); MAX_SKIP_BUFFER_VALUES];
+        let mut skip_buffer = [T::T::default(); MAX_SKIP_BUFFER_VALUES];
         while skip < to_skip {
             if self.mini_block_remaining == 0 {
                 self.next_mini_block()?;
