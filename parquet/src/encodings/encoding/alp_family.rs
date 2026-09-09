@@ -24,8 +24,21 @@ use crate::data_type::{ByteArray, DataType, FixedLenByteArray, Int96};
 use crate::errors::Result;
 use bytes::Bytes;
 
+pub trait AlpRunEncoder<T: DataType>: Encoder<T> {
+    fn put_repeated(&mut self, value: T::T, count: usize) -> Result<()>;
+}
+
+impl<T: DataType> AlpRunEncoder<T> for AlpEncoder<T>
+where
+    T::T: crate::encodings::alp::AlpFloat,
+{
+    fn put_repeated(&mut self, value: T::T, count: usize) -> Result<()> {
+        AlpEncoder::put_repeated(self, value, count)
+    }
+}
+
 pub trait AlpValue: Sized {
-    type Encoder<D>: Encoder<D> + 'static
+    type Encoder<D>: AlpRunEncoder<D> + 'static
     where
         D: DataType<T = Self>;
 
@@ -50,6 +63,12 @@ impl<T: DataType> Encoder<T> for UnsupportedAlp {
         unreachable!("ALP is not supported for this physical type")
     }
     fn flush_buffer(&mut self) -> Result<Bytes> {
+        unreachable!("ALP is not supported for this physical type")
+    }
+}
+
+impl<T: DataType> AlpRunEncoder<T> for UnsupportedAlp {
+    fn put_repeated(&mut self, _value: T::T, _count: usize) -> Result<()> {
         unreachable!("ALP is not supported for this physical type")
     }
 }

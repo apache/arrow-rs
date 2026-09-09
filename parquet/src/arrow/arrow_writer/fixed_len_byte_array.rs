@@ -18,8 +18,6 @@
 //! Fixed-length byte-array physical storage and Arrow writer bridge.
 
 use super::*;
-use crate::column::writer::encoder::FIXED_LEN_BYTE_ARRAY_MAX_WIDTH;
-use arrow_array::Array;
 
 /// Already-downcast storage for Arrow types represented by fixed-length byte arrays.
 #[derive(Clone, Copy)]
@@ -124,6 +122,10 @@ impl FixedLenByteArraySource for PhysicalFixedLenByteArraySource<'_> {
         Ok(())
     }
 
+    fn is_grouped(&self) -> bool {
+        self.1.is_grouped()
+    }
+
     fn write_to(self, sink: &mut FixedLenByteArraySink<'_>) -> Result<()> {
         let Self(storage, selection) = self;
         if selection.should_cache_dictionary(storage.len())
@@ -132,13 +134,16 @@ impl FixedLenByteArraySource for PhysicalFixedLenByteArraySource<'_> {
                 storage.len(),
                 selection,
                 storage.width(),
+                selection.is_grouped(),
                 move |index, dest| storage.write_at(index, dest),
             )?
         {
             return Ok(());
         }
 
-        if let FixedLenByteArrayStorage::Fixed(array) = storage {
+        if let FixedLenByteArrayStorage::Fixed(array) = storage
+            && !selection.is_grouped()
+        {
             let bytes = array.value_data();
             let width = array.value_size();
             let mut push = |start: usize, len: usize| {
@@ -154,9 +159,26 @@ impl FixedLenByteArraySource for PhysicalFixedLenByteArraySource<'_> {
             if selection.try_for_each_borrowable_range(|range| push(range.start, range.len()))? {
                 return Ok(());
             }
-            return sink.push_selected(map_values(selection, move |index| {
-                &bytes[index * width..(index + 1) * width]
-            }));
+        }
+
+        if let FixedLenByteArrayStorage::Fixed(array) = storage {
+            if !selection.is_grouped() {
+                let bytes = array.value_data();
+                let width = array.value_size();
+                return sink.push_selected(map_values(selection, move |index| {
+                    &bytes[index * width..(index + 1) * width]
+                }));
+            }
+            let values = map_values(selection, move |index| array.value(index));
+            return gather_run_groups_tiled::<FIXED_LEN_BYTE_ARRAY_BATCH_VALUES, _, _>(
+                values,
+                |values, counts| {
+                    sink.push_batch(FixedLenByteArrayBatch::RunGroups(RunBatch {
+                        values,
+                        counts,
+                    }))
+                },
+            );
         }
 
         write_computed_fixed_len_values(selection, sink, storage.width(), move |index, dest| {
@@ -241,6 +263,17 @@ fn write_computed_fixed_len_values<F>(
 where
     F: Fn(usize, &mut [u8]) + Copy,
 {
+    if selection.is_grouped() {
+        let mut buf = [0u8; FIXED_LEN_BYTE_ARRAY_MAX_WIDTH];
+        return selection.try_for_each_index_group(|index, count| {
+            write_at(index, &mut buf[..width]);
+            sink.push_batch(FixedLenByteArrayBatch::RunGroups(RunBatch {
+                values: &[&buf[..width]],
+                counts: &[count],
+            }))
+        });
+    }
+
     let mut packer = FixedLenByteArrayBatchPacker::new(sink, width);
     selection.try_for_each_index(|index| packer.push(|dest| write_at(index, dest)))?;
     packer.finish()
