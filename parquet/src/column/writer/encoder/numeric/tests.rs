@@ -121,3 +121,37 @@ fn dense_float_batch_statistics() {
     check_dense::<FloatType>(&[f32::NAN, f32::from_bits(0xffc0_0001)], None);
     check_dense::<DoubleType>(&[f64::NAN, f64::from_bits(0xfff8_0000_0000_0001)], None);
 }
+
+#[cfg(feature = "arrow")]
+#[test]
+fn dense_and_counted_batch_statistics() {
+    let flat = [f64::NAN, -0.0, 0.0];
+    let repeated = [-f64::NAN, 5.0, -7.0];
+    let counts = [3, 11, 2];
+    let expected: Vec<_> = flat
+        .into_iter()
+        .chain(
+            repeated
+                .into_iter()
+                .zip(counts)
+                .flat_map(|(v, n)| std::iter::repeat_n(v, n)),
+        )
+        .chain(flat)
+        .collect();
+    for dictionary in [false, true] {
+        for statistics in [EnabledStatistics::None, EnabledStatistics::Page] {
+            let mut encoder = encoder::<DoubleType>(None, statistics, dictionary);
+            for _ in 0..2 {
+                encoder.push_batch(NumericBatch::Flat(&flat)).unwrap();
+                encoder
+                    .push_batch(NumericBatch::RunGroups(RunBatch {
+                        values: &repeated,
+                        counts: &counts,
+                    }))
+                    .unwrap();
+                encoder.push_batch(NumericBatch::Flat(&flat)).unwrap();
+                assert_page(&mut encoder, &expected);
+            }
+        }
+    }
+}
