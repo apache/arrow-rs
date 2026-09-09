@@ -862,8 +862,7 @@ where
         // allocation on pages written with big miniblocks. The buffer only exists to
         // walk last_value forward, so keep it at the size the common cases need and
         // consume wider miniblocks a chunk at a time.
-        let mut skip_buffer =
-            vec![T::T::default(); self.values_per_mini_block.min(MAX_SKIP_BUFFER_VALUES)];
+        let mut skip_buffer =  vec![T::T::default(); MAX_SKIP_BUFFER_VALUES];
         while skip < to_skip {
             if self.mini_block_remaining == 0 {
                 self.next_mini_block()?;
