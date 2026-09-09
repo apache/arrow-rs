@@ -463,11 +463,13 @@ fn arrow_writer_list() {
     .build()
     .unwrap();
     let a = ListArray::from(a_list_data);
-    assert_eq!(a.null_count(), 1);
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+    assert_eq!(batch.column(0).null_count(), 1);
 
-    RoundTripTest::new(Arc::new(a))
-        .with_schema(Arc::new(schema))
+    RoundTripTest::new(batch.column(0).clone())
+        .with_schema(batch.schema())
         .run();
+    roundtrip(batch, None);
 }
 
 #[test]
@@ -590,11 +592,11 @@ fn arrow_writer_large_list_view() {
         true,
     )]);
 
-    //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
+    // [[1], [2, 3], null, [7, 8, 9, 10], [4, 5, 6]] — out-of-order offsets
     let a = LargeListViewArray::new(
         list_field,
-        vec![0i64, 1, 0, 3, 6].into(),
-        vec![1i64, 2, 0, 3, 4].into(),
+        vec![0i64, 1, 0, 6, 3].into(),
+        vec![1i64, 2, 0, 4, 3].into(),
         Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
         Some(vec![true, true, false, true, true].into()),
     );
@@ -1494,9 +1496,13 @@ fn arrow_writer_non_null() {
     let schema = Schema::new(vec![Field::new("a", ArrowDataType::Int32, false)]);
     let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
 
-    RoundTripTest::new(Arc::new(a))
-        .with_schema(Arc::new(schema))
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+    RoundTripTest::new(batch.column(0).clone())
+        .with_schema(batch.schema())
         .run();
+
+    roundtrip(batch, Some(SMALL_SIZE / 2));
 }
 
 #[test]
