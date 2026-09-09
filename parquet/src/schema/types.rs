@@ -263,10 +263,6 @@ pub struct PrimitiveTypeBuilder<'a> {
     /// unknown logical type instead of returning an error. Used when reading
     /// files, not when constructing a schema to write.
     coerce_incompatible_logical_types: bool,
-    /// When true, skip the physical/logical compatibility check so tests can
-    /// emit files that other writers may produce. The logical type is kept.
-    #[cfg(test)]
-    skip_logical_physical_validation: bool,
 }
 
 impl<'a> PrimitiveTypeBuilder<'a> {
@@ -283,8 +279,6 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             scale: -1,
             id: None,
             coerce_incompatible_logical_types: false,
-            #[cfg(test)]
-            skip_logical_physical_validation: false,
         }
     }
 
@@ -337,24 +331,15 @@ impl<'a> PrimitiveTypeBuilder<'a> {
     }
 
     /// Treat incompatible physical/logical type combinations as an unknown
-    /// logical type (physical type, no annotation) instead of erroring.
+    /// logical type instead of erroring.
     ///
-    /// This is the parquet-format GH-607 reader behavior. Do not use when
-    /// building a schema to write; invalid combinations should still fail.
+    /// The logical type is rewritten to [`LogicalType::_Unknown`] with sort
+    /// order [`SortOrder::UNDEFINED`]. This is the parquet-format GH-607
+    /// reader behavior. Do not use when building a schema to write; invalid
+    /// combinations should still fail.
     pub(crate) fn with_coerce_incompatible_logical_types(self, value: bool) -> Self {
         Self {
             coerce_incompatible_logical_types: value,
-            ..self
-        }
-    }
-
-    /// Skip physical/logical compatibility checks, keeping the logical type.
-    ///
-    /// Only for tests that need to write a file with an invalid combination.
-    #[cfg(test)]
-    pub(crate) fn with_skip_logical_physical_validation(self, value: bool) -> Self {
-        Self {
-            skip_logical_physical_validation: value,
             ..self
         }
     }
@@ -368,8 +353,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             converted_type: self.converted_type,
             logical_type: self.logical_type.clone(),
             id: self.id,
-            sort_order: SortOrder::SIGNED,
-            incompatible_logical_type_coerced: false,
+            sort_order: SortOrder::UNDEFINED,
         };
 
         // Check length before logical type, since it is used for logical type validation.
@@ -484,22 +468,10 @@ impl<'a> PrimitiveTypeBuilder<'a> {
 
             if let Some(err) = combo_error {
                 if self.coerce_incompatible_logical_types {
-                    // parquet-format GH-607: treat as unknown logical type.
-                    basic_info.logical_type = None;
-                    basic_info.converted_type = self.converted_type;
-                    basic_info.incompatible_logical_type_coerced = true;
+                    // parquet-format GH-607: treat as an unknown logical type.
+                    basic_info.logical_type = Some(LogicalType::_Unknown { field_id: 0 });
+                    basic_info.converted_type = ConvertedType::NONE;
                 } else {
-                    #[cfg(test)]
-                    {
-                        if self.skip_logical_physical_validation {
-                            if self.converted_type == ConvertedType::NONE {
-                                basic_info.converted_type = self.logical_type.clone().into();
-                            }
-                        } else {
-                            return Err(err);
-                        }
-                    }
-                    #[cfg(not(test))]
                     return Err(err);
                 }
             } else if self.converted_type == ConvertedType::NONE {
@@ -740,7 +712,6 @@ impl<'a> GroupTypeBuilder<'a> {
             logical_type: self.logical_type.clone(),
             id: self.id,
             sort_order: SortOrder::UNDEFINED,
-            incompatible_logical_type_coerced: false,
         };
         // Populate the converted type if only the logical type is populated
         if self.logical_type.is_some() && self.converted_type == ConvertedType::NONE {
@@ -853,9 +824,6 @@ pub struct BasicTypeInfo {
     logical_type: Option<LogicalType>,
     id: Option<i32>,
     sort_order: SortOrder,
-    /// Set when an incompatible logical type was stripped while reading
-    /// (parquet-format GH-607). Statistics for this column should be ignored.
-    incompatible_logical_type_coerced: bool,
 }
 
 impl HeapSize for BasicTypeInfo {
@@ -916,14 +884,6 @@ impl BasicTypeInfo {
     /// Returns [`SortOrder`] for the type.
     pub fn sort_order(&self) -> SortOrder {
         self.sort_order
-    }
-
-    /// Returns `true` if an incompatible logical type was stripped while reading
-    /// this field (parquet-format GH-607).
-    ///
-    /// Statistics for such columns should be ignored.
-    pub(crate) fn incompatible_logical_type_coerced(&self) -> bool {
-        self.incompatible_logical_type_coerced
     }
 }
 
@@ -2979,16 +2939,96 @@ mod tests {
         );
     }
 
+    fn primitive_logical_schema_elements(
+        name: &str,
+        physical: PhysicalType,
+        logical: LogicalType,
+    ) -> Vec<SchemaElement<'_>> {
+        vec![
+            SchemaElement {
+                r#type: None,
+                type_length: None,
+                repetition_type: None,
+                name: "schema",
+                num_children: Some(1),
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: None,
+            },
+            SchemaElement {
+                r#type: Some(physical),
+                type_length: None,
+                repetition_type: Some(Repetition::REQUIRED),
+                name,
+                num_children: None,
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: Some(logical),
+            },
+        ]
+    }
+
+    fn assert_coerced_unknown(col: &Type, physical: PhysicalType) {
+        assert_eq!(col.get_physical_type(), physical);
+        assert_eq!(
+            col.get_basic_info().logical_type_ref(),
+            Some(&LogicalType::_Unknown { field_id: 0 })
+        );
+        assert_eq!(col.get_basic_info().converted_type(), ConvertedType::NONE);
+        // UUID would be UNSIGNED and INT32/INT64 would be SIGNED. After coerce
+        // the sort order must be UNDEFINED, not a leftover physical default.
+        assert_eq!(col.get_basic_info().sort_order(), SortOrder::UNDEFINED);
+        assert_eq!(
+            ColumnOrder::column_order_for_type(
+                col.get_basic_info().logical_type_ref(),
+                col.get_basic_info().converted_type(),
+                physical,
+            )
+            .sort_order(),
+            SortOrder::UNDEFINED
+        );
+    }
+
     #[test]
     fn test_int32_uuid_coerced_to_physical_type() {
         let schema = parquet_schema_from_array_opts(int32_uuid_schema_elements(), true).unwrap();
         let fields = schema.get_fields();
         assert_eq!(fields.len(), 1);
-        let col = &fields[0];
-        assert_eq!(col.get_physical_type(), PhysicalType::INT32);
-        assert_eq!(col.get_basic_info().logical_type_ref(), None);
-        assert_eq!(col.get_basic_info().converted_type(), ConvertedType::NONE);
-        assert!(col.get_basic_info().incompatible_logical_type_coerced());
+        assert_coerced_unknown(&fields[0], PhysicalType::INT32);
+    }
+
+    #[test]
+    fn test_int64_uuid_coerced_sort_order_is_undefined() {
+        let schema = parquet_schema_from_array_opts(
+            primitive_logical_schema_elements("id", PhysicalType::INT64, LogicalType::Uuid),
+            true,
+        )
+        .unwrap();
+        assert_coerced_unknown(&schema.get_fields()[0], PhysicalType::INT64);
+    }
+
+    #[test]
+    fn test_byte_array_uuid_coerced_sort_order_is_undefined() {
+        let schema = parquet_schema_from_array_opts(
+            primitive_logical_schema_elements("id", PhysicalType::BYTE_ARRAY, LogicalType::Uuid),
+            true,
+        )
+        .unwrap();
+        assert_coerced_unknown(&schema.get_fields()[0], PhysicalType::BYTE_ARRAY);
+    }
+
+    #[test]
+    fn test_float16_on_int32_coerced_to_unknown() {
+        let schema = parquet_schema_from_array_opts(
+            primitive_logical_schema_elements("id", PhysicalType::INT32, LogicalType::Float16),
+            true,
+        )
+        .unwrap();
+        assert_coerced_unknown(&schema.get_fields()[0], PhysicalType::INT32);
     }
 
     #[test]

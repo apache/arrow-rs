@@ -251,8 +251,8 @@ impl ParquetMetaDataOptions {
     /// be treated as an unknown logical type when reading.
     ///
     /// Default is `false`: such combinations return an error, matching historical
-    /// behavior. When `true`, the column is exposed as its physical type with no
-    /// logical annotation, and column statistics are ignored (parquet-format GH-607).
+    /// behavior. When `true`, the logical type is rewritten to `_Unknown` with
+    /// sort order `UNDEFINED`. Column statistics are retained.
     pub fn coerce_incompatible_logical_types(&self) -> bool {
         self.coerce_incompatible_logical_types
     }

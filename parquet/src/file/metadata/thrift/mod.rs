@@ -438,13 +438,6 @@ fn read_column_metadata(
         skip_col_stats = opts.skip_column_stats(col_index);
         skip_size_stats = opts.skip_size_stats(col_index);
     }
-    if column
-        .column_descr
-        .get_basic_info()
-        .incompatible_logical_type_coerced()
-    {
-        skip_col_stats = true;
-    }
 
     // struct ColumnMetaData {
     //   1: required Type type

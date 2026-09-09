@@ -22,9 +22,9 @@
 use arrow::util::test_util::parquet_test_data;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BinaryArray, Int64Array, RecordBatch, StringArray, types};
-use arrow_schema::{ArrowError, Field, Schema, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
-use parquet::basic::{LogicalType, Type as PhysicalType};
+use parquet::basic::{LogicalType, SortOrder, Type as PhysicalType};
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -284,4 +284,66 @@ fn test_json_and_bson_logical_types() {
             None,
         ])
     );
+}
+
+fn int32_uuid_incompatible_path() -> PathBuf {
+    PathBuf::from(parquet_test_data()).join("int32_with_uuid_logical_type.parquet")
+}
+
+#[test]
+fn test_int32_with_uuid_logical_type_errors_by_default() {
+    let file = File::open(int32_uuid_incompatible_path()).unwrap();
+    let err = ParquetRecordBatchReaderBuilder::try_new(file).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Cannot annotate Uuid from INT32 for field 'int32_uuid'"),
+        "{err}"
+    );
+}
+
+#[test]
+fn test_int32_with_uuid_logical_type_coerced_with_option() {
+    let file = File::open(int32_uuid_incompatible_path()).unwrap();
+    let options = ArrowReaderOptions::new().with_coerce_incompatible_logical_types(true);
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+
+    let parquet_col = builder.metadata().file_metadata().schema_descr().column(0);
+    assert_eq!(parquet_col.name(), "int32_uuid");
+    assert_eq!(parquet_col.physical_type(), PhysicalType::INT32);
+    assert_eq!(
+        parquet_col.logical_type_ref(),
+        Some(&LogicalType::_Unknown { field_id: 0 })
+    );
+    assert_eq!(
+        parquet_col.get_basic_info().sort_order(),
+        SortOrder::UNDEFINED
+    );
+    assert_eq!(
+        builder
+            .metadata()
+            .file_metadata()
+            .column_order(0)
+            .sort_order(),
+        SortOrder::UNDEFINED
+    );
+    assert!(
+        builder
+            .metadata()
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .is_some(),
+        "statistics should be retained when coercing incompatible logical types"
+    );
+
+    let schema = builder.schema();
+    assert_eq!(schema.field(0).name(), "int32_uuid");
+    assert_eq!(schema.field(0).data_type(), &DataType::Int32);
+
+    let mut reader = builder.build().unwrap();
+    let batch = reader.next().unwrap().unwrap();
+    assert!(reader.next().is_none());
+    assert_eq!(batch.num_rows(), 10);
+    let values = batch.column(0).as_primitive::<types::Int32Type>();
+    assert_eq!(values.values(), &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 }
