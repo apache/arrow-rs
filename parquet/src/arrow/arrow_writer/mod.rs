@@ -70,8 +70,8 @@ use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
+use levels::LeafBatch;
 use levels::cursor::LevelTree;
-use levels::{ArrayLevels, LeafBatch, calculate_array_levels};
 
 mod boolean;
 mod byte_array;
@@ -152,6 +152,8 @@ pub use crate::column::page_store::{
 ///
 /// The writer supports writing all Arrow [`DataType`]s that have a direct mapping to
 /// Parquet types including  [`StructArray`] and [`ListArray`].
+/// `RunEndEncoded` (REE) arrays are supported when their value type has a Parquet
+/// representation.
 ///
 /// The following are not supported:
 ///
@@ -173,8 +175,8 @@ pub use crate::column::page_store::{
 /// * String, LargeString, StringView
 /// * Binary, LargeBinary, BinaryView
 ///
-/// The writer can will also accept both native and dictionary encoded arrays if the dictionaries
-/// contain compatible values.
+/// The writer will also accept native, dictionary encoded, and `RunEndEncoded` (REE) arrays if
+/// they contain compatible values.
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_array::{DictionaryArray, LargeStringArray, RecordBatch, StringArray, UInt8Array};
@@ -947,16 +949,12 @@ impl PageWriter for ArrowPageWriter {
     }
 }
 
-/// How one leaf's levels are produced.
-#[derive(Debug)]
-enum ArrowLeafPlan {
-    Cursor { tree: Arc<LevelTree>, leaf: u32 },
-    Legacy(Box<ArrayLevels>),
-}
-
 /// A leaf column that can be encoded by [`ArrowColumnWriter`]
 #[derive(Debug)]
-pub struct ArrowLeafColumn(ArrowLeafPlan);
+pub struct ArrowLeafColumn {
+    tree: Arc<LevelTree>,
+    leaf: u32,
+}
 
 const CURSOR_TARGET_SLOTS: usize = 1024;
 
@@ -967,53 +965,7 @@ impl ArrowLeafColumn {
         cursor_row_limit: usize,
         emit: impl for<'a> FnMut(LeafBatch<'a>) -> Result<()>,
     ) -> Result<()> {
-        match &self.0 {
-            ArrowLeafPlan::Cursor { tree, leaf } => {
-                write_leaf_window(tree, *leaf, cursor_row_limit, emit)
-            }
-            ArrowLeafPlan::Legacy(levels) => {
-                levels.validate()?;
-                let mut emit = emit;
-                emit(levels.leaf_batch())
-            }
-        }
-    }
-}
-// Temporary individual-column fallback boundary; P25 retires the eager reference.
-fn native_indexed_without_lists(data_type: &ArrowDataType) -> bool {
-    match data_type {
-        ArrowDataType::List(_)
-        | ArrowDataType::LargeList(_)
-        | ArrowDataType::ListView(_)
-        | ArrowDataType::LargeListView(_)
-        | ArrowDataType::FixedSizeList(_, _)
-        | ArrowDataType::Map(_, _) => false,
-        ArrowDataType::RunEndEncoded(_, values) => native_indexed_without_lists(values.data_type()),
-        ArrowDataType::Dictionary(_, values) => native_indexed_without_lists(values),
-        ArrowDataType::Struct(fields) => fields
-            .iter()
-            .all(|field| native_indexed_without_lists(field.data_type())),
-        _ => true,
-    }
-}
-
-/// Whether a shape still needs the materializing level builder.
-fn needs_legacy_levels(data_type: &ArrowDataType) -> bool {
-    match data_type {
-        ArrowDataType::RunEndEncoded(..) => true,
-        ArrowDataType::Dictionary(_, value) => {
-            !levels::is_leaf(value) || needs_legacy_levels(value)
-        }
-        ArrowDataType::List(field)
-        | ArrowDataType::LargeList(field)
-        | ArrowDataType::ListView(field)
-        | ArrowDataType::LargeListView(field)
-        | ArrowDataType::FixedSizeList(field, _)
-        | ArrowDataType::Map(field, _) => needs_legacy_levels(field.data_type()),
-        ArrowDataType::Struct(fields) => fields
-            .iter()
-            .any(|field| needs_legacy_levels(field.data_type())),
-        _ => false,
+        write_leaf_window(&self.tree, self.leaf, cursor_row_limit, emit)
     }
 }
 
@@ -1033,6 +985,10 @@ fn write_leaf_window(
 }
 
 /// Write every leaf of `tree`, sharing structural walks where useful.
+///
+/// Each planned window shares list-row or nullable-ancestor work. Leaves with
+/// no work to amortize, and leaves behind indexed barriers, keep their own
+/// cursors.
 fn write_tree(tree: &LevelTree, writers: &mut [ArrowColumnWriter]) -> Result<()> {
     let Some(first) = writers.first() else {
         return Ok(());
@@ -1139,20 +1095,11 @@ fn write_tree_with_framers(
 /// Structural compatibility is checked here. A logical null reachable at a
 /// non-nullable `field` returns an error when the leaf is written.
 pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafColumn>> {
-    if !native_indexed_without_lists(array.data_type()) && needs_legacy_levels(array.data_type()) {
-        validate_map_key_type(field.data_type())?;
-        return Ok(calculate_array_levels(array, field)?
-            .into_iter()
-            .map(|levels| ArrowLeafColumn(ArrowLeafPlan::Legacy(Box::new(levels))))
-            .collect());
-    }
     let tree = Arc::new(LevelTree::build(field, array)?);
     Ok((0..tree.leaf_count() as u32)
-        .map(|leaf| {
-            ArrowLeafColumn(ArrowLeafPlan::Cursor {
-                tree: Arc::clone(&tree),
-                leaf,
-            })
+        .map(|leaf| ArrowLeafColumn {
+            tree: Arc::clone(&tree),
+            leaf,
         })
         .collect())
 }
@@ -1330,17 +1277,6 @@ impl ArrowColumnWriter {
         col.try_for_each_batch(cursor_row_limit, |batch| {
             self.write_leaf_batch(batch)?;
             Ok(())
-        })
-    }
-
-    /// Write through a content-defined framer, inserting page flushes at its
-    /// stream boundaries.
-    #[cfg(test)]
-    fn write_with_framer(&mut self, col: &ArrowLeafColumn, framer: &mut CdcFramer) -> Result<()> {
-        self.writer.start_arrow_source();
-        let cursor_row_limit = self.cursor_row_limit;
-        col.try_for_each_batch(cursor_row_limit, |batch| {
-            self.write_cdc_batch(batch, framer)
         })
     }
 
@@ -2168,7 +2104,6 @@ mod tests {
         roundtrip_opts_with_array_validation,
     };
     use super::*;
-    use crate::file::properties::CdcOptions;
     use std::cmp::Ordering;
     use std::collections::HashMap;
 
@@ -2198,7 +2133,7 @@ mod tests {
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::{
-        BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
+        BloomFilterPosition, CdcOptions, EnabledStatistics, ReaderProperties, WriterVersion,
     };
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
@@ -2658,6 +2593,7 @@ mod tests {
         arrow_select::concat::concat(&arrays).unwrap()
     }
 
+    /// Write a single column and read every row back as one array.
     fn roundtrip_column(field: Field, col: ArrayRef, props: Option<WriterProperties>) -> ArrayRef {
         let schema = Arc::new(Schema::new(vec![field]));
         let batch = RecordBatch::try_new(schema.clone(), vec![col]).unwrap();
@@ -2668,6 +2604,8 @@ mod tests {
         read_column(file)
     }
 
+    /// Write a batch whose dense physical schema is logically compatible with
+    /// a wrapper-bearing writer schema.
     fn roundtrip_compatible_column(field: Field, col: ArrayRef) -> ArrayRef {
         let writer_schema = Arc::new(Schema::new(vec![field]));
         let batch_schema = Arc::new(Schema::new(vec![Field::new(
@@ -2904,7 +2842,7 @@ mod tests {
 
         let factory = ArrowRowGroupWriterFactory::new(&file_writer, Arc::clone(&two_fields));
         let Err(err) = factory.create_column_writers(0) else {
-            panic!("mismatched schemas should not create column writers")
+            panic!("mismatched schemas should not create column writers");
         };
         assert!(
             err.to_string()
@@ -2917,7 +2855,7 @@ mod tests {
             SerializedFileWriter::new(Vec::new(), parquet.root_schema_ptr(), props).unwrap();
         let factory = ArrowRowGroupWriterFactory::new(&file_writer, one_field);
         let Err(err) = factory.create_column_writers(0) else {
-            panic!("mismatched schemas should not create column writers")
+            panic!("mismatched schemas should not create column writers");
         };
         assert!(
             err.to_string()
@@ -2926,6 +2864,9 @@ mod tests {
         );
     }
 
+    /// An REE writer field can be required while its value field is nullable.
+    /// Dense batches written to that schema still need definition levels because
+    /// the Parquet leaf is optional.
     #[test]
     fn arrow_writer_required_map_keys_reject_only_reachable_nulls() {
         let keys: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
@@ -3143,6 +3084,9 @@ mod tests {
         );
     }
 
+    /// REE null runs can be written through a dense nullable schema, but must be
+    /// rejected for a dense required schema because the target Parquet leaf has
+    /// no definition level to represent them.
     #[test]
     fn ree_nulls_respect_dense_schema_nullability() {
         let run_ends = Int32Array::from(vec![2, 4, 5]);
@@ -3178,288 +3122,6 @@ mod tests {
             err.to_string().contains("required field") && err.to_string().contains("Found null"),
             "{err}"
         );
-    }
-
-    #[test]
-    fn eager_required_null_validation_respects_reachability_and_write_timing() {
-        let required = Field::new("c", DataType::Int32, false);
-        let nullable: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
-        let leaves = compute_leaves(&required, &nullable).unwrap();
-        let schema = Arc::new(Schema::new(vec![required.clone()]));
-        let writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
-        let (_file, factory) = writer.into_serialized_writer().unwrap();
-        let mut columns = factory.create_column_writers(0).unwrap();
-        assert!(
-            columns[0]
-                .write(&leaves[0])
-                .unwrap_err()
-                .to_string()
-                .contains("required field 'c'")
-        );
-
-        // Only a referenced logical dictionary null is invalid, not an unused value.
-        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None]));
-        let dict: ArrayRef = Arc::new(DictionaryArray::new(
-            Int8Array::from(vec![0, 0]),
-            values.clone(),
-        ));
-        assert_eq!(
-            roundtrip_compatible_column(required.clone(), dict).as_primitive::<Int32Type>(),
-            &Int32Array::from(vec![7, 7])
-        );
-        let dict: ArrayRef = Arc::new(DictionaryArray::new(Int8Array::from(vec![0, 1]), values));
-        let leaves = compute_leaves(&required, &dict).unwrap();
-        assert!(leaves[0].try_for_each_batch(1024, |_| Ok(())).is_err());
-
-        // A nullable ancestor masks an otherwise required child null.
-        let actual_fields = Fields::from(vec![Field::new("source_child", DataType::Int32, true)]);
-        let array: ArrayRef = Arc::new(StructArray::new(
-            actual_fields,
-            vec![nullable.clone()],
-            Some(NullBuffer::from(vec![true, false])),
-        ));
-        let target = Field::new(
-            "c",
-            DataType::Struct(Fields::from(vec![Field::new(
-                "target_child",
-                DataType::Int32,
-                false,
-            )])),
-            true,
-        );
-        let leaves = compute_leaves(&target, &array).unwrap();
-        assert!(leaves[0].try_for_each_batch(1024, |_| Ok(())).is_ok());
-        let result = roundtrip_compatible_column(target, array);
-        assert_eq!(result.as_struct().fields()[0].name(), "target_child");
-        assert!(result.is_null(1));
-
-        // Unused list child slots and out-of-slice scalar nulls are unreachable.
-        let values: ArrayRef = Arc::new(Int32Array::from(vec![None, Some(9), None]));
-        let list: ArrayRef = Arc::new(ListArray::new(
-            Arc::new(Field::new_list_field(DataType::Int32, true)),
-            OffsetBuffer::new(vec![1_i32, 2].into()),
-            values,
-            None,
-        ));
-        let target = Field::new(
-            "c",
-            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
-            false,
-        );
-        assert!(
-            compute_leaves(&target, &list).unwrap()[0]
-                .try_for_each_batch(1024, |_| Ok(()))
-                .is_ok()
-        );
-        assert_eq!(
-            roundtrip_compatible_column(required, nullable.slice(0, 1)).as_primitive::<Int32Type>(),
-            &Int32Array::from(vec![1])
-        );
-    }
-
-    // Temporary eager-path coverage; P20-P25 replace this with target cursor tests.
-    fn check_eager_required_list_validation(list_type: fn(Arc<Field>) -> DataType) {
-        let make_array = |values: Vec<Option<i32>>,
-                          offsets: Vec<i32>,
-                          sizes: Vec<i32>,
-                          nulls: Option<NullBuffer>| {
-            let child = Arc::new(Field::new("source_child", DataType::Int32, true));
-            let values: ArrayRef = Arc::new(Int32Array::from(values));
-            match list_type(child.clone()) {
-                DataType::List(_) => Arc::new(ListArray::new(
-                    child,
-                    OffsetBuffer::new(offsets.into()),
-                    values,
-                    nulls,
-                )) as ArrayRef,
-                DataType::LargeList(_) => Arc::new(LargeListArray::new(
-                    child,
-                    OffsetBuffer::new(
-                        offsets
-                            .into_iter()
-                            .map(i64::from)
-                            .collect::<Vec<_>>()
-                            .into(),
-                    ),
-                    values,
-                    nulls,
-                )) as ArrayRef,
-                DataType::ListView(_) => Arc::new(ListViewArray::new(
-                    child,
-                    offsets.into(),
-                    sizes.into(),
-                    values,
-                    nulls,
-                )) as ArrayRef,
-                DataType::LargeListView(_) => Arc::new(LargeListViewArray::new(
-                    child,
-                    offsets
-                        .into_iter()
-                        .map(i64::from)
-                        .collect::<Vec<_>>()
-                        .into(),
-                    sizes.into_iter().map(i64::from).collect::<Vec<_>>().into(),
-                    values,
-                    nulls,
-                )) as ArrayRef,
-                _ => unreachable!(),
-            }
-        };
-        let is_view = matches!(
-            list_type(Arc::new(Field::new("item", DataType::Int32, true))),
-            DataType::ListView(_) | DataType::LargeListView(_)
-        );
-        let offsets = |starts: Vec<i32>, end: i32| {
-            let mut result = starts;
-            if !is_view {
-                result.push(end);
-            }
-            result
-        };
-        let target = Field::new(
-            "c",
-            list_type(Arc::new(Field::new("target_child", DataType::Int32, false))),
-            true,
-        );
-        let invalid = make_array(vec![None, Some(7)], offsets(vec![0], 2), vec![2], None);
-        let valid = make_array(vec![Some(7), Some(8)], offsets(vec![0], 2), vec![2], None);
-        let masked = make_array(
-            vec![None, Some(7)],
-            offsets(vec![0, 1], 2),
-            vec![1, 1],
-            Some(NullBuffer::from(vec![false, true])),
-        );
-        let unused = make_array(
-            vec![None, Some(7), None],
-            offsets(vec![1], 2),
-            vec![1],
-            None,
-        );
-        let empty = make_array(vec![None], offsets(vec![0], 0), vec![0], None);
-        let sliced = make_array(
-            vec![None, Some(7)],
-            offsets(vec![0, 1], 2),
-            vec![1, 1],
-            None,
-        )
-        .slice(1, 1);
-        let schema = Arc::new(Schema::new(vec![target.clone()]));
-
-        // Binding must succeed even for invalid input; only an individual write rejects it.
-        for (name, array, invalid) in [
-            ("reachable null", invalid, true),
-            ("valid required child", valid.clone(), false),
-            ("null ancestor", masked, false),
-            ("unused child slots", unused, false),
-            ("empty list", empty, false),
-            ("out-of-slice null", sliced, false),
-        ] {
-            let leaves = compute_leaves(&target, &array).unwrap();
-            assert_eq!(leaves.len(), 1);
-            for cdc in [false, true] {
-                let props = WriterProperties::builder()
-                    .set_content_defined_chunking(cdc.then(Default::default))
-                    .build();
-                let mut writer =
-                    ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
-                let mut chunkers = writer.cdc_framers.take();
-                let (_file, factory) = writer.into_serialized_writer().unwrap();
-                let mut columns = factory.create_column_writers(0).unwrap();
-                let before = (
-                    columns[0].memory_size(),
-                    columns[0].get_estimated_total_bytes(),
-                );
-                let result = match &mut chunkers {
-                    Some(chunkers) => columns[0].write_with_framer(&leaves[0], &mut chunkers[0]),
-                    None => columns[0].write(&leaves[0]),
-                };
-                if invalid {
-                    let error = result.unwrap_err().to_string();
-                    assert!(
-                        error.contains("Found null at index 0 for required field 'target_child'"),
-                        "{name}, cdc={cdc}: {error}"
-                    );
-                    assert_eq!(
-                        before,
-                        (
-                            columns[0].memory_size(),
-                            columns[0].get_estimated_total_bytes()
-                        ),
-                        "invalid leaf must be rejected before encoding"
-                    );
-                    // The rejected write must leave no encoded values behind.
-                    let valid_leaves = compute_leaves(&target, &valid).unwrap();
-                    match &mut chunkers {
-                        Some(chunkers) => columns[0]
-                            .write_with_framer(&valid_leaves[0], &mut chunkers[0])
-                            .unwrap(),
-                        None => columns[0].write(&valid_leaves[0]).unwrap(),
-                    }
-                    assert_eq!(
-                        columns
-                            .pop()
-                            .unwrap()
-                            .close()
-                            .unwrap()
-                            .close
-                            .metadata
-                            .num_values(),
-                        2
-                    );
-                } else {
-                    result.unwrap();
-                    columns.pop().unwrap().close().unwrap();
-                }
-
-                // Exercise the ordinary and CDC row-group driving entry points as well.
-                let batch = RecordBatch::try_new(
-                    Arc::new(Schema::new(vec![Field::new(
-                        "c",
-                        array.data_type().clone(),
-                        true,
-                    )])),
-                    vec![array.clone()],
-                )
-                .unwrap();
-                let props = WriterProperties::builder()
-                    .set_content_defined_chunking(cdc.then(Default::default))
-                    .build();
-                let mut writer =
-                    ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
-                let result = writer.write(&batch);
-                if invalid {
-                    assert!(
-                        result
-                            .unwrap_err()
-                            .to_string()
-                            .contains("required field 'target_child'")
-                    );
-                } else {
-                    result.unwrap();
-                    writer.close().unwrap();
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn eager_required_list_validation_preserves_level_generation() {
-        check_eager_required_list_validation(DataType::List);
-    }
-
-    #[test]
-    fn eager_required_large_list_validation_preserves_level_generation() {
-        check_eager_required_list_validation(DataType::LargeList);
-    }
-
-    #[test]
-    fn eager_required_list_view_validation_preserves_level_generation() {
-        check_eager_required_list_validation(DataType::ListView);
-    }
-
-    #[test]
-    fn eager_required_large_list_view_validation_preserves_level_generation() {
-        check_eager_required_list_validation(DataType::LargeListView);
     }
 
     #[test]
@@ -6144,40 +5806,6 @@ mod tests {
     }
 
     #[test]
-    fn ree_string() {
-        let ree: ArrayRef = Arc::new(
-            [Some("a"), Some("a"), None, Some("b"), Some("b")]
-                .into_iter()
-                .collect::<Int32RunArray>(),
-        );
-        let flat: ArrayRef = Arc::new(StringArray::from(vec![
-            Some("a"),
-            Some("a"),
-            None,
-            Some("b"),
-            Some("b"),
-        ]));
-        ree_write_read_roundtrip(ree, flat);
-    }
-
-    #[test]
-    fn ree_int32() {
-        let mut b = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        for v in [Some(1), Some(1), None, Some(2), Some(2)] {
-            b.append_option(v);
-        }
-        let ree: ArrayRef = Arc::new(b.finish());
-        let flat: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(1),
-            Some(1),
-            None,
-            Some(2),
-            Some(2),
-        ]));
-        ree_write_read_roundtrip(ree, flat);
-    }
-
-    #[test]
     fn ree_bool() {
         // run_ends [3, 5, 7] → [T,T,T, null,null, F,F]
         let ree: ArrayRef = Arc::new(
@@ -6728,6 +6356,8 @@ mod tests {
         roundtrip_opts(&batch, props);
     }
 
+    /// Dictionaries whose values are `Utf8View` or `BinaryView` round-trip
+    /// through the byte-array writer.
     #[test]
     fn arrow_writer_dictionary_of_view_roundtrip() {
         fn check(flat_type: DataType, nullable: bool, dict: ArrayRef, expected: ArrayRef) {
@@ -6839,7 +6469,6 @@ mod tests {
         fixed.append_value([3, 4]).unwrap();
         check_required_dict_null_value(Arc::new(fixed.finish()));
     }
-
     #[test]
     fn arrow_writer_rejects_null_dictionary_key_for_required_column() {
         let values: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
@@ -6868,6 +6497,7 @@ mod tests {
         assert!(err.to_string().contains("Found null"), "{err}");
     }
 
+    /// Binary and LargeBinary dictionaries round-trip.
     #[test]
     fn arrow_writer_low_cardinality_binary_dictionary() {
         let dict_vals: Vec<&[u8]> = vec![b"alpha".as_ref(), b"beta", b"gamma", b"delta"];
@@ -6884,6 +6514,7 @@ mod tests {
         RoundTripTest::new(Arc::new(lbin)).run();
     }
 
+    /// Dictionary columns round-trip with bloom filters enabled.
     #[test]
     fn arrow_writer_low_cardinality_dictionary_with_bloom_filter() {
         let keys = Int32Array::from_iter_values((0..64).map(|i| i % 4));
@@ -7098,6 +6729,7 @@ mod tests {
         assert_eq!(idx.min_value(1), Some(b"m".as_slice()));
         assert_eq!(idx.max_value(1), Some(b"z".as_slice()));
     }
+
     #[test]
     fn dense_dictionary_source_changes_preserve_cache_and_pages() {
         let sources: Vec<(ArrayRef, ArrayRef)> = vec![
@@ -7238,6 +6870,7 @@ mod tests {
         roundtrip_opts(&batch, props);
     }
 
+    /// Plain Decimal32 and Decimal64 columns round-trip.
     #[test]
     fn arrow_writer_decimal32_decimal64_plain_column() {
         let d32 = Decimal32Array::from(vec![Some(12345), Some(56789), Some(34567)])
@@ -7431,6 +7064,7 @@ mod tests {
             .page_locations()
             .len()
     }
+
     #[test]
     fn arrow_writer_clustered_nullable_ranges_roundtrip_all_families() {
         const ROWS: usize = 80;

@@ -17,6 +17,7 @@
 
 //! Tests for [`ArrowWriter`]
 
+mod fixed_width;
 mod layout;
 mod roundtrip;
 // The integration tests currently use only part of the shared helpers.

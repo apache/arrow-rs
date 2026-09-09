@@ -291,7 +291,6 @@ impl<'a> LeafBatch<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::Int32Array;
 
     fn selected(selection: &ValueSelection) -> Vec<usize> {
         selection.as_ref().cursor().collect()
@@ -370,9 +369,10 @@ mod tests {
         ranges.append_sparse(NullBuffer::from(&[true]), 40, 0);
         assert_eq!(selected(&ranges), before);
     }
+
     #[test]
     fn leaf_batch_window_preserves_levels_and_selected_values() {
-        let array = Int32Array::from(vec![10, 20, 30, 40]);
+        let array = arrow_array::Int32Array::from(vec![10, 20, 30, 40]);
         let batch = LeafBatch::new(
             &array,
             LevelDataRef::Materialized(&[1, 0, 1, 1]),

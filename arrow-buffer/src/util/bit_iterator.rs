@@ -531,13 +531,13 @@ mod tests {
             ($iter:expr) => {{
                 let mut iter = $iter;
                 assert_eq!(iter.size_hint(), (2, Some(66)));
-                assert_eq!(iter.next().map(|index| index as usize), Some(1));
+                assert_eq!(iter.next(), Some(1));
                 assert_eq!(iter.size_hint(), (1, Some(65)));
-                assert_eq!(iter.next().map(|index| index as usize), Some(5));
+                assert_eq!(iter.next(), Some(5));
                 assert_eq!(iter.size_hint(), (0, Some(64)));
-                assert_eq!(iter.next().map(|index| index as usize), Some(70));
+                assert_eq!(iter.next(), Some(70));
                 assert_eq!(iter.size_hint(), (1, Some(1)));
-                assert_eq!(iter.next().map(|index| index as usize), Some(90));
+                assert_eq!(iter.next(), Some(90));
                 assert_eq!(iter.size_hint(), (0, Some(0)));
             }};
         }
