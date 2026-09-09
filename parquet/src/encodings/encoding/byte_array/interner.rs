@@ -97,11 +97,17 @@ pub(crate) struct ByteArrayInterner {
     map: hashbrown::hash_table::HashTable<Entry>,
     /// Encoded dictionary page: each value prefixed by its length as a `u32`
     pub(crate) page: Vec<u8>,
+    #[cfg(all(test, feature = "arrow"))]
+    pub(super) intern_calls: usize,
 }
 
 impl ByteArrayInterner {
     #[inline]
     pub(crate) fn intern(&mut self, value: &[u8]) -> Result<u64> {
+        #[cfg(all(test, feature = "arrow"))]
+        {
+            self.intern_calls += 1;
+        }
         let hash = self.state.hash_one(value);
 
         // value is "small" - can be inlined

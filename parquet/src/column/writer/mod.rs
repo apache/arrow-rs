@@ -102,6 +102,29 @@ pub enum ColumnWriter<'a> {
 }
 
 impl ColumnWriter<'_> {
+    #[cfg(feature = "arrow")]
+    pub(crate) fn start_arrow_source(&mut self, byte_cache_enabled: bool, reset_byte_cache: bool) {
+        match self {
+            Self::ByteArrayColumnWriter(writer) => writer
+                .encoder
+                .prepare_arrow_dictionary(reset_byte_cache, byte_cache_enabled),
+            _ => downcast_writer!(self, typed, typed.encoder.start_arrow_source()),
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    pub(crate) fn has_dictionary(&self) -> bool {
+        downcast_writer!(self, typed, typed.encoder.has_dictionary())
+    }
+
+    #[cfg(all(test, feature = "arrow"))]
+    pub(crate) fn arrow_dictionary_cache_stats(&self) -> Option<(usize, usize)> {
+        match self {
+            Self::ByteArrayColumnWriter(writer) => writer.encoder.arrow_dictionary_cache_stats(),
+            _ => None,
+        }
+    }
+
     /// Returns the estimated total memory usage
     #[cfg(feature = "arrow")]
     pub(crate) fn memory_size(&self) -> usize {

@@ -6,6 +6,8 @@ use std::mem::MaybeUninit;
 
 use super::ArrowPhysicalBridge;
 use crate::column::value_batch::{BatchSink, ValueProducer};
+#[cfg(test)]
+use crate::column::value_selection::DictionaryKeys;
 use crate::column::value_selection::{PhysicalValueSelection, PhysicalValueSpan};
 use crate::column::writer::ByteBudgetTarget;
 use crate::column::writer::encoder::TypedColumnChunkEncoder;
@@ -26,6 +28,8 @@ use arrow_schema::DataType;
 trait ByteArrayValueAccess<'a>: Copy {
     /// Whether every contiguous logical range can be lent as a byte batch.
     const SUPPORTS_CONTIGUOUS_BATCHES: bool = false;
+
+    fn len(self) -> usize;
 
     fn value(self, index: usize) -> &'a [u8];
 
@@ -104,6 +108,10 @@ impl ByteArrayOffset for i64 {
 impl<'a, O: ByteArrayOffset> ByteArrayValueAccess<'a> for OffsetByteArrayAccess<'a, O> {
     const SUPPORTS_CONTIGUOUS_BATCHES: bool = true;
 
+    fn len(self) -> usize {
+        self.offsets.len() - 1
+    }
+
     #[inline]
     fn value(self, index: usize) -> &'a [u8] {
         let start = self.offsets[index].as_usize();
@@ -156,6 +164,10 @@ impl<'a, F> ByteArrayValueAccess<'a> for ViewByteArrayAccess<'a, F>
 where
     F: Fn(usize) -> &'a [u8] + Copy + 'a,
 {
+    fn len(self) -> usize {
+        self.views.len()
+    }
+
     #[inline]
     fn value(self, index: usize) -> &'a [u8] {
         (self.get)(index)
@@ -215,6 +227,12 @@ where
 {
     #[inline]
     fn write_flat_to(self, sink: &mut ByteArraySink<'a, '_>) -> Result<()> {
+        // Even consecutive keys can reuse slots interned by an earlier write.
+        if self.selection.has_dictionary_mapping() && sink.uses_arrow_dictionary_cache() {
+            return sink
+                .push_dictionary_source(self.selection, move |index| self.values.value(index));
+        }
+
         // Offset layouts can lend every selected range directly. Other
         // layouts retain one gathered stream so short ranges fill full tiles.
         if A::SUPPORTS_CONTIGUOUS_BATCHES
@@ -349,18 +367,37 @@ impl<'a> ArrowPhysicalBridge<'a> for ByteArrayStorage<'a> {
 
     fn count_variable_width_within_byte_budget(
         self,
-        _encoder: &Self::ColumnEncoder,
+        encoder: &Self::ColumnEncoder,
         selection: PhysicalValueSelection<'a>,
         budget: usize,
-        _target: ByteBudgetTarget,
+        target: ByteBudgetTarget,
     ) -> Option<usize> {
         if selection.len() == 0 {
             return None;
         }
 
-        with_byte_array_access!(self.kind, |values| Some(
-            count_selection_within_byte_budget(selection, values, budget)
-        ))
+        with_byte_array_access!(self.kind, |values| {
+            if target == ByteBudgetTarget::DictionaryPage
+                && selection.has_dictionary_mapping()
+                && encoder.uses_arrow_dictionary_cache()
+            {
+                let all_values_fit = values
+                    .exact_range_encoded_size(0, values.len())
+                    .or_else(|| values.range_encoded_upper_bound(0, values.len()))
+                    .is_some_and(|size| size <= budget);
+                Some(if all_values_fit {
+                    selection.len()
+                } else {
+                    count_dictionary_values_within_byte_budget(selection, values, budget, |index| {
+                        encoder.has_arrow_dictionary(index)
+                    })
+                })
+            } else {
+                Some(count_selection_within_byte_budget(
+                    selection, values, budget,
+                ))
+            }
+        })
     }
 }
 
@@ -372,6 +409,38 @@ fn write_physical_byte_array_source<'a, A: ByteArrayValueAccess<'a> + 'a>(
 ) -> Result<()> {
     let values = PhysicalByteArraySource { selection, values };
     encoder.write_byte_array_source(values)
+}
+
+/// Count logical values while charging each new Arrow dictionary slot once.
+fn count_dictionary_values_within_byte_budget<'a, A: ByteArrayValueAccess<'a>>(
+    selection: PhysicalValueSelection<'a>,
+    values: A,
+    budget: usize,
+    cached: impl Fn(usize) -> bool,
+) -> usize {
+    let mut seen = None;
+    let mut remaining = budget;
+    let mut count = 0;
+    let _: std::result::Result<(), ()> = selection.try_for_each_index(|index| {
+        if !cached(index) {
+            // Reused slots need neither payload sizing nor a dictionary-sized scratch bitmap.
+            let seen = seen.get_or_insert_with(|| vec![false; values.len()]);
+            if !seen[index] {
+                seen[index] = true;
+                let encoded = values
+                    .value_len(index)
+                    .saturating_add(std::mem::size_of::<u32>());
+                if encoded > remaining {
+                    count += 1;
+                    return Err(());
+                }
+                remaining -= encoded;
+            }
+        }
+        count += 1;
+        Ok(())
+    });
+    count
 }
 
 /// Count leading physical-selection values within a PLAIN byte budget. Range
@@ -497,5 +566,27 @@ mod tests {
             .map(|offset| &data[offset[0] as usize..offset[1] as usize])
             .collect();
         assert_eq!(selected, [b"bb".as_slice(), b"ccc".as_slice()]);
+    }
+
+    #[test]
+    fn dictionary_budget_charges_distinct_physical_values() {
+        let values = StringArray::from(vec!["a", "bbbb"]);
+        let keys = [0_i32, 0, 1, 0, 1];
+        let selection = PhysicalValueSelection::dictionary(
+            ValueSelectionRef::Dense { offset: 0, len: 5 },
+            DictionaryKeys::I32(&keys),
+        );
+        let storage = ByteArrayStorage::bind(&values).unwrap();
+
+        with_byte_array_access!(storage.kind, |values| {
+            assert_eq!(
+                count_dictionary_values_within_byte_budget(selection, values, 5, |_| false),
+                3
+            );
+            assert_eq!(
+                count_dictionary_values_within_byte_budget(selection, values, 8, |i| i == 0),
+                5
+            );
+        });
     }
 }

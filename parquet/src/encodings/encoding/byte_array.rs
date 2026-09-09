@@ -32,6 +32,13 @@ pub(crate) fn append_plain_value(buffer: &mut Vec<u8>, value: &[u8]) {
 #[derive(Debug, Default)]
 pub struct ByteArrayDictionaryStorage(ByteArrayInterner);
 
+#[cfg(all(test, feature = "arrow"))]
+impl ByteArrayDictionaryStorage {
+    pub(crate) fn intern_calls(&self) -> usize {
+        self.0.intern_calls
+    }
+}
+
 impl DictionaryStorage<ByteArray> for ByteArrayDictionaryStorage {
     fn new(_desc: &ColumnDescPtr) -> Self {
         Self::default()

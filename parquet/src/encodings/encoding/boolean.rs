@@ -25,12 +25,14 @@ pub(super) enum BoolBatchSelection<'a> {
         bit_offset: usize,
         indices: &'a [usize],
     },
-    /// An Arrow selection traversed as physical spans for packed copies
-    /// and popcounts.
+    /// A recursively lowered Arrow selection. Flat dictionaries use scalar
+    /// traversal to avoid span-coalescing overhead for alternating keys; other
+    /// selections use spans for packed copies and popcounts.
     #[cfg(feature = "arrow")]
     Physical {
         bit_offset: usize,
         selection: PhysicalValueSelection<'a>,
+        scalar: bool,
     },
 }
 
@@ -78,6 +80,7 @@ impl<'a> BoolBatch<'a> {
                 _ => BoolBatchSelection::Physical {
                     bit_offset,
                     selection,
+                    scalar: selection.has_dictionary_mapping(),
                 },
             },
         };
@@ -147,6 +150,7 @@ impl<'a> BoolBatch<'a> {
             BoolBatchSelection::Physical {
                 bit_offset,
                 selection,
+                scalar: false,
             } => {
                 let _: Result<(), ()> = selection.try_for_each_span(|span| {
                     match span {
@@ -197,9 +201,16 @@ impl<'a> BoolBatch<'a> {
                 .filter(|&&index| get_bit(self.bytes, bit_offset + index))
                 .count(),
             #[cfg(feature = "arrow")]
+            BoolBatchSelection::Physical { scalar: true, .. } => {
+                let mut count = 0;
+                self.for_each(|value| count += usize::from(value));
+                count
+            }
+            #[cfg(feature = "arrow")]
             BoolBatchSelection::Physical {
                 bit_offset,
                 selection,
+                scalar: false,
             } => {
                 let mut count = 0;
                 let _: Result<(), ()> = selection.try_for_each_span(|span| {
