@@ -56,6 +56,60 @@ struct FixedLenByteArrayObserver<'a> {
     has_max: bool,
 }
 
+/// Widest Arrow logical value computed into fixed-length bytes (decimal256).
+#[cfg(feature = "arrow")]
+pub(crate) const FIXED_LEN_BYTE_ARRAY_MAX_WIDTH: usize = 32;
+/// Number of fixed-length values or run groups per stack batch.
+#[cfg(feature = "arrow")]
+pub(crate) const FIXED_LEN_BYTE_ARRAY_BATCH_VALUES: usize = 64;
+
+#[cfg(feature = "arrow")]
+pub(crate) struct FixedLenByteArrayBatchPacker<'sink, 'encoder> {
+    sink: &'sink mut FixedLenByteArraySink<'encoder>,
+    tile: [u8; FIXED_LEN_BYTE_ARRAY_BATCH_VALUES * FIXED_LEN_BYTE_ARRAY_MAX_WIDTH],
+    width: usize,
+    filled: usize,
+}
+
+#[cfg(feature = "arrow")]
+impl<'sink, 'encoder> FixedLenByteArrayBatchPacker<'sink, 'encoder> {
+    #[inline]
+    pub(crate) fn new(sink: &'sink mut FixedLenByteArraySink<'encoder>, width: usize) -> Self {
+        Self {
+            sink,
+            tile: [0; FIXED_LEN_BYTE_ARRAY_BATCH_VALUES * FIXED_LEN_BYTE_ARRAY_MAX_WIDTH],
+            width,
+            filled: 0,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn push(&mut self, fill: impl FnOnce(&mut [u8])) -> Result<()> {
+        let offset = self.filled * self.width;
+        let end = offset + self.width;
+        fill(&mut self.tile[offset..end]);
+        self.filled += 1;
+        if self.filled == FIXED_LEN_BYTE_ARRAY_BATCH_VALUES {
+            self.flush()?;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub(crate) fn finish(mut self) -> Result<()> {
+        self.flush()
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        let len = self.filled * self.width;
+        self.sink.push_batch(FixedLenByteArrayBatch::Packed(
+            PackedFixedLenByteArrayBatch::new(&self.tile[..len], self.width, self.filled),
+        ))?;
+        self.filled = 0;
+        Ok(())
+    }
+}
+
 impl<D: DataType<T = FixedLenByteArray>> TypedColumnChunkEncoder<D> {
     #[inline]
     pub(crate) fn write_fixed_len_byte_array_source(
@@ -172,6 +226,82 @@ impl FixedLenByteArrayObserver<'_> {
 }
 
 impl FixedLenByteArraySink<'_> {
+    #[inline(never)]
+    fn encode_packed(&mut self, values: PackedFixedLenByteArrayBatch<'_>) -> Result<()> {
+        if matches!(self.target, FixedLenByteArraySinkTarget::Dictionary(_)) {
+            self.encode_dictionary_packed(values)
+        } else {
+            self.encode_fallback_packed(values)
+        }
+    }
+
+    fn encode_dictionary_packed(&mut self, values: PackedFixedLenByteArrayBatch<'_>) -> Result<()> {
+        for value in values.iter() {
+            self.observer.observe(value, 1);
+            let FixedLenByteArraySinkTarget::Dictionary(dict) = &mut self.target else {
+                unreachable!()
+            };
+            dict.put_value_bytes(value, || value.to_vec().into())?;
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn encode_fallback_packed(&mut self, values: PackedFixedLenByteArrayBatch<'_>) -> Result<()> {
+        debug_assert!(matches!(
+            self.target,
+            FixedLenByteArraySinkTarget::Fallback(_)
+        ));
+        if self.observer.collect_stats || self.observer.bloom.is_some() {
+            let observer = &mut self.observer;
+            let descr = observer.descr;
+            let is_float16 = observer.is_float16;
+            let collect_stats = observer.collect_stats;
+            let mut extrema: Option<(&[u8], &[u8], bool)> = None;
+            let mut tile_nan_count = 0_u64;
+            {
+                let mut bloom = observer.bloom.as_deref_mut();
+                for value in values.iter() {
+                    if collect_stats {
+                        let value_is_nan = is_float16 && is_f16_nan(value);
+                        tile_nan_count += value_is_nan as u64;
+                        match extrema.as_mut() {
+                            None => extrema = Some((value, value, value_is_nan)),
+                            Some((min, max, are_nan)) => match (*are_nan, value_is_nan) {
+                                (false, true) => {}
+                                (true, false) => {
+                                    *min = value;
+                                    *max = value;
+                                    *are_nan = false;
+                                }
+                                _ if compare_greater_byte_array(descr, min, value) => *min = value,
+                                _ if compare_greater_byte_array(descr, value, max) => *max = value,
+                                _ => {}
+                            },
+                        }
+                    }
+                    if let Some(bloom) = bloom.as_deref_mut() {
+                        bloom.insert(value);
+                    }
+                }
+            }
+            if collect_stats {
+                if is_float16 {
+                    *observer.nan_count.get_or_insert(0) += tile_nan_count;
+                }
+                if let Some((min, max, are_nan)) = extrema {
+                    observer.merge_extrema(min, max, are_nan);
+                }
+            }
+        }
+        match &mut self.target {
+            FixedLenByteArraySinkTarget::Fallback(encoder) => {
+                encoder.put_fixed_len_byte_array_batch(values)
+            }
+            FixedLenByteArraySinkTarget::Dictionary(_) => unreachable!(),
+        }
+    }
+
     #[inline]
     pub(crate) fn push_selected<'a>(&mut self, values: impl ValueProducer<&'a [u8]>) -> Result<()> {
         let observer = &mut self.observer;
@@ -199,6 +329,20 @@ impl FixedLenByteArraySink<'_> {
         drop(batch);
         observer.bloom = bloom;
         result
+    }
+}
+
+#[cfg_attr(not(feature = "arrow"), allow(dead_code))]
+pub(crate) enum FixedLenByteArrayBatch<'a> {
+    Packed(PackedFixedLenByteArrayBatch<'a>),
+}
+
+impl<'batch> BatchSink<FixedLenByteArrayBatch<'batch>> for FixedLenByteArraySink<'_> {
+    #[inline(never)]
+    fn push_batch(&mut self, values: FixedLenByteArrayBatch<'batch>) -> Result<()> {
+        match values {
+            FixedLenByteArrayBatch::Packed(values) => self.encode_packed(values),
+        }
     }
 }
 

@@ -229,4 +229,19 @@ impl FixedLenByteArrayEncoder for PlainEncoder<FixedLenByteArrayType> {
         self.buffer.extend_from_slice(values.bytes);
         Ok(())
     }
+
+    /// PLAIN stores fixed-length values back-to-back, so each streamed value is
+    /// appended straight into the page buffer — one copy, no intermediate buffer.
+    #[cfg(feature = "arrow")]
+    #[inline]
+    fn reserve_fixed_len(&mut self, additional_bytes: usize) {
+        self.buffer.reserve(additional_bytes);
+    }
+
+    #[cfg(feature = "arrow")]
+    #[inline]
+    fn append_fixed_len_value(&mut self, value: &[u8]) -> Result<()> {
+        self.buffer.extend_from_slice(value);
+        Ok(())
+    }
 }

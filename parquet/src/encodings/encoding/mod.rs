@@ -20,6 +20,10 @@
 use std::{cmp, marker::PhantomData};
 
 use crate::basic::*;
+#[cfg(feature = "arrow")]
+use crate::column::value_selection::{
+    PhysicalValueSelection, PhysicalValueSpan, ValueSelectionRef,
+};
 #[cfg(any(test, feature = "test_common", feature = "experimental"))]
 use crate::column::writer::encoder::EncodingFamilyFor;
 use crate::data_type::private::{ParquetValueType, PlainEncoderValue};
@@ -29,7 +33,12 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{BitWriter, num_required_bits};
 
+#[cfg(feature = "arrow")]
+use crate::util::bit_util::get_bit;
 pub(crate) use alp_family::AlpValue;
+#[cfg(feature = "arrow")]
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
+
 use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
@@ -563,6 +572,8 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "arrow")]
+    use super::boolean::BoolBatchSelection;
     use super::*;
 
     use std::sync::Arc;
@@ -1158,5 +1169,30 @@ mod tests {
 
     fn create_test_dict_decoder<T: DataType>() -> DictDecoder<T> {
         DictDecoder::<T>::new()
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn physical_boolean_identity_descriptors() {
+        let bits = [0b1010_1101, 0b0111_0010, 0b1100_1001];
+        let selection =
+            PhysicalValueSelection::identity(ValueSelectionRef::Dense { offset: 3, len: 14 });
+        let packed = BoolBatch::new_physical(&bits, 2, selection);
+
+        assert!(matches!(packed.selection, BoolBatchSelection::Dense { .. }));
+        assert_eq!(
+            packed.true_count(),
+            (3..17)
+                .filter(|&index| bit_util::get_bit(&bits, 2 + index))
+                .count()
+        );
+
+        let indices = [0, 2, 5, 9];
+        let selection = PhysicalValueSelection::identity(ValueSelectionRef::Sparse(&indices));
+        let packed = BoolBatch::new_physical(&bits, 2, selection);
+        assert!(matches!(
+            packed.selection,
+            BoolBatchSelection::Sparse { .. }
+        ));
     }
 }

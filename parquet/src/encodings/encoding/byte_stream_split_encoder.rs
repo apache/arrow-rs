@@ -247,6 +247,15 @@ impl FixedLenByteArrayEncoder for VariableWidthByteStreamSplitEncoder<FixedLenBy
         self.buffer.extend_from_slice(values.bytes);
         Ok(())
     }
+
+    /// BYTE_STREAM_SPLIT accumulates the raw value bytes contiguously and transposes
+    /// them into byte-streams at `flush_buffer`, so a streamed value is simply
+    /// appended — no intermediate buffer.
+    #[cfg(feature = "arrow")]
+    #[inline]
+    fn reserve_fixed_len(&mut self, additional_bytes: usize) {
+        self.buffer.reserve(additional_bytes);
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +312,24 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("Mismatched FixedLenByteArray sizes: 3 != 2"));
+    }
+
+    #[test]
+    fn scalar_byte_stream_split_rejects_mismatched_width_without_mutation() {
+        let mut encoder = VariableWidthByteStreamSplitEncoder::<FixedLenByteArrayType>::new(2);
+        encoder.append_fixed_len_value(&[1, 2]).unwrap();
+        for value in [&[9][..], &[9, 9, 9][..]] {
+            let error = encoder.append_fixed_len_value(value).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Mismatched FixedLenByteArray sizes"),
+                "{error}"
+            );
+            assert_eq!(encoder.buffer, [1, 2]);
+        }
+        encoder.append_fixed_len_value(&[3, 4]).unwrap();
+        assert_eq!(encoder.flush_buffer().unwrap().as_ref(), &[1, 3, 2, 4]);
     }
 
     #[test]

@@ -19,6 +19,10 @@
 
 use super::*;
 
+/// Maximum values per gathered or expanded numeric batch.
+#[cfg(feature = "arrow")]
+const NUMERIC_BATCH_VALUES: usize = 64;
+
 /// A native scalar batch handed to the numeric column encoder.
 #[derive(Clone, Copy)]
 pub(super) enum NumericBatch<'a, T> {
@@ -109,6 +113,59 @@ where
     value_is_nan
 }
 
+/// A selected Arrow numeric source, retaining its physical values and mapping.
+#[cfg(feature = "arrow")]
+#[derive(Clone, Copy)]
+pub(crate) struct PhysicalNumericSource<'source, D, T, F> {
+    data: &'source [D],
+    direct: Option<&'source [T]>,
+    selection: PhysicalValueSelection<'source>,
+    cast: F,
+}
+
+#[cfg(feature = "arrow")]
+impl<'source, D, T, F> PhysicalNumericSource<'source, D, T, F>
+where
+    D: Copy,
+    T: Copy,
+    F: Fn(D) -> T + Copy,
+{
+    pub(crate) fn new(
+        data: &'source [D],
+        direct: Option<&'source [T]>,
+        selection: PhysicalValueSelection<'source>,
+        cast: F,
+    ) -> Self {
+        Self {
+            data,
+            direct,
+            selection,
+            cast,
+        }
+    }
+
+    fn write_ungrouped_to<S>(self, sink: &mut S) -> Result<()>
+    where
+        T: 'static,
+        S: for<'batch> BatchSink<NumericBatch<'batch, T>>,
+    {
+        let data = self.data;
+        let cast = self.cast;
+        let mapped = map_values(self.selection, move |index| cast(data[index]));
+        if let Some(values) = self.direct
+            && self.selection.try_for_each_borrowable_range(|range| {
+                sink.push_batch(NumericBatch::Flat(&values[range]))
+            })?
+        {
+            return Ok(());
+        }
+
+        gather_tiled::<NUMERIC_BATCH_VALUES, _, _, _>(mapped, |values| {
+            sink.push_batch(NumericBatch::Flat(values))
+        })
+    }
+}
+
 impl<'batch, T: PlainEncoderType> BatchSink<NumericBatch<'batch, T::T>>
     for TypedColumnChunkEncoder<T>
 where
@@ -133,6 +190,24 @@ where
 }
 
 impl<T: DataType> TypedColumnChunkEncoder<T> {
+    #[cfg(feature = "arrow")]
+    pub(crate) fn write_numeric_source<D, F>(
+        &mut self,
+        values: PhysicalNumericSource<'_, D, T::T, F>,
+    ) -> Result<()>
+    where
+        T: PlainEncoderType,
+        T::T: ColumnWriterValue<Family<T> = NumericEncodingFamily<T>>,
+        T::T: Copy + 'static + for<'v> MinMaxStrategy<'v, Elem = T::T, Owned = T::T>,
+        D: Copy,
+        F: Fn(D) -> T::T + Copy,
+    {
+        if values.selection.len() == 0 {
+            return Ok(());
+        }
+        values.write_ungrouped_to(self)
+    }
+
     #[inline(never)]
     fn merge_batch_stats(&mut self, min: Option<T::T>, max: Option<T::T>) {
         if let Some(min) = min {

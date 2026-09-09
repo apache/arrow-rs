@@ -306,6 +306,12 @@ impl FixedLenByteArrayEncoder for ByteArrayDeltaEncoder {
         }
         Ok(())
     }
+
+    #[cfg(feature = "arrow")]
+    #[inline(always)]
+    fn append_fixed_len_value(&mut self, value: &[u8]) -> Result<()> {
+        self.put_value(value)
+    }
 }
 
 impl ByteArrayEncodingFamily {

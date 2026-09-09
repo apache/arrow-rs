@@ -19,8 +19,21 @@
 
 use super::*;
 
-/// The column-chunk encoder consumes borrowed Boolean batches.
-/// `push_batch` derives statistics and bloom state from the selection's
+/// Arrow packed-Boolean entry point.
+impl TypedColumnChunkEncoder<BoolType> {
+    #[cfg(feature = "arrow")]
+    pub(crate) fn write_bool_batch(&mut self, values: BoolBatch<'_>) -> Result<()> {
+        debug_assert!(
+            !<BoolEncodingFamily as EncodingFamily<BoolType>>::is_dictionary(&self.encoding_family)
+        );
+        // The packed buffer and its selection cross together, without expanding
+        // bits to Rust `bool`s.
+        self.push_batch(values)
+    }
+}
+
+/// The column-chunk encoder consumes Boolean batches without materializing an
+/// unpacked array. `push_batch` derives statistics and bloom state from the selection's
 /// true count before passing it to the active encoding family.
 impl<'source, D: DataType<T = bool>> BatchSink<BoolBatch<'source>> for TypedColumnChunkEncoder<D> {
     #[inline(never)]
