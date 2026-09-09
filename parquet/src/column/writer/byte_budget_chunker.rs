@@ -19,7 +19,7 @@
 
 use crate::basic::Type;
 use crate::column::writer::LevelDataRef;
-use crate::column::writer::encoder::ColumnValueEncoder;
+use crate::column::writer::encoder::ColumnChunkEncoder;
 use crate::file::properties::ResolvedColumnProperties;
 use crate::schema::types::ColumnDescriptor;
 
@@ -152,7 +152,7 @@ impl ByteBudgetChunker {
     /// `#[inline]`: this is a tiny per-chunk dispatcher; the actual byte
     /// inspection lives in the out-of-line `byte_budget_sub_batch`.
     #[inline]
-    pub(crate) fn pick_sub_batch<E: ColumnValueEncoder>(
+    pub(crate) fn pick_sub_batch<E: ColumnChunkEncoder>(
         &self,
         encoder: &E,
         values: &E::Values,
@@ -204,7 +204,7 @@ impl ByteBudgetChunker {
     /// `write_batch_internal` loop; numeric and bool columns never reach it.
     #[inline(never)]
     #[expect(clippy::too_many_arguments)]
-    fn byte_budget_sub_batch<E: ColumnValueEncoder>(
+    fn byte_budget_sub_batch<E: ColumnChunkEncoder>(
         &self,
         values: &E::Values,
         value_indices: Option<&[usize]>,

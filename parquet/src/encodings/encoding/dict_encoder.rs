@@ -21,9 +21,9 @@
 use bytes::Bytes;
 
 use crate::basic::{Encoding, Type};
-use crate::data_type::private::ParquetValueType;
+use crate::data_type::private::{ParquetValueType, PlainEncoderValue};
 use crate::data_type::{DataType, FixedLenByteArray, Int96};
-use crate::encodings::encoding::{Encoder, PlainEncoder};
+use crate::encodings::encoding::{Encoder, PlainEncoderImpl as PlainEncoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
@@ -92,7 +92,7 @@ pub trait DictionaryStorage<T>: Send {
 
 type TypedDictionaryStorage<T> = Interner<KeyStorage<T>>;
 
-impl<T: ParquetValueType> DictionaryStorage<T> for TypedDictionaryStorage<T> {
+impl<T: PlainEncoderValue> DictionaryStorage<T> for TypedDictionaryStorage<T> {
     fn new(desc: &ColumnDescPtr) -> Self {
         Interner::new(KeyStorage {
             uniques: vec![],
