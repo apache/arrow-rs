@@ -18,7 +18,6 @@ use crate::errors::Result;
 /// Run boundaries of a run-end-encoded array, type-erased over the run-end
 /// index width. `run_ends[j]` is the logical position one past the end of
 /// physical run `j`.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunEnds<'a> {
     I16(&'a [i16]),
@@ -26,7 +25,6 @@ pub(crate) enum RunEnds<'a> {
     I64(&'a [i64]),
 }
 
-#[cfg(test)]
 impl RunEnds<'_> {
     /// Physical run index containing absolute logical position `pos` — the
     /// first run whose end is strictly past `pos`. Equivalent to
@@ -197,7 +195,6 @@ pub(crate) struct GroupedSelectionRef<'a> {
     len: usize,
 }
 
-#[cfg(test)]
 impl<'a> GroupedSelectionRef<'a> {
     pub(crate) fn new(indices: &'a [usize], ends: &'a [usize]) -> Self {
         debug_assert_eq!(indices.len(), ends.len());
@@ -211,9 +208,7 @@ impl<'a> GroupedSelectionRef<'a> {
             len: ends.last().copied().unwrap_or(0),
         }
     }
-}
 
-impl GroupedSelectionRef<'_> {
     fn slice(self, offset: usize, len: usize) -> Self {
         debug_assert!(offset <= self.len && len <= self.len - offset);
         Self {
@@ -513,6 +508,24 @@ pub(crate) enum DictionaryKeys<'a> {
 }
 
 impl<'a> DictionaryKeys<'a> {
+    /// The physical value index selected by logical key `index`.
+    ///
+    /// The per-row leaf cursor resolves one key at a time; sharing this with the
+    /// batch traversals keeps a single type-erased key representation.
+    #[inline(always)]
+    pub(crate) fn key_at(self, index: usize) -> usize {
+        match self {
+            Self::I8(keys) => keys[index].as_usize(),
+            Self::I16(keys) => keys[index].as_usize(),
+            Self::I32(keys) => keys[index].as_usize(),
+            Self::I64(keys) => keys[index].as_usize(),
+            Self::U8(keys) => keys[index].as_usize(),
+            Self::U16(keys) => keys[index].as_usize(),
+            Self::U32(keys) => keys[index].as_usize(),
+            Self::U64(keys) => keys[index].as_usize(),
+        }
+    }
+
     /// Number of keys, i.e. logical values in the bound source.
     fn len(self) -> usize {
         match self {
