@@ -117,3 +117,6 @@ pub mod reader;
 pub mod writer;
 
 pub(crate) mod value_batch;
+
+#[cfg(feature = "arrow")]
+pub(crate) mod value_selection;
