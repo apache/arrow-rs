@@ -19,14 +19,19 @@
 //!
 //! One [`LevelTree`] resolves a schema tree once: every node appears exactly
 //! once and owns the buffers the walk reads, and every subtree owns a
-//! contiguous range of leaf outputs. A range walk descends the tree and fans
-//! each run out to the leaves below it.
+//! contiguous range of leaf outputs. A range walk descends
+//! the tree and fans each run out to the leaves below it. Branches through run
+//! ends or non-leaf dictionary values cannot be walked in ranges, so they are
+//! projected back out into a linear view and visited one row at a time.
 
 use super::{
     FieldContract, LevelContext, LevelData, is_leaf, leaf_types_compatible, normalized,
     plan::{LeafBatch, ValueSelection},
 };
 use crate::arrow::schema::validate_map_key_type;
+use crate::column::value_selection::{
+    DictionaryKeys, GroupedSelectionRef, RunEnds, ValueSelectionRef,
+};
 use crate::column::writer::LevelDataRef;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
@@ -57,7 +62,13 @@ pub(crate) struct LevelTree {
 #[derive(Debug)]
 struct TreeNode {
     kind: TreeKind,
-    /// Logical validity for this node.
+    /// The array at this node, retained for the indexed walker: it binds a
+    /// linear view of one branch when its cursor is created.
+    array: ArrayRef,
+    /// Logical validity, bound only for nodes a range walk can reach. Nodes at
+    /// or below a run-end or dictionary node are left `None`; expanding their
+    /// logical validity would cost a full-length bitmap, and the indexed walker
+    /// reads the physical buffers instead.
     nulls: Option<NullBuffer>,
     nullable: bool,
     name: Box<str>,
@@ -65,6 +76,8 @@ struct TreeNode {
     children: Range<u32>,
     /// Leaves below this node, contiguous in [`LevelTree::leaves`].
     leaves: Range<u32>,
+    /// Every leaf below this node can be traversed in ranges.
+    direct: bool,
 }
 
 /// One Parquet leaf: the output stream a walk feeds.
@@ -77,8 +90,12 @@ struct TreeLeaf {
     /// Preceding leaves that own identical level streams. These stay empty for
     /// a tree whose leaves all take independent paths.
     level_links: LevelGroups,
-    /// Node indices from the root down to this leaf.
+    /// Node indices from the root down to this leaf. Only the indexed walker
+    /// needs it; a range walk descends the tree itself.
     branch: Box<[u32]>,
+    /// The branch passes through a run-end or non-leaf dictionary node, so it
+    /// is walked one row at a time rather than in ranges.
+    indexed: bool,
 }
 
 /// What a node contributes to the walk.
@@ -90,6 +107,8 @@ enum TreeKind {
     Leaf,
     Null,
     DictionaryLeaf,
+    /// Run-end encoded. Indexed traversal only.
+    RunEndEncoded,
     Struct,
     List(ListBounds),
 }
@@ -127,6 +146,7 @@ impl LevelTree {
             array.clone(),
             normalized(field),
             LevelContext::default(),
+            false,
             LevelGroups::default(),
         )?;
         let TreeBuilder {
@@ -183,7 +203,9 @@ impl LevelTree {
     ///
     /// Lists always have row structure worth sharing. A struct is worth
     /// sharing when its validity has both null and valid rows; otherwise it
-    /// contributes no scan, or collapses to one constant run.
+    /// contributes no scan, or collapses to one constant run. An indexed node
+    /// is a local barrier, so disjoint direct descendants form their own
+    /// windows and retain any structural work shared above the barrier.
     /// Returns `None` when every leaf should use its independent fast path.
     pub(crate) fn write_windows(&self) -> Option<&[Range<u32>]> {
         self.write_windows.as_deref()
@@ -192,7 +214,7 @@ impl LevelTree {
     fn has_shared_window(&self, index: u32, shared_prefix: bool) -> bool {
         let node = &self.nodes[index as usize];
         let shares_work = self.shares_work(node, shared_prefix);
-        (node.leaves.len() > 1 && shares_work)
+        (node.direct && node.leaves.len() > 1 && shares_work)
             || node
                 .children
                 .clone()
@@ -207,7 +229,7 @@ impl LevelTree {
     ) {
         let node = &self.nodes[index as usize];
         let shares_work = self.shares_work(node, shared_prefix);
-        if node.leaves.len() > 1 && shares_work {
+        if node.direct && node.leaves.len() > 1 && shares_work {
             windows.push(node.leaves.clone());
             return;
         }
@@ -236,15 +258,18 @@ impl LevelTree {
     pub(crate) fn cursor(
         &self,
         window: Range<u32>,
-        _target_slots: usize,
+        target_slots: usize,
         target_rows: usize,
     ) -> Result<LeafCursor<'_>> {
         debug_assert!(!window.is_empty());
         debug_assert!(window.end as usize <= self.leaves.len());
         let leaves = &self.leaves[window.start as usize..window.end as usize];
+        debug_assert!(leaves.len() == 1 || leaves.iter().all(|leaf| !leaf.indexed));
+        // Indexed traversal visits one row per call, so its branch is bound to
+        // the Arrow buffers once here rather than re-resolved for every row.
         // One leaf has no fan-out to share, so its stored branch is walked
-        // directly.
-        let branch = if leaves.len() == 1 {
+        // directly, the way the indexed branch is.
+        let branch = if leaves.len() == 1 && !leaves[0].indexed {
             Some(match leaves[0].branch.as_ref() {
                 &[index] => DirectBranch::One(&self.nodes[index as usize]),
                 indices => DirectBranch::Many(
@@ -257,46 +282,77 @@ impl LevelTree {
         } else {
             None
         };
-        let mut tiles: Vec<LeafTile> = Vec::with_capacity(leaves.len());
-        for leaf in leaves {
-            let def_owner = leaf
-                .level_links
-                .definition
-                .filter(|&owner| owner >= window.start)
-                .map(|owner| {
-                    let predecessor = (owner - window.start) as usize;
-                    tiles[predecessor].def_owner.unwrap_or(predecessor as u32)
-                });
-            let rep_owner = leaf
-                .level_links
-                .repetition
-                .filter(|&owner| owner >= window.start)
-                .map(|owner| {
-                    let predecessor = (owner - window.start) as usize;
-                    tiles[predecessor].rep_owner.unwrap_or(predecessor as u32)
-                });
-            tiles.push(LeafTile::new(
+        let indexed = leaves[0]
+            .indexed
+            .then(|| -> Result<_> {
+                debug_assert_eq!(leaves.len(), 1);
+                Ok(IndexedState {
+                    bound: bind_indexed_branch(self, &leaves[0])?,
+                })
+            })
+            .transpose()?;
+        let tiles = if leaves.len() == 1 {
+            let leaf = &leaves[0];
+            vec![LeafTile::new(
                 leaf.max_def_level,
                 leaf.max_rep_level,
-                def_owner,
-                rep_owner,
-            ));
-        }
+                leaf.indexed,
+                None,
+                None,
+            )]
+            .into_boxed_slice()
+        } else {
+            let mut tiles: Vec<LeafTile> = Vec::with_capacity(leaves.len());
+            for leaf in leaves {
+                let def_owner = leaf
+                    .level_links
+                    .definition
+                    .filter(|&owner| owner >= window.start)
+                    .map(|owner| {
+                        let predecessor = (owner - window.start) as usize;
+                        tiles[predecessor].def_owner.unwrap_or(predecessor as u32)
+                    });
+                let rep_owner = leaf
+                    .level_links
+                    .repetition
+                    .filter(|&owner| owner >= window.start)
+                    .map(|owner| {
+                        let predecessor = (owner - window.start) as usize;
+                        tiles[predecessor].rep_owner.unwrap_or(predecessor as u32)
+                    });
+                tiles.push(LeafTile::new(
+                    leaf.max_def_level,
+                    leaf.max_rep_level,
+                    leaf.indexed,
+                    def_owner,
+                    rep_owner,
+                ));
+            }
+            tiles.into_boxed_slice()
+        };
         Ok(LeafCursor {
             tree: self,
             window,
             next_row: 0,
+            target_slots: target_slots.max(1),
             // A lone range walk with one slot per row needs no tiling. Grouped
-            // walks keep the row limit to bound all live leaf tiles together.
-            target_rows: if leaves.len() == 1 && leaves[0].max_rep_level == 0 {
+            // walks keep the row limit to bound all live leaf tiles together;
+            // indexed walks need it to admit a new data page.
+            target_rows: if indexed.is_none() && leaves.len() == 1 && leaves[0].max_rep_level == 0 {
                 usize::MAX
             } else {
                 target_rows.max(1)
             },
-            tiles: tiles.into_boxed_slice(),
+            tiles,
+            indexed,
             branch,
         })
     }
+}
+
+/// Per-cursor state for a branch that must be walked one row at a time.
+struct IndexedState<'a> {
+    bound: Box<[BoundNode<'a>]>,
 }
 
 /// A resolved direct branch. Flat leaves stay inline; nested branches pay one
@@ -337,6 +393,7 @@ impl TreeBuilder {
         array: ArrayRef,
         contract: FieldContract<'_>,
         ctx: LevelContext,
+        indexed: bool,
         groups: LevelGroups,
     ) -> Result<()> {
         let classified = classify_node(array.as_ref(), contract)?;
@@ -366,6 +423,7 @@ impl TreeBuilder {
                     max_rep_level: ctx.rep_level,
                     level_links: groups,
                     branch: self.branch.clone().into_boxed_slice(),
+                    indexed,
                 });
                 match classified {
                     NodeKind::Null => TreeKind::Null,
@@ -392,6 +450,7 @@ impl TreeBuilder {
                         child.clone(),
                         normalized(child_field),
                         child_ctx,
+                        indexed,
                         groups,
                     )?;
                 }
@@ -409,6 +468,7 @@ impl TreeBuilder {
                         def_level: ctx.def_level + contract.nullable as i16 + 1,
                         rep_level: ctx.rep_level + 1,
                     },
+                    indexed,
                     LevelGroups {
                         repetition: Some(me),
                         ..groups
@@ -416,19 +476,36 @@ impl TreeBuilder {
                 )?;
                 TreeKind::List(bounds)
             }
+            NodeKind::RunEndEncoded => {
+                let (_, _, values) = super::super::run_ends_of(array.as_ref())?;
+                let values = values.clone();
+                child_count = 1;
+                self.nodes.push(None);
+                self.fill(children_start, values, contract, ctx, true, groups)?;
+                TreeKind::RunEndEncoded
+            }
         };
 
-        let nulls = array
-            .logical_nulls()
+        // A range walk never reaches a run-end or dictionary node, and asking
+        // one for its logical validity would expand a bitmap it will not read.
+        let range_walked = !indexed && !matches!(kind, TreeKind::RunEndEncoded);
+        let nulls = range_walked
+            .then(|| array.logical_nulls())
+            .flatten()
             .filter(|nulls| nulls.null_count() != 0);
 
+        let direct = self.leaves[leaf_start as usize..]
+            .iter()
+            .all(|leaf| !leaf.indexed);
         self.nodes[me as usize] = Some(TreeNode {
             kind,
+            array,
             nulls,
             nullable: contract.nullable,
             name: contract.name.into(),
             children: children_start..children_start + child_count,
             leaves: leaf_start..self.leaves.len() as u32,
+            direct,
         });
         self.branch.pop();
         Ok(())
@@ -529,6 +606,7 @@ impl ListKind {
 
 #[derive(Debug, Clone, Copy)]
 enum NodeKind {
+    RunEndEncoded,
     Null,
     Leaf,
     DictionaryLeaf,
@@ -538,6 +616,9 @@ enum NodeKind {
 
 fn classify_node(array: &dyn Array, contract: FieldContract<'_>) -> Result<NodeKind> {
     Ok(match array.data_type() {
+        DataType::RunEndEncoded(_, values) if super::super::native_ree_leaf(values.data_type()) => {
+            NodeKind::RunEndEncoded
+        }
         DataType::Dictionary(_, value) if is_leaf(value) => {
             if !leaf_types_compatible(contract.data_type, value) {
                 return Err(incompatible(contract, value));
@@ -579,8 +660,71 @@ fn classify_node(array: &dyn Array, contract: FieldContract<'_>) -> Result<NodeK
     })
 }
 
-/// One reusable portion of a leaf stream. Repeated paths are bounded on
-/// record boundaries, and the cursor reuses the tile between calls.
+/// Compact level storage for indexed traversal, which appends one slot at a time.
+#[derive(Debug)]
+struct ScalarLevels {
+    enabled: bool,
+    uniform: Option<i16>,
+    len: usize,
+    values: Vec<i16>,
+}
+
+impl ScalarLevels {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            uniform: None,
+            len: 0,
+            values: Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.uniform = None;
+        self.len = 0;
+        self.values.clear();
+    }
+
+    #[inline]
+    fn push(&mut self, value: i16) {
+        if !self.enabled {
+            return;
+        }
+        match self.uniform {
+            None if self.len == 0 => self.uniform = Some(value),
+            Some(uniform) if uniform == value => {}
+            Some(uniform) => {
+                self.values.resize(self.len, uniform);
+                self.values.push(value);
+                self.uniform = None;
+            }
+            None => self.values.push(value),
+        }
+        self.len += 1;
+    }
+
+    fn len(&self) -> usize {
+        usize::from(self.enabled) * self.len
+    }
+
+    fn as_ref(&self) -> LevelDataRef<'_> {
+        if !self.enabled {
+            LevelDataRef::Absent
+        } else if let Some(value) = self.uniform {
+            LevelDataRef::Uniform {
+                value,
+                count: self.len,
+            }
+        } else {
+            LevelDataRef::Materialized(&self.values)
+        }
+    }
+}
+
+/// One reusable portion of a leaf stream. Indexed traversal accumulates
+/// terminal indices, while direct traversal can emit contiguous ranges.
+/// Repeated paths are bounded on record boundaries, and the cursor reuses the
+/// tile between calls.
 #[derive(Debug)]
 pub(crate) struct LeafTile {
     slots: usize,
@@ -593,7 +737,15 @@ pub(crate) struct LeafTile {
     /// An earlier tile whose repetition stream this tile shares. `None` means
     /// this tile materializes its own stream.
     rep_owner: Option<u32>,
+    def_levels: ScalarLevels,
+    rep_levels: ScalarLevels,
     direct: DirectTile,
+    indexed_traversal: bool,
+    value_indices: Vec<usize>,
+    value_ends: Vec<usize>,
+    // Last physical run at each REE depth; retained across tile clears.
+    ree_runs: Vec<usize>,
+    ree_depth: usize,
 }
 
 #[derive(Debug)]
@@ -607,39 +759,91 @@ impl LeafTile {
     fn new(
         max_def_level: i16,
         max_rep_level: i16,
+        indexed_traversal: bool,
         def_owner: Option<u32>,
         rep_owner: Option<u32>,
     ) -> Self {
+        let owns_def_levels = def_owner.is_none();
+        let owns_rep_levels = rep_owner.is_none();
         Self {
             slots: 0,
             max_rep_level,
             def_owner,
             rep_owner,
+            def_levels: ScalarLevels::new(
+                indexed_traversal && max_def_level != 0 && owns_def_levels,
+            ),
+            rep_levels: ScalarLevels::new(
+                indexed_traversal && max_rep_level != 0 && owns_rep_levels,
+            ),
             direct: DirectTile {
-                def_levels: LevelData::new(max_def_level != 0 && def_owner.is_none()),
-                rep_levels: LevelData::new(max_rep_level != 0 && rep_owner.is_none()),
+                def_levels: LevelData::new(
+                    !indexed_traversal && max_def_level != 0 && owns_def_levels,
+                ),
+                rep_levels: LevelData::new(
+                    !indexed_traversal && max_rep_level != 0 && owns_rep_levels,
+                ),
                 values: ValueSelection::Empty,
             },
+            indexed_traversal,
+            value_indices: Vec::new(),
+            value_ends: Vec::new(),
+            ree_runs: Vec::new(),
+            ree_depth: 0,
         }
     }
 
     fn clear(&mut self) {
         self.slots = 0;
-        self.direct.def_levels.clear();
-        self.direct.rep_levels.clear();
-        self.direct.values.clear();
+        if self.indexed_traversal {
+            self.def_levels.clear();
+            self.rep_levels.clear();
+        } else {
+            let direct = &mut self.direct;
+            direct.def_levels.clear();
+            direct.rep_levels.clear();
+            direct.values.clear();
+        }
+        self.value_indices.clear();
+        self.value_ends.clear();
+    }
+
+    fn push_level(&mut self, def: i16, rep: i16) {
+        debug_assert!(self.indexed_traversal);
+        self.slots += 1;
+        self.def_levels.push(def);
+        self.rep_levels.push(rep);
     }
 
     fn push_level_run(&mut self, def: i16, rep: i16, count: usize) {
+        debug_assert!(!self.indexed_traversal);
         self.slots += count;
-        self.direct.def_levels.append_run(def, count);
-        self.direct.rep_levels.append_dense_run(rep, count);
+        let direct = &mut self.direct;
+        direct.def_levels.append_run(def, count);
+        direct.rep_levels.append_dense_run(rep, count);
     }
 
-    fn push_value_range(&mut self, def: i16, rep: i16, range: Range<usize>) {
+    fn push_value_range(&mut self, def: i16, rep: i16, range: std::ops::Range<usize>) {
+        debug_assert!(!self.indexed_traversal);
         let len = range.len();
         self.push_level_run(def, rep, len);
         self.direct.values.append_range(range);
+    }
+
+    fn push_value(&mut self, def: i16, rep: i16, index: usize) {
+        debug_assert!(self.indexed_traversal);
+        self.push_level(def, rep);
+        self.push_group(index, 1);
+    }
+
+    fn push_group(&mut self, index: usize, len: usize) {
+        let end = self.value_ends.last().copied().unwrap_or(0) + len;
+        if self.value_indices.last() == Some(&index) {
+            *self.value_ends.last_mut().unwrap() = end;
+        } else {
+            self.value_indices.push(index);
+            self.value_ends.push(end);
+        }
     }
 
     fn batch<'a>(
@@ -648,20 +852,35 @@ impl LeafTile {
         def_levels: LevelDataRef<'a>,
         rep_levels: LevelDataRef<'a>,
     ) -> LeafBatch<'a> {
-        LeafBatch::new(
-            terminal,
-            def_levels,
-            rep_levels,
-            self.direct.values.as_ref(),
-        )
+        let values = if !self.indexed_traversal {
+            self.direct.values.as_ref()
+        } else if self.value_indices.is_empty() {
+            ValueSelectionRef::Empty
+        } else if self.value_indices.len() == self.value_ends.last().copied().unwrap_or(0) {
+            ValueSelectionRef::Sparse(&self.value_indices)
+        } else {
+            ValueSelectionRef::Grouped(GroupedSelectionRef::new(
+                &self.value_indices,
+                &self.value_ends,
+            ))
+        };
+        LeafBatch::new(terminal, def_levels, rep_levels, values)
     }
 
     fn def_levels_len(&self) -> usize {
-        self.direct.def_levels.len()
+        if self.indexed_traversal {
+            self.def_levels.len()
+        } else {
+            self.direct.def_levels.len()
+        }
     }
 
     fn rep_levels_len(&self) -> usize {
-        self.direct.rep_levels.len()
+        if self.indexed_traversal {
+            self.rep_levels.len()
+        } else {
+            self.direct.rep_levels.len()
+        }
     }
 }
 
@@ -675,10 +894,12 @@ pub(crate) struct LeafCursor<'a> {
     tree: &'a LevelTree,
     window: Range<u32>,
     next_row: usize,
+    target_slots: usize,
     target_rows: usize,
     tiles: Box<[LeafTile]>,
-    /// A lone leaf's branch. `None` when the walk fans out to more than one
-    /// leaf.
+    indexed: Option<IndexedState<'a>>,
+    /// A lone direct leaf's branch. `None` when the walk fans out to more than
+    /// one leaf.
     branch: Option<DirectBranch<'a>>,
 }
 
@@ -694,9 +915,17 @@ impl<'a> CursorBatch<'a> {
     pub(crate) fn leaf(&self, index: usize, terminal: &'a (dyn Array + 'static)) -> LeafBatch<'a> {
         let tile = &self.tiles[index];
         let def_owner = &self.tiles[tile.def_owner.map_or(index, |owner| owner as usize)];
-        let def_levels = def_owner.direct.def_levels.as_ref();
+        let def_levels = if def_owner.indexed_traversal {
+            def_owner.def_levels.as_ref()
+        } else {
+            def_owner.direct.def_levels.as_ref()
+        };
         let rep_owner = &self.tiles[tile.rep_owner.map_or(index, |owner| owner as usize)];
-        let rep_levels = rep_owner.direct.rep_levels.as_ref();
+        let rep_levels = if rep_owner.indexed_traversal {
+            rep_owner.rep_levels.as_ref()
+        } else {
+            rep_owner.direct.rep_levels.as_ref()
+        };
         tile.batch(terminal, def_levels, rep_levels)
     }
 }
@@ -715,27 +944,49 @@ impl LeafCursor<'_> {
         let first_row = self.next_row;
         let rows_to_boundary = self.target_rows - first_row % self.target_rows;
 
-        let end = first_row.saturating_add(rows_to_boundary).min(len);
-        if let Some(branch) = self.branch.as_ref() {
-            visit_branch(
-                branch.as_slice(),
-                first_row..end,
-                LevelContext::default(),
-                0,
-                &mut self.tiles[0],
-            )?;
-        } else {
-            visit_range(
-                self.tree,
-                &self.tree.nodes[0],
-                &self.window,
-                first_row..end,
-                LevelContext::default(),
-                0,
-                &mut self.tiles,
-            )?;
+        match self.indexed.as_mut() {
+            None => {
+                let end = first_row.saturating_add(rows_to_boundary).min(len);
+                if self.branch.is_none() {
+                    visit_range(
+                        self.tree,
+                        &self.tree.nodes[0],
+                        &self.window,
+                        first_row..end,
+                        LevelContext::default(),
+                        0,
+                        &mut self.tiles,
+                    )?;
+                } else if let Some(branch) = self.branch.as_ref() {
+                    visit_branch(
+                        branch.as_slice(),
+                        first_row..end,
+                        LevelContext::default(),
+                        0,
+                        &mut self.tiles[0],
+                    )?;
+                } else {
+                    unreachable!("a direct cursor is either grouped or follows one branch")
+                }
+                self.next_row = end;
+            }
+            Some(state) => {
+                let tile = &mut self.tiles[0];
+                while self.next_row < len
+                    && tile.slots < self.target_slots
+                    && self.next_row - first_row < rows_to_boundary
+                {
+                    visit_node(
+                        self.next_row,
+                        LevelContext::default(),
+                        0,
+                        &state.bound,
+                        tile,
+                    )?;
+                    self.next_row += 1;
+                }
+            }
         }
-        self.next_row = end;
 
         for (index, (leaf, tile)) in self.tree.leaves
             [self.window.start as usize..self.window.end as usize]
@@ -826,6 +1077,9 @@ fn visit_branch(
                 })
             }
         },
+        TreeKind::RunEndEncoded => {
+            unreachable!("an indexed node is never reached by a range walk")
+        }
     }
 }
 
@@ -955,6 +1209,9 @@ fn visit_range_inner<'a>(
                 })
             }
         },
+        TreeKind::RunEndEncoded => {
+            unreachable!("an indexed node is never reached by a range walk")
+        }
     }
 }
 
@@ -1416,6 +1673,161 @@ fn patch_list_starts(
 
 /// One path node with its Arrow buffers resolved for the lifetime of one cursor.
 ///
+/// The indexed walker visits a single row per call, so every downcast it would
+/// otherwise repeat for each row is resolved once here. This is the same trick
+/// [`TreeNode`] plays for the range walker; indexed branches bind the same buffers once.
+#[derive(Debug)]
+struct BoundNode<'a> {
+    kind: BoundKind<'a>,
+    /// Physical validity of the array visited at this node, when it has nulls.
+    nulls: Option<&'a NullBuffer>,
+    /// The normalized field contract in scope at this node.
+    nullable: bool,
+    name: &'a str,
+}
+
+#[derive(Debug)]
+enum BoundKind<'a> {
+    /// `DataType::Null`: every row is logically null.
+    Null,
+    /// A primitive leaf. The row index is the physical value position.
+    Leaf,
+    /// A dictionary whose values are a leaf. The *key* index is emitted; the
+    /// value pipeline composes the key mapping, so the values are consulted
+    /// only for their validity.
+    DictionaryLeaf {
+        keys: DictionaryKeys<'a>,
+        value_nulls: Option<&'a NullBuffer>,
+        null_values: bool,
+    },
+    /// Run-end encoded: map the row to its physical run, then descend.
+    RunEnds { ends: RunEnds<'a>, base: usize },
+}
+
+/// Bind one leaf's branch to the Arrow buffers the tree already owns.
+///
+/// The indexed walker visits a single row per call, so it wants a linear view
+/// of the branch rather than the tree: every downcast it would otherwise repeat
+/// for each row is resolved once, here.
+fn bind_indexed_branch<'a>(tree: &'a LevelTree, leaf: &TreeLeaf) -> Result<Box<[BoundNode<'a>]>> {
+    let mut bound = Vec::with_capacity(leaf.branch.len());
+    for index in leaf.branch.iter().copied() {
+        let node = &tree.nodes[index as usize];
+        let array = node.array.as_ref();
+        let dictionary =
+            matches!(node.kind, TreeKind::DictionaryLeaf).then(|| array.as_any_dictionary());
+        let nulls = match dictionary {
+            Some(dictionary) => dictionary.keys().nulls(),
+            None => array.nulls(),
+        };
+        let kind = match &node.kind {
+            TreeKind::Null => BoundKind::Null,
+            TreeKind::Leaf => BoundKind::Leaf,
+            TreeKind::DictionaryLeaf => {
+                let dictionary = dictionary.unwrap();
+                let values = dictionary.values();
+                BoundKind::DictionaryLeaf {
+                    keys: super::super::dictionary_keys(dictionary.keys()),
+                    value_nulls: values.nulls(),
+                    null_values: matches!(values.data_type(), DataType::Null),
+                }
+            }
+            TreeKind::RunEndEncoded => {
+                let (ends, base, _) = super::super::run_ends_of(array)?;
+                BoundKind::RunEnds { ends, base }
+            }
+            TreeKind::Struct | TreeKind::List(_) => {
+                unreachable!("nested indexed binding remains eager")
+            }
+        };
+        bound.push(BoundNode {
+            kind,
+            nulls,
+            nullable: node.nullable,
+            name: &node.name,
+        });
+    }
+    Ok(bound.into_boxed_slice())
+}
+
+#[inline(always)]
+fn bound_is_null(nulls: Option<&NullBuffer>, index: usize) -> bool {
+    nulls.is_some_and(|nulls| nulls.is_null(index))
+}
+
+fn visit_node(
+    index: usize,
+    ctx: LevelContext,
+    rep: i16,
+    path: &[BoundNode<'_>],
+    out: &mut LeafTile,
+) -> Result<()> {
+    let (node, child_path) = path.split_first().unwrap();
+    match &node.kind {
+        BoundKind::RunEnds { ends, base } => {
+            let position = base + index;
+            let depth = out.ree_depth;
+            let physical = match out.ree_runs.get(depth).copied() {
+                Some(mut run) if run == 0 || position >= ends.end_of(run.saturating_sub(1)) => {
+                    while ends.end_of(run) <= position {
+                        run += 1;
+                    }
+                    run
+                }
+                _ => ends.run_of(position),
+            };
+            if let Some(run) = out.ree_runs.get_mut(depth) {
+                *run = physical;
+            } else {
+                debug_assert_eq!(out.ree_runs.len(), depth);
+                out.ree_runs.push(physical);
+            }
+            out.ree_depth += 1;
+            let result = visit_node(physical, ctx, rep, child_path, out);
+            out.ree_depth -= 1;
+            result
+        }
+        BoundKind::DictionaryLeaf {
+            keys,
+            value_nulls,
+            null_values,
+        } => {
+            if bound_is_null(node.nulls, index) {
+                return emit_null(node, ctx, rep, index, out);
+            }
+            let key = keys.key_at(index);
+            if *null_values || bound_is_null(*value_nulls, key) {
+                return emit_null(node, ctx, rep, index, out);
+            }
+            out.push_value(ctx.def_level + node.nullable as i16, rep, index);
+            Ok(())
+        }
+        BoundKind::Null => emit_null(node, ctx, rep, index, out),
+        BoundKind::Leaf => {
+            if bound_is_null(node.nulls, index) {
+                emit_null(node, ctx, rep, index, out)
+            } else {
+                out.push_value(ctx.def_level + node.nullable as i16, rep, index);
+                Ok(())
+            }
+        }
+    }
+}
+
+fn emit_null(
+    node: &BoundNode<'_>,
+    ctx: LevelContext,
+    rep: i16,
+    index: usize,
+    out: &mut LeafTile,
+) -> Result<()> {
+    if !node.nullable {
+        return Err(super::required_null(node.name, index));
+    }
+    out.push_level(ctx.def_level, rep);
+    Ok(())
+}
+
 fn incompatible(contract: FieldContract<'_>, actual: &DataType) -> ParquetError {
     ParquetError::ArrowError(format!(
         "Incompatible type. Field '{}' has type {}, array has type {}",
@@ -1516,7 +1928,7 @@ mod tests {
         let field = Field::new("a", DataType::Int32, false);
         let array: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
         let tree = tree_of(&field, array);
-        let mut tile = LeafTile::new(0, 0, None, None);
+        let mut tile = LeafTile::new(0, 0, false, None, None);
         visit_range(
             &tree,
             &tree.nodes[0],
@@ -1549,7 +1961,7 @@ mod tests {
         ));
         let len = array.len();
         let tree = tree_of(&field, array);
-        let mut tile = LeafTile::new(1, 0, None, None);
+        let mut tile = LeafTile::new(1, 0, false, None, None);
         visit_range(
             &tree,
             &tree.nodes[0],
