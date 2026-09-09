@@ -19,6 +19,8 @@
 
 use std::{mem::MaybeUninit, slice};
 
+#[cfg(feature = "arrow")]
+use crate::column::value_selection::PhysicalValueSelection;
 use crate::errors::Result;
 
 /// Consumes native value batches without imposing a common scalar or owned
@@ -32,11 +34,55 @@ pub(crate) trait BatchSink<B> {
 /// Non-contiguous and computed sources can be gathered into bounded batches;
 /// sources that already expose a native batch can bypass this traversal.
 pub(crate) trait ValueProducer<T: Copy>: Copy {
-    /// Exact number of logical values [`Self::try_for_each`] emits.
+    /// Exact number of logical values this producer emits.
     fn len(self) -> usize;
 
-    /// Emit values in output order.
+    /// Write the next values into `out`, advance past them, and return how many
+    /// were written. For a non-empty `out`, zero means the producer is exhausted.
+    ///
+    /// Filling a bounded buffer gives the compiler a counted loop rather than
+    /// interleaving each value with a consumer callback that may flush the buffer.
+    fn fill(&mut self, out: &mut [MaybeUninit<T>]) -> usize;
+
+    /// Emit values in output order, for consumers that stream each value into
+    /// an encoder rather than buffering batches.
     fn try_for_each<E>(self, f: impl FnMut(T) -> Result<(), E>) -> Result<(), E>;
+}
+
+/// Projects a physical value selection through a copyable mapping.
+#[cfg(feature = "arrow")]
+#[derive(Clone, Copy)]
+pub(crate) struct MappedValueProducer<'a, F> {
+    source: PhysicalValueSelection<'a>,
+    map: F,
+}
+
+#[cfg(feature = "arrow")]
+pub(crate) fn map_values<F>(
+    source: PhysicalValueSelection<'_>,
+    map: F,
+) -> MappedValueProducer<'_, F> {
+    MappedValueProducer { source, map }
+}
+
+#[cfg(feature = "arrow")]
+impl<T, F> ValueProducer<T> for MappedValueProducer<'_, F>
+where
+    T: Copy,
+    F: Fn(usize) -> T + Copy,
+{
+    fn len(self) -> usize {
+        self.source.len()
+    }
+
+    #[inline]
+    fn fill(&mut self, out: &mut [MaybeUninit<T>]) -> usize {
+        self.source.fill_mapped(out, self.map)
+    }
+
+    fn try_for_each<E>(self, mut f: impl FnMut(T) -> Result<(), E>) -> Result<(), E> {
+        self.source.try_for_each_index(|index| f((self.map)(index)))
+    }
 }
 
 /// View the initialized prefix of a `MaybeUninit` slice as initialized values.
@@ -61,28 +107,16 @@ where
     P: ValueProducer<T>,
     Flush: FnMut(&[T]) -> Result<()>,
 {
+    let mut values = values;
     let mut batch = [MaybeUninit::<T>::uninit(); N];
-    let mut filled = 0;
-    values.try_for_each(
-        #[inline(always)]
-        |value| -> Result<()> {
-            batch[filled].write(value);
-            filled += 1;
-            if filled == N {
-                // SAFETY: this loop initialized every slot before `filled`
-                // reached `N`.
-                flush(unsafe { assume_init_prefix(&batch, filled) })?;
-                filled = 0;
-            }
-            Ok(())
-        },
-    )?;
-    if filled != 0 {
-        // SAFETY: this loop initializes slots sequentially and `filled` is the
-        // length of that initialized prefix.
+    loop {
+        let filled = values.fill(&mut batch);
+        if filled == 0 {
+            return Ok(());
+        }
+        // SAFETY: `fill` initializes the leading `filled` slots of `batch`.
         flush(unsafe { assume_init_prefix(&batch, filled) })?;
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -105,6 +139,16 @@ mod tests {
     impl<T: Copy> ValueProducer<T> for SliceProducer<'_, T> {
         fn len(self) -> usize {
             self.0.len()
+        }
+
+        fn fill(&mut self, out: &mut [MaybeUninit<T>]) -> usize {
+            let filled = self.0.len().min(out.len());
+            let (head, tail) = self.0.split_at(filled);
+            self.0 = tail;
+            for (slot, &value) in out.iter_mut().zip(head) {
+                slot.write(value);
+            }
+            filled
         }
 
         fn try_for_each<E>(self, mut f: impl FnMut(T) -> Result<(), E>) -> Result<(), E> {
@@ -147,6 +191,22 @@ mod tests {
             .unwrap();
 
             assert_tiled_batches::<4, _>(&batches, &input);
+        }
+
+        #[cfg(feature = "arrow")]
+        {
+            use crate::column::value_selection::ValueSelectionRef;
+            let input = [1_usize, 2, 3];
+            let selection = PhysicalValueSelection::identity(ValueSelectionRef::Sparse(&input));
+            let mapped = map_values(selection, |value| (value * 2) as u32);
+            assert_eq!(mapped.len(), input.len());
+            let mut batches = Vec::new();
+            gather_tiled::<2, _, _, _>(mapped, |batch| {
+                batches.push(batch.to_vec());
+                Ok(())
+            })
+            .unwrap();
+            assert_tiled_batches::<2, _>(&batches, &[2, 4, 6]);
         }
 
         let error = gather_tiled::<2, _, _, _>(SliceProducer(&[1_u32, 2, 3]), |_| {

@@ -19,6 +19,8 @@
 //!
 //! Sources gather borrowed values into bounded `&[u8]` batches.
 
+use std::mem::MaybeUninit;
+
 use super::{ColumnChunkEncoder, MinMaxStrategy, TypedColumnChunkEncoder};
 use crate::basic::{ConvertedType, LogicalType};
 use crate::bloom_filter::Sbbf;
@@ -502,6 +504,17 @@ impl<'a, T: AsBytes> ValueProducer<&'a [u8]> for &'a [T] {
     #[inline]
     fn len(self) -> usize {
         <[T]>::len(self)
+    }
+
+    #[inline]
+    fn fill(&mut self, out: &mut [MaybeUninit<&'a [u8]>]) -> usize {
+        let filled = <[T]>::len(self).min(out.len());
+        let (head, tail) = self.split_at(filled);
+        *self = tail;
+        for (slot, value) in out.iter_mut().zip(head) {
+            slot.write(value.as_bytes());
+        }
+        filled
     }
 
     #[inline]

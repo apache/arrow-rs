@@ -41,7 +41,9 @@
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
 use crate::column::chunker::CdcChunk;
+use crate::column::value_selection::ValueSelectionRef;
 use crate::column::writer::LevelDataRef;
+mod plan;
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::types::RunEndIndexType;
@@ -49,6 +51,7 @@ use arrow_array::{Array, ArrayRef, Int32Array, OffsetSizeTrait, RunArray, downca
 use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
+pub(crate) use plan::LeafBatch;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -1263,6 +1266,43 @@ impl ArrayLevels {
 
     pub fn non_null_indices(&self) -> &[usize] {
         &self.non_null_indices
+    }
+
+    /// Present this batch to the column writer: the leaf array, its level
+    /// streams, and the selection of values those levels refer to.
+    pub(crate) fn leaf_batch(&self) -> LeafBatch<'_> {
+        LeafBatch::new(
+            self.array.as_ref(),
+            self.def_levels.as_ref(),
+            self.rep_levels.as_ref(),
+            self.value_selection(),
+        )
+    }
+
+    /// The selected values, reported as a dense range whenever the selected
+    /// indices ascend by one.
+    ///
+    /// Saying so lets the encoder borrow the values as a single slice; a
+    /// `Sparse` selection of more than one element forces it to gather them one
+    /// index at a time even when the leaf has no nulls at all.
+    ///
+    /// The span test rejects any column with nulls in O(1); the walk only runs
+    /// when the span matches, and cannot be skipped because a list-view child
+    /// may select indices out of order (see `arrow_writer_list_view_out_of_order`).
+    fn value_selection(&self) -> ValueSelectionRef<'_> {
+        let indices = &self.non_null_indices;
+        match (indices.first(), indices.last()) {
+            (Some(&first), Some(&last))
+                if last.checked_sub(first) == Some(indices.len() - 1)
+                    && indices.windows(2).all(|pair| pair[1] == pair[0] + 1) =>
+            {
+                ValueSelectionRef::Dense {
+                    offset: first,
+                    len: indices.len(),
+                }
+            }
+            _ => ValueSelectionRef::Sparse(indices),
+        }
     }
 
     /// Create a sliced view of this `ArrayLevels` for a CDC chunk.

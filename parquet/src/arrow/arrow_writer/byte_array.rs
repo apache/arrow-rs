@@ -20,6 +20,7 @@ use crate::bloom_filter::Sbbf;
 use crate::column::writer::encoder::{
     ColumnChunkEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
 };
+use crate::column::writer::{ByteBudgetTarget, ColumnWriteSource};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
@@ -434,7 +435,6 @@ pub struct ByteArrayEncoder {
 
 impl ColumnChunkEncoder for ByteArrayEncoder {
     type Value = ByteArray;
-    type Values = dyn Array;
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         let mut sbbf = self.bloom_filter.take()?;
         sbbf.fold_to_target_fpp(self.bloom_filter_target_fpp);
@@ -469,99 +469,6 @@ impl ColumnChunkEncoder for ByteArrayEncoder {
             max_value: None,
             geo_stats_accumulator,
         })
-    }
-
-    fn write(&mut self, _values: &Self::Values, _offset: usize, _len: usize) -> Result<()> {
-        unreachable!("should call write_gather instead")
-    }
-
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
-        downcast_op!(
-            values.data_type(),
-            values,
-            encode,
-            indices.iter().copied(),
-            self
-        );
-        Ok(())
-    }
-
-    fn count_values_within_byte_budget_gather(
-        values: &Self::Values,
-        indices: &[usize],
-        byte_budget: usize,
-    ) -> Option<usize> {
-        // `ByteArrayEncoder` only ever writes via `write_gather`, so this
-        // is the relevant method.
-        //
-        // Two-stage walk for the simple offset-buffer byte array types:
-        //   1. If indices are contiguous, compute the total payload in
-        //      O(1) via a single subtraction on the offsets buffer.
-        //      When the total fits the budget — the overwhelmingly
-        //      common "small values" case — return immediately.
-        //   2. Otherwise, walk per-value byte sizes from the offsets
-        //      buffer (still cheap, no slice/UTF-8 construction) and
-        //      exit at the first value that pushes the cumulative sum
-        //      past the budget. This bounds skewed distributions: an
-        //      outlier value is caught wherever it lands in the chunk.
-        let count = match values.data_type() {
-            DataType::Utf8 => count_within_budget_offsets(
-                values.as_any().downcast_ref::<StringArray>().unwrap(),
-                indices,
-                byte_budget,
-            ),
-            DataType::LargeUtf8 => count_within_budget_offsets(
-                values.as_any().downcast_ref::<LargeStringArray>().unwrap(),
-                indices,
-                byte_budget,
-            ),
-            DataType::Binary => count_within_budget_offsets(
-                values.as_any().downcast_ref::<BinaryArray>().unwrap(),
-                indices,
-                byte_budget,
-            ),
-            DataType::LargeBinary => count_within_budget_offsets(
-                values.as_any().downcast_ref::<LargeBinaryArray>().unwrap(),
-                indices,
-                byte_budget,
-            ),
-            // View arrays carry each value's length in the low 32 bits of
-            // its u128 view word, so lengths are scannable without touching
-            // any data buffer — and the common small-value case skips even
-            // that scan via an O(1) conservative bound.
-            DataType::Utf8View => {
-                let array = values.as_any().downcast_ref::<StringViewArray>().unwrap();
-                count_within_budget_views(
-                    array.views(),
-                    indices,
-                    byte_budget,
-                    max_view_value_len(array.data_buffers()),
-                )
-            }
-            DataType::BinaryView => {
-                let array = values.as_any().downcast_ref::<BinaryViewArray>().unwrap();
-                count_within_budget_views(
-                    array.views(),
-                    indices,
-                    byte_budget,
-                    max_view_value_len(array.data_buffers()),
-                )
-            }
-            // The values in an arrow dictionary are already small and
-            // deduplicated, so there is nothing to bound — treat every
-            // chunk as fitting and stay on the batched path. (A per-value
-            // walk through dict keys on every chunk also measured ~+30-80%
-            // slower than `main`.)
-            DataType::Dictionary(_, _) => indices.len(),
-            // Every byte-array type `ByteArrayEncoder` is constructed for
-            // has an explicit arm above. A `Dictionary(value = FixedSizeBinary)`
-            // column hits the `Dictionary(_, _)` arm (its `values.data_type()`
-            // is `Dictionary`), and a bare `FixedSizeBinary` column is routed
-            // to the generic column writer, never this encoder — so no other
-            // type can reach here.
-            data_type => unreachable!("ByteArrayEncoder cannot be constructed for {data_type:?}"),
-        };
-        Some(count)
     }
 
     fn num_values(&self) -> usize {
@@ -836,5 +743,134 @@ fn update_geo_stats_accumulator<T>(
             let val = array.value(idx);
             bounder.update_wkb(val.as_ref());
         }
+    }
+}
+
+/// How many of `indices` fit in `byte_budget` bytes, computed from the Arrow
+/// offsets/views without materialising any value.
+fn count_gathered_within_byte_budget(
+    values: &dyn Array,
+    indices: &[usize],
+    byte_budget: usize,
+) -> Option<usize> {
+    // `ByteArrayEncoder` only ever writes via `write_gather`, so this
+    // is the relevant method.
+    //
+    // Two-stage walk for the simple offset-buffer byte array types:
+    //   1. If indices are contiguous, compute the total payload in
+    //      O(1) via a single subtraction on the offsets buffer.
+    //      When the total fits the budget — the overwhelmingly
+    //      common "small values" case — return immediately.
+    //   2. Otherwise, walk per-value byte sizes from the offsets
+    //      buffer (still cheap, no slice/UTF-8 construction) and
+    //      exit at the first value that pushes the cumulative sum
+    //      past the budget. This bounds skewed distributions: an
+    //      outlier value is caught wherever it lands in the chunk.
+    let count = match values.data_type() {
+        DataType::Utf8 => count_within_budget_offsets(
+            values.as_any().downcast_ref::<StringArray>().unwrap(),
+            indices,
+            byte_budget,
+        ),
+        DataType::LargeUtf8 => count_within_budget_offsets(
+            values.as_any().downcast_ref::<LargeStringArray>().unwrap(),
+            indices,
+            byte_budget,
+        ),
+        DataType::Binary => count_within_budget_offsets(
+            values.as_any().downcast_ref::<BinaryArray>().unwrap(),
+            indices,
+            byte_budget,
+        ),
+        DataType::LargeBinary => count_within_budget_offsets(
+            values.as_any().downcast_ref::<LargeBinaryArray>().unwrap(),
+            indices,
+            byte_budget,
+        ),
+        // View arrays carry each value's length in the low 32 bits of
+        // its u128 view word, so lengths are scannable without touching
+        // any data buffer — and the common small-value case skips even
+        // that scan via an O(1) conservative bound.
+        DataType::Utf8View => {
+            let array = values.as_any().downcast_ref::<StringViewArray>().unwrap();
+            count_within_budget_views(
+                array.views(),
+                indices,
+                byte_budget,
+                max_view_value_len(array.data_buffers()),
+            )
+        }
+        DataType::BinaryView => {
+            let array = values.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+            count_within_budget_views(
+                array.views(),
+                indices,
+                byte_budget,
+                max_view_value_len(array.data_buffers()),
+            )
+        }
+        // The values in an arrow dictionary are already small and
+        // deduplicated, so there is nothing to bound — treat every
+        // chunk as fitting and stay on the batched path. (A per-value
+        // walk through dict keys on every chunk also measured ~+30-80%
+        // slower than `main`.)
+        DataType::Dictionary(_, _) => indices.len(),
+        // Every byte-array type `ByteArrayEncoder` is constructed for
+        // has an explicit arm above. A `Dictionary(value = FixedSizeBinary)`
+        // column hits the `Dictionary(_, _)` arm (its `values.data_type()`
+        // is `Dictionary`), and a bare `FixedSizeBinary` column is routed
+        // to the generic column writer, never this encoder — so no other
+        // type can reach here.
+        data_type => unreachable!("ByteArrayEncoder cannot be constructed for {data_type:?}"),
+    };
+    Some(count)
+}
+
+/// The Arrow byte-array encoder still consumes a gathered `dyn Array`. This
+/// adapter presents that pair as a [`ColumnWriteSource`] so the column writer
+/// can drive every physical type through one seam.
+#[derive(Clone, Copy)]
+pub(super) struct ByteArrayGatherSource<'a> {
+    values: &'a dyn Array,
+    indices: &'a [usize],
+}
+
+impl<'a> ByteArrayGatherSource<'a> {
+    pub(super) fn new(values: &'a dyn Array, indices: &'a [usize]) -> Self {
+        Self { values, indices }
+    }
+}
+
+impl ColumnWriteSource<ByteArrayEncoder> for ByteArrayGatherSource<'_> {
+    fn len(self) -> usize {
+        self.indices.len()
+    }
+
+    fn slice(self, offset: usize, len: usize) -> Self {
+        Self {
+            values: self.values,
+            indices: &self.indices[offset..offset + len],
+        }
+    }
+
+    fn write_to(self, encoder: &mut ByteArrayEncoder) -> Result<()> {
+        let values = self.values;
+        downcast_op!(
+            values.data_type(),
+            values,
+            encode,
+            self.indices.iter().copied(),
+            encoder
+        );
+        Ok(())
+    }
+
+    fn count_variable_width_within_byte_budget(
+        self,
+        _encoder: &ByteArrayEncoder,
+        budget: usize,
+        _target: ByteBudgetTarget,
+    ) -> Option<usize> {
+        count_gathered_within_byte_budget(self.values, self.indices, budget)
     }
 }

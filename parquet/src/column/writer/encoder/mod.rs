@@ -20,7 +20,7 @@ use bytes::Bytes;
 use self::byte_array::encode_byte_slice;
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
-use crate::column::value_batch::{BatchSink, ValueProducer, gather_tiled};
+use crate::column::value_batch::{BatchSink, ValueProducer};
 use crate::column::writer::{compare_greater_byte_array, is_f16_nan};
 use crate::column::writer::{fallback_encoding, has_dictionary_support, update_max, update_min};
 use crate::data_type::FixedLenByteArrayType;
@@ -45,25 +45,6 @@ mod numeric;
 
 use fixed_len_byte_array::encode_fixed_len_byte_array_slice;
 use numeric::NumericBatch;
-/// A collection of [`ParquetValueType`] encoded by a [`ColumnChunkEncoder`]
-pub trait ColumnValues {
-    /// The number of values in this collection
-    fn len(&self) -> usize;
-}
-
-#[cfg(feature = "arrow")]
-impl ColumnValues for dyn arrow_array::Array {
-    fn len(&self) -> usize {
-        arrow_array::Array::len(self)
-    }
-}
-
-impl<T: ParquetValueType> ColumnValues for [T] {
-    fn len(&self) -> usize {
-        self.len()
-    }
-}
-
 /// The encoded data for a dictionary page
 pub struct DictionaryPage {
     pub buf: Bytes,
@@ -87,9 +68,6 @@ pub trait ColumnChunkEncoder {
     /// The underlying value type encoded by this encoder.
     type Value: ParquetValueType;
 
-    /// The values encoded by this encoder
-    type Values: ColumnValues + ?Sized;
-
     /// Create a new [`ColumnChunkEncoder`] using already-resolved per-column settings.
     #[expect(
         private_interfaces,
@@ -102,43 +80,6 @@ pub trait ColumnChunkEncoder {
     ) -> Result<Self>
     where
         Self: Sized;
-
-    /// Write the corresponding values to this [`ColumnChunkEncoder`]
-    fn write(&mut self, values: &Self::Values, offset: usize, len: usize) -> Result<()>;
-
-    /// Write the values at the indexes in `indices` to this [`ColumnChunkEncoder`]
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
-
-    /// Returns the largest `k` such that the first `k` values in
-    /// `values[offset..offset + len]` encode to at most `byte_budget`
-    /// bytes — i.e. how many values fit in a single page byte budget.
-    ///
-    /// Returns `len` if every value fits. Returns at least 1 if a single
-    /// value alone exceeds the budget, matching parquet's "at least one
-    /// value per data page" rule.
-    ///
-    /// `None` means "no cheap estimate available"; the caller stays on
-    /// the batched fast path and lets the post-write
-    /// `should_add_data_page` check handle bounding.
-    fn count_values_within_byte_budget(
-        _values: &Self::Values,
-        _offset: usize,
-        _len: usize,
-        _byte_budget: usize,
-    ) -> Option<usize> {
-        None
-    }
-
-    /// As [`Self::count_values_within_byte_budget`] but using gather
-    /// `indices` rather than a contiguous range. Returns the number of
-    /// `indices` that fit, not the maximum index value.
-    fn count_values_within_byte_budget_gather(
-        _values: &Self::Values,
-        _indices: &[usize],
-        _byte_budget: usize,
-    ) -> Option<usize> {
-        None
-    }
 
     /// Returns the number of buffered values
     fn num_values(&self) -> usize;
@@ -209,18 +150,6 @@ pub trait ColumnWriterValue: DictionaryValue + Sized {
     fn encode_slice<D>(enc: &mut TypedColumnChunkEncoder<D>, values: &[Self]) -> Result<()>
     where
         D: DataType<T = Self>;
-    fn encode_gather<D>(
-        enc: &mut TypedColumnChunkEncoder<D>,
-        values: &[Self],
-        indices: &[usize],
-    ) -> Result<()>
-    where
-        D: DataType<T = Self>,
-        Self: Clone,
-    {
-        let gathered: Vec<_> = indices.iter().map(|&i| values[i].clone()).collect();
-        Self::encode_slice(enc, &gathered)
-    }
 }
 
 /// Resolves the encoding family selected by [`DataType::T`].
@@ -243,18 +172,6 @@ macro_rules! impl_numeric_encoder_dispatch {
                 } else {
                     enc.push_batch(NumericBatch::Flat(values))
                 }
-            }
-            fn encode_gather<D>(
-                enc: &mut TypedColumnChunkEncoder<D>,
-                values: &[Self],
-                indices: &[usize],
-            ) -> Result<()>
-            where
-                D: DataType<T = Self>,
-            {
-                let producer = SliceIndices { values, indices };
-                debug_assert_eq!(producer.len(), indices.len());
-                gather_tiled::<128, _, _, _>(producer, |batch| Self::encode_slice(enc, batch))
             }
         }
     };
@@ -347,57 +264,6 @@ struct FixedLenByteArrayScratch {
 
 impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {
     type Value = T::T;
-
-    type Values = [T::T];
-
-    fn write(&mut self, values: &[T::T], offset: usize, len: usize) -> Result<()> {
-        let slice = values.get(offset..offset + len).ok_or_else(|| {
-            general_err!(
-                "Expected to write {} values, but have only {}",
-                len,
-                values.len() - offset
-            )
-        })?;
-
-        <T::T as ColumnWriterValue>::encode_slice(self, slice)
-    }
-
-    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
-        <T::T as ColumnWriterValue>::encode_gather(self, values, indices)
-    }
-
-    fn count_values_within_byte_budget(
-        values: &[T::T],
-        offset: usize,
-        len: usize,
-        byte_budget: usize,
-    ) -> Option<usize> {
-        // Clamp so that a caller-supplied `len` that overruns the input
-        // (e.g. a level/value mismatch the encoder will reject later)
-        // returns an estimate instead of panicking here.
-        let end = (offset + len).min(values.len());
-        let start = offset.min(end);
-        count_within_budget::<T>(
-            end - start,
-            byte_budget,
-            values[start..end].iter().map(Some),
-        )
-    }
-
-    fn count_values_within_byte_budget_gather(
-        values: &[T::T],
-        indices: &[usize],
-        byte_budget: usize,
-    ) -> Option<usize> {
-        // `values.get` yields `None` for an out-of-range index (defensive
-        // against a level/value mismatch the encoder rejects later); such a
-        // position is counted but contributes no bytes.
-        count_within_budget::<T>(
-            indices.len(),
-            byte_budget,
-            indices.iter().map(|&i| values.get(i)),
-        )
-    }
 
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         let mut sbbf = self.bloom_filter.take()?;
@@ -781,48 +647,25 @@ fn plain_encoded_byte_size<T: DataType>(value: &T::T) -> usize {
     }
 }
 
-fn count_within_budget<'a, T: DataType>(
-    n: usize,
+/// How many leading present values fit in `byte_budget` bytes. The value that
+/// crosses the budget is included so the post-write page check flushes on this
+/// mini-batch rather than leaving a sliver for the next page.
+#[inline]
+pub(crate) fn count_within_budget<'a, T: DataType>(
     byte_budget: usize,
-    vals: impl Iterator<Item = Option<&'a T::T>>,
-) -> Option<usize>
+    vals: impl Iterator<Item = &'a T::T>,
+) -> usize
 where
     T::T: 'a,
 {
-    // Fixed-size physical types have a constant per-value byte cost, so the
-    // answer is one division — no walk needed.
-    let phys = <T::T as ParquetValueType>::PHYSICAL_TYPE;
-    if phys != Type::BYTE_ARRAY && phys != Type::FIXED_LEN_BYTE_ARRAY {
-        let per = std::mem::size_of::<T::T>().max(1);
-        return Some((byte_budget / per).max(1).min(n));
-    }
-    // Variable-width: accumulate, exit at the first value past the budget.
     let mut cum: usize = 0;
-    for (i, v) in vals.enumerate() {
-        if let Some(v) = v {
-            cum = cum.saturating_add(plain_encoded_byte_size::<T>(v));
-        }
+    let mut count = 0;
+    for value in vals {
+        count += 1;
+        cum = cum.saturating_add(plain_encoded_byte_size::<T>(value));
         if cum > byte_budget {
-            return Some(i + 1);
+            return count;
         }
     }
-    Some(n)
-}
-
-// Temporary legacy gather producer; P15's ColumnWriteSource replaces it.
-#[derive(Clone, Copy)]
-struct SliceIndices<'a, T> {
-    values: &'a [T],
-    indices: &'a [usize],
-}
-impl<T: Copy> ValueProducer<T> for SliceIndices<'_, T> {
-    fn len(self) -> usize {
-        self.indices.len()
-    }
-    fn try_for_each<E>(self, mut f: impl FnMut(T) -> Result<(), E>) -> Result<(), E> {
-        for &i in self.indices {
-            f(self.values[i])?;
-        }
-        Ok(())
-    }
+    count
 }
