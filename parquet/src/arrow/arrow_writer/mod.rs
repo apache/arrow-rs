@@ -42,7 +42,7 @@ use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
 use crate::basic::PageType;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
-use crate::column::writer::encoder::ColumnValueEncoder;
+use crate::column::writer::encoder::ColumnChunkEncoder;
 use crate::column::writer::{
     ColumnCloseResult, ColumnWriter, ColumnWriterImpl, GenericColumnWriter, get_column_writer,
 };
@@ -1955,14 +1955,14 @@ pub(crate) fn visit_i64<V: PrimitiveVisitor<i64>>(
 }
 
 /// Writes the values passed to it to an `INT32` or `INT64` column
-struct WritePrimitive<'a, 'b, E: ColumnValueEncoder> {
+struct WritePrimitive<'a, 'b, E: ColumnChunkEncoder> {
     writer: &'a mut GenericColumnWriter<'b, E>,
     levels: &'a ArrayLevels,
 }
 
 impl<T, E> PrimitiveVisitor<T> for WritePrimitive<'_, '_, E>
 where
-    E: ColumnValueEncoder<Values = [T]>,
+    E: ColumnChunkEncoder<Values = [T]>,
 {
     type Output = usize;
 
@@ -2113,7 +2113,7 @@ impl FixedLenByteArrayVisitor for WriteFixedLenByteArray<'_, '_> {
     }
 }
 
-fn write_primitive<E: ColumnValueEncoder>(
+fn write_primitive<E: ColumnChunkEncoder>(
     writer: &mut GenericColumnWriter<E>,
     values: &E::Values,
     levels: &ArrayLevels,
