@@ -25,6 +25,8 @@ use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
+#[cfg(feature = "arrow")]
+use std::ops::Range;
 use std::str;
 
 use crate::basic::{
@@ -396,6 +398,19 @@ impl<T: Default> ColumnMetrics<T> {
     }
 }
 
+/// A coordinated window into logical level positions and selected-value
+/// ordinals.
+///
+/// The ranges are separate because null slots occupy level positions but not
+/// selected-value positions. `values` addresses a `ValueSelectionRef` ordinal
+/// stream, not source-array indices.
+#[cfg(feature = "arrow")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LevelValueWindow {
+    pub(crate) levels: Range<usize>,
+    pub(crate) values: Range<usize>,
+}
+
 /// Borrowed view of level data, analogous to `&str` for `LevelData`'s `String`.
 ///
 /// `LevelDataRef` can be constructed from `LevelData` and directly from an existing
@@ -403,11 +418,18 @@ impl<T: Default> ColumnMetrics<T> {
 ///
 /// The variants are different physical representations of the same logical
 /// sequence of levels.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LevelDataRef<'a> {
     Absent,
     Materialized(&'a [i16]),
-    Uniform { value: i16, count: usize },
+    Uniform {
+        value: i16,
+        count: usize,
+    },
+    /// A compact run-end-encoded representation whose ends are cumulative
+    /// logical offsets into the complete level stream.
+    #[cfg(feature = "arrow")]
+    Runs(RunLevelsRef<'a>),
 }
 
 impl<'a> From<&'a [i16]> for LevelDataRef<'a> {
@@ -422,12 +444,14 @@ impl<'a> From<Option<&'a [i16]>> for LevelDataRef<'a> {
     }
 }
 
-impl LevelDataRef<'_> {
+impl<'a> LevelDataRef<'a> {
     pub(crate) fn len(self) -> usize {
         match self {
             Self::Absent => 0,
             Self::Materialized(values) => values.len(),
             Self::Uniform { count, .. } => count,
+            #[cfg(feature = "arrow")]
+            Self::Runs(runs) => runs.len(),
         }
     }
 
@@ -436,15 +460,19 @@ impl LevelDataRef<'_> {
             Self::Absent => None,
             Self::Materialized(values) => values.first().copied(),
             Self::Uniform { value, count } => (count > 0).then_some(value),
+            #[cfg(feature = "arrow")]
+            Self::Runs(runs) => runs.value_at(0),
         }
     }
 
     #[cfg(feature = "arrow")]
+    #[inline]
     pub(crate) fn value_at(self, idx: usize) -> Option<i16> {
         match self {
             Self::Absent => None,
             Self::Materialized(values) => values.get(idx).copied(),
             Self::Uniform { value, count } => (idx < count).then_some(value),
+            Self::Runs(runs) => runs.value_at(idx),
         }
     }
 
@@ -453,6 +481,25 @@ impl LevelDataRef<'_> {
             Self::Absent => Self::Absent,
             Self::Materialized(values) => Self::Materialized(&values[offset..offset + len]),
             Self::Uniform { value, .. } => Self::Uniform { value, count: len },
+            #[cfg(feature = "arrow")]
+            Self::Runs(runs) => Self::Runs(runs.slice(offset, len)),
+        }
+    }
+
+    /// Exact-size sequential traversal used when levels must be consumed in
+    /// lockstep with values (notably content-defined chunking). Compact run
+    /// representations perform one initial lookup and then advance at run
+    /// boundaries.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn cursor(self) -> LevelDataCursor<'a> {
+        match self {
+            Self::Absent => LevelDataCursor::Empty,
+            Self::Materialized(values) => LevelDataCursor::Materialized(values.iter()),
+            Self::Uniform { value, count } => LevelDataCursor::Uniform {
+                value,
+                remaining: count,
+            },
+            Self::Runs(levels) => LevelDataCursor::Runs(RunLevelCursor::new(levels)),
         }
     }
 
@@ -471,10 +518,60 @@ impl LevelDataRef<'_> {
                     0
                 }
             }
+            #[cfg(feature = "arrow")]
+            Self::Runs(runs) => runs.value_count(max_def),
         }
     }
 }
 
+#[cfg(feature = "arrow")]
+pub(crate) enum LevelDataCursor<'a> {
+    Empty,
+    Materialized(std::slice::Iter<'a, i16>),
+    Uniform { value: i16, remaining: usize },
+    Runs(RunLevelCursor<'a>),
+}
+
+#[cfg(feature = "arrow")]
+impl Iterator for LevelDataCursor<'_> {
+    type Item = i16;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Empty => None,
+            Self::Materialized(values) => values.next().copied(),
+            Self::Uniform { value, remaining } => {
+                if *remaining == 0 {
+                    None
+                } else {
+                    *remaining -= 1;
+                    Some(*value)
+                }
+            }
+            Self::Runs(cursor) => cursor.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+#[cfg(feature = "arrow")]
+impl ExactSizeIterator for LevelDataCursor<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Materialized(values) => values.len(),
+            Self::Uniform { remaining, .. } => *remaining,
+            Self::Runs(cursor) => cursor.len(),
+        }
+    }
+}
+
+#[inline]
 fn encode_level_data(
     encoder: &mut LevelEncoder,
     levels: LevelDataRef<'_>,
@@ -502,6 +599,11 @@ fn encode_level_data_with(
             encoder.put_with_observer(levels, put);
         }
         LevelDataRef::Uniform { value, count } => encoder.put_n_with_observer(value, count, put),
+        #[cfg(feature = "arrow")]
+        LevelDataRef::Runs(runs) => {
+            let mut put = put;
+            runs.for_each_run(|level, count| encoder.put_n_with_observer(level, count, &mut put))
+        }
     }
 }
 
@@ -530,6 +632,250 @@ fn extend_to_record_boundary(
                 limit
             }
         }
+        #[cfg(feature = "arrow")]
+        LevelDataRef::Runs(runs) => runs
+            .first_position_of(0, end_offset, limit)
+            .unwrap_or(limit),
+    }
+}
+
+/// Borrowed view of a level stream represented by cumulative run ends and a
+/// level shared by all rows in each run.
+#[cfg(feature = "arrow")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RunLevelsRef<'a> {
+    run_ends: &'a [usize],
+    levels: &'a [i16],
+    start: usize,
+    len: usize,
+}
+
+#[cfg(feature = "arrow")]
+impl<'a> RunLevelsRef<'a> {
+    /// A level-plan span backed by owned cumulative `usize` run ends and
+    /// explicit per-run levels.
+    pub(crate) fn from_level_runs(
+        run_ends: &'a [usize],
+        levels: &'a [i16],
+        start: usize,
+        len: usize,
+    ) -> Self {
+        debug_assert_eq!(run_ends.len(), levels.len());
+        debug_assert!(run_ends.windows(2).all(|window| window[0] < window[1]));
+        debug_assert!(run_ends.first().is_none_or(|&end| end > 0));
+        debug_assert!(levels.windows(2).all(|window| window[0] != window[1]));
+        let total = run_ends.last().copied().unwrap_or(0);
+        debug_assert!(start <= total);
+        debug_assert!(len <= total - start);
+        Self {
+            run_ends,
+            levels,
+            start,
+            len,
+        }
+    }
+
+    pub(crate) fn len(self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    fn level_of(self, run: usize) -> i16 {
+        self.levels[run]
+    }
+
+    #[inline]
+    fn level_at(self, idx: usize) -> i16 {
+        self.level_of(
+            self.run_ends
+                .partition_point(|&end| end <= self.start + idx),
+        )
+    }
+
+    #[inline(never)]
+    fn value_at(self, idx: usize) -> Option<i16> {
+        (idx < self.len).then(|| self.level_at(idx))
+    }
+
+    fn slice(self, offset: usize, len: usize) -> Self {
+        debug_assert!(offset <= self.len);
+        debug_assert!(len <= self.len - offset);
+        Self {
+            start: self.start + offset,
+            len,
+            ..self
+        }
+    }
+
+    /// Walk the window's runs in order, coalescing adjacent runs that share a
+    /// definition level (e.g. two consecutive non-null runs), invoking
+    /// `f(level, count)` once per coalesced level run.
+    #[inline]
+    pub(crate) fn for_each_run(self, mut f: impl FnMut(i16, usize)) {
+        let lo = self.start;
+        // A window overlap is never empty, so `pending_count == 0` means no
+        // pending coalesced run yet.
+        let mut pending_level = 0i16;
+        let mut pending_count = 0usize;
+        let hi = lo + self.len;
+        let mut run = self.run_ends.partition_point(|&end| end <= lo);
+        let mut pos = lo;
+        while pos < hi {
+            let run_end = self.run_ends[run].min(hi);
+            let overlap = run_end - pos;
+            let level = self.level_of(run);
+            if pending_count == 0 {
+                pending_level = level;
+                pending_count = overlap;
+            } else if level == pending_level {
+                pending_count += overlap;
+            } else {
+                f(pending_level, pending_count);
+                pending_level = level;
+                pending_count = overlap;
+            }
+            pos = run_end;
+            run += 1;
+        }
+        if pending_count > 0 {
+            f(pending_level, pending_count);
+        }
+    }
+
+    /// End of a value-counted prefix, visiting only the compact runs it covers.
+    fn end_for_values(
+        self,
+        offset: usize,
+        limit: usize,
+        max_def: i16,
+        mut remaining: usize,
+    ) -> usize {
+        let limit = limit.min(self.len);
+        let mut position = self.start + offset;
+        let absolute_limit = self.start + limit;
+        let mut run = self.run_ends.partition_point(|&end| end <= position);
+        while position < absolute_limit {
+            let end = self.run_ends[run].min(absolute_limit);
+            if self.level_of(run) == max_def {
+                let count = end - position;
+                if count >= remaining {
+                    return position + remaining - self.start;
+                }
+                remaining -= count;
+            }
+            position = end;
+            run += 1;
+        }
+        limit
+    }
+
+    /// Count of rows in the window whose definition level equals `max_def`
+    /// (i.e. that carry a value).
+    fn value_count(self, max_def: i16) -> usize {
+        let mut count = 0;
+        self.for_each_run(|level, run_len| {
+            if level == max_def {
+                count += run_len;
+            }
+        });
+        count
+    }
+
+    /// Find the first logical position at or after `offset` whose level equals
+    /// `value`, bounded by `limit`. Both offsets are relative to this view.
+    fn first_position_of(self, value: i16, offset: usize, limit: usize) -> Option<usize> {
+        let limit = limit.min(self.len);
+        if offset >= limit {
+            return None;
+        }
+
+        let absolute_limit = self.start + limit;
+        let mut absolute_position = self.start + offset;
+        let mut run = self
+            .run_ends
+            .partition_point(|&end| end <= absolute_position);
+        while absolute_position < absolute_limit {
+            if self.level_of(run) == value {
+                return Some(absolute_position - self.start);
+            }
+            absolute_position = self.run_ends[run].min(absolute_limit);
+            run += 1;
+        }
+        None
+    }
+}
+
+/// Exact-size sequential traversal of [`RunLevelsRef`], caching the current
+/// run's level and end position.
+#[cfg(feature = "arrow")]
+pub(crate) struct RunLevelCursor<'a> {
+    levels: RunLevelsRef<'a>,
+    run: usize,
+    level: i16,
+    absolute_position: usize,
+    absolute_end: usize,
+    run_end: usize,
+}
+
+#[cfg(feature = "arrow")]
+impl<'a> RunLevelCursor<'a> {
+    pub(crate) fn new(levels: RunLevelsRef<'a>) -> Self {
+        let absolute_position = levels.start;
+        let absolute_end = absolute_position + levels.len;
+        if levels.len == 0 || levels.run_ends.is_empty() {
+            return Self {
+                levels,
+                run: 0,
+                level: 0,
+                absolute_position,
+                absolute_end,
+                run_end: absolute_end,
+            };
+        }
+        let run = levels
+            .run_ends
+            .partition_point(|&end| end <= absolute_position);
+        let run_end = levels.run_ends[run];
+        let level = levels.level_of(run);
+        Self {
+            levels,
+            run,
+            level,
+            absolute_position,
+            absolute_end,
+            run_end,
+        }
+    }
+}
+
+#[cfg(feature = "arrow")]
+impl Iterator for RunLevelCursor<'_> {
+    type Item = i16;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.absolute_position >= self.absolute_end {
+            return None;
+        }
+        while self.absolute_position >= self.run_end {
+            self.run += 1;
+            self.run_end = self.levels.run_ends[self.run];
+            self.level = self.levels.level_of(self.run);
+        }
+        self.absolute_position += 1;
+        Some(self.level)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.absolute_end - self.absolute_position;
+        (len, Some(len))
+    }
+}
+
+#[cfg(feature = "arrow")]
+impl ExactSizeIterator for RunLevelCursor<'_> {
+    fn len(&self) -> usize {
+        self.absolute_end - self.absolute_position
     }
 }
 
@@ -791,9 +1137,11 @@ impl<'a, E: ColumnChunkEncoder> GenericColumnWriter<'a, E> {
             && !matches!(rep_levels, LevelDataRef::Materialized(_));
         let has_levels = !matches!(def_levels, LevelDataRef::Absent)
             || !matches!(rep_levels, LevelDataRef::Absent);
-        // When both level vectors are compact (Uniform or Absent), there is no
-        // materialized slice to split and the per-mini-batch work is O(1), so we
-        // can safely use a much larger batch size.
+        // A larger batch coarsens the post-mini-batch page checks, so it is
+        // worth taking only when there is level-encoding work to amortise:
+        // `Uniform` folds a window into one RLE run and `Runs` into one per
+        // level run, which a run-length floor keeps to a constant fraction of
+        // the window. `Absent` has no stream to amortise, hence `has_levels`.
         let base_batch_size = if both_levels_compact && has_levels {
             self.props.data_page_row_count_limit()
         } else {
@@ -1056,6 +1404,10 @@ impl<'a, E: ColumnChunkEncoder> GenericColumnWriter<'a, E> {
         match chunk_def {
             // `max_def_level == 0`: every level is a value.
             LevelDataRef::Absent => (start + max_values).min(chunk_size),
+            #[cfg(feature = "arrow")]
+            LevelDataRef::Runs(runs) => {
+                runs.end_for_values(start, chunk_size, max_def_level, max_values)
+            }
             LevelDataRef::Uniform { value, .. } => {
                 if value == max_def_level {
                     (start + max_values).min(chunk_size)
@@ -2182,6 +2534,30 @@ mod tests {
     use crate::util::test_common::rand_gen::random_numbers_range;
 
     use super::*;
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn exact_value_windows_preserve_compact_level_runs() {
+        let run_ends = [3, 7, 10, 15];
+        let run_values = [0, 1, 0, 1];
+        let dense = [0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1];
+        for offset in 0..dense.len() {
+            for len in 1..=dense.len() - offset {
+                let runs = RunLevelsRef::from_level_runs(&run_ends, &run_values, offset, len);
+                for start in 0..len {
+                    for budget in 1..=8 {
+                        let expected = GenericColumnWriter::<TypedColumnChunkEncoder<Int32Type>>::window_end_for_values(
+                            LevelDataRef::Materialized(&dense[offset..offset + len]), len, 1, start, budget,
+                        );
+                        let actual = GenericColumnWriter::<TypedColumnChunkEncoder<Int32Type>>::window_end_for_values(
+                            LevelDataRef::Runs(runs), len, 1, start, budget,
+                        );
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn remaining_dictionary_budget_bounds_dense_mini_batches() {
@@ -6285,5 +6661,202 @@ mod tests {
         );
         assert!(checked_page_value_increment(0, MAX_DATA_PAGE_VALUE_COUNT as usize + 1).is_err());
         assert!(checked_page_value_increment(MAX_DATA_PAGE_VALUE_COUNT, 1).is_err());
+    }
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn level_data_cursor_matches_all_representations() {
+        let level_run_ends = [2, 5, 7];
+        let level_run_values = [2, 1, 3];
+        let level_runs = RunLevelsRef::from_level_runs(&level_run_ends, &level_run_values, 1, 5);
+
+        let check = |levels: LevelDataRef<'_>, expected: &[i16]| {
+            let cursor = levels.cursor();
+            assert_eq!(cursor.len(), levels.len());
+            let actual = cursor.collect::<Vec<_>>();
+            assert_eq!(actual.len(), levels.len());
+            assert_eq!(actual, expected);
+        };
+        check(LevelDataRef::Absent, &[]);
+        check(LevelDataRef::Materialized(&[3, 1, 2]), &[3, 1, 2]);
+        check(LevelDataRef::Uniform { value: 4, count: 3 }, &[4, 4, 4]);
+        check(LevelDataRef::Runs(level_runs), &[2, 1, 1, 1, 3]);
+
+        let empty_runs = RunLevelsRef::from_level_runs(&[], &[], 0, 0);
+        let mut empty = RunLevelCursor::new(empty_runs);
+        assert_eq!(empty.next(), None);
+        assert_eq!(empty.len(), 0);
+    }
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn level_runs_slice_matrix_matches_materialized() {
+        let ends = [3, 5, 9, 12];
+        let values = [2, 0, 3, 1];
+        let materialized = [2, 2, 2, 0, 0, 3, 3, 3, 3, 1, 1, 1];
+        let runs = RunLevelsRef::from_level_runs(&ends, &values, 0, materialized.len());
+
+        for offset in 0..=materialized.len() {
+            for len in 0..=materialized.len() - offset {
+                let expected = &materialized[offset..offset + len];
+                let sliced = runs.slice(offset, len);
+                let levels = LevelDataRef::Runs(sliced);
+
+                assert_eq!(levels.len(), len, "offset={offset}, len={len}");
+                assert_eq!(levels.first(), expected.first().copied());
+                assert_eq!(levels.cursor().collect::<Vec<_>>(), expected);
+                assert_eq!(
+                    levels.value_count(len, 3),
+                    expected.iter().filter(|&&v| v == 3).count()
+                );
+                for idx in 0..=len {
+                    assert_eq!(
+                        levels.value_at(idx),
+                        expected.get(idx).copied(),
+                        "offset={offset}, len={len}, idx={idx}"
+                    );
+                }
+            }
+        }
+    }
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn level_runs_encoding_matches_materialized_for_every_slice() {
+        let ends = [1, 3, 11, 12, 20];
+        let values = [0, 2, 1, 3, 0];
+        let materialized = [0, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0];
+        let runs = RunLevelsRef::from_level_runs(&ends, &values, 0, materialized.len());
+
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            for offset in 0..=materialized.len() {
+                for len in 0..=materialized.len() - offset {
+                    let make_encoder = || match version {
+                        WriterVersion::PARQUET_1_0 => LevelEncoder::v1_streaming(3),
+                        WriterVersion::PARQUET_2_0 => LevelEncoder::v2_streaming(3),
+                    };
+                    let encode = |levels| {
+                        let mut encoder = make_encoder();
+                        let mut histogram = [0usize; 4];
+                        encode_level_data_with(&mut encoder, levels, |level, count| {
+                            histogram[level as usize] += count
+                        });
+                        (histogram, encoder.consume())
+                    };
+                    let (actual_histogram, actual) =
+                        encode(LevelDataRef::Runs(runs.slice(offset, len)));
+                    let (expected_histogram, expected) = encode(LevelDataRef::Materialized(
+                        &materialized[offset..offset + len],
+                    ));
+
+                    assert_eq!(actual_histogram, expected_histogram);
+                    assert_eq!(
+                        actual, expected,
+                        "version={version:?}, offset={offset}, len={len}"
+                    );
+                }
+            }
+        }
+    }
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn level_runs_record_boundary_extension_matches_materialized() {
+        assert_eq!(extend_to_record_boundary(LevelDataRef::Absent, 2, 4), 2);
+        assert_eq!(
+            extend_to_record_boundary(LevelDataRef::Uniform { value: 0, count: 4 }, 2, 4,),
+            2
+        );
+        assert_eq!(
+            extend_to_record_boundary(LevelDataRef::Uniform { value: 1, count: 4 }, 2, 4,),
+            4
+        );
+
+        let ends = [1, 3, 4, 6, 7];
+        let values = [0, 1, 0, 1, 0];
+        let materialized = [0, 1, 1, 0, 1, 1, 0];
+        let runs = LevelDataRef::Runs(RunLevelsRef::from_level_runs(
+            &ends,
+            &values,
+            0,
+            materialized.len(),
+        ));
+        let materialized_levels = LevelDataRef::Materialized(&materialized);
+        for (case, levels) in [("level runs", runs)] {
+            for limit in 0..=materialized_levels.len() {
+                for candidate in 0..=limit {
+                    assert_eq!(
+                        extend_to_record_boundary(levels, candidate, limit),
+                        extend_to_record_boundary(materialized_levels, candidate, limit),
+                        "{case}: candidate={candidate}, limit={limit}"
+                    );
+                }
+            }
+        }
+
+        // Sliced views use offsets relative to the view, not the backing runs.
+        let sliced_runs = runs.slice(2, 4);
+        let sliced_materialized = LevelDataRef::Materialized(&materialized[2..6]);
+        for candidate in 0..=4 {
+            assert_eq!(
+                extend_to_record_boundary(sliced_runs, candidate, 4),
+                extend_to_record_boundary(sliced_materialized, candidate, 4),
+            );
+        }
+    }
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn repeated_records_respect_the_hard_page_value_limit() {
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .build(),
+        );
+        let mut writer = get_test_column_writer::<Int32Type>(get_test_page_writer(), 0, 1, props);
+        writer.write_batch(&[10], None, Some(&[0])).unwrap();
+        writer.page_metrics.num_buffered_values = MAX_DATA_PAGE_VALUE_COUNT - 1;
+
+        let run_ends = [1, 2];
+        let levels = [0, 1];
+        let rep = LevelDataRef::Runs(RunLevelsRef::from_level_runs(&run_ends, &levels, 0, 2));
+        assert_eq!(
+            writer
+                .write_batch_internal(
+                    &[20_i32, 30][..],
+                    LevelDataRef::Absent,
+                    rep,
+                    None,
+                    None,
+                    None
+                )
+                .unwrap(),
+            2
+        );
+        assert_eq!(writer.page_metrics.num_buffered_values, 2);
+        assert!(writer.column_metrics.total_bytes_written > 0);
+
+        let mut writer =
+            get_test_column_writer::<Int32Type>(get_test_page_writer(), 1, 1, Default::default());
+        let oversized = MAX_DATA_PAGE_VALUE_COUNT as usize + 1;
+        let run_ends = [1, oversized];
+        let levels = [0, 1];
+        let rep = LevelDataRef::Runs(RunLevelsRef::from_level_runs(
+            &run_ends, &levels, 0, oversized,
+        ));
+        let error = writer
+            .write_batch_internal(
+                &[] as &[i32],
+                LevelDataRef::Uniform {
+                    value: 0,
+                    count: oversized,
+                },
+                rep,
+                None,
+                None,
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Parquet error: Record contains more than {MAX_DATA_PAGE_VALUE_COUNT} values and cannot fit in a Parquet data page"
+            )
+        );
     }
 }

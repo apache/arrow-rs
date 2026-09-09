@@ -588,7 +588,7 @@ mod tests {
     use super::boolean::BoolBatchSelection;
     use super::*;
     #[cfg(feature = "arrow")]
-    use crate::column::value_selection::DictionaryKeys;
+    use crate::column::value_selection::{DictionaryKeys, RangesSelectionRef, SelectionRange};
 
     use std::sync::Arc;
 
@@ -1251,5 +1251,74 @@ mod tests {
         for (index, expected) in expected.into_iter().enumerate() {
             assert_eq!(bit_util::get_bit(&encoded, index), expected);
         }
+    }
+    #[cfg(feature = "arrow")]
+    fn assert_plain_packed_bool<'a>(
+        input: &'a [u8],
+        bit_offset: usize,
+        selection: PhysicalValueSelection<'a>,
+        expected_indices: &[usize],
+    ) {
+        let values = BoolBatch::new_physical(input, bit_offset, selection);
+        assert_eq!(
+            values.true_count(),
+            expected_indices
+                .iter()
+                .filter(|&&idx| bit_util::get_bit(input, bit_offset + idx))
+                .count()
+        );
+
+        let mut encoder = PlainEncoder::<BoolType>::new();
+        encoder.put_bool_batch(values).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+        assert_eq!(encoded.len(), expected_indices.len().div_ceil(8));
+        for (out_idx, &input_idx) in expected_indices.iter().enumerate() {
+            assert_eq!(
+                bit_util::get_bit(&encoded, out_idx),
+                bit_util::get_bit(input, bit_offset + input_idx),
+                "mismatch at output bit {out_idx}"
+            );
+        }
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn test_plain_encoder_selected_packed_bool() {
+        let input = [
+            0b1010_1101,
+            0b0111_0010,
+            0b1100_1001,
+            0b0011_1110,
+            0b0101_0101,
+            0b1000_1111,
+            0b1111_0000,
+            0b0001_1011,
+            0b1011_0110,
+            0b0100_1001,
+            0b1110_0011,
+            0b0010_1100,
+            0b1001_0111,
+            0b0110_1010,
+        ];
+        let indices: Vec<_> = (0..93).filter(|idx| idx % 3 != 1).collect();
+        assert_plain_packed_bool(
+            &input,
+            5,
+            PhysicalValueSelection::identity(ValueSelectionRef::Sparse(&indices)),
+            &indices,
+        );
+
+        let spans = [
+            SelectionRange::new(2..11, 9),
+            SelectionRange::new(17..33, 25),
+        ];
+        let ranges = RangesSelectionRef::new(&spans, 25);
+        let indices = (2..11).chain(17..33).collect::<Vec<_>>();
+        assert_plain_packed_bool(
+            &input,
+            3,
+            PhysicalValueSelection::identity(ValueSelectionRef::Ranges(ranges)),
+            &indices,
+        );
     }
 }
