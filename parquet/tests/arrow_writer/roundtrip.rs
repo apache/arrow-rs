@@ -1456,8 +1456,8 @@ fn ree_float32() {
 
 #[test]
 fn ree_sliced() {
-    // A sliced (non-zero offset) REE array: verify that get_physical_index
-    // correctly accounts for the logical offset when expanding.
+    // A sliced (non-zero offset) REE array verifies that physical run
+    // selection correctly accounts for the logical offset.
     // Full array: run_ends [3, 5, 7] → [a,a,a, b,b, c,c]
     // After slice(2, 5) the logical view is [a, b, b, c, c].
     let full: ArrayRef = Arc::new(
