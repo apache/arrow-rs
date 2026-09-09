@@ -8,7 +8,6 @@
 //! planning. [`PhysicalValueSelection`] maps those positions through optional
 //! dictionary keys to the physical value array.
 
-#[cfg(test)]
 use std::slice;
 use std::{mem::MaybeUninit, ops::Range};
 
@@ -80,9 +79,7 @@ impl<'a> RangesSelectionRef<'a> {
             len,
         }
     }
-}
 
-impl RangesSelectionRef<'_> {
     pub(crate) fn slice(self, offset: usize, len: usize) -> Self {
         debug_assert!(offset <= self.len && len <= self.len - offset);
         Self {
@@ -168,7 +165,7 @@ pub(crate) enum ValueSelectionRef<'a> {
     Sparse(&'a [usize]),
 }
 
-impl ValueSelectionRef<'_> {
+impl<'a> ValueSelectionRef<'a> {
     pub(crate) fn len(self) -> usize {
         match self {
             Self::Empty => 0,
@@ -200,6 +197,17 @@ impl ValueSelectionRef<'_> {
             }
             Self::Ranges(ranges) => Self::Ranges(ranges.slice(offset, len)),
             Self::Sparse(indices) => Self::Sparse(&indices[offset..offset + len]),
+        }
+    }
+
+    pub(crate) fn cursor(self) -> ValueSelectionCursor<'a> {
+        match self {
+            Self::Empty => ValueSelectionCursor::Empty,
+            Self::Dense { offset, len } => ValueSelectionCursor::Dense(offset..offset + len),
+            Self::Ranges(ranges) => {
+                ValueSelectionCursor::Ranges(RangesSelectionCursor::new(ranges))
+            }
+            Self::Sparse(indices) => ValueSelectionCursor::Sparse(indices.iter()),
         }
     }
 
@@ -243,24 +251,9 @@ impl ValueSelectionRef<'_> {
     }
 }
 
-#[cfg(test)]
-impl<'a> ValueSelectionRef<'a> {
-    pub(crate) fn cursor(self) -> ValueSelectionCursor<'a> {
-        match self {
-            Self::Empty => ValueSelectionCursor::Empty,
-            Self::Dense { offset, len } => ValueSelectionCursor::Dense(offset..offset + len),
-            Self::Ranges(ranges) => {
-                ValueSelectionCursor::Ranges(RangesSelectionCursor::new(ranges))
-            }
-            Self::Sparse(indices) => ValueSelectionCursor::Sparse(indices.iter()),
-        }
-    }
-}
-
 /// Exact-size sequential traversal of a value selection. This is deliberately
 /// separate from the encoder-facing `ValueProducer`: it yields source positions
 /// while CDC zips positions with definition and repetition levels.
-#[cfg(test)]
 pub(crate) enum ValueSelectionCursor<'a> {
     Empty,
     Dense(std::ops::Range<usize>),
@@ -268,7 +261,6 @@ pub(crate) enum ValueSelectionCursor<'a> {
     Sparse(slice::Iter<'a, usize>),
 }
 
-#[cfg(test)]
 impl Iterator for ValueSelectionCursor<'_> {
     type Item = usize;
 
@@ -288,7 +280,6 @@ impl Iterator for ValueSelectionCursor<'_> {
     }
 }
 
-#[cfg(test)]
 impl ExactSizeIterator for ValueSelectionCursor<'_> {
     fn len(&self) -> usize {
         match self {
@@ -300,7 +291,6 @@ impl ExactSizeIterator for ValueSelectionCursor<'_> {
     }
 }
 
-#[cfg(test)]
 pub(crate) struct RangesSelectionCursor<'a> {
     ranges: &'a [SelectionRange],
     range_index: usize,
@@ -309,7 +299,6 @@ pub(crate) struct RangesSelectionCursor<'a> {
     remaining: usize,
 }
 
-#[cfg(test)]
 impl<'a> RangesSelectionCursor<'a> {
     pub(crate) fn new(selection: RangesSelectionRef<'a>) -> Self {
         let range_index = selection.range_index(selection.offset);
@@ -334,7 +323,6 @@ impl<'a> RangesSelectionCursor<'a> {
     }
 }
 
-#[cfg(test)]
 impl Iterator for RangesSelectionCursor<'_> {
     type Item = usize;
 
@@ -361,7 +349,6 @@ impl Iterator for RangesSelectionCursor<'_> {
     }
 }
 
-#[cfg(test)]
 impl ExactSizeIterator for RangesSelectionCursor<'_> {
     fn len(&self) -> usize {
         self.remaining
