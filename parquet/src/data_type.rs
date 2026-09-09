@@ -707,7 +707,7 @@ pub(crate) mod private {
         fallback_min_max, min_max_f32, min_max_f64, min_max_i32, min_max_i64,
     };
     use crate::file::metadata::HeapSize;
-    use crate::schema::types::BasicTypeInfo;
+    use crate::schema::types::ColumnDescriptor;
 
     /// Convert a byte-array payload length to its four-byte PLAIN prefix.
     #[inline]
@@ -790,8 +790,8 @@ pub(crate) mod private {
 
         /// Return the min, max and NaN count of `values` for column statistics,
         /// or `None` if `values` is empty
-        fn min_max(basic_type_info: &BasicTypeInfo, values: &[Self]) -> Option<(Self, Self, u64)> {
-            fallback_min_max(basic_type_info, values.iter())
+        fn min_max(descr: &ColumnDescriptor, values: &[Self]) -> Option<(Self, Self, u64)> {
+            fallback_min_max(descr, values.iter())
         }
 
         /// Return the value as an Any to allow for downcasts without transmutation
@@ -966,7 +966,7 @@ pub(crate) mod private {
                 }
 
                 #[inline]
-                fn min_max($info: &BasicTypeInfo, $values: &[Self]) -> Option<(Self, Self, u64)> {
+                fn min_max($info: &ColumnDescriptor, $values: &[Self]) -> Option<(Self, Self, u64)> {
                     $min_max
                 }
 

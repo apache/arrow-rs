@@ -175,9 +175,7 @@ impl<T: DataType> TypedColumnChunkEncoder<T> {
                     let value_is_nan = classify_and_count_nan(ctx, value, 1, nan_count);
                     extrema.observe(ctx, value, value_is_nan);
                 }
-            } else if let Some((min, max, batch_nan_count)) =
-                T::T::min_max(self.descr.get_basic_info(), values)
-            {
+            } else if let Some((min, max, batch_nan_count)) = T::T::min_max(&self.descr, values) {
                 // Reduce borrowed dense slices with the upstream vectorized kernels.
                 extrema.min = Some(min);
                 extrema.max = Some(max);
@@ -187,7 +185,9 @@ impl<T: DataType> TypedColumnChunkEncoder<T> {
                 }
             }
         }
-        if let Some(bloom) = bloom_filter.as_mut() {
+        if !matches!(encoding_family, NumericEncodingFamily::Dictionary(_))
+            && let Some(bloom) = bloom_filter.as_mut()
+        {
             for &value in values {
                 bloom.insert(&value);
             }

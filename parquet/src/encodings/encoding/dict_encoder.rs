@@ -20,9 +20,9 @@
 
 use bytes::Bytes;
 
-use crate::basic::{Encoding, Type};
+use crate::basic::Encoding;
 use crate::data_type::private::{ParquetValueType, PlainEncoderValue};
-use crate::data_type::{DataType, FixedLenByteArray, Int96};
+use crate::data_type::{DataType, Int96};
 use crate::encodings::encoding::{Encoder, PlainEncoderImpl as PlainEncoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::Result;
@@ -36,8 +36,6 @@ pub struct KeyStorage<T: ParquetValueType> {
 
     /// size of unique values (keys) in the dictionary, in bytes.
     size_in_bytes: usize,
-
-    type_length: usize,
 }
 
 impl<T: ParquetValueType> Storage for KeyStorage<T> {
@@ -50,13 +48,7 @@ impl<T: ParquetValueType> Storage for KeyStorage<T> {
     }
 
     fn push(&mut self, value: &Self::Value) -> Self::Key {
-        let (base_size, _) = value.dict_encoding_size();
-        let unique_size = if T::PHYSICAL_TYPE == Type::FIXED_LEN_BYTE_ARRAY {
-            self.type_length
-        } else {
-            base_size
-        };
-        self.size_in_bytes += unique_size;
+        self.size_in_bytes += value.dict_encoding_size().0;
 
         let key = self.uniques.len() as u64;
         self.uniques.push(value.clone());
@@ -64,12 +56,7 @@ impl<T: ParquetValueType> Storage for KeyStorage<T> {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        let uniques_heap_bytes = if T::PHYSICAL_TYPE == Type::FIXED_LEN_BYTE_ARRAY {
-            self.type_length * self.uniques.len()
-        } else {
-            0
-        };
-        self.uniques.capacity() * std::mem::size_of::<T>() + uniques_heap_bytes
+        self.uniques.capacity() * std::mem::size_of::<T>()
     }
 }
 
@@ -93,11 +80,10 @@ pub trait DictionaryStorage<T>: Send {
 type TypedDictionaryStorage<T> = Interner<KeyStorage<T>>;
 
 impl<T: PlainEncoderValue> DictionaryStorage<T> for TypedDictionaryStorage<T> {
-    fn new(desc: &ColumnDescPtr) -> Self {
+    fn new(_desc: &ColumnDescPtr) -> Self {
         Interner::new(KeyStorage {
             uniques: vec![],
             size_in_bytes: 0,
-            type_length: desc.type_length() as usize,
         })
     }
 
@@ -145,7 +131,7 @@ macro_rules! typed_dictionary_value {
     };
 }
 
-typed_dictionary_value!(bool, i32, i64, Int96, f32, f64, FixedLenByteArray);
+typed_dictionary_value!(bool, i32, i64, Int96, f32, f64);
 
 /// The buffered dictionary indices of one column chunk's data page.
 ///
@@ -206,7 +192,7 @@ impl RunIndexBuffer {
 pub struct DictEncoder<T: DataType> {
     dictionary: <T::T as DictionaryValue>::Storage,
 
-    /// The buffered data-page indices.
+    /// The buffered dense data-page indices.
     indices: RunIndexBuffer,
 }
 
@@ -261,14 +247,28 @@ impl<T: DataType> DictEncoder<T> {
         self.indices.write_indices(self.bit_width())
     }
 
-    /// Intern `value` and append its dictionary index to the data page.
+    /// Intern `value` and append its dictionary index to the dense `indices`
+    /// buffer.
     #[inline]
     pub(crate) fn put_one(&mut self, value: &T::T) -> Result<()> {
         self.indices.push(self.dictionary.intern(value)?);
         Ok(())
     }
 
-    /// Reserve capacity for more dictionary indices.
+    /// Intern raw bytes. Typed storage invokes `make` only on a miss; byte-array
+    /// page storage appends the bytes directly.
+    #[inline(always)]
+    pub(crate) fn put_value_bytes(
+        &mut self,
+        bytes: &[u8],
+        make: impl FnOnce() -> T::T,
+    ) -> Result<()> {
+        self.indices
+            .push(self.dictionary.intern_bytes(bytes, make)?);
+        Ok(())
+    }
+
+    /// Reserve capacity for `additional` more dictionary indices.
     pub(crate) fn reserve(&mut self, additional: usize) {
         self.indices.reserve(additional);
     }
@@ -318,6 +318,7 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::sync::Arc;
 
     use super::*;
@@ -531,9 +532,9 @@ mod tests {
 
         let size = encoder.estimated_memory_size();
 
-        // Must account for the 3 unique dictionary entries: struct overhead plus the
-        // fixed-length bytes allocated per entry.
-        let dict_entry_size = 3 * std::mem::size_of::<FixedLenByteArray>() + 3 * TYPE_LEN;
+        // Fixed-length dictionary entries are stored contiguously in their final
+        // PLAIN representation, without one heap-backed wrapper per value.
+        let dict_entry_size = 3 * TYPE_LEN;
         assert!(
             size >= empty_size + dict_entry_size,
             "memory size {size} should grow by at least the dict storage ({dict_entry_size} bytes)"
@@ -563,9 +564,9 @@ mod tests {
 
         let size = encoder.estimated_memory_size();
 
-        // Must account for the 100 unique dictionary entries: struct overhead plus the
-        // fixed-length bytes allocated per entry.
-        let dict_entry_size = 100 * std::mem::size_of::<FixedLenByteArray>() + 100 * TYPE_LEN;
+        // Fixed-length dictionary entries are stored contiguously in their final
+        // PLAIN representation, without one heap-backed wrapper per value.
+        let dict_entry_size = 100 * TYPE_LEN;
         assert!(
             size >= empty_size + dict_entry_size,
             "memory size {size} should grow by at least the dict storage ({dict_entry_size} bytes)"
@@ -577,6 +578,29 @@ mod tests {
             size >= empty_size + dict_entry_size + indices_size,
             "memory size {size} should include indices ({indices_size} bytes)"
         );
+    }
+
+    #[test]
+    fn fixed_len_byte_array_dictionary_interns_directly_into_plain_page() {
+        const TYPE_LEN: usize = 3;
+        let mut encoder = DictEncoder::<FixedLenByteArrayType>::new(make_col_desc_with_length::<
+            FixedLenByteArrayType,
+        >(TYPE_LEN as i32));
+        let constructions = Cell::new(0);
+
+        for value in [b"foo".as_slice(), b"bar", b"foo"] {
+            encoder
+                .put_value_bytes(value, || {
+                    constructions.set(constructions.get() + 1);
+                    FixedLenByteArray::from(value.to_vec())
+                })
+                .unwrap();
+        }
+
+        assert_eq!(constructions.get(), 0);
+        assert_eq!(encoder.num_entries(), 2);
+        assert_eq!(encoder.dict_encoded_size(), 2 * TYPE_LEN);
+        assert_eq!(encoder.write_dict().unwrap().as_ref(), b"foobar");
     }
 
     #[test]

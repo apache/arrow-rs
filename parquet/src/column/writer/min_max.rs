@@ -18,7 +18,7 @@
 use crate::basic::SortOrder;
 use crate::column::writer::{compare_greater, is_nan};
 use crate::data_type::private::ParquetValueType;
-use crate::schema::types::BasicTypeInfo;
+use crate::schema::types::ColumnDescriptor;
 
 /// Accumulators for 64 bytes of values, i.e. a cache line and one AVX-512
 /// register, or four NEON / two AVX2 registers.
@@ -61,13 +61,13 @@ fn min_max_by_key<T: Copy, K: Copy + Ord, const LANES: usize>(
 }
 
 #[inline]
-fn is_unsigned(basic_type_info: &BasicTypeInfo) -> bool {
-    matches!(basic_type_info.sort_order(), SortOrder::UNSIGNED)
+fn is_unsigned(descr: &ColumnDescriptor) -> bool {
+    matches!(descr.sort_order(), SortOrder::UNSIGNED)
 }
 
 /// Returns the min and max of an `INT32` column, or `None` if `values` is empty.
-pub(crate) fn min_max_i32(basic_type_info: &BasicTypeInfo, values: &[i32]) -> Option<(i32, i32)> {
-    if is_unsigned(basic_type_info) {
+pub(crate) fn min_max_i32(descr: &ColumnDescriptor, values: &[i32]) -> Option<(i32, i32)> {
+    if is_unsigned(descr) {
         min_max_by_key::<_, _, LANES_32>(values, |v| v as u32, u32::MIN, u32::MAX)
             .map(|(min, max)| (min as i32, max as i32))
     } else {
@@ -76,8 +76,8 @@ pub(crate) fn min_max_i32(basic_type_info: &BasicTypeInfo, values: &[i32]) -> Op
 }
 
 /// Returns the min and max of an `INT64` column, or `None` if `values` is empty.
-pub(crate) fn min_max_i64(basic_type_info: &BasicTypeInfo, values: &[i64]) -> Option<(i64, i64)> {
-    if is_unsigned(basic_type_info) {
+pub(crate) fn min_max_i64(descr: &ColumnDescriptor, values: &[i64]) -> Option<(i64, i64)> {
+    if is_unsigned(descr) {
         min_max_by_key::<_, _, LANES_64>(values, |v| v as u64, u64::MIN, u64::MAX)
             .map(|(min, max)| (min as i64, max as i64))
     } else {
@@ -173,7 +173,7 @@ float_min_max!(min_max_f64, f64, i64, u64, LANES_64);
 // evaluated. If all values are NaN, then the min/max NaNs as determined by
 // IEEE 754 total order are returned.
 pub(crate) fn fallback_min_max<'a, T, I>(
-    basic_type_info: &BasicTypeInfo,
+    descr: &ColumnDescriptor,
     mut iter: I,
 ) -> Option<(T, T, u64)>
 where
@@ -181,13 +181,13 @@ where
     I: Iterator<Item = &'a T>,
 {
     let first = iter.next()?;
-    let mut min_max_nan = is_nan(basic_type_info, first);
+    let mut min_max_nan = is_nan(descr, first);
     let mut nan_count = min_max_nan as u64;
 
     let mut min = first;
     let mut max = first;
     for val in iter {
-        match (min_max_nan, is_nan(basic_type_info, val)) {
+        match (min_max_nan, is_nan(descr, val)) {
             // skip NaNs if we've encounter non-NaN
             (false, true) => {
                 nan_count += 1;
@@ -203,9 +203,9 @@ where
                 nan_count += val_is_nan as u64;
                 // we've already initialized min and max, so a single value can't be both
                 // extremes
-                if compare_greater(basic_type_info, min, val) {
+                if compare_greater(descr, min, val) {
                     min = val;
-                } else if compare_greater(basic_type_info, val, max) {
+                } else if compare_greater(descr, val, max) {
                     max = val;
                 }
             }
@@ -221,14 +221,14 @@ mod tests {
     use crate::basic::{ConvertedType, IntType, LogicalType, Type as PhysicalType};
     use crate::schema::types::Type;
     use rand::prelude::*;
+    use std::sync::Arc;
 
-    fn type_info(physical: PhysicalType, logical: Option<LogicalType>) -> BasicTypeInfo {
-        Type::primitive_type_builder("col", physical)
+    fn column_descr(physical: PhysicalType, logical: Option<LogicalType>) -> ColumnDescriptor {
+        let primitive = Type::primitive_type_builder("col", physical)
             .with_logical_type(logical)
             .build()
-            .unwrap()
-            .get_basic_info()
-            .clone()
+            .unwrap();
+        ColumnDescriptor::new(Arc::new(primitive), 0, 0, "col".into())
     }
 
     fn signed_int(bits: u8) -> Option<LogicalType> {
@@ -252,12 +252,12 @@ mod tests {
 
     fn check_ints<T, F>(
         rng: &mut StdRng,
-        info: &BasicTypeInfo,
+        info: &ColumnDescriptor,
         kernel: F,
         gen_value: impl Fn(&mut StdRng) -> T,
     ) where
         T: crate::data_type::private::ParquetValueType + Copy,
-        F: Fn(&BasicTypeInfo, &[T]) -> Option<(T, T)>,
+        F: Fn(&ColumnDescriptor, &[T]) -> Option<(T, T)>,
     {
         for len in lengths() {
             let values: Vec<T> = (0..len).map(|_| gen_value(rng)).collect();
@@ -272,10 +272,10 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let edges = [i32::MIN, i32::MIN + 1, -1, 0, 1, i32::MAX - 1, i32::MAX];
         for info in [
-            type_info(PhysicalType::INT32, None),
-            type_info(PhysicalType::INT32, signed_int(32)),
-            type_info(PhysicalType::INT32, unsigned_int(32)),
-            type_info(PhysicalType::INT32, unsigned_int(8)),
+            column_descr(PhysicalType::INT32, None),
+            column_descr(PhysicalType::INT32, signed_int(32)),
+            column_descr(PhysicalType::INT32, unsigned_int(32)),
+            column_descr(PhysicalType::INT32, unsigned_int(8)),
         ] {
             check_ints(&mut rng, &info, min_max_i32, |r| r.random());
             check_ints(&mut rng, &info, min_max_i32, |r| *edges.choose(r).unwrap());
@@ -288,9 +288,9 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let edges = [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX - 1, i64::MAX];
         for info in [
-            type_info(PhysicalType::INT64, None),
-            type_info(PhysicalType::INT64, signed_int(64)),
-            type_info(PhysicalType::INT64, unsigned_int(64)),
+            column_descr(PhysicalType::INT64, None),
+            column_descr(PhysicalType::INT64, signed_int(64)),
+            column_descr(PhysicalType::INT64, unsigned_int(64)),
         ] {
             check_ints(&mut rng, &info, min_max_i64, |r| r.random());
             check_ints(&mut rng, &info, min_max_i64, |r| *edges.choose(r).unwrap());
@@ -300,12 +300,11 @@ mod tests {
 
     #[test]
     fn test_unsigned_int32_converted_type() {
-        let info = Type::primitive_type_builder("col", PhysicalType::INT32)
+        let primitive = Type::primitive_type_builder("col", PhysicalType::INT32)
             .with_converted_type(ConvertedType::UINT_32)
             .build()
-            .unwrap()
-            .get_basic_info()
-            .clone();
+            .unwrap();
+        let info = ColumnDescriptor::new(Arc::new(primitive), 0, 0, "col".into());
         assert_eq!(min_max_i32(&info, &[-1, 0, 5]), Some((0, -1)));
     }
 
@@ -313,7 +312,7 @@ mod tests {
         ($test:ident, $float:ty, $uint:ty, $kernel:ident, $physical:expr) => {
             #[test]
             fn $test() {
-                let info = type_info($physical, None);
+                let info = column_descr($physical, None);
                 let mut rng = StdRng::seed_from_u64(42);
 
                 let quiet_nan = <$float>::NAN;

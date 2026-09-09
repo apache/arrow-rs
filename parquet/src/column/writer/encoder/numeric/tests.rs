@@ -46,7 +46,7 @@ fn encoder<T: DataType>(
 
 fn assert_page<T: DataType>(encoder: &mut TypedColumnChunkEncoder<T>, values: &[T::T]) {
     let expected = (encoder.statistics_enabled != EnabledStatistics::None)
-        .then(|| fallback_min_max(encoder.descr.get_basic_info(), values.iter()))
+        .then(|| fallback_min_max(&encoder.descr, values.iter()))
         .flatten();
     let page = encoder.flush_data_page().unwrap();
     assert_eq!(page.num_values, values.len());
