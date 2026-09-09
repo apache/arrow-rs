@@ -42,11 +42,13 @@ use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
 use crate::basic::PageType;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
-use crate::column::writer::encoder::ColumnChunkEncoder;
+use crate::column::value_selection::PhysicalValueSelection;
+use crate::column::writer::encoder::{ColumnWriterValue, TypedColumnChunkEncoder};
+use crate::column::writer::{ByteBudgetTarget, ColumnWriteSource};
 use crate::column::writer::{
     ColumnCloseResult, ColumnWriter, ColumnWriterImpl, GenericColumnWriter, get_column_writer,
 };
-use crate::data_type::{ByteArray, FixedLenByteArray, FixedLenByteArrayType};
+use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, FixedLenByteArrayType};
 use std::collections::HashSet;
 type DistinctValuesSet = HashSet<u64>;
 #[cfg(feature = "encryption")]
@@ -1186,7 +1188,18 @@ impl ArrowColumnWriter {
                 };
             }
             ArrowColumnWriterImpl::ByteArray(c) => {
-                write_primitive(c, levels.array().as_ref(), levels)?;
+                let batch = levels.leaf_batch();
+                c.write_batch_internal(
+                    byte_array::ByteArrayGatherSource::new(
+                        batch.array(),
+                        levels.non_null_indices(),
+                    ),
+                    batch.def_level_data(),
+                    batch.rep_level_data(),
+                    None,
+                    None,
+                    None,
+                )?;
             }
         }
         Ok(())
@@ -1766,7 +1779,6 @@ fn write_leaf(
             let values = get_bool_array_slice(array, indices.iter().copied());
             typed.write_batch_internal(
                 values.as_slice(),
-                None,
                 levels.def_level_data().as_ref(),
                 levels.rep_level_data().as_ref(),
                 None,
@@ -1955,23 +1967,20 @@ pub(crate) fn visit_i64<V: PrimitiveVisitor<i64>>(
 }
 
 /// Writes the values passed to it to an `INT32` or `INT64` column
-struct WritePrimitive<'a, 'b, E: ColumnChunkEncoder> {
-    writer: &'a mut GenericColumnWriter<'b, E>,
+struct WritePrimitive<'a, 'b, D: crate::data_type::DataType> {
+    writer: &'a mut GenericColumnWriter<'b, TypedColumnChunkEncoder<D>>,
     levels: &'a ArrayLevels,
 }
 
-impl<T, E> PrimitiveVisitor<T> for WritePrimitive<'_, '_, E>
-where
-    E: ColumnChunkEncoder<Values = [T]>,
-{
+impl<D: crate::data_type::DataType> PrimitiveVisitor<D::T> for WritePrimitive<'_, '_, D> {
     type Output = usize;
 
-    fn slice(self, values: &[T]) -> Result<usize> {
+    fn slice(self, values: &[D::T]) -> Result<usize> {
         write_primitive(self.writer, values, self.levels)
     }
 
-    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Result<usize> {
-        let values: Vec<T> = values.iter().map(|v| convert(*v)).collect();
+    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> D::T) -> Result<usize> {
+        let values: Vec<D::T> = values.iter().map(|v| convert(*v)).collect();
         write_primitive(self.writer, &values, self.levels)
     }
 }
@@ -2103,7 +2112,6 @@ impl FixedLenByteArrayVisitor for WriteFixedLenByteArray<'_, '_> {
         let values = chunk_array_slice(length, indices, fill);
         self.writer.write_batch_internal(
             values.as_slice(),
-            None,
             self.levels.def_level_data().as_ref(),
             self.levels.rep_level_data().as_ref(),
             None,
@@ -2113,20 +2121,76 @@ impl FixedLenByteArrayVisitor for WriteFixedLenByteArray<'_, '_> {
     }
 }
 
-fn write_primitive<E: ColumnChunkEncoder>(
-    writer: &mut GenericColumnWriter<E>,
-    values: &E::Values,
+fn write_primitive<D: crate::data_type::DataType>(
+    writer: &mut GenericColumnWriter<TypedColumnChunkEncoder<D>>,
+    values: &[D::T],
     levels: &ArrayLevels,
 ) -> Result<usize> {
+    let batch = levels.leaf_batch();
     writer.write_batch_internal(
-        values,
-        Some(levels.non_null_indices()),
-        levels.def_level_data().as_ref(),
-        levels.rep_level_data().as_ref(),
+        LegacySelectedSlice {
+            values,
+            selection: PhysicalValueSelection::identity(batch.value_selection()),
+        },
+        batch.def_level_data(),
+        batch.rep_level_data(),
         None,
         None,
         None,
     )
+}
+
+// Temporary source for the eager owned/slice bridge. P16 replaces this with native bridges.
+struct LegacySelectedSlice<'a, T> {
+    values: &'a [T],
+    selection: PhysicalValueSelection<'a>,
+}
+impl<T> Copy for LegacySelectedSlice<'_, T> {}
+impl<T> Clone for LegacySelectedSlice<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<D: crate::data_type::DataType> ColumnWriteSource<TypedColumnChunkEncoder<D>>
+    for LegacySelectedSlice<'_, D::T>
+{
+    fn len(self) -> usize {
+        self.selection.len()
+    }
+    fn slice(self, offset: usize, len: usize) -> Self {
+        Self {
+            values: self.values,
+            selection: self.selection.slice(offset, len),
+        }
+    }
+    fn write_to(self, encoder: &mut TypedColumnChunkEncoder<D>) -> Result<()> {
+        if let Some(range) = self.selection.direct_physical_range() {
+            return <D::T as ColumnWriterValue>::encode_slice(encoder, &self.values[range]);
+        }
+        // Gather indices in bounded tiles; no unbounded per-value source allocation.
+        crate::column::value_batch::gather_tiled::<128, _, _, _>(
+            crate::column::value_batch::map_values(self.selection, |i| i),
+            |indices| {
+                let values: Vec<_> = indices.iter().map(|&i| self.values[i].clone()).collect();
+                <D::T as ColumnWriterValue>::encode_slice(encoder, &values)
+            },
+        )
+    }
+    fn count_variable_width_within_byte_budget(
+        self,
+        _encoder: &TypedColumnChunkEncoder<D>,
+        budget: usize,
+        _target: ByteBudgetTarget,
+    ) -> Option<usize> {
+        let mut bytes = 0usize;
+        let mut count = 0;
+        let _ = self.selection.try_for_each_index(|i| {
+            count += 1;
+            bytes = bytes.saturating_add(self.values[i].as_bytes().len());
+            if bytes > budget { Err(()) } else { Ok(()) }
+        });
+        Some(count)
+    }
 }
 
 fn get_bool_array_slice(
