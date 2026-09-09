@@ -15,7 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::column::value_batch::{BatchSink, ValueProducer, gather_tiled};
+use crate::encodings::encoding::{BoolBatch, BoolEncoder, PlainEncoderType};
+use crate::schema::types::ColumnDescriptor;
 use bytes::Bytes;
+mod boolean;
+mod numeric;
+use numeric::NumericBatch;
 
 use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
 use crate::bloom_filter::Sbbf;
@@ -197,6 +203,19 @@ pub trait ColumnWriterValue: DictionaryValue + Sized {
     fn encode_slice<D>(enc: &mut TypedColumnChunkEncoder<D>, values: &[Self]) -> Result<()>
     where
         D: DataType<T = Self>;
+
+    fn encode_gather<D>(
+        enc: &mut TypedColumnChunkEncoder<D>,
+        values: &[Self],
+        indices: &[usize],
+    ) -> Result<()>
+    where
+        D: DataType<T = Self>,
+        Self: Clone,
+    {
+        let gathered: Vec<_> = indices.iter().map(|&i| values[i].clone()).collect();
+        Self::encode_slice(enc, &gathered)
+    }
 }
 
 /// Resolves the encoding family selected by [`DataType::T`].
@@ -214,7 +233,23 @@ macro_rules! impl_numeric_encoder_dispatch {
             where
                 D: DataType<T = Self>,
             {
-                enc.write_generic_slice(values)
+                if values.is_empty() {
+                    Ok(())
+                } else {
+                    enc.push_batch(NumericBatch::Flat(values))
+                }
+            }
+            fn encode_gather<D>(
+                enc: &mut TypedColumnChunkEncoder<D>,
+                values: &[Self],
+                indices: &[usize],
+            ) -> Result<()>
+            where
+                D: DataType<T = Self>,
+            {
+                let producer = SliceIndices { values, indices };
+                debug_assert_eq!(producer.len(), indices.len());
+                gather_tiled::<128, _, _, _>(producer, |batch| Self::encode_slice(enc, batch))
             }
         }
     };
@@ -230,7 +265,7 @@ impl ColumnWriterValue for bool {
     where
         D: DataType<T = Self>,
     {
-        enc.write_generic_slice(values)
+        enc.push_batch(BoolBatch::from_bool_slice(values))
     }
 }
 
@@ -305,6 +340,7 @@ impl<T: DataType> TypedColumnChunkEncoder<T> {
     /// values. Every physical type shares this path until its own batch sink
     /// takes over.
     fn write_generic_slice(&mut self, slice: &[T::T]) -> Result<()> {
+        self.num_values += slice.len();
         if self.statistics_enabled != EnabledStatistics::None
             // INTERVAL, Geometry, and Geography have undefined sort order, so don't write min/max stats for them
             && self.descr.converted_type() != ConvertedType::INTERVAL
@@ -345,8 +381,6 @@ impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {
     type Values = [T::T];
 
     fn write(&mut self, values: &[T::T], offset: usize, len: usize) -> Result<()> {
-        self.num_values += len;
-
         let slice = values.get(offset..offset + len).ok_or_else(|| {
             general_err!(
                 "Expected to write {} values, but have only {}",
@@ -359,9 +393,7 @@ impl<T: DataType> ColumnChunkEncoder for TypedColumnChunkEncoder<T> {
     }
 
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
-        self.num_values += indices.len();
-        let slice: Vec<_> = indices.iter().map(|idx| values[*idx].clone()).collect();
-        <T::T as ColumnWriterValue>::encode_slice(self, &slice)
+        <T::T as ColumnWriterValue>::encode_gather(self, values, indices)
     }
 
     fn count_values_within_byte_budget(
@@ -596,6 +628,147 @@ where
     }
 }
 
+#[inline]
+fn int_is_unsigned(descr: &ColumnDescriptor) -> bool {
+    if let Some(LogicalType::Integer(int)) = descr.logical_type_ref()
+        && !int.is_signed
+    {
+        return true;
+    }
+    matches!(
+        descr.converted_type(),
+        ConvertedType::UINT_8
+            | ConvertedType::UINT_16
+            | ConvertedType::UINT_32
+            | ConvertedType::UINT_64
+    )
+}
+
+#[inline(always)]
+fn int32_greater(unsigned: bool, a: i32, b: i32) -> bool {
+    if unsigned {
+        (a as u32) > (b as u32)
+    } else {
+        a > b
+    }
+}
+
+#[inline(always)]
+fn int64_greater(unsigned: bool, a: i64, b: i64) -> bool {
+    if unsigned {
+        (a as u64) > (b as u64)
+    } else {
+        a > b
+    }
+}
+
+/// Min/max folding for numeric scalars. Strategies retain scalar values;
+/// `Owned` is the materialized column statistic.
+///
+/// Integer columns need descriptor-derived context because Parquet min/max for
+/// unsigned logical types must compare the stored bits as unsigned values.
+/// Float columns do not need descriptor context, but must count NaNs and retain
+/// an IEEE-total-ordered NaN extremum when a page contains only NaNs. [`Self::Ctx`]
+/// stores descriptor decisions once per column so comparison and classification
+/// can stay small inside per-value loops.
+pub(crate) trait MinMaxStrategy<'v> {
+    /// The per-value handle folded into statistics (owned scalar or borrowed bytes).
+    type Elem: Copy;
+    /// The materialized column statistic type.
+    type Owned;
+    /// Per-column comparison context, derived from the descriptor and reused
+    /// for every value (e.g. integer signedness).
+    type Ctx: Copy;
+
+    /// Build the comparison context for this column.
+    fn ctx(descr: &ColumnDescriptor) -> Self::Ctx;
+    /// `a > b` under the column's logical order.
+    fn greater(ctx: Self::Ctx, a: Self::Elem, b: Self::Elem) -> bool;
+    /// Whether this strategy represents a floating-point type with NaNs.
+    const TRACKS_NAN: bool = false;
+    /// True when `value` is NaN; false by default.
+    #[inline(always)]
+    fn is_nan(_ctx: Self::Ctx, _value: Self::Elem) -> bool {
+        false
+    }
+}
+
+impl MinMaxStrategy<'_> for i32 {
+    type Elem = i32;
+    type Owned = i32;
+    type Ctx = bool;
+    #[inline(always)]
+    fn ctx(descr: &ColumnDescriptor) -> bool {
+        int_is_unsigned(descr)
+    }
+    #[inline(always)]
+    fn greater(unsigned: bool, a: i32, b: i32) -> bool {
+        int32_greater(unsigned, a, b)
+    }
+}
+
+impl MinMaxStrategy<'_> for i64 {
+    type Elem = i64;
+    type Owned = i64;
+    type Ctx = bool;
+    #[inline(always)]
+    fn ctx(descr: &ColumnDescriptor) -> bool {
+        int_is_unsigned(descr)
+    }
+    #[inline(always)]
+    fn greater(unsigned: bool, a: i64, b: i64) -> bool {
+        int64_greater(unsigned, a, b)
+    }
+}
+
+impl MinMaxStrategy<'_> for f32 {
+    type Elem = f32;
+    type Owned = f32;
+    type Ctx = ();
+    #[inline(always)]
+    fn ctx(_: &ColumnDescriptor) {}
+    #[inline(always)]
+    fn greater((): (), a: f32, b: f32) -> bool {
+        a.total_cmp(&b).is_gt()
+    }
+    const TRACKS_NAN: bool = true;
+    #[inline(always)]
+    fn is_nan((): (), value: f32) -> bool {
+        value.is_nan()
+    }
+}
+
+impl MinMaxStrategy<'_> for f64 {
+    type Elem = f64;
+    type Owned = f64;
+    type Ctx = ();
+    #[inline(always)]
+    fn ctx(_: &ColumnDescriptor) {}
+    #[inline(always)]
+    fn greater((): (), a: f64, b: f64) -> bool {
+        a.total_cmp(&b).is_gt()
+    }
+    const TRACKS_NAN: bool = true;
+    #[inline(always)]
+    fn is_nan((): (), value: f64) -> bool {
+        value.is_nan()
+    }
+}
+
+impl MinMaxStrategy<'_> for Int96 {
+    type Elem = Int96;
+    type Owned = Int96;
+    type Ctx = ();
+    #[inline(always)]
+    fn ctx(_: &ColumnDescriptor) {}
+    #[inline(always)]
+    fn greater((): (), a: Int96, b: Int96) -> bool {
+        // INT96 min/max use the timestamp `(days, nanos)` order (`Int96: Ord`),
+        // matching the descriptor-driven `compare_greater` merge in `merge_batch_stats`.
+        a > b
+    }
+}
+
 /// Creates a bloom filter sized for the column's configured NDV, returning the filter
 /// and the target FPP for folding.
 pub(crate) fn create_bloom_filter(
@@ -659,4 +832,22 @@ where
         }
     }
     Some(n)
+}
+
+// Temporary legacy gather producer; P15's ColumnWriteSource replaces it.
+#[derive(Clone, Copy)]
+struct SliceIndices<'a, T> {
+    values: &'a [T],
+    indices: &'a [usize],
+}
+impl<T: Copy> ValueProducer<T> for SliceIndices<'_, T> {
+    fn len(self) -> usize {
+        self.indices.len()
+    }
+    fn try_for_each<E>(self, mut f: impl FnMut(T) -> Result<(), E>) -> Result<(), E> {
+        for &i in self.indices {
+            f(self.values[i])?;
+        }
+        Ok(())
+    }
 }
