@@ -27,10 +27,10 @@ use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchWriter};
+use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchWriter, new_empty_array};
 use arrow_array::{PrimitiveArray, types::*};
 use arrow_schema::{
-    ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef, TimeUnit,
+    ArrowError, DataType as ArrowDataType, Field, FieldRef, IntervalUnit, SchemaRef, TimeUnit,
 };
 
 use super::schema::{
@@ -56,7 +56,7 @@ use crate::file::metadata::{KeyValue, ParquetMetaData, RowGroupMetaData};
 use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
-use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
+use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use levels::{ArrayLevels, calculate_array_levels};
 
 mod byte_array;
@@ -1251,18 +1251,84 @@ impl ArrowColumnWriter {
     }
 }
 
-fn arrow_leaf_ranges(schema: &SchemaRef) -> Result<Vec<Range<usize>>> {
-    let mut count = 0;
-    schema
-        .fields
-        .iter()
-        .map(|field| {
-            validate_map_key_type(field.data_type())?;
-            let start = count;
-            count += compute_leaves(field, &arrow_array::new_empty_array(field.data_type()))?.len();
-            Ok(start..count)
+/// Associates a top-level Arrow field with its range of Parquet leaf writers.
+#[derive(Debug)]
+struct ArrowTopLevelWriterSpec {
+    /// The writer schema's field supplies the target nullability and nesting,
+    /// while each batch can use a compatible physical layout (dictionary,
+    /// run-end, string/binary offset width, or view).
+    field: FieldRef,
+    leaf_range: Range<usize>,
+}
+
+#[derive(Debug)]
+enum ArrowWriteSchemaPlanError {
+    General(String),
+    Nyi(String),
+}
+
+impl ArrowWriteSchemaPlanError {
+    fn to_parquet_error(&self) -> ParquetError {
+        match self {
+            Self::General(message) => ParquetError::General(message.clone()),
+            Self::Nyi(message) => ParquetError::NYI(message.clone()),
+        }
+    }
+
+    fn from_parquet_error(error: ParquetError) -> Self {
+        match error {
+            ParquetError::NYI(message) => Self::Nyi(message),
+            ParquetError::General(message) => Self::General(message),
+            error => Self::General(error.to_string()),
+        }
+    }
+}
+
+/// Immutable schema glue shared by every row group.
+///
+/// This deliberately caches only schema fields and Parquet descriptors, never
+/// arrays or per-batch level/value plans.
+#[derive(Debug)]
+struct ArrowWriteSchemaPlan {
+    fields: Box<[ArrowTopLevelWriterSpec]>,
+    leaves: Box<[ColumnDescPtr]>,
+}
+
+impl ArrowWriteSchemaPlan {
+    fn try_new(
+        parquet: &SchemaDescriptor,
+        arrow: &SchemaRef,
+    ) -> std::result::Result<Self, ArrowWriteSchemaPlanError> {
+        let parquet_leaves = parquet.columns();
+        let mut leaf_count = 0;
+        let mut fields = Vec::with_capacity(arrow.fields.len());
+
+        for field in &arrow.fields {
+            validate_map_key_type(field.data_type())
+                .map_err(ArrowWriteSchemaPlanError::from_parquet_error)?;
+            let start = leaf_count;
+            leaf_count += compute_leaves(field, &new_empty_array(field.data_type()))
+                .map_err(ArrowWriteSchemaPlanError::from_parquet_error)?
+                .len();
+            fields.push(ArrowTopLevelWriterSpec {
+                field: Arc::clone(field),
+                leaf_range: start..leaf_count,
+            });
+        }
+
+        if leaf_count != parquet_leaves.len() {
+            return Err(ArrowWriteSchemaPlanError::General(format!(
+                "Arrow schema maps to {} leaf columns but Parquet schema has {}",
+                leaf_count,
+                parquet_leaves.len()
+            )));
+        }
+
+        Ok(Self {
+            fields: fields.into_boxed_slice(),
+            leaves: parquet_leaves.to_vec().into_boxed_slice(),
         })
-        .collect()
+    }
 }
 
 /// Encodes [`RecordBatch`] to a parquet row group
@@ -1274,27 +1340,29 @@ fn arrow_leaf_ranges(schema: &SchemaRef) -> Result<Vec<Range<usize>>> {
 #[derive(Debug)]
 struct ArrowRowGroupWriter {
     writers: Vec<ArrowColumnWriter>,
-    schema: SchemaRef,
+    schema_plan: Arc<ArrowWriteSchemaPlan>,
     buffered_rows: usize,
 }
 
 impl ArrowRowGroupWriter {
-    fn new(writers: Vec<ArrowColumnWriter>, arrow: &SchemaRef) -> Self {
+    fn new(writers: Vec<ArrowColumnWriter>, schema_plan: Arc<ArrowWriteSchemaPlan>) -> Self {
+        debug_assert_eq!(writers.len(), schema_plan.leaves.len());
         Self {
             writers,
-            schema: arrow.clone(),
+            schema_plan,
             buffered_rows: 0,
         }
     }
 
     fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        let ranges = self.validate_batch_shape(batch, None)?;
+        self.validate_batch_shape(batch, None)?;
         self.buffered_rows += batch.num_rows();
-        for (column_idx, (field, range)) in self.schema.fields.iter().zip(ranges).enumerate() {
-            let leaves = compute_leaves(field, batch.column(column_idx))?;
-            Self::validate_leaf_count(field, &range, leaves.len())?;
+
+        for (column_idx, field) in self.schema_plan.fields.iter().enumerate() {
+            let leaves = compute_leaves(field.field.as_ref(), batch.column(column_idx))?;
+            self.validate_leaf_count(field, leaves.len())?;
             for (offset, leaf) in leaves.into_iter().enumerate() {
-                self.writers[range.start + offset].write(&leaf)?;
+                self.writers[field.leaf_range.start + offset].write(&leaf)?;
             }
         }
         Ok(())
@@ -1305,14 +1373,15 @@ impl ArrowRowGroupWriter {
         batch: &RecordBatch,
         chunkers: &mut [ContentDefinedChunker],
     ) -> Result<()> {
-        let ranges = self.validate_batch_shape(batch, Some(chunkers.len()))?;
+        self.validate_batch_shape(batch, Some(chunkers.len()))?;
         self.buffered_rows += batch.num_rows();
-        for (column_idx, (field, range)) in self.schema.fields.iter().zip(ranges).enumerate() {
-            let leaves = compute_leaves(field, batch.column(column_idx))?;
-            Self::validate_leaf_count(field, &range, leaves.len())?;
+
+        for (column_idx, field) in self.schema_plan.fields.iter().enumerate() {
+            let leaves = compute_leaves(field.field.as_ref(), batch.column(column_idx))?;
+            self.validate_leaf_count(field, leaves.len())?;
             for (offset, leaf) in leaves.into_iter().enumerate() {
-                let index = range.start + offset;
-                self.writers[index].write_with_chunker(&leaf, &mut chunkers[index])?;
+                let leaf_idx = field.leaf_range.start + offset;
+                self.writers[leaf_idx].write_with_chunker(&leaf, &mut chunkers[leaf_idx])?;
             }
         }
         Ok(())
@@ -1322,39 +1391,38 @@ impl ArrowRowGroupWriter {
         &self,
         batch: &RecordBatch,
         chunker_count: Option<usize>,
-    ) -> Result<Vec<Range<usize>>> {
-        if batch.num_columns() != self.schema.fields.len() {
+    ) -> Result<()> {
+        if batch.num_columns() != self.schema_plan.fields.len() {
             return Err(ParquetError::ArrowError(format!(
                 "Incompatible schema: writer has {} top-level fields but batch has {} columns",
-                self.schema.fields.len(),
+                self.schema_plan.fields.len(),
                 batch.num_columns()
             )));
         }
-        let ranges = arrow_leaf_ranges(&self.schema)?;
-        let leaf_count = ranges.last().map_or(0, |r| r.end);
-        if self.writers.len() != leaf_count {
+        if self.writers.len() != self.schema_plan.leaves.len() {
             return Err(ParquetError::General(format!(
                 "Arrow row-group writer has {} column writers for {} planned leaves",
                 self.writers.len(),
-                leaf_count
+                self.schema_plan.leaves.len()
             )));
         }
         if let Some(actual) = chunker_count
-            && actual != leaf_count
+            && actual != self.schema_plan.leaves.len()
         {
             return Err(ParquetError::General(format!(
-                "content-defined chunking has {actual} chunkers for {leaf_count} planned leaves"
+                "content-defined chunking has {actual} chunkers for {} planned leaves",
+                self.schema_plan.leaves.len()
             )));
         }
-        Ok(ranges)
+        Ok(())
     }
 
-    fn validate_leaf_count(field: &Field, range: &Range<usize>, actual: usize) -> Result<()> {
-        let expected = range.len();
+    fn validate_leaf_count(&self, field: &ArrowTopLevelWriterSpec, actual: usize) -> Result<()> {
+        let expected = field.leaf_range.end - field.leaf_range.start;
         if actual != expected {
             return Err(ParquetError::ArrowError(format!(
                 "Incompatible schema: field '{}' produced {actual} leaf columns but writer expects {expected}",
-                field.name()
+                field.field.name()
             )));
         }
         Ok(())
@@ -1382,8 +1450,7 @@ impl ArrowRowGroupWriter {
 /// See the example on [`ArrowColumnWriter`] for how to encode columns in parallel
 #[derive(Debug)]
 pub struct ArrowRowGroupWriterFactory {
-    schema: SchemaDescPtr,
-    arrow_schema: SchemaRef,
+    schema_plan: std::result::Result<Arc<ArrowWriteSchemaPlan>, ArrowWriteSchemaPlanError>,
     props: WriterPropertiesPtr,
     page_store_factory: Arc<dyn PageStoreFactory>,
     #[cfg(feature = "encryption")]
@@ -1396,11 +1463,12 @@ impl ArrowRowGroupWriterFactory {
         file_writer: &SerializedFileWriter<W>,
         arrow_schema: SchemaRef,
     ) -> Self {
-        let schema = Arc::clone(file_writer.schema_descr_ptr());
+        let schema_plan =
+            ArrowWriteSchemaPlan::try_new(file_writer.schema_descr_ptr().as_ref(), &arrow_schema)
+                .map(Arc::new);
         let props = Arc::clone(file_writer.properties());
         Self {
-            schema,
-            arrow_schema,
+            schema_plan,
             props,
             page_store_factory: Arc::new(InMemoryPageStoreFactory),
             #[cfg(feature = "encryption")]
@@ -1420,27 +1488,34 @@ impl ArrowRowGroupWriterFactory {
     }
 
     fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
-        let writers = self.create_column_writers(row_group_index)?;
-        Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
+        let schema_plan = Arc::clone(self.schema_plan()?);
+        let writers = self.create_column_writers_from_plan(row_group_index, &schema_plan)?;
+        Ok(ArrowRowGroupWriter::new(writers, schema_plan))
     }
 
     /// Create column writers for a new row group, with the given row group index
     pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
-        let ranges = arrow_leaf_ranges(&self.arrow_schema)?;
-        let leaf_count = ranges.last().map_or(0, |r| r.end);
-        if leaf_count != self.schema.num_columns() {
-            return Err(ParquetError::General(format!(
-                "Arrow schema maps to {} leaf columns but Parquet schema has {}",
-                leaf_count,
-                self.schema.num_columns()
-            )));
+        self.create_column_writers_from_plan(row_group_index, self.schema_plan()?)
+    }
+
+    fn schema_plan(&self) -> Result<&Arc<ArrowWriteSchemaPlan>> {
+        match &self.schema_plan {
+            Ok(plan) => Ok(plan),
+            Err(error) => Err(error.to_parquet_error()),
         }
-        let mut writers = Vec::with_capacity(self.arrow_schema.fields.len());
-        let mut leaves = self.schema.columns().iter();
+    }
+
+    fn create_column_writers_from_plan(
+        &self,
+        row_group_index: usize,
+        schema_plan: &ArrowWriteSchemaPlan,
+    ) -> Result<Vec<ArrowColumnWriter>> {
+        let mut writers = Vec::with_capacity(schema_plan.leaves.len());
+        let mut leaves = schema_plan.leaves.iter();
         let column_factory = self.column_writer_factory(row_group_index);
-        for field in &self.arrow_schema.fields {
+        for field in &schema_plan.fields {
             column_factory.get_arrow_column_writer(
-                field.data_type(),
+                field.field.data_type(),
                 &self.props,
                 &mut leaves,
                 &mut writers,
@@ -3414,6 +3489,167 @@ mod tests {
                 .contains("column writers")
         );
         assert_eq!(group.buffered_rows, 0);
+    }
+
+    #[test]
+    fn arrow_write_schema_plan_caches_nested_leaf_ranges() {
+        let nested = ArrowDataType::Struct(Fields::from(vec![
+            Field::new("i", ArrowDataType::Int32, false),
+            Field::new("s", ArrowDataType::Utf8, true),
+        ]));
+        let list = ArrowDataType::List(Arc::new(Field::new("item", ArrowDataType::Boolean, true)));
+        let ree = ArrowDataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", ArrowDataType::Int32, false)),
+            Arc::new(Field::new("values", ArrowDataType::Int64, false)),
+        );
+        let dictionary_fsb = ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::Int8),
+            Box::new(ArrowDataType::FixedSizeBinary(2)),
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("nested", nested, true),
+            Field::new("list", list, true),
+            Field::new("ree", ree, false),
+            Field::new("dictionary_fsb", dictionary_fsb, true),
+        ]));
+        let parquet = ArrowSchemaConverter::new().convert(&schema).unwrap();
+
+        let plan = ArrowWriteSchemaPlan::try_new(&parquet, &schema).unwrap();
+        let ranges = plan
+            .fields
+            .iter()
+            .map(|field| field.leaf_range.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(ranges, vec![0..2, 2..3, 3..4, 4..5]);
+        assert_eq!(plan.leaves.len(), parquet.num_columns());
+        assert_eq!(
+            plan.leaves[4].physical_type(),
+            crate::basic::Type::FIXED_LEN_BYTE_ARRAY
+        );
+    }
+
+    #[test]
+    fn cached_schema_plan_preserves_compatible_physical_layout_alternation() {
+        let writer_schema = Arc::new(Schema::new(vec![
+            Field::new("number", ArrowDataType::Int32, false),
+            Field::new("text", ArrowDataType::Utf8, false),
+            Field::new("bytes", ArrowDataType::Binary, false),
+        ]));
+
+        let dense = RecordBatch::try_new(
+            Arc::clone(&writer_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["a"])),
+                Arc::new(BinaryArray::from_iter_values([b"a".as_slice()])),
+            ],
+        )
+        .unwrap();
+
+        let number_dictionary = DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0]),
+            Arc::new(Int32Array::from(vec![2])),
+        )
+        .unwrap();
+        let text_dictionary = DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0]),
+            Arc::new(StringArray::from(vec!["b"])),
+        )
+        .unwrap();
+        let bytes_dictionary = DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0]),
+            Arc::new(BinaryArray::from_iter_values([b"b".as_slice()])),
+        )
+        .unwrap();
+        let dictionary = RecordBatch::try_from_iter(vec![
+            ("number", Arc::new(number_dictionary) as ArrayRef),
+            ("text", Arc::new(text_dictionary) as ArrayRef),
+            ("bytes", Arc::new(bytes_dictionary) as ArrayRef),
+        ])
+        .unwrap();
+
+        let run_ends = Int32Array::from(vec![1]);
+        let number_ree: ArrayRef =
+            Arc::new(Int32RunArray::try_new(&run_ends, &Int32Array::from(vec![3])).unwrap());
+        let text_ree: ArrayRef =
+            Arc::new(Int32RunArray::try_new(&run_ends, &StringArray::from(vec!["c"])).unwrap());
+        let bytes_ree: ArrayRef = Arc::new(
+            Int32RunArray::try_new(&run_ends, &BinaryArray::from_iter_values([b"c".as_slice()]))
+                .unwrap(),
+        );
+        let ree = RecordBatch::try_from_iter(vec![
+            ("number", number_ree),
+            ("text", text_ree),
+            ("bytes", bytes_ree),
+        ])
+        .unwrap();
+
+        let alternate = RecordBatch::try_from_iter(vec![
+            ("number", Arc::new(Int32Array::from(vec![4])) as ArrayRef),
+            (
+                "text",
+                Arc::new(LargeStringArray::from(vec!["d"])) as ArrayRef,
+            ),
+            (
+                "bytes",
+                Arc::new(BinaryViewArray::from_iter_values([b"d".as_slice()])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(1))
+            .build();
+        let mut out = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut out, Arc::clone(&writer_schema), Some(props)).unwrap();
+        for batch in [&dense, &dictionary, &ree, &alternate] {
+            writer.write(batch).unwrap();
+        }
+        writer.close().unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(out)).unwrap();
+        assert_eq!(builder.metadata().num_row_groups(), 4);
+        let mut reader = builder.build().unwrap();
+        let actual = reader.next().unwrap().unwrap();
+        assert_eq!(
+            actual.column(0).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![1, 2, 3, 4])
+        );
+        assert_eq!(
+            actual.column(1).as_string::<i32>(),
+            &StringArray::from(vec!["a", "b", "c", "d"])
+        );
+        assert_eq!(
+            actual.column(2).as_binary::<i32>(),
+            &BinaryArray::from_iter_values([
+                b"a".as_slice(),
+                b"b".as_slice(),
+                b"c".as_slice(),
+                b"d".as_slice(),
+            ])
+        );
+    }
+
+    #[test]
+    fn cached_schema_plan_does_not_retain_batch_arrays() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        let array = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array.clone()]).unwrap();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+
+        writer.write(&batch).unwrap();
+        drop(batch);
+        assert_eq!(
+            Arc::strong_count(&array),
+            1,
+            "schema and row-group caches must not retain input ArrayRefs"
+        );
+        writer.close().unwrap();
     }
 
     #[test]
