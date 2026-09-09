@@ -117,7 +117,6 @@ impl<'a> PhysicalValueSelection<'a> {
     }
 
     /// Return the source-coordinate selection.
-    #[cfg(test)] // P16 enables native bridge use.
     pub(crate) fn unmapped_selection(self) -> Option<ValueSelectionRef<'a>> {
         Some(self.selection)
     }
@@ -133,7 +132,6 @@ impl<'a> PhysicalValueSelection<'a> {
 
     /// Visit directly borrowable physical ranges, returning `false` without
     /// invoking `f` when scalar gathering is required.
-    #[cfg(test)] // P16 enables native bridge use.
     pub(crate) fn try_for_each_borrowable_range<E>(
         self,
         mut f: impl FnMut(Range<usize>) -> Result<(), E>,
