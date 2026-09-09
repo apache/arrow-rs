@@ -18,7 +18,7 @@
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::encoder::{
-    ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
+    ColumnChunkEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
 };
 use crate::column::writer::{compare_greater_byte_array_decimals, is_decimal_descr};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
@@ -434,8 +434,8 @@ pub struct ByteArrayEncoder {
     is_decimal: bool,
 }
 
-impl ColumnValueEncoder for ByteArrayEncoder {
-    type T = ByteArray;
+impl ColumnChunkEncoder for ByteArrayEncoder {
+    type Value = ByteArray;
     type Values = dyn Array;
     fn flush_bloom_filter(&mut self) -> Option<Sbbf> {
         let mut sbbf = self.bloom_filter.take()?;
