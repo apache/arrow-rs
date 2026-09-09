@@ -49,6 +49,7 @@ mod dict_encoder;
 mod fixed_len_byte_array;
 mod numeric;
 
+pub(crate) use boolean::{BoolBatch, BoolEncoder};
 #[cfg(feature = "experimental")]
 #[expect(deprecated, reason = "Preserve the experimental concrete encoder API")]
 pub use compatibility::{DeltaByteArrayEncoder, DeltaLengthByteArrayEncoder, PlainEncoder};
