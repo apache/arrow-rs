@@ -147,11 +147,16 @@ mod tests {
     use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
     use crate::file::reader::ChunkReader;
     use arrow::util::test_util::parquet_test_data;
-    use arrow_array::{ArrayRef, RecordBatch};
-    use arrow_schema::Schema;
+    use arrow_array::{
+        Array, ArrayRef, BinaryViewArray, FixedSizeListArray, Int64Array, RecordBatch, StructArray,
+        new_null_array,
+    };
+    use arrow_schema::{DataType, Field, Fields, Schema};
     use bytes::Bytes;
-    use parquet_variant::{Variant, VariantBuilderExt};
-    use parquet_variant_compute::{VariantArray, VariantArrayBuilder, VariantType};
+    use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilderExt};
+    use parquet_variant_compute::{
+        VariantArray, VariantArrayBuilder, VariantType, unshred_variant,
+    };
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -179,6 +184,52 @@ mod tests {
         assert!(var_array.is_valid(0));
         let var_value = var_array.value(0);
         assert_eq!(var_value, Variant::from("iceberg"));
+    }
+
+    #[test]
+    fn read_fixed_size_list_typed_value_as_list() {
+        let element_values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3, 4]));
+        let element_value = new_null_array(&DataType::BinaryView, 4);
+        let element_fields = Fields::from(vec![
+            Field::new("value", DataType::BinaryView, true),
+            Field::new("typed_value", DataType::Int64, true),
+        ]);
+        let elements: ArrayRef = Arc::new(StructArray::new(
+            element_fields,
+            vec![element_value, element_values],
+            None,
+        ));
+        let item_field = Arc::new(Field::new("item", elements.data_type().clone(), true));
+        let typed_value: ArrayRef =
+            Arc::new(FixedSizeListArray::new(item_field, 2, elements, None));
+        let metadata: ArrayRef = Arc::new(BinaryViewArray::from_iter_values(std::iter::repeat_n(
+            EMPTY_VARIANT_METADATA_BYTES,
+            2,
+        )));
+        let value = new_null_array(&DataType::BinaryView, 2);
+        let fields = Fields::from(vec![
+            Field::new("metadata", DataType::BinaryView, false),
+            Field::new("value", DataType::BinaryView, true),
+            Field::new("typed_value", typed_value.data_type().clone(), true),
+        ]);
+        let source = StructArray::new(fields, vec![metadata, value, typed_value], None);
+        let field = Field::new("data", source.data_type().clone(), false);
+        let batch =
+            RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![Arc::new(source)])
+                .unwrap();
+
+        let buffer = write_to_buffer(&batch);
+        let result = read_to_batch(Bytes::from(buffer));
+        let column = result.column_by_name("data").unwrap();
+        let variant = VariantArray::try_new(column).unwrap();
+        assert!(matches!(
+            variant.typed_value_column().unwrap().data_type(),
+            DataType::List(_)
+        ));
+
+        let unshredded = unshred_variant(&variant).unwrap();
+        assert!(unshredded.typed_value_column().is_none());
+        assert_eq!(unshredded.len(), 2);
     }
 
     /// Writes a variant to a parquet file and ensures the parquet logical type
