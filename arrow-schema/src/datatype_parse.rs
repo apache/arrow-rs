@@ -251,19 +251,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses the next double-quoted string
-    fn parse_quoted_string(&mut self, context: &str) -> ArrowResult<String> {
-        let token = self.next_token()?;
-        if let Token::DoubleQuotedString(s) = token {
-            Ok(s)
-        } else {
-            Err(make_error(
-                self.val,
-                &format!("expected double quoted string for {context}, got '{token}'"),
-            ))
-        }
-    }
-
     /// Parses the next integer value
     fn parse_i64(&mut self, context: &str) -> ArrowResult<i64> {
         match self.next_token()? {
@@ -649,7 +636,7 @@ impl<'a> Parser<'a> {
 
     /// Parses `"name": [non-null] Type` used in the verbose REE form.
     fn parse_ree_verbose_field(&mut self) -> ArrowResult<Field> {
-        let name = self.parse_quoted_string("RunEndEncoded field")?;
+        let name = self.parse_double_quoted_string("RunEndEncoded field")?;
         self.expect_token(Token::Colon)?;
         let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;

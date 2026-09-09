@@ -179,11 +179,9 @@ impl Display for DataType {
                 let no_metadata =
                     run_ends_field.metadata().is_empty() && values_field.metadata().is_empty();
                 write!(f, "RunEndEncoded(")?;
-                let re_null = format_nullability(run_ends_field);
-                let v_null = format_nullability(values_field);
-                let re_meta = format_metadata(run_ends_field.metadata());
-                let v_meta = format_metadata(values_field.metadata());
                 if default_names && no_metadata {
+                    let re_null = format_nullability(run_ends_field);
+                    let v_null = format_nullability(values_field);
                     write!(
                         f,
                         "{re_null}{}, {v_null}{})",
@@ -191,16 +189,9 @@ impl Display for DataType {
                         values_field.data_type(),
                     )?;
                 } else {
-                    write!(
-                        f,
-                        "\"{}\": {re_null}{}{}, \"{}\": {v_null}{}{})",
-                        run_ends_field.name(),
-                        run_ends_field.data_type(),
-                        re_meta,
-                        values_field.name(),
-                        values_field.data_type(),
-                        v_meta,
-                    )?;
+                    let run_ends_str = format_field(run_ends_field);
+                    let values_str = format_field(values_field);
+                    write!(f, "{run_ends_str}, {values_str})")?;
                 }
                 Ok(())
             }
