@@ -268,6 +268,11 @@ impl<T: DataType> DictEncoder<T> {
         Ok(())
     }
 
+    /// Reserve capacity for more dictionary indices.
+    pub(crate) fn reserve(&mut self, additional: usize) {
+        self.indices.reserve(additional);
+    }
+
     #[inline]
     fn bit_width(&self) -> u8 {
         num_required_bits(self.num_entries().saturating_sub(1) as u64)

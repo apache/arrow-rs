@@ -128,3 +128,5 @@ pub(crate) mod page_encryption;
 pub mod page_store;
 pub mod reader;
 pub mod writer;
+
+pub(crate) mod value_batch;
