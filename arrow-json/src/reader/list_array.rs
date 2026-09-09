@@ -51,7 +51,7 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ListLikeArrayDecoder<O, IS_VIEW> {
             (true, DataType::LargeListView(f)) if O::IS_LARGE => f,
             _ => unreachable!(),
         };
-        let decoder = ctx.make_decoder(field.data_type(), field.is_nullable())?;
+        let decoder = ctx.make_decoder(field, field.is_nullable())?;
 
         Ok(Self {
             field: field.clone(),
@@ -148,7 +148,7 @@ impl FixedSizeListArrayDecoder {
             DataType::FixedSizeList(f, s) => (f, *s),
             _ => unreachable!(),
         };
-        let decoder = ctx.make_decoder(field.data_type(), field.is_nullable())?;
+        let decoder = ctx.make_decoder(field, field.is_nullable())?;
 
         Ok(Self {
             field: field.clone(),

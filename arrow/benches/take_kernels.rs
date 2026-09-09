@@ -19,6 +19,7 @@
 extern crate criterion;
 use criterion::Criterion;
 
+use arrow_buffer::ScalarBuffer;
 use rand::RngExt;
 
 use arrow::compute::{TakeOptions, take, take_record_batch};
@@ -69,6 +70,100 @@ fn bench_take_record_batch(batch: &RecordBatch, indices: &UInt32Array) {
 
 fn bench_take_bounds_check(values: &dyn Array, indices: &UInt32Array) {
     hint::black_box(take(values, indices, Some(TakeOptions { check_bounds: true })).unwrap());
+}
+
+fn create_string_run_array(logical_len: usize, physical_len: usize) -> RunArray<Int32Type> {
+    let strings = create_string_array_for_runs(physical_len, logical_len, 8);
+    let mut builder = GenericByteRunBuilder::<Int32Type, Utf8Type>::new();
+    for s in &strings {
+        builder.append_value(s.as_str());
+    }
+    builder.finish()
+}
+
+fn create_sparse_union(size: usize) -> UnionArray {
+    let mut rng = seedable_rng();
+    let type_ids: ScalarBuffer<i8> = (0..size).map(|_| rng.random_range(0_i8..4)).collect();
+    let int_array: Int32Array = (0..size).map(|_| Some(rng.random::<i32>())).collect();
+    let float_array: Float64Array = (0..size).map(|_| Some(rng.random::<f64>())).collect();
+    let string_array = StringArray::from_iter((0..size).map(|i| Some(format!("basic_string:{i}"))));
+    let fsb_array = create_fsb_array(size, 0.0, 16);
+    let fields = [
+        (0, Arc::new(Field::new("a", DataType::Int32, false))),
+        (1, Arc::new(Field::new("b", DataType::Float64, false))),
+        (2, Arc::new(Field::new("c", DataType::Utf8, false))),
+        (
+            3,
+            Arc::new(Field::new("d", DataType::FixedSizeBinary(16), false)),
+        ),
+    ]
+    .into_iter()
+    .collect::<UnionFields>();
+    UnionArray::try_new(
+        fields,
+        type_ids,
+        None,
+        vec![
+            Arc::new(int_array),
+            Arc::new(float_array),
+            Arc::new(string_array),
+            Arc::new(fsb_array),
+        ],
+    )
+    .unwrap()
+}
+
+fn create_dense_union(size: usize) -> UnionArray {
+    let mut rng = seedable_rng();
+    let mut int_vals: Vec<i32> = Vec::new();
+    let mut float_vals: Vec<f64> = Vec::new();
+    let mut fsb_vals: Vec<[u8; 16]> = Vec::new();
+    let mut type_ids = Vec::with_capacity(size);
+    let mut offsets = Vec::with_capacity(size);
+    for _ in 0..size {
+        let tid = rng.random_range(0_i8..3);
+        type_ids.push(tid);
+        match tid {
+            0 => {
+                offsets.push(int_vals.len() as i32);
+                int_vals.push(rng.random());
+            }
+            1 => {
+                offsets.push(float_vals.len() as i32);
+                float_vals.push(rng.random());
+            }
+            _ => {
+                offsets.push(fsb_vals.len() as i32);
+                fsb_vals.push(rng.random());
+            }
+        }
+    }
+    let type_ids: ScalarBuffer<i8> = type_ids.into_iter().collect();
+    let offsets: ScalarBuffer<i32> = offsets.into_iter().collect();
+    let int_array: Int32Array = int_vals.into_iter().map(Some).collect();
+    let float_array: Float64Array = float_vals.into_iter().map(Some).collect();
+    let fsb_array = FixedSizeBinaryArray::try_from_iter(fsb_vals.into_iter()).unwrap();
+    let fields = [
+        (0, Arc::new(Field::new("a", DataType::Int32, false))),
+        (1, Arc::new(Field::new("b", DataType::Float64, false))),
+        (
+            2,
+            Arc::new(Field::new("c", DataType::FixedSizeBinary(16), false)),
+        ),
+    ]
+    .into_iter()
+    .collect::<UnionFields>();
+    UnionArray::try_new(
+        fields,
+        type_ids,
+        Some(offsets),
+        vec![
+            Arc::new(int_array),
+            Arc::new(float_array),
+            Arc::new(fsb_array),
+        ],
+    )
+    .unwrap()
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -273,6 +368,27 @@ fn add_benchmark(c: &mut Criterion) {
         |b| b.iter(|| bench_take(&values, &indices)),
     );
 
+    let values = create_string_run_array(1024, 128);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function(
+        "take string run logical len: 1024, physical len: 128, indices: 1024",
+        |b| b.iter(|| bench_take(&values, &indices)),
+    );
+
+    let values = create_string_run_array(1024, 512);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function(
+        "take string run logical len: 1024, physical len: 512, indices: 1024",
+        |b| b.iter(|| bench_take(&values, &indices)),
+    );
+
+    let values = create_string_run_array(1024, 512);
+    let indices = create_random_index(1024, 0.5);
+    c.bench_function(
+        "take string run logical len: 1024, physical len: 512, null indices: 1024",
+        |b| b.iter(|| bench_take(&values, &indices)),
+    );
+
     let values = create_fsb_array(1024, 0.0, 12);
     let indices = create_random_index(1024, 0.0);
     c.bench_function("take fsb value len: 12, indices: 1024", |b| {
@@ -416,6 +532,30 @@ fn add_benchmark(c: &mut Criterion) {
     let values = create_string_map_array::<Int32Type>(1024, 0.0, 10, 8);
     let indices = create_random_index(1024, 0.5);
     c.bench_function("take map<str, i32> null indices 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_sparse_union(512);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take sparse union 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_sparse_union(1024);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take sparse union 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_dense_union(512);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take dense union 512", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_dense_union(1024);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take dense union 1024", |b| {
         b.iter(|| bench_take(&values, &indices))
     });
 }

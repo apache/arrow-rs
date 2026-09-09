@@ -368,7 +368,7 @@ unsafe fn producer_error(stream_ptr: *mut FFI_ArrowArrayStream) -> Option<String
 fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef> {
     let mut schema = FFI_ArrowSchema::empty();
 
-    let ret_code = unsafe { (*stream_ptr).get_schema.unwrap()(stream_ptr, &mut schema) };
+    let ret_code = unsafe { (*stream_ptr).get_schema.unwrap()(stream_ptr, &raw mut schema) };
 
     if ret_code == 0 {
         let schema = Schema::try_from(&schema)?;
@@ -395,7 +395,7 @@ impl ArrowArrayStreamReader {
             ));
         }
 
-        let schema = get_stream_schema(&mut stream)?;
+        let schema = get_stream_schema(&raw mut stream)?;
 
         Ok(Self { stream, schema })
     }
@@ -421,7 +421,8 @@ impl Iterator for ArrowArrayStreamReader {
     fn next(&mut self) -> Option<Self::Item> {
         let mut array = FFI_ArrowArray::empty();
 
-        let ret_code = unsafe { self.stream.get_next.unwrap()(&mut self.stream, &mut array) };
+        let ret_code =
+            unsafe { self.stream.get_next.unwrap()(&raw mut self.stream, &raw mut array) };
 
         if ret_code == 0 {
             // The end of stream has been reached
@@ -445,7 +446,7 @@ impl Iterator for ArrowArrayStreamReader {
                 format!("Cannot get next batch from input stream. Error code: {ret_code}");
             // SAFETY: `self.stream` is valid and unreleased by construction, and the
             // `get_next` call above returned a non-zero code.
-            let message = match unsafe { producer_error(&mut self.stream) } {
+            let message = match unsafe { producer_error(&raw mut self.stream) } {
                 Some(producer_message) => format!("{message}. Producer error: {producer_message}"),
                 None => message,
             };
@@ -508,7 +509,7 @@ mod tests {
 
         // Get schema from `FFI_ArrowArrayStream`
         let mut ffi_schema = FFI_ArrowSchema::empty();
-        let ret_code = unsafe { get_schema(&mut ffi_stream, &mut ffi_schema) };
+        let ret_code = unsafe { get_schema(&raw mut ffi_stream, &raw mut ffi_schema) };
         assert_eq!(ret_code, 0);
 
         let exported_schema = Schema::try_from(&ffi_schema).unwrap();
@@ -518,7 +519,7 @@ mod tests {
         let mut produced_batches = vec![];
         loop {
             let mut ffi_array = FFI_ArrowArray::empty();
-            let ret_code = unsafe { get_next(&mut ffi_stream, &mut ffi_array) };
+            let ret_code = unsafe { get_next(&raw mut ffi_stream, &raw mut ffi_array) };
             assert_eq!(ret_code, 0);
 
             // The end of stream has been reached

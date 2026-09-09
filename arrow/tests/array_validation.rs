@@ -604,7 +604,7 @@ fn test_validate_large_binary_out_of_bounds() {
     check_index_out_of_bounds_validation::<i64>(DataType::LargeBinary);
 }
 
-// validate that indexes don't go bacwards check indexes that go backwards
+// validate that indexes don't go backwards check indexes that go backwards
 fn check_index_backwards_validation<T: ArrowNativeType>(data_type: DataType) {
     let data_buffer = Buffer::from_slice_ref(b"abcd");
     // First three offsets are fine, then 1 goes backwards

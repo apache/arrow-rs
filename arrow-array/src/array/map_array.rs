@@ -70,7 +70,7 @@ impl MapArray {
         ordered: bool,
     ) -> Result<Self, ArrowError> {
         let len = offsets.len() - 1; // Offsets guaranteed to not be empty
-        let end_offset = offsets.last().unwrap().as_usize();
+        let end_offset = offsets.last().as_usize();
         // don't need to check other values of `offsets` because they are checked
         // during construction of `OffsetBuffer`
         if end_offset > entries.len() {
@@ -259,7 +259,7 @@ impl MapArray {
         let end = *unsafe { self.value_offsets().get_unchecked(i + 1) };
         let start = *unsafe { self.value_offsets().get_unchecked(i) };
         self.entries
-            .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
+            .slice(start.as_usize(), (end - start).as_usize())
     }
 
     /// Returns ith value of this map array.
@@ -617,8 +617,8 @@ impl ArrayAccessor for &MapArray {
 impl std::fmt::Debug for MapArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "MapArray\n[\n")?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }

@@ -278,18 +278,18 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
         ));
     }
 
-    let (len, buffer) = if buffer[..4] == CONTINUATION_MARKER {
-        if buffer.len() < 8 {
-            return Err(ArrowError::ParseError(
-                "The buffer length is less than 8 and missing the length of buffer".to_string(),
-            ));
-        }
-        buffer[4..].split_at(4)
+    let rest = if buffer[..4] == CONTINUATION_MARKER {
+        &buffer[4..]
     } else {
-        buffer.split_at(4)
+        buffer
+    };
+    let Some((len, buffer)) = rest.split_first_chunk::<4>() else {
+        return Err(ArrowError::ParseError(
+            "The buffer length is less than 8 and missing the length of buffer".to_string(),
+        ));
     };
 
-    let len = <i32>::from_le_bytes(len.try_into().unwrap());
+    let len = i32::from_le_bytes(*len);
     if len < 0 {
         return Err(ArrowError::ParseError(format!(
             "The encapsulated message's reported length is negative ({len})"

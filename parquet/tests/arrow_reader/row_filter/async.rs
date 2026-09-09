@@ -383,18 +383,18 @@ async fn test_mask_nested_projection_with_different_page_boundaries() {
     )
     .await
     .unwrap();
-    let page_first_rows = builder
+    let num_columns = builder
         .metadata()
-        .page_index()
-        .unwrap()
-        .offset_indexes_for_rowgroup(0)
-        .unwrap()
-        .iter()
-        .map(|column| {
-            column
-                .as_ref()
+        .file_metadata()
+        .schema_descr()
+        .num_columns();
+    let page_index = builder.metadata().page_index().unwrap();
+    let page_first_rows = (0..num_columns)
+        .into_iter()
+        .map(|idx| {
+            page_index
+                .page_locations(0, idx)
                 .unwrap()
-                .page_locations()
                 .iter()
                 .map(|page| page.first_row_index)
                 .collect::<Vec<_>>()
