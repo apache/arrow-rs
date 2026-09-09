@@ -62,7 +62,7 @@ use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
 use parquet::basic::{Encoding, Type as PhysicalType};
 use parquet::column::reader::ColumnReader;
 use parquet::errors::Result;
-use parquet::file::properties::{WriterProperties, WriterVersion};
+use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use tempfile::tempfile;
 
@@ -2046,9 +2046,21 @@ fn test_list_of_struct_roundtrip() {
     values.append(true);
     list_builder.append(true);
 
-    let array = Arc::new(list_builder.finish());
+    let array: ArrayRef = Arc::new(list_builder.finish());
 
-    RoundTripTest::new(array).run();
+    RoundTripTest::new(array.clone()).run();
+
+    let props = WriterProperties::builder()
+        .set_data_page_row_count_limit(2)
+        .set_content_defined_chunking(Some(CdcOptions::default()))
+        .build();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        array.data_type().clone(),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+    roundtrip_opts(&batch, props);
 }
 
 #[test]
