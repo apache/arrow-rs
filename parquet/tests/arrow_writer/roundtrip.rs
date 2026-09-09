@@ -62,7 +62,7 @@ use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
 use parquet::basic::{Encoding, Type as PhysicalType};
 use parquet::column::reader::ColumnReader;
 use parquet::errors::Result;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{WriterProperties, WriterVersion};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use tempfile::tempfile;
 
@@ -1519,8 +1519,20 @@ fn arrow_writer_binary() {
     assert_eq!(string_values.null_count(), 0);
     assert_eq!(binary_values.null_count(), 0);
 
-    RoundTripTest::new(Arc::new(string_values)).run();
-    RoundTripTest::new(Arc::new(binary_values)).run();
+    RoundTripTest::new(Arc::new(string_values.clone())).run();
+    RoundTripTest::new(Arc::new(binary_values.clone())).run();
+
+    let string_field = Field::new("a", ArrowDataType::Utf8, false);
+    let binary_field = Field::new("b", ArrowDataType::Binary, false);
+    let schema = Schema::new(vec![string_field, binary_field]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(string_values), Arc::new(binary_values)],
+    )
+    .unwrap();
+
+    roundtrip(batch, Some(SMALL_SIZE / 2));
 }
 
 #[test]
@@ -1539,14 +1551,36 @@ fn arrow_writer_binary_view() {
     let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
     let nullable_string_view_values = StringViewArray::from(nullable_string_values);
 
-    RoundTripTest::new(Arc::new(string_view_values)).run();
-    RoundTripTest::new(Arc::new(binary_view_values)).run();
-    RoundTripTest::new(Arc::new(nullable_string_view_values)).run();
+    RoundTripTest::new(Arc::new(string_view_values.clone())).run();
+    RoundTripTest::new(Arc::new(binary_view_values.clone())).run();
+    RoundTripTest::new(Arc::new(nullable_string_view_values.clone())).run();
+
+    let string_field = Field::new("a", ArrowDataType::Utf8View, false);
+    let binary_field = Field::new("b", ArrowDataType::BinaryView, false);
+    let nullable_string_field = Field::new("a", ArrowDataType::Utf8View, true);
+    let schema = Schema::new(vec![string_field, binary_field, nullable_string_field]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(string_view_values),
+            Arc::new(binary_view_values),
+            Arc::new(nullable_string_view_values),
+        ],
+    )
+    .unwrap();
+
+    roundtrip(batch.clone(), Some(SMALL_SIZE / 2));
+    roundtrip(batch, None);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)] // Takes too long
 fn arrow_writer_binary_view_long_value() {
+    let string_field = Field::new("a", ArrowDataType::Utf8View, false);
+    let binary_field = Field::new("b", ArrowDataType::BinaryView, false);
+    let schema = Schema::new(vec![string_field, binary_field]);
+
     // There is special case validation for long values (greater than 128)
     // 128 encodes as 0x80 0x00 0x00 0x00 in little endian, which should
     // trigger the long-string UTF-8 validation branch in the plain decoder.
@@ -1564,6 +1598,21 @@ fn arrow_writer_binary_view_long_value() {
     RoundTripTest::new(Arc::clone(&binary_view_values))
         .with_nullable(false)
         .run();
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![string_view_values, binary_view_values],
+    )
+    .unwrap();
+
+    // Disable dictionary to exercise plain encoding paths in the reader.
+    for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+        let props = WriterProperties::builder()
+            .set_writer_version(version)
+            .set_dictionary_enabled(false)
+            .build();
+        roundtrip_opts(&batch, props);
+    }
 }
 
 fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
