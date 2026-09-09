@@ -39,7 +39,8 @@ use super::schema::{
 };
 
 use crate::arrow::ArrowSchemaConverter;
-use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
+use crate::arrow::arrow_writer::byte_array::ByteArrayStorage;
+use crate::arrow::arrow_writer::legacy_byte_array::ByteArrayEncoder;
 use crate::basic::PageType;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
@@ -74,6 +75,7 @@ use levels::{ArrayLevels, LeafBatch, calculate_array_levels};
 mod boolean;
 mod byte_array;
 mod fixed_len_byte_array;
+mod legacy_byte_array;
 mod levels;
 mod numeric;
 
@@ -1208,7 +1210,7 @@ impl ArrowColumnWriter {
             ArrowColumnWriterImpl::ByteArray(c) => {
                 let batch = levels.leaf_batch();
                 c.write_batch_internal(
-                    byte_array::ByteArrayGatherSource::new(
+                    legacy_byte_array::ByteArrayGatherSource::new(
                         batch.array(),
                         levels.non_null_indices(),
                     ),
@@ -1693,7 +1695,7 @@ impl ArrowColumnWriterFactory {
             | ArrowDataType::Utf8
             | ArrowDataType::LargeUtf8
             | ArrowDataType::BinaryView
-            | ArrowDataType::Utf8View => out.push(bytes(leaves.next().unwrap())?),
+            | ArrowDataType::Utf8View => out.push(col(leaves.next().unwrap())?),
             ArrowDataType::List(f)
             | ArrowDataType::LargeList(f)
             | ArrowDataType::FixedSizeList(f, _)
@@ -1902,9 +1904,7 @@ macro_rules! dispatch_leaf_writer {
             }
             ColumnWriter::FloatColumnWriter(typed) => $phys!(Float32Storage<'_>, typed),
             ColumnWriter::DoubleColumnWriter(typed) => $phys!(Float64Storage<'_>, typed),
-            ColumnWriter::ByteArrayColumnWriter(_typed) => {
-                unreachable!("byte arrays are written by ArrowColumnWriterImpl::ByteArray")
-            }
+            ColumnWriter::ByteArrayColumnWriter(typed) => $phys!(ByteArrayStorage<'_>, typed),
             ColumnWriter::FixedLenByteArrayColumnWriter(typed) => {
                 $phys!(FixedLenByteArrayStorage<'_>, typed)
             }
@@ -4523,6 +4523,56 @@ mod tests {
         assert!(writer.bytes_written() > pre_flush_bytes_written);
 
         writer.close().unwrap();
+
+        fn check(values: ArrayRef, props: WriterProperties) {
+            let batch = RecordBatch::try_from_iter([("a", values)]).unwrap();
+            let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            assert!(writer.memory_size() >= writer.in_progress_size());
+            writer.flush().unwrap();
+            assert_eq!(writer.memory_size(), 0);
+            writer.close().unwrap();
+        }
+
+        check(
+            Arc::new(BooleanArray::from(vec![true, false, true])),
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_encoding(Encoding::RLE)
+                .set_statistics_enabled(EnabledStatistics::None)
+                .build(),
+        );
+        check(
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_encoding(Encoding::DELTA_BINARY_PACKED)
+                .build(),
+        );
+        check(
+            Arc::new(StringArray::from(vec!["prefix-a", "prefix-b"])),
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+                .build(),
+        );
+        let fixed =
+            FixedSizeBinaryArray::try_from_iter([[1, 2, 3, 4], [5, 6, 7, 8]].into_iter()).unwrap();
+        check(
+            Arc::new(fixed),
+            WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .set_encoding(Encoding::BYTE_STREAM_SPLIT)
+                .build(),
+        );
+        for limit in [usize::MAX, 1] {
+            check(
+                Arc::new(StringArray::from(vec!["dictionary-a", "dictionary-b"])),
+                WriterProperties::builder()
+                    .set_dictionary_page_size_limit(limit)
+                    .build(),
+            );
+        }
     }
 
     #[test]
@@ -5792,9 +5842,14 @@ mod tests {
             file.into_inner().unwrap()
         }
 
-        fn arrow_binary() -> Vec<u8> {
+        fn arrow_binary(dictionary: bool) -> Vec<u8> {
             let file = new_file(PhysicalType::BYTE_ARRAY);
             let array: ArrayRef = Arc::new(BinaryArray::from_vec(VALUES.to_vec()));
+            let array = if dictionary {
+                Arc::new(DictionaryArray::new(Int8Array::from(vec![0, 1, 2]), array)) as ArrayRef
+            } else {
+                array
+            };
             arrow_bounds(file, array)
         }
 
@@ -5807,11 +5862,17 @@ mod tests {
 
         let direct = read_minmax(direct_parquet());
         let fixed = read_minmax(arrow_fixed_size_binary());
-        let binary = read_minmax(arrow_binary());
+        let binary = read_minmax(arrow_binary(false));
+        let dictionary = read_minmax(arrow_binary(true));
 
         assert_eq!(direct, (-1, 1), "incorrect direct Parquet stats");
         assert_eq!(fixed, (-1, 1), "incorrect Arrow FixedSizeBinaryArray stats");
         assert_eq!(binary, (-1, 1), "incorrect Arrow BinaryArray stats");
+        assert_eq!(
+            dictionary,
+            (-1, 1),
+            "incorrect Arrow Dictionary<Binary> stats"
+        );
     }
 
     #[test]
@@ -5898,5 +5959,53 @@ mod tests {
             .with_precision_and_scale(12, 2)
             .unwrap();
         RoundTripTest::new(Arc::new(d64n)).run();
+    }
+
+    #[test]
+    fn string_view_fallback_observes_across_gathered_tiles() {
+        let mut raw_values = (0..130)
+            .map(|i| format!("middle-{i:03}"))
+            .collect::<Vec<_>>();
+        raw_values[63] = "aaa-min".to_string();
+        raw_values[64] = "zzz-max".to_string();
+
+        let values: ArrayRef = Arc::new(StringViewArray::from_iter_values(
+            raw_values.iter().map(String::as_str),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            values.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+
+        for encoding in [
+            Encoding::PLAIN,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ] {
+            let props = WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_2_0)
+                .set_dictionary_enabled(false)
+                .set_encoding(encoding)
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .set_bloom_filter_enabled(true)
+                .build();
+            let file = roundtrip_opts(&batch, props);
+            let reader = SerializedFileReader::new(file.clone()).unwrap();
+            let column = reader.metadata().row_group(0).column(0);
+            let Statistics::ByteArray(stats) = column.statistics().unwrap() else {
+                panic!("expected byte-array statistics for {encoding:?}");
+            };
+            assert_eq!(stats.min_opt().unwrap().as_bytes(), b"aaa-min");
+            assert_eq!(stats.max_opt().unwrap().as_bytes(), b"zzz-max");
+
+            check_bloom_filter(
+                vec![file],
+                "col".to_string(),
+                vec!["middle-000", "aaa-min", "zzz-max", "middle-129"],
+                Vec::<&str>::new(),
+            );
+        }
     }
 }
