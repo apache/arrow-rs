@@ -65,7 +65,7 @@ impl<S: Storage> Interner<S> {
     /// `#[inline]` (and hashbrown's `inline-more` feature) each has a single copy,
     /// and whether it is inlined depends on how rustc splits the crate into
     /// codegen units, so unrelated changes can turn it into a call per value.
-    #[inline]
+    #[inline(always)]
     pub fn intern(&mut self, value: &S::Value) -> S::Key {
         let hash = self.state.hash_one(value.as_bytes());
 
@@ -81,6 +81,30 @@ impl<S: Storage> Interner<S> {
             .get()
     }
 
+    /// Like [`Self::intern`], but keyed by the value's raw bytes — the owned
+    /// `S::Value` is built (via `make`) **only on a dedup miss**. Lets callers
+    /// whose owned value is expensive to construct (e.g. a heap-backed
+    /// `FixedLenByteArray`) pay that cost once per *unique* value instead of once
+    /// per occurrence; on a hit nothing is allocated, only the bytes are hashed
+    /// and compared.
+    #[inline(always)]
+    pub fn intern_bytes(&mut self, bytes: &[u8], make: impl FnOnce() -> S::Value) -> S::Key
+    where
+        S::Value: Sized,
+    {
+        let hash = self.state.hash_one(bytes);
+
+        *self
+            .dedup
+            .entry(
+                hash,
+                |index| bytes == self.storage.get(*index).as_bytes(),
+                |key| self.state.hash_one(self.storage.get(*key).as_bytes()),
+            )
+            .or_insert_with(|| self.storage.push(&make()))
+            .get()
+    }
+
     /// Return estimate of the memory used, in bytes
     pub fn estimated_memory_size(&self) -> usize {
         self.storage.estimated_memory_size() + self.dedup.allocation_size()
@@ -89,5 +113,59 @@ impl<S: Storage> Interner<S> {
     /// Returns the storage for this interner
     pub fn storage(&self) -> &S {
         &self.storage
+    }
+
+    /// Unwraps the inner storage
+    pub fn into_inner(self) -> S {
+        self.storage
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+    use crate::data_type::ByteArray;
+
+    #[derive(Default)]
+    struct VecStorage(Vec<ByteArray>);
+
+    impl Storage for VecStorage {
+        type Key = usize;
+        type Value = ByteArray;
+
+        fn get(&self, idx: Self::Key) -> &Self::Value {
+            &self.0[idx]
+        }
+
+        fn push(&mut self, value: &Self::Value) -> Self::Key {
+            let key = self.0.len();
+            self.0.push(value.clone());
+            key
+        }
+
+        fn estimated_memory_size(&self) -> usize {
+            self.0.iter().map(|value| value.as_bytes().len()).sum()
+        }
+    }
+
+    #[test]
+    fn intern_bytes_constructs_values_only_on_miss() {
+        let calls = Cell::new(0);
+        let make = |bytes: &[u8]| {
+            calls.set(calls.get() + 1);
+            ByteArray::from(bytes.to_vec())
+        };
+        let mut interner = Interner::new(VecStorage::default());
+
+        let first = interner.intern_bytes(b"same", || make(b"same"));
+        let duplicate = interner.intern_bytes(b"same", || make(b"same"));
+        let other = interner.intern_bytes(b"other", || make(b"other"));
+
+        assert_eq!(first, duplicate);
+        assert_ne!(first, other);
+        assert_eq!(calls.get(), 2);
+        assert_eq!(interner.storage().0.len(), 2);
     }
 }

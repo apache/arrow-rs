@@ -35,7 +35,11 @@ use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
 
 mod alp_encoder;
+mod byte_array;
+#[cfg(feature = "arrow")]
+pub(crate) use byte_array::ByteArrayInterner;
 mod byte_stream_split_encoder;
+pub(crate) use dict_encoder::DictionaryValue;
 mod dict_encoder;
 
 // ----------------------------------------------------------------------
@@ -1444,7 +1448,7 @@ mod tests {
         // DICTIONARY
         // NOTE: The final size is almost the same because the dictionary entries are
         // preserved after encoded values have been written.
-        run_test::<Int32Type>(Encoding::RLE_DICTIONARY, -1, &[123, 1024], 0, 2, 0);
+        run_test::<Int32Type>(Encoding::RLE_DICTIONARY, -1, &[123, 1024], 1, 3, 1);
 
         // DELTA_BINARY_PACKED
         run_test::<Int32Type>(Encoding::DELTA_BINARY_PACKED, -1, &[123; 1024], 0, 35, 0);
