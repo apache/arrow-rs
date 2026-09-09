@@ -700,6 +700,18 @@ pub(crate) mod private {
     use crate::basic::Type;
     use crate::file::metadata::HeapSize;
 
+    /// Convert a byte-array payload length to its four-byte PLAIN prefix.
+    #[inline]
+    pub(crate) fn byte_array_length(len: usize) -> Result<u32> {
+        len.try_into().map_err(|_| {
+            general_err!(
+                "Byte array length {} exceeds the Parquet limit of {} bytes",
+                len,
+                u32::MAX
+            )
+        })
+    }
+
     /// Sealed trait to start to remove specialisation from implementations
     ///
     /// This is done to force the associated value type to be unimplementable outside of this
@@ -1218,7 +1230,7 @@ pub(crate) mod private {
 /// presentation.
 pub trait DataType: 'static + Send {
     /// The physical type of the Parquet data type.
-    type T: private::ParquetValueType;
+    type T: private::ParquetValueType + crate::encodings::encoding::DictionaryValue;
 
     /// Returns Parquet physical type.
     fn get_physical_type() -> Type {
@@ -1395,6 +1407,19 @@ mod tests {
         );
         let buf = vec![6u8, 7u8, 8u8, 9u8, 10u8];
         assert_eq!(ByteArray::from(buf).data(), &[6u8, 7u8, 8u8, 9u8, 10u8]);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn test_byte_array_length_rejects_overflow() {
+        assert_eq!(
+            private::byte_array_length(u32::MAX as usize).unwrap(),
+            u32::MAX
+        );
+        let error = private::byte_array_length(u32::MAX as usize + 1)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exceeds the Parquet limit"));
     }
 
     #[test]

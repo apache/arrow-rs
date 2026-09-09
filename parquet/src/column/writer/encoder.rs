@@ -416,17 +416,17 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
                 }
 
                 if let Some(bloom_filter) = &mut self.bloom_filter {
-                    for value in encoder.uniques() {
-                        bloom_filter.insert(value);
-                    }
+                    encoder.visit_uniques(|value| bloom_filter.insert(value));
                 }
 
-                let buf = encoder.write_dict()?;
+                let num_values = encoder.num_entries();
+                let is_sorted = encoder.is_sorted();
+                let buf = encoder.into_dict_page()?;
 
                 Ok(Some(DictionaryPage {
                     buf,
-                    num_values: encoder.num_entries(),
-                    is_sorted: encoder.is_sorted(),
+                    num_values,
+                    is_sorted,
                 }))
             }
             _ => Ok(None),
