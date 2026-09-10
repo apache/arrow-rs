@@ -2107,7 +2107,7 @@ mod tests {
     use num_traits::{FromPrimitive, ToPrimitive};
     use tempfile::tempfile;
 
-    use crate::basic::Encoding;
+    use crate::basic::{Encoding, EncodingMask};
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::{
@@ -3961,6 +3961,109 @@ mod tests {
             "col".to_string(),
             (0..SMALL_SIZE as i32).collect(),
             (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+        );
+    }
+
+    fn write_with_bloom_filter(array: ArrayRef, dictionary_page_size_limit: usize) -> Bytes {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            array.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .set_dictionary_page_size_limit(dictionary_page_size_limit)
+            .set_write_batch_size(256)
+            .set_bloom_filter_enabled(true)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        Bytes::from(buf)
+    }
+
+    fn data_page_encoding_mask(file: &Bytes) -> EncodingMask {
+        let metadata = ParquetMetaDataReader::new().parse_and_finish(file).unwrap();
+        *metadata
+            .row_group(0)
+            .column(0)
+            .page_encoding_stats_mask()
+            .unwrap()
+    }
+
+    /// While a column is dictionary encoded the bloom filter is populated from the dictionary
+    /// when it is flushed, so a chunk that stays dictionary encoded must still contain every value.
+    #[test]
+    fn string_column_bloom_filter_populated_from_dictionary() {
+        let values: Vec<String> = (0..2000).map(|i| format!("value-{}", i % 10)).collect();
+        let array = Arc::new(StringArray::from_iter_values(&values));
+        let file = write_with_bloom_filter(array, 1024 * 1024);
+        assert!(data_page_encoding_mask(&file).is_only(Encoding::RLE_DICTIONARY));
+
+        check_bloom_filter(
+            vec![file],
+            "col".to_string(),
+            (0..10).map(|i| format!("value-{i}").into_bytes()).collect(),
+            (10..20)
+                .map(|i| format!("value-{i}").into_bytes())
+                .collect(),
+        );
+    }
+
+    /// After falling back from dictionary encoding the filter holds the dictionary's values
+    /// and every value written plain afterwards.
+    #[test]
+    fn string_column_bloom_filter_across_dictionary_fallback() {
+        let values: Vec<String> = (0..2000).map(|i| format!("value-{i}")).collect();
+        let array = Arc::new(StringArray::from_iter_values(&values));
+        let file = write_with_bloom_filter(array, 1024);
+        let encodings = data_page_encoding_mask(&file);
+        assert!(
+            encodings.is_set(Encoding::RLE_DICTIONARY) && encodings.is_set(Encoding::PLAIN),
+            "expected dictionary and plain data pages, got {encodings:?}"
+        );
+
+        check_bloom_filter(
+            vec![file],
+            "col".to_string(),
+            values.into_iter().map(String::into_bytes).collect(),
+            (2000..2010)
+                .map(|i| format!("value-{i}").into_bytes())
+                .collect(),
+        );
+    }
+
+    #[test]
+    fn i64_column_bloom_filter_populated_from_dictionary() {
+        let array = Arc::new(Int64Array::from_iter_values((0..2000).map(|i| i % 10)));
+        let file = write_with_bloom_filter(array, 1024 * 1024);
+        assert!(data_page_encoding_mask(&file).is_only(Encoding::RLE_DICTIONARY));
+
+        check_bloom_filter(
+            vec![file],
+            "col".to_string(),
+            (0..10i64).collect(),
+            (10..20i64).collect(),
+        );
+    }
+
+    #[test]
+    fn i64_column_bloom_filter_across_dictionary_fallback() {
+        let array = Arc::new(Int64Array::from_iter_values(0..2000i64));
+        let file = write_with_bloom_filter(array, 1024);
+        let encodings = data_page_encoding_mask(&file);
+        assert!(
+            encodings.is_set(Encoding::RLE_DICTIONARY) && encodings.is_set(Encoding::PLAIN),
+            "expected dictionary and plain data pages, got {encodings:?}"
+        );
+
+        check_bloom_filter(
+            vec![file],
+            "col".to_string(),
+            (0..2000i64).collect(),
+            (2000..2010i64).collect(),
         );
     }
 

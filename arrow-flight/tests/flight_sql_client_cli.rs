@@ -484,7 +484,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         };
         let schema = batch.schema_ref();
         let batches = vec![batch.clone()];
-        let flight_data = batches_to_flight_data(schema, batches)
+        let flight_data = batches_to_flight_data(schema, &batches)
             .unwrap()
             .into_iter()
             .map(Ok);
