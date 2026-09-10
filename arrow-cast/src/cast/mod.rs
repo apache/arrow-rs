@@ -876,11 +876,21 @@ pub fn cast_with_options(
             }
             let array = array.as_fixed_size_list();
             let values = cast_with_options(array.values(), list_to.data_type(), cast_options)?;
+            let nulls = array.nulls().cloned();
+            if *size_from == 0 && nulls.is_none() {
+                return Ok(Arc::new(FixedSizeListArray::try_new_with_length(
+                    list_to.clone(),
+                    *size_from,
+                    values,
+                    nulls,
+                    array.len(),
+                )?));
+            }
             Ok(Arc::new(FixedSizeListArray::try_new(
                 list_to.clone(),
                 *size_from,
                 values,
-                array.nulls().cloned(),
+                nulls,
             )?))
         }
         (ListView(_), ListView(to)) => cast_list_view_values::<i32>(array, to, cast_options),
@@ -9399,6 +9409,26 @@ mod tests {
         assert_eq!(946728000000, c.value(4));
         assert!(c.is_valid(5)); // "2000-01-01"
         assert_eq!(946684800000, c.value(5));
+    }
+
+    #[test]
+    fn test_cast_zero_width_fsl_to_fsl() {
+        // size=0 FSL with no nulls: length cannot be inferred from the child buffer
+        // (0 bytes / 0 = ambiguous), so the cast must preserve it explicitly.
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let input = FixedSizeListArray::try_new_with_length(
+            field,
+            0,
+            Arc::new(Int32Array::new_null(0)),
+            None,
+            3,
+        )
+        .unwrap();
+        let to_type =
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int64, true)), 0);
+        let result = cast(&(Arc::new(input) as ArrayRef), &to_type).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.data_type(), &to_type);
     }
 
     #[test]
