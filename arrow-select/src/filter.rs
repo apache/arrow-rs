@@ -26,6 +26,7 @@ use arrow_array::types::{
     ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
 };
 use arrow_array::*;
+use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, NullBuffer, OffsetBuffer, RunEndBuffer, ScalarBuffer, bit_util,
 };
@@ -676,6 +677,79 @@ where
     RunArray::try_new(&run_ends, &values)
 }
 
+/// Extract bits from `src` at positions where `filter` has a 1, packed densely.
+///
+/// Processes 64 filter bits per iteration: one u64 load from each buffer, then
+/// software PEXT to scatter the selected source bits. This reduces source reads
+/// from O(selected_count) byte loads to O(filter_len/64) u64 loads.
+fn gather_bits(src: &BooleanBuffer, filter: &BooleanBuffer, count: usize) -> Buffer {
+    let filter_chunks = filter.bit_chunks();
+    let src_chunks = BitChunks::new(src.values(), src.offset(), filter.len());
+
+    let out_u64s = bit_util::ceil(count, 64);
+    let mut out: Vec<u64> = Vec::with_capacity(out_u64s);
+    let mut out_word = 0u64;
+    let mut out_bits = 0usize; // bits written into `out_word` so far (0..=63)
+
+    macro_rules! push_chunk {
+        ($compressed:expr, $n_set:expr) => {{
+            let free = 64 - out_bits;
+            if $n_set <= free {
+                out_word |= $compressed << out_bits;
+                out_bits += $n_set;
+                if out_bits == 64 {
+                    out.push(out_word);
+                    out_word = 0;
+                    out_bits = 0;
+                }
+            } else {
+                // Fill the current word with the lower `free` bits, then start the next word.
+                out_word |= $compressed << out_bits; // upper bits of compressed shift off; kept in >> below
+                out.push(out_word);
+                out_word = $compressed >> free;
+                out_bits = $n_set - free;
+            }
+        }};
+    }
+
+    for (filter_word, src_word) in filter_chunks.iter().zip(src_chunks.iter()) {
+        if filter_word == 0 {
+            continue;
+        }
+        let n_set = filter_word.count_ones() as usize;
+        push_chunk!(pext64(src_word, filter_word), n_set);
+    }
+
+    let rem_filter = filter_chunks.remainder_bits();
+    if rem_filter != 0 {
+        let n_set = rem_filter.count_ones() as usize;
+        push_chunk!(pext64(src_chunks.remainder_bits(), rem_filter), n_set);
+    }
+
+    if out_bits > 0 {
+        out.push(out_word);
+    }
+
+    let mut buf: MutableBuffer = out.into();
+    buf.truncate(bit_util::ceil(count, 8));
+    buf.into()
+}
+
+/// Software parallel-bits-extract (PEXT): pack the bits of `val` at positions
+/// where `mask` has a 1 into the low bits of the result, in LSB-first order.
+#[inline(always)]
+fn pext64(val: u64, mut mask: u64) -> u64 {
+    let mut result = 0u64;
+    let mut dst = 0u32;
+    while mask != 0 {
+        let bit = mask.trailing_zeros();
+        result |= ((val >> bit) & 1) << dst;
+        dst += 1;
+        mask &= mask - 1;
+    }
+    result
+}
+
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
@@ -684,22 +758,20 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
 
     match &predicate.strategy {
         IterationStrategy::IndexIterator => {
-            let bits =
-                // SAFETY: IndexIterator uses the filter predicate to derive indices
-                IndexIterator::new(&predicate.filter, predicate.count).map(|src_idx| unsafe {
-                    bit_util::get_bit_raw(buffer.values().as_ptr(), src_idx + offset)
-                });
-
-            // SAFETY: `IndexIterator` reports its size correctly
-            unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
+            gather_bits(buffer, predicate.filter.values(), predicate.count)
         }
         IterationStrategy::Indices(indices) => {
-            // SAFETY: indices were derived from the filter predicate
-            let bits = indices.iter().map(|src_idx| unsafe {
-                bit_util::get_bit_raw(buffer.values().as_ptr(), *src_idx + offset)
-            });
-            // SAFETY: `Vec::iter()` reports its size correctly
-            unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
+            // gather_bits scans every filter chunk (filter_len/64 u64 loads).
+            // For very sparse selections the precomputed Vec is smaller and cheaper to walk.
+            // Threshold: switch when the selected count exceeds one u64 per filter chunk.
+            if predicate.count.saturating_mul(64) >= predicate.filter.len() {
+                gather_bits(buffer, predicate.filter.values(), predicate.count)
+            } else {
+                let bits = indices.iter().map(|src_idx| unsafe {
+                    bit_util::get_bit_raw(buffer.values().as_ptr(), *src_idx + offset)
+                });
+                unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
+            }
         }
         IterationStrategy::SlicesIterator => {
             let mut builder = BooleanBufferBuilder::new(predicate.count);
