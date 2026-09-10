@@ -1127,9 +1127,26 @@ impl ArrowReaderMetadata {
             )));
         }
 
+        // Virtual columns are appended to `field_levels` and counted in the length check
+        // above, so the reported schema has to carry them too.
+        let schema = if virtual_columns.is_empty() {
+            supplied_schema
+        } else {
+            let fields = supplied_schema
+                .fields()
+                .iter()
+                .cloned()
+                .chain(virtual_columns.iter().cloned())
+                .collect::<Vec<_>>();
+            Arc::new(Schema::new_with_metadata(
+                fields,
+                supplied_schema.metadata().clone(),
+            ))
+        };
+
         Ok(Self {
             metadata,
-            schema: supplied_schema,
+            schema,
             fields: field_levels.levels.map(Arc::new),
         })
     }
@@ -5584,6 +5601,51 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             vec![Some(0), Some(1), Some(2)]
         );
+    }
+
+    #[test]
+    fn test_supplied_schema_keeps_virtual_columns() {
+        let file = write_parquet_from_iter(vec![(
+            "value",
+            Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+        )]);
+        let supplied_fields = Fields::from(vec![Field::new("value", ArrowDataType::Int64, false)]);
+        let row_number_field = Arc::new(
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+        );
+        let row_group_index_field = Arc::new(
+            Field::new("row_group_index", ArrowDataType::Int64, false)
+                .with_extension_type(RowGroupIndex),
+        );
+        let supplied_metadata = HashMap::from([("k".to_string(), "v".to_string())]);
+
+        let options = ArrowReaderOptions::new()
+            .with_schema(Arc::new(Schema::new_with_metadata(
+                supplied_fields,
+                supplied_metadata.clone(),
+            )))
+            .with_virtual_columns(vec![
+                row_number_field.clone(),
+                row_group_index_field.clone(),
+            ])
+            .unwrap();
+        let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
+
+        let expected = Fields::from(vec![
+            Arc::new(Field::new("value", ArrowDataType::Int64, false)),
+            row_number_field,
+            row_group_index_field,
+        ]);
+        assert_eq!(metadata.schema().fields(), &expected);
+        assert_eq!(metadata.schema().metadata(), &supplied_metadata);
+
+        let batch = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata.clone())
+            .build()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(batch.schema().fields(), metadata.schema().fields());
     }
 
     #[test]
