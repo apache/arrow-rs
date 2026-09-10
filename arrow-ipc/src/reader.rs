@@ -923,9 +923,14 @@ fn get_dictionary_values(
             let value = value_type.as_ref().clone();
             let schema = Schema::new(vec![Field::new("", value, true)]);
             // Read a single column
+            let Some(data) = batch.data() else {
+                return Err(ArrowError::ParseError(
+                    "Dictionary batch is missing its data".to_string(),
+                ));
+            };
             let record_batch = RecordBatchDecoder::try_new(
                 buf,
-                batch.data().unwrap(),
+                data,
                 Arc::new(schema),
                 dictionaries_by_id,
                 metadata,
@@ -2194,6 +2199,50 @@ mod tests {
         assert_eq!(
             batch_err.unwrap().to_string(),
             "Parser error: Invalid metadata length: -1"
+        );
+    }
+
+    #[test]
+    fn test_invalid_dictionary_batch_without_data() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            true,
+        )]);
+
+        // DictionaryBatch.data is optional in the flatbuffer grammar and
+        // required by the format
+        let mut fbb = FlatBufferBuilder::new();
+        let batch_offset = DictionaryBatch::create(
+            &mut fbb,
+            &DictionaryBatchArgs {
+                id: 0,
+                data: None,
+                isDelta: false,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<DictionaryBatch>(&batch_bytes).unwrap();
+
+        let data_buffer = Buffer::from(vec![0u8; 0]);
+        let mut dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+
+        let err = read_dictionary(
+            &data_buffer,
+            batch,
+            &schema,
+            &mut dictionaries,
+            &MetadataVersion::V5,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Parser error: Dictionary batch is missing its data"
         );
     }
 

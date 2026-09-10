@@ -240,16 +240,18 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             }
         }
 
-        // encode the values into bloom filter if enabled
-        if let Some(bloom_filter) = &mut self.bloom_filter {
-            for value in slice {
-                bloom_filter.insert(value);
-            }
-        }
-
+        // While a dictionary is in use the filter is populated from its distinct values
+        // in `flush_dict_page`, so each value is hashed once rather than once per row.
         match &mut self.dict_encoder {
             Some(encoder) => encoder.put(slice),
-            _ => self.encoder.put(slice),
+            _ => {
+                if let Some(bloom_filter) = &mut self.bloom_filter {
+                    for value in slice {
+                        bloom_filter.insert(value);
+                    }
+                }
+                self.encoder.put(slice)
+            }
         }
     }
 }
@@ -411,6 +413,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
                     return Err(general_err!(
                         "Must flush data pages before flushing dictionary"
                     ));
+                }
+
+                if let Some(bloom_filter) = &mut self.bloom_filter {
+                    for value in encoder.uniques() {
+                        bloom_filter.insert(value);
+                    }
                 }
 
                 let buf = encoder.write_dict()?;

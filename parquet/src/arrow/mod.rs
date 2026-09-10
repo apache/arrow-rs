@@ -179,7 +179,13 @@
 //! assert_eq!(50, record_batch.num_rows());
 //! ```
 
-experimental!(mod array_reader);
+// Keep these module declarations explicit so rustfmt discovers their source files.
+// See the comment in the crate root.
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+pub mod array_reader;
+#[cfg(not(feature = "experimental"))]
+mod array_reader;
 pub mod arrow_reader;
 pub mod arrow_writer;
 mod buffer;
@@ -195,7 +201,11 @@ pub mod push_decoder;
 mod in_memory_row_group;
 mod record_reader;
 
-experimental!(mod schema);
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+pub mod schema;
+#[cfg(not(feature = "experimental"))]
+mod schema;
 
 use std::fmt::Debug;
 

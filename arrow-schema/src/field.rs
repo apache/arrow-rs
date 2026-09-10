@@ -162,6 +162,14 @@ impl Field {
     ///
     /// See [Arrow Spec](https://github.com/apache/arrow/blob/b19c4761b558ade94ae05743062d92aacedef10e/format/Schema.fbs#L127-L138))
     pub const MAP_VALUE_FIELD_DEFAULT_NAME: &'static str = "value";
+    /// Default field name for the run-ends field for RunEndEncoded
+    ///
+    /// See [Arrow Spec](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
+    pub const REE_RUN_ENDS_FIELD_DEFAULT_NAME: &'static str = "run_ends";
+    /// Default field name for the values field for RunEndEncoded
+    ///
+    /// See [Arrow Spec](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
+    pub const REE_VALUES_FIELD_DEFAULT_NAME: &'static str = "values";
 
     /// Creates a new field with the given name, data type, and nullability
     ///
