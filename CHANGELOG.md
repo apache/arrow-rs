@@ -20,11 +20,12 @@
 # Changelog
 
 
-## [60.0.0](https://github.com/apache/arrow-rs/tree/60.0.0) - (2026-09-09)
+## [60.0.0](https://github.com/apache/arrow-rs/tree/60.0.0) - (2026-09-10)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/59.2.0...60.0.0)
 
 ### Breaking changes
+- minor : batches_to_flight_data() should not require ownership of arguments by @Rich-T-kid in [#11010](https://github.com/apache/arrow-rs/pull/11010)
 - Add `PageIndexBuilder` and `PageIndexProvider` for Parquet page indexes by @etseidl in [#10842](https://github.com/apache/arrow-rs/pull/10842)
 - [Parquet] ALP encoder/decoder support by @sdf-jkl in [#9372](https://github.com/apache/arrow-rs/pull/9372)
 - Remove `force_validate` feature from `arrow-cast` by @Jefffrey in [#10950](https://github.com/apache/arrow-rs/pull/10950)
@@ -50,6 +51,7 @@
 - Implement PARQUET-2249: Introduce IEEE 754 total order by @etseidl in [#9619](https://github.com/apache/arrow-rs/pull/9619)
 
 ### Enhancements
+- Prettify RunEndEncoded datatype display by @Rich-T-kid in [#10840](https://github.com/apache/arrow-rs/pull/10840)
 - Add `ARROW_VERSION` const to arrow-array by @ylw510 in [#10957](https://github.com/apache/arrow-rs/pull/10957)
 - feat(arrow-buffer): add `OverflowError` and fallible offset constructors by @emilk in [#10736](https://github.com/apache/arrow-rs/pull/10736)
 - docs + feature : Introduce schemaBuilder::project + make better docs by @Rich-T-kid in [#10924](https://github.com/apache/arrow-rs/pull/10924)
@@ -200,6 +202,9 @@
 - Update release schedule on README by @alamb in [#10528](https://github.com/apache/arrow-rs/pull/10528)
 
 ### Miscellaneous
+- fix(parquet): skip miniblocks wider than 64 values instead of erroring by @bharadwaj-pendyala in [#11021](https://github.com/apache/arrow-rs/pull/11021)
+- [Parquet] Populate bloom filters from the dictionary while a column is dictionary encoded by @ranflarion in [#10966](https://github.com/apache/arrow-rs/pull/10966)
+- [Parquet] Add writer option to skip bloom filters for column chunks whose data pages are all dictionary encoded by @ranflarion in [#10963](https://github.com/apache/arrow-rs/pull/10963)
 - Json decoder factory by @hareshkh in [#10670](https://github.com/apache/arrow-rs/pull/10670)
 - Return errors instead of panicking in fallible functions by @emilk in [#10755](https://github.com/apache/arrow-rs/pull/10755)
 - Parquet: Make page index decoders public by @etseidl in [#10899](https://github.com/apache/arrow-rs/pull/10899)
