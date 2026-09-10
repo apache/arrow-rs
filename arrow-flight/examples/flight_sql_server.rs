@@ -207,7 +207,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let batch = Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
         let schema = batch.schema_ref();
         let batches = vec![batch.clone()];
-        let flight_data = batches_to_flight_data(schema, batches)
+        let flight_data = batches_to_flight_data(schema, &batches)
             .map_err(|e| status!("Could not convert batches", e))?
             .into_iter()
             .map(Ok);
