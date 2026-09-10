@@ -144,6 +144,21 @@ pub trait FromPyArrow: Sized {
     /// Convert a Python object to an arrow-rs type.
     ///
     /// Takes a GIL-bound value from Python and returns a result with the arrow-rs type.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use arrow_pyarrow::FromPyArrow;
+    /// use arrow_schema::Schema;
+    /// use pyo3::prelude::*;
+    ///
+    /// #[pyfunction]
+    /// fn print_schema(ob: &Bound<'_, PyAny>) -> PyResult<()> {
+    ///     let schema = Schema::from_pyarrow_bound(ob)?;
+    ///     println!("{schema:?}");
+    ///     Ok(())
+    /// }
+    /// ```
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self>;
 }
 
@@ -314,39 +329,79 @@ impl ToPyArrow for Schema {
     }
 }
 
+/// Convert a Python object to [`ArrayData`] without validating the result.
+///
+/// # Safety
+///
+/// The caller must ensure the data produced by the Python object upholds the invariants
+/// required by [`ArrayData`]. Prefer [`FromPyArrow::from_pyarrow_bound`] for `ArrayData`, which
+/// validates the result before returning it.
+///
+/// # Example
+///
+/// ```ignore
+/// use arrow_array::{Array, Int32Array, make_array};
+/// use arrow_pyarrow::from_pyarrow_bound_unsafe;
+/// use pyo3::prelude::*;
+///
+/// /// Sums an int32 pyarrow array without paying the cost of full validation.
+/// ///
+/// /// # Safety
+/// ///
+/// /// `ob` must be a valid `pyarrow.Array` of type `int32` produced by a trusted source.
+/// /// Passing an array with out-of-bounds offsets or mismatched buffers is undefined behavior.
+/// #[pyfunction]
+/// unsafe fn fast_sum(ob: &Bound<'_, PyAny>) -> PyResult<i64> {
+///     // Skip full validation — we trust the source (e.g. data we produced ourselves).
+///     // Use `ArrayData::from_pyarrow_bound` instead if the data comes from an untrusted caller.
+///     let data = unsafe { from_pyarrow_bound_unsafe(ob)? };
+///     let array = make_array(data);
+///     let int_array = array
+///         .as_any()
+///         .downcast_ref::<Int32Array>()
+///         .ok_or_else(|| pyo3::exceptions::PyTypeError::new_err("expected int32 array"))?;
+///
+///     Ok(int_array.iter().flatten().map(i64::from).sum())
+/// }
+/// ```
+pub unsafe fn from_pyarrow_bound_unsafe(value: &Bound<PyAny>) -> PyResult<ArrayData> {
+    // Newer versions of PyArrow as well as other libraries with Arrow data implement this
+    // method, so prefer it over _export_to_c.
+    // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
+    if let Some((schema_capsule, array_capsule)) = call_arrow_c_array_method_if_exists(value)? {
+        let schema_ptr = extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
+        let array_ptr = extract_capsule(&array_capsule, c"arrow_array", "__arrow_c_array__")?;
+        let array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
+        return unsafe { ffi::from_ffi(array, schema_ptr.as_ref()) }.map_err(to_py_err);
+    }
+
+    validate_class(array_class(value.py())?, value)?;
+
+    // prepare a pointer to receive the Array struct
+    let mut array = FFI_ArrowArray::empty();
+    let mut schema = FFI_ArrowSchema::empty();
+
+    // make the conversion through PyArrow's private API
+    // this changes the pointer's memory and is thus unsafe.
+    // In particular, `_export_to_c` can go out of bounds
+    value.call_method1(
+        intern!(value.py(), "_export_to_c"),
+        (
+            &raw mut array as Py_uintptr_t,
+            &raw mut schema as Py_uintptr_t,
+        ),
+    )?;
+
+    unsafe { ffi::from_ffi(array, &schema) }.map_err(to_py_err)
+}
+
 impl FromPyArrow for ArrayData {
     type_hint!(INPUT_TYPE = type_hint_identifier!("pyarrow", "Array"));
 
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
-        // Newer versions of PyArrow as well as other libraries with Arrow data implement this
-        // method, so prefer it over _export_to_c.
-        // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
-        if let Some((schema_capsule, array_capsule)) = call_arrow_c_array_method_if_exists(value)? {
-            let schema_ptr =
-                extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
-            let array_ptr = extract_capsule(&array_capsule, c"arrow_array", "__arrow_c_array__")?;
-            let array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
-            return unsafe { ffi::from_ffi(array, schema_ptr.as_ref()) }.map_err(to_py_err);
-        }
-
-        validate_class(array_class(value.py())?, value)?;
-
-        // prepare a pointer to receive the Array struct
-        let mut array = FFI_ArrowArray::empty();
-        let mut schema = FFI_ArrowSchema::empty();
-
-        // make the conversion through PyArrow's private API
-        // this changes the pointer's memory and is thus unsafe.
-        // In particular, `_export_to_c` can go out of bounds
-        value.call_method1(
-            intern!(value.py(), "_export_to_c"),
-            (
-                &raw mut array as Py_uintptr_t,
-                &raw mut schema as Py_uintptr_t,
-            ),
-        )?;
-
-        unsafe { ffi::from_ffi(array, &schema) }.map_err(to_py_err)
+        let data = unsafe { from_pyarrow_bound_unsafe(value)? };
+        data.validate_full().map_err(to_py_err)?;
+        Ok(data)
     }
 }
 
