@@ -1127,9 +1127,26 @@ impl ArrowReaderMetadata {
             )));
         }
 
+        // Virtual columns are appended to `field_levels` and counted in the length check
+        // above, so the reported schema has to carry them too.
+        let schema = if virtual_columns.is_empty() {
+            supplied_schema
+        } else {
+            let fields = supplied_schema
+                .fields()
+                .iter()
+                .cloned()
+                .chain(virtual_columns.iter().cloned())
+                .collect::<Vec<_>>();
+            Arc::new(Schema::new_with_metadata(
+                fields,
+                supplied_schema.metadata().clone(),
+            ))
+        };
+
         Ok(Self {
             metadata,
-            schema: supplied_schema,
+            schema,
             fields: field_levels.levels.map(Arc::new),
         })
     }
