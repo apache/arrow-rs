@@ -165,14 +165,6 @@ pub struct FlightDataEncoderBuilder {
 /// somewhat inexact, so we set it to 2MB.
 pub const GRPC_TARGET_MAX_FLIGHT_SIZE_BYTES: usize = 2097152;
 
-/// Divisor used to shrink the target passed to the cheap, buffer-memory-based
-/// splitting heuristic in [`split_batch_for_grpc_response`] (e.g. `10` means
-/// target 90% of `max_flight_data_size`). This leaves headroom for IPC
-/// framing/padding overhead that the heuristic doesn't account for, so pieces
-/// don't land right at the real limit and trigger a wasted re-split in
-/// [`FlightDataEncoder::encode_piece_adaptive`].
-const SPLIT_HEURISTIC_MARGIN_DIVISOR: usize = 10;
-
 impl Default for FlightDataEncoderBuilder {
     fn default() -> Self {
         Self {
@@ -381,15 +373,7 @@ impl FlightDataEncoder {
             DictionaryHandling::Hydrate => hydrate_dictionaries(&batch, schema)?,
         };
 
-        // Cheap first pass, based on buffer memory size, to avoid IPC
-        // encoding a potentially huge incoming batch just to measure it.
-        // Target a size somewhat under the real limit: a piece estimated right at
-        // `max_flight_data_size` usually ends up just over once actually
-        // encoded, wasting a full probe-and-resplit round trip in
-        // `encode_piece_adaptive` below.
-        let batch_target_size =
-            self.max_flight_data_size - self.max_flight_data_size / SPLIT_HEURISTIC_MARGIN_DIVISOR;
-        let batches = split_batch_for_grpc_response(batch, batch_target_size);
+        let batches = split_batch_for_grpc_response(batch, self.max_flight_data_size);
         let last = batches.len().saturating_sub(1); // handle empty batches
         for (i, batch) in batches.into_iter().enumerate() {
             self.encode_piece_adaptive(batch, i == last)?;
@@ -401,20 +385,12 @@ impl FlightDataEncoder {
     /// Encodes `batch` and queues the result. If the *actual* encoded size
     /// still exceeds max_flight_data_size (the heuristic used to produce
     /// `batch` can be wrong - it ignores IPC framing overhead and
-    /// already-sliced arrays, see
-    /// <https://github.com/apache/arrow-rs/issues/3478>), splits `batch`
-    /// further using the real size ratio and recurses on the pieces.
-    ///
-    /// `is_last` marks the final `FlightData` message that will be produced
-    /// for the whole [`Self::encode_batch`] call, and is only used to hint
-    /// the IPC scratch-buffer reuse policy.
+    /// already-sliced arrays, see <https://github.com/apache/arrow-rs/issues/3478>),
+    /// splits `batch` further using the real size ratio and recurses on the pieces.
     fn encode_piece_adaptive(&mut self, batch: RecordBatch, is_last: bool) -> Result<()> {
         self.encoder.ipc_write_context.set_reserve_scratch(!is_last);
         let (flight_dictionaries, flight_batch) = self.encoder.encode_batch(&batch)?;
 
-        // Dictionaries are keyed by id and are correct to send now
-        // regardless of whether `flight_batch` below ends up split further,
-        // so queue them unconditionally.
         for dict in flight_dictionaries {
             self.queue_message(dict);
         }
@@ -425,7 +401,7 @@ impl FlightDataEncoder {
             return Ok(());
         }
 
-        let n = actual_size.div_ceil(self.max_flight_data_size).max(2);
+        let n = actual_size.div_ceil(self.max_flight_data_size);
         let num_rows = batch.num_rows();
         let rows_per_piece = num_rows.div_ceil(n).max(1);
 
@@ -732,7 +708,6 @@ fn split_batch_for_grpc_response(
         (size / max_flight_data_size + usize::from(size % max_flight_data_size != 0)).max(1);
     let num_rows = batch.num_rows();
     let rows_per_batch = num_rows.div_ceil(n_batches).max(1);
-    // let rows_per_batch = (num_rows / n_batches).max(1);
     let mut offset = 0;
     let mut batches = Vec::with_capacity(n_batches);
 
@@ -2198,14 +2173,8 @@ mod tests {
 
     #[tokio::test]
     async fn flight_data_size_resend_dictionary_adaptive_resplit() {
-        // Dictionary values of increasing length: `split_batch_for_grpc_response`'s
-        // cheap `get_buffer_memory_size`-based estimate can undershoot the
-        // actual encoded size badly here, forcing `encode_piece_adaptive` to
-        // recursively re-split. Uses `DictionaryHandling::Resend` (rather
-        // than the default `Hydrate`) so the dictionary is still a
-        // `DictionaryArray` when it reaches `encode_piece_adaptive`,
-        // exercising the "queue dictionaries unconditionally, even if the
-        // batch gets split further" logic.
+        // Uses `DictionaryHandling::Resend` (rather than the default `Hydrate`)
+        // so the dictionary is still a `DictionaryArray` when it reaches `encode_piece_adaptive`.
         let values: Vec<_> = (0..300).map(|i| "*".repeat(i)).collect();
         let array: DictionaryArray<Int32Type> = values.iter().map(|s| Some(s.as_str())).collect();
         let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as ArrayRef)]).unwrap();
@@ -2238,7 +2207,10 @@ mod tests {
             actual.extend(col.iter().map(|s| s.map(str::to_string)));
         }
 
-        assert!(num_pieces > 1, "expected the batch to be split into multiple pieces");
+        assert!(
+            num_pieces > 1,
+            "expected the batch to be split into multiple pieces"
+        );
         let expected: Vec<_> = values.into_iter().map(Some).collect();
         assert_eq!(actual, expected);
     }
@@ -2291,8 +2263,6 @@ mod tests {
             let mut i = 0;
             while let Some(data) = stream.next().await.transpose().unwrap() {
                 let actual_data_size = flight_data_size(&data);
-
-                println!("data size: {actual_data_size}");
 
                 let actual_overage = actual_data_size.saturating_sub(max_flight_data_size);
 
