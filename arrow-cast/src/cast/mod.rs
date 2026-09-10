@@ -321,10 +321,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (_, Duration(_)) if from_type.is_numeric() => true,
         (Duration(_), _) if to_type.is_numeric() => true,
         (Duration(_), Duration(_)) => true,
-        // Note: there is deliberately no `(Interval(_), Int64)` arm. No interval unit has an
-        // unambiguous `i64` value (`YearMonth` is a count of months, `DayTime` packs days and
-        // milliseconds, `MonthDayNano` is 128 bits wide), and `cast_with_options` implements no
-        // such cast. Cast via `Duration` instead.
+        // No `(Interval(_), Int64)` arm: `cast_with_options` implements no such cast.
         (Int32, Interval(to_type)) => match to_type {
             YearMonth => true,
             DayTime => false,
@@ -12450,10 +12447,7 @@ mod tests {
 
     #[test]
     fn test_can_cast_interval_to_int64_matches_cast() {
-        // `can_cast_types` used to report `true` for `Interval(YearMonth)` and
-        // `Interval(DayTime)` to `Int64` even though `cast_with_options` implements no such
-        // cast. Assert the two agree for every interval unit rather than hard coding the
-        // expected answer.
+        // Assert the two agree for every interval unit, rather than hard coding the answer.
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(IntervalYearMonthArray::from(vec![12])),
             Arc::new(IntervalDayTimeArray::from(vec![IntervalDayTime::new(1, 2)])),
@@ -12473,9 +12467,8 @@ mod tests {
 
     #[test]
     fn test_cast_union_to_int64_skips_uncastable_interval_child() {
-        // `resolve_child_array` picks the first child that `can_cast_types` accepts, so an
-        // over-permissive answer for `Interval -> Int64` made the union cast pick the interval
-        // child and fail, instead of the `Utf8` child that can actually be cast.
+        // `resolve_child_array` picks the first child `can_cast_types` accepts, so an
+        // over-permissive answer made it pick the interval child instead of the `Utf8` one.
         let fields = UnionFields::try_new(
             [0, 1],
             [
