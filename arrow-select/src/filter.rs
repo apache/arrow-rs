@@ -1017,7 +1017,17 @@ fn filter_fixed_size_binary(
 
     let nulls = predicate.filter_nulls(array.nulls());
 
-    FixedSizeBinaryArray::new(array.value_length(), buffer.into(), nulls)
+    if array.value_length() == 0 && nulls.is_none() {
+        FixedSizeBinaryArray::try_new_with_len(
+            array.value_length(),
+            buffer.into(),
+            None,
+            predicate.count,
+        )
+        .unwrap()
+    } else {
+        FixedSizeBinaryArray::new(array.value_length(), buffer.into(), nulls)
+    }
 }
 
 /// `filter` implementation for dictionaries
@@ -2104,6 +2114,22 @@ mod tests {
             &[6, 7],
             list.as_any().downcast_ref::<Int32Array>().unwrap().values()
         );
+    }
+
+    #[test]
+    fn test_filter_zero_width_fixed_size_binary() {
+        // value_length=0 with no nulls: row count cannot be inferred from the empty
+        // buffer, so filter must preserve it explicitly.
+        let array = FixedSizeBinaryArray::try_new_with_len(
+            0,
+            Buffer::from_slice_ref(&[] as &[u8]),
+            None,
+            3,
+        )
+        .unwrap();
+        let filter_array = BooleanArray::from(vec![true, false, true]);
+        let result = filter(&array, &filter_array).unwrap();
+        assert_eq!(result.len(), 2);
     }
 
     fn test_filter_union_array(array: UnionArray) {
