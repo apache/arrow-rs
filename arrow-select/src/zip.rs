@@ -25,8 +25,8 @@ use arrow_array::types::{
 };
 use arrow_array::*;
 use arrow_buffer::{
-    BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, OffsetBufferBuilder,
-    ScalarBuffer, ToByteSlice,
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+    ToByteSlice,
 };
 use arrow_data::transform::MutableArrayData;
 use arrow_data::{ArrayData, ByteView};
@@ -598,7 +598,9 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         let total_number_of_bytes =
             true_count * truthy_val.len() + (predicate.len() - true_count) * falsy_val.len();
         let mut mutable = MutableBuffer::with_capacity(total_number_of_bytes);
-        let mut offset_buffer_builder = OffsetBufferBuilder::<T::Offset>::new(predicate.len());
+        let mut offsets = Vec::<T::Offset>::with_capacity(predicate.len() + 1);
+        offsets.push(T::Offset::usize_as(0));
+        let mut current_offset: usize = 0;
 
         // keep track of how much is filled
         let mut filled = 0;
@@ -615,9 +617,13 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
                     .try_repeat_slice_n_times(falsy_val, false_repeat_count)
                     .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-                for _ in 0..false_repeat_count {
-                    offset_buffer_builder.push_length(falsy_len)
-                }
+                let start_offset = current_offset;
+                let added = falsy_len.checked_mul(false_repeat_count).expect("overflow");
+                current_offset = current_offset.checked_add(added).expect("overflow");
+                offsets.extend(
+                    (1..=false_repeat_count)
+                        .map(|index| T::Offset::usize_as(start_offset + index * falsy_len)),
+                );
             }
 
             let true_repeat_count = end - start;
@@ -626,9 +632,13 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
                 .try_repeat_slice_n_times(truthy_val, true_repeat_count)
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-            for _ in 0..true_repeat_count {
-                offset_buffer_builder.push_length(truthy_len)
-            }
+            let start_offset = current_offset;
+            let added = truthy_len.checked_mul(true_repeat_count).expect("overflow");
+            current_offset = current_offset.checked_add(added).expect("overflow");
+            offsets.extend(
+                (1..=true_repeat_count)
+                    .map(|index| T::Offset::usize_as(start_offset + index * truthy_len)),
+            );
             filled = end;
             Ok(())
         })?;
@@ -640,12 +650,19 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
                 .try_repeat_slice_n_times(falsy_val, false_repeat_count)
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-            for _ in 0..false_repeat_count {
-                offset_buffer_builder.push_length(falsy_len)
-            }
+            let start_offset = current_offset;
+            let added = falsy_len.checked_mul(false_repeat_count).expect("overflow");
+            current_offset = current_offset.checked_add(added).expect("overflow");
+            offsets.extend(
+                (1..=false_repeat_count)
+                    .map(|index| T::Offset::usize_as(start_offset + index * falsy_len)),
+            );
         }
 
-        Ok((mutable.into(), offset_buffer_builder.finish()))
+        T::Offset::from_usize(current_offset).expect("overflow");
+        // SAFETY: offsets start at zero and are monotonically increasing.
+        let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+        Ok((mutable.into(), offsets))
     }
 }
 
