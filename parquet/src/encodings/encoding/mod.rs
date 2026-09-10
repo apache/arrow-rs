@@ -90,6 +90,19 @@ pub fn get_encoder<T: DataType>(
     <T::T as private::GetEncoder>::get_encoder(descr, encoding)
 }
 
+pub(crate) fn get_encoder_with_options<T: DataType>(
+    encoding: Encoding,
+    descr: &ColumnDescPtr,
+    delta_options: Option<DeltaBinaryPackedEncoderOptions>,
+) -> Result<Box<dyn Encoder<T>>> {
+    match (encoding, delta_options) {
+        (Encoding::DELTA_BINARY_PACKED, Some(options)) => Ok(Box::new(
+            DeltaBitPackEncoder::try_new_with_options(options)?,
+        )),
+        _ => get_encoder(encoding, descr),
+    }
+}
+
 pub(crate) mod private {
     use super::*;
 
@@ -344,6 +357,54 @@ const MAX_PAGE_HEADER_WRITER_SIZE: usize = 32;
 const DEFAULT_BIT_WRITER_SIZE: usize = 1024 * 1024;
 const DEFAULT_NUM_MINI_BLOCKS: usize = 4;
 
+/// Controls the block layout emitted by [`DeltaBitPackEncoder`].
+///
+/// The Parquet format requires block sizes to be multiples of 128 and mini
+/// block sizes to be multiples of 32.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeltaBinaryPackedEncoderOptions {
+    block_size: usize,
+    mini_blocks_per_block: usize,
+}
+
+impl DeltaBinaryPackedEncoderOptions {
+    /// Creates validated delta binary packed encoder options.
+    pub fn try_new(block_size: usize, mini_blocks_per_block: usize) -> Result<Self> {
+        if block_size == 0 || !block_size.is_multiple_of(128) {
+            return Err(general_err!(
+                "delta binary packed block size must be a positive multiple of 128, got {block_size}"
+            ));
+        }
+        if mini_blocks_per_block == 0 || !block_size.is_multiple_of(mini_blocks_per_block) {
+            return Err(general_err!(
+                "delta binary packed mini block count must be a positive divisor of the block size, got {mini_blocks_per_block} for block size {block_size}"
+            ));
+        }
+
+        let mini_block_size = block_size / mini_blocks_per_block;
+        if !mini_block_size.is_multiple_of(32) {
+            return Err(general_err!(
+                "delta binary packed mini block size must be a multiple of 32, got {mini_block_size}"
+            ));
+        }
+
+        Ok(Self {
+            block_size,
+            mini_blocks_per_block,
+        })
+    }
+
+    /// Returns the number of values in each block.
+    pub fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    /// Returns the number of mini blocks in each block.
+    pub fn mini_blocks_per_block(&self) -> usize {
+        self.mini_blocks_per_block
+    }
+}
+
 /// Delta bit packed encoder.
 /// Consists of a header followed by blocks of delta encoded values binary packed.
 ///
@@ -403,6 +464,10 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
         let block_size = mini_block_size * num_mini_blocks;
         assert_eq!(block_size % 128, 0);
 
+        Self::new_with_layout(block_size, num_mini_blocks)
+    }
+
+    fn new_with_layout(block_size: usize, num_mini_blocks: usize) -> Self {
         DeltaBitPackEncoder {
             page_header_writer: BitWriter::new(MAX_PAGE_HEADER_WRITER_SIZE),
             bit_writer: BitWriter::new(DEFAULT_BIT_WRITER_SIZE),
@@ -410,12 +475,21 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             first_value: 0,
             current_value: 0, // current value to keep adding deltas
             block_size,       // can write fewer values than block size for last block
-            mini_block_size,
+            mini_block_size: block_size / num_mini_blocks,
             num_mini_blocks,
             values_in_block: 0, // will be at most block_size
             deltas: vec![0; block_size],
             _phantom: PhantomData,
         }
+    }
+
+    /// Creates a delta bit packed encoder with a custom block layout.
+    pub fn try_new_with_options(options: DeltaBinaryPackedEncoderOptions) -> Result<Self> {
+        Self::assert_supported_type();
+
+        let block_size = options.block_size();
+        let num_mini_blocks = options.mini_blocks_per_block();
+        Ok(Self::new_with_layout(block_size, num_mini_blocks))
     }
 
     /// Writes page header for blocks, this method is invoked when we are done encoding
@@ -836,6 +910,53 @@ mod tests {
     use crate::util::test_common::rand_gen::{RandGen, random_bytes};
 
     const TEST_SET_SIZE: usize = 1024;
+
+    #[test]
+    fn test_delta_binary_packed_encoder_options() {
+        let options = DeltaBinaryPackedEncoderOptions::try_new(256, 4).unwrap();
+        assert_eq!(options.block_size(), 256);
+        assert_eq!(options.mini_blocks_per_block(), 4);
+
+        let encoder = DeltaBitPackEncoder::<Int32Type>::try_new_with_options(options).unwrap();
+        assert_eq!(encoder.block_size, 256);
+        assert_eq!(encoder.mini_block_size, 64);
+        assert_eq!(encoder.num_mini_blocks, 4);
+
+        let desc = create_test_col_desc_ptr(-1, Type::INT32);
+        let mut encoder = get_encoder_with_options::<Int32Type>(
+            Encoding::DELTA_BINARY_PACKED,
+            &desc,
+            Some(options),
+        )
+        .unwrap();
+        let input: Vec<i32> = (0..600).map(|value| value * value).collect();
+        encoder.put(&input).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+        let mut header = bit_util::BitReader::new(encoded.clone());
+        assert_eq!(header.get_vlq_int(), Some(256));
+        assert_eq!(header.get_vlq_int(), Some(4));
+
+        let mut decoder = create_test_decoder::<Int32Type>(-1, Encoding::DELTA_BINARY_PACKED);
+        decoder.set_data(encoded, input.len()).unwrap();
+        let mut output = vec![0; input.len()];
+        assert_eq!(decoder.get(&mut output).unwrap(), input.len());
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn test_delta_binary_packed_encoder_options_validation() {
+        for (block_size, mini_blocks_per_block, message) in [
+            (0, 4, "positive multiple of 128"),
+            (127, 4, "positive multiple of 128"),
+            (128, 0, "positive divisor"),
+            (128, 3, "positive divisor"),
+            (256, 16, "must be a multiple of 32"),
+        ] {
+            let error = DeltaBinaryPackedEncoderOptions::try_new(block_size, mini_blocks_per_block)
+                .unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
 
     #[test]
     fn test_get_encoders() {
