@@ -837,7 +837,7 @@ fn write_variant_to_string(
             // The writing is always success
             let _ = write_temporal_display(out, d, formats.date());
             true
-        },
+        }
         Variant::Time(t) => {
             // The writing is always success
             let _ = write_temporal_display(out, t, formats.time());
@@ -1343,8 +1343,7 @@ mod tests {
         list_builder.finish();
         let (metadata, value) = variant_builder.finish();
         let variant_list = Variant::new(&metadata, &value);
-        let variant_list_as_string =
-            variant_to_string(&variant_list, &TemporalFormats::default());
+        let variant_list_as_string = variant_to_string(&variant_list, &TemporalFormats::default());
 
         let inner_builder = Int32Builder::new();
         let mut builder = ListBuilder::new(inner_builder);
@@ -1437,8 +1436,7 @@ mod tests {
 
         let (metadata, value) = variant_builder.finish();
         let variant_list = Variant::new(&metadata, &value);
-        let variant_list_as_string =
-            variant_to_string(&variant_list, &TemporalFormats::default());
+        let variant_list_as_string = variant_to_string(&variant_list, &TemporalFormats::default());
 
         let inner_map_builder =
             MapBuilder::new(None, StringBuilder::new(), Int32Builder::with_capacity(2));
@@ -1490,8 +1488,7 @@ mod tests {
 
         let (metadata, value) = variant_builder.finish();
         let variant_list = Variant::new(&metadata, &value);
-        let variant_list_as_string =
-            variant_to_string(&variant_list, &TemporalFormats::default());
+        let variant_list_as_string = variant_to_string(&variant_list, &TemporalFormats::default());
 
         let inner_builder = Int32Builder::new();
         let inner_list_builder = ListBuilder::new(inner_builder);
