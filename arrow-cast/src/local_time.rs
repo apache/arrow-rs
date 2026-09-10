@@ -55,12 +55,27 @@ pub(crate) fn resolve_local_offset<T: TimeZone>(
         // The second offset of `Ambiguous` is the one that yields the later instant.
         LocalResult::Ambiguous(_, later) => Some(later),
         LocalResult::None => {
-            // The reading falls in a gap. Recover the offset in effect before the
-            // transition by probing 24 hours earlier: the timezone database
-            // contains no two transitions within 24 hours of each other, so that
-            // probe lands on the other side of this transition and is itself
-            // resolvable. If it somehow is not, give up and let the caller apply
-            // the usual error / null handling.
+            // The reading falls in a gap. Recover the offset in effect before
+            // the transition by probing 24 hours earlier.
+            //
+            // Two separate properties of the timezone database make this sound,
+            // and it is worth stating both:
+            //
+            // 1. No local gap is longer than 24 hours, so the probe lands
+            //    outside this gap and is itself resolvable. Seven zones have a
+            //    gap of exactly 24 hours -- the dateline changes, such as
+            //    `Pacific/Apia` in 2011 and `Pacific/Kiritimati` in 1994. At the
+            //    last second of one of those the probe lands one second before
+            //    the gap starts, so the true margin here is one second, not a
+            //    comfortable one.
+            // 2. No two transitions are closer together than 24 hours, so the
+            //    offset the probe finds is the one in effect immediately before
+            //    this transition, and not some older offset. The smallest
+            //    observed interval is 167 hours (`America/Boa_Vista`, 2000).
+            //
+            // Property 1 is what makes the probe resolvable; property 2 is what
+            // makes the answer correct. If the probe is still unresolvable, give
+            // up and let the caller apply the usual error / null handling.
             tz.offset_from_local_datetime(&(*local - TimeDelta::hours(24)))
                 .earliest()
         }
