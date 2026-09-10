@@ -2215,6 +2215,122 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    #[tokio::test]
+    async fn flight_data_size_repeated_adaptive_resplit() {
+        let values: Vec<_> = (0..2000).map(|i| "*".repeat(i)).collect();
+        let array: DictionaryArray<Int32Type> = values.iter().map(|s| Some(s.as_str())).collect();
+        let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as ArrayRef)]).unwrap();
+
+        let max_flight_data_size = 256;
+        let stream = FlightDataEncoderBuilder::new()
+            .with_max_flight_data_size(max_flight_data_size)
+            .with_dictionary_handling(DictionaryHandling::Resend)
+            .build(futures::stream::iter([Ok(batch)]));
+
+        let mut decoder = FlightDataDecoder::new(stream);
+        let mut actual = Vec::new();
+        let mut num_pieces = 0;
+        while let Some(decoded) = decoder.next().await {
+            let decoded = decoded.unwrap();
+            let DecodedPayload::RecordBatch(batch) = &decoded.payload else {
+                continue;
+            };
+            num_pieces += 1;
+
+            // every produced piece must actually respect the limit
+            let actual_size = flight_data_size(&decoded.inner);
+            assert!(
+                actual_size <= max_flight_data_size || batch.num_rows() <= 1,
+                "piece exceeded max_flight_data_size: {actual_size} > {max_flight_data_size}"
+            );
+
+            let col = cast(batch.column(0), &DataType::Utf8).unwrap();
+            let col = col.as_any().downcast_ref::<StringArray>().unwrap();
+            actual.extend(col.iter().map(|s| s.map(str::to_string)));
+        }
+
+        assert_eq!(
+            num_pieces, 2000,
+            "expected repeated re-splitting to produce 2000 pieces, got {num_pieces}"
+        );
+        let expected: Vec<_> = values.into_iter().map(Some).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn flight_data_size_hydrate_dictionary_adaptive_resplit() {
+        // Same undershoot scenario as `flight_data_size_resend_dictionary_adaptive_resplit`,
+        // but with the default `DictionaryHandling::Hydrate`.
+        let values: Vec<_> = (0..300).map(|i| "*".repeat(i)).collect();
+        let array: DictionaryArray<Int32Type> = values.iter().map(|s| Some(s.as_str())).collect();
+        let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as ArrayRef)]).unwrap();
+
+        let max_flight_data_size = 1024;
+        let stream = FlightDataEncoderBuilder::new()
+            .with_max_flight_data_size(max_flight_data_size)
+            .build(futures::stream::iter([Ok(batch)]));
+
+        let mut decoder = FlightDataDecoder::new(stream);
+        let mut actual = Vec::new();
+        let mut num_pieces = 0;
+        while let Some(decoded) = decoder.next().await {
+            let decoded = decoded.unwrap();
+            let DecodedPayload::RecordBatch(batch) = &decoded.payload else {
+                continue;
+            };
+            num_pieces += 1;
+
+            let actual_size = flight_data_size(&decoded.inner);
+            assert!(
+                actual_size <= max_flight_data_size || batch.num_rows() <= 1,
+                "piece exceeded max_flight_data_size: {actual_size} > {max_flight_data_size}"
+            );
+
+            let col = downcast_array::<StringArray>(batch.column(0));
+            actual.extend(col.iter().map(|s| s.map(str::to_string)));
+        }
+
+        assert!(
+            num_pieces > 1,
+            "expected the batch to be split into multiple pieces"
+        );
+        let expected: Vec<_> = values.into_iter().map(Some).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn flight_data_size_single_oversized_row() {
+        let array = StringArray::from_iter_values(["*".repeat(10_000)]);
+        let batch = RecordBatch::try_from_iter(vec![("a1", Arc::new(array) as ArrayRef)]).unwrap();
+
+        let max_flight_data_size = 1024;
+        let stream = FlightDataEncoderBuilder::new()
+            .with_max_flight_data_size(max_flight_data_size)
+            .build(futures::stream::iter([Ok(batch)]));
+
+        let mut decoder = FlightDataDecoder::new(stream);
+        let mut num_pieces = 0;
+        while let Some(decoded) = decoder.next().await {
+            let decoded = decoded.unwrap();
+            let DecodedPayload::RecordBatch(batch) = &decoded.payload else {
+                continue;
+            };
+            num_pieces += 1;
+            assert_eq!(batch.num_rows(), 1);
+
+            let actual_size = flight_data_size(&decoded.inner);
+            assert!(
+                actual_size > max_flight_data_size,
+                "expected the oversized single row to exceed max_flight_data_size"
+            );
+        }
+
+        assert_eq!(
+            num_pieces, 1,
+            "the single oversized row cannot be split further"
+        );
+    }
+
     /// Return size, in memory of flight data
     fn flight_data_size(d: &FlightData) -> usize {
         let flight_descriptor_size = d
