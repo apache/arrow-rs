@@ -1308,6 +1308,7 @@ pub(crate) struct TemporalFormats<'a> {
     time: CompiledTimeFormat<'a>,
     timestamp: CompiledTimeFormat<'a>,
     timestamp_tz: CompiledTimeFormat<'a>,
+    null: &'a str,
 }
 
 impl<'a> TemporalFormats<'a> {
@@ -1318,6 +1319,7 @@ impl<'a> TemporalFormats<'a> {
             time: CompiledTimeFormat::new(options.time_format()),
             timestamp: CompiledTimeFormat::new(options.timestamp_format()),
             timestamp_tz: CompiledTimeFormat::new(options.timestamp_tz_format()),
+            null: options.null(),
         }
     }
 
@@ -1335,6 +1337,10 @@ impl<'a> TemporalFormats<'a> {
 
     pub(crate) fn timestamp_tz(&self) -> &CompiledTimeFormat<'a> {
         &self.timestamp_tz
+    }
+
+    pub(crate) fn null(&self) -> &str {
+        self.null
     }
 }
 

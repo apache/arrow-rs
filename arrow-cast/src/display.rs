@@ -49,7 +49,8 @@ enum CompiledTimeFormatInner<'a> {
 
 /// A compiled time format that can be used to format temporal values.
 ///
-/// This struct wraps a [`CompiledTimeFormatInner`] and provides methods for formatting temporal values.
+/// Use [`CompiledTimeFormat::new` to compile a custom strftime format,
+/// or [`Default::default`] to use the default temporal representation.
 pub struct CompiledTimeFormat<'a>(CompiledTimeFormatInner<'a>);
 
 impl<'a> CompiledTimeFormat<'a> {
