@@ -29,6 +29,12 @@ pub struct DeltaByteArrayDecoder {
     length_offset: usize,
     data_offset: usize,
     last_value: Vec<u8>,
+    /// The length in bytes of the longest value in this page
+    ///
+    /// Computed once here because a `DELTA_BYTE_ARRAY` value can be longer than
+    /// the bytes it occupies in the page, so the page length is not an upper
+    /// bound on the decoded size. See [`Self::max_value_len`].
+    max_value_len: usize,
 }
 
 impl DeltaByteArrayDecoder {
@@ -56,6 +62,13 @@ impl DeltaByteArrayDecoder {
 
         assert_eq!(prefix_lengths.len(), suffix_lengths.len());
 
+        let max_value_len = prefix_lengths
+            .iter()
+            .zip(&suffix_lengths)
+            .map(|(prefix, suffix)| (*prefix).max(0) as usize + (*suffix).max(0) as usize)
+            .max()
+            .unwrap_or(0);
+
         Ok(Self {
             prefix_lengths,
             suffix_lengths,
@@ -63,7 +76,16 @@ impl DeltaByteArrayDecoder {
             length_offset: 0,
             data_offset: prefix.get_offset() + suffix.get_offset(),
             last_value: vec![],
+            max_value_len,
         })
+    }
+
+    /// Returns the length in bytes of the longest value in this page
+    ///
+    /// Together with [`Self::remaining`] this bounds the number of bytes this
+    /// decoder can still append to an output buffer, without decoding anything.
+    pub fn max_value_len(&self) -> usize {
+        self.max_value_len
     }
 
     /// Returns the number of values remaining
