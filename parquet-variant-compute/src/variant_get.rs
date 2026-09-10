@@ -182,6 +182,9 @@ pub(crate) fn follow_shredded_path_element(
                 None => Ok(missing_path_step()),
             }
         }
+        VariantPathElement::ListElement => Err(ArrowError::NotYetImplemented(
+            "variant_get does not support [*] path elements".to_string(),
+        )),
     }
 }
 
@@ -454,6 +457,15 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
         path,
         cast_options,
     } = options;
+
+    if path
+        .iter()
+        .any(|element| matches!(element, VariantPathElement::ListElement))
+    {
+        return Err(ArrowError::NotYetImplemented(
+            "variant_get does not support [*] path elements".to_string(),
+        ));
+    }
 
     shredded_get_path(&variant_array, &path, as_type.as_deref(), &cast_options)
 }
@@ -2468,6 +2480,17 @@ mod test {
         let options = GetOptions::new_with_path(VariantPath::try_from("field_name").unwrap())
             .with_as_type(Some(FieldRef::from(shredded_field)));
         let err = variant_get(&shredded, options).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::NotYetImplemented(_)),
+            "expected NotYetImplemented, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_variant_get_list_element_wildcard_is_not_yet_supported() {
+        let (unshredded, _) = create_variant_get_as_variant_test_data();
+        let options = GetOptions::new_with_path(VariantPath::try_from("field_name[*]").unwrap());
+        let err = variant_get(&unshredded, options).unwrap_err();
         assert!(
             matches!(err, ArrowError::NotYetImplemented(_)),
             "expected NotYetImplemented, got {err:?}"
