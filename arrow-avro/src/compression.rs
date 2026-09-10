@@ -47,7 +47,16 @@ pub enum CompressionCodec {
 }
 
 impl CompressionCodec {
-    #[allow(unused_variables)]
+    #[cfg_attr(
+        not(any(
+            feature = "deflate",
+            feature = "snappy",
+            feature = "zstd",
+            feature = "bzip2",
+            feature = "xz"
+        )),
+        expect(unused_variables)
+    )]
     pub(crate) fn decompress(&self, block: &[u8]) -> Result<Vec<u8>, AvroError> {
         match self {
             #[cfg(feature = "deflate")]
@@ -126,7 +135,16 @@ impl CompressionCodec {
         }
     }
 
-    #[allow(unused_variables)]
+    #[cfg_attr(
+        not(any(
+            feature = "deflate",
+            feature = "snappy",
+            feature = "zstd",
+            feature = "bzip2",
+            feature = "xz"
+        )),
+        expect(unused_variables)
+    )]
     pub(crate) fn compress(&self, data: &[u8]) -> Result<Vec<u8>, ArrowError> {
         match self {
             #[cfg(feature = "deflate")]

@@ -23,7 +23,6 @@ use arrow_array::*;
 use arrow_buffer::NullBuffer;
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_schema::*;
-use std::borrow::BorrowMut;
 use std::cmp::{self, Ordering};
 use std::ops::{BitAnd, BitOr, BitXor};
 use types::ByteViewType;
@@ -237,12 +236,11 @@ fn aggregate_nonnull_lanes<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, const
     // aggregating into multiple independent accumulators allows the compiler to use vector registers
     // with a single accumulator the compiler would not be allowed to reorder floating point addition
     let mut acc = [A::default(); LANES];
-    let mut chunks = values.chunks_exact(LANES);
-    chunks.borrow_mut().for_each(|chunk| {
-        aggregate_nonnull_chunk(&mut acc, chunk[..LANES].try_into().unwrap());
+    let (chunks, remainder) = values.as_chunks::<LANES>();
+    chunks.iter().for_each(|chunk| {
+        aggregate_nonnull_chunk(&mut acc, chunk);
     });
 
-    let remainder = chunks.remainder();
     for i in 0..remainder.len() {
         acc[i].accumulate(remainder[i]);
     }
@@ -261,31 +259,29 @@ fn aggregate_nullable_lanes<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, cons
     // aggregating into multiple independent accumulators allows the compiler to use vector registers
     let mut acc = [A::default(); LANES];
     // we process 64 bits of validity at a time
-    let mut values_chunks = values.chunks_exact(64);
+    let (values_chunks, remainder) = values.as_chunks::<64>();
     let validity_chunks = validity.inner().bit_chunks();
     let mut validity_chunks_iter = validity_chunks.iter();
 
-    values_chunks.borrow_mut().for_each(|chunk| {
+    values_chunks.iter().for_each(|chunk| {
         // Safety: we asserted that values and validity have the same length and trust the iterator impl
         let mut validity = unsafe { validity_chunks_iter.next().unwrap_unchecked() };
         // chunk further based on the number of vector lanes
-        chunk.chunks_exact(LANES).for_each(|chunk| {
-            aggregate_nullable_chunk(&mut acc, chunk[..LANES].try_into().unwrap(), validity);
+        chunk.as_chunks::<LANES>().0.iter().for_each(|chunk| {
+            aggregate_nullable_chunk(&mut acc, chunk, validity);
             validity >>= LANES;
         });
     });
 
-    let remainder = values_chunks.remainder();
     if !remainder.is_empty() {
         let mut validity = validity_chunks.remainder_bits();
 
-        let mut remainder_chunks = remainder.chunks_exact(LANES);
-        remainder_chunks.borrow_mut().for_each(|chunk| {
-            aggregate_nullable_chunk(&mut acc, chunk[..LANES].try_into().unwrap(), validity);
+        let (remainder_chunks, remainder) = remainder.as_chunks::<LANES>();
+        remainder_chunks.iter().for_each(|chunk| {
+            aggregate_nullable_chunk(&mut acc, chunk, validity);
             validity >>= LANES;
         });
 
-        let remainder = remainder_chunks.remainder();
         if !remainder.is_empty() {
             let mut bit = 1;
             for i in 0..remainder.len() {
@@ -656,9 +652,9 @@ mod ree {
     use arrow_schema::ArrowError;
 
     /// Downcasts an array to a TypedRunArray.
-    fn downcast<'a, I: RunEndIndexType, V: ArrowNumericType>(
-        array: &'a dyn Array,
-    ) -> Option<TypedRunArray<'a, I, PrimitiveArray<V>>> {
+    fn downcast<I: RunEndIndexType, V: ArrowNumericType>(
+        array: &dyn Array,
+    ) -> Option<TypedRunArray<'_, I, PrimitiveArray<V>>> {
         let array = array.as_run_opt::<I>()?;
         // We only support RunArray wrapping primitive types.
         array.downcast::<PrimitiveArray<V>>()
@@ -697,8 +693,8 @@ mod ree {
     }
 
     /// Folds over the values in a run-end-encoded array.
-    fn fold<'a, I: RunEndIndexType, V: ArrowNumericType, F, E>(
-        array: TypedRunArray<'a, I, PrimitiveArray<V>>,
+    fn fold<I: RunEndIndexType, V: ArrowNumericType, F, E>(
+        array: TypedRunArray<'_, I, PrimitiveArray<V>>,
         mut f: F,
     ) -> Result<Option<V::Native>, E>
     where
@@ -1557,27 +1553,27 @@ mod tests {
     test_binary!(
         test_binary_min_max_with_nulls,
         vec![
-            Some("b01234567890123".as_bytes()), // long bytes
+            Some(b"b01234567890123".as_slice()), // long bytes
             None,
             None,
             Some(b"a"),
             Some(b"c"),
             Some(b"abcdedfg0123456"),
         ],
-        Some("a".as_bytes()),
-        Some("c".as_bytes())
+        Some(b"a".as_slice()),
+        Some(b"c".as_slice())
     );
 
     test_binary!(
         test_binary_min_max_no_null,
         vec![
-            Some("b".as_bytes()),
+            Some(b"b".as_slice()),
             Some(b"abcdefghijklmnopqrst"), // long bytes
             Some(b"c"),
             Some(b"b01234567890123"), // long bytes for view types
         ],
-        Some("abcdefghijklmnopqrst".as_bytes()),
-        Some("c".as_bytes())
+        Some(b"abcdefghijklmnopqrst".as_slice()),
+        Some(b"c".as_slice())
     );
 
     test_binary!(test_binary_min_max_all_nulls, vec![None, None], None, None);
@@ -1586,13 +1582,13 @@ mod tests {
         test_binary_min_max_1,
         vec![
             None,
-            Some("b01234567890123435".as_bytes()), // long bytes for view types
+            Some(b"b01234567890123435".as_slice()), // long bytes for view types
             None,
             Some(b"b0123xxxxxxxxxxx"),
             Some(b"a")
         ],
-        Some("a".as_bytes()),
-        Some("b0123xxxxxxxxxxx".as_bytes())
+        Some(b"a".as_slice()),
+        Some(b"b0123xxxxxxxxxxx".as_slice())
     );
 
     macro_rules! test_string {
@@ -2005,7 +2001,7 @@ mod tests {
         ItemType: Clone + Into<Option<V::Native>> + 'static,
     {
         let mut builder = arrow_array::builder::PrimitiveRunBuilder::<I, V>::new();
-        for v in values.into_iter() {
+        for v in values {
             builder.append_option((*v).clone().into());
         }
         builder.finish()

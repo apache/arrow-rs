@@ -104,6 +104,14 @@
 //!     serde_json::json!({"a": 2}),
 //! );
 //! ```
+//!
+//! ## Customizing the encoder
+//!
+//! The output produced for each data type can be customized using
+//! [`WriterBuilder::with_encoder_factory`]. For example, you can override the
+//! default hex encoding of binary data to use `Base64` instead, or provide
+//! encoders for types with no built-in encoding, such as unions.
+//! See the example on [`EncoderFactory`].
 mod encoder;
 
 use std::{fmt::Debug, io::Write, sync::Arc};
@@ -1421,15 +1429,23 @@ mod tests {
     fn run_json_writer_map_with_keys(keys_array: ArrayRef) {
         let values_array = super::Int64Array::from(vec![10, 20, 30, 40, 50]);
 
-        let keys_field = Arc::new(Field::new("keys", keys_array.data_type().clone(), false));
-        let values_field = Arc::new(Field::new("values", DataType::Int64, false));
+        let keys_field = Arc::new(Field::new(
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
+            keys_array.data_type().clone(),
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            false,
+        ));
         let entry_struct = StructArray::from(vec![
             (keys_field, keys_array.clone()),
             (values_field, Arc::new(values_array) as ArrayRef),
         ]);
 
         let entries_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             entry_struct.data_type().clone(),
             false,
         ));
@@ -1513,6 +1529,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_write_multi_batches() {
         let test_file = "test/data/basic.json";
 
@@ -1830,7 +1847,7 @@ mod tests {
             assert_eq!(
                 json!([
                     {
-                        "bytes": "4e656420466c616e64657273"
+                        "bytes": "426f622054686f6d70736f6e"
                     },
                     {
                         "bytes": null // the explicit null
@@ -1857,7 +1874,7 @@ mod tests {
 
             assert_eq!(
                 json!([
-                    { "bytes": "4e656420466c616e64657273" },
+                    { "bytes": "426f622054686f6d70736f6e" },
                     {},
                     { "bytes": "54726f79204d63436c757265" }
                 ]),
@@ -1869,7 +1886,7 @@ mod tests {
     #[test]
     fn test_writer_binary() {
         let values: [Option<&[u8]>; 3] = [
-            Some(b"Ned Flanders" as &[u8]),
+            Some(b"Bob Thompson" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
         ];
@@ -2200,6 +2217,31 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_encoder_negative_scale() {
+        // https://github.com/apache/arrow-rs/issues/10865
+        let array = Decimal128Array::from_iter([Some(0), Some(12), Some(-12)])
+            .with_precision_and_scale(10, -2)
+            .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":0}
+{"decimal":1200}
+{"decimal":-1200}
+"#,
+        );
+    }
+
+    #[test]
     fn write_structs_as_list() {
         let schema = Schema::new(vec![
             Field::new(
@@ -2302,13 +2344,12 @@ mod tests {
                 _options: &'a EncoderOptions,
             ) -> Result<Option<NullableEncoder<'a>>, ArrowError> {
                 let data_type = array.data_type();
-                let fields = match data_type {
-                    DataType::Union(fields, UnionMode::Sparse) => fields,
-                    _ => return Ok(None),
+                let DataType::Union(fields, UnionMode::Sparse) = data_type else {
+                    return Ok(None);
                 };
                 // check that the fields are supported
                 let fields = fields.iter().map(|(_, f)| f).collect::<Vec<_>>();
-                for f in fields.iter() {
+                for f in &fields {
                     match f.data_type() {
                         DataType::Null => {}
                         DataType::Int32 => {}
@@ -2508,9 +2549,9 @@ mod tests {
         }
 
         #[derive(Debug)]
-        struct IntArayBinaryEncoderFactory;
+        struct IntArrayBinaryEncoderFactory;
 
-        impl EncoderFactory for IntArayBinaryEncoderFactory {
+        impl EncoderFactory for IntArrayBinaryEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
                 _field: &'a FieldRef,
@@ -2548,7 +2589,7 @@ mod tests {
         let json_value: Value = {
             let mut buf = Vec::new();
             let mut writer = WriterBuilder::new()
-                .with_encoder_factory(Arc::new(IntArayBinaryEncoderFactory))
+                .with_encoder_factory(Arc::new(IntArrayBinaryEncoderFactory))
                 .build::<_, JsonArray>(&mut buf);
             writer.write_batches(&[&batch]).unwrap();
             writer.finish().unwrap();
@@ -2595,11 +2636,7 @@ mod tests {
                 // 1. You can use information from Field to determine how to do the encoding.
                 // 2. For dictionary arrays the Field is always the outer field but the array may be the keys or values array
                 //    and thus the data type of `field` may not match the data type of `array`.
-                let padded = field
-                    .metadata()
-                    .get("padded")
-                    .map(|v| v == "true")
-                    .unwrap_or_default();
+                let padded = field.metadata().get("padded").is_some_and(|v| v == "true");
                 match (array.data_type(), padded) {
                     (DataType::Int32, true) => {
                         let array = array.as_primitive::<Int32Type>();

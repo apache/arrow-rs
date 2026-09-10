@@ -145,10 +145,6 @@ impl SelectorsCursor {
         self.selectors.is_empty()
     }
 
-    pub(crate) fn selectors_mut(&mut self) -> &mut VecDeque<RowSelector> {
-        &mut self.selectors
-    }
-
     /// Return the next [`RowSelector`]
     pub(crate) fn next_selector(&mut self) -> RowSelector {
         let selector = self.selectors.pop_front().unwrap();
@@ -180,10 +176,11 @@ impl SelectorsCursor {
 /// LoadedRowRanges:  [0, 4)                         [10, 12)
 /// ```
 ///
-/// The first chunk decodes `[0, 4)` with mask `1000`. The next chunk skips to
-/// row 11 and decodes `[11, 12)` with mask `1`. The loaded ranges are decode
-/// boundaries, not output batch boundaries: [`ParquetRecordBatchReader`]
-/// accumulates both chunks and applies the combined mask `10001` once.
+/// The first chunk decodes `[0, 1)` with mask `1`. The next chunk skips to row
+/// 11 and decodes `[11, 12)` with mask `1`. When loaded ranges are present,
+/// every returned chunk ends at a selected row and never includes trailing
+/// unselected rows. [`ParquetRecordBatchReader`] still accumulates both chunks
+/// and applies the combined mask `11` once.
 ///
 /// [`ParquetRecordBatchReader`]: crate::arrow::arrow_reader::ParquetRecordBatchReader
 #[derive(Debug)]
@@ -258,6 +255,9 @@ impl MaskCursor {
     }
 
     /// Returns the next non-empty mask chunk without crossing an unloaded row range.
+    /// When loaded ranges are present, every returned chunk ends immediately after a
+    /// selected row and therefore never contains trailing unselected rows. Those rows
+    /// remain for the next call's initial skip.
     ///
     /// The [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan) removes trailing
     /// skips before constructing this cursor. Callers therefore only invoke
@@ -276,10 +276,13 @@ impl MaskCursor {
             cursor += 1;
         }
 
-        debug_assert!(
-            cursor < self.mask.len(),
-            "ReadPlan must remove trailing skips from Mask selections"
-        );
+        if cursor == self.mask.len() {
+            return Err(ParquetError::General(
+                "Internal Error: Mask cursor reached the end without finding a selected row; \
+                 ReadPlan must remove trailing skips"
+                    .to_string(),
+            ));
+        }
 
         let loaded_range_end = self
             .loaded_row_ranges
@@ -293,17 +296,19 @@ impl MaskCursor {
 
         let mask_start = cursor;
         let mut selected_rows = 0;
+        let mut chunk_end = cursor;
         while cursor < loaded_range_end && cursor < self.mask.len() && selected_rows < batch_size {
             if self.mask.value(cursor) {
                 selected_rows += 1;
+                chunk_end = cursor + 1;
             }
             cursor += 1;
         }
 
-        self.position = cursor;
+        self.position = chunk_end;
         Ok(MaskChunk {
             initial_skip: mask_start - start_position,
-            chunk_rows: cursor - mask_start,
+            chunk_rows: chunk_end - mask_start,
             selected_rows,
             mask_start,
         })

@@ -18,7 +18,7 @@
 use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
 use arrow_array::{RecordBatch, builder::StringBuilder};
 use arrow_buffer::Buffer;
-use arrow_ipc::convert::fb_to_schema;
+use arrow_ipc::convert::try_fb_to_schema;
 use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
 use arrow_ipc::{Block, CompressionType, root_as_footer};
@@ -215,7 +215,7 @@ impl IPCBufferDecoder {
         let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap()).unwrap();
         let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start]).unwrap();
 
-        let schema = fb_to_schema(footer.schema().unwrap());
+        let schema = try_fb_to_schema(footer.schema().unwrap()).unwrap();
 
         let mut decoder = FileDecoder::new(Arc::new(schema), footer.version());
 

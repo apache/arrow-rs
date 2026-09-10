@@ -36,6 +36,9 @@ on:
       - rust-toolchain.toml
       - .github/**
 
+permissions:
+  contents: read
+
 jobs:
   # test the crate
   linux-test:

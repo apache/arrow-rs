@@ -58,8 +58,8 @@ pub fn garbage_collect_dictionary<K: ArrowDictionaryKeyType>(
     // Create a mapping from the old keys to the new keys, use a Vec for easy indexing
     let mut key_remap = vec![K::Native::ZERO; values.len()];
     for (new_idx, old_idx) in mask.set_indices().enumerate() {
-        key_remap[old_idx] = K::Native::from_usize(new_idx)
-            .expect("new index should fit in K::Native, as old index was in range");
+        key_remap[old_idx] =
+            K::Native::from_usize(new_idx).ok_or(ArrowError::DictionaryKeyOverflowError)?;
     }
 
     // ... and then build the new keys array
@@ -82,9 +82,7 @@ pub fn garbage_collect_dictionary<K: ArrowDictionaryKeyType>(
 pub fn garbage_collect_any_dictionary(
     dictionary: &dyn AnyDictionaryArray,
 ) -> Result<ArrayRef, ArrowError> {
-    // FIXME: this is a workaround for MSRV Rust versions below 1.86 where trait upcasting is not stable.
-    // From 1.86 onward, `&dyn AnyDictionaryArray` can be directly passed to `downcast_dictionary_array!`.
-    let dictionary = &*dictionary.slice(0, dictionary.len());
+    let dictionary: &dyn Array = dictionary;
     downcast_dictionary_array!(
         dictionary => garbage_collect_dictionary(dictionary).map(|dict| Arc::new(dict) as ArrayRef),
         _ => unreachable!("have a dictionary array")

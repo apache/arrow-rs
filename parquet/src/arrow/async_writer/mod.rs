@@ -60,7 +60,6 @@
 
 #[cfg(feature = "object_store")]
 mod store;
-#[allow(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::*;
 

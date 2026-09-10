@@ -16,10 +16,11 @@
 // under the License.
 
 use crate::array::print_long_array;
-use crate::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
+use crate::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use crate::iterator::PrimitiveIter;
 use crate::temporal_conversions::{
-    as_date, as_datetime, as_datetime_with_timezone, as_duration, as_time,
+    as_datetime, as_datetime_with_data_type, as_datetime_with_timezone,
+    as_datetime_with_timezone_and_data_type, as_duration, as_time, as_time_with_data_type,
 };
 use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
@@ -581,6 +582,16 @@ pub use crate::types::ArrowPrimitiveType;
 /// assert!(array.is_null(1));
 /// ```
 ///
+/// # Performance: Choosing Between `from` and [`PrimitiveBuilder`]
+///
+/// Rust's `Vec` is highly optimized, and Arrow's conversion from `Vec` to
+/// `PrimitiveArray` is zero-copy. Prefer [`PrimitiveArray::from`] or
+/// [`PrimitiveArray::new`] whenever values are already in a `Vec` or can be collected
+/// into one. [`PrimitiveBuilder`] is backed by a `Vec` and a `NullBufferBuilder`
+/// internally, so it offers no performance advantage. Use it when the array may
+/// contain nulls whose positions aren't known upfront, since it keeps values and the
+/// null bitmask in sync automatically.
+///
 /// # Example: Get a `PrimitiveArray` from an [`ArrayRef`]
 /// ```
 /// # use std::sync::Arc;
@@ -673,14 +684,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         values: ScalarBuffer<T::Native>,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != values.len() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
-                    values.len(),
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != values.len()
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for PrimitiveArray, expected {} got {}",
+                values.len(),
+                n.len(),
+            )));
         }
 
         Ok(Self {
@@ -848,6 +859,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -992,9 +1006,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let len = self.len();
 
         let nulls = self.nulls().cloned();
-        let mut buffer = BufferBuilder::<O::Native>::new(len);
-        buffer.append_n_zeroed(len);
-        let slice = buffer.as_slice_mut();
+        let mut values = vec![O::Native::default(); len];
+        let slice = values.as_mut_slice();
 
         let f = |idx| {
             unsafe { *slice.get_unchecked_mut(idx) = op(self.value_unchecked(idx))? };
@@ -1006,7 +1019,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             None => (0..len).try_for_each(f)?,
         }
 
-        let values = buffer.finish().into();
+        let values = values.into();
         Ok(PrimitiveArray::new(values, nulls))
     }
 
@@ -1076,9 +1089,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             None => null_builder.append_n(len, true),
         }
 
-        let mut buffer = BufferBuilder::<O::Native>::new(len);
-        buffer.append_n_zeroed(len);
-        let slice = buffer.as_slice_mut();
+        let mut values = vec![O::Native::default(); len];
+        let slice = values.as_mut_slice();
 
         let mut out_null_count = null_count;
 
@@ -1094,7 +1106,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         });
 
         let nulls = null_builder.finish();
-        let values = buffer.finish().into();
+        let values = values.into();
         let nulls = unsafe { NullBuffer::new_unchecked(nulls, out_null_count) };
         PrimitiveArray::new(values, Some(nulls))
     }
@@ -1195,12 +1207,29 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
 impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
     fn from(array: PrimitiveArray<T>) -> Self {
-        let builder = ArrayDataBuilder::new(array.data_type)
-            .len(array.values.len())
-            .nulls(array.nulls)
-            .buffers(vec![array.values.into_inner()]);
+        /// Converts the parts of a `PrimitiveArray` into [`ArrayData`].
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        ///
+        /// # Safety
+        /// The parts must come from a valid `PrimitiveArray`
+        unsafe fn inner(
+            data_type: DataType,
+            len: usize,
+            values: Buffer,
+            nulls: Option<NullBuffer>,
+        ) -> ArrayData {
+            let builder = ArrayDataBuilder::new(data_type)
+                .len(len)
+                .nulls(nulls)
+                .buffers(vec![values]);
 
-        unsafe { builder.build_unchecked() }
+            // SAFETY: arguments are valid, per contract
+            unsafe { builder.build_unchecked() }
+        }
+        let len = array.values.len();
+        // SAFETY: the parts come from a valid PrimitiveArray
+        unsafe { inner(array.data_type, len, array.values.into_inner(), array.nulls) }
     }
 }
 
@@ -1297,6 +1326,10 @@ where
     /// A valid value is expected, thus the user should first check for validity.
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_datetime(&self, i: usize) -> Option<NaiveDateTime> {
         as_datetime::<T>(i64::from(self.value(i)))
     }
@@ -1307,6 +1340,10 @@ where
     /// the passed tz to the to-be-returned NaiveDateTime
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_datetime_with_tz(&self, i: usize, tz: Tz) -> Option<DateTime<Tz>> {
         as_datetime_with_timezone::<T>(i64::from(self.value(i)), tz)
     }
@@ -1316,6 +1353,10 @@ where
     /// If a data type cannot be converted to `NaiveDate`, a `None` is returned
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_date(&self, i: usize) -> Option<NaiveDate> {
         self.value_as_datetime(i).map(|datetime| datetime.date())
     }
@@ -1325,6 +1366,10 @@ where
     /// `Date32` and `Date64` return UTC midnight as they do not have time resolution
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_time(&self, i: usize) -> Option<NaiveTime> {
         as_time::<T>(i64::from(self.value(i)))
     }
@@ -1334,8 +1379,79 @@ where
     /// If a data type cannot be converted to `Duration`, a `None` is returned
     ///
     /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`
     pub fn value_as_duration(&self, i: usize) -> Option<Duration> {
         as_duration::<T>(i64::from(self.value(i)))
+    }
+}
+
+/// Writes the `Debug` representation of a single temporal value (converted to
+/// `i64`) of the given [`DataType`] to `f`
+fn write_temporal_value(
+    f: &mut std::fmt::Formatter,
+    data_type: &DataType,
+    v: i64,
+) -> std::fmt::Result {
+    match data_type {
+        DataType::Date32 | DataType::Date64 => {
+            match as_datetime_with_data_type(data_type, v).map(|datetime| datetime.date()) {
+                Some(date) => write!(f, "{date:?}"),
+                None => {
+                    write!(
+                        f,
+                        "Cast error: Failed to convert {v} to temporal for {data_type}"
+                    )
+                }
+            }
+        }
+        DataType::Time32(_) | DataType::Time64(_) => match as_time_with_data_type(data_type, v) {
+            Some(time) => write!(f, "{time:?}"),
+            None => {
+                write!(
+                    f,
+                    "Cast error: Failed to convert {v} to temporal for {data_type}"
+                )
+            }
+        },
+        DataType::Timestamp(_, tz_string_opt) => {
+            match tz_string_opt {
+                // for Timestamp with TimeZone
+                Some(tz_string) => {
+                    match tz_string.parse::<Tz>() {
+                        // if the time zone is valid, construct a DateTime<Tz> and format it as rfc3339
+                        Ok(tz) => match as_datetime_with_timezone_and_data_type(data_type, v, tz) {
+                            Some(datetime) => write!(f, "{}", datetime.to_rfc3339()),
+                            None => write!(
+                                f,
+                                "Cast error: Failed to convert {v} to timestamp for {data_type}"
+                            ),
+                        },
+                        // if the time zone is invalid, shows NaiveDateTime with an error message
+                        Err(_) => match as_datetime_with_data_type(data_type, v) {
+                            Some(datetime) => {
+                                write!(f, "{datetime:?} (Unknown Time Zone '{tz_string}')")
+                            }
+                            None => write!(
+                                f,
+                                "Cast error: Failed to convert {v} to timestamp for {data_type}"
+                            ),
+                        },
+                    }
+                }
+                // for Timestamp without TimeZone
+                None => match as_datetime_with_data_type(data_type, v) {
+                    Some(datetime) => write!(f, "{datetime:?}"),
+                    None => write!(
+                        f,
+                        "Cast error: Failed to convert {v} to timestamp for {data_type}"
+                    ),
+                },
+            }
+        }
+        _ => unreachable!("write_temporal_value called with non-temporal type {data_type}"),
     }
 }
 
@@ -1344,68 +1460,18 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
         let data_type = self.data_type();
 
         write!(f, "PrimitiveArray<{data_type}>\n[\n")?;
-        print_long_array(self, f, |array, index, f| match data_type {
-            DataType::Date32 | DataType::Date64 => {
-                let v = self.value(index).to_i64().unwrap();
-                match as_date::<T>(v) {
-                    Some(date) => write!(f, "{date:?}"),
-                    None => {
-                        write!(
-                            f,
-                            "Cast error: Failed to convert {v} to temporal for {data_type}"
-                        )
-                    }
-                }
+        // Keep the per-value closure as small as possible: temporal formatting
+        // is dispatched to the non-generic `write_temporal_value` so it is not
+        // instantiated for every primitive type (see #10889)
+        print_long_array(self, f, &mut |index, f| match data_type {
+            DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _) => {
+                write_temporal_value(f, data_type, self.value(index).to_i64().unwrap())
             }
-            DataType::Time32(_) | DataType::Time64(_) => {
-                let v = self.value(index).to_i64().unwrap();
-                match as_time::<T>(v) {
-                    Some(time) => write!(f, "{time:?}"),
-                    None => {
-                        write!(
-                            f,
-                            "Cast error: Failed to convert {v} to temporal for {data_type}"
-                        )
-                    }
-                }
-            }
-            DataType::Timestamp(_, tz_string_opt) => {
-                let v = self.value(index).to_i64().unwrap();
-                match tz_string_opt {
-                    // for Timestamp with TimeZone
-                    Some(tz_string) => {
-                        match tz_string.parse::<Tz>() {
-                            // if the time zone is valid, construct a DateTime<Tz> and format it as rfc3339
-                            Ok(tz) => match as_datetime_with_timezone::<T>(v, tz) {
-                                Some(datetime) => write!(f, "{}", datetime.to_rfc3339()),
-                                None => write!(
-                                    f,
-                                    "Cast error: Failed to convert {v} to timestamp for {data_type}"
-                                ),
-                            },
-                            // if the time zone is invalid, shows NaiveDateTime with an error message
-                            Err(_) => match as_datetime::<T>(v) {
-                                Some(datetime) => {
-                                    write!(f, "{datetime:?} (Unknown Time Zone '{tz_string}')")
-                                }
-                                None => write!(
-                                    f,
-                                    "Cast error: Failed to convert {v} to timestamp for {data_type}"
-                                ),
-                            },
-                        }
-                    }
-                    // for Timestamp without TimeZone
-                    None => match as_datetime::<T>(v) {
-                        Some(datetime) => write!(f, "{datetime:?}"),
-                        None => write!(
-                            f,
-                            "Cast error: Failed to convert {v} to timestamp for {data_type}"
-                        ),
-                    },
-                }
-            }
-            _ => std::fmt::Debug::fmt(&array.value(index), f),
+            _ => std::fmt::Debug::fmt(&self.value(index), f),
         })?;
         write!(f, "]")
     }

@@ -22,7 +22,7 @@ use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
 use arrow_array::UInt32Array;
 use criterion::{Criterion, criterion_group, criterion_main};
-use rand::Rng;
+use rand::RngExt;
 use std::hint;
 
 fn create_random_index(size: usize, null_density: f32, max_value: usize) -> UInt32Array {

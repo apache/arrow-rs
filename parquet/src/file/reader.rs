@@ -39,7 +39,7 @@ use crate::column::reader::ColumnReaderImpl;
 
 /// Length should return the total number of bytes in the input source.
 /// It's mainly used to read the metadata, which is at the end of the source.
-#[allow(clippy::len_without_is_empty)]
+#[expect(clippy::len_without_is_empty)]
 pub trait Length {
     /// Returns the amount of bytes of the inner source.
     fn len(&self) -> u64;
@@ -281,8 +281,8 @@ impl Iterator for FilePageIterator {
     fn next(&mut self) -> Option<Result<Box<dyn PageReader>>> {
         self.row_group_indices.next().map(|row_group_index| {
             self.file_reader
-                .get_row_group(row_group_index)
-                .and_then(|r| r.get_column_page_reader(self.column_index))
+                .get_row_group(row_group_index)?
+                .get_column_page_reader(self.column_index)
         })
     }
 }

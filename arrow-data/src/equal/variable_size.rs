@@ -81,8 +81,8 @@ pub(super) fn variable_sized_equal<T: ArrowNativeType + Integer>(
             let rhs_pos = rhs_start + i;
 
             // the null bits can still be `None`, indicating that the value is valid.
-            let lhs_is_null = lhs.nulls().map(|v| v.is_null(lhs_pos)).unwrap_or_default();
-            let rhs_is_null = rhs.nulls().map(|v| v.is_null(rhs_pos)).unwrap_or_default();
+            let lhs_is_null = lhs.nulls().is_some_and(|v| v.is_null(lhs_pos));
+            let rhs_is_null = rhs.nulls().is_some_and(|v| v.is_null(rhs_pos));
 
             lhs_is_null
                 || (lhs_is_null == rhs_is_null)

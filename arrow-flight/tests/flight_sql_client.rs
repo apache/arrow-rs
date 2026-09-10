@@ -35,7 +35,7 @@ use arrow_flight::sql::{
 use arrow_flight::{Action, FlightData, FlightDescriptor};
 use futures::{StreamExt, TryStreamExt};
 use prost::Message;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{IntoStreamingRequest, Request, Status};
@@ -223,14 +223,14 @@ fn make_ingest_command() -> CommandStatementIngest {
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
-    transactions: Arc<Mutex<HashMap<String, ()>>>,
+    transactions: Arc<Mutex<HashSet<String>>>,
     ingested_batches: Arc<Mutex<Vec<RecordBatch>>>,
 }
 
 impl FlightSqlServiceImpl {
     pub fn new() -> Self {
         Self {
-            transactions: Arc::new(Mutex::new(HashMap::new())),
+            transactions: Arc::new(Mutex::new(HashSet::new())),
             ingested_batches: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -262,7 +262,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         self.transactions
             .lock()
             .await
-            .insert(transaction_id.clone(), ());
+            .insert(transaction_id.clone());
         Ok(ActionBeginTransactionResult {
             transaction_id: transaction_id.as_bytes().to_vec().into(),
         })
@@ -275,13 +275,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<(), Status> {
         let transaction_id = String::from_utf8(query.transaction_id.to_vec())
             .map_err(|_| Status::invalid_argument("Invalid transaction id"))?;
-        if self
-            .transactions
-            .lock()
-            .await
-            .remove(&transaction_id)
-            .is_none()
-        {
+        if !self.transactions.lock().await.remove(&transaction_id) {
             return Err(Status::invalid_argument("Transaction id not found"));
         }
         Ok(())

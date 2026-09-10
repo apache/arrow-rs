@@ -29,6 +29,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   # Check workspace wide compile and test with default features for
   # mac
@@ -96,16 +99,8 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Setup rustfmt
         run: rustup component add rustfmt
-      - name: Format arrow
+      - name: Format workspace
         run: cargo fmt --all -- --check
-      - name: Format parquet
-        # Many modules in parquet are skipped, so check parquet separately
-        # https://github.com/apache/arrow-rs/issues/6179
-        working-directory: parquet
-        run: |
-          # if this fails, run this from the parquet directory:
-          # cargo fmt -p parquet -- --config skip_children=true `find . -name "*.rs" \! -name format.rs`
-          cargo fmt -p parquet -- --check --config skip_children=true `find . -name "*.rs" \! -name format.rs`
 
   msrv:
     name: Verify MSRV (Minimum Supported Rust Version)
@@ -116,11 +111,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Install cargo-msrv (if needed)
-        # cargo-msrv binary may be cached by the cargo cache step in setup-builder, and cargo install will error if it is already installed
-        # --locked uses cargo-msrv's pinned Cargo.lock; without it an unpinned transitive
-        # dep (aws-runtime) resolves to a version that fails to compile (E0282)
-        run: if which cargo-msrv ; then echo "using existing cargo-msrv binary" ; else cargo install cargo-msrv --locked ; fi
+      - name: Install cargo-msrv
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
+        with:
+          tool: cargo-msrv
       - name: Check all packages
         run: |
           # run `cargo msrv verify --manifest-path "path/to/Cargo.toml"` to see problematic dependencies

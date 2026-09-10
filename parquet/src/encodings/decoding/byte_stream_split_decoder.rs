@@ -160,7 +160,7 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
 impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         // Rough check that all data elements are the same length
-        if data.len() % self.type_width != 0 {
+        if !data.len().is_multiple_of(self.type_width) {
             return Err(general_err!(
                 "Input data length is not a multiple of type width {}",
                 self.type_width

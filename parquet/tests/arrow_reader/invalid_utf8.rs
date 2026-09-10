@@ -125,7 +125,7 @@ fn test_invalid_utf8_string_view_array() {
             let array = unsafe {
                 StringViewArray::new_unchecked(
                     array.views().clone(),
-                    array.data_buffers().to_vec(),
+                    Arc::clone(array.data_buffers()),
                     array.nulls().cloned(),
                 )
             };

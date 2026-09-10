@@ -297,6 +297,14 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     /// Skip the next `n` bytes of input.
     fn skip_bytes(&mut self, n: usize) -> ThriftProtocolResult<()>;
 
+    /// Remaining unread bytes, if this protocol is backed by a finite buffer.
+    ///
+    /// Used to reject Thrift collection sizes that cannot fit in the remaining
+    /// input before allocating.
+    fn remaining_bytes(&self) -> Option<usize> {
+        None
+    }
+
     /// Read a ULEB128 encoded unsigned varint from the input.
     fn read_vlq(&mut self) -> ThriftProtocolResult<u64> {
         // try the happy path first
@@ -499,11 +507,11 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             // boolean field has no data
             FieldType::BooleanFalse | FieldType::BooleanTrue => Ok(()),
             FieldType::Byte => self.read_i8().map(|_| ()),
-            FieldType::I16 => self.skip_vlq().map(|_| ()),
-            FieldType::I32 => self.skip_vlq().map(|_| ()),
-            FieldType::I64 => self.skip_vlq().map(|_| ()),
-            FieldType::Double => self.skip_bytes(8).map(|_| ()),
-            FieldType::Binary => self.skip_binary().map(|_| ()),
+            FieldType::I16 => self.skip_vlq(),
+            FieldType::I32 => self.skip_vlq(),
+            FieldType::I64 => self.skip_vlq(),
+            FieldType::Double => self.skip_bytes(8),
+            FieldType::Binary => self.skip_binary(),
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct
             FieldType::Struct => {
                 loop {
@@ -541,8 +549,8 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
                 Ok(())
             }
             // see https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#universal-unique-identifier-encoding
-            FieldType::Uuid => self.skip_bytes(16).map(|_| ()),
-            _ => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
+            FieldType::Uuid => self.skip_bytes(16),
+            FieldType::Stop => Err(ThriftProtocolError::SkipUnsupportedType(field_type)),
         }
     }
 }
@@ -597,6 +605,10 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a>
             Ok(slice) => Ok(f64::from_le_bytes(slice)),
             Err(_) => unreachable!(),
         }
+    }
+
+    fn remaining_bytes(&self) -> Option<usize> {
+        Some(self.buf.len())
     }
 }
 
@@ -721,7 +733,20 @@ where
 {
     let list_ident = prot.read_list_begin()?;
     validate_list_type(T::ELEMENT_TYPE, &list_ident)?;
-    let mut res = Vec::with_capacity(list_ident.size as usize);
+    let size = list_ident.size as usize;
+    // Each list element occupies at least one byte on the wire. Bound the
+    // declared count by remaining input before reserving, so a malformed
+    // header cannot abort the process with a huge allocation.
+    if let Some(remaining) = prot.remaining_bytes()
+        && size > remaining
+    {
+        return Err(general_err!(
+            "Thrift list size {} exceeds remaining input length {}",
+            size,
+            remaining
+        ));
+    }
+    let mut res = Vec::with_capacity(size);
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
         res.push(val);
@@ -754,6 +779,7 @@ pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) ->
 pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
     writer: W,
     write_path_in_schema: bool,
+    write_rg_ordinal: bool,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
@@ -762,6 +788,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         Self {
             writer,
             write_path_in_schema: true,
+            write_rg_ordinal: true,
         }
     }
 
@@ -776,6 +803,21 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Indicate whether or not to emit `path_in_schema`.
     pub(crate) fn write_path_in_schema(&self) -> bool {
         self.write_path_in_schema
+    }
+
+    /// Control the writing of the `ordinal` element of the `RowGroup` struct.
+    ///
+    /// The Thrift `ordinal` field on the `RowGroup` struct is `i16`, but the
+    /// Thrift compact protocol allows for up to 2^31 elements in a list. If
+    /// more than 2^15 row groups are to be written, this can be set to `false`
+    /// to prevent writing the ordinal for some row groups but not others.
+    pub(crate) fn set_write_row_group_ordinal(&mut self, val: bool) {
+        self.write_rg_ordinal = val;
+    }
+
+    /// Indicate whether or not to emit `ordinal`.
+    pub(crate) fn write_row_group_ordinal(&self) -> bool {
+        self.write_rg_ordinal
     }
 
     /// Write a single byte to the output stream.
@@ -812,7 +854,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     ) -> Result<()> {
         let delta = field_id.wrapping_sub(last_field_id);
         if delta > 0 && delta <= 0xf {
-            self.write_byte((delta as u8) << 4 | field_type as u8)
+            self.write_byte(((delta as u8) << 4) | field_type as u8)
         } else {
             self.write_byte(field_type as u8)?;
             self.write_i16(field_id)
@@ -822,7 +864,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Used to indicate the start of a list of `element_type` elements.
     pub(crate) fn write_list_begin(&mut self, element_type: ElementType, len: usize) -> Result<()> {
         if len < 15 {
-            self.write_byte((len as u8) << 4 | element_type as u8)
+            self.write_byte(((len as u8) << 4) | element_type as u8)
         } else {
             self.write_byte(0xf0u8 | element_type as u8)?;
             self.write_vlq(len as _)
@@ -876,7 +918,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
 
     /// Write a zig-zag encoded `i64` value.
     pub(crate) fn write_i64(&mut self, val: i64) -> Result<()> {
-        self.write_zig_zag(val as _)
+        self.write_zig_zag(val)
     }
 
     /// Write a double value.
@@ -1007,7 +1049,7 @@ impl WriteThrift for String {
 /// ```
 ///
 /// which becomes in Rust
-/// ```no_run
+/// ```ignore
 /// # struct OtherStruct {}
 /// struct MyStruct {
 ///   field1: i32,
@@ -1196,6 +1238,48 @@ pub(crate) mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("Expected list element type of I32 but got Bool")
+        );
+    }
+
+    #[test]
+    fn test_read_thrift_vec_roundtrip_i32() {
+        // 2-element list of i32: header 0x25 (count=2, type=I32), two zigzag zeros.
+        let data = [0x25, 0x00, 0x00];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot).unwrap();
+        assert_eq!(result, vec![0, 0]);
+    }
+
+    #[test]
+    fn test_read_thrift_vec_size_exceeds_remaining_returns_err() {
+        // Header 0xE5: 14 i32 elements, no payload. After reading the header
+        // zero bytes remain, so this must error instead of reserving 14 slots
+        // (and, for a larger declared size, gigabytes).
+        let data = [0xE5];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot);
+        assert!(result.is_err(), "expected error, got {result:?}");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Thrift list size 14 exceeds remaining input length 0")
+        );
+    }
+
+    #[test]
+    fn test_read_thrift_vec_huge_declared_size_returns_err() {
+        // Compact list header: 0xF5 = I32 elements, size follows as a varint.
+        // 0xfc 0xfc 0xfc 0x33 decodes to 109_002_364 — the schema-list case
+        // from #10920 — with only two leftover bytes.
+        let data = [0xF5, 0xfc, 0xfc, 0xfc, 0x33, 0x00, 0x00];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot);
+        assert!(result.is_err(), "expected error, got {result:?}");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Thrift list size 109002364 exceeds remaining input length 2"),
+            "{err}"
         );
     }
 }

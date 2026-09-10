@@ -91,13 +91,17 @@ Planned Release Schedule
 
 | Approximate Date | Version    | Notes                                   |
 | ---------------- | ---------- | --------------------------------------- |
-| June 2026        | [`59.1.0`] | Minor, NO breaking API changes          |
 | July 2026        | [`59.2.0`] | Minor, NO breaking API changes          |
 | August 2026      | [`60.0.0`] | Major, potentially breaking API changes |
+| September 2026   | [`60.1.0`] | Minor, NO breaking API changes          |
+| October 2026     | [`60.2.0`] | Minor, NO breaking API changes          |
+| November 2026    | [`61.0.0`] | Major, potentially breaking API changes |
 
-[`59.1.0`]: https://github.com/apache/arrow-rs/issues/9878
 [`59.2.0`]: https://github.com/apache/arrow-rs/issues/9879
 [`60.0.0`]: https://github.com/apache/arrow-rs/issues/9880
+[`60.1.0`]: https://github.com/apache/arrow-rs/issues/10525
+[`60.2.0`]: https://github.com/apache/arrow-rs/issues/10526
+[`61.0.0`]: https://github.com/apache/arrow-rs/issues/10527
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 
@@ -157,6 +161,7 @@ There are several related crates in different repositories
 
 [`datafusion`]: https://crates.io/crates/datafusion
 [`ballista`]: https://crates.io/crates/ballista
+[`opendal`]: https://crates.io/crates/opendal
 [`parquet_opendal`]: https://crates.io/crates/parquet_opendal
 [parquet_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/parquet/README.md
 [object_store-readme]: https://github.com/apache/arrow-rs-object-store/blob/main/README.md

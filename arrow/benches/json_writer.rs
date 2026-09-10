@@ -26,7 +26,7 @@ use arrow::util::test_util::seedable_rng;
 use arrow_array::{Array, ListArray, RecordBatch, StructArray};
 use arrow_buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
 use arrow_json::{LineDelimitedWriter, ReaderBuilder};
-use rand::Rng;
+use rand::RngExt;
 use serde::Serialize;
 use std::sync::Arc;
 

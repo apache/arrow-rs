@@ -17,7 +17,7 @@
 
 use arrow::array::BooleanBufferBuilder;
 use criterion::{Criterion, criterion_group, criterion_main};
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 
 fn rand_bytes(len: usize) -> Vec<u8> {
     let mut rng = rng();

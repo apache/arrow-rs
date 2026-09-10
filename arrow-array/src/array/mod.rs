@@ -157,6 +157,9 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// assert_eq!(&array_slice, &Int32Array::from(vec![2, 3, 4]));
     /// ```
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     fn slice(&self, offset: usize, length: usize) -> ArrayRef;
 
     /// Returns the length (i.e., number of elements) of this array.
@@ -265,8 +268,15 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// let array = NullArray::new(1);
     /// assert_eq!(array.is_null(0), false);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= self.len()`.
+    ///
+    /// Note: arrays without a null buffer currently return `false` instead of
+    /// panicking, but callers must not rely on this.
     fn is_null(&self, index: usize) -> bool {
-        self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
+        self.nulls().is_some_and(|n| n.is_null(index))
     }
 
     /// Returns whether the element at `index` is *not* null, the
@@ -282,6 +292,13 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// assert_eq!(array.is_valid(0), true);
     /// assert_eq!(array.is_valid(1), false);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= self.len()`.
+    ///
+    /// Note: arrays without a null buffer currently return `true` instead of
+    /// panicking, but callers must not rely on this.
     fn is_valid(&self, index: usize) -> bool {
         !self.is_null(index)
     }
@@ -1043,11 +1060,16 @@ unsafe fn get_offsets_from_buffer<O: ArrowNativeType>(
 }
 
 /// Helper function for printing potentially long arrays.
-fn print_long_array<A, F>(array: &A, f: &mut std::fmt::Formatter, print_item: F) -> std::fmt::Result
-where
-    A: Array,
-    F: Fn(&A, usize, &mut std::fmt::Formatter) -> std::fmt::Result,
-{
+///
+/// Note this function is deliberately not generic over the array or closure
+/// type: it is called from `Debug` impls that are instantiated for many
+/// concrete array types, and using dynamic dispatch here avoids duplicating
+/// this function's code in each of those instantiations
+fn print_long_array(
+    array: &dyn Array,
+    f: &mut std::fmt::Formatter,
+    print_item: &mut dyn FnMut(usize, &mut std::fmt::Formatter) -> std::fmt::Result,
+) -> std::fmt::Result {
     let head = std::cmp::min(10, array.len());
 
     for i in 0..head {
@@ -1055,7 +1077,7 @@ where
             writeln!(f, "  null,")?;
         } else {
             write!(f, "  ")?;
-            print_item(array, i, f)?;
+            print_item(i, f)?;
             writeln!(f, ",")?;
         }
     }
@@ -1071,7 +1093,7 @@ where
                 writeln!(f, "  null,")?;
             } else {
                 write!(f, "  ")?;
-                print_item(array, i, f)?;
+                print_item(i, f)?;
                 writeln!(f, ",")?;
             }
         }
@@ -1178,10 +1200,10 @@ mod tests {
     fn test_null_map() {
         let data_type = DataType::Map(
             Arc::new(Field::new(
-                "entry",
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                 DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Int32, true),
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                 ])),
                 false,
             )),
@@ -1246,7 +1268,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(unused_parens)]
     fn test_null_runs() {
         for r in [DataType::Int16, DataType::Int32, DataType::Int64] {
             let data_type = DataType::RunEndEncoded(

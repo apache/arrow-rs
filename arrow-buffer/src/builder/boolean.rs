@@ -63,6 +63,10 @@ impl BooleanBufferBuilder {
     }
 
     /// Creates a new `BooleanBufferBuilder` from [`MutableBuffer`] of `len`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `len > buffer.len() * 8`
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
         assert!(len <= buffer.len() * 8);
         let mut s = Self {
@@ -80,6 +84,10 @@ impl BooleanBufferBuilder {
     }
 
     /// Sets a bit in the buffer at `index`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index / 8 >= self.as_slice().len()`
     #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
         if v {
@@ -90,6 +98,10 @@ impl BooleanBufferBuilder {
     }
 
     /// Gets a bit in the buffer at `index`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index / 8 >= self.as_slice().len()`
     #[inline]
     pub fn get_bit(&self, index: usize) -> bool {
         bit_util::get_bit(self.buffer.as_slice(), index)
@@ -149,9 +161,11 @@ impl BooleanBufferBuilder {
         self.len = len;
 
         let remainder = self.len % 8;
-        if remainder != 0 {
+        if remainder != 0
+            && let Some(last) = self.buffer.as_mut().last_mut()
+        {
             let mask = (1_u8 << remainder).wrapping_sub(1);
-            *self.buffer.as_mut().last_mut().unwrap() &= mask;
+            *last &= mask;
         }
     }
 
@@ -236,14 +250,18 @@ impl BooleanBufferBuilder {
                 let cur_remainder = self.len % 8;
                 let new_remainder = new_len % 8;
 
-                if cur_remainder != 0 {
+                if cur_remainder != 0
+                    && let Some(last) = self.buffer.as_slice_mut().last_mut()
+                {
                     // Pad last byte with 1s
-                    *self.buffer.as_slice_mut().last_mut().unwrap() |= !((1 << cur_remainder) - 1)
+                    *last |= !((1 << cur_remainder) - 1);
                 }
                 self.buffer.resize(new_len_bytes, 0xFF);
-                if new_remainder != 0 {
+                if new_remainder != 0
+                    && let Some(last) = self.buffer.as_slice_mut().last_mut()
+                {
                     // Clear remaining bits
-                    *self.buffer.as_slice_mut().last_mut().unwrap() &= (1 << new_remainder) - 1
+                    *last &= (1 << new_remainder) - 1;
                 }
                 self.len = new_len;
             }
@@ -634,7 +652,7 @@ mod tests {
         assert_eq!(builder.len(), 100);
         let finished = builder.finish();
         for (i, v) in bools.into_iter().enumerate() {
-            assert_eq!(finished.value(i), v, "at index {}", i);
+            assert_eq!(finished.value(i), v, "at index {i}");
         }
     }
 
@@ -768,7 +786,7 @@ mod tests {
 
             let finished = builder.finish();
             for (i, &v) in bools.iter().enumerate() {
-                assert_eq!(finished.value(i), v, "at index {} for len {}", i, len);
+                assert_eq!(finished.value(i), v, "at index {i} for len {len}");
             }
         }
     }

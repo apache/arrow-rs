@@ -36,11 +36,11 @@ pub(crate) const UNIX_EPOCH_DATE: chrono::NaiveDate =
     chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
 fn primitive_header(primitive_type: VariantPrimitiveType) -> u8 {
-    (primitive_type as u8) << 2 | VariantBasicType::Primitive as u8
+    ((primitive_type as u8) << 2) | VariantBasicType::Primitive as u8
 }
 
 fn short_string_header(len: usize) -> u8 {
-    (len as u8) << 2 | VariantBasicType::ShortString as u8
+    ((len as u8) << 2) | VariantBasicType::ShortString as u8
 }
 
 pub(crate) fn int_size(v: usize) -> OffsetSizeBytes {

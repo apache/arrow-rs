@@ -22,11 +22,13 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
+use arrow_array::temporal_conversions::{NANOSECONDS, SECONDS_IN_DAY};
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
+use num_traits::ToPrimitive;
 
 use crate::arity::{binary, try_binary};
 
@@ -212,7 +214,10 @@ impl std::fmt::Display for Op {
 
 impl Op {
     fn commutative(&self) -> bool {
-        matches!(self, Self::Add | Self::AddWrapping)
+        matches!(
+            self,
+            Self::Add | Self::AddWrapping | Self::Mul | Self::MulWrapping
+        )
     }
 }
 
@@ -243,15 +248,10 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
         (Duration(Millisecond), Duration(Millisecond)) => duration_op::<DurationMillisecondType>(op, l, l_scalar, r, r_scalar),
         (Duration(Microsecond), Duration(Microsecond)) => duration_op::<DurationMicrosecondType>(op, l, l_scalar, r, r_scalar),
         (Duration(Nanosecond), Duration(Nanosecond)) => duration_op::<DurationNanosecondType>(op, l, l_scalar, r, r_scalar),
-        (Interval(YearMonth), Int64) if matches!(op, Op::Mul) => interval_mul_op::<IntervalYearMonthType>(l, l_scalar, r, r_scalar),
-        (Interval(DayTime), Int64) if matches!(op, Op::Mul) => interval_mul_op::<IntervalDayTimeType>(l, l_scalar, r, r_scalar),
-        (Interval(MonthDayNano), Int64) if matches!(op, Op::Mul) => interval_mul_op::<IntervalMonthDayNanoType>(l, l_scalar, r, r_scalar),
-        (Int64, Interval(YearMonth)) if matches!(op, Op::Mul) => interval_mul_op::<IntervalYearMonthType>(r, r_scalar, l, l_scalar),
-        (Int64, Interval(DayTime)) if matches!(op, Op::Mul) => interval_mul_op::<IntervalDayTimeType>(r, r_scalar, l, l_scalar),
-        (Int64, Interval(MonthDayNano)) if matches!(op, Op::Mul) => interval_mul_op::<IntervalMonthDayNanoType>(r, r_scalar, l, l_scalar),
-        (Interval(YearMonth), Interval(YearMonth)) => interval_op::<IntervalYearMonthType>(op, l, l_scalar, r, r_scalar),
-        (Interval(DayTime), Interval(DayTime)) => interval_op::<IntervalDayTimeType>(op, l, l_scalar, r, r_scalar),
-        (Interval(MonthDayNano), Interval(MonthDayNano)) => interval_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
+        (Interval(YearMonth), Interval(YearMonth) | Int64) => interval_op::<IntervalYearMonthType>(op, l, l_scalar, r, r_scalar),
+        (Interval(DayTime), Interval(DayTime) | Int64) => interval_op::<IntervalDayTimeType>(op, l, l_scalar, r, r_scalar),
+        (Interval(MonthDayNano), Interval(MonthDayNano) | Int64) => interval_op::<IntervalMonthDayNanoType>(op, l, l_scalar, r, r_scalar),
+        (Interval(MonthDayNano), Float64) => interval_f64_op(op, l, l_scalar, r, r_scalar),
         (Date32, _) => date_op::<Date32Type>(op, l, l_scalar, r, r_scalar),
         (Date64, _) => date_op::<Date64Type>(op, l, l_scalar, r, r_scalar),
         (Decimal32(_, _), Decimal32(_, _)) => decimal_op::<Decimal32Type>(op, l, l_scalar, r, r_scalar),
@@ -260,6 +260,11 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
         (Decimal256(_, _), Decimal256(_, _)) => decimal_op::<Decimal256Type>(op, l, l_scalar, r, r_scalar),
         (l_t, r_t) => match (l_t, r_t) {
             (Duration(_) | Interval(_), Date32 | Date64 | Timestamp(_, _)) if op.commutative() => {
+                arithmetic_op(op, rhs, lhs)
+            }
+            (Int64, Interval(_)) | (Float64, Interval(MonthDayNano))
+                if matches!(op, Op::Mul) =>
+            {
                 arithmetic_op(op, rhs, lhs)
             }
             _ => Err(ArrowError::InvalidArgumentError(
@@ -724,6 +729,123 @@ fn interval_mul_op<T: IntervalOp>(
     ))
 }
 
+/// Multiplies an `IntervalMonthDayNano` by an `f64`, mirroring DuckDB's
+/// `interval_t` layout of months, days, and a sub-day component (nanoseconds in
+/// Arrow, microseconds in DuckDB).
+/// <https://github.com/duckdb/duckdb/blob/21aca0424f1faf78b593b1e6fbfdd4846624c987/src/include/duckdb/common/types/interval.hpp#L24-L27>
+///
+/// Algorithm:
+///
+/// 1. use checked integer multiplication when `factor` fits in `i64` (early return).
+/// 2. multiply months and days separately
+/// 3. cascade remainders: convert fractional months to days using 30
+///    days per month, then fractional days to a sub-day value using 24 hours
+///    per day.
+/// 4. combine the cascaded remainder with the scaled input nanoseconds and round ties-to-even at nanosecond precision.
+/// 5. return an overflow error if any output component is out of
+///    range.
+fn interval_mul_f64(
+    interval: IntervalMonthDayNano,
+    factor: f64,
+) -> Result<IntervalMonthDayNano, ArrowError> {
+    const DAYS_PER_MONTH: f64 = 30.;
+    const NANOS_PER_SECOND: f64 = NANOSECONDS as f64;
+    const SECONDS_PER_DAY: f64 = SECONDS_IN_DAY as f64;
+
+    // Keep integral factors exact instead of round-tripping i64 nanoseconds through f64.
+    if factor.fract() == 0.
+        && let Some(factor) = ToPrimitive::to_i64(&factor)
+    {
+        return IntervalMonthDayNanoType::mul_i64(interval, factor);
+    }
+
+    // Based on DuckDB's INTERVAL * DOUBLE implementation, which is referenced from PostgreSQL's interval_mul:
+    // https://github.com/duckdb/duckdb/blob/21aca0424f1faf78b593b1e6fbfdd4846624c987/src/function/scalar/operator/multiply.cpp#L48-L123
+    // PostgreSQL's interval_mul:
+    // https://github.com/postgres/postgres/blob/78758d37306cd89ab060f00cb06f249018d5b8da/src/backend/utils/adt/timestamp.c#L3627-L3744
+    let overflow =
+        |component| ArrowError::ArithmeticOverflow(format!("Overflow in interval {component}"));
+    let timestamp_round =
+        |value: f64| (value * NANOS_PER_SECOND).round_ties_even() / NANOS_PER_SECOND;
+
+    let months_product = f64::from(interval.months) * factor;
+    if !months_product.is_finite()
+        || months_product < f64::from(i32::MIN)
+        || months_product > f64::from(i32::MAX)
+    {
+        return Err(overflow("months"));
+    }
+    let months = months_product.to_i32().ok_or_else(|| overflow("months"))?;
+
+    let days_product = f64::from(interval.days) * factor;
+    if !days_product.is_finite()
+        || days_product < f64::from(i32::MIN)
+        || days_product > f64::from(i32::MAX)
+    {
+        return Err(overflow("days"));
+    }
+    let mut days = days_product.to_i32().ok_or_else(|| overflow("days"))?;
+
+    let month_remainder = timestamp_round(months_product.fract() * DAYS_PER_MONTH);
+    let month_remainder_days = month_remainder
+        .to_i32()
+        .ok_or_else(|| overflow("month remainder"))?;
+    let mut seconds_remainder =
+        timestamp_round((days_product.fract() + month_remainder.fract()) * SECONDS_PER_DAY);
+
+    if seconds_remainder.abs() >= SECONDS_PER_DAY {
+        let remainder_days = (seconds_remainder / SECONDS_PER_DAY)
+            .to_i32()
+            .ok_or_else(|| overflow("day remainder"))?;
+        days = days
+            .checked_add(remainder_days)
+            .ok_or_else(|| overflow("days"))?;
+        seconds_remainder -= f64::from(remainder_days) * SECONDS_PER_DAY;
+    }
+    days = days
+        .checked_add(month_remainder_days)
+        .ok_or_else(|| overflow("days"))?;
+
+    let nanoseconds = ((interval.nanoseconds as f64) * factor
+        + seconds_remainder * NANOS_PER_SECOND)
+        .round_ties_even();
+    let nanoseconds = ToPrimitive::to_i64(&nanoseconds).ok_or_else(|| {
+        ArrowError::ArithmeticOverflow(format!("Overflow in interval nanoseconds: {nanoseconds}"))
+    })?;
+
+    Ok(IntervalMonthDayNano::new(months, days, nanoseconds))
+}
+
+fn interval_f64_op(
+    op: Op,
+    interval: &dyn Array,
+    interval_scalar: bool,
+    factor: &dyn Array,
+    factor_scalar: bool,
+) -> Result<ArrayRef, ArrowError> {
+    let interval = interval.as_primitive::<IntervalMonthDayNanoType>();
+    let factor = factor.as_primitive::<Float64Type>();
+    Ok(try_op_ref!(
+        IntervalMonthDayNanoType,
+        interval,
+        interval_scalar,
+        factor,
+        factor_scalar,
+        {
+            match op {
+                Op::Mul => interval_mul_f64(interval, factor),
+                Op::Div if factor == 0. => Err(ArrowError::DivideByZero),
+                // DuckDB defines interval division as multiplication by the reciprocal:
+                // https://github.com/duckdb/duckdb/blob/21aca0424f1faf78b593b1e6fbfdd4846624c987/src/function/scalar/operator/arithmetic.cpp#L1102-L1110
+                Op::Div => interval_mul_f64(interval, 1. / factor),
+                _ => Err(ArrowError::InvalidArgumentError(format!(
+                    "Invalid interval arithmetic operation: Interval(MonthDayNano) {op} Float64"
+                ))),
+            }
+        }
+    ))
+}
+
 /// Perform arithmetic operation on an interval array
 fn interval_op<T: IntervalOp>(
     op: Op,
@@ -732,11 +854,18 @@ fn interval_op<T: IntervalOp>(
     r: &dyn Array,
     r_s: bool,
 ) -> Result<ArrayRef, ArrowError> {
-    let l = l.as_primitive::<T>();
-    let r = r.as_primitive::<T>();
-    match op {
-        Op::Add | Op::AddWrapping => Ok(try_op_ref!(T, l, l_s, r, r_s, T::add(l, r))),
-        Op::Sub | Op::SubWrapping => Ok(try_op_ref!(T, l, l_s, r, r_s, T::sub(l, r))),
+    match (op, r.data_type()) {
+        (Op::Add | Op::AddWrapping, data_type) if data_type == l.data_type() => {
+            let l = l.as_primitive::<T>();
+            let r = r.as_primitive::<T>();
+            Ok(try_op_ref!(T, l, l_s, r, r_s, T::add(l, r)))
+        }
+        (Op::Sub | Op::SubWrapping, data_type) if data_type == l.data_type() => {
+            let l = l.as_primitive::<T>();
+            let r = r.as_primitive::<T>();
+            Ok(try_op_ref!(T, l, l_s, r, r_s, T::sub(l, r)))
+        }
+        (Op::Mul, DataType::Int64) => interval_mul_op::<T>(l, l_s, r, r_s),
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Invalid interval arithmetic operation: {} {op} {}",
             l.data_type(),
@@ -835,6 +964,58 @@ fn date_op<T: DateOp>(
             l.data_type(),
             r.data_type()
         ))),
+    }
+}
+
+/// Divides `l * 10^mul_pow` by `r` a digit at a time, without forming the scaled numerator.
+/// Used when scaling `l` would overflow `T::Native`, which it does well before the quotient
+/// does.
+///
+/// Runs on magnitudes and restores the sign last, so it truncates toward zero.
+fn scaled_div<T: DecimalType>(
+    l: T::Native,
+    r: T::Native,
+    mul_pow: i8,
+) -> Result<T::Native, ArrowError> {
+    let zero = T::Native::ZERO;
+    let negative = l.is_lt(zero) != r.is_lt(zero);
+    let dividend = abs_checked::<T>(l)?;
+    let divisor = abs_checked::<T>(r)?;
+
+    let mut quotient = dividend.div_checked(divisor)?;
+    let mut remainder = dividend.mod_checked(divisor)?;
+    for _ in 0..mul_pow {
+        // `remainder * 10` overflows for divisors near `T::Native::MAX`, so add the remainder
+        // ten times and take the divisor off whenever the running sum reaches it.
+        let mut carried = zero;
+        let mut digit = zero;
+        for _ in 0..10 {
+            let headroom = divisor.sub_wrapping(remainder);
+            if carried.is_lt(headroom) {
+                carried = carried.add_wrapping(remainder);
+            } else {
+                carried = carried.sub_wrapping(headroom);
+                digit = digit.add_wrapping(T::Native::ONE);
+            }
+        }
+        quotient = quotient
+            .mul_checked(T::Native::usize_as(10))?
+            .add_checked(digit)?;
+        remainder = carried;
+    }
+
+    if negative {
+        quotient.neg_checked()
+    } else {
+        Ok(quotient)
+    }
+}
+
+fn abs_checked<T: DecimalType>(value: T::Native) -> Result<T::Native, ArrowError> {
+    if value.is_lt(T::Native::ZERO) {
+        value.neg_checked()
+    } else {
+        Ok(value)
     }
 }
 
@@ -947,7 +1128,10 @@ fn decimal_op<T: DecimalType>(
                 l_s,
                 r,
                 r_s,
-                l.mul_checked(l_mul)?.div_checked(r.mul_checked(r_mul)?)
+                match l.mul_checked(l_mul) {
+                    Ok(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
+                    Err(_) => scaled_div::<T>(l, r, mul_pow),
+                }
             )
             .with_precision_and_scale(result_precision, result_scale)?
         }
@@ -1351,6 +1535,116 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal256_div_wide_intermediate() {
+        // Dividing two scale-37 values needs l * 10^41, which is 79 digits and does not
+        // fit in an i256, even though the 41-digit quotient does.
+        let a = Decimal256Array::from(vec![i256::from_i128(
+            60096743305738933273387748827369321010i128,
+        )])
+        .with_precision_and_scale(38, 37)
+        .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(
+            60096763826458053191384497987259478584i128,
+        )])
+        .with_precision_and_scale(38, 37)
+        .unwrap();
+
+        let result = div(&a, &b).unwrap();
+        assert_eq!(result.data_type(), &DataType::Decimal256(76, 41));
+        assert_eq!(
+            result.as_primitive::<Decimal256Type>().value(0),
+            i256::from_string("99999965853869970143724273117679321341339").unwrap()
+        );
+
+        // Truncation stays toward zero on either side of the fallback.
+        let neg_a = neg(&a).unwrap();
+        let result = div(neg_a.as_primitive::<Decimal256Type>(), &b).unwrap();
+        assert_eq!(
+            result.as_primitive::<Decimal256Type>().value(0),
+            i256::from_string("-99999965853869970143724273117679321341339").unwrap()
+        );
+
+        let neg_b = neg(&b).unwrap();
+        let result = div(&a, neg_b.as_primitive::<Decimal256Type>()).unwrap();
+        assert_eq!(
+            result.as_primitive::<Decimal256Type>().value(0),
+            i256::from_string("-99999965853869970143724273117679321341339").unwrap()
+        );
+
+        let zero = Decimal256Array::from(vec![i256::ZERO])
+            .with_precision_and_scale(38, 37)
+            .unwrap();
+        let err = div(&a, &zero).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
+    }
+
+    #[test]
+    fn test_decimal256_div_divisor_near_max() {
+        // A divisor past i256::MAX / 10 leaves no room to scale the running remainder either.
+        let a = Decimal256Array::from(vec![
+            i256::from_string(
+                "5900000000000000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .unwrap(),
+        ])
+        .with_precision_and_scale(76, 37)
+        .unwrap();
+        let b = Decimal256Array::from(vec![
+            i256::from_string(
+                "6000000000000000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .unwrap(),
+        ])
+        .with_precision_and_scale(76, 37)
+        .unwrap();
+
+        let result = div(&a, &b).unwrap();
+        assert_eq!(
+            result.as_primitive::<Decimal256Type>().value(0),
+            i256::from_string("98333333333333333333333333333333333333333").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_decimal128_div_wide_intermediate() {
+        // Same overflow one type down: 3.0 / 6.0 at scale 37 needs l * 10^38, 76 digits in i128.
+        let a = Decimal128Array::from(vec![30000000000000000000000000000000000000i128])
+            .with_precision_and_scale(38, 37)
+            .unwrap();
+        let b = Decimal128Array::from(vec![60000000000000000000000000000000000000i128])
+            .with_precision_and_scale(38, 37)
+            .unwrap();
+
+        let result = div(&a, &b).unwrap();
+        assert_eq!(result.data_type(), &DataType::Decimal128(38, 38));
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().value(0),
+            50000000000000000000000000000000000000i128
+        );
+    }
+
+    #[test]
+    fn test_scaled_div_agrees_with_direct_division() {
+        for (l, r, mul_pow) in [
+            (7i128, 3i128, 4i8),
+            (-7, 3, 4),
+            (7, -3, 4),
+            (-7, -3, 4),
+            (1, 999_999_999, 9),
+            (i128::MAX / 10, 7, 1),
+            (i128::MAX / 10, -i128::MAX / 11, 1),
+            (0, 5, 6),
+        ] {
+            let scaled = l * 10i128.pow(mul_pow as u32);
+            assert_eq!(
+                scaled_div::<Decimal128Type>(l, r, mul_pow).unwrap(),
+                scaled / r,
+                "{l} * 10^{mul_pow} / {r}"
+            );
+        }
+    }
+
+    #[test]
     fn test_decimal256_same_scale_add_sub() {
         let lhs = Decimal256Array::from(vec![
             Some(i256::from_parts(u128::MAX, 0)),
@@ -1648,8 +1942,176 @@ mod tests {
         assert_eq!(mul(&factor, &interval).unwrap().as_ref(), &expected);
 
         let float_factor = Float64Array::new_scalar(2.);
-        assert!(mul(&interval, &float_factor).is_err());
+        assert!(mul_wrapping(&float_factor, &interval).is_err());
         assert!(mul_wrapping(&factor, &interval).is_err());
+    }
+
+    #[test]
+    fn test_interval_mul_div_f64() {
+        const HOUR_NANOS: i64 = 3_600_000_000_000;
+        const MINUTE_NANOS: i64 = 60_000_000_000;
+
+        // Adapted from DuckDB's interval multiplication tests:
+        // https://github.com/duckdb/duckdb/blob/21aca0424f1faf78b593b1e6fbfdd4846624c987/test/sql/function/interval/test_interval_muldiv.test#L1-L99
+        // DuckDB's cases come from PostgreSQL's interval regression tests:
+        // https://github.com/postgres/postgres/blob/78758d37306cd89ab060f00cb06f249018d5b8da/src/test/regress/sql/interval.sql#L118-L164
+        let interval = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(41, 12, 360 * HOUR_NANOS),
+            IntervalMonthDayNanoType::make_value(-41, -12, 360 * HOUR_NANOS),
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+            IntervalMonthDayNanoType::make_value(0, 0, 1),
+            IntervalMonthDayNanoType::make_value(0, 0, 3),
+            IntervalMonthDayNanoType::make_value(0, 0, -1),
+            IntervalMonthDayNanoType::make_value(0, 0, -3),
+        ]);
+        let factor = Float64Array::from(vec![0.3, 0.3, 1.5, 0.5, 0.5, 0.5, 0.5]);
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(12, 12, 122 * HOUR_NANOS + 24 * MINUTE_NANOS),
+            IntervalMonthDayNanoType::make_value(-12, -12, 93 * HOUR_NANOS + 36 * MINUTE_NANOS),
+            IntervalMonthDayNanoType::make_value(1, 16, 12 * HOUR_NANOS),
+            IntervalMonthDayNanoType::make_value(0, 0, 0),
+            IntervalMonthDayNanoType::make_value(0, 0, 2),
+            IntervalMonthDayNanoType::make_value(0, 0, 0),
+            IntervalMonthDayNanoType::make_value(0, 0, -2),
+        ]);
+        assert_eq!(mul(&interval, &factor).unwrap().as_ref(), &expected);
+        assert_eq!(mul(&factor, &interval).unwrap().as_ref(), &expected);
+
+        let interval = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+            9,
+            -27,
+            45_296 * NANOSECONDS,
+        )]);
+        let factor = Float64Array::new_scalar(0.3);
+        let expected = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+            2,
+            13,
+            4_948_800_000_000,
+        )]);
+        assert_eq!(mul(&interval, &factor).unwrap().as_ref(), &expected);
+
+        let interval = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(0, 1, 0),
+            IntervalMonthDayNanoType::make_value(4, 0, 0),
+            IntervalMonthDayNanoType::make_value(1, 1, 0),
+            IntervalMonthDayNanoType::make_value(0, 0, (1_i64 << 53) - 1),
+            IntervalMonthDayNanoType::make_value(0, 0, i64::MAX),
+            IntervalMonthDayNanoType::make_value(1, 1, 1),
+            IntervalMonthDayNanoType::make_value(1, 1, 1),
+            IntervalMonthDayNanoType::make_value(1, 0, 0),
+        ]);
+        let factor = Float64Array::from(vec![
+            3.,
+            5.,
+            2.,
+            0.7,
+            1.,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -2.,
+        ]);
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNanoType::make_value(0, 0, 8 * HOUR_NANOS),
+            IntervalMonthDayNanoType::make_value(0, 24, 0),
+            IntervalMonthDayNanoType::make_value(0, 15, 12 * HOUR_NANOS),
+            IntervalMonthDayNanoType::make_value(0, 0, 12_867_427_506_772_844),
+            IntervalMonthDayNanoType::make_value(0, 0, i64::MAX),
+            IntervalMonthDayNanoType::make_value(0, 0, 0),
+            IntervalMonthDayNanoType::make_value(0, 0, 0),
+            IntervalMonthDayNanoType::make_value(0, -15, 0),
+        ]);
+        assert_eq!(div(&interval, &factor).unwrap().as_ref(), &expected);
+
+        let null_factor = Scalar::new(Float64Array::new_null(1));
+        assert_eq!(
+            mul(&interval, &null_factor).unwrap().as_ref(),
+            &IntervalMonthDayNanoArray::new_null(interval.len())
+        );
+    }
+
+    #[test]
+    fn test_interval_mul_div_f64_errors() {
+        let factor = Float64Array::new_scalar(2.);
+        let year_month = IntervalYearMonthArray::new_scalar(1);
+        let day_time = IntervalDayTimeArray::new_scalar(IntervalDayTime::new(1, 1));
+        for interval in [&year_month as &dyn Datum, &day_time] {
+            assert!(mul(interval, &factor).is_err());
+            assert!(mul(&factor, interval).is_err());
+            assert!(div(interval, &factor).is_err());
+        }
+
+        let interval =
+            IntervalMonthDayNanoArray::new_scalar(IntervalMonthDayNanoType::make_value(1, 1, 1));
+
+        assert!(matches!(
+            add(&interval, &factor),
+            Err(ArrowError::InvalidArgumentError(_))
+        ));
+
+        let zero = Float64Array::new_scalar(-0.);
+        assert!(matches!(
+            div(&interval, &zero),
+            Err(ArrowError::DivideByZero)
+        ));
+
+        assert!(div(&factor, &interval).is_err());
+
+        for factor in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let factor = Float64Array::new_scalar(factor);
+            assert!(matches!(
+                mul(&interval, &factor),
+                Err(ArrowError::ArithmeticOverflow(_))
+            ));
+        }
+
+        let nan = Float64Array::new_scalar(f64::NAN);
+        assert!(matches!(
+            div(&interval, &nan),
+            Err(ArrowError::ArithmeticOverflow(_))
+        ));
+
+        let interval = IntervalMonthDayNanoArray::new_scalar(IntervalMonthDayNanoType::make_value(
+            i32::MAX,
+            0,
+            0,
+        ));
+        assert!(matches!(
+            mul(&interval, &factor),
+            Err(ArrowError::ArithmeticOverflow(_))
+        ));
+
+        let factor = Float64Array::new_scalar(1.5);
+        let interval = IntervalMonthDayNanoArray::new_scalar(IntervalMonthDayNanoType::make_value(
+            0,
+            0,
+            i64::MAX,
+        ));
+        assert!(matches!(
+            mul(&interval, &factor),
+            Err(ArrowError::ArithmeticOverflow(_))
+        ));
+
+        let factor = Float64Array::new_scalar(1.000_000_000_4);
+        let interval = IntervalMonthDayNanoArray::new_scalar(IntervalMonthDayNanoType::make_value(
+            i32::MIN,
+            0,
+            0,
+        ));
+        assert!(matches!(
+            mul(&interval, &factor),
+            Err(ArrowError::ArithmeticOverflow(_))
+        ));
+
+        let factor = Float64Array::new_scalar(0.999_999_999);
+        let interval = IntervalMonthDayNanoArray::new_scalar(IntervalMonthDayNanoType::make_value(
+            1,
+            i32::MAX,
+            0,
+        ));
+        assert!(matches!(
+            mul(&interval, &factor),
+            Err(ArrowError::ArithmeticOverflow(_))
+        ));
     }
 
     #[test]

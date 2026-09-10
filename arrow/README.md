@@ -36,11 +36,6 @@ Arrow features are supported by this crate.
 
 [Implementation Status Page]: https://arrow.apache.org/docs/status.html
 
-
-## Rust Version Compatibility
-
-This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions.
-
 ## Versioning / Releases
 
 The `arrow` crate follows the [SemVer standard] defined by Cargo and works well
@@ -69,6 +64,7 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
 - `ffi` - bindings for the Arrow C [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 - `pyarrow` - bindings for pyo3 to call arrow-rs from python
+- `pyarrow-experimental-inspect` - record the pyarrow type of each conversion in PyO3's introspection data, so that stub generators emit e.g. `pyarrow.Array` rather than `_typeshed.Incomplete` (also enables `pyarrow`)
 - `canonical_extension_types` - definitions for [canonical extension types](https://arrow.apache.org/docs/format/CanonicalExtensions.html#format-canonical-extensions)
 - `async` - definitions for traits using `async`, intended to work with the async ecosystem
 

@@ -213,7 +213,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
         let len = offsets.len() - 1; // Offsets guaranteed to not be empty
-        let end_offset = offsets.last().unwrap().as_usize();
+        let end_offset = offsets.last().as_usize();
         // don't need to check other values of `offsets` because they are checked
         // during construction of `OffsetBuffer`
         if end_offset > values.len() {
@@ -223,14 +223,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
             )));
         }
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}ListArray, expected {len} got {}",
-                    OffsetSize::PREFIX,
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}ListArray, expected {len} got {}",
+                OffsetSize::PREFIX,
+                n.len(),
+            )));
         }
         if !field.is_nullable() && values.is_nullable() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -315,11 +315,18 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         ArrayRef,
         Option<NullBuffer>,
     ) {
-        let f = match self.data_type {
-            DataType::List(f) | DataType::LargeList(f) => f,
-            _ => unreachable!(),
+        let (DataType::List(f) | DataType::LargeList(f)) = self.data_type else {
+            unreachable!()
         };
         (f, self.value_offsets, self.values, self.nulls)
+    }
+
+    /// The field that describes the values of this list.
+    pub fn value_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::List(f) | DataType::LargeList(f) => f,
+            _ => unreachable!(),
+        }
     }
 
     /// Returns a reference to the offsets of this list
@@ -386,6 +393,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 
     /// Returns the length for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if `i >= self.len()`
     #[inline]
     pub fn value_length(&self, i: usize) -> OffsetSize {
         let offsets = self.value_offsets();
@@ -412,6 +422,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// Notes: this method does *NOT* slice the underlying values array or modify
     /// the values in the offsets buffer. See [`Self::values`] and
     /// [`Self::offsets`] for more information.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -667,6 +680,15 @@ impl<OffsetSize: OffsetSizeTrait> super::ListLikeArray for GenericListArray<Offs
     }
 }
 
+impl<'a, OffsetSize: OffsetSizeTrait> IntoIterator for &'a GenericListArray<OffsetSize> {
+    type Item = Option<ArrayRef>;
+    type IntoIter = GenericListArrayIter<'a, OffsetSize>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        GenericListArrayIter::<'a, OffsetSize>::new(self)
+    }
+}
+
 impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListArray<OffsetSize> {
     type Item = ArrayRef;
 
@@ -684,8 +706,8 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
         let prefix = OffsetSize::PREFIX;
 
         write!(f, "{prefix}ListArray\n[\n")?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }

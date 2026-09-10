@@ -26,11 +26,14 @@ use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{BitWriter, num_required_bits};
+use crate::util::prefix::common_prefix_length;
 
+use alp_encoder::AlpEncoder;
 use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
 
+mod alp_encoder;
 mod byte_stream_split_encoder;
 mod dict_encoder;
 
@@ -84,26 +87,92 @@ pub fn get_encoder<T: DataType>(
     encoding: Encoding,
     descr: &ColumnDescPtr,
 ) -> Result<Box<dyn Encoder<T>>> {
-    let encoder: Box<dyn Encoder<T>> = match encoding {
-        Encoding::PLAIN => Box::new(PlainEncoder::new()),
-        Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
-            return Err(general_err!(
-                "Cannot initialize this encoding through this function"
-            ));
+    <T::T as private::GetEncoder>::get_encoder(descr, encoding)
+}
+
+pub(crate) mod private {
+    use super::*;
+
+    /// A trait that allows getting an [`Encoder`] implementation for a [`DataType`]
+    /// with the corresponding [`ParquetValueType`]. This is necessary to support
+    /// [`Encoder`] implementations that may not be applicable for all [`DataType`]
+    /// and by extension all [`ParquetValueType`], such as ALP, which encodes only
+    /// floating-point columns.
+    ///
+    /// [`ParquetValueType`]: crate::data_type::private::ParquetValueType
+    pub trait GetEncoder {
+        fn get_encoder<T: DataType<T = Self>>(
+            descr: &ColumnDescPtr,
+            encoding: Encoding,
+        ) -> Result<Box<dyn Encoder<T>>> {
+            get_encoder_default(descr, encoding)
         }
-        Encoding::RLE => Box::new(RleValueEncoder::new()),
-        Encoding::DELTA_BINARY_PACKED => Box::new(DeltaBitPackEncoder::new()),
-        Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(DeltaLengthByteArrayEncoder::new()),
-        Encoding::DELTA_BYTE_ARRAY => Box::new(DeltaByteArrayEncoder::new()),
-        Encoding::BYTE_STREAM_SPLIT => match T::get_physical_type() {
-            Type::FIXED_LEN_BYTE_ARRAY => Box::new(VariableWidthByteStreamSplitEncoder::new(
-                descr.type_length(),
-            )),
-            _ => Box::new(ByteStreamSplitEncoder::new()),
-        },
-        e => return Err(nyi_err!("Encoding {} is not supported", e)),
-    };
-    Ok(encoder)
+    }
+
+    fn get_encoder_default<T: DataType>(
+        descr: &ColumnDescPtr,
+        encoding: Encoding,
+    ) -> Result<Box<dyn Encoder<T>>> {
+        let encoder: Box<dyn Encoder<T>> = match encoding {
+            Encoding::PLAIN => Box::new(PlainEncoder::new()),
+            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
+                return Err(general_err!(
+                    "Cannot initialize this encoding through this function"
+                ));
+            }
+            Encoding::RLE => Box::new(RleValueEncoder::new()),
+            Encoding::DELTA_BINARY_PACKED => Box::new(DeltaBitPackEncoder::new()),
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(DeltaLengthByteArrayEncoder::new()),
+            Encoding::DELTA_BYTE_ARRAY => Box::new(DeltaByteArrayEncoder::new()),
+            Encoding::BYTE_STREAM_SPLIT => match T::get_physical_type() {
+                Type::FIXED_LEN_BYTE_ARRAY => Box::new(VariableWidthByteStreamSplitEncoder::new(
+                    descr.type_length(),
+                )),
+                _ => Box::new(ByteStreamSplitEncoder::new()),
+            },
+            Encoding::ALP => {
+                return Err(general_err!(
+                    "Encoding {} only supports FLOAT and DOUBLE, got {}",
+                    encoding,
+                    T::get_physical_type()
+                ));
+            }
+            #[expect(deprecated, reason = "BIT_PACKED is the encoding we reject here")]
+            e @ Encoding::BIT_PACKED => return Err(nyi_err!("Encoding {} is not supported", e)),
+        };
+        Ok(encoder)
+    }
+
+    impl GetEncoder for bool {}
+    impl GetEncoder for i32 {}
+    impl GetEncoder for i64 {}
+    impl GetEncoder for Int96 {}
+    impl GetEncoder for ByteArray {}
+    impl GetEncoder for FixedLenByteArray {}
+
+    impl GetEncoder for f32 {
+        fn get_encoder<T: DataType<T = Self>>(
+            descr: &ColumnDescPtr,
+            encoding: Encoding,
+        ) -> Result<Box<dyn Encoder<T>>> {
+            match encoding {
+                Encoding::ALP => Ok(Box::new(AlpEncoder::new())),
+                _ => get_encoder_default(descr, encoding),
+            }
+        }
+    }
+
+    impl GetEncoder for f64 {
+        fn get_encoder<T: DataType<T = Self>>(
+            descr: &ColumnDescPtr,
+            encoding: Encoding,
+        ) -> Result<Box<dyn Encoder<T>>> {
+            match encoding {
+                Encoding::ALP => Ok(Box::new(AlpEncoder::new())),
+                _ => get_encoder_default(descr, encoding),
+            }
+        }
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -698,13 +767,8 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
 
         for byte_array in values {
             let current = byte_array.data();
-            // Maximum prefix length that is shared between previous value and current
-            // value
-            let prefix_len = cmp::min(self.previous.len(), current.len());
-            let mut match_len = 0;
-            while match_len < prefix_len && self.previous[match_len] == current[match_len] {
-                match_len += 1;
-            }
+            // Number of leading bytes shared with the previous value
+            let match_len = common_prefix_length(&self.previous, current);
             prefix_lengths.push(match_len as i32);
             suffixes.push(byte_array.slice(match_len, byte_array.len() - match_len));
             // Update previous for the next prefix
@@ -797,9 +861,16 @@ mod tests {
                 "Cannot initialize this encoding through this function"
             )),
         );
+        create_and_check_encoder::<Int32Type>(
+            0,
+            Encoding::ALP,
+            Some(general_err!(
+                "Encoding ALP only supports FLOAT and DOUBLE, got INT32"
+            )),
+        );
 
         // unsupported
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         create_and_check_encoder::<Int32Type>(
             0,
             Encoding::BIT_PACKED,
@@ -815,6 +886,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i32() {
         Int32Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int32Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -823,6 +895,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i64() {
         Int64Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int64Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -831,6 +904,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i96() {
         Int96Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int96Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -844,6 +918,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_double() {
         DoubleType::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         DoubleType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -851,6 +926,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_byte_array() {
         ByteArrayType::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         ByteArrayType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -859,6 +935,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_fixed_len_byte_array() {
         FixedLenByteArrayType::test(Encoding::PLAIN, TEST_SET_SIZE, 100);
         FixedLenByteArrayType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, 100);

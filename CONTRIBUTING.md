@@ -159,12 +159,39 @@ PR be sure to run the following and check for lint issues:
 cargo +stable fmt --all -- --check
 ```
 
-Note that currently the above will not check all source files in the parquet crate. To check all
-parquet files run the following from the top-level `arrow-rs` directory:
+## Miri
 
-```bash
-cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
+Run tests under [`Miri`](https://github.com/rust-lang/miri) like so, assuming
+[`cargo-nextest`](https://nexte.st/) is available:
+
+```sh
+# Run all tests
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run
+# Run specific tests
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer --lib bigint
+# Run specific crate
+MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error" cargo +nightly miri nextest run -p arrow-buffer
 ```
+
+The whole suite will take a long time to run so it's suggested to run individual
+suites/tests when required.
+
+Add a `cfg_attr` to tests in cases where the test should be ignored by Miri:
+
+```rust
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test123() {}
+```
+
+Please ensure you include a comment why the test is being ignored. Common cases
+are:
+
+- Takes too long
+  - Threshold is if it takes longer than 1 minute
+- Zstd code unsupported by Miri
+- Inline assembly unsupported by Miri
+- Any other operation thats unsupported by Miri
 
 ## Breaking Changes
 
@@ -190,13 +217,67 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `clippy` to run each time you save a file. See https://users.rust-lang.org/t/how-to-use-clippy-in-vs-code-with-rust-analyzer/41881.
 
+In addition to the lints that `clippy` enables by default, we enable a few extra ones in
+`[workspace.lints]` in the root `Cargo.toml`. Every crate in the workspace opts in to those with:
+
+```toml
+[lints]
+workspace = true
+```
+
+New crates should include that section, and new lints should be added to `[workspace.lints]`
+rather than to individual crates, so that they apply everywhere.
+
 One of the concerns with `clippy` is that it often produces a lot of false positives, or that some recommendations may hurt readability. We do not have a policy of which lints are ignored, but if you disagree with a `clippy` lint, you may disable the lint and briefly justify it.
 
-Search for `allow(clippy::` in the codebase to identify lints that are ignored/allowed. We currently prefer ignoring lints on the lowest unit possible.
+Search for `expect(clippy::` in the codebase to identify lints that are intentionally suppressed. We currently prefer suppressing lints on the lowest unit possible.
 
 - If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
 - If you have several lints on a function or module, you may disable the lint on the function or module.
 - If a lint is pervasive across multiple modules, you may disable it at the crate level.
+
+## Spell Checking
+
+We use [`typos`](https://github.com/crate-ci/typos) to catch spelling mistakes in source code and
+comments. CI runs a spell check on every pull request.
+
+### Running locally
+
+Install `typos` and run it from the repo root:
+
+```bash
+cargo install typos-cli
+typos --config typos.toml
+```
+
+### Adding a pre-commit hook
+
+To catch typos before they reach CI, add `typos` as a Git pre-commit hook:
+
+```bash
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/sh
+typos --config typos.toml
+EOF
+chmod +x .git/hooks/pre-commit
+```
+
+After that, `typos` will run automatically on every `git commit`. If it finds an issue, the commit
+is blocked until you fix or allowlist the word.
+
+### Allowlisting false positives
+
+If `typos` flags a word that is intentionally spelled that way (a test value, a domain-specific
+term, a crate name, etc.), add it to `[default.extend-words]` in `typos.toml` at the repo root
+with a short comment explaining why:
+
+```toml
+[default.extend-words]
+flate = "flate"  # flate2 is the crate name for the deflate/inflate compression library
+```
+
+Prefer renaming variables over adding allowlist entries when the flagged word is just a local
+identifier that can be changed without affecting test semantics.
 
 ## Performance Improvements
 
@@ -231,31 +312,6 @@ If your PR proposes a performance improvement, include a summary of the benchmar
 If you need to add new benchmarks to cover your change, make a separate PR first (for example, [#9729]) so we can run the benchmarks on an automated runner.
 
 [#9729]: https://github.com/apache/arrow-rs/pull/9729
-
-## Git Pre-Commit Hook
-
-We can use [git pre-commit hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) to automate various kinds of git pre-commit checking/formatting.
-
-Suppose you are in the root directory of the project.
-
-First check if the file already exists:
-
-```bash
-ls -l .git/hooks/pre-commit
-```
-
-If the file already exists, to avoid mistakenly **overriding**, you MAY have to check
-the link source or file content. Else if not exist, let's safely soft link [pre-commit.sh](pre-commit.sh) as file `.git/hooks/pre-commit`:
-
-```bash
-ln -s  ../../pre-commit.sh .git/hooks/pre-commit
-```
-
-If sometimes you want to commit without checking, just run `git commit` with `--no-verify`:
-
-```bash
-git commit --no-verify -m "... commit message ..."
-```
 
 ## AI Generated Submissions
 

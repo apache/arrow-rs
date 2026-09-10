@@ -76,8 +76,8 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .unwrap_or_else(|| NullBufferBuilder::new_with_len(offsets_builder.len() - 1));
 
         Self {
-            offsets_builder,
             value_builder,
+            offsets_builder,
             null_buffer_builder,
         }
     }
@@ -113,6 +113,10 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// Appends a value of type `T` into the builder `n` times.
     ///
     /// See [`Self::append_value`] for more panic information.
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`Self::append_value`]
     #[inline]
     pub fn append_value_n(&mut self, value: impl AsRef<T::Native>, n: usize) {
         let bytes: &[u8] = value.as_ref().as_ref();
@@ -131,12 +135,16 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// - A `Some` value will append the value.
     ///
     /// See [`Self::append_value`] for more panic information.
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`Self::append_value`]
     #[inline]
     pub fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Append a null value into the builder.
@@ -207,6 +215,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .nulls(self.null_buffer_builder.finish());
 
         self.offsets_builder.push(self.next_offset());
+        // SAFETY: builder is constructed from valid offset and value buffers maintained by the builder
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
     }
@@ -222,6 +231,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .add_buffer(value_buffer)
             .nulls(self.null_buffer_builder.finish_cloned());
 
+        // SAFETY: builder is constructed from valid offset and value buffers maintained by the builder
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
     }
@@ -777,7 +787,7 @@ mod tests {
         let r: Vec<_> = a.iter().flatten().collect();
         assert_eq!(
             r,
-            &["foo".as_bytes(), "bar\n".as_bytes(), "fizbuz".as_bytes()]
+            &[b"foo".as_slice(), b"bar\n".as_slice(), b"fizbuz".as_slice()]
         )
     }
 

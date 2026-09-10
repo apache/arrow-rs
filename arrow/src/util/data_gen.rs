@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use rand::{
-    Rng,
+    Rng, RngExt,
     distr::uniform::{SampleRange, SampleUniform},
 };
 
@@ -92,7 +92,7 @@ pub fn create_random_array(
         UInt16 => Arc::new(create_primitive_array::<UInt16Type>(size, null_density)),
         UInt32 => Arc::new(create_primitive_array::<UInt32Type>(size, null_density)),
         UInt64 => Arc::new(create_primitive_array::<UInt64Type>(size, null_density)),
-        Float16 => Arc::new(create_primitive_array::<Float16Type>(size, null_density)),
+        Float16 => Arc::new(create_nullable_f16_array(size, null_density)),
         Float32 => Arc::new(create_primitive_array::<Float32Type>(size, null_density)),
         Float64 => Arc::new(create_primitive_array::<Float64Type>(size, null_density)),
         Timestamp(unit, tz) => match unit {
@@ -385,13 +385,10 @@ fn create_random_struct_array(
     null_density: f32,
     true_density: f32,
 ) -> Result<ArrayRef> {
-    let struct_fields = match field.data_type() {
-        DataType::Struct(fields) => fields,
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot create struct array for field {field}"
-            )));
-        }
+    let DataType::Struct(struct_fields) = field.data_type() else {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot create struct array for field {field}"
+        )));
     };
 
     let child_arrays = struct_fields
@@ -431,13 +428,10 @@ fn create_random_map_array(
         false => 0.0,
     };
 
-    let entries_field = match field.data_type() {
-        DataType::Map(f, _) => f,
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot create map array for field {field:?}"
-            )));
-        }
+    let DataType::Map(entries_field, _) = field.data_type() else {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot create map array for field {field:?}"
+        )));
     };
 
     let (offsets, child_len) = create_random_offsets::<i32>(size, 0, 5);
@@ -849,9 +843,9 @@ mod tests {
     fn test_create_map_array() {
         let map_field = Field::new_map(
             "map",
-            "entries",
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+            Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, true),
             false,
             false,
         );

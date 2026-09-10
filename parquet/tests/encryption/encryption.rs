@@ -264,7 +264,7 @@ fn test_aes_ctr_encryption() {
             _ => {
                 panic!("Expected ParquetError::NYI");
             }
-        };
+        }
     }
 
     aes_ctr_encryption(AES_128_FOOTER_KEY, AES_128_COLUMN_NAME_KEYS);
@@ -631,7 +631,7 @@ fn uniform_encryption_roundtrip(
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -644,7 +644,7 @@ fn uniform_encryption_roundtrip(
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -743,7 +743,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -756,7 +756,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
                 .unwrap()
                 .values()
                 .iter()
-                .cloned()
+                .copied()
         })
         .collect();
 
@@ -783,7 +783,7 @@ fn test_write_non_uniform_encryption() {
         let file = File::open(path).unwrap();
 
         let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
-            .with_column_keys(column_names.to_vec(), column_keys.clone())
+            .with_column_keys(column_names.clone(), column_keys.clone())
             .unwrap()
             .build()
             .unwrap();
@@ -1089,7 +1089,7 @@ fn write_and_read_stats(
 
     // Check column statistics produced at write time are available in full
     let row_group = metadata.row_group(0);
-    for column in row_group.columns().iter() {
+    for column in row_group.columns() {
         check_column_stats(column, true);
     }
 
@@ -1136,8 +1136,8 @@ fn test_write_uniform_encryption() {
 }
 
 #[test]
-fn test_write_non_uniform_encryption_column_missmatch() {
-    fn write_non_uniform_encryption_column_missmatch(
+fn test_write_non_uniform_encryption_column_mismatch() {
+    fn write_non_uniform_encryption_column_mismatch(
         footer_key: &[u8],
         column_keys: &[(&str, &[u8])],
         encryption_column_keys: &[(&str, &[u8])],
@@ -1187,13 +1187,13 @@ fn test_write_non_uniform_encryption_column_missmatch() {
         );
     }
 
-    write_non_uniform_encryption_column_missmatch(
+    write_non_uniform_encryption_column_mismatch(
         AES_128_FOOTER_KEY,
         AES_128_COLUMN_NAME_KEYS,
         AES_128_COLUMN_NAME_KEYS,
     );
 
-    write_non_uniform_encryption_column_missmatch(
+    write_non_uniform_encryption_column_mismatch(
         AES_256_FOOTER_KEY,
         AES_256_COLUMN_NAME_KEYS,
         AES_256_COLUMN_NAME_KEYS,

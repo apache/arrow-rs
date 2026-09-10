@@ -23,7 +23,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReaderBuilder, RowSelection};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::hint;
 use std::sync::Arc;
 

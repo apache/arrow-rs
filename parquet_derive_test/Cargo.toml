@@ -36,3 +36,6 @@ uuid = { version = "1", features = ["v4"] }
 
 [package.metadata.docs.rs]
 all-features = true
+
+[lints]
+workspace = true

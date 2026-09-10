@@ -84,7 +84,7 @@ pub struct ParquetObjectWriter {
     w: BufWriter,
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl ParquetObjectWriter {
     /// Create a new [`ParquetObjectWriter`] that writes to the specified path in the given store.
     ///
@@ -104,7 +104,7 @@ impl ParquetObjectWriter {
     }
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl AsyncFileWriter for ParquetObjectWriter {
     fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
         Box::pin(async {
@@ -124,14 +124,14 @@ impl AsyncFileWriter for ParquetObjectWriter {
         })
     }
 }
-#[allow(deprecated)]
+#[expect(deprecated)]
 impl From<BufWriter> for ParquetObjectWriter {
     fn from(w: BufWriter) -> Self {
         Self::from_buf_writer(w)
     }
 }
 #[cfg(test)]
-#[allow(deprecated)]
+#[expect(deprecated)]
 mod tests {
     use arrow_array::{ArrayRef, Int64Array, RecordBatch};
     use object_store::memory::InMemory;

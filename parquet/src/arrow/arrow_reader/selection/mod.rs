@@ -48,7 +48,6 @@ use algebra::{
     intersect_row_selections, union_masks, union_row_selections,
 };
 pub use boolean::MaskRunIter;
-pub(crate) use boolean::mask_to_selectors;
 use boolean::{
     MaskSelection, limit_mask, mask_has_at_least_runs, offset_mask, split_off_mask, trim_mask,
 };
@@ -230,7 +229,7 @@ impl RowSelection {
     pub fn as_mask(&self) -> Option<&BooleanBuffer> {
         match &self.inner {
             RowSelectionInner::Mask(m) => Some(m.mask()),
-            _ => None,
+            RowSelectionInner::Selectors(_) => None,
         }
     }
 
@@ -300,13 +299,13 @@ impl RowSelection {
     fn into_selectors_vec(self) -> Vec<RowSelector> {
         match self.inner {
             RowSelectionInner::Selectors(s) => s,
-            RowSelectionInner::Mask(m) => mask_to_selectors(m.mask()),
+            RowSelectionInner::Mask(m) => (*m).into_selectors(),
         }
     }
 
     /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// Panics if any of the [`BooleanArray`] contain nulls
     pub fn from_filters(filters: &[BooleanArray]) -> Self {
@@ -489,12 +488,10 @@ impl RowSelection {
                 intersect_row_selections(l, r)
             }
             (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                let r = mask_to_selectors(r.mask());
-                intersect_row_selections(l, &r)
+                intersect_row_selections(l, &r.borrowed_selectors())
             }
             (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                let l = mask_to_selectors(l.mask());
-                intersect_row_selections(&l, r)
+                intersect_row_selections(&l.borrowed_selectors(), r)
             }
         }
     }
@@ -506,23 +503,19 @@ impl RowSelection {
     ///
     /// returned:  NYYYYYNNYYNYN
     pub fn union(&self, other: &Self) -> Self {
-        match &self.inner {
-            RowSelectionInner::Mask(l) => match &other.inner {
-                RowSelectionInner::Mask(r) => {
-                    Self::from_boolean_buffer(union_masks(l.mask(), r.mask()))
-                }
-                RowSelectionInner::Selectors(r) => {
-                    let l = mask_to_selectors(l.mask());
-                    union_row_selections(&l, r)
-                }
-            },
-            RowSelectionInner::Selectors(l) => match &other.inner {
-                RowSelectionInner::Mask(r) => {
-                    let r = mask_to_selectors(r.mask());
-                    union_row_selections(l, &r)
-                }
-                RowSelectionInner::Selectors(r) => union_row_selections(l, r),
-            },
+        match (&self.inner, &other.inner) {
+            (RowSelectionInner::Mask(l), RowSelectionInner::Mask(r)) => {
+                Self::from_boolean_buffer(union_masks(l.mask(), r.mask()))
+            }
+            (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
+                union_row_selections(l, r)
+            }
+            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
+                union_row_selections(l, &r.borrowed_selectors())
+            }
+            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
+                union_row_selections(&l.borrowed_selectors(), r)
+            }
         }
     }
 
@@ -630,6 +623,15 @@ impl RowSelection {
                 s.iter().filter(|x| !x.skip).map(|x| x.row_count).sum()
             }
             RowSelectionInner::Mask(m) => m.count(),
+        }
+    }
+
+    /// Returns the total number of rows spanned by this selection, both
+    /// selected and skipped
+    pub fn total_row_count(&self) -> usize {
+        match &self.inner {
+            RowSelectionInner::Selectors(s) => s.iter().map(|x| x.row_count).sum(),
+            RowSelectionInner::Mask(m) => m.mask().len(),
         }
     }
 
@@ -761,6 +763,23 @@ impl FromIterator<RowSelection> for RowSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_total_row_count() {
+        let selection = RowSelection::from(vec![RowSelector::skip(5), RowSelector::select(3)]);
+        assert_eq!(selection.total_row_count(), 8);
+        assert_eq!(selection.row_count(), 3);
+        assert_eq!(selection.skipped_row_count(), 5);
+
+        let selection =
+            RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![true, false, true]));
+        assert_eq!(selection.total_row_count(), 3);
+        assert_eq!(selection.row_count(), 2);
+        assert_eq!(selection.skipped_row_count(), 1);
+
+        let empty = RowSelection::from(vec![]);
+        assert_eq!(empty.total_row_count(), 0);
+    }
 
     #[test]
     fn test_offset_zero_and_zero_batch_expand_are_identity() {

@@ -41,6 +41,9 @@ on:
       - arrow-select/**
       - .github/**
 
+permissions:
+  contents: read
+
 jobs:
   linux-test:
     name: Test

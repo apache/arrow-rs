@@ -178,7 +178,7 @@ impl WritableMetadataBuilder {
     /// If the number of field names exceeds the maximum allowed value for `u32`.
     fn num_field_names(&self) -> usize {
         let n = self.field_names.len();
-        assert!(n <= u32::MAX as usize);
+        assert!(u32::try_from(n).is_ok());
 
         n
     }
@@ -198,7 +198,7 @@ impl WritableMetadataBuilder {
         let nkeys = self.num_field_names();
 
         // Calculate metadata size
-        let total_dict_size: usize = self.metadata_size();
+        let total_dict_size = self.metadata_size();
 
         let metadata_buffer = &mut self.metadata_buffer;
         let is_sorted = std::mem::take(&mut self.is_sorted);
@@ -215,14 +215,14 @@ impl WritableMetadataBuilder {
         metadata_buffer.reserve(metadata_size);
 
         // Write header: version=1, field names are sorted, with calculated offset_size
-        metadata_buffer.push(0x01 | (is_sorted as u8) << 4 | ((offset_size - 1) << 6));
+        metadata_buffer.push(0x01 | ((is_sorted as u8) << 4) | ((offset_size - 1) << 6));
 
         // Write dictionary size
         write_offset(metadata_buffer, nkeys, offset_size);
 
         // Write offsets
         let mut cur_offset = 0;
-        for key in field_names.iter() {
+        for key in &field_names {
             write_offset(metadata_buffer, cur_offset, offset_size);
             cur_offset += key.len();
         }

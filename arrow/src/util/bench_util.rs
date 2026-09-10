@@ -23,7 +23,7 @@ use crate::util::test_util::seedable_rng;
 use arrow_buffer::{Buffer, IntervalMonthDayNano, NullBuffer};
 use arrow_schema::Field;
 use half::f16;
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use rand::distr::uniform::SampleUniform;
 use rand::rng;
@@ -33,6 +33,13 @@ use rand::{
 };
 use std::ops::Range;
 use std::sync::Arc;
+
+fn f16_random(rng: &mut StdRng) -> f16 {
+    // Otherwise it can round up to 1.0 even though we should generate in [0, 1)
+    // See: https://github.com/VoidStarKat/half-rs/issues/152
+    let one_next_down = f16::from_bits(0x3BFFu16); // 0.9995117
+    f16::from_f32(rng.random::<f32>()).clamp(f16::ZERO, one_next_down)
+}
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
 pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
@@ -48,6 +55,25 @@ where
                 None
             } else {
                 Some(rng.random())
+            }
+        })
+        .collect()
+}
+
+/// Same as [`create_primitive_array`] but specialized for f16 since it doesn't
+/// implement the required rand traits.
+///
+/// This may be deprecated/removed in the future if half updates to the required
+/// rand version.
+pub fn create_nullable_f16_array(size: usize, null_density: f32) -> Float16Array {
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                Some(f16_random(&mut rng))
             }
         })
         .collect()
@@ -219,6 +245,10 @@ fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
 /// Creates a random [`GenericStringArray`] of a given `size` and `null_density`
 /// filling it with random strings with lengths in the specified range,
 /// all starting with the provided `prefix`, generated using the provided `seed`.
+///
+/// # Panics
+///
+/// Panics if `min_str_len > max_str_len` or `prefix.len() > max_str_len`
 pub fn create_string_array_with_len_range_and_prefix_and_seed<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
@@ -593,6 +623,10 @@ where
 }
 
 /// Create primitive run array for given logical and physical array lengths
+///
+/// # Panics
+///
+/// Panics if `logical_array_len < physical_array_len`
 pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
     logical_array_len: usize,
     physical_array_len: usize,
@@ -627,6 +661,10 @@ pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
 /// Create string array to be used by run array builder. The string array
 /// will result in run array with physical length of `physical_array_len`
 /// and logical length of `logical_array_len`
+///
+/// # Panics
+///
+/// Panics if `logical_array_len < physical_array_len`
 pub fn create_string_array_for_runs(
     physical_array_len: usize,
     logical_array_len: usize,
@@ -707,6 +745,10 @@ pub fn create_binary_array_with_seed<Offset: OffsetSizeTrait>(
 /// filling it with random bytes with lengths in the specified range,
 /// all starting with the provided `prefix`, generated using the provided `seed`.
 ///
+///
+/// # Panics
+///
+/// Panics if `min_len > max_len` or `prefix.len() > max_len`
 pub fn create_binary_array_with_len_range_and_prefix_and_seed<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
@@ -823,7 +865,7 @@ pub fn create_f16_array(size: usize, nan_density: f32) -> Float16Array {
             if rng.random::<f32>() < nan_density {
                 Some(f16::NAN)
             } else {
-                Some(rng.random())
+                Some(f16_random(&mut rng))
             }
         })
         .collect()
@@ -952,6 +994,10 @@ where
 ///
 /// Useful for building arrays and record batches in benchmarks without
 /// repeating per-type construction logic. Panics on unsupported types.
+///
+/// # Panics
+///
+/// Panics if `data_type` is not supported
 pub fn create_array_for_type(data_type: &DataType, size: usize, null_density: f32) -> ArrayRef {
     match data_type {
         DataType::Boolean => Arc::new(create_boolean_array(size, null_density, 0.5)),

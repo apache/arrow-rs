@@ -137,7 +137,7 @@ impl ExtensionType for TimestampWithOffset {
     }
 
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
-        Self.supports_data_type(data_type).map(|_| Self)
+        Self.supports_data_type(data_type).map(|()| Self)
     }
 
     fn validate(data_type: &DataType, _metadata: Self::Metadata) -> Result<(), ArrowError> {
@@ -307,7 +307,7 @@ mod tests {
     #[should_panic(expected = "Extension type name missing")]
     fn missing_name() {
         let field = make_valid_field_primitive(TimeUnit::Second)
-            .with_metadata([(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())].into());
+            .with_metadata([(EXTENSION_TYPE_METADATA_KEY, "")]);
         field.extension_type::<TimestampWithOffset>();
     }
 
@@ -509,28 +509,17 @@ mod tests {
 
     #[test]
     fn no_metadata() {
-        let field = make_valid_field_primitive(TimeUnit::Second).with_metadata(
-            [(
-                EXTENSION_TYPE_NAME_KEY.to_owned(),
-                TimestampWithOffset::NAME.to_owned(),
-            )]
-            .into(),
-        );
+        let field = make_valid_field_primitive(TimeUnit::Second)
+            .with_metadata([(EXTENSION_TYPE_NAME_KEY, TimestampWithOffset::NAME)]);
         field.extension_type::<TimestampWithOffset>();
     }
 
     #[test]
     fn empty_metadata() {
-        let field = make_valid_field_primitive(TimeUnit::Second).with_metadata(
-            [
-                (
-                    EXTENSION_TYPE_NAME_KEY.to_owned(),
-                    TimestampWithOffset::NAME.to_owned(),
-                ),
-                (EXTENSION_TYPE_METADATA_KEY.to_owned(), String::new()),
-            ]
-            .into(),
-        );
+        let field = make_valid_field_primitive(TimeUnit::Second).with_metadata([
+            (EXTENSION_TYPE_NAME_KEY, TimestampWithOffset::NAME),
+            (EXTENSION_TYPE_METADATA_KEY, ""),
+        ]);
         field.extension_type::<TimestampWithOffset>();
     }
 }

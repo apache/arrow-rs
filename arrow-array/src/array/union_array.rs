@@ -207,15 +207,15 @@ impl UnionArray {
 
         // Create mapping from type id to array lengths.
         let max_id = fields.iter().map(|(i, _)| i).max().unwrap_or_default() as usize;
-        let mut array_lens = vec![i32::MIN; max_id + 1];
+        let mut array_lens = vec![None; max_id + 1];
         for (cd, (field_id, _)) in children.iter().zip(fields.iter()) {
-            array_lens[field_id as usize] = cd.len() as i32;
+            array_lens[field_id as usize] = Some(cd.len());
         }
 
         // Type id values must match one of the fields.
         for id in &type_ids {
             match array_lens.get(*id as usize) {
-                Some(x) if *x != i32::MIN => {}
+                Some(Some(_)) => {}
                 _ => {
                     return Err(ArrowError::InvalidArgumentError(
                         "Type Ids values must match one of the field type ids".to_owned(),
@@ -227,8 +227,9 @@ impl UnionArray {
         // Check the value offsets are in bounds.
         if let Some(offsets) = &offsets {
             let mut iter = type_ids.iter().zip(offsets.iter());
-            if iter.any(|(type_id, &offset)| offset < 0 || offset >= array_lens[*type_id as usize])
-            {
+            if iter.any(|(type_id, &offset)| {
+                offset < 0 || offset as usize >= array_lens[*type_id as usize].unwrap()
+            }) {
                 return Err(ArrowError::InvalidArgumentError(
                     "Offsets must be non-negative and within the length of the Array".to_owned(),
                 ));
@@ -328,6 +329,9 @@ impl UnionArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         let (offsets, fields) = match self.offsets.as_ref() {
             // If dense union, slice offsets
@@ -378,7 +382,6 @@ impl UnionArray {
     /// # Ok(())
     /// # }
     /// ```
-    #[allow(clippy::type_complexity)]
     pub fn into_parts(
         self,
     ) -> (
@@ -459,9 +462,8 @@ impl UnionArray {
 
     /// Computes the logical nulls for a sparse union, optimized for when there's a lot of fields fully null
     fn mask_sparse_skip_fully_null(&self, mut nulls: Vec<(i8, NullBuffer)>) -> BooleanBuffer {
-        let fields = match self.data_type() {
-            DataType::Union(fields, _) => fields,
-            _ => unreachable!("Union array's data type is not a union!"),
+        let DataType::Union(fields, _) = self.data_type() else {
+            unreachable!("Union array's data type is not a union!")
         };
 
         let type_ids = fields.iter().map(|(id, _)| id).collect::<HashSet<_>>();
@@ -584,14 +586,11 @@ impl UnionArray {
             .map(|(type_id, bit_chunks)| (*type_id, bit_chunks.iter()))
             .collect::<Vec<_>>();
 
-        let chunks_exact = self.type_ids.chunks_exact(64);
-        let remainder = chunks_exact.remainder();
+        let (chunks_exact, remainder) = self.type_ids.as_chunks::<64>();
 
-        let chunks = chunks_exact.map(|type_ids_chunk| {
-            let type_ids_chunk_array = <&[i8; 64]>::try_from(type_ids_chunk).unwrap();
-
-            mask_chunk(type_ids_chunk_array, &mut nulls_masks_iter)
-        });
+        let chunks = chunks_exact
+            .iter()
+            .map(|type_ids_chunk| mask_chunk(type_ids_chunk, &mut nulls_masks_iter));
 
         // SAFETY:
         // chunks is a ChunksExact iterator, which implements TrustedLen, and correctly reports its length
@@ -720,9 +719,8 @@ impl From<ArrayData> for UnionArray {
 impl From<UnionArray> for ArrayData {
     fn from(array: UnionArray) -> Self {
         let len = array.len();
-        let f = match &array.data_type {
-            DataType::Union(f, _) => f,
-            _ => unreachable!(),
+        let DataType::Union(f, _) = &array.data_type else {
+            unreachable!()
         };
         let buffers = match array.offsets {
             Some(o) => vec![array.type_ids.into_inner(), o.into_inner()],
@@ -792,9 +790,8 @@ unsafe impl Array for UnionArray {
     }
 
     fn logical_nulls(&self) -> Option<NullBuffer> {
-        let fields = match self.data_type() {
-            DataType::Union(fields, _) => fields,
-            _ => unreachable!(),
+        let DataType::Union(fields, _) = self.data_type() else {
+            unreachable!()
         };
 
         if fields.len() <= 1 {
@@ -928,7 +925,7 @@ unsafe impl Array for UnionArray {
         }
         self.fields
             .iter()
-            .flat_map(|x| x.as_ref().map(|x| x.get_buffer_memory_size()))
+            .filter_map(|x| x.as_ref().map(|x| x.get_buffer_memory_size()))
             .sum::<usize>()
             + sum
     }
@@ -942,7 +939,7 @@ unsafe impl Array for UnionArray {
             + self
                 .fields
                 .iter()
-                .flat_map(|x| x.as_ref().map(|x| x.get_array_memory_size()))
+                .filter_map(|x| x.as_ref().map(|x| x.get_array_memory_size()))
                 .sum::<usize>()
             + sum
     }
@@ -976,9 +973,8 @@ impl std::fmt::Debug for UnionArray {
             writeln!(f, "{offsets:?}")?;
         }
 
-        let fields = match self.data_type() {
-            DataType::Union(fields, _) => fields,
-            _ => unreachable!(),
+        let DataType::Union(fields, _) = self.data_type() else {
+            unreachable!()
         };
 
         for (type_id, field) in fields.iter() {
@@ -1016,8 +1012,6 @@ enum SparseStrategy {
 #[repr(usize)]
 enum Mask {
     Zero = 0,
-    // false positive, see https://github.com/rust-lang/rust-clippy/issues/8043
-    #[allow(clippy::enum_clike_unportable_variant)]
     Max = usize::MAX,
 }
 
@@ -1049,7 +1043,7 @@ mod tests {
     use crate::builder::UnionBuilder;
     use crate::cast::AsArray;
     use crate::types::{Float32Type, Float64Type, Int32Type, Int64Type};
-    use crate::{Float64Array, Int32Array, Int64Array, StringArray};
+    use crate::{Float64Array, Int32Array, Int64Array, NullArray, StringArray};
     use crate::{Int8Array, RecordBatch};
     use arrow_buffer::Buffer;
     use arrow_schema::{Field, Schema};
@@ -1132,7 +1126,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn test_dense_i32_large() {
         let mut builder = UnionBuilder::new_dense();
 
@@ -1853,6 +1846,27 @@ mod tests {
     }
 
     #[test]
+    fn test_dense_union_large_child() {
+        let fields =
+            UnionFields::try_new([3], [Field::new("nulls", DataType::Null, true)]).unwrap();
+
+        // NullArray represents these lengths without allocating a values buffer.
+        for child_len in [i32::MAX as usize + 1, i32::MAX as usize + 2] {
+            let array = UnionArray::try_new(
+                fields.clone(),
+                vec![3, 3].into(),
+                Some(vec![0, i32::MAX].into()),
+                vec![Arc::new(NullArray::new(child_len))],
+            )
+            .unwrap();
+
+            assert_eq!(array.child(3).len(), child_len);
+            assert_eq!(array.value(1).len(), 1);
+            array.to_data().validate_full().unwrap();
+        }
+    }
+
+    #[test]
     fn test_invalid() {
         let fields = UnionFields::try_new(
             [3, 2],
@@ -1899,6 +1913,15 @@ mod tests {
         UnionArray::try_new(fields.clone(), type_ids.clone(), offsets, children.clone()).unwrap();
 
         let offsets = Some(vec![0, 1, 1].into());
+        let err = UnionArray::try_new(fields.clone(), type_ids.clone(), offsets, children.clone())
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offsets must be non-negative and within the length of the Array"
+        );
+
+        let offsets = Some(vec![0, -1, 0].into());
         let err = UnionArray::try_new(fields.clone(), type_ids.clone(), offsets, children.clone())
             .unwrap_err();
 
@@ -1978,7 +2001,7 @@ mod tests {
             vec![1, 1].into(),
             None,
             vec![
-                // every children is completly null
+                // every child is completely null
                 Arc::new(Int8Array::new_null(2)), // all null, same len as it's parent
                 Arc::new(Int8Array::new_null(2)), // all null, same len as it's parent
             ],
@@ -1992,7 +2015,7 @@ mod tests {
             vec![1, 1].into(),
             Some(vec![0, 1].into()),
             vec![
-                // every children is completly null
+                // every child is completely null
                 Arc::new(Int8Array::new_null(3)), // bigger that parent
                 Arc::new(Int8Array::new_null(3)), // bigger that parent
             ],
@@ -2053,7 +2076,7 @@ mod tests {
             array.mask_sparse_all_with_nulls_skip_one(array.fields_logical_nulls())
         );
 
-        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        //like above, but repeated to generate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::new_null(len);
@@ -2103,7 +2126,7 @@ mod tests {
             array.mask_sparse_skip_without_nulls(array.fields_logical_nulls())
         );
 
-        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        //like above, but repeated to generate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::from_value(2, len);
@@ -2158,7 +2181,7 @@ mod tests {
             array.mask_sparse_skip_fully_null(array.fields_logical_nulls())
         );
 
-        //like above, but repeated to genereate two exact bitmasks and a non empty remainder
+        //like above, but repeated to generate two exact bitmasks and a non empty remainder
         let len = 2 * 64 + 32;
 
         let int_array = Int32Array::new_null(len);

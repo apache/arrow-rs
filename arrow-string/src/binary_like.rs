@@ -56,7 +56,7 @@ impl std::fmt::Display for Op {
     }
 }
 
-pub(crate) fn binary_apply<'a, 'i, T: BinaryArrayType<'a> + 'a>(
+pub(crate) fn binary_apply<'a, T: BinaryArrayType<'a> + 'a>(
     op: Op,
     l: T,
     l_s: bool,
@@ -65,7 +65,7 @@ pub(crate) fn binary_apply<'a, 'i, T: BinaryArrayType<'a> + 'a>(
     r_s: bool,
     r_v: Option<&'a dyn AnyDictionaryArray>,
 ) -> Result<BooleanArray, ArrowError> {
-    let l_len = l_v.map(|l| l.len()).unwrap_or(l.len());
+    let l_len = l_v.map_or_else(|| l.len(), |l| l.len());
     if r_s {
         let idx = match r_v {
             Some(dict) if dict.null_count() != 0 => return Ok(BooleanArray::new_null(l_len)),
@@ -132,7 +132,7 @@ fn vectored_iter<'a, T: BinaryArrayType<'a> + 'a>(
     let nulls = a_v.nulls();
     let keys = a_v.normalized_keys();
     keys.into_iter().enumerate().map(move |(idx, key)| {
-        if nulls.map(|n| n.is_null(idx)).unwrap_or_default() || a.is_null(key) {
+        if nulls.is_some_and(|n| n.is_null(idx)) || a.is_null(key) {
             return None;
         }
         Some(a.value(key))

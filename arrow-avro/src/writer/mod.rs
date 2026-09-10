@@ -826,13 +826,14 @@ mod tests {
             // TODO: avoid requiring snappy for this file
             #[cfg(feature = "snappy")]
             "avro/alltypes_plain.avro",
-            #[cfg(feature = "snappy")]
+            // Compression codecs are unsupported by Miri
+            #[cfg(all(feature = "snappy", not(miri)))]
             "avro/alltypes_plain.snappy.avro",
-            #[cfg(feature = "zstd")]
+            #[cfg(all(feature = "zstd", not(miri)))]
             "avro/alltypes_plain.zstandard.avro",
-            #[cfg(feature = "bzip2")]
+            #[cfg(all(feature = "bzip2", not(miri)))]
             "avro/alltypes_plain.bzip2.avro",
-            #[cfg(feature = "xz")]
+            #[cfg(all(feature = "xz", not(miri)))]
             "avro/alltypes_plain.xz.avro",
         ]
         .into_iter()
@@ -1278,8 +1279,7 @@ mod tests {
                 arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
             assert_eq!(
                 roundtrip, original,
-                "Round-trip batch mismatch for file: {}",
-                rel
+                "Round-trip batch mismatch for file: {rel}"
             );
         }
         Ok(())
@@ -1637,7 +1637,7 @@ mod tests {
             let editors_field = arrow_schema.field_with_name("editors")?;
             let editors_item_type = match editors_field.data_type() {
                 DataType::List(item_field) => item_field.data_type(),
-                other => panic!("Editors field should be a List, but was {:?}", other),
+                other => panic!("Editors field should be a List, but was {other:?}"),
             };
             assert_eq!(
                 author_type, editors_item_type,
@@ -1883,8 +1883,8 @@ mod tests {
     /// Checks that `actual_meta` contains all of `expected_meta`, and any additional
     /// keys in `actual_meta` are from a permitted set.
     fn assert_metadata_is_superset(
-        expected_meta: &HashMap<String, String>,
-        actual_meta: &HashMap<String, String>,
+        expected_meta: &arrow_schema::Metadata,
+        actual_meta: &arrow_schema::Metadata,
         context: &str,
     ) {
         let allowed_additions: HashSet<&str> =
@@ -2028,7 +2028,7 @@ mod tests {
             .into_owned();
 
         let in_file = File::open(&file_path)
-            .unwrap_or_else(|_| panic!("Failed to open test file: {}", file_path));
+            .unwrap_or_else(|_| panic!("Failed to open test file: {file_path}"));
 
         let reader = ReaderBuilder::new()
             .build(BufReader::new(in_file))
@@ -2119,10 +2119,9 @@ mod tests {
                     .expect("RunArray<Int32Type>");
                 assert_eq!(got_ree, &ree);
             }
-            other => panic!(
-                "Unexpected DataType for round-tripped RunEndEncoded column: {:?}",
-                other
-            ),
+            other => {
+                panic!("Unexpected DataType for round-tripped RunEndEncoded column: {other:?}")
+            }
         }
         Ok(())
     }
@@ -2165,7 +2164,7 @@ mod tests {
                     .expect("RunArray<Int16Type>");
                 assert_eq!(got, &ree);
             }
-            other => panic!("Unexpected DataType: {:?}", other),
+            other => panic!("Unexpected DataType: {other:?}"),
         }
         Ok(())
     }
@@ -2205,7 +2204,7 @@ mod tests {
                     .expect("RunArray<Int64Type>");
                 assert_eq!(got, &ree);
             }
-            other => panic!("Unexpected DataType for REE column: {:?}", other),
+            other => panic!("Unexpected DataType for REE column: {other:?}"),
         }
         Ok(())
     }
@@ -2305,7 +2304,7 @@ mod tests {
                     "Logical values differ after REE slice round-trip"
                 );
             }
-            other => panic!("Unexpected DataType for REE column: {:?}", other),
+            other => panic!("Unexpected DataType for REE column: {other:?}"),
         }
         Ok(())
     }
@@ -2686,6 +2685,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn comprehensive_e2e_test_roundtrip() -> Result<(), AvroError> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test/data/comprehensive_e2e.avro");
@@ -3079,7 +3079,7 @@ mod tests {
                 msg,
                 "AvroBinaryFormat is only supported with Encoder, use build_encoder instead"
             ),
-            other => panic!("expected InvalidArgumentError, got {:?}", other),
+            other => panic!("expected InvalidArgumentError, got {other:?}"),
         }
     }
     #[test]
@@ -3521,6 +3521,7 @@ mod tests {
 
     #[cfg(not(feature = "avro_custom_types"))]
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_roundtrip_float16_no_custom_widens_to_float32() {
         assert_round_trip_widened(
             Arc::new(Float16Array::from(vec![
@@ -3785,6 +3786,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn e2e_types_and_schema_alignment() -> Result<(), AvroError> {
         // Values are chosen to:
         // - exercise full UInt64 range when `avro_custom_types` is enabled
@@ -3914,9 +3916,7 @@ mod tests {
         if cfg!(feature = "avro_custom_types") {
             assert!(
                 schemas_equal_ignoring_metadata(rt_arrow_schema.as_ref(), &schema),
-                "Schema fields mismatch.\nExpected: {:?}\nGot: {:?}",
-                schema,
-                rt_arrow_schema
+                "Schema fields mismatch.\nExpected: {schema:?}\nGot: {rt_arrow_schema:?}"
             );
             for field_name in ["u64", "f16", "iv_ym", "iv_dt", "iv_mdn"] {
                 let field = rt_arrow_schema
@@ -3924,8 +3924,7 @@ mod tests {
                     .expect("field exists");
                 assert!(
                     field.metadata().get(AVRO_NAME_METADATA_KEY).is_some(),
-                    "Field '{}' should have avro.name metadata",
-                    field_name
+                    "Field '{field_name}' should have avro.name metadata"
                 );
             }
         } else {
@@ -3975,9 +3974,7 @@ mod tests {
             ]);
             assert!(
                 schemas_equal_ignoring_metadata(rt_arrow_schema.as_ref(), &exp_schema),
-                "Schema fields mismatch.\nExpected: {:?}\nGot: {:?}",
-                exp_schema,
-                rt_arrow_schema
+                "Schema fields mismatch.\nExpected: {exp_schema:?}\nGot: {rt_arrow_schema:?}"
             );
             for field_name in ["iv_ym", "iv_dt", "iv_mdn"] {
                 let field = rt_arrow_schema
@@ -3985,8 +3982,7 @@ mod tests {
                     .expect("field exists");
                 assert!(
                     field.metadata().get(AVRO_NAME_METADATA_KEY).is_some(),
-                    "Field '{}' should have avro.name metadata",
-                    field_name
+                    "Field '{field_name}' should have avro.name metadata"
                 );
             }
         }

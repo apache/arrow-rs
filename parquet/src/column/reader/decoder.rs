@@ -273,7 +273,7 @@ impl LevelDecoder {
                 decoder.set_data(data)?;
                 Ok(Self::Rle(decoder))
             }
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Encoding::BIT_PACKED => Ok(Self::Packed(BitReader::new(data), bit_width)),
             _ => unreachable!("invalid level encoding: {}", encoding),
         }
@@ -392,7 +392,7 @@ impl RepetitionLevelDecoderImpl {
     /// and returns the number of "complete" records along with the corresponding number of values
     ///
     /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
-    fn count_records(&mut self, records_to_read: usize, num_levels: usize) -> (bool, usize, usize) {
+    fn count_records(&self, records_to_read: usize, num_levels: usize) -> (bool, usize, usize) {
         let mut records_read = 0;
 
         let levels = num_levels.min(self.buffer_len - self.buffer_offset);
@@ -514,6 +514,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_skip_rep_levels() {
         for _ in 0..10 {
             let mut rng = rng();

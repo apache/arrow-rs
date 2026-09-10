@@ -18,14 +18,12 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
 
 use chrono::DateTime;
 use std::sync::Arc;
-
-extern crate arrow;
 
 use arrow::array::*;
 use arrow::compute::cast;
@@ -137,7 +135,7 @@ fn build_string_float_array(size: usize, null_density: f32) -> ArrayRef {
             builder.append_null()
         } else {
             builder.append_value(
-                rng.random_range(-999_999_999f32..999_999_999f32)
+                rng.random_range(-1_000_000_000_f32..1_000_000_000_f32)
                     .to_string(),
             )
         }
@@ -174,6 +172,28 @@ fn build_float64_array_invalid_items(size: usize, null_density: f32) -> ArrayRef
     build_array_with_samples!(builder, size, null_density, invalid_values)
 }
 
+// Builds a BinaryArray of `size` rows over `unique_count` distinct byte strings.
+// `null_every` controls null density: Some(n) inserts a null every n rows, None means no nulls.
+// Binary and Utf8 both route through pack_byte_to_dictionary, so binary covers both paths.
+fn build_binary_array_for_dict_cast(
+    size: usize,
+    unique_count: usize,
+    null_every: Option<usize>,
+) -> ArrayRef {
+    let values: Vec<Vec<u8>> = (0..unique_count)
+        .map(|i| format!("value{i:08}").into_bytes())
+        .collect();
+    let mut builder = BinaryBuilder::with_capacity(size, size * 10);
+    for i in 0..size {
+        if null_every.is_some_and(|n| i % n == 0) {
+            builder.append_null();
+        } else {
+            builder.append_value(&values[i % unique_count]);
+        }
+    }
+    Arc::new(builder.finish())
+}
+
 fn build_dict_array(size: usize) -> ArrayRef {
     let values = StringArray::from_iter([
         Some("small"),
@@ -204,6 +224,34 @@ fn build_nested_dict_array(size: usize) -> ArrayRef {
     Arc::new(DictionaryArray::new(outer_keys, Arc::new(inner)))
 }
 
+// Keys for a `size` row dictionary, spread over `distinct` values so a cast has to touch
+// the whole values buffer rather than a contiguous prefix of it.
+fn dict_keys(size: usize, distinct: usize) -> UInt64Array {
+    let mut rng = seedable_rng();
+    let range = Uniform::new(0, distinct as u64).unwrap();
+    UInt64Array::from_iter_values((0..size).map(|_| rng.sample(range)))
+}
+
+// `Dictionary<UInt64, Utf8>` of `size` rows over `distinct` values, alternating between
+// values short enough to inline into a view and longer ones that reference the buffer.
+//
+// Different implementation paths may be taken based on the ratio of rows to distinct
+// values.
+fn build_string_dict_array(size: usize, distinct: usize) -> ArrayRef {
+    let values = StringArray::from_iter_values((0..distinct).map(|i| {
+        if i % 2 == 0 {
+            format!("val {i}")
+        } else {
+            format!("dictionary value {i:07}")
+        }
+    }));
+
+    Arc::new(DictionaryArray::new(
+        dict_keys(size, distinct),
+        Arc::new(values),
+    ))
+}
+
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
@@ -231,10 +279,26 @@ fn add_benchmark(c: &mut Criterion) {
     let string_array = build_string_array(512);
     let wide_string_array = cast(&string_array, &DataType::LargeUtf8).unwrap();
 
+    let binary_low_card = build_binary_array_for_dict_cast(10_000, 25, Some(20));
+    let binary_med_card = build_binary_array_for_dict_cast(10_000, 500, Some(20));
+    let binary_high_card = build_binary_array_for_dict_cast(10_000, 2_500, Some(20));
+    let binary_low_card_no_nulls = build_binary_array_for_dict_cast(10_000, 25, None);
+    let binary_med_card_no_nulls = build_binary_array_for_dict_cast(10_000, 500, None);
+    let binary_high_card_no_nulls = build_binary_array_for_dict_cast(10_000, 2_500, None);
+
     let dict_array = build_dict_array(10_000);
     let nested_dict_array = build_nested_dict_array(10_000);
     let string_view_array = cast(&dict_array, &DataType::Utf8View).unwrap();
     let binary_view_array = cast(&string_view_array, &DataType::BinaryView).unwrap();
+
+    // the dictionary is far larger than the array is long, as after a selective filter.
+    // `dict_array` above is the opposite shape, many rows over few dictionary values.
+    let sparse_dict_array = build_string_dict_array(1_024, 32_768);
+    let sparse_binary_dict_array = cast(
+        &sparse_dict_array,
+        &DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Binary)),
+    )
+    .unwrap();
 
     let string_float_array_normal = build_string_float_array(5_000, 0.1);
     let float64_array_cast_to_decimal = build_float64_array_for_cast_to_decimal(8_000, 0.1);
@@ -266,6 +330,12 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast int64 to int32 512", |b| {
         b.iter(|| cast_array(&i64_array, DataType::Int32))
+    });
+    c.bench_function("cast int64 to decimal32(9, 0) 512", |b| {
+        b.iter(|| cast_array(&i64_array, DataType::Decimal32(9, 0)))
+    });
+    c.bench_function("cast int64 to decimal32(9, -1) 512", |b| {
+        b.iter(|| cast_array(&i64_array, DataType::Decimal32(9, -1)))
     });
     c.bench_function("cast date64 to date32 512", |b| {
         b.iter(|| cast_array(&date64_array, DataType::Date32))
@@ -354,11 +424,65 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast dict to string view", |b| {
         b.iter(|| cast_array(&dict_array, DataType::Utf8View))
     });
+    c.bench_function("cast dict to string view (sparse)", |b| {
+        b.iter(|| cast_array(&sparse_dict_array, DataType::Utf8View))
+    });
+    c.bench_function("cast binary dict to string view (sparse)", |b| {
+        b.iter(|| cast_array(&sparse_binary_dict_array, DataType::Utf8View))
+    });
     c.bench_function("cast nested dict to dict", |b| {
         b.iter(|| {
             cast_array(
                 &nested_dict_array,
                 DataType::Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict low cardinality", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_low_card,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict medium cardinality", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_med_card,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict high cardinality", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_high_card,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict low cardinality no nulls", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_low_card_no_nulls,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict medium cardinality no nulls", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_med_card_no_nulls,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            )
+        })
+    });
+    c.bench_function("cast binary to dict high cardinality no nulls", |b| {
+        b.iter(|| {
+            cast_array(
+                &binary_high_card_no_nulls,
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             )
         })
     });
@@ -408,6 +532,11 @@ fn add_benchmark(c: &mut Criterion) {
         "cast string to decimal128(38, 3)",
         string_float_array_normal,
         DataType::Decimal128(38, 3)
+    );
+    benchmark_cast!(
+        "cast string to decimal256(76, 3)",
+        string_float_array_normal,
+        DataType::Decimal256(76, 3)
     );
 
     // cast float64 to decimals

@@ -84,7 +84,7 @@ impl Header {
     /// Returns an iterator over the meta keys in this header
     pub fn metadata(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
         let mut last = 0;
-        self.meta_offsets.chunks_exact(2).map(move |w| {
+        self.meta_offsets.as_chunks::<2>().0.iter().map(move |w| {
             let start = last;
             last = w[1];
             (&self.meta_buf[start..w[0]], &self.meta_buf[w[0]..w[1]])
@@ -134,7 +134,7 @@ impl Header {
 /// Header information for an Avro OCF file.
 ///
 /// The header can be parsed once and shared to construct multiple readers
-/// for the same file, and so this struct is designed to be cheaply clonable.
+/// for the same file, and so this struct is designed to be cheaply cloneable.
 #[derive(Clone)]
 pub struct HeaderInfo(Arc<HeaderInfoInner>);
 
@@ -314,8 +314,9 @@ impl HeaderDecoder {
                 }
                 HeaderDecoderState::Sync => {
                     let to_decode = buf.len().min(self.bytes_remaining);
-                    let write = &mut self.sync_marker[16 - to_decode..];
-                    write[..to_decode].copy_from_slice(&buf[..to_decode]);
+                    // Fill from the front: the marker may arrive split across decode() calls.
+                    let offset = 16 - self.bytes_remaining;
+                    self.sync_marker[offset..offset + to_decode].copy_from_slice(&buf[..to_decode]);
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];
                     if self.bytes_remaining == 0 {

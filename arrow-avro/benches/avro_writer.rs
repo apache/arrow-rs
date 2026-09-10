@@ -17,10 +17,6 @@
 
 //! Benchmarks for `arrow-avro` Writer (Avro Object Container File)
 
-extern crate arrow_avro;
-extern crate criterion;
-extern crate once_cell;
-
 use arrow_array::{
     ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Decimal256Array, FixedSizeBinaryArray,
     Float32Array, Float64Array, ListArray, PrimitiveArray, RecordBatch, StringArray, StructArray,
@@ -35,7 +31,7 @@ use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionFields,
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use once_cell::sync::Lazy;
 use rand::{
-    Rng, SeedableRng,
+    RngExt, SeedableRng,
     distr::uniform::{SampleRange, SampleUniform},
     rngs::StdRng,
 };
@@ -623,10 +619,18 @@ static DECIMAL256_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
 static MAP_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
     use arrow_array::builder::{MapBuilder, StringBuilder};
 
-    let key_field = Arc::new(Field::new("keys", DataType::Utf8, false));
-    let value_field = Arc::new(Field::new("values", DataType::Utf8, true));
+    let key_field = Arc::new(Field::new(
+        Field::MAP_KEY_FIELD_DEFAULT_NAME,
+        DataType::Utf8,
+        false,
+    ));
+    let value_field = Arc::new(Field::new(
+        Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+        DataType::Utf8,
+        true,
+    ));
     let entry_struct = Field::new(
-        "entries",
+        Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
         DataType::Struct(vec![key_field.as_ref().clone(), value_field.as_ref().clone()].into()),
         false,
     );

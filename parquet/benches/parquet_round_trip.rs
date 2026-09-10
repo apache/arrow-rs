@@ -29,7 +29,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::Encoding;
 use parquet::file::properties::WriterProperties;
 use rand::{
-    Rng, SeedableRng,
+    RngExt, SeedableRng,
     distr::{Alphanumeric, StandardUniform},
     prelude::StdRng,
 };

@@ -102,7 +102,7 @@ impl GetTablesBuilder {
     ///     - "%" means to match any substring with 0 or more characters.
     ///     - "_" means to match any one character.
     /// - `table_types`:  Specifies a filter of table types which must match.
-    ///   An empy Vec matches all table types.
+    ///   An empty Vec matches all table types.
     /// - `include_schema`: Specifies if the Arrow schema should be returned for found tables.
     ///
     /// [`CommandGetTables`]: crate::sql::CommandGetTables
@@ -267,7 +267,7 @@ impl GetTablesBuilder {
 
     /// Return the schema of the RecordBatch that will be returned from [`CommandGetTables`]
     ///
-    /// Note the schema differs based on the values of `include_schema
+    /// Note the schema differs based on the values of `include_schema`
     ///
     /// [`CommandGetTables`]: crate::sql::CommandGetTables
     pub fn schema(&self) -> SchemaRef {

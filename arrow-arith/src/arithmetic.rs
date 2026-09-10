@@ -114,7 +114,7 @@ pub fn multiply_fixed_point_checked(
             .with_precision_and_scale(precision, required_scale);
     }
 
-    try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
+    let product = try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
         let a = i256::from_i128(a);
         let b = i256::from_i128(b);
 
@@ -123,8 +123,8 @@ pub fn multiply_fixed_point_checked(
         mul.to_i128().ok_or_else(|| {
             ArrowError::ArithmeticOverflow(format!("Overflow happened on: {a:?} * {b:?}"))
         })
-    })
-    .and_then(|a| a.with_precision_and_scale(precision, required_scale))
+    })?;
+    product.with_precision_and_scale(precision, required_scale)
 }
 
 /// Perform `left * right` operation on two decimal arrays. If either left or right value is
@@ -158,15 +158,15 @@ pub fn multiply_fixed_point(
             .with_precision_and_scale(precision, required_scale);
     }
 
-    binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
+    let product = binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
         let a = i256::from_i128(a);
         let b = i256::from_i128(b);
 
         let mut mul = a.wrapping_mul(b);
         mul = divide_and_round::<Decimal256Type>(mul, divisor);
         mul.as_i128()
-    })
-    .and_then(|a| a.with_precision_and_scale(precision, required_scale))
+    })?;
+    product.with_precision_and_scale(precision, required_scale)
 }
 
 /// Divide a decimal native value by given divisor and round the result.

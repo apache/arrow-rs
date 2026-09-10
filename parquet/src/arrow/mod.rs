@@ -179,7 +179,13 @@
 //! assert_eq!(50, record_batch.num_rows());
 //! ```
 
-experimental!(mod array_reader);
+// Keep these module declarations explicit so rustfmt discovers their source files.
+// See the comment in the crate root.
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+pub mod array_reader;
+#[cfg(not(feature = "experimental"))]
+mod array_reader;
 pub mod arrow_reader;
 pub mod arrow_writer;
 mod buffer;
@@ -195,7 +201,11 @@ pub mod push_decoder;
 mod in_memory_row_group;
 mod record_reader;
 
-experimental!(mod schema);
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+pub mod schema;
+#[cfg(not(feature = "experimental"))]
+mod schema;
 
 use std::fmt::Debug;
 
@@ -410,7 +420,7 @@ impl ProjectionMask {
     /// ```
     pub fn intersect(&mut self, other: &Self) {
         match (self.mask.as_ref(), other.mask.as_ref()) {
-            (None, _) => self.mask = other.mask.clone(),
+            (None, _) => self.mask.clone_from(&other.mask),
             (_, None) => {}
             (Some(a), Some(b)) => {
                 debug_assert_eq!(a.len(), b.len());
@@ -553,6 +563,7 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_metadata_read_write_roundtrip_page_index() {
         let parquet_bytes = create_parquet_file();
 

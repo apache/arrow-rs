@@ -318,7 +318,7 @@ async fn send_app_metadata(
     .map_err(|e| Status::internal(format!("Could not send PutResult: {e:?}")))
 }
 
-async fn record_batch_from_message(
+fn record_batch_from_message(
     message: ipc::Message<'_>,
     data_body: &Buffer,
     schema_ref: SchemaRef,
@@ -341,7 +341,7 @@ async fn record_batch_from_message(
         .map_err(|e| Status::internal(format!("Could not convert to RecordBatch: {e:?}")))
 }
 
-async fn dictionary_from_message(
+fn dictionary_from_message(
     message: ipc::Message<'_>,
     data_body: &Buffer,
     schema_ref: SchemaRef,
@@ -393,8 +393,7 @@ async fn save_uploaded_chunks(
                     &Buffer::from(data.data_body.as_ref()),
                     schema_ref.clone(),
                     &dictionaries_by_id,
-                )
-                .await?;
+                )?;
 
                 chunks.push(batch);
             }
@@ -404,8 +403,7 @@ async fn save_uploaded_chunks(
                     &Buffer::from(data.data_body.as_ref()),
                     schema_ref.clone(),
                     &mut dictionaries_by_id,
-                )
-                .await?;
+                )?;
             }
             t => {
                 return Err(Status::internal(format!(

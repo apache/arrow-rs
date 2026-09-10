@@ -45,3 +45,6 @@ name = "parquet_variant_json"
 bench = false
 
 [dev-dependencies]
+
+[lints]
+workspace = true

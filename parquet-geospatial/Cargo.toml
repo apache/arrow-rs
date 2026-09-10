@@ -41,3 +41,6 @@ wkt = { version = "0.14" }
 [lib]
 name = "parquet_geospatial"
 bench = false
+
+[lints]
+workspace = true

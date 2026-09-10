@@ -31,7 +31,7 @@ pub(super) fn lengths_equal<T: ArrowNativeType + Integer>(lhs: &[T], rhs: &[T]) 
 
     if lhs[0] == T::zero() && rhs[0] == T::zero() {
         return lhs == rhs;
-    };
+    }
 
     // The expensive case, e.g.
     // [0, 2, 4, 6, 9] == [4, 6, 8, 10, 13]

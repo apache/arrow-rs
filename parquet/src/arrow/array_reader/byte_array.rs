@@ -461,7 +461,7 @@ impl ByteArrayDecoderDeltaLength {
 
         let mut total_bytes = 0;
 
-        for l in lengths.iter() {
+        for l in &lengths {
             if *l < 0 {
                 return Err(ParquetError::General(
                     "negative delta length byte array length".to_string(),
@@ -644,21 +644,21 @@ mod tests {
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
 
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
+            assert_eq!(output.values.as_slice(), b"hello");
             assert_eq!(output.offsets.as_slice(), &[0, 5]);
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(output.values.as_slice(), "helloworld".as_bytes());
+            assert_eq!(output.values.as_slice(), b"helloworld");
             assert_eq!(output.offsets.as_slice(), &[0, 5, 10]);
 
             assert_eq!(decoder.read(&mut output, 2).unwrap(), 2);
-            assert_eq!(output.values.as_slice(), "helloworldab".as_bytes());
+            assert_eq!(output.values.as_slice(), b"helloworldab");
             assert_eq!(output.offsets.as_slice(), &[0, 5, 10, 11, 12]);
 
             assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
 
             let valid = [false, false, true, true, false, true, true, false, false];
-            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+            let valid_buffer = Buffer::from_iter(valid.iter().copied());
 
             output
                 .pad_nulls(0, 4, valid.len(), valid_buffer.as_slice())
@@ -701,20 +701,20 @@ mod tests {
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
 
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
+            assert_eq!(output.values.as_slice(), b"hello");
             assert_eq!(output.offsets.as_slice(), &[0, 5]);
 
             assert_eq!(decoder.skip_values(1).unwrap(), 1);
             assert_eq!(decoder.skip_values(1).unwrap(), 1);
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(output.values.as_slice(), "hellob".as_bytes());
+            assert_eq!(output.values.as_slice(), b"hellob");
             assert_eq!(output.offsets.as_slice(), &[0, 5, 6]);
 
             assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
 
             let valid = [false, false, true, true, false, false];
-            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+            let valid_buffer = Buffer::from_iter(valid.iter().copied());
 
             output
                 .pad_nulls(0, 2, valid.len(), valid_buffer.as_slice())

@@ -324,7 +324,7 @@ impl<'a> Parser<'a> {
                             &format!("Expected None, Some, or a timezone string, got {tok:?}"),
                         ));
                     }
-                };
+                }
                 self.expect_token(Token::RParen)?;
             }
             // No timezone (e.g `Timestamp(ns)`)
@@ -353,7 +353,7 @@ impl<'a> Parser<'a> {
                     &format!("Time32 time unit must be 's' or 'ms', got '{time_unit}'"),
                 ));
             }
-        };
+        }
         self.expect_token(Token::RParen)?;
         Ok(DataType::Time32(time_unit))
     }
@@ -370,7 +370,7 @@ impl<'a> Parser<'a> {
                     &format!("Time64 time unit must be 'µs' or 'ns', got '{time_unit}'"),
                 ));
             }
-        };
+        }
         self.expect_token(Token::RParen)?;
         Ok(DataType::Time64(time_unit))
     }
@@ -512,7 +512,7 @@ impl<'a> Parser<'a> {
             let field = self.parse_field()?;
             fields.push(Arc::new(field));
             match self.next_token()? {
-                Token::Comma => continue,
+                Token::Comma => {}
                 Token::RParen => break,
                 tok => {
                     return Err(make_error(
@@ -597,18 +597,50 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses the next RunEndEncoded (called after `RunEndEncoded` has been consumed)
-    /// E.g: RunEndEncoded("run_ends": UInt32, "values": nonnull Int32)
+    /// Parses the next RunEndEncoded (called after `RunEndEncoded` has been consumed).
+    ///
+    /// Compact form (default field names): `RunEndEncoded(non-null Int32, non-null Utf8)`
+    /// Verbose form (custom field names):  `RunEndEncoded("re": Int32, "v": non-null Utf8)`
     fn parse_run_end_encoded(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let run_ends = self.parse_field()?;
-        self.expect_token(Token::Comma)?;
-        let values = self.parse_field()?;
+
+        // Distinguish compact from verbose by peeking: verbose starts with a double-quoted name.
+        let verbose = matches!(
+            self.tokenizer.peek(),
+            Some(Ok(Token::DoubleQuotedString(_)))
+        );
+
+        let (run_ends, values) = if verbose {
+            let run_ends = self.parse_ree_verbose_field()?;
+            self.expect_token(Token::Comma)?;
+            let values = self.parse_ree_verbose_field()?;
+            (run_ends.with_nullable(false), values)
+        } else {
+            self.parse_opt_nullable(); // run_ends is always non-null; consume the token if present
+            let re_type = self.parse_next_type()?;
+            self.expect_token(Token::Comma)?;
+            let v_nullable = self.parse_opt_nullable();
+            let v_type = self.parse_next_type()?;
+            (
+                Field::new(Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME, re_type, false),
+                Field::new(Field::REE_VALUES_FIELD_DEFAULT_NAME, v_type, v_nullable),
+            )
+        };
+
         self.expect_token(Token::RParen)?;
         Ok(DataType::RunEndEncoded(
             Arc::new(run_ends),
             Arc::new(values),
         ))
+    }
+
+    /// Parses `"name": [non-null] Type` used in the verbose REE form.
+    fn parse_ree_verbose_field(&mut self) -> ArrowResult<Field> {
+        let name = self.parse_double_quoted_string("RunEndEncoded field")?;
+        self.expect_token(Token::Colon)?;
+        let nullable = self.parse_opt_nullable();
+        let data_type = self.parse_next_type()?;
+        Ok(Field::new(name, data_type, nullable))
     }
 
     /// consume the next token and return `false` if the field is `nonnull`.
@@ -863,7 +895,6 @@ impl Iterator for Tokenizer<'_> {
                 ' ' => {
                     // skip whitespace
                     self.next_char();
-                    continue;
                 }
                 '"' => {
                     return Some(self.parse_quoted_string(QuoteType::Double));
@@ -1209,9 +1240,9 @@ mod test {
             DataType::Map(
                 Arc::new(Field::new_map(
                     "nested_map",
-                    "entries",
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Int32, true),
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
                     false,
                     true,
                 )),
@@ -1223,14 +1254,38 @@ mod test {
             ),
             DataType::RunEndEncoded(
                 Arc::new(Field::new(
-                    "nested_run_end_encoded",
+                    "run_ends",
                     DataType::RunEndEncoded(
                         Arc::new(Field::new("run_ends", DataType::UInt32, false)),
                         Arc::new(Field::new("values", DataType::Int32, true)),
                     ),
-                    true,
+                    false,
                 )),
                 Arc::new(Field::new("values", DataType::Int32, true)),
+            ),
+            // non-default field names trigger verbose display form
+            DataType::RunEndEncoded(
+                Arc::new(Field::new(
+                    "run_ends",
+                    DataType::RunEndEncoded(
+                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
+                        Arc::new(Field::new("values", DataType::Int32, true)),
+                    ),
+                    false,
+                )),
+                Arc::new(Field::new("named_values", DataType::Int32, false)),
+            ),
+            // verbose form with non-null inner values
+            DataType::RunEndEncoded(
+                Arc::new(Field::new(
+                    "run_ends",
+                    DataType::RunEndEncoded(
+                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
+                        Arc::new(Field::new("values", DataType::Int32, false)),
+                    ),
+                    false,
+                )),
+                Arc::new(Field::new("named_values", DataType::Int32, false)),
             ),
         ]
     }
@@ -1429,7 +1484,7 @@ mod test {
                     ),
                 ])),
             ),
-            (r#"Struct()"#, Struct(Fields::empty())),
+            (r"Struct()", Struct(Fields::empty())),
             (
                 "FixedSizeList(4, Int64)",
                 FixedSizeList(Arc::new(Field::new_list_field(Int64, true)), 4),
@@ -1461,12 +1516,12 @@ mod test {
             ("", "Error finding next token"),
             ("null", "Unsupported type 'null'"),
             ("Nu", "Unsupported type 'Nu'"),
-            (r#"Timestamp(ns, +00:00)"#, "Error unknown token: +00"),
+            (r"Timestamp(ns, +00:00)", "Error unknown token: +00"),
             (
                 r#"Timestamp(ns, "+00:00)"#,
                 r#"Unterminated string at: "+00:00)"#,
             ),
-            (r#"Timestamp(ns, "")"#, r#"empty strings aren't allowed"#),
+            (r#"Timestamp(ns, "")"#, r"empty strings aren't allowed"),
             (
                 r#"Timestamp(ns, "+00:00"")"#,
                 r#"Parser error: Unterminated string at: ")"#,

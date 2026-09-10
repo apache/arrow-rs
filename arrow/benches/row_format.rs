@@ -17,7 +17,6 @@
 
 #[macro_use]
 extern crate criterion;
-extern crate core;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Int64Type, UInt64Type};
@@ -104,7 +103,7 @@ fn bench_iter(c: &mut Criterion) {
 
     c.bench_function("iterate rows", |b| {
         b.iter(|| {
-            for r in rows.iter() {
+            for r in &rows {
                 hint::black_box(r.as_ref());
             }
         })
