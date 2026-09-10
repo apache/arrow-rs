@@ -487,6 +487,9 @@ impl WriterProperties {
     }
 
     /// Returns custom delta binary packed encoder options for a specific column.
+    ///
+    /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
+    /// the integer sub-encoders used by `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY`.
     pub fn delta_binary_packed_encoder_options(
         &self,
         col: &ColumnPath,
@@ -1080,6 +1083,9 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets the default delta binary packed encoder block layout for all columns.
+    ///
+    /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
+    /// the integer sub-encoders used by `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY`.
     pub fn set_delta_binary_packed_encoder_options(
         mut self,
         value: DeltaBinaryPackedEncoderOptions,
@@ -1384,6 +1390,8 @@ impl WriterPropertiesBuilder {
     /// Sets the delta binary packed encoder block layout for a specific column.
     ///
     /// Takes precedence over [`Self::set_delta_binary_packed_encoder_options`].
+    /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
+    /// the integer sub-encoders used by `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY`.
     pub fn set_column_delta_binary_packed_encoder_options(
         mut self,
         col: ColumnPath,

@@ -20,12 +20,15 @@ use std::sync::Arc;
 
 use arrow_array::{ArrayRef, StringArray};
 use arrow_schema::{DataType as ArrowDataType, Field, Schema};
-use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::arrow::arrow_writer::{ArrowRowGroupWriterFactory, compute_leaves};
 use parquet::basic::Encoding;
 use parquet::data_type::{BoolType, ByteArray, ByteArrayType, DataType, Int32Type, Int64Type};
-use parquet::encoding::{DictEncoder, Encoder, get_encoder};
+use parquet::decoding::{Decoder, DeltaBitPackDecoder};
+use parquet::encoding::{
+    DeltaBinaryPackedEncoderOptions, DeltaBitPackEncoder, DictEncoder, Encoder, get_encoder,
+};
 use parquet::encodings::levels::LevelEncoder;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
@@ -58,6 +61,57 @@ fn bench_encoding<T: DataType>(c: &mut Criterion, name: &str, values: &[T::T], e
             black_box(encoder.flush_buffer().unwrap());
         });
     });
+    group.finish();
+}
+
+fn bench_delta_binary_packed_layouts(c: &mut Criterion, name: &str, values: &[i32]) {
+    let layouts = [(128, 4), (256, 8), (256, 4), (512, 8)];
+    let mut group = c.benchmark_group(format!("delta_binary_packed_layout/i32/{name}"));
+    group.throughput(Throughput::Elements(values.len() as u64));
+
+    for (block_size, mini_blocks_per_block) in layouts {
+        let options =
+            DeltaBinaryPackedEncoderOptions::try_new(block_size, mini_blocks_per_block).unwrap();
+        let mut encoder = DeltaBitPackEncoder::<Int32Type>::new_with_options(options);
+        encoder.put(values).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+        let layout = format!(
+            "{block_size}/{mini_blocks_per_block}/{} bytes",
+            encoded.len()
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("encode", &layout),
+            &options,
+            |b, options| {
+                b.iter(|| {
+                    let mut encoder = DeltaBitPackEncoder::<Int32Type>::new_with_options(*options);
+                    encoder.put(black_box(values)).unwrap();
+                    black_box(encoder.flush_buffer().unwrap());
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("decode", &layout),
+            &encoded,
+            |b, encoded| {
+                b.iter_batched(
+                    || {
+                        (
+                            DeltaBitPackDecoder::<Int32Type>::new(),
+                            vec![0; values.len()],
+                        )
+                    },
+                    |(mut decoder, mut output)| {
+                        decoder.set_data(encoded.clone(), values.len()).unwrap();
+                        black_box(decoder.get(&mut output).unwrap());
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
     group.finish();
 }
 
@@ -141,6 +195,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(0);
     let mut bools = Vec::with_capacity(NUM_VALUES);
     let mut i32s = Vec::with_capacity(NUM_VALUES);
+    let mut locally_varying_i32s = Vec::with_capacity(NUM_VALUES);
     let mut i64s = Vec::with_capacity(NUM_VALUES);
     let mut byte_arrays = Vec::with_capacity(NUM_VALUES);
     let mut dictionary_values = Vec::with_capacity(NUM_VALUES);
@@ -162,6 +217,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         levels.push(rng.random_range(0..=3));
     }
 
+    let mut locally_varying_rng = StdRng::seed_from_u64(1);
+    let mut locally_varying_value = 0_i32;
+    for i in 0..NUM_VALUES {
+        let delta = if (i / 32) % 8 == 0 {
+            locally_varying_rng.random_range(-1_000_000..=1_000_000)
+        } else {
+            locally_varying_rng.random_range(-4..=4)
+        };
+        locally_varying_value = locally_varying_value.wrapping_add(delta);
+        locally_varying_i32s.push(locally_varying_value);
+    }
+
     // Direct BitWriter and RLE/bit-packed hybrid users.
     bench_encoding::<BoolType>(c, "plain/bool/bit_packed", &bools, Encoding::PLAIN);
     bench_encoding::<BoolType>(c, "rle/bool/bit_packed", &bools, Encoding::RLE);
@@ -179,6 +246,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         &i64s,
         Encoding::DELTA_BINARY_PACKED,
     );
+    bench_delta_binary_packed_layouts(c, "uniform_bit_width", &i32s);
+    bench_delta_binary_packed_layouts(c, "locally_varying_bit_width", &locally_varying_i32s);
 
     // These byte-array encodings transitively use DELTA_BINARY_PACKED for
     // lengths, prefix lengths, and suffix lengths.
