@@ -37,7 +37,11 @@ use std::sync::Arc;
 
 pub(crate) enum ShreddedPathStep {
     /// Path step succeeded, return the new shredding state
-    Success(ShreddingState),
+    Success {
+        state: ShreddingState,
+        /// Validity after evaluating this path element.
+        path_nulls: Option<NullBuffer>,
+    },
     /// The path element is not present in the `typed_value` column and the `value` column is
     /// all-null, so we know it does not exist. It, and all paths under it, are all-NULL.
     Missing,
@@ -52,7 +56,7 @@ pub(crate) enum ShreddedPathStep {
 fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
     typed_value: &dyn Array,
     index: usize,
-) -> Result<Option<ShreddingState>> {
+) -> Result<Option<(ShreddingState, Option<NullBuffer>)>> {
     let list_array = typed_value.as_any().downcast_ref::<L>().ok_or_else(|| {
         ArrowError::ComputeError(format!(
             "Expected array type '{}' while handling list-like path step, got '{}'",
@@ -84,6 +88,10 @@ fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
     }
 
     let index_array = UInt64Array::from(take_indices);
+    // Keep index validity separate from the gathered child arrays: both child columns are null
+    // for an out-of-bounds index, but that same physical state represents an explicit Variant null
+    // for a present list element.
+    let path_nulls = index_array.nulls().cloned();
 
     // Gather both typed and fallback values at the requested element index.
     let taken_value = take(value_array, &index_array, None)?;
@@ -91,7 +99,10 @@ fn take_list_like_index_as_shredding_state<L: ListLikeArray + 'static>(
         .map(|typed| take(typed, &index_array, None))
         .transpose()?;
 
-    Ok(Some(ShreddingState::new(taken_value, taken_typed)))
+    Ok(Some((
+        ShreddingState::new(taken_value, taken_typed),
+        path_nulls,
+    )))
 }
 
 /// Given a shredded variant field -- a `(value?, typed_value?)` pair -- try to take one path step
@@ -155,7 +166,10 @@ pub(crate) fn follow_shredded_path_element(
             })?;
 
             let state = ShreddingState::try_from(struct_array)?;
-            Ok(ShreddedPathStep::Success(state))
+            Ok(ShreddedPathStep::Success {
+                state,
+                path_nulls: None,
+            })
         }
         VariantPathElement::Index { index } => {
             let state = match typed_value.data_type() {
@@ -178,7 +192,7 @@ pub(crate) fn follow_shredded_path_element(
             };
 
             match state {
-                Some(state) => Ok(ShreddedPathStep::Success(state)),
+                Some((state, path_nulls)) => Ok(ShreddedPathStep::Success { state, path_nulls }),
                 None => Ok(missing_path_step()),
             }
         }
@@ -275,12 +289,14 @@ fn shredded_get_path(
     let mut path_index = 0;
     for path_element in path {
         match follow_shredded_path_element(&shredding_state, path_element, cast_options)? {
-            ShreddedPathStep::Success(state) => {
+            ShreddedPathStep::Success { state, path_nulls } => {
                 // Union nulls from the typed_value we just accessed
                 if let Some(typed_value) = shredding_state.typed_value_column() {
                     accumulated_nulls =
                         NullBuffer::union(accumulated_nulls.as_ref(), typed_value.nulls());
                 }
+                accumulated_nulls =
+                    NullBuffer::union(accumulated_nulls.as_ref(), path_nulls.as_ref());
                 shredding_state = state;
                 path_index += 1;
             }
@@ -1999,8 +2015,8 @@ mod test {
         for (case, array_gen) in shredded_list_like_cases() {
             let result = variant_get(&array_gen(), options.clone()).unwrap();
             let result_variant = VariantArray::try_new(&result).unwrap();
-            assert_eq!(result_variant.value(0), Variant::Null, "{case}");
-            assert_eq!(result_variant.value(1), Variant::Null, "{case}");
+            assert!(result_variant.is_null(0), "{case}");
+            assert!(result_variant.is_null(1), "{case}");
         }
     }
 
@@ -2073,6 +2089,23 @@ mod test {
         .unwrap();
         let expected: ArrayRef = Arc::new(Int64Array::from(vec![None, Some(123)]));
         assert_eq!(&casted, &expected);
+    }
+
+    #[test]
+    fn test_shredded_list_out_of_bounds_is_null() {
+        let json: ArrayRef = Arc::new(StringArray::from(vec!["[]", "[null]", "[1]"]));
+        let input = json_to_variant(&json).unwrap();
+        let list_schema = DataType::new_list(DataType::Int64, true);
+        let shredded = shred_variant(&input, &list_schema).unwrap();
+
+        let options = GetOptions::new_with_path(VariantPath::from(0));
+        let result = variant_get(&ArrayRef::from(shredded), options).unwrap();
+        let result = VariantArray::try_new(&result).unwrap();
+
+        assert!(result.is_null(0));
+        assert!(!result.is_null(1));
+        assert_eq!(result.value(1), Variant::Null);
+        assert_eq!(result.value(2), Variant::Int64(1));
     }
 
     /// Helper to create a shredded list-like variant array used by list index tests.
