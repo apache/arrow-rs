@@ -68,6 +68,13 @@
 //!
 //! Input hints name the pyarrow classes only, and are therefore narrower than what is accepted: the
 //! PyCapsule interface is duck-typed and has no canonical Python type to name.
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 use std::convert::{From, TryFrom};
 use std::ffi::CStr;
