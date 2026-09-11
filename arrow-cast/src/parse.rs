@@ -1653,7 +1653,20 @@ fn parse_interval_components(
     // parse amounts and units
     let Ok(pairs): Result<Vec<(IntervalAmount, IntervalUnit)>, ArrowError> = raw_pairs
         .iter()
-        .map(|(a, u)| Ok((a.parse()?, IntervalUnit::from_str_or_config(*u, config)?)))
+        .map(|(a, u)| {
+            // A unit with no preceding amount (e.g. the "hour" in "5 day hour")
+            // is treated as an amount of zero, matching PostgreSQL. An empty
+            // input that contains no unit at all is not affected.
+            let amount = if a.is_empty() && u.is_some() {
+                IntervalAmount {
+                    integer: 0,
+                    frac: 0,
+                }
+            } else {
+                a.parse()?
+            };
+            Ok((amount, IntervalUnit::from_str_or_config(*u, config)?))
+        })
         .collect()
     else {
         return Err(ArrowError::ParseError(format!(
@@ -2580,14 +2593,50 @@ mod tests {
             .unwrap(),
         );
 
+        // a bare unit contributes zero rather than erroring (#6390)
         assert_eq!(
-            Interval::parse("1h s", &config).unwrap_err().to_string(),
-            r#"Parser error: Invalid input syntax for type interval: "1h s""#
+            Interval::new(0, 0, NANOS_PER_HOUR),
+            Interval::parse("1h s", &config).unwrap(),
         );
 
         assert_eq!(
             Interval::parse("1XX", &config).unwrap_err().to_string(),
             r#"Parser error: Invalid input syntax for type interval: "1XX""#
+        );
+    }
+
+    #[test]
+    fn test_interval_bare_units() {
+        let config = IntervalParseConfig::new(IntervalUnit::Month);
+
+        // "5 day hour" should parse like "5 day 0 hour"
+        assert_eq!(
+            Interval::new(0, 5, 0),
+            Interval::parse("5 day hour", &config).unwrap(),
+        );
+
+        // unit matching is case insensitive
+        assert_eq!(
+            Interval::new(0, 5, 0),
+            Interval::parse("5 day HOUR", &config).unwrap(),
+        );
+
+        // bare unit in the middle of the interval
+        assert_eq!(
+            Interval::new(1, 2, 0),
+            Interval::parse("1 month hour 2 days", &config).unwrap(),
+        );
+
+        // a bare unit alone is zero
+        assert_eq!(
+            Interval::new(0, 0, 0),
+            Interval::parse("hour", &config).unwrap(),
+        );
+
+        // an empty string contains no unit and stays invalid
+        assert_eq!(
+            Interval::parse("", &config).unwrap_err().to_string(),
+            r#"Parser error: Invalid input syntax for type interval: """#
         );
     }
 
@@ -3576,6 +3625,16 @@ mod tests {
         assert_eq!(interval.months, 0);
         assert_eq!(interval.days, 0);
         assert_eq!(interval.nanoseconds, NANOS_PER_SECOND);
+
+        // a bare unit is treated as zero (#6390)
+        let interval = parse_interval_month_day_nano_config(
+            "5 day hour",
+            IntervalParseConfig::new(IntervalUnit::Second),
+        )
+        .unwrap();
+        assert_eq!(interval.months, 0);
+        assert_eq!(interval.days, 5);
+        assert_eq!(interval.nanoseconds, 0);
     }
     #[test]
     fn test_parse_prefix_white_space() {
