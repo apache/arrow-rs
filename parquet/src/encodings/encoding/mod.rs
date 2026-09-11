@@ -24,6 +24,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
+use crate::file::properties::ResolvedColumnProperties;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{BitWriter, num_required_bits};
 use crate::util::prefix::common_prefix_length;
@@ -87,7 +88,19 @@ pub fn get_encoder<T: DataType>(
     encoding: Encoding,
     descr: &ColumnDescPtr,
 ) -> Result<Box<dyn Encoder<T>>> {
-    <T::T as private::GetEncoder>::get_encoder(descr, encoding)
+    <T::T as private::GetEncoder>::get_encoder(descr, encoding, None)
+}
+
+pub(crate) fn get_encoder_with_properties<T: DataType>(
+    encoding: Encoding,
+    descr: &ColumnDescPtr,
+    column_props: &ResolvedColumnProperties,
+) -> Result<Box<dyn Encoder<T>>> {
+    <T::T as private::GetEncoder>::get_encoder(
+        descr,
+        encoding,
+        column_props.delta_binary_packed_encoder_options,
+    )
 }
 
 pub(crate) mod private {
@@ -104,14 +117,16 @@ pub(crate) mod private {
         fn get_encoder<T: DataType<T = Self>>(
             descr: &ColumnDescPtr,
             encoding: Encoding,
+            delta_options: Option<DeltaBinaryPackedEncoderOptions>,
         ) -> Result<Box<dyn Encoder<T>>> {
-            get_encoder_default(descr, encoding)
+            get_encoder_default(descr, encoding, delta_options)
         }
     }
 
     fn get_encoder_default<T: DataType>(
         descr: &ColumnDescPtr,
         encoding: Encoding,
+        delta_options: Option<DeltaBinaryPackedEncoderOptions>,
     ) -> Result<Box<dyn Encoder<T>>> {
         let encoder: Box<dyn Encoder<T>> = match encoding {
             Encoding::PLAIN => Box::new(PlainEncoder::new()),
@@ -121,9 +136,18 @@ pub(crate) mod private {
                 ));
             }
             Encoding::RLE => Box::new(RleValueEncoder::new()),
-            Encoding::DELTA_BINARY_PACKED => Box::new(DeltaBitPackEncoder::new()),
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(DeltaLengthByteArrayEncoder::new()),
-            Encoding::DELTA_BYTE_ARRAY => Box::new(DeltaByteArrayEncoder::new()),
+            Encoding::DELTA_BINARY_PACKED => Box::new(match delta_options {
+                Some(options) => DeltaBitPackEncoder::new_with_options(options),
+                None => DeltaBitPackEncoder::new(),
+            }),
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(match delta_options {
+                Some(options) => DeltaLengthByteArrayEncoder::new_with_options(options),
+                None => DeltaLengthByteArrayEncoder::new(),
+            }),
+            Encoding::DELTA_BYTE_ARRAY => Box::new(match delta_options {
+                Some(options) => DeltaByteArrayEncoder::new_with_options(options),
+                None => DeltaByteArrayEncoder::new(),
+            }),
             Encoding::BYTE_STREAM_SPLIT => match T::get_physical_type() {
                 Type::FIXED_LEN_BYTE_ARRAY => Box::new(VariableWidthByteStreamSplitEncoder::new(
                     descr.type_length(),
@@ -154,10 +178,11 @@ pub(crate) mod private {
         fn get_encoder<T: DataType<T = Self>>(
             descr: &ColumnDescPtr,
             encoding: Encoding,
+            delta_options: Option<DeltaBinaryPackedEncoderOptions>,
         ) -> Result<Box<dyn Encoder<T>>> {
             match encoding {
                 Encoding::ALP => Ok(Box::new(AlpEncoder::new())),
-                _ => get_encoder_default(descr, encoding),
+                _ => get_encoder_default(descr, encoding, delta_options),
             }
         }
     }
@@ -166,10 +191,11 @@ pub(crate) mod private {
         fn get_encoder<T: DataType<T = Self>>(
             descr: &ColumnDescPtr,
             encoding: Encoding,
+            delta_options: Option<DeltaBinaryPackedEncoderOptions>,
         ) -> Result<Box<dyn Encoder<T>>> {
             match encoding {
                 Encoding::ALP => Ok(Box::new(AlpEncoder::new())),
-                _ => get_encoder_default(descr, encoding),
+                _ => get_encoder_default(descr, encoding, delta_options),
             }
         }
     }
@@ -344,6 +370,68 @@ const MAX_PAGE_HEADER_WRITER_SIZE: usize = 32;
 const DEFAULT_BIT_WRITER_SIZE: usize = 1024 * 1024;
 const DEFAULT_NUM_MINI_BLOCKS: usize = 4;
 
+/// Controls the block layout emitted by [`DeltaBitPackEncoder`] and the integer sub-encoders used
+/// by [`DeltaLengthByteArrayEncoder`] and [`DeltaByteArrayEncoder`].
+///
+/// In the [Parquet DELTA_BINARY_PACKED encoding], each block records a minimum delta and each mini
+/// block records its own bit width. The defaults use 128 values per block and 4 mini blocks for
+/// `INT32`, and 256 values per block and 4 mini blocks for `INT64`.
+///
+/// Smaller blocks or mini blocks can reduce encoded size for bursty data, where the required bit
+/// width changes over short ranges, and for short pages that would otherwise need more padding.
+/// They also add more minimum-delta and bit-width metadata. Larger blocks or mini blocks can reduce
+/// that metadata and block-processing overhead for long inputs with stable delta distributions,
+/// improving compression or throughput, but an outlier then affects more values and the encoder
+/// uses a larger scratch buffer. Benchmark representative data before changing the defaults.
+///
+/// The format requires block sizes to be multiples of 128 and mini block sizes to be multiples
+/// of 32.
+///
+/// [Parquet DELTA_BINARY_PACKED encoding]: https://github.com/apache/parquet-format/blob/master/Encodings.md#delta-encoding-delta_binary_packed--5
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeltaBinaryPackedEncoderOptions {
+    block_size: usize,
+    mini_blocks_per_block: usize,
+}
+
+impl DeltaBinaryPackedEncoderOptions {
+    /// Creates validated delta binary packed encoder options.
+    pub fn try_new(block_size: usize, mini_blocks_per_block: usize) -> Result<Self> {
+        if block_size == 0 || !block_size.is_multiple_of(128) {
+            return Err(general_err!(
+                "delta binary packed block size must be a positive multiple of 128, got {block_size}"
+            ));
+        }
+        if mini_blocks_per_block == 0 || !block_size.is_multiple_of(mini_blocks_per_block) {
+            return Err(general_err!(
+                "delta binary packed mini block count must be a positive divisor of the block size, got {mini_blocks_per_block} for block size {block_size}"
+            ));
+        }
+
+        let mini_block_size = block_size / mini_blocks_per_block;
+        if !mini_block_size.is_multiple_of(32) {
+            return Err(general_err!(
+                "delta binary packed mini block size must be a multiple of 32, got {mini_block_size}"
+            ));
+        }
+
+        Ok(Self {
+            block_size,
+            mini_blocks_per_block,
+        })
+    }
+
+    /// Returns the number of values in each block.
+    pub fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    /// Returns the number of mini blocks in each block.
+    pub fn mini_blocks_per_block(&self) -> usize {
+        self.mini_blocks_per_block
+    }
+}
+
 /// Delta bit packed encoder.
 /// Consists of a header followed by blocks of delta encoded values binary packed.
 ///
@@ -403,6 +491,10 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
         let block_size = mini_block_size * num_mini_blocks;
         assert_eq!(block_size % 128, 0);
 
+        Self::new_with_layout(block_size, num_mini_blocks)
+    }
+
+    fn new_with_layout(block_size: usize, num_mini_blocks: usize) -> Self {
         DeltaBitPackEncoder {
             page_header_writer: BitWriter::new(MAX_PAGE_HEADER_WRITER_SIZE),
             bit_writer: BitWriter::new(DEFAULT_BIT_WRITER_SIZE),
@@ -410,12 +502,21 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             first_value: 0,
             current_value: 0, // current value to keep adding deltas
             block_size,       // can write fewer values than block size for last block
-            mini_block_size,
+            mini_block_size: block_size / num_mini_blocks,
             num_mini_blocks,
             values_in_block: 0, // will be at most block_size
             deltas: vec![0; block_size],
             _phantom: PhantomData,
         }
+    }
+
+    /// Creates a delta bit packed encoder with a custom block layout.
+    pub fn new_with_options(options: DeltaBinaryPackedEncoderOptions) -> Self {
+        Self::assert_supported_type();
+
+        let block_size = options.block_size();
+        let num_mini_blocks = options.mini_blocks_per_block();
+        Self::new_with_layout(block_size, num_mini_blocks)
     }
 
     /// Writes page header for blocks, this method is invoked when we are done encoding
@@ -658,6 +759,16 @@ impl<T: DataType> DeltaLengthByteArrayEncoder<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// Creates a delta length byte array encoder with a custom layout for its length encoder.
+    pub fn new_with_options(options: DeltaBinaryPackedEncoderOptions) -> Self {
+        Self {
+            len_encoder: DeltaBitPackEncoder::new_with_options(options),
+            data: vec![],
+            encoded_size: 0,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
@@ -747,6 +858,17 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// Creates a delta byte array encoder with a custom layout for its prefix and suffix length
+    /// encoders.
+    pub fn new_with_options(options: DeltaBinaryPackedEncoderOptions) -> Self {
+        Self {
+            prefix_len_encoder: DeltaBitPackEncoder::new_with_options(options),
+            suffix_writer: DeltaLengthByteArrayEncoder::new_with_options(options),
+            previous: vec![],
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
@@ -831,11 +953,93 @@ mod tests {
     use std::sync::Arc;
 
     use crate::encodings::decoding::{Decoder, DictDecoder, PlainDecoder, get_decoder};
+    use crate::file::properties::WriterProperties;
     use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
     use crate::util::bit_util;
     use crate::util::test_common::rand_gen::{RandGen, random_bytes};
 
     const TEST_SET_SIZE: usize = 1024;
+
+    #[test]
+    fn test_delta_binary_packed_encoder_options() {
+        let options = DeltaBinaryPackedEncoderOptions::try_new(256, 4).unwrap();
+        assert_eq!(options.block_size(), 256);
+        assert_eq!(options.mini_blocks_per_block(), 4);
+
+        let encoder = DeltaBitPackEncoder::<Int32Type>::new_with_options(options);
+        assert_eq!(encoder.block_size, 256);
+        assert_eq!(encoder.mini_block_size, 64);
+        assert_eq!(encoder.num_mini_blocks, 4);
+
+        let props = WriterProperties::builder()
+            .set_delta_binary_packed_encoder_options(options)
+            .build();
+        let column_props = props.resolve_column_properties(&ColumnPath::new(vec![]));
+        let desc = create_test_col_desc_ptr(-1, Type::INT32);
+        let mut encoder = get_encoder_with_properties::<Int32Type>(
+            Encoding::DELTA_BINARY_PACKED,
+            &desc,
+            &column_props,
+        )
+        .unwrap();
+        let input: Vec<i32> = (0..600).map(|value| value * value).collect();
+        encoder.put(&input).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+        let mut header = bit_util::BitReader::new(encoded.clone());
+        assert_eq!(header.get_vlq_int(), Some(256));
+        assert_eq!(header.get_vlq_int(), Some(4));
+
+        let mut decoder = create_test_decoder::<Int32Type>(-1, Encoding::DELTA_BINARY_PACKED);
+        decoder.set_data(encoded, input.len()).unwrap();
+        let mut output = vec![0; input.len()];
+        assert_eq!(decoder.get(&mut output).unwrap(), input.len());
+        assert_eq!(output, input);
+
+        let encoder = DeltaLengthByteArrayEncoder::<ByteArrayType>::new_with_options(options);
+        assert_eq!(encoder.len_encoder.block_size, 256);
+        let encoder = DeltaByteArrayEncoder::<ByteArrayType>::new_with_options(options);
+        assert_eq!(encoder.prefix_len_encoder.block_size, 256);
+        assert_eq!(encoder.suffix_writer.len_encoder.block_size, 256);
+
+        let input: Vec<ByteArray> = (0..600)
+            .map(|value| ByteArray::from(format!("prefix-{value:04}-suffix").into_bytes()))
+            .collect();
+        let desc = create_test_col_desc_ptr(-1, Type::BYTE_ARRAY);
+        for encoding in [
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ] {
+            let mut encoder =
+                get_encoder_with_properties::<ByteArrayType>(encoding, &desc, &column_props)
+                    .unwrap();
+            encoder.put(&input).unwrap();
+            let encoded = encoder.flush_buffer().unwrap();
+            let mut header = bit_util::BitReader::new(encoded.clone());
+            assert_eq!(header.get_vlq_int(), Some(256));
+            assert_eq!(header.get_vlq_int(), Some(4));
+
+            let mut decoder = create_test_decoder::<ByteArrayType>(-1, encoding);
+            decoder.set_data(encoded, input.len()).unwrap();
+            let mut output = vec![ByteArray::default(); input.len()];
+            assert_eq!(decoder.get(&mut output).unwrap(), input.len());
+            assert_eq!(output, input);
+        }
+    }
+
+    #[test]
+    fn test_delta_binary_packed_encoder_options_validation() {
+        for (block_size, mini_blocks_per_block, message) in [
+            (0, 4, "positive multiple of 128"),
+            (127, 4, "positive multiple of 128"),
+            (128, 0, "positive divisor"),
+            (128, 3, "positive divisor"),
+            (256, 16, "must be a multiple of 32"),
+        ] {
+            let error = DeltaBinaryPackedEncoderOptions::try_new(block_size, mini_blocks_per_block)
+                .unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
 
     #[test]
     fn test_get_encoders() {
