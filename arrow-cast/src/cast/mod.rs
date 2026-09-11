@@ -14287,6 +14287,85 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_time64_to_time32_boundaries() {
+        fn check<FROM, TO>(divisor: i64)
+        where
+            FROM: ArrowPrimitiveType<Native = i64>,
+            TO: ArrowPrimitiveType<Native = i32>,
+        {
+            // Division truncates towards zero before the range check. Values
+            // slightly outside the scaled i32 bounds can still be representable.
+            let min = <i64 as From<i32>>::from(i32::MIN) * divisor - (divisor - 1);
+            let max = <i64 as From<i32>>::from(i32::MAX) * divisor + (divisor - 1);
+            let array = PrimitiveArray::<FROM>::new(
+                vec![i64::MAX, min - 1, min, -divisor + 1, i64::MAX, max, max + 1].into(),
+                Some(vec![true, true, true, true, false, true, true].into()),
+            )
+            .slice(1, 6);
+            let expected = PrimitiveArray::<TO>::from_iter([
+                None,
+                Some(i32::MIN),
+                Some(0),
+                None,
+                Some(i32::MAX),
+                None,
+            ]);
+            let result = cast(&array, &TO::DATA_TYPE).unwrap();
+            assert_eq!(result.as_primitive::<TO>(), &expected);
+
+            let options = CastOptions {
+                safe: false,
+                ..Default::default()
+            };
+            assert!(cast_with_options(&array, &TO::DATA_TYPE, &options).is_err());
+            // The invalid physical value under the null must not cause an error.
+            let result = cast_with_options(&array.slice(1, 4), &TO::DATA_TYPE, &options).unwrap();
+            assert_eq!(result.as_primitive::<TO>(), &expected.slice(1, 4));
+        }
+        check::<Time64MicrosecondType, Time32SecondType>(MICROSECONDS);
+        check::<Time64MicrosecondType, Time32MillisecondType>(MICROSECONDS / MILLISECONDS);
+        check::<Time64NanosecondType, Time32SecondType>(NANOSECONDS);
+        check::<Time64NanosecondType, Time32MillisecondType>(NANOSECONDS / MILLISECONDS);
+    }
+
+    #[test]
+    fn test_cast_temporal_scaling_boundaries() {
+        fn check<FROM, TO>(multiplier: i64)
+        where
+            FROM: ArrowPrimitiveType<Native = i64>,
+            TO: ArrowPrimitiveType<Native = i64>,
+        {
+            let min = i64::MIN / multiplier;
+            let max = i64::MAX / multiplier;
+            let array = PrimitiveArray::<FROM>::new(
+                vec![i64::MAX, min - 1, min, -1, i64::MAX, max, max + 1].into(),
+                Some(vec![true, true, true, true, false, true, true].into()),
+            )
+            .slice(1, 6);
+            let expected = PrimitiveArray::<TO>::from_iter([
+                None,
+                Some(min * multiplier),
+                Some(-multiplier),
+                None,
+                Some(max * multiplier),
+                None,
+            ]);
+            let result = cast(&array, &TO::DATA_TYPE).unwrap();
+            assert_eq!(result.as_primitive::<TO>(), &expected);
+            let options = CastOptions {
+                safe: false,
+                ..Default::default()
+            };
+            assert!(cast_with_options(&array, &TO::DATA_TYPE, &options).is_err());
+            let result = cast_with_options(&array.slice(1, 4), &TO::DATA_TYPE, &options).unwrap();
+            assert_eq!(result.as_primitive::<TO>(), &expected.slice(1, 4));
+        }
+        check::<Time64MicrosecondType, Time64NanosecondType>(NANOSECONDS / MICROSECONDS);
+        check::<Date64Type, TimestampMicrosecondType>(MICROSECONDS / MILLISECONDS);
+        check::<Date64Type, TimestampNanosecondType>(NANOSECONDS / MILLISECONDS);
+    }
+
+    #[test]
     fn test_cast_string_to_time32_second_to_int64() {
         // Mimic: select arrow_cast('03:12:44'::time, 'Time32(Second)')::bigint;
         // raised in https://github.com/apache/datafusion/issues/19036
