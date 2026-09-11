@@ -512,6 +512,7 @@ dependencies = [
 name = "arrow-schema"
 version = "60.0.0"
 dependencies = [
+ "arrow-buffer",
  "bitflags",
  "criterion",
  "insta",
