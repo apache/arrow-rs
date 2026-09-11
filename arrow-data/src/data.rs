@@ -333,21 +333,6 @@ impl ArrayData {
         buffers: Vec<Buffer>,
         child_data: Vec<ArrayData>,
     ) -> Result<Self, ArrowError> {
-        // we must check the length of `null_bit_buffer` first
-        // because we use this buffer to calculate `null_count`
-        // in `ArrayDataBuilder::build`.
-        if let Some(null_bit_buffer) = null_bit_buffer.as_ref() {
-            let len_plus_offset = checked_len_plus_offset(&data_type, len, offset)?;
-            let needed_len = bit_util::ceil(len_plus_offset, 8);
-            if null_bit_buffer.len() < needed_len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "null_bit_buffer size too small. got {} needed {}",
-                    null_bit_buffer.len(),
-                    needed_len
-                )));
-            }
-        }
-
         let builder = Self::inner_new_builder(
             data_type,
             len,
@@ -2331,6 +2316,21 @@ impl ArrayDataBuilder {
             skip_validation,
         } = self;
 
+        // SAFETY: `skip_validation` is only set to true using `unsafe` APIs.
+        let validate = !skip_validation.get() || cfg!(feature = "force_validate");
+        if validate && let Some(buffer) = null_bit_buffer.as_ref() {
+            // Check before constructing the BooleanBuffer, which would otherwise panic.
+            let len_plus_offset = checked_len_plus_offset(&data_type, len, offset)?;
+            let needed_len = bit_util::ceil(len_plus_offset, 8);
+            if buffer.len() < needed_len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "null_bit_buffer size too small. got {} needed {}",
+                    buffer.len(),
+                    needed_len
+                )));
+            }
+        }
+
         let nulls = nulls
             .or_else(|| {
                 let buffer = null_bit_buffer?;
@@ -2358,8 +2358,7 @@ impl ArrayDataBuilder {
             data.align_buffers();
         }
 
-        // SAFETY: `skip_validation` is only set to true using `unsafe` APIs
-        if !skip_validation.get() || cfg!(feature = "force_validate") {
+        if validate {
             data.validate_data()?;
         }
         Ok(data)
@@ -2952,6 +2951,72 @@ mod tests {
             string_data.get_slice_memory_size().unwrap() - 6,
             string_data_slice.get_slice_memory_size().unwrap()
         );
+    }
+
+    #[test]
+    fn test_builder_rejects_short_null_bit_buffer() {
+        for (len, offset, bytes) in [(8000, 0, 1), (1, 0, 0), (8, 1, 1), (0, 9, 1)] {
+            for null_count in [None, Some(0), Some(len)] {
+                let mut builder = ArrayData::builder(DataType::Int32)
+                    .len(len)
+                    .offset(offset)
+                    .add_buffer(make_i32_buffer(len + offset))
+                    .null_bit_buffer(Some(Buffer::from(vec![0_u8; bytes])));
+                if let Some(null_count) = null_count {
+                    builder = builder.null_count(null_count);
+                }
+                let err = builder.build().unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "Invalid argument error: null_bit_buffer size too small. got {bytes} needed {}",
+                        bit_util::ceil(len + offset, 8)
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_builder_null_bit_buffer_length_overflow() {
+        let err = ArrayData::builder(DataType::Int32)
+            .len(usize::MAX)
+            .offset(1)
+            .null_bit_buffer(Some(Buffer::default()))
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Invalid argument error: Length {} with offset 1 overflows usize for Int32",
+                usize::MAX
+            )
+        );
+    }
+
+    #[test]
+    fn test_builder_accepts_valid_null_bit_buffer() {
+        for (len, offset) in [(0, 0), (0, 8), (7, 1), (8, 0), (9, 0)] {
+            for valid in [false, true] {
+                let bytes = bit_util::ceil(len + offset, 8);
+                let buffer = Buffer::from(vec![if valid { 255_u8 } else { 0 }; bytes]);
+                let expected_nulls = if valid { 0 } else { len };
+                for null_count in [None, Some(expected_nulls)] {
+                    let mut builder = ArrayData::builder(DataType::Int32)
+                        .len(len)
+                        .offset(offset)
+                        .add_buffer(make_i32_buffer(len + offset))
+                        .null_bit_buffer(Some(buffer.clone()));
+                    if let Some(null_count) = null_count {
+                        builder = builder.null_count(null_count);
+                    }
+                    let data = builder.build().unwrap();
+                    assert_eq!(data.len(), len);
+                    assert_eq!(data.offset(), offset);
+                    assert_eq!(data.null_count(), expected_nulls);
+                }
+            }
+        }
     }
 
     #[test]
