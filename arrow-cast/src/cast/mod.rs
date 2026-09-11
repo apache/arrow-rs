@@ -106,13 +106,15 @@ where
 /// Rounds once for the values the division cannot convert exactly, by parsing the
 /// decimal's own text. `u8::MAX` because `format_decimal` truncates to the
 /// precision it is given, and values are not validated against the precision they
-/// declare.
+/// declare. A scale that does not fit the `i8` `format_decimal` takes falls back to
+/// the division.
 #[cold]
 #[inline(never)]
 fn decimal_to_f64_rounded_once<D: DecimalType>(x: D::Native, scale: i32, unscaled: f64) -> f64 {
-    D::format_decimal(x, u8::MAX, scale as i8)
-        .parse::<f64>()
-        .unwrap_or_else(|_| unscaled / 10_f64.powi(scale))
+    i8::try_from(scale)
+        .ok()
+        .and_then(|scale| D::format_decimal(x, u8::MAX, scale).parse::<f64>().ok())
+        .unwrap_or_else(|| unscaled / 10_f64.powi(scale))
 }
 
 /// As [`decimal_to_f64_rounded_once`], but narrowing to `f32` in one step.
@@ -122,9 +124,10 @@ fn decimal_to_f64_rounded_once<D: DecimalType>(x: D::Native, scale: i32, unscale
 #[cold]
 #[inline(never)]
 fn decimal_to_f32_rounded_once<D: DecimalType>(x: D::Native, scale: i32, unscaled: f64) -> f32 {
-    D::format_decimal(x, u8::MAX, scale as i8)
-        .parse::<f32>()
-        .unwrap_or_else(|_| decimal_to_f64_rounded_once::<D>(x, scale, unscaled) as f32)
+    i8::try_from(scale)
+        .ok()
+        .and_then(|scale| D::format_decimal(x, u8::MAX, scale).parse::<f32>().ok())
+        .unwrap_or_else(|| decimal_to_f64_rounded_once::<D>(x, scale, unscaled) as f32)
 }
 
 /// Casts a decimal array to `Float64`, rounding each value once.
@@ -14569,6 +14572,27 @@ mod tests {
 
         let as_f64 = cast(&array, &DataType::Float64).unwrap();
         assert_eq!(as_f64.as_primitive::<Float64Type>().value(0), 1e-76);
+    }
+
+    #[test]
+    fn test_single_decimal_to_float_lossy_scale_outside_i8() {
+        // `format_decimal` takes an `i8` scale; narrowing 128 into one wraps it to
+        // -128 and turns 1e-128 into 1e128. The edges of the `i8` range still round
+        // once, and anything past them falls back to the division.
+        let as_float = |x: i128| x as f64;
+        let lossy =
+            |scale: i32| single_decimal_to_float_lossy::<Decimal128Type, _>(&as_float, 1, scale);
+        for scale in [i8::MAX, i8::MIN] {
+            let text = Decimal128Type::format_decimal(1, u8::MAX, scale);
+            assert_eq!(
+                lossy(scale.into()),
+                text.parse::<f64>().unwrap(),
+                "scale={scale}"
+            );
+        }
+        for scale in [128, -129] {
+            assert_eq!(lossy(scale), 1.0 / 10_f64.powi(scale), "scale={scale}");
+        }
     }
 
     // Keeping only `MAX_PRECISION` digits would scale the result by ten.
