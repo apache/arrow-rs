@@ -677,11 +677,8 @@ where
     RunArray::try_new(&run_ends, &values)
 }
 
-/// Extract bits from `src` at positions where `filter` has a 1, packed densely.
-///
-/// Processes 64 filter bits per iteration: one u64 load from each buffer, then
-/// software PEXT to scatter the selected source bits. This reduces source reads
-/// from O(selected_count) byte loads to O(filter_len/64) u64 loads.
+/// Extract bits from `src` at positions where `filter` has a 1, packed densely,
+/// processing 64 filter bits at a time
 fn gather_bits(src: &BooleanBuffer, filter: &BooleanBuffer, count: usize) -> Buffer {
     let filter_chunks = filter.bit_chunks();
     let src_chunks = BitChunks::new(src.values(), src.offset(), filter.len());
@@ -689,24 +686,22 @@ fn gather_bits(src: &BooleanBuffer, filter: &BooleanBuffer, count: usize) -> Buf
     let out_u64s = bit_util::ceil(count, 64);
     let mut out: Vec<u64> = Vec::with_capacity(out_u64s);
     let mut current_word = 0u64;
-    let mut bits_filled = 0usize; // bits written into `current_word` so far (0..=63)
+    let mut bits_filled = 0usize;
 
     // Appends `bits_selected` densely-packed bits from `selected_bits` into the output word stream.
     let mut push_chunk = |selected_bits: u64, bits_selected: usize| {
         let bits_remaining = 64 - bits_filled;
-        if bits_selected <= bits_remaining {
-            current_word |= selected_bits << bits_filled;
+        current_word |= selected_bits << bits_filled;
+        if bits_selected < bits_remaining {
             bits_filled += bits_selected;
-            if bits_filled == 64 {
-                out.push(current_word);
-                current_word = 0;
-                bits_filled = 0;
-            }
         } else {
-            // Fill the current word with the lower `bits_remaining` bits, then start the next word.
-            current_word |= selected_bits << bits_filled; // upper bits of selected_bits shift off; kept in >> below
+            // Current word is full; carry the overflow into the next word.
             out.push(current_word);
-            current_word = selected_bits >> bits_remaining;
+            current_word = if bits_selected == bits_remaining {
+                0
+            } else {
+                selected_bits >> bits_remaining
+            };
             bits_filled = bits_selected - bits_remaining;
         }
     };
