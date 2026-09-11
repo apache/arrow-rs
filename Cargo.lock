@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "arrow"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-arith"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-avro"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "apache-avro",
  "arrow",
@@ -268,12 +268,12 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
- "zstd",
+ "zstd 0.14.0",
 ]
 
 [[package]]
 name = "arrow-buffer"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "bytes",
  "criterion",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-cmp"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-csv"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-flight"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "anyhow",
  "arrow-arith",
@@ -389,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-integration-test"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-integration-testing"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-ipc"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -435,12 +435,12 @@ dependencies = [
  "memmap2",
  "tempfile",
  "tokio",
- "zstd",
+ "zstd 0.14.0",
 ]
 
 [[package]]
 name = "arrow-json"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arbitrary",
  "arrow-array",
@@ -471,7 +471,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-ord"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -485,7 +485,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-pyarrow"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-row"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -510,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "bitflags",
  "criterion",
@@ -523,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-select"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-string"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -595,7 +595,7 @@ checksum = "ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -932,7 +932,7 @@ dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1212,7 +1212,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1383,7 +1383,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1815,9 +1815,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.14.1"
+version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07aa2048142242915a31d35844fb311e0e53fcca590c3a0a40dcf1b841fa09eb"
+checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
@@ -2406,7 +2406,7 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -2449,12 +2449,12 @@ dependencies = [
  "tempfile",
  "tokio",
  "twox-hash",
- "zstd",
+ "zstd 0.14.0",
 ]
 
 [[package]]
 name = "parquet-geospatial"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-schema",
  "geo-traits",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-variant"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-schema",
  "chrono",
@@ -2481,7 +2481,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-variant-compute"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2499,7 +2499,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-variant-json"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "arrow-schema",
  "base64 0.23.1",
@@ -2511,17 +2511,17 @@ dependencies = [
 
 [[package]]
 name = "parquet_derive"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "parquet",
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
 name = "parquet_derive_test"
-version = "59.2.0"
+version = "60.0.0"
 dependencies = [
  "chrono",
  "parquet",
@@ -3291,7 +3291,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3465,9 +3465,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.4"
+version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3580,7 +3580,7 @@ checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3659,7 +3659,7 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3758,7 +3758,7 @@ dependencies = [
  "tower-service",
  "tracing",
  "webpki-roots",
- "zstd",
+ "zstd 0.13.3",
 ]
 
 [[package]]
@@ -4549,7 +4549,16 @@ version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
 dependencies = [
- "zstd-safe",
+ "zstd-safe 7.2.4",
+]
+
+[[package]]
+name = "zstd"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf06bd8162af0734b344780deb55b42a2429ae430870d13fcc12f238e880fe6e"
+dependencies = [
+ "zstd-safe 8.0.0",
 ]
 
 [[package]]
@@ -4562,10 +4571,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "zstd-sys"
-version = "2.0.16+zstd.1.5.7"
+name = "zstd-safe"
+version = "8.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+checksum = "ae42c0555055784c70058d19ba8e275528e8a99a706684868ace5da4e716a4ab"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.0+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ef0a8027ec3ee71300ab3bcbcd0393f434aa72b91ca6d635a39941deae8eea0"
 dependencies = [
  "cc",
  "pkg-config",

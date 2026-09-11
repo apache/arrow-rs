@@ -543,7 +543,13 @@ fn interleave_fixed_size_list(
         }
     };
 
-    let array = FixedSizeListArray::new(field.clone(), size, interleaved_values, interleaved.nulls);
+    let array = FixedSizeListArray::try_new_with_length(
+        field.clone(),
+        size,
+        interleaved_values,
+        interleaved.nulls,
+        indices.len(),
+    )?;
     Ok(Arc::new(array))
 }
 
@@ -2186,6 +2192,23 @@ mod tests {
         let values = result.values().as_primitive::<Int32Type>();
         // [[5,6], [7,8], [1,2], [9,10], [3,4]]
         assert_eq!(values.values(), &[5, 6, 7, 8, 1, 2, 9, 10, 3, 4]);
+    }
+
+    #[test]
+    fn test_interleave_zero_sized_fixed_size_list() {
+        let input = FixedSizeListArray::try_new_with_length(
+            Field::new_list_field(DataType::Int32, true).into(),
+            0,
+            Arc::new(Int32Array::new_null(0)),
+            None,
+            3,
+        )
+        .unwrap();
+
+        let indices = [(0, 2), (0, 0)];
+        let result = interleave(&[&input], &indices).unwrap();
+
+        assert_eq!(result.len(), 2);
     }
 
     #[test]
