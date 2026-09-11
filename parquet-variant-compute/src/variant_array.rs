@@ -614,9 +614,9 @@ impl From<VariantArray> for ArrayRef {
     }
 }
 
-impl<'m, 'v> FromIterator<Option<Variant<'m, 'v>>> for VariantArray {
-    fn from_iter<T: IntoIterator<Item = Option<Variant<'m, 'v>>>>(iter: T) -> Self {
-        let iter = iter.into_iter();
+impl<'m, 'v, V: Into<Variant<'m, 'v>>> FromIterator<Option<V>> for VariantArray {
+    fn from_iter<T: IntoIterator<Item = Option<V>>>(iter: T) -> Self {
+        let iter = iter.into_iter().map(|value| value.map(Into::into));
 
         let mut b = VariantArrayBuilder::new(iter.size_hint().0);
         b.extend(iter);
@@ -1837,6 +1837,56 @@ mod test {
         assert_eq!(variant_array.value(2), Variant::BooleanFalse);
 
         assert!(variant_array.is_null(3));
+    }
+
+    #[test]
+    fn test_from_option_into_variants_into_variant_array() {
+        // Items that convert cleanly to `Variant` can be collected directly,
+        // without wrapping them in `Some(Variant::from(..))` first
+        let v = vec![Some(42_i64), None, Some(-1_i64)];
+
+        let variant_array = VariantArray::from_iter(v);
+
+        assert_eq!(variant_array.len(), 3);
+
+        assert!(!variant_array.is_null(0));
+        assert_eq!(variant_array.value(0), Variant::Int64(42));
+
+        assert!(variant_array.is_null(1));
+
+        assert!(!variant_array.is_null(2));
+        assert_eq!(variant_array.value(2), Variant::Int64(-1));
+    }
+
+    #[test]
+    fn test_from_option_str_into_variant_array() {
+        let v = vec![
+            Some("hello"),
+            None,
+            Some(
+                "hello world this is much longer than the maximum short string length of sixty three bytes",
+            ),
+        ];
+
+        let variant_array: VariantArray = v.into_iter().collect();
+
+        assert_eq!(variant_array.len(), 3);
+
+        assert!(!variant_array.is_null(0));
+        assert_eq!(
+            variant_array.value(0),
+            Variant::ShortString(ShortString::try_new("hello").unwrap())
+        );
+
+        assert!(variant_array.is_null(1));
+
+        assert!(!variant_array.is_null(2));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::String(
+                "hello world this is much longer than the maximum short string length of sixty three bytes"
+            )
+        );
     }
 
     #[test]
