@@ -31,11 +31,18 @@
 //! and each vector as
 //!
 //! ```text
-//! [info block] [start value, only when differencing] [packed residuals]
+//! [info block] [start value(s), only when differencing] [packed residuals]
 //! [exception positions] [exception values]
 //! ```
 //!
 //! Every multi-byte field is little-endian.
+//!
+//! Modes 0 and 1 use one start value and adjacent deltas per vector. Mode 2
+//! stores independent starts for each complete block's UTL lanes, plus one
+//! start for a partial block. For i32 there are 32 chains of 32 adjacent values;
+//! for i64, 16 chains of 64. Each chain's first difference is zero. Complete
+//! blocks' differences and exception positions are in UTL order, so patches
+//! precede lane sums; reconstructed values are returned in original order.
 
 use crate::encodings::fastlanes::FastLanesBitPacking;
 use crate::errors::{ParquetError, Result};
@@ -74,6 +81,21 @@ pub(crate) const PACKING_MODE_FOR_BIT_PACK: u8 = 0;
 /// is added, so both modes have the same encoded length and vector offsets.
 pub(crate) const PACKING_MODE_FASTLANES: u8 = 1;
 
+/// FastLanes packing with independent UTL delta chains. A differenced vector
+/// stores 128 bytes of lane starts per complete 1024-value block, followed by
+/// one scalar start if it has a tail. Complete blocks contain UTL differences;
+/// tails retain ordinary adjacent differences. Non-delta vectors match mode 1.
+pub(crate) const PACKING_MODE_FASTLANES_DELTA: u8 = 2;
+
+pub(crate) fn delta_start_count<T: PforInt>(packing_mode: u8, num_elements: usize) -> usize {
+    if packing_mode == PACKING_MODE_FASTLANES_DELTA {
+        num_elements / DEFAULT_VECTOR_SIZE * (DEFAULT_VECTOR_SIZE / T::MAX_BIT_WIDTH as usize)
+            + usize::from(!num_elements.is_multiple_of(DEFAULT_VECTOR_SIZE))
+    } else {
+        1
+    }
+}
+
 /// Mask selecting the bit width out of the info block's width byte.
 pub(crate) const BIT_WIDTH_MASK: u8 = 0x7F;
 
@@ -99,6 +121,20 @@ pub trait PforInt: Copy + Default + Ord + Send + std::fmt::Debug + FromBitpacked
     /// Unpack a complete FastLanes block, fusing the wrapping frame addition.
     #[doc(hidden)]
     fn unpack_fastlanes(width: usize, packed: &[u8], frame: Self, out: &mut [Self]);
+
+    /// Decode a complete UTL delta block without an intermediate serial sum.
+    #[doc(hidden)]
+    fn unpack_fastlanes_delta(
+        width: usize,
+        packed: &[u8],
+        frame: Self,
+        starts: &[u8],
+        out: &mut [Self],
+    );
+
+    /// Restore independent delta lanes after patching their differences.
+    #[doc(hidden)]
+    fn restore_fastlanes_delta(starts: &[u8], out: &mut [Self]);
 
     /// Width of one value on the wire, in bytes: 4 for INT32, 8 for INT64.
     const BYTE_WIDTH: usize;
@@ -143,6 +179,27 @@ pub trait PforInt: Copy + Default + Ord + Send + std::fmt::Debug + FromBitpacked
 }
 
 impl PforInt for i32 {
+    fn unpack_fastlanes_delta(
+        width: usize,
+        packed: &[u8],
+        frame: Self,
+        starts: &[u8],
+        out: &mut [Self],
+    ) {
+        // SAFETY: i32/u32 have identical layout, all bit patterns are valid, and
+        // the mutable borrow remains exclusive for the call.
+        let out =
+            unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u32>(), out.len()) };
+        u32::unpack_delta_bytes(width, packed, frame as u32, starts, out);
+    }
+
+    fn restore_fastlanes_delta(starts: &[u8], out: &mut [Self]) {
+        // SAFETY: same layout and exclusive borrow as above.
+        let out =
+            unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u32>(), out.len()) };
+        u32::restore_delta(starts, out);
+    }
+
     fn pack_fastlanes(width: usize, residuals: &[u64], out: &mut Vec<u8>) {
         assert_eq!(residuals.len(), DEFAULT_VECTOR_SIZE);
         let input: [u32; DEFAULT_VECTOR_SIZE] = std::array::from_fn(|i| residuals[i] as u32);
@@ -182,6 +239,27 @@ impl PforInt for i32 {
 }
 
 impl PforInt for i64 {
+    fn unpack_fastlanes_delta(
+        width: usize,
+        packed: &[u8],
+        frame: Self,
+        starts: &[u8],
+        out: &mut [Self],
+    ) {
+        // SAFETY: i64/u64 have identical layout, all bit patterns are valid, and
+        // the mutable borrow remains exclusive for the call.
+        let out =
+            unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u64>(), out.len()) };
+        u64::unpack_delta_bytes(width, packed, frame as u64, starts, out);
+    }
+
+    fn restore_fastlanes_delta(starts: &[u8], out: &mut [Self]) {
+        // SAFETY: same layout and exclusive borrow as above.
+        let out =
+            unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u64>(), out.len()) };
+        u64::restore_delta(starts, out);
+    }
+
     fn pack_fastlanes(width: usize, residuals: &[u64], out: &mut Vec<u8>) {
         u64::pack_bytes(width, residuals, out);
     }
@@ -306,7 +384,7 @@ impl PforHeader {
         };
         if !matches!(
             header.packing_mode,
-            PACKING_MODE_FOR_BIT_PACK | PACKING_MODE_FASTLANES
+            PACKING_MODE_FOR_BIT_PACK | PACKING_MODE_FASTLANES | PACKING_MODE_FASTLANES_DELTA
         ) {
             return Err(general_err!(
                 "PFOR unsupported packing mode: {}",
@@ -349,7 +427,8 @@ impl PforHeader {
 /// The width byte holds the bit width in bits 0..6 and the differencing flag in bit 7. A vector
 /// with the flag set packs the backward differences of its values rather than the values, and
 /// carries one extra full-width field after this block -- the vector's first value -- so that it
-/// still decodes without reading the vector before it.
+/// still decodes without reading the vector before it. Mode 2 instead carries
+/// the lane starts described by [`delta_start_count`].
 ///
 /// Seven bits for the width, not six: the range is 0..64 inclusive, and 64 does not fit in six. A
 /// six-bit field stored an INT64 vector whose differences need the full 64 bits as width 0, and
@@ -371,7 +450,9 @@ pub(crate) struct PforVectorInfo<T> {
 }
 
 impl<T: PforInt> PforVectorInfo<T> {
-    /// Bytes this info occupies on the wire, start value included.
+    /// Bytes this info occupies in modes 0 and 1, start value included.
+    /// Mode 2 must additionally account for its lane starts using
+    /// [`delta_start_count`].
     ///
     /// Not a constant: the start value is only present on a differenced vector. Paying for it
     /// unconditionally would be free at a 1024-value vector and ruinous at the smallest one the
@@ -611,7 +692,7 @@ mod tests {
 
         // A packing mode this implementation does not have.
         let mut buf = bytes(&good);
-        buf[0] = 2;
+        buf[0] = 3;
         assert!(PforHeader::read::<i32>(&buf).is_err());
 
         // An INT64 page read as INT32.

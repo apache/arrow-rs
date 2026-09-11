@@ -26,8 +26,8 @@ use crate::basic::Encoding;
 use crate::data_type::DataType;
 use crate::encodings::pfor::{
     DEFAULT_LOG_VECTOR_SIZE, DEFAULT_VECTOR_SIZE, HEADER_SIZE, OFFSET_SIZE, PACKING_MODE_FASTLANES,
-    PACKING_MODE_FOR_BIT_PACK, POSITION_SIZE, PforHeader, PforInt, PforVectorInfo, bytes_for_bits,
-    read_offset, validate_offsets,
+    PACKING_MODE_FASTLANES_DELTA, PACKING_MODE_FOR_BIT_PACK, POSITION_SIZE, PforHeader, PforInt,
+    PforVectorInfo, bytes_for_bits, delta_start_count, read_offset, validate_offsets,
 };
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::BitReader;
@@ -109,12 +109,28 @@ where
         let vector_at = read_offset(payload, index);
         let src = &payload[vector_at..];
 
-        let layout = VectorLayout::read(src, num_elements)?;
+        let layout = VectorLayout::read(src, num_elements, self.header.packing_mode)?;
         let info = layout.info;
         let frame = info.frame_of_reference;
+        let utl_delta = self.header.packing_mode == PACKING_MODE_FASTLANES_DELTA && info.is_delta;
 
         self.vector.clear();
         self.vector.resize(num_elements, T::T::default());
+
+        // With no patches, unpacking, frame addition, and the independent lane
+        // sums are fused. A partial block retains a scalar sum of its own.
+        if utl_delta && info.num_exceptions == 0 {
+            let packed_at = HEADER_SIZE + vector_at + layout.packed_at;
+            let packed = data.slice(packed_at..packed_at + layout.packed_bytes);
+            unpack_utl_delta(
+                &mut self.vector,
+                packed,
+                info.bit_width,
+                frame,
+                &src[T::T::INFO_SIZE..layout.packed_at],
+            )?;
+            return Ok(());
+        }
 
         // A constant vector, which is the whole of what it stores.
         if info.bit_width == 0 && info.num_exceptions == 0 {
@@ -130,7 +146,10 @@ where
             // Slice out of the page rather than out of `src`: BitReader wants an owned `Bytes`.
             let packed_at = HEADER_SIZE + vector_at + layout.packed_at;
             let packed = data.slice(packed_at..packed_at + layout.packed_bytes);
-            if self.header.packing_mode == PACKING_MODE_FASTLANES {
+            if matches!(
+                self.header.packing_mode,
+                PACKING_MODE_FASTLANES | PACKING_MODE_FASTLANES_DELTA
+            ) {
                 unpack_fastlanes_residuals(&mut self.vector, packed, info.bit_width, frame)?;
             } else {
                 unpack_residuals(&mut self.vector, packed, info.bit_width, frame)?;
@@ -153,7 +172,18 @@ where
         // This has to come after the patch: an exception in a differenced vector is a difference
         // too, and summing before patching would carry the placeholder zero into every value that
         // follows.
-        if info.is_delta {
+        if utl_delta {
+            let starts = &src[T::T::INFO_SIZE..layout.packed_at];
+            let mut blocks = self.vector.chunks_exact_mut(DEFAULT_VECTOR_SIZE);
+            for (block, out) in blocks.by_ref().enumerate() {
+                T::T::restore_fastlanes_delta(&starts[block * 128..][..128], out);
+            }
+            let tail = blocks.into_remainder();
+            if !tail.is_empty() {
+                let at = num_elements / DEFAULT_VECTOR_SIZE * 128;
+                accumulate(tail, T::T::read_le(&starts[at..]));
+            }
+        } else if info.is_delta {
             accumulate(&mut self.vector, layout.start_value);
         }
 
@@ -292,9 +322,13 @@ struct VectorLayout<V> {
 }
 
 impl<V: PforInt> VectorLayout<V> {
-    fn read(src: &[u8], num_elements: usize) -> Result<Self> {
+    fn read(src: &[u8], num_elements: usize, packing_mode: u8) -> Result<Self> {
         let info = PforVectorInfo::<V>::read(src)?;
-        let info_bytes = info.stored_bytes();
+        let info_bytes = if info.is_delta {
+            V::INFO_SIZE + delta_start_count::<V>(packing_mode, num_elements) * V::BYTE_WIDTH
+        } else {
+            info.stored_bytes()
+        };
         if info_bytes > src.len() {
             return Err(general_err!(
                 "PFOR delta vector needs {} bytes of metadata but only {} remain",
@@ -381,8 +415,43 @@ fn unpack_residuals<V: PforInt>(
     Ok(())
 }
 
-/// Complete blocks use the byte-oriented FastLanes kernel. The remaining
-/// elements use the original format, so a short final vector needs no padding.
+/// Fuse unpacking and lane sums for unpatched blocks, then restore original
+/// order. Each partial block has its own scalar delta start.
+fn unpack_utl_delta<V: PforInt>(
+    out: &mut [V],
+    packed: Bytes,
+    bit_width: u8,
+    frame: V,
+    starts: &[u8],
+) -> Result<()> {
+    let block_bytes = DEFAULT_VECTOR_SIZE * bit_width as usize / 8;
+    let mut packed_at = 0;
+    let mut starts_at = 0;
+    let mut blocks = out.chunks_exact_mut(DEFAULT_VECTOR_SIZE);
+    for block in &mut blocks {
+        V::unpack_fastlanes_delta(
+            bit_width as usize,
+            &packed[packed_at..packed_at + block_bytes],
+            frame,
+            &starts[starts_at..starts_at + 128],
+            block,
+        );
+        packed_at += block_bytes;
+        starts_at += 128;
+    }
+    let tail = blocks.into_remainder();
+    if !tail.is_empty() {
+        if bit_width == 0 {
+            tail.fill(frame);
+        } else {
+            unpack_residuals(tail, packed.slice(packed_at..), bit_width, frame)?;
+        }
+        accumulate(tail, V::read_le(&starts[starts_at..]));
+    }
+    Ok(())
+}
+
+/// Complete blocks use FastLanes; a short final block needs no padding.
 fn unpack_fastlanes_residuals<V: PforInt>(
     out: &mut [V],
     packed: Bytes,
@@ -513,6 +582,76 @@ mod tests {
 
     // The four phases of `decode_vector` are exercised through whole pages below. These tests
     // reach them directly, which is the only way to cover an argument no encoder of ours produces.
+
+    #[test]
+    fn test_utl_delta_literal_starts_patches_and_tail() {
+        fn check<T: DataType>()
+        where
+            T::T: PforInt,
+        {
+            let rows = T::T::MAX_BIT_WIDTH as usize;
+            for patched in [false, true] {
+                let mut body = Vec::new();
+                PforVectorInfo::<T::T> {
+                    frame_of_reference: T::T::from_bits(3),
+                    bit_width: 0,
+                    num_exceptions: u16::from(patched),
+                    is_delta: true,
+                }
+                .write(&mut body);
+                let mut expected = Vec::new();
+                for lane in 0..1024 / rows {
+                    let start = (lane as u64 * 1000).wrapping_add(u64::MAX - 500);
+                    T::T::from_bits(start).write_le(&mut body);
+                    for row in 0..rows {
+                        // Position 263 is row 2, lane 7 in UTL. Only this lane's
+                        // suffix receives the patch, not adjacent output lanes.
+                        let extra = if patched && lane == 7 && row >= 2 {
+                            96
+                        } else {
+                            0
+                        };
+                        expected.push(T::T::from_bits(
+                            start.wrapping_add((row as u64 + 1) * 3 + extra),
+                        ));
+                    }
+                }
+                T::T::from_bits(777).write_le(&mut body);
+                expected.extend((1..=7).map(|i| T::T::from_bits(777 + i * 3)));
+                if patched {
+                    body.extend_from_slice(&263u16.to_le_bytes());
+                    T::T::from_bits(99).write_le(&mut body);
+                }
+                let mut encoded = page(11, T::T::BYTE_WIDTH as u8, 1031, &[body]);
+                encoded[0] = PACKING_MODE_FASTLANES_DELTA;
+                let mut decoder = PforDecoder::<T>::new();
+                decoder.set_data(encoded.into(), 1031).unwrap();
+                let mut out = vec![T::T::default(); 1031];
+                assert_eq!(decoder.get(&mut out).unwrap(), 1031);
+                assert_eq!(out, expected);
+            }
+            // In particular, a scalar-sized start field is insufficient for a
+            // full UTL block. Reject every truncated lane-start array.
+            for bytes in 0..128 {
+                let mut body = Vec::new();
+                PforVectorInfo::<T::T> {
+                    frame_of_reference: T::T::default(),
+                    bit_width: 0,
+                    num_exceptions: 0,
+                    is_delta: true,
+                }
+                .write(&mut body);
+                body.resize(body.len() + bytes, 0);
+                let mut encoded = page(10, T::T::BYTE_WIDTH as u8, 1024, &[body]);
+                encoded[0] = PACKING_MODE_FASTLANES_DELTA;
+                let mut decoder = PforDecoder::<T>::new();
+                decoder.set_data(encoded.into(), 1024).unwrap();
+                assert!(decoder.get(&mut [T::T::default(); 1024]).is_err());
+            }
+        }
+        check::<Int32Type>();
+        check::<Int64Type>();
+    }
 
     #[test]
     fn test_patch_exceptions_writes_positions_and_values() {

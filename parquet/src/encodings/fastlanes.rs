@@ -26,10 +26,40 @@
 //!
 //! Adapted from the ALP experiment on `alp-benchmark-fastlanes`, commit
 //! e97ae0dbb74dfcd4d4109afbe3dec78598de0900. Frame addition is fused into
-//! unpacking here; the packing order is unchanged.
+//! unpacking here; the packing order is unchanged. UTL delta kernels sum lanes
+//! in transposed order, then restore original order with a fully unrolled
+//! permutation, following FastLanes and Vortex's separate untranspose kernels.
 
 const FL_ORDER: [usize; 8] = [0, 4, 2, 6, 1, 5, 3, 7];
 const VECTOR_SIZE: usize = 1024;
+
+/// Position of a row/lane in the universal transposed layout. A delta lane
+/// contains 32 consecutive original i32 values or 64 consecutive i64 values.
+pub(crate) const fn utl_index(row: usize, lane: usize) -> usize {
+    FL_ORDER[row / 8] * 16 + (row % 8) * 128 + lane
+}
+
+const fn original_index(bits: usize, index: usize) -> usize {
+    let lane = index % (VECTOR_SIZE / bits);
+    let sub_row = index / 128;
+    let order = (index - sub_row * 128 - lane) / 16;
+    lane * bits + FL_ORDER[order] * 8 + sub_row
+}
+
+/// Generate the entire permutation, not just its rows. This follows
+/// vortex-fastlanes/src/transpose.rs and FastLanes' generated untranspose_i:
+/// constant source/destination indices let LLVM use contiguous loads/stores
+/// and register shuffles rather than a loop of gathers or scatters.
+///
+/// Mode 2's i32 lane numbering differs from the reference's universal
+/// permutation. Keep its published ordering here; the i64 mapping is identical.
+#[inline(never)]
+fn untranspose<T: Copy, const BITS: usize>(input: &[T; VECTOR_SIZE], output: &mut [T]) {
+    assert_eq!(output.len(), VECTOR_SIZE);
+    seq_macro::seq!(I in 0..1024 {
+        output[original_index(BITS, I)] = input[I];
+    });
+}
 
 pub(crate) trait FastLanesBitPacking: Copy + Default {
     /// Pack one 1024-value vector and append its transposed bytes to `out`.
@@ -37,6 +67,18 @@ pub(crate) trait FastLanesBitPacking: Copy + Default {
 
     /// Unpack one complete vector and add the frame with wrapping arithmetic.
     fn unpack_for_bytes(width: usize, input: &[u8], frame: Self, output: &mut [Self]);
+
+    /// Unpack and sum independent UTL lanes, then restore original value order.
+    fn unpack_delta_bytes(
+        width: usize,
+        input: &[u8],
+        frame: Self,
+        starts: &[u8],
+        output: &mut [Self],
+    );
+
+    /// Sum already unpacked and patched UTL differences and restore value order.
+    fn restore_delta(starts: &[u8], output: &mut [Self]);
 
     #[cfg(test)]
     fn unpack_bytes(width: usize, input: &[u8], output: &mut [Self]) {
@@ -72,10 +114,42 @@ macro_rules! impl_fastlanes_bitpacking {
 
                 seq_macro::seq!(W in 0..=$bits {
                     match width {
-                        #(W => $unpack::<W>(input, frame, output),)*
+                        #(W => $unpack::<W, false>(input, frame, &[], output),)*
                         _ => unreachable!("invalid FastLanes bit width {width}"),
                     }
                 })
+            }
+
+            fn unpack_delta_bytes(width: usize, input: &[u8], frame: Self, starts: &[u8], output: &mut [Self]) {
+                assert!(width <= $bits);
+                assert_eq!(input.len(), VECTOR_SIZE * width / 8);
+                assert_eq!(starts.len(), 128);
+                assert_eq!(output.len(), VECTOR_SIZE);
+                let mut transposed = [0; VECTOR_SIZE];
+                seq_macro::seq!(W in 0..=$bits {
+                    match width {
+                        #(W => $unpack::<W, true>(input, frame, starts, &mut transposed),)*
+                        _ => unreachable!("invalid FastLanes bit width {width}"),
+                    }
+                });
+                untranspose::<$ty, $bits>(&transposed, output);
+            }
+
+            fn restore_delta(starts: &[u8], output: &mut [Self]) {
+                assert_eq!(starts.len(), 128);
+                assert_eq!(output.len(), VECTOR_SIZE);
+                // Unroll each chain so the independent outer lane loop can be
+                // vectorized. Patch values have already replaced differences.
+                let mut transposed = [0; VECTOR_SIZE];
+                for lane in 0..VECTOR_SIZE / $bits {
+                    let mut acc = $load(starts, lane);
+                    seq_macro::seq!(ROW in 0..$bits {
+                        let index = utl_index(ROW, lane);
+                        acc = acc.wrapping_add(output[index]);
+                        transposed[index] = acc;
+                    });
+                }
+                untranspose::<$ty, $bits>(&transposed, output);
             }
 
             #[cfg(test)]
@@ -185,20 +259,37 @@ macro_rules! impl_fastlanes_bitpacking {
         }
 
         #[inline(never)]
-        fn $unpack<const W: usize>(input: &[u8], frame: $ty, output: &mut [$ty]) {
+        fn $unpack<const W: usize, const DELTA: bool>(input: &[u8], frame: $ty, starts: &[u8], output: &mut [$ty]) {
             const LANES: usize = VECTOR_SIZE / $bits;
             if W == 0 {
-                output.fill(frame);
+                if DELTA {
+                    for lane in 0..LANES {
+                        let mut acc = $load(starts, lane);
+                        seq_macro::seq!(ROW in 0..$bits {
+                            acc = acc.wrapping_add(frame);
+                            output[utl_index(ROW, lane)] = acc;
+                        });
+                    }
+                } else {
+                    output.fill(frame);
+                }
                 return;
             }
 
             for lane in 0..LANES {
+                let mut acc = if DELTA { $load(starts, lane) } else { 0 };
                 if W == $bits {
                     seq_macro::seq!(ROW in 0..$bits {
                         let order = ROW / 8;
                         let sub_row = ROW % 8;
                         let index = FL_ORDER[order] * 16 + sub_row * 128 + lane;
-                        output[index] = $load(input, LANES * ROW + lane).wrapping_add(frame);
+                        let value = $load(input, LANES * ROW + lane).wrapping_add(frame);
+                        if DELTA {
+                            acc = acc.wrapping_add(value);
+                            output[index] = acc;
+                        } else {
+                            output[index] = value;
+                        }
                     });
                 } else {
                     let mask = |width: usize| (<$ty>::from(1u8) << width) - 1;
@@ -223,7 +314,13 @@ macro_rules! impl_fastlanes_bitpacking {
                         let order = ROW / 8;
                         let sub_row = ROW % 8;
                         let index = FL_ORDER[order] * 16 + sub_row * 128 + lane;
-                        output[index] = value.wrapping_add(frame);
+                        let value = value.wrapping_add(frame);
+                        if DELTA {
+                            acc = acc.wrapping_add(value);
+                            output[index] = acc;
+                        } else {
+                            output[index] = value;
+                        }
                     });
                 }
             }
@@ -237,7 +334,88 @@ impl_fastlanes_bitpacking!(u64, 64, load_u64, store_u64, pack_impl_u64, unpack_i
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fastlanes::BitPacking;
+    use fastlanes::{BitPacking, Delta, Transpose};
+
+    #[test]
+    fn utl_delta_kernels_match_independent_lane_sums_at_every_width() {
+        macro_rules! check {
+            ($ty:ty, $bits:literal) => {
+                for width in 0..=$bits {
+                    let mask = <$ty>::MAX >> ($bits - width).min($bits - 1);
+                    let mask = if width == 0 { 0 } else { mask };
+                    let frame = <$ty>::MAX - 7;
+                    let mut residuals: [$ty; VECTOR_SIZE] = [0; VECTOR_SIZE];
+                    let mut expected: [$ty; VECTOR_SIZE] = [0; VECTOR_SIZE];
+                    let mut starts = Vec::new();
+                    for lane in 0..VECTOR_SIZE / $bits {
+                        let mut acc = (<$ty>::MAX - lane as $ty).wrapping_mul(1009);
+                        starts.extend_from_slice(&acc.to_le_bytes());
+                        for row in 0..$bits {
+                            let residual =
+                                ((lane * $bits + row) as $ty).wrapping_mul(0x9e37_79b9) & mask;
+                            residuals[utl_index(row, lane)] = residual;
+                            acc = acc.wrapping_add(residual).wrapping_add(frame);
+                            expected[lane * $bits + row] = acc;
+                        }
+                    }
+                    // Also check the running sums and permutation against the
+                    // actual FastLanes implementation used by Vortex. Mode 2
+                    // numbers i32 chains consecutively; the universal reference
+                    // puts the two halves of each 64-value run 16 lanes apart.
+                    let deltas = std::array::from_fn(|i| residuals[i].wrapping_add(frame));
+                    let bases = std::array::from_fn(|i| {
+                        let at = i * std::mem::size_of::<$ty>();
+                        <$ty>::from_le_bytes(
+                            starts[at..at + std::mem::size_of::<$ty>()]
+                                .try_into()
+                                .unwrap(),
+                        )
+                    });
+                    let mut reference_transposed = [0; VECTOR_SIZE];
+                    <$ty as Delta>::undelta::<{ VECTOR_SIZE / $bits }>(
+                        &deltas,
+                        &bases,
+                        &mut reference_transposed,
+                    );
+                    let mut reference = [0; VECTOR_SIZE];
+                    <$ty as Transpose>::untranspose(&reference_transposed, &mut reference);
+                    for lane in 0..VECTOR_SIZE / $bits {
+                        for row in 0..$bits {
+                            assert_eq!(
+                                expected[lane * $bits + row],
+                                reference[(lane % 16) * 64 + (lane / 16) * $bits + row]
+                            );
+                        }
+                    }
+                    // The packed stream is produced by the independent upstream
+                    // bitpacking oracle, not our packer.
+                    let mut words: Vec<$ty> = vec![0; VECTOR_SIZE * width / $bits];
+                    unsafe { <$ty as BitPacking>::unchecked_pack(width, &residuals, &mut words) };
+                    let packed: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+                    for offset in 0..8 {
+                        let mut unaligned = vec![0xa5; offset];
+                        unaligned.extend_from_slice(&packed);
+                        let mut unaligned_starts = vec![0xa5; offset];
+                        unaligned_starts.extend_from_slice(&starts);
+                        let mut out: [$ty; VECTOR_SIZE] = [0; VECTOR_SIZE];
+                        <$ty>::unpack_delta_bytes(
+                            width,
+                            &unaligned[offset..],
+                            frame,
+                            &unaligned_starts[offset..],
+                            &mut out,
+                        );
+                        assert_eq!(out, expected, "fused width {width}, offset {offset}");
+                        <$ty>::unpack_for_bytes(width, &unaligned[offset..], frame, &mut out);
+                        <$ty>::restore_delta(&unaligned_starts[offset..], &mut out);
+                        assert_eq!(out, expected, "separate width {width}, offset {offset}");
+                    }
+                }
+            };
+        }
+        check!(u32, 32);
+        check!(u64, 64);
+    }
 
     fn check_u32(width: usize) {
         let input: Vec<u32> = (0..VECTOR_SIZE)

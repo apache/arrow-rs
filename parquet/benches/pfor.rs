@@ -17,7 +17,7 @@
 
 //! PFOR against the other ways Parquet can carry an integer column.
 //!
-//! Eight arms, on the columns the C++ implementation is benchmarked on:
+//! Nine arms, on the columns the C++ implementation is benchmarked on:
 //!
 //! | arm | what it is |
 //! |---|---|
@@ -27,6 +27,7 @@
 //! | `PFOR+DELTA` | PFOR free to choose differencing per vector, which is the default |
 //! | `PFOR_FASTLANES` | PFOR with byte-oriented FastLanes packing and fused frame addition |
 //! | `PFOR_FASTLANES+DELTA` | the same FastLanes layout with optional differencing |
+//! | `PFOR_FASTLANES+UTL_DELTA` | FastLanes with independent UTL delta lanes and per-lane starts |
 //! | `PLAIN+ZSTD` | the raw little-endian values through zstd |
 //! | `PLAIN+LZ4` | the raw little-endian values through lz4 |
 //!
@@ -38,7 +39,7 @@
 //!
 //! The two compressor arms time the compressor alone, over a buffer of values that is
 //! already in memory, which is what the C++ benchmark times. So their decode figure is
-//! bytes-to-bytes and does not include producing typed values; the other four arms all
+//! bytes-to-bytes and does not include producing typed values; the other arms all
 //! decode to values.
 //!
 //! Run with `cargo bench -p parquet --bench pfor`, or a subset with e.g.
@@ -401,7 +402,11 @@ enum Arm {
     /// An encoding the crate hands out through `get_encoder`/`get_decoder`.
     Direct(Encoding),
     /// PFOR, with the per-vector differencing mode allowed or forbidden.
-    Pfor { delta: bool, fastlanes: bool },
+    Pfor {
+        delta: bool,
+        fastlanes: bool,
+        utl_delta: bool,
+    },
     /// The raw little-endian values through a page compressor.
     PlainCompressed(Compression),
 }
@@ -422,6 +427,7 @@ fn arms() -> Vec<(&'static str, &'static str, Arm)> {
             Arm::Pfor {
                 delta: false,
                 fastlanes: false,
+                utl_delta: false,
             },
         ),
         (
@@ -430,6 +436,7 @@ fn arms() -> Vec<(&'static str, &'static str, Arm)> {
             Arm::Pfor {
                 delta: true,
                 fastlanes: false,
+                utl_delta: false,
             },
         ),
         (
@@ -438,6 +445,7 @@ fn arms() -> Vec<(&'static str, &'static str, Arm)> {
             Arm::Pfor {
                 delta: false,
                 fastlanes: true,
+                utl_delta: false,
             },
         ),
         (
@@ -446,6 +454,16 @@ fn arms() -> Vec<(&'static str, &'static str, Arm)> {
             Arm::Pfor {
                 delta: true,
                 fastlanes: true,
+                utl_delta: false,
+            },
+        ),
+        (
+            "PFOR_FASTLANES+UTL_DELTA",
+            "PFOR+UTL",
+            Arm::Pfor {
+                delta: true,
+                fastlanes: true,
+                utl_delta: true,
             },
         ),
         (
@@ -529,10 +547,15 @@ where
             encoder.put(values).unwrap();
             encoder.flush_buffer().unwrap()
         }
-        Arm::Pfor { delta, fastlanes } => {
+        Arm::Pfor {
+            delta,
+            fastlanes,
+            utl_delta,
+        } => {
             let mut encoder = PforEncoder::<T>::new()
                 .with_delta_enabled(delta)
-                .with_fastlanes_enabled(fastlanes);
+                .with_fastlanes_enabled(fastlanes)
+                .with_fastlanes_delta_enabled(utl_delta);
             encoder.put(values).unwrap();
             encoder.flush_buffer().unwrap()
         }
@@ -613,6 +636,40 @@ fn verify<T: DataType>(
         let mut out = vec![T::T::default(); values.len()];
         decode::<T>(arm, encoded, &mut out, descr);
         assert!(out == *values, "did not round trip {name}");
+    }
+    if let Arm::Pfor {
+        delta,
+        fastlanes,
+        utl_delta,
+    } = arm
+    {
+        let bytes = &encoded.bytes;
+        let vector_size = 1usize << bytes[1];
+        let num_vectors = values.len().div_ceil(vector_size);
+        let mut delta_vectors = 0;
+        let mut utl_blocks = 0;
+        let mut patches = 0;
+        for vector in 0..num_vectors {
+            let offset_at = 7 + vector * 4;
+            let at = 7 + u32::from_le_bytes(bytes[offset_at..offset_at + 4].try_into().unwrap())
+                as usize;
+            let width_at = at + T::T::BYTE_WIDTH;
+            if bytes[width_at] & 0x80 != 0 {
+                delta_vectors += 1;
+                if utl_delta {
+                    utl_blocks += (values.len() - vector * vector_size).min(vector_size) / 1024;
+                }
+            }
+            patches +=
+                u16::from_le_bytes(bytes[width_at + 1..width_at + 3].try_into().unwrap()) as usize;
+        }
+        // Outside the timer: retain exact sizes and actual mode selections so
+        // delta-allowed workloads cannot be mistaken for forced-delta timings.
+        println!(
+            "PFOR_STATS,int{},{name},delta={delta},fastlanes={fastlanes},utl={utl_delta},bytes={},vectors={num_vectors},delta_vectors={delta_vectors},utl_blocks={utl_blocks},patches={patches}",
+            T::T::BYTE_WIDTH * 8,
+            bytes.len()
+        );
     }
 }
 

@@ -30,10 +30,11 @@ use bytes::Bytes;
 use super::Encoder;
 use crate::basic::Encoding;
 use crate::data_type::DataType;
+use crate::encodings::fastlanes::utl_index;
 use crate::encodings::pfor::{
     DEFAULT_VECTOR_SIZE, MAX_VECTOR_SIZE, OFFSET_SIZE, PACKING_MODE_FASTLANES,
-    PACKING_MODE_FOR_BIT_PACK, PforHeader, PforInt, PforVectorInfo, exception_bits, low_mask,
-    max_compressed_size, validate_vector_size,
+    PACKING_MODE_FASTLANES_DELTA, PACKING_MODE_FOR_BIT_PACK, PforHeader, PforInt, PforVectorInfo,
+    delta_start_count, exception_bits, low_mask, max_compressed_size, validate_vector_size,
 };
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::{BitWriter, num_required_bits};
@@ -393,7 +394,7 @@ fn compute_deltas<T: PforInt>(values: &[T], deltas: &mut Vec<T>) -> MinMax<T> {
 /// `[-k, k]` zigzag into `[0, 2k]`, and a frame at `-k` maps them onto the same `[0, 2k]`, so for a
 /// range that straddles zero evenly the estimated width is the width the search would find. Where
 /// the range leans one way the estimate runs a bit or two wide.
-fn estimate_delta_cost_bits<T: PforInt>(values: &[T]) -> i64 {
+fn estimate_delta_cost_bits<T: PforInt>(values: &[T], utl_delta: bool) -> i64 {
     // Enough of a sample to place a distribution across the width bins, and few enough that the
     // pass is a fraction of the one it is deciding against.
     const SAMPLE_TARGET: usize = 128;
@@ -404,7 +405,14 @@ fn estimate_delta_cost_bits<T: PforInt>(values: &[T]) -> i64 {
     let mut sampled = 0usize;
     let mut i = stride;
     while i < num_elements {
-        let d = T::from_bits(values[i].to_bits().wrapping_sub(values[i - 1].to_bits()));
+        let full_len = values.len() / DEFAULT_VECTOR_SIZE * DEFAULT_VECTOR_SIZE;
+        let is_start = utl_delta
+            && ((i < full_len && i.is_multiple_of(T::MAX_BIT_WIDTH as usize)) || i == full_len);
+        let d = if is_start {
+            T::default()
+        } else {
+            T::from_bits(values[i].to_bits().wrapping_sub(values[i - 1].to_bits()))
+        };
         h[sampled & 3][num_required_bits(zigzag(d)) as usize] += 1;
         sampled += 1;
         i += stride;
@@ -423,6 +431,33 @@ fn estimate_delta_cost_bits<T: PforInt>(values: &[T]) -> i64 {
     // every element, an exception costs its slot every time it occurs -- so the sample cost scales
     // with the count.
     sample_cost * num_elements as i64 / sampled as i64
+}
+
+/// Adjacent differences within independent contiguous chains, placed in UTL
+/// order for complete blocks. Each chain starts with zero; its first value is
+/// stored separately. An incomplete block remains in sequential order.
+fn compute_utl_deltas<T: PforInt>(values: &[T], deltas: &mut Vec<T>) -> MinMax<T> {
+    deltas.resize(values.len(), T::default());
+    let mut blocks = values.chunks_exact(DEFAULT_VECTOR_SIZE);
+    for (block, values) in blocks.by_ref().enumerate() {
+        let out = &mut deltas[block * DEFAULT_VECTOR_SIZE..][..DEFAULT_VECTOR_SIZE];
+        for (lane, chain) in values.chunks_exact(T::MAX_BIT_WIDTH as usize).enumerate() {
+            out[utl_index(0, lane)] = T::default();
+            for row in 1..chain.len() {
+                out[utl_index(row, lane)] =
+                    T::from_bits(chain[row].to_bits().wrapping_sub(chain[row - 1].to_bits()));
+            }
+        }
+    }
+    let tail = blocks.remainder();
+    if !tail.is_empty() {
+        let at = values.len() - tail.len();
+        deltas[at] = T::default();
+        for i in 1..tail.len() {
+            deltas[at + i] = T::from_bits(tail[i].to_bits().wrapping_sub(tail[i - 1].to_bits()));
+        }
+    }
+    min_max(deltas)
 }
 
 /// Everything the encoder decided about one vector.
@@ -451,6 +486,7 @@ fn choose_vector_plan<T: PforInt>(
     values: &[T],
     delta_scratch: &mut Vec<T>,
     delta_enabled: bool,
+    utl_delta: bool,
 ) -> PforVectorPlan<T> {
     let raw = choose_frame_and_width(values, min_max(values));
 
@@ -468,20 +504,29 @@ fn choose_vector_plan<T: PforInt>(
         return plan;
     }
 
-    // A differenced vector carries its own first value, so it starts one full-width value behind
-    // whatever its differences pack to.
-    let start_value_bits = (T::BYTE_WIDTH * 8) as i64;
+    // Include every independent chain's start in the cost; UTL starts occupy
+    // 128 bytes per complete block, versus one value for ordinary delta.
+    let mode = if utl_delta {
+        PACKING_MODE_FASTLANES_DELTA
+    } else {
+        PACKING_MODE_FOR_BIT_PACK
+    };
+    let start_value_bits = (delta_start_count::<T>(mode, values.len()) * T::BYTE_WIDTH * 8) as i64;
 
     // Estimate the mode before paying for it, and drop it here if the estimate cannot reach the
     // incumbent. What is skipped is the whole of the rest of the mode: the pass that writes the
     // differences out, and the frame search over them. The estimate is deliberately loose, so it
     // declines only where the two modes are more than a sampling error apart -- which is where the
     // choice matters least.
-    if estimate_delta_cost_bits(values) + start_value_bits >= plan.cost_bits {
+    if estimate_delta_cost_bits(values, utl_delta) + start_value_bits >= plan.cost_bits {
         return plan;
     }
 
-    let delta_bounds = compute_deltas(values, delta_scratch);
+    let delta_bounds = if utl_delta {
+        compute_utl_deltas(values, delta_scratch)
+    } else {
+        compute_deltas(values, delta_scratch)
+    };
     let delta = choose_frame_and_width(delta_scratch, delta_bounds);
 
     let delta_cost = delta.cost_bits + start_value_bits;
@@ -508,6 +553,8 @@ pub struct PforEncoder<T: DataType> {
     vector_size: usize,
     /// Whether to use the experimental FastLanes packed representation.
     fastlanes_enabled: bool,
+    /// Use independent UTL delta lanes instead of one sum per vector.
+    fastlanes_delta_enabled: bool,
     /// Whether the planner may difference a vector.
     ///
     /// Nothing here changes how a page is read: a decoder is told which mode each vector used by
@@ -532,6 +579,7 @@ impl<T: DataType> PforEncoder<T> {
             values: Vec::new(),
             vector_size: DEFAULT_VECTOR_SIZE,
             fastlanes_enabled: false,
+            fastlanes_delta_enabled: false,
             delta_enabled: true,
             delta_scratch: Vec::new(),
             _phantom: PhantomData,
@@ -560,6 +608,17 @@ impl<T: DataType> PforEncoder<T> {
         self.fastlanes_enabled = enabled;
         self
     }
+
+    /// Select experimental packing mode 2: FastLanes packing and independent
+    /// UTL delta chains in complete 1024-value blocks. This implies FastLanes
+    /// packing even if `with_fastlanes_enabled` is false. Differencing is still
+    /// selected per vector by the cost model and requires `with_delta_enabled`.
+    /// Each complete delta block carries 128 bytes of chain starts; partial
+    /// blocks use the ordinary delta representation with one start value.
+    pub fn with_fastlanes_delta_enabled(mut self, enabled: bool) -> Self {
+        self.fastlanes_delta_enabled = enabled;
+        self
+    }
 }
 
 impl<T: DataType> PforEncoder<T>
@@ -569,7 +628,12 @@ where
     /// Encode one vector onto the end of `out`.
     fn encode_vector(&mut self, values: &[T::T], out: &mut Vec<u8>) {
         debug_assert!(!values.is_empty());
-        let plan = choose_vector_plan(values, &mut self.delta_scratch, self.delta_enabled);
+        let plan = choose_vector_plan(
+            values,
+            &mut self.delta_scratch,
+            self.delta_enabled,
+            self.fastlanes_delta_enabled,
+        );
         let source: &[T::T] = if plan.delta {
             &self.delta_scratch
         } else {
@@ -612,11 +676,23 @@ where
         info.write(out);
 
         if plan.delta {
-            plan.start_value.write_le(out);
+            if self.fastlanes_delta_enabled {
+                let mut blocks = values.chunks_exact(DEFAULT_VECTOR_SIZE);
+                for block in &mut blocks {
+                    for chain in block.chunks_exact(T::T::MAX_BIT_WIDTH as usize) {
+                        chain[0].write_le(out);
+                    }
+                }
+                if let Some(&start) = blocks.remainder().first() {
+                    start.write_le(out);
+                }
+            } else {
+                plan.start_value.write_le(out);
+            }
         }
 
         if plan.bit_width > 0 {
-            let sequential = if self.fastlanes_enabled {
+            let sequential = if self.fastlanes_enabled || self.fastlanes_delta_enabled {
                 let mut blocks = residuals.chunks_exact(DEFAULT_VECTOR_SIZE);
                 for block in &mut blocks {
                     T::T::pack_fastlanes(plan.bit_width as usize, block, out);
@@ -680,7 +756,9 @@ where
 
         let log_vector_size = validate_vector_size(self.vector_size)?;
         let header = PforHeader {
-            packing_mode: if self.fastlanes_enabled {
+            packing_mode: if self.fastlanes_delta_enabled {
+                PACKING_MODE_FASTLANES_DELTA
+            } else if self.fastlanes_enabled {
                 PACKING_MODE_FASTLANES
             } else {
                 PACKING_MODE_FOR_BIT_PACK
@@ -762,6 +840,18 @@ mod tests {
         assert_eq!(fastlanes[0], PACKING_MODE_FASTLANES);
         assert_eq!(fastlanes.len(), page.len());
         decoder.set_data(fastlanes, values.len()).unwrap();
+        assert_eq!(decoder.get(&mut out).unwrap(), values.len());
+        assert_eq!(out, values);
+        assert_eq!(decoder.values_left(), 0);
+        let mut encoder = PforEncoder::<T>::new()
+            .with_vector_size(vector_size)
+            .unwrap()
+            .with_fastlanes_delta_enabled(true);
+        encoder.put(values).unwrap();
+        let utl = encoder.flush_buffer().unwrap();
+        assert_eq!(utl[0], PACKING_MODE_FASTLANES_DELTA);
+        assert!(utl.len() <= max_compressed_size::<T::T>(values.len(), vector_size).unwrap());
+        decoder.set_data(utl, values.len()).unwrap();
         assert_eq!(decoder.get(&mut out).unwrap(), values.len());
         assert_eq!(out, values);
         assert_eq!(decoder.values_left(), 0);
@@ -1120,6 +1210,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_utl_delta_streaming_and_skipping() {
+        fn check<T: DataType>()
+        where
+            T::T: PforInt,
+        {
+            let values: Vec<T::T> = (0..8199u64)
+                .map(|i| {
+                    T::T::from_bits(
+                        (i * 100_003 + if i % 1024 >= 513 { 10_000_000 } else { 0 })
+                            .wrapping_add(i64::MAX as u64 - 1_000_000),
+                    )
+                })
+                .collect();
+            for vector_size in [1024, 2048, 4096, 8192] {
+                let mut encoder = PforEncoder::<T>::new()
+                    .with_vector_size(vector_size)
+                    .unwrap()
+                    .with_fastlanes_delta_enabled(true);
+                for _ in 0..2 {
+                    for part in values.chunks(317) {
+                        encoder.put(part).unwrap();
+                    }
+                    let encoded = encoder.flush_buffer().unwrap();
+                    assert!(vector_info::<T::T>(&encoded, 0).is_delta);
+                    for skip in [0, 1, 31, 32, 63, 64, 1023, 1024, 1025, 2048, 8192, 8199] {
+                        let mut decoder = PforDecoder::<T>::new();
+                        decoder.set_data(encoded.clone(), values.len()).unwrap();
+                        assert_eq!(decoder.skip(skip).unwrap(), skip);
+                        let mut output = Vec::new();
+                        let mut batch = vec![T::T::default(); 317];
+                        loop {
+                            let read = decoder.get(&mut batch).unwrap();
+                            if read == 0 {
+                                break;
+                            }
+                            output.extend_from_slice(&batch[..read]);
+                        }
+                        assert_eq!(output, values[skip..]);
+                    }
+                }
+            }
+        }
+        check::<Int32Type>();
+        check::<Int64Type>();
     }
 
     #[test]
