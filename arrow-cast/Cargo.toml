@@ -55,6 +55,9 @@ base64 = "0.23"
 ryu = "1.0.16"
 
 [dev-dependencies]
+# Enable `chrono-tz` so that tests can exercise IANA (named) timezones such as
+# `America/New_York`, which is where DST transitions can be observed.
+arrow-array = { workspace = true, features = ["chrono-tz"] }
 criterion = { workspace = true, default-features = false }
 half = { version = "2.1", default-features = false }
 insta = { workspace = true }

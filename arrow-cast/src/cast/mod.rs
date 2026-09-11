@@ -53,6 +53,7 @@ use crate::cast::run_array::*;
 use crate::cast::string::*;
 pub use crate::cast::union::*;
 
+use crate::local_time::resolve_local_offset;
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_data::ByteView;
 use chrono::{NaiveTime, Offset, TimeZone, Utc};
@@ -1906,6 +1907,11 @@ pub fn cast_with_options(
                 // unchanged.
                 //
                 // i.e. Timestamp('2001-01-01T00:00', None) -> Timestamp('2001-01-01T00:00', '+0700')
+                //
+                // For IANA timezones a wall clock reading is not always a unique
+                // instant: a "fall back" DST transition makes an hour occur twice
+                // and a "spring forward" transition skips an hour entirely. See
+                // `resolve_local_offset` for how those readings are resolved.
                 (None, Some(to_tz)) => {
                     let to_tz: Tz = to_tz.parse()?;
                     match to_unit {
@@ -2633,8 +2639,8 @@ fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
 ) -> Result<PrimitiveArray<Int64Type>, ArrowError> {
     let adjust = |o| {
         let local = as_datetime::<T>(o)?;
-        let offset = to_tz.offset_from_local_datetime(&local).single()?;
-        T::from_naive_datetime(local - offset.fix(), None)
+        let offset = resolve_local_offset(to_tz, &local)?.fix();
+        T::from_naive_datetime(local - offset, None)
     };
     let adjusted = if cast_options.safe {
         array.unary_opt::<_, Int64Type>(adjust)
@@ -2901,7 +2907,7 @@ mod tests {
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
     use arrow_buffer::{ScalarBuffer, i256};
     use arrow_schema::{DataType, Field};
-    use chrono::NaiveDate;
+    use chrono::{FixedOffset, NaiveDate};
     use half::f16;
     use std::sync::Arc;
 
@@ -6940,6 +6946,344 @@ mod tests {
         assert_eq!("1999-12-31T16:00:00-08:00", result.value(0));
         assert_eq!("2009-12-31T16:00:00-08:00", result.value(1));
         assert!(result.is_null(2));
+    }
+
+    /// The i64 value of a `Timestamp(Second, None)` holding the given wall clock
+    /// reading (a naive timestamp is stored as if it were UTC).
+    fn naive_seconds(y: i32, m: u32, d: u32, h: u32, min: u32) -> i64 {
+        NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, min, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp()
+    }
+
+    /// The instant, in seconds since the epoch, denoted by the given wall clock
+    /// reading at a fixed offset of `offset_hours`.
+    fn instant_seconds(y: i32, m: u32, d: u32, h: u32, min: u32, offset_hours: i32) -> i64 {
+        let offset = FixedOffset::east_opt(offset_hours * 3600).unwrap();
+        NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, min, 0)
+            .unwrap()
+            .and_local_timezone(offset)
+            .unwrap()
+            .timestamp()
+    }
+
+    // Cast Timestamp(_, None) -> Timestamp(_, Some(IANA timezone)) across DST
+    // transitions. See `resolve_local_offset`.
+    #[test]
+    fn test_cast_timestamp_to_named_timezone_dst() {
+        // Unambiguous, EDT (-04:00) is in effect.
+        let unambiguous = naive_seconds(2024, 11, 1, 0, 0);
+        // Ambiguous: the clocks go back at 2024-11-03T02:00 EDT, so 01:30
+        // happens twice, first at -04:00 and then at -05:00.
+        let ambiguous = naive_seconds(2024, 11, 3, 1, 30);
+        // Nonexistent: the clocks go forward at 2024-03-10T02:00 EST, so 02:30
+        // never happens.
+        let nonexistent = naive_seconds(2024, 3, 10, 2, 30);
+        assert_eq!(
+            [unambiguous, ambiguous, nonexistent],
+            [1_730_419_200, 1_730_597_400, 1_710_037_800]
+        );
+
+        let array = TimestampSecondArray::from(vec![
+            Some(unambiguous),
+            Some(ambiguous),
+            Some(nonexistent),
+            None,
+        ]);
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampSecondType>();
+
+        assert_eq!(c.value(0), instant_seconds(2024, 11, 1, 0, 0, -4));
+        assert_eq!(c.value(0), 1_730_433_600);
+        // The later of the two candidates, i.e. EST rather than EDT.
+        assert_eq!(c.value(1), instant_seconds(2024, 11, 3, 1, 30, -5));
+        assert_eq!(c.value(1), 1_730_615_400);
+        // Shifted forward by the one hour gap: 02:30 EST is 03:30 EDT.
+        assert_eq!(c.value(2), instant_seconds(2024, 3, 10, 2, 30, -5));
+        assert_eq!(c.value(2), instant_seconds(2024, 3, 10, 3, 30, -4));
+        assert_eq!(c.value(2), 1_710_055_800);
+        assert!(c.is_null(3));
+    }
+
+    /// The rows of the string array used by the string -> timestamp DST tests,
+    /// and the instants they denote in `America/New_York` according to
+    /// PostgreSQL 17.11.
+    ///
+    /// They deliberately straddle both transitions of 2024, so a single offset
+    /// resolved once for the whole array cannot satisfy all of them.
+    const DST_STRINGS: [&str; 5] = [
+        // EDT (-04:00), before the November transition.
+        "2024-11-02 12:00:00",
+        // Ambiguous: 01:30 happens twice, the later (EST) instant wins.
+        "2024-11-03 01:30:00",
+        // EST (-05:00), after the November transition.
+        "2024-11-03 12:00:00",
+        // Nonexistent: 02:30 is skipped in March and shifts to 03:30 EDT.
+        "2024-03-10 02:30:00",
+        // EST (-05:00), before the March transition.
+        "2024-03-09 12:00:00",
+    ];
+
+    const DST_SECONDS: [i64; 5] = [
+        1_730_563_200,
+        1_730_615_400,
+        1_730_653_200,
+        1_710_055_800,
+        1_710_003_600,
+    ];
+
+    // Casting strings to `Timestamp(_, Some(tz))` goes through
+    // `string_to_datetime`, not through `adjust_timestamp_to_timezone`, so it
+    // needs its own coverage of the DST rules. See `crate::local_time`.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst() {
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let mut values: Vec<Option<&str>> = DST_STRINGS.iter().copied().map(Some).collect();
+        values.push(None);
+
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(values.clone())),
+            Arc::new(LargeStringArray::from(values.clone())),
+            Arc::new(StringViewArray::from(values)),
+        ];
+
+        for array in arrays {
+            let from_type = array.data_type().clone();
+            let b = cast_with_options(&array, &to_type, &options)
+                .unwrap_or_else(|e| panic!("{from_type:?}: {e}"));
+            assert_eq!(b.data_type(), &to_type);
+            let c = b.as_primitive::<TimestampSecondType>();
+            for (i, expected) in DST_SECONDS.iter().enumerate() {
+                assert_eq!(c.value(i), *expected, "{from_type:?} row {i}");
+            }
+            assert!(c.is_null(5), "{from_type:?} null row");
+        }
+    }
+
+    // The same values must not silently become null under `safe` casting either.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst_safe() {
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+
+        let array = StringArray::from(vec![
+            Some(DST_STRINGS[1]),
+            Some(DST_STRINGS[3]),
+            Some("not a timestamp"),
+            None,
+        ]);
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(c.value(0), DST_SECONDS[1]);
+        assert_eq!(c.value(1), DST_SECONDS[3]);
+        // Genuinely unparsable input still becomes null.
+        assert!(c.is_null(2));
+        assert!(c.is_null(3));
+        assert_eq!(c.null_count(), 2);
+    }
+
+    // Sub-second precision survives the shift applied to a nonexistent reading.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst_nanos() {
+        let to_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let array = StringArray::from(vec![
+            "2024-03-10 02:30:00.123456789",
+            "2024-11-03 01:30:00.123456789",
+        ]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(c.value(0), 1_710_055_800 * 1_000_000_000 + 123_456_789);
+        assert_eq!(c.value(1), 1_730_615_400 * 1_000_000_000 + 123_456_789);
+    }
+
+    // A date-only string reads local midnight, which is itself skipped or
+    // repeated in some zones.
+    #[test]
+    fn test_cast_string_to_named_timezone_dst_date_only() {
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        // Local midnight does not exist in Sao Paulo on 2018-11-04.
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/Sao_Paulo".into()));
+        let array = StringArray::from(vec!["2018-11-04"]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(
+            b.as_primitive::<TimestampSecondType>().value(0),
+            1_541_300_400
+        );
+
+        // Local midnight happens twice in Havana on 2024-11-03.
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/Havana".into()));
+        let array = StringArray::from(vec!["2024-11-03"]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(
+            b.as_primitive::<TimestampSecondType>().value(0),
+            1_730_610_000
+        );
+    }
+
+    // A timezone named by the string itself is resolved the same way, matching
+    // PostgreSQL.
+    #[test]
+    fn test_cast_string_to_timezone_named_in_string_dst() {
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("UTC".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let array = StringArray::from(vec![
+            "2024-03-10 02:30:00 America/New_York",
+            "2024-11-03 01:30:00 America/New_York",
+        ]);
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(c.value(0), 1_710_055_800);
+        assert_eq!(c.value(1), 1_730_615_400);
+    }
+
+    // The same values must not become null when `safe` casting is requested.
+    #[test]
+    fn test_cast_timestamp_to_named_timezone_dst_safe() {
+        let array = TimestampSecondArray::from(vec![
+            Some(naive_seconds(2024, 11, 1, 0, 0)),
+            Some(naive_seconds(2024, 11, 3, 1, 30)),
+            Some(naive_seconds(2024, 3, 10, 2, 30)),
+            None,
+        ]);
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(c.null_count(), 1);
+        assert_eq!(c.value(0), 1_730_433_600);
+        assert_eq!(c.value(1), 1_730_615_400);
+        assert_eq!(c.value(2), 1_710_055_800);
+        assert!(c.is_null(3));
+    }
+
+    // Southern hemisphere: the transitions run the other way around.
+    #[test]
+    fn test_cast_timestamp_to_named_timezone_dst_southern_hemisphere() {
+        // Ambiguous: clocks go back at 2024-04-07T03:00 AEDT (+11:00 -> +10:00).
+        let ambiguous = naive_seconds(2024, 4, 7, 2, 30);
+        // Nonexistent: clocks go forward at 2024-10-06T02:00 AEST (+10:00 -> +11:00).
+        let nonexistent = naive_seconds(2024, 10, 6, 2, 30);
+
+        let array = TimestampSecondArray::from(vec![Some(ambiguous), Some(nonexistent)]);
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("Australia/Sydney".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampSecondType>();
+
+        // The later of the two candidates, i.e. AEST (+10:00).
+        assert_eq!(c.value(0), instant_seconds(2024, 4, 7, 2, 30, 10));
+        assert_eq!(c.value(0), 1_712_421_000);
+        // Shifted forward by the one hour gap: 02:30 AEST is 03:30 AEDT.
+        assert_eq!(c.value(1), instant_seconds(2024, 10, 6, 2, 30, 10));
+        assert_eq!(c.value(1), instant_seconds(2024, 10, 6, 3, 30, 11));
+        assert_eq!(c.value(1), 1_728_145_800);
+    }
+
+    // The resolution is independent of the time unit.
+    #[test]
+    fn test_cast_timestamp_to_named_timezone_dst_nanosecond() {
+        let ambiguous = naive_seconds(2024, 11, 3, 1, 30) * 1_000_000_000 + 123_456_789;
+        let nonexistent = naive_seconds(2024, 3, 10, 2, 30) * 1_000_000_000 + 123_456_789;
+        let array = TimestampNanosecondArray::from(vec![Some(ambiguous), Some(nonexistent)]);
+        let to_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(c.value(0), 1_730_615_400 * 1_000_000_000 + 123_456_789);
+        assert_eq!(c.value(1), 1_710_055_800 * 1_000_000_000 + 123_456_789);
+    }
+
+    // Unit conversion still composes with the timezone adjustment.
+    #[test]
+    fn test_cast_timestamp_to_named_timezone_dst_changing_unit() {
+        let array = TimestampSecondArray::from(vec![
+            Some(naive_seconds(2024, 11, 3, 1, 30)),
+            Some(naive_seconds(2024, 3, 10, 2, 30)),
+        ]);
+        let to_type = DataType::Timestamp(TimeUnit::Millisecond, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(c.value(0), 1_730_615_400_000);
+        assert_eq!(c.value(1), 1_710_055_800_000);
+    }
+
+    // A fixed offset has no transitions, so the same readings are unaffected.
+    #[test]
+    fn test_cast_timestamp_to_fixed_offset_timezone_unaffected() {
+        let array = TimestampSecondArray::from(vec![
+            Some(naive_seconds(2024, 11, 1, 0, 0)),
+            Some(naive_seconds(2024, 11, 3, 1, 30)),
+            Some(naive_seconds(2024, 3, 10, 2, 30)),
+            None,
+        ]);
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("+08:00".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(c.value(0), instant_seconds(2024, 11, 1, 0, 0, 8));
+        assert_eq!(c.value(1), instant_seconds(2024, 11, 3, 1, 30, 8));
+        assert_eq!(c.value(2), instant_seconds(2024, 3, 10, 2, 30, 8));
+        assert!(c.is_null(3));
     }
 
     #[test]
@@ -12567,11 +12911,14 @@ mod tests {
         };
 
         for dt in data_types {
-            assert_eq!(
-                cast_with_options(&array, &dt, &cast_options)
-                    .unwrap_err()
-                    .to_string(),
-                "Parser error: Invalid timezone \"ZZTOP\": only offset based timezones supported without chrono-tz feature"
+            // The trailing detail of the message differs depending on whether
+            // `chrono-tz` is enabled, so only the common prefix is asserted.
+            let err = cast_with_options(&array, &dt, &cast_options)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.starts_with("Parser error: Invalid timezone \"ZZTOP\":"),
+                "{err}"
             );
         }
     }
