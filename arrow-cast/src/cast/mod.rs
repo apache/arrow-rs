@@ -84,7 +84,8 @@ const F32_EXACT_INT_LIMIT: f64 = 16_777_216.0;
 
 /// Lossy conversion from decimal to float.
 ///
-/// Returns the `f64` nearest to the decimal's exact value, rounding once.
+/// Returns the `f64` nearest to the decimal's exact value, rounding once, for any
+/// scale that fits in an `i8` -- as every Arrow decimal's does.
 ///
 /// Conversion is lossy and follows standard floating point semantics. Values
 /// that exceed the representable range become `INFINITY` or `-INFINITY` without
@@ -104,10 +105,8 @@ where
 }
 
 /// Rounds once for the values the division cannot convert exactly, by parsing the
-/// decimal's own text. `u8::MAX` because `format_decimal` truncates to the
-/// precision it is given, and values are not validated against the precision they
-/// declare. A scale that does not fit the `i8` `format_decimal` takes falls back to
-/// the division.
+/// decimal's own text. A scale that does not fit the `i8` `format_decimal` takes
+/// falls back to the division.
 #[cold]
 #[inline(never)]
 fn decimal_to_f64_rounded_once<D: DecimalType>(x: D::Native, scale: i32, unscaled: f64) -> f64 {
@@ -132,8 +131,8 @@ fn decimal_to_f32_rounded_once<D: DecimalType>(x: D::Native, scale: i32, unscale
 
 /// Casts a decimal array to `Float64`, rounding each value once.
 ///
-/// Scale and precision are the same for every value, so the divisor and the loop
-/// to run are picked here rather than inside the loop.
+/// The scale is the same for every value, so the divisor is computed once here
+/// rather than inside the loop.
 fn cast_decimal_to_f64<D, F>(
     array: &dyn Array,
     as_float: &F,
@@ -153,28 +152,21 @@ where
         return Ok(Arc::new(values));
     }
     let pow = 10_f64.powi(scale);
-    // `10^15 < 2^53`: at this precision every value that fits the precision it
-    // declares is exactly representable, so the per-value test can go -- the same
-    // reading of the declared precision `make_upscaler` uses to skip validation.
-    let values = if array.precision() <= 15 {
-        array.unary::<_, Float64Type>(|x| as_float(x) / pow)
-    } else {
-        array.unary::<_, Float64Type>(|x| {
-            let unscaled = as_float(x);
-            if unscaled.abs() < F64_EXACT_INT_LIMIT {
-                unscaled / pow
-            } else {
-                decimal_to_f64_rounded_once::<D>(x, scale, unscaled)
-            }
-        })
-    };
+    let values = array.unary::<_, Float64Type>(|x| {
+        let unscaled = as_float(x);
+        if unscaled.abs() < F64_EXACT_INT_LIMIT {
+            unscaled / pow
+        } else {
+            decimal_to_f64_rounded_once::<D>(x, scale, unscaled)
+        }
+    });
     Ok(Arc::new(values))
 }
 
 /// Casts a decimal array to `Float32`, rounding each value once. Same shape as
 /// [`cast_decimal_to_f64`] with the bounds an `f32` allows: `10^k` is exact only up
 /// to `k = 10`, since `5^10` is the largest power of five that fits the 24-bit
-/// significand, and `10^7 < 2^24` bounds the precision.
+/// significand.
 fn cast_decimal_to_f32<D, F>(
     array: &dyn Array,
     as_float: &F,
@@ -191,18 +183,14 @@ where
         return Ok(Arc::new(values));
     }
     let pow = 10_f32.powi(scale);
-    let values = if array.precision() <= 7 {
-        array.unary::<_, Float32Type>(|x| as_float(x) as f32 / pow)
-    } else {
-        array.unary::<_, Float32Type>(|x| {
-            let unscaled = as_float(x);
-            if unscaled.abs() < F32_EXACT_INT_LIMIT {
-                unscaled as f32 / pow
-            } else {
-                decimal_to_f32_rounded_once::<D>(x, scale, unscaled)
-            }
-        })
-    };
+    let values = array.unary::<_, Float32Type>(|x| {
+        let unscaled = as_float(x);
+        if unscaled.abs() < F32_EXACT_INT_LIMIT {
+            unscaled as f32 / pow
+        } else {
+            decimal_to_f32_rounded_once::<D>(x, scale, unscaled)
+        }
+    });
     Ok(Arc::new(values))
 }
 
@@ -14612,5 +14600,28 @@ mod tests {
             as_f32.as_primitive::<Float32Type>().value(0),
             1.7014118e38 // 2^127, the float nearest i128::MAX
         );
+
+        // A precision of 15 (7 for `f32`) promises an integer the float holds
+        // exactly, but values are not validated against the precision they declare.
+        for (unscaled, precision, scale) in
+            [(12345678901234567890i128, 15u8, 2i8), (16777217, 7, 1)]
+        {
+            let text = Decimal128Type::format_decimal(unscaled, u8::MAX, scale);
+            let array = decimal128(unscaled, precision, scale);
+
+            let as_f64 = cast(&array, &DataType::Float64).unwrap();
+            assert_eq!(
+                as_f64.as_primitive::<Float64Type>().value(0),
+                text.parse::<f64>().unwrap(),
+                "{text} at precision {precision} -> Float64"
+            );
+
+            let as_f32 = cast(&array, &DataType::Float32).unwrap();
+            assert_eq!(
+                as_f32.as_primitive::<Float32Type>().value(0),
+                text.parse::<f32>().unwrap(),
+                "{text} at precision {precision} -> Float32"
+            );
+        }
     }
 }
