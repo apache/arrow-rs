@@ -91,7 +91,9 @@
 pub mod reader;
 pub mod writer;
 
-pub use self::reader::{Reader, ReaderBuilder};
+pub use self::reader::{
+    ArrayDecoder, DecoderContext, DecoderFactory, Reader, ReaderBuilder, Tape, TapeElement,
+};
 pub use self::writer::{
     ArrayWriter, Encoder, EncoderFactory, EncoderOptions, LineDelimitedWriter, Writer,
     WriterBuilder,
@@ -287,7 +289,7 @@ mod tests {
         assert!(str::from_utf8(not_utf8).is_err());
 
         let values: &[Option<&[u8]>] = &[
-            Some(b"Ned Flanders" as &[u8]),
+            Some(b"Bob Thompson" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
             Some(not_utf8),

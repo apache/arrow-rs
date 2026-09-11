@@ -329,6 +329,13 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
 
+    // Mostly-inline values with enough 13-byte values to retain a backing
+    // buffer and therefore exercise the mixed view path.
+    let arr = create_string_view_array_with_len_range_and_seed(2usize.pow(12), 0.0, 0..14, 42);
+    c.bench_function("rank string_view[0-13] sparse long 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
     let arr = create_string_view_array(2usize.pow(12), 0.0);
     c.bench_function("rank string_view[0-400] 2^12", |b| {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
@@ -336,6 +343,42 @@ fn add_benchmark(c: &mut Criterion) {
 
     let arr = create_string_view_array(2usize.pow(12), 0.5);
     c.bench_function("rank string_view[0-400] nulls 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    // All values are longer than the inline capacity and share a 7-byte
+    // prefix, exercising collisions beyond the 4 bytes stored in the view.
+    let arr = create_longer_string_view_array_with_same_prefix(2usize.pow(12), 0.0);
+    c.bench_function("rank string_view[13-100] same prefix 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr = create_longer_string_view_array_with_same_prefix(2usize.pow(12), 0.5);
+    c.bench_function("rank string_view[13-100] same prefix nulls 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    // All values share the same first 16 bytes, providing a worst-case
+    // collision input for prefix-key rank implementations.
+    let arr: StringViewArray = (0..2_u32.pow(12))
+        .map(|i| {
+            let suffix = i.wrapping_mul(2_654_435_761);
+            Some(format!("abcdefghijklmnop{suffix:08x}"))
+        })
+        .collect();
+    c.bench_function("rank string_view[24] same 16-byte prefix 2^12", |b| {
+        b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
+    });
+
+    let arr: StringViewArray = (0..2_u32.pow(12))
+        .map(|i| {
+            (i % 2 == 0).then(|| {
+                let suffix = i.wrapping_mul(2_654_435_761);
+                format!("abcdefghijklmnop{suffix:08x}")
+            })
+        })
+        .collect();
+    c.bench_function("rank string_view[24] same 16-byte prefix nulls 2^12", |b| {
         b.iter(|| hint::black_box(rank(&arr, None).unwrap()))
     });
 }

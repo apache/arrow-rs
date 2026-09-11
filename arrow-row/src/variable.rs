@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::null_sentinel;
-use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
@@ -204,10 +203,11 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
     let end_offset = block_count * (SIZE + 1);
     let to_write = &mut out[..end_offset];
 
-    let chunks = val.chunks_exact(SIZE);
-    let remainder = chunks.remainder();
-    for (input, output) in chunks.clone().zip(to_write.chunks_exact_mut(SIZE + 1)) {
-        let input: &[u8; SIZE] = input.try_into().unwrap();
+    let (chunks, remainder) = val.as_chunks::<SIZE>();
+    #[expect(clippy::chunks_exact_to_as_chunks)]
+    // Requires using generic parameters in const operations: generic_const_exprs
+    let to_write_chunks = to_write.chunks_exact_mut(SIZE + 1);
+    for (input, output) in chunks.iter().zip(to_write_chunks) {
         let out_block: &mut [u8; SIZE] = (&mut output[..SIZE]).try_into().unwrap();
 
         *out_block = *input;
@@ -284,14 +284,14 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     let nulls = decode_nulls_sentinel(rows, options);
 
     let values_capacity = rows.iter().map(|row| decoded_len(row, options)).sum();
-    let mut offsets = BufferBuilder::<I>::new(len + 1);
-    offsets.append(I::zero());
+    let mut offsets = Vec::<I>::with_capacity(len + 1);
+    offsets.push(I::zero());
     let mut values = MutableBuffer::new(values_capacity);
 
     for row in rows {
         let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
         *row = &row[offset..];
-        offsets.append(I::from_usize(values.len()).expect("offset overflow"))
+        offsets.push(I::from_usize(values.len()).expect("offset overflow"))
     }
 
     if options.descending {

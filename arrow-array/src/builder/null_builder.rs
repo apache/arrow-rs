@@ -88,6 +88,7 @@ impl NullBuilder {
         let len = self.len();
         let builder = ArrayData::new_null(&DataType::Null, len).into_builder();
 
+        // SAFETY: ArrayData::new_null produces valid null array data, so all builder invariants hold
         let array_data = unsafe { builder.build_unchecked() };
         NullArray::from(array_data)
     }
@@ -97,6 +98,7 @@ impl NullBuilder {
         let len = self.len();
         let builder = ArrayData::new_null(&DataType::Null, len).into_builder();
 
+        // SAFETY: ArrayData::new_null produces valid null array data, so all builder invariants hold
         let array_data = unsafe { builder.build_unchecked() };
         NullArray::from(array_data)
     }

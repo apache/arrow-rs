@@ -297,6 +297,14 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     /// Skip the next `n` bytes of input.
     fn skip_bytes(&mut self, n: usize) -> ThriftProtocolResult<()>;
 
+    /// Remaining unread bytes, if this protocol is backed by a finite buffer.
+    ///
+    /// Used to reject Thrift collection sizes that cannot fit in the remaining
+    /// input before allocating.
+    fn remaining_bytes(&self) -> Option<usize> {
+        None
+    }
+
     /// Read a ULEB128 encoded unsigned varint from the input.
     fn read_vlq(&mut self) -> ThriftProtocolResult<u64> {
         // try the happy path first
@@ -598,6 +606,10 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a>
             Err(_) => unreachable!(),
         }
     }
+
+    fn remaining_bytes(&self) -> Option<usize> {
+        Some(self.buf.len())
+    }
 }
 
 /// A Thrift input protocol that wraps a [`Read`] object.
@@ -721,7 +733,20 @@ where
 {
     let list_ident = prot.read_list_begin()?;
     validate_list_type(T::ELEMENT_TYPE, &list_ident)?;
-    let mut res = Vec::with_capacity(list_ident.size as usize);
+    let size = list_ident.size as usize;
+    // Each list element occupies at least one byte on the wire. Bound the
+    // declared count by remaining input before reserving, so a malformed
+    // header cannot abort the process with a huge allocation.
+    if let Some(remaining) = prot.remaining_bytes()
+        && size > remaining
+    {
+        return Err(general_err!(
+            "Thrift list size {} exceeds remaining input length {}",
+            size,
+            remaining
+        ));
+    }
+    let mut res = Vec::with_capacity(size);
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
         res.push(val);
@@ -1213,6 +1238,48 @@ pub(crate) mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("Expected list element type of I32 but got Bool")
+        );
+    }
+
+    #[test]
+    fn test_read_thrift_vec_roundtrip_i32() {
+        // 2-element list of i32: header 0x25 (count=2, type=I32), two zigzag zeros.
+        let data = [0x25, 0x00, 0x00];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot).unwrap();
+        assert_eq!(result, vec![0, 0]);
+    }
+
+    #[test]
+    fn test_read_thrift_vec_size_exceeds_remaining_returns_err() {
+        // Header 0xE5: 14 i32 elements, no payload. After reading the header
+        // zero bytes remain, so this must error instead of reserving 14 slots
+        // (and, for a larger declared size, gigabytes).
+        let data = [0xE5];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot);
+        assert!(result.is_err(), "expected error, got {result:?}");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Thrift list size 14 exceeds remaining input length 0")
+        );
+    }
+
+    #[test]
+    fn test_read_thrift_vec_huge_declared_size_returns_err() {
+        // Compact list header: 0xF5 = I32 elements, size follows as a varint.
+        // 0xfc 0xfc 0xfc 0x33 decodes to 109_002_364 — the schema-list case
+        // from #10920 — with only two leftover bytes.
+        let data = [0xF5, 0xfc, 0xfc, 0xfc, 0x33, 0x00, 0x00];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let result = read_thrift_vec::<i32, ThriftSliceInputProtocol>(&mut prot);
+        assert!(result.is_err(), "expected error, got {result:?}");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Thrift list size 109002364 exceeds remaining input length 2"),
+            "{err}"
         );
     }
 }

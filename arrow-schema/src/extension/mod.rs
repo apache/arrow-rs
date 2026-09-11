@@ -207,7 +207,7 @@ pub trait ExtensionType: Sized {
 
     /// The metadata type of this extension type.
     ///
-    /// Implementations can use strongly or loosly typed data structures here
+    /// Implementations can use strongly or loosely typed data structures here
     /// depending on the complexity of the metadata.
     ///
     /// Implementations can also use `Self` here if the extension type can be

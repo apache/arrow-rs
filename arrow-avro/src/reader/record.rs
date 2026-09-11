@@ -250,12 +250,16 @@ enum Decoder {
     /// String data encoded as UTF-8 bytes, but mapped to Arrow's StringViewArray
     StringView(OffsetBufferBuilder<i32>, Vec<u8>),
     Array(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
-    Record(
-        Fields,
-        Vec<Decoder>,
-        Vec<Option<AvroLiteral>>,
-        Option<Projector>,
-    ),
+    Record {
+        fields: Fields,
+        decoders: Vec<Decoder>,
+        defaults: Vec<Option<AvroLiteral>>,
+        projector: Option<Projector>,
+        /// Rows appended since the last flush. A record with no fields (legal) has no child
+        /// array to take a length from, so this is the only length available to it; it is
+        /// maintained for every record to keep the arms uniform.
+        row_count: usize,
+    },
     Map(
         FieldRef,
         OffsetBufferBuilder<i32>,
@@ -276,7 +280,39 @@ enum Decoder {
     #[cfg(feature = "avro_custom_types")]
     RunEndEncoded(u8, usize, Box<Decoder>),
     Union(UnionDecoder),
-    Nullable(NullablePlan, NullBufferBuilder, Box<Decoder>),
+    /// Nullable value and its deferred validity and child placeholders.
+    Nullable(NullableDecoder),
+}
+
+#[derive(Debug)]
+struct NullableDecoder {
+    plan: NullablePlan,
+    validity: NullBufferBuilder,
+    values: Box<Decoder>,
+    pending_nulls: usize,
+}
+
+impl NullableDecoder {
+    fn new(plan: NullablePlan, values: Decoder) -> Self {
+        Self {
+            plan,
+            validity: NullBufferBuilder::new(DEFAULT_CAPACITY),
+            values: Box::new(values),
+            pending_nulls: 0,
+        }
+    }
+
+    #[inline]
+    fn materialize_pending(&mut self) -> Result<(), AvroError> {
+        if self.pending_nulls == 0 {
+            return Ok(());
+        }
+
+        self.values.append_nulls(self.pending_nulls)?;
+        self.validity.append_n_nulls(self.pending_nulls);
+        self.pending_nulls = 0;
+        Ok(())
+    }
 }
 
 impl Decoder {
@@ -502,7 +538,13 @@ impl Decoder {
                     } else {
                         None
                     };
-                Self::Record(arrow_fields.into(), encodings, field_defaults, projector)
+                Self::Record {
+                    fields: arrow_fields.into(),
+                    decoders: encodings,
+                    defaults: field_defaults,
+                    projector,
+                    row_count: 0,
+                }
             }
             (Codec::Map(child), _) => {
                 let val_field = child.field_with_name(ArrowField::MAP_VALUE_FIELD_DEFAULT_NAME);
@@ -625,11 +667,7 @@ impl Decoder {
                         resolution: ResolutionPlan::try_new(&decoder, resolution)?,
                     },
                 };
-                Self::Nullable(
-                    plan,
-                    NullBufferBuilder::new(DEFAULT_CAPACITY),
-                    Box::new(decoder),
-                )
+                Self::Nullable(NullableDecoder::new(plan, decoder))
             }
             None => decoder,
         })
@@ -637,90 +675,111 @@ impl Decoder {
 
     /// Append a null record
     fn append_null(&mut self) -> Result<(), AvroError> {
+        self.append_nulls(1)
+    }
+
+    /// Append a run of null placeholders, deferring nullable children until their next value or
+    /// flush so sparse record subtrees can be materialized in bulk.
+    fn append_nulls(&mut self, count: usize) -> Result<(), AvroError> {
+        if count == 0 {
+            return Ok(());
+        }
         match self {
-            Self::Null(count) => *count += 1,
-            Self::Boolean(b) => b.append(false),
-            Self::Int32(v) | Self::Date32(v) | Self::TimeMillis(v) => v.push(0),
-            Self::Int64(v)
-            | Self::Int32ToInt64(v)
-            | Self::TimeMicros(v)
-            | Self::TimestampMillis(_, v)
-            | Self::TimestampMicros(_, v)
-            | Self::TimestampNanos(_, v) => v.push(0),
+            Self::Null(size) => *size += count,
+            Self::Boolean(values) => values.append_n(count, false),
+            Self::Int32(values) | Self::Date32(values) | Self::TimeMillis(values) => {
+                values.resize(values.len() + count, 0)
+            }
+            Self::Int64(values)
+            | Self::Int32ToInt64(values)
+            | Self::TimeMicros(values)
+            | Self::TimestampMillis(_, values)
+            | Self::TimestampMicros(_, values)
+            | Self::TimestampNanos(_, values) => values.resize(values.len() + count, 0),
             #[cfg(feature = "avro_custom_types")]
-            Self::DurationSecond(v)
-            | Self::DurationMillisecond(v)
-            | Self::DurationMicrosecond(v)
-            | Self::DurationNanosecond(v) => v.push(0),
+            Self::DurationSecond(values)
+            | Self::DurationMillisecond(values)
+            | Self::DurationMicrosecond(values)
+            | Self::DurationNanosecond(values)
+            | Self::Date64(values)
+            | Self::TimeNanos(values)
+            | Self::TimestampSecs(_, values) => values.resize(values.len() + count, 0),
             #[cfg(feature = "avro_custom_types")]
-            Self::Int8(v) => v.push(0),
+            Self::Int8(values) => values.resize(values.len() + count, 0),
             #[cfg(feature = "avro_custom_types")]
-            Self::Int16(v) => v.push(0),
+            Self::Int16(values) => values.resize(values.len() + count, 0),
             #[cfg(feature = "avro_custom_types")]
-            Self::UInt8(v) => v.push(0),
+            Self::UInt8(values) => values.resize(values.len() + count, 0),
             #[cfg(feature = "avro_custom_types")]
-            Self::UInt16(v) => v.push(0),
+            Self::UInt16(values) | Self::Float16(values) => values.resize(values.len() + count, 0),
             #[cfg(feature = "avro_custom_types")]
-            Self::UInt32(v) => v.push(0),
+            Self::UInt32(values) => values.resize(values.len() + count, 0),
             #[cfg(feature = "avro_custom_types")]
-            Self::UInt64(v) => v.push(0),
+            Self::UInt64(values) => values.resize(values.len() + count, 0),
             #[cfg(feature = "avro_custom_types")]
-            Self::Float16(v) => v.push(0),
+            Self::Time32Secs(values) | Self::IntervalYearMonth(values) => {
+                values.resize(values.len() + count, 0)
+            }
             #[cfg(feature = "avro_custom_types")]
-            Self::Date64(v) | Self::TimeNanos(v) | Self::TimestampSecs(_, v) => v.push(0),
+            Self::IntervalDayTime(values) => {
+                values.resize(values.len() + count, IntervalDayTime::new(0, 0))
+            }
             #[cfg(feature = "avro_custom_types")]
-            Self::IntervalDayTime(v) => v.push(IntervalDayTime::new(0, 0)),
-            #[cfg(feature = "avro_custom_types")]
-            Self::IntervalMonthDayNano(v) => v.push(IntervalMonthDayNano::new(0, 0, 0)),
-            #[cfg(feature = "avro_custom_types")]
-            Self::Time32Secs(v) | Self::IntervalYearMonth(v) => v.push(0),
-            Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => v.push(0.),
-            Self::Float64(v)
-            | Self::Int32ToFloat64(v)
-            | Self::Int64ToFloat64(v)
-            | Self::Float32ToFloat64(v) => v.push(0.),
+            Self::IntervalMonthDayNano(values) => {
+                values.resize(values.len() + count, IntervalMonthDayNano::new(0, 0, 0))
+            }
+            Self::Float32(values) | Self::Int32ToFloat32(values) | Self::Int64ToFloat32(values) => {
+                values.resize(values.len() + count, 0.0)
+            }
+            Self::Float64(values)
+            | Self::Int32ToFloat64(values)
+            | Self::Int64ToFloat64(values)
+            | Self::Float32ToFloat64(values) => values.resize(values.len() + count, 0.0),
             Self::Binary(offsets, _)
             | Self::String(offsets, _)
             | Self::StringView(offsets, _)
             | Self::BytesToString(offsets, _)
-            | Self::StringToBytes(offsets, _) => {
-                offsets.push_length(0);
-            }
-            Self::Uuid(v) => {
-                v.extend([0; 16]);
-            }
-            Self::Array(_, offsets, _) => {
-                offsets.push_length(0);
-            }
-            Self::Record(_, e, _, _) => {
-                for encoding in e.iter_mut() {
-                    encoding.append_null()?;
+            | Self::StringToBytes(offsets, _)
+            | Self::Array(_, offsets, _)
+            | Self::Map(_, _, offsets, _, _) => {
+                offsets.reserve(count);
+                for _ in 0..count {
+                    offsets.push_length(0);
                 }
             }
-            Self::Map(_, _koff, moff, _, _) => {
-                moff.push_length(0);
+            Self::Record {
+                decoders,
+                row_count,
+                ..
+            } => {
+                for child in decoders.iter_mut() {
+                    child.append_nulls(count)?;
+                }
+                *row_count += count;
             }
-            Self::Fixed(sz, accum) => {
-                accum.extend(std::iter::repeat_n(0u8, *sz as usize));
+            Self::Fixed(width, values) => {
+                values.resize(values.len() + (*width as usize) * count, 0)
             }
+            Self::Enum(values, _, _) => values.resize(values.len() + count, 0),
+            Self::Duration(builder) => builder.append_nulls(count),
+            Self::Uuid(values) => values.resize(values.len() + 16 * count, 0),
             #[cfg(feature = "small_decimals")]
-            Self::Decimal32(_, _, _, builder) => builder.append_value(0),
+            Self::Decimal32(_, _, _, builder) => builder.append_value_n(0, count),
             #[cfg(feature = "small_decimals")]
-            Self::Decimal64(_, _, _, builder) => builder.append_value(0),
-            Self::Decimal128(_, _, _, builder) => builder.append_value(0),
-            Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
-            Self::Enum(indices, _, _) => indices.push(0),
-            Self::Duration(builder) => builder.append_null(),
+            Self::Decimal64(_, _, _, builder) => builder.append_value_n(0, count),
+            Self::Decimal128(_, _, _, builder) => builder.append_value_n(0, count),
+            Self::Decimal256(_, _, _, builder) => builder.append_value_n(i256::ZERO, count),
             #[cfg(feature = "avro_custom_types")]
             Self::RunEndEncoded(_, len, inner) => {
-                *len += 1;
-                inner.append_null()?;
+                inner.append_nulls(count)?;
+                *len += count;
             }
-            Self::Union(u) => u.append_null()?,
-            Self::Nullable(_, null_buffer, inner) => {
-                null_buffer.append(false);
-                inner.append_null()?;
+            Self::Union(union) => {
+                for _ in 0..count {
+                    union.append_null()?;
+                }
             }
+            Self::Nullable(nullable) => nullable.pending_nulls += count,
         }
         Ok(())
     }
@@ -728,14 +787,15 @@ impl Decoder {
     /// Append a single default literal into the decoder's buffers
     fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), AvroError> {
         match self {
-            Self::Nullable(_, nb, inner) => {
+            Self::Nullable(nullable) => {
                 if matches!(lit, AvroLiteral::Null) {
-                    nb.append(false);
-                    inner.append_null()
+                    nullable.pending_nulls += 1;
                 } else {
-                    nb.append(true);
-                    inner.append_default(lit)
+                    nullable.materialize_pending()?;
+                    nullable.values.append_default(lit)?;
+                    nullable.validity.append_non_null();
                 }
+                Ok(())
             }
             Self::Null(count) => match lit {
                 AvroLiteral::Null => {
@@ -1134,7 +1194,13 @@ impl Decoder {
                 inner.append_default(lit)
             }
             Self::Union(u) => u.append_default(lit),
-            Self::Record(field_meta, decoders, field_defaults, _) => match lit {
+            Self::Record {
+                fields: field_meta,
+                decoders,
+                defaults: field_defaults,
+                row_count,
+                ..
+            } => match lit {
                 AvroLiteral::Map(entries) => {
                     for (i, dec) in decoders.iter_mut().enumerate() {
                         let name = field_meta[i].name();
@@ -1146,6 +1212,7 @@ impl Decoder {
                             dec.append_null()?;
                         }
                     }
+                    *row_count += 1;
                     Ok(())
                 }
                 AvroLiteral::Null => {
@@ -1156,6 +1223,7 @@ impl Decoder {
                             dec.append_null()?;
                         }
                     }
+                    *row_count += 1;
                     Ok(())
                 }
                 _ => Err(AvroError::InvalidArgument(
@@ -1293,13 +1361,25 @@ impl Decoder {
                 let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
                 off.push_length(total_items);
             }
-            Self::Record(_, encodings, _, None) => {
-                for encoding in encodings {
+            Self::Record {
+                decoders,
+                projector: None,
+                row_count,
+                ..
+            } => {
+                for encoding in decoders {
                     encoding.decode(buf)?;
                 }
+                *row_count += 1;
             }
-            Self::Record(_, encodings, _, Some(proj)) => {
-                proj.project_record(buf, encodings)?;
+            Self::Record {
+                decoders,
+                projector: Some(proj),
+                row_count,
+                ..
+            } => {
+                proj.project_record(buf, decoders)?;
+                *row_count += 1;
             }
             Self::Map(_, koff, moff, kdata, valdec) => {
                 let newly_added = read_blocks(buf, |cur| {
@@ -1350,29 +1430,29 @@ impl Decoder {
                 inner.decode(buf)?;
             }
             Self::Union(u) => u.decode(buf)?,
-            Self::Nullable(plan, nb, encoding) => {
-                match plan {
-                    NullablePlan::FromSingle { resolution } => {
-                        encoding.decode_with_resolution(buf, resolution)?;
-                        nb.append(true);
-                    }
-                    NullablePlan::ReadTag {
-                        nullability,
-                        resolution,
-                    } => {
+            Self::Nullable(nullable) => {
+                let is_not_null = match &nullable.plan {
+                    NullablePlan::FromSingle { .. } => true,
+                    NullablePlan::ReadTag { nullability, .. } => {
                         let branch = buf.read_vlq()?;
-                        let is_not_null = match *nullability {
+                        match *nullability {
                             Nullability::NullFirst => branch != 0,
                             Nullability::NullSecond => branch == 0,
-                        };
-                        if is_not_null {
-                            // It is important to decode before appending to null buffer in case of decode error
-                            encoding.decode_with_resolution(buf, resolution)?;
-                        } else {
-                            encoding.append_null()?;
                         }
-                        nb.append(is_not_null);
                     }
+                };
+
+                if is_not_null {
+                    nullable.materialize_pending()?;
+                    let resolution = match &nullable.plan {
+                        NullablePlan::FromSingle { resolution }
+                        | NullablePlan::ReadTag { resolution, .. } => resolution,
+                    };
+                    // Append validity only after decoding succeeds.
+                    nullable.values.decode_with_resolution(buf, resolution)?;
+                    nullable.validity.append_non_null();
+                } else {
+                    nullable.pending_nulls += 1;
                 }
             }
         }
@@ -1472,12 +1552,19 @@ impl Decoder {
                 Ok(())
             }
             ResolutionPlan::Record(proj) => {
-                let Self::Record(_, encodings, _, _) = self else {
+                let Self::Record {
+                    decoders,
+                    row_count,
+                    ..
+                } = self
+                else {
                     return Err(AvroError::SchemaError(
                         "record projection provided for non-record decoder".into(),
                     ));
                 };
-                proj.project_record(buf, encodings)
+                proj.project_record(buf, decoders)?;
+                *row_count += 1;
+                Ok(())
             }
         }
     }
@@ -1485,7 +1572,10 @@ impl Decoder {
     /// Flush decoded records to an [`ArrayRef`]
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, AvroError> {
         Ok(match self {
-            Self::Nullable(_, n, e) => e.flush(n.finish())?,
+            Self::Nullable(nullable) => {
+                nullable.materialize_pending()?;
+                nullable.values.flush(nullable.validity.finish())?
+            }
             Self::Null(size) => Arc::new(NullArray::new(std::mem::replace(size, 0))),
             Self::Boolean(b) => Arc::new(BooleanArray::new(b.finish(), nulls)),
             Self::Int32(values) => Arc::new(flush_primitive::<Int32Type>(values, nulls)),
@@ -1614,12 +1704,24 @@ impl Decoder {
                 let offsets = flush_offsets(offsets);
                 Arc::new(ListArray::try_new(field.clone(), offsets, values, nulls)?)
             }
-            Self::Record(fields, encodings, _, _) => {
-                let arrays = encodings
+            Self::Record {
+                fields,
+                decoders,
+                row_count,
+                ..
+            } => {
+                let arrays = decoders
                     .iter_mut()
                     .map(|x| x.flush(None))
                     .collect::<Result<Vec<_>, _>>()?;
-                Arc::new(StructArray::try_new(fields.clone(), arrays, nulls)?)
+                // In case there are no fields (legal, encodes to zero bytes), manually specify
+                // the length for the output struct to account for this.
+                Arc::new(StructArray::try_new_with_length(
+                    fields.clone(),
+                    arrays,
+                    nulls,
+                    std::mem::replace(row_count, 0),
+                )?)
             }
             Self::Map(map_field, k_off, m_off, kdata, valdec) => {
                 let moff = flush_offsets(m_off);
@@ -1793,9 +1895,15 @@ impl ResolutionPlan {
             (_, ResolutionInfo::EnumMapping(m)) => {
                 Ok(ResolutionPlan::EnumMapping(EnumResolution::new(m)))
             }
-            (Decoder::Record(_, _, field_defaults, _), ResolutionInfo::Record(r)) => Ok(
-                ResolutionPlan::Record(ProjectorBuilder::try_new(r, field_defaults).build()?),
-            ),
+            (
+                Decoder::Record {
+                    defaults: field_defaults,
+                    ..
+                },
+                ResolutionInfo::Record(r),
+            ) => Ok(ResolutionPlan::Record(
+                ProjectorBuilder::try_new(r, field_defaults).build()?,
+            )),
             (_, ResolutionInfo::Record(_)) => Err(AvroError::SchemaError(
                 "record resolution on non-record decoder".into(),
             )),
@@ -2176,6 +2284,7 @@ impl UnionDecoder {
             children,
         )
         .map_err(|e| AvroError::ParseError(e.to_string()))?;
+        self.branches.counts.fill(0);
         Ok(Arc::new(arr))
     }
 }
@@ -3733,14 +3842,13 @@ mod tests {
     fn test_decimal_decoding_bytes_with_nulls() {
         let dt = avro_from_codec(Codec::Decimal(4, Some(1), None));
         let inner = Decoder::try_new(&dt).unwrap();
-        let mut decoder = Decoder::Nullable(
+        let mut decoder = Decoder::Nullable(NullableDecoder::new(
             NullablePlan::ReadTag {
                 nullability: Nullability::NullSecond,
                 resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
-            NullBufferBuilder::new(DEFAULT_CAPACITY),
-            Box::new(inner),
-        );
+            inner,
+        ));
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(0));
         data.extend_from_slice(&encode_avro_bytes(&[0x04, 0xD2]));
@@ -3778,14 +3886,13 @@ mod tests {
     fn test_decimal_decoding_bytes_with_nulls_fixed_size_narrow_result() {
         let dt = avro_from_codec(Codec::Decimal(6, Some(2), Some(16)));
         let inner = Decoder::try_new(&dt).unwrap();
-        let mut decoder = Decoder::Nullable(
+        let mut decoder = Decoder::Nullable(NullableDecoder::new(
             NullablePlan::ReadTag {
                 nullability: Nullability::NullSecond,
                 resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
-            NullBufferBuilder::new(DEFAULT_CAPACITY),
-            Box::new(inner),
-        );
+            inner,
+        ));
         let row1 = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
             0xE2, 0x40,
@@ -4238,15 +4345,16 @@ mod tests {
             encodings.push(enc);
         }
         let fields: Fields = field_refs.into();
-        Decoder::Record(
+        Decoder::Record {
             fields,
-            encodings,
-            vec![None; reader_fields.len()],
-            Some(Projector {
+            decoders: encodings,
+            defaults: vec![None; reader_fields.len()],
+            projector: Some(Projector {
                 writer_projections,
                 default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
             }),
-        )
+            row_count: 0,
+        }
     }
 
     #[test]
@@ -4533,6 +4641,26 @@ mod tests {
     }
 
     #[test]
+    fn test_union_dense_offsets_reset_after_flush() {
+        let union_dt = make_dense_union_avro(
+            vec![
+                (Codec::Null, "n", DataType::Null),
+                (Codec::Utf8, "s", DataType::Utf8),
+            ],
+            vec![0, 1],
+        );
+        let mut dec = Decoder::try_new(&union_dt).unwrap();
+
+        for _ in 0..2 {
+            dec.decode(&mut AvroCursor::new(&encode_avro_long(0)))
+                .unwrap();
+            let array = dec.flush(None).unwrap();
+            let union = array.as_union();
+            assert_eq!(union.value_offset(0), 0);
+        }
+    }
+
+    #[test]
     fn test_union_decode_negative_branch_index_errors() {
         let union_dt = make_dense_union_avro(
             vec![
@@ -4628,7 +4756,13 @@ mod tests {
             writer_projections: vec![],
             default_injections: Arc::from(default_injections),
         };
-        Decoder::Record(fields, encodings, field_defaults, Some(projector))
+        Decoder::Record {
+            fields,
+            decoders: encodings,
+            defaults: field_defaults,
+            projector: Some(projector),
+            row_count: 0,
+        }
     }
 
     #[cfg(feature = "avro_custom_types")]
@@ -4879,23 +5013,70 @@ mod tests {
     }
 
     #[test]
-    fn test_default_append_nullable_int32_null_and_value() {
-        let inner = Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY));
-        let mut dec = Decoder::Nullable(
+    fn test_nullable_null_runs_defer_validity_and_values_together() {
+        let mut decoder = Decoder::Nullable(NullableDecoder::new(
             NullablePlan::ReadTag {
                 nullability: Nullability::NullFirst,
                 resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
-            NullBufferBuilder::new(DEFAULT_CAPACITY),
-            Box::new(inner),
-        );
+            Decoder::Int32(Vec::new()),
+        ));
+
+        decoder.append_nulls(64).unwrap();
+        let Decoder::Nullable(nullable) = &decoder else {
+            unreachable!();
+        };
+        assert_eq!(nullable.pending_nulls, 64);
+        assert_eq!(nullable.validity.len(), 0);
+        let Decoder::Int32(values) = nullable.values.as_ref() else {
+            unreachable!();
+        };
+        assert!(values.is_empty());
+
+        decoder.append_default(&AvroLiteral::Int(7)).unwrap();
+        let Decoder::Nullable(nullable) = &decoder else {
+            unreachable!();
+        };
+        assert_eq!(nullable.pending_nulls, 0);
+        assert_eq!(nullable.validity.len(), 65);
+        let Decoder::Int32(values) = nullable.values.as_ref() else {
+            unreachable!();
+        };
+        assert_eq!(values.len(), 65);
+        assert_eq!(values[64], 7);
+
+        decoder.append_nulls(32).unwrap();
+        let values = decoder.flush(None).unwrap();
+        assert_eq!(values.len(), 97);
+        assert_eq!(values.null_count(), 96);
+        assert_eq!(values.as_primitive::<Int32Type>().value(64), 7);
+    }
+
+    #[test]
+    fn test_default_append_nullable_int32_null_and_value() {
+        let inner = Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY));
+        let mut dec = Decoder::Nullable(NullableDecoder::new(
+            NullablePlan::ReadTag {
+                nullability: Nullability::NullFirst,
+                resolution: ResolutionPlan::Promotion(Promotion::Direct),
+            },
+            inner,
+        ));
+        dec.append_default(&AvroLiteral::Null).unwrap();
         dec.append_default(&AvroLiteral::Null).unwrap();
         dec.append_default(&AvroLiteral::Int(11)).unwrap();
+        dec.append_default(&AvroLiteral::Null).unwrap();
+        dec.append_default(&AvroLiteral::Null).unwrap();
+        dec.append_default(&AvroLiteral::Int(12)).unwrap();
         let arr = dec.flush(None).unwrap();
         let a = arr.as_any().downcast_ref::<Int32Array>().unwrap();
-        assert_eq!(a.len(), 2);
+        assert_eq!(a.len(), 6);
         assert!(a.is_null(0));
-        assert_eq!(a.value(1), 11);
+        assert!(a.is_null(1));
+        assert_eq!(a.value(2), 11);
+        assert!(a.is_null(3));
+        assert!(a.is_null(4));
+        assert_eq!(a.value(5), 12);
     }
 
     #[test]
@@ -5135,25 +5316,23 @@ mod tests {
         for (name, dt, nullable) in &fields {
             field_refs.push(Arc::new(ArrowField::new(*name, dt.clone(), *nullable)));
         }
-        let enc_a = Decoder::Nullable(
+        let enc_a = Decoder::Nullable(NullableDecoder::new(
             NullablePlan::ReadTag {
                 nullability: Nullability::NullSecond,
                 resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
-            NullBufferBuilder::new(DEFAULT_CAPACITY),
-            Box::new(Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY))),
-        );
-        let enc_b = Decoder::Nullable(
+            Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
+        ));
+        let enc_b = Decoder::Nullable(NullableDecoder::new(
             NullablePlan::ReadTag {
                 nullability: Nullability::NullSecond,
                 resolution: ResolutionPlan::Promotion(Promotion::Direct),
             },
-            NullBufferBuilder::new(DEFAULT_CAPACITY),
-            Box::new(Decoder::String(
+            Decoder::String(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
-            )),
-        );
+            ),
+        ));
         encoders.push(enc_a);
         encoders.push(enc_b);
         let field_defaults = vec![None, None]; // no defaults -> append_null
@@ -5161,7 +5340,13 @@ mod tests {
             writer_projections: vec![],
             default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
         };
-        let mut rec = Decoder::Record(field_refs.into(), encoders, field_defaults, Some(projector));
+        let mut rec = Decoder::Record {
+            fields: field_refs.into(),
+            decoders: encoders,
+            defaults: field_defaults,
+            projector: Some(projector),
+            row_count: 0,
+        };
         let mut map: IndexMap<String, AvroLiteral> = IndexMap::new();
         map.insert("a".to_string(), AvroLiteral::Int(9));
         rec.append_default(&AvroLiteral::Map(map)).unwrap();
@@ -5477,13 +5662,12 @@ mod tests {
             0,
             Box::new(inner_values),
         );
-        let mut dec = Decoder::Nullable(
+        let mut dec = Decoder::Nullable(NullableDecoder::new(
             NullablePlan::FromSingle {
                 resolution: ResolutionPlan::Promotion(Promotion::IntToDouble),
             },
-            NullBufferBuilder::new(DEFAULT_CAPACITY),
-            Box::new(ree),
-        );
+            ree,
+        ));
         for v in [1, 1, 2, 2, 2] {
             let bytes = encode_avro_int(v);
             dec.decode(&mut AvroCursor::new(&bytes)).expect("decode");

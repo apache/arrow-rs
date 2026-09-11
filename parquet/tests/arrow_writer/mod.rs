@@ -317,6 +317,7 @@ fn write_dict_dataset(options: ArrowWriterOptions) {
 /// fine), but keeping them together also keeps the in-memory/spill comparison on
 /// one consistent baseline.
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn page_store_bounds_write_memory() {
     let props = single_row_group_props();
 
@@ -522,6 +523,7 @@ fn write_dict_columns(page_store_factory: Option<Arc<dyn PageStoreFactory>>, poo
 /// off the heap as its column closes, so at most one is ever resident, keeping
 /// the spilling peak far below the in-memory K × dict_page baseline.
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn page_store_spills_dictionary_pages() {
     // Build the distinct-value pool up front so its bytes sit in the baseline
     // and are not charged to either per-run peak below.

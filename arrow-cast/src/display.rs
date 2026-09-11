@@ -1622,7 +1622,7 @@ mod tests {
     }
 
     #[test]
-    fn test_string_run_arry_to_string() {
+    fn test_string_run_array_to_string() {
         let mut builder = StringRunBuilder::<Int32Type>::new();
 
         builder.append_value("input_value");

@@ -198,7 +198,7 @@ impl futures::Stream for FlightRecordBatchStream {
 ///
 /// # Protocol Details
 ///
-/// The client handles flight messages as followes:
+/// The client handles flight messages as follows:
 ///
 /// - **None:** This message has no effect. This is useful to
 ///   transmit metadata without any actual payload.

@@ -359,6 +359,9 @@ pub(crate) struct VariantToShreddedObjectVariantRowBuilder<'a> {
     typed_value_nulls: NullBufferBuilder,
     nulls: NullBufferBuilder,
     null_value: NullValue,
+    /// Scratch space marking which of `typed_value_builders` the current row supplied a value for,
+    /// indexed the same way as `typed_value_builders`. Reused across rows.
+    seen: Vec<bool>,
 }
 
 impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
@@ -379,9 +382,11 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             )?;
             Ok((field.name().as_str(), builder))
         });
+        let typed_value_builders: IndexMap<_, _> = typed_value_builders.collect::<Result<_>>()?;
         Ok(Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
-            typed_value_builders: typed_value_builders.collect::<Result<_>>()?,
+            seen: vec![false; typed_value_builders.len()],
+            typed_value_builders,
             typed_value_nulls: NullBufferBuilder::new(capacity),
             nulls: NullBufferBuilder::new(capacity),
             null_value,
@@ -411,15 +416,21 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         };
 
         // Route the object's fields by name as either shredded or unshredded
-        let mut builder = self.value_builder.builder_ext(value.metadata());
+        let Self {
+            value_builder,
+            typed_value_builders,
+            seen,
+            ..
+        } = self;
+        seen.fill(false);
+        let mut builder = value_builder.builder_ext(value.metadata());
         let mut object_builder = builder.try_new_object()?;
-        let mut seen = std::collections::HashSet::new();
         let mut partially_shredded = false;
         for (field_name, value) in obj.iter() {
-            match self.typed_value_builders.get_mut(field_name) {
-                Some(typed_value_builder) => {
+            match typed_value_builders.get_full_mut(field_name) {
+                Some((index, _, typed_value_builder)) => {
                     typed_value_builder.append_value(value)?;
-                    seen.insert(field_name);
+                    seen[index] = true;
                 }
                 None => {
                     object_builder.insert_bytes(field_name, value);
@@ -429,8 +440,8 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         }
 
         // Handle missing fields
-        for (field_name, typed_value_builder) in &mut self.typed_value_builders {
-            if !seen.contains(field_name) {
+        for (index, (_, typed_value_builder)) in typed_value_builders.iter_mut().enumerate() {
+            if !seen[index] {
                 typed_value_builder.append_null()?;
             }
         }
@@ -440,7 +451,8 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             object_builder.finish();
         } else {
             drop(object_builder);
-            self.value_builder.append_null();
+            drop(builder);
+            value_builder.append_null();
         }
 
         self.typed_value_nulls.append_non_null();

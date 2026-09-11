@@ -65,16 +65,16 @@ use crate::parse::{
     string_to_datetime,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{ArrowNativeType, OffsetBuffer, i256};
+use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, i256};
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
-pub use decimal::{
-    DecimalCast, parse_string_to_decimal_native, rescale_decimal, single_float_to_decimal,
-};
+#[expect(deprecated)]
+pub use decimal::parse_string_to_decimal_native;
+pub use decimal::{DecimalCast, rescale_decimal, single_float_to_decimal};
 pub use string::cast_single_string_to_boolean_default;
 
 /// Integers below 2^53 convert to an `f64` exactly.
@@ -2939,7 +2939,7 @@ where
     let str_values_buf = data.buffers()[1].clone();
     let offsets = data.buffers()[0].typed_data::<FROM::Offset>();
 
-    let mut offset_builder = BufferBuilder::<TO::Offset>::new(offsets.len());
+    let mut cast_offsets = Vec::<TO::Offset>::with_capacity(offsets.len());
     offsets
         .iter()
         .try_for_each::<_, Result<_, ArrowError>>(|offset| {
@@ -2953,11 +2953,11 @@ where
                         TO::PREFIX
                     ))
                 })?;
-            offset_builder.append(offset);
+            cast_offsets.push(offset);
             Ok(())
         })?;
 
-    let offset_buffer = offset_builder.finish();
+    let offset_buffer = Buffer::from_vec(cast_offsets);
 
     let dtype = TO::DATA_TYPE;
 
@@ -3002,6 +3002,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parse::parse_decimal;
     use DataType::*;
     use arrow_array::{Int64Array, RunArray, StringArray};
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
@@ -3133,7 +3134,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     #[should_panic(
         expected = "Cannot cast to Decimal128(20, 3). Overflowing on 57896044618658097711785492504343953926634992332820282019728792003956564819967"
     )]
@@ -3170,7 +3170,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "force_validate"))]
     fn test_cast_decimal_to_decimal_round() {
         let array = vec![
             Some(1123454),
@@ -4204,6 +4203,34 @@ mod tests {
         assert!(casted_array.is_ok());
         assert!(casted_array.unwrap().is_null(0));
 
+        // overflow test: values whose low 64 bits fit the target type
+        // https://github.com/apache/arrow-rs/issues/10855
+        let value_array: Vec<Option<i256>> = vec![Some(i256::from_i128((1i128 << 64) + 5))];
+        let array = create_decimal256_array(value_array, 76, 0).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!(
+            "Cast error: value of 18446744073709551621 is out of range Int64".to_string(),
+            casted_array.unwrap_err().to_string()
+        );
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
         // loss the precision: convert decimal to f32、f64
         // f32
         // 112345678_f32 and 112345679_f32 are same, so the 112345679_f32 will lose precision.
@@ -4473,7 +4500,7 @@ mod tests {
     fn test_cast_numeric_to_decimal128() {
         let decimal_type = DataType::Decimal128(38, 6);
         // u8, u16, u32, u64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(UInt8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4504,7 +4531,7 @@ mod tests {
             ])) as ArrayRef, // u64
         ];
 
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal128Array,
@@ -4520,7 +4547,7 @@ mod tests {
         }
 
         // i8, i16, i32, i64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(Int8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4550,7 +4577,7 @@ mod tests {
                 Some(5),
             ])) as ArrayRef, // i64
         ];
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal128Array,
@@ -4639,7 +4666,7 @@ mod tests {
     fn test_cast_numeric_to_decimal256() {
         let decimal_type = DataType::Decimal256(76, 6);
         // u8, u16, u32, u64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(UInt8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4670,7 +4697,7 @@ mod tests {
             ])) as ArrayRef, // u64
         ];
 
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal256Array,
@@ -4686,7 +4713,7 @@ mod tests {
         }
 
         // i8, i16, i32, i64
-        let input_datas = vec![
+        let input_arrays = vec![
             Arc::new(Int8Array::from(vec![
                 Some(1),
                 Some(2),
@@ -4716,7 +4743,7 @@ mod tests {
                 Some(5),
             ])) as ArrayRef, // i64
         ];
-        for array in input_datas {
+        for array in input_arrays {
             generate_cast_test_case!(
                 &array,
                 Decimal256Array,
@@ -7723,7 +7750,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bianry_to_view() {
+    fn test_binary_to_view() {
         _test_binary_to_view::<i32>();
         _test_binary_to_view::<i64>();
     }
@@ -11218,10 +11245,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_string_to_decimal() {
+    fn test_parse_decimal_and_format() {
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>("123.45", 2).unwrap(),
+                parse_decimal::<Decimal128Type>("123.45", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11229,7 +11256,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>("12345", 2).unwrap(),
+                parse_decimal::<Decimal128Type>("12345", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11237,7 +11264,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>("0.12345", 2).unwrap(),
+                parse_decimal::<Decimal128Type>("0.12345", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11245,7 +11272,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>(".12345", 2).unwrap(),
+                parse_decimal::<Decimal128Type>(".12345", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11253,7 +11280,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>(".1265", 2).unwrap(),
+                parse_decimal::<Decimal128Type>(".1265", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11261,7 +11288,7 @@ mod tests {
         );
         assert_eq!(
             Decimal128Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal128Type>(".1265", 2).unwrap(),
+                parse_decimal::<Decimal128Type>(".1265", 38, 2).unwrap(),
                 38,
                 2,
             ),
@@ -11270,7 +11297,7 @@ mod tests {
 
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>("123.45", 3).unwrap(),
+                parse_decimal::<Decimal256Type>("123.45", 76, 3).unwrap(),
                 38,
                 3,
             ),
@@ -11278,7 +11305,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>("12345", 3).unwrap(),
+                parse_decimal::<Decimal256Type>("12345", 76, 3).unwrap(),
                 38,
                 3,
             ),
@@ -11286,7 +11313,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>("0.12345", 3).unwrap(),
+                parse_decimal::<Decimal256Type>("0.12345", 76, 3).unwrap(),
                 38,
                 3,
             ),
@@ -11294,7 +11321,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>(".12345", 3).unwrap(),
+                parse_decimal::<Decimal256Type>(".12345", 76, 3).unwrap(),
                 38,
                 3,
             ),
@@ -11302,7 +11329,7 @@ mod tests {
         );
         assert_eq!(
             Decimal256Type::format_decimal(
-                parse_string_to_decimal_native::<Decimal256Type>(".1265", 3).unwrap(),
+                parse_decimal::<Decimal256Type>(".1265", 76, 3).unwrap(),
                 38,
                 3,
             ),
@@ -11635,7 +11662,7 @@ mod tests {
             },
         );
         assert_eq!(
-            "Invalid argument error: 1000.00000000 is too large to store in a Decimal128 of precision 10. Max is 99.99999999",
+            "Cast error: Cannot cast string '1000' to value of Decimal128(10, 8) type: value does not fit",
             err.unwrap_err().to_string()
         );
     }
@@ -11721,7 +11748,7 @@ mod tests {
             },
         );
         assert_eq!(
-            "Invalid argument error: 1000.00000000 is too large to store in a Decimal256 of precision 10. Max is 99.99999999",
+            "Cast error: Cannot cast string '1000' to value of Decimal256(10, 8) type: value does not fit",
             err.unwrap_err().to_string()
         );
     }
@@ -12022,6 +12049,19 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_out_of_precision_decimal_to_string() {
+        // Decimal values are not validated against their type's declared
+        // precision by default. Check that out-of-precision values are rendered
+        // in full when cast to strings, rather than truncated to the declared
+        // precision (https://github.com/apache/arrow-rs/issues/10866)
+        let array = create_decimal128_array(vec![Some(123456789), Some(-123456789)], 7, 3).unwrap();
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_string::<i32>();
+        assert_eq!("123456.789", c.value(0));
+        assert_eq!("-123456.789", c.value(1));
+    }
+
+    #[test]
     fn test_cast_decimal_to_string() {
         assert!(can_cast_types(
             &DataType::Decimal32(9, 4),
@@ -12049,9 +12089,7 @@ mod tests {
                 assert_eq!("-3123.456", c.value(3));
                 assert_eq!("0.000", c.value(4));
                 assert_eq!("0.123", c.value(5));
-                assert_eq!("1234.567", c.value(6));
-                assert_eq!("-1234.567", c.value(7));
-                assert!(c.is_null(8));
+                assert!(c.is_null(6));
             };
         }
 
@@ -12082,8 +12120,6 @@ mod tests {
             Some(-3123456),
             Some(0),
             Some(123),
-            Some(123456789),
-            Some(-123456789),
             None,
         ];
         let array64: Vec<Option<i64>> = array32.iter().map(|num| num.map(|x| x as i64)).collect();
@@ -13012,7 +13048,7 @@ mod tests {
                 output_scale: 2,
                 expected_output_repr: Ok(10000), // 100.00
             },
-            // increase precision, decrease scale, no rouding
+            // increase precision, decrease scale, no rounding
             DecimalCastTestConfig {
                 input_prec: 5,
                 input_scale: 3,

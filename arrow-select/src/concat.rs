@@ -159,7 +159,7 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
             output_len += l.len();
             list_has_nulls |= l.null_count() != 0;
             list_has_slices |= l.offsets()[0] > OffsetSize::zero()
-                || l.offsets().last().unwrap().as_usize() < l.values().len();
+                || l.offsets().last().as_usize() < l.values().len();
         })
         .collect::<Vec<_>>();
 
@@ -184,7 +184,7 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
             // we concatenate them below only the relevant values are included
             let offsets = l.offsets();
             let start_offset = offsets[0].as_usize();
-            let end_offset = offsets.last().unwrap().as_usize();
+            let end_offset = offsets.last().as_usize();
             sliced_values.push(l.values().slice(start_offset, end_offset - start_offset));
         }
         sliced_values.iter().map(|a| a.as_ref()).collect()
@@ -224,7 +224,7 @@ fn concat_maps(
             output_len += m.len();
             map_has_nulls |= m.null_count() != 0;
             map_has_slices |=
-                m.offsets()[0] > 0 || m.offsets().last().unwrap().as_usize() < m.entries().len();
+                m.offsets()[0] > 0 || m.offsets().last().as_usize() < m.entries().len();
         })
         .collect::<Vec<_>>();
 
@@ -247,7 +247,7 @@ fn concat_maps(
         for m in &maps {
             let offsets = m.offsets();
             let start_offset = offsets[0].as_usize();
-            let end_offset = offsets.last().unwrap().as_usize();
+            let end_offset = offsets.last().as_usize();
             let entries_arr: &dyn Array = m.entries();
             sliced_entries.push(entries_arr.slice(start_offset, end_offset - start_offset));
         }
@@ -423,6 +423,12 @@ where
         .map(|x| x.as_run::<R>())
         .filter(|x| !x.run_ends().is_empty())
         .collect();
+
+    if run_arrays.is_empty() {
+        // If all input arrays are empty then handle here otherwise we
+        // lose the type below
+        return Ok(new_empty_array(arrays[0].data_type()));
+    }
 
     // The run ends need to be adjusted by the sum of the lengths of the previous arrays.
     let needed_run_end_adjustments = std::iter::once(R::default_value())
@@ -1036,7 +1042,7 @@ mod tests {
         // verify that this test covers the case when the first offset is zero, but the
         // last offset doesn't cover the entire array
         assert_eq!(list1_array.offsets()[0].as_usize(), 0);
-        assert!(list1_array.offsets().last().unwrap().as_usize() < list1_array.values().len());
+        assert!(list1_array.offsets().last().as_usize() < list1_array.values().len());
         let array_result = concat(&[&list1_array, &list2_array]).unwrap();
 
         let expected = list1_values.chain(list2);
@@ -1903,6 +1909,24 @@ mod tests {
         let expected = vec![20, 20, 40, 40, 40];
         let actual = result.into_iter().flatten().collect::<Vec<_>>();
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_concat_run_array_all_empty() {
+        let run_ends1 = Int32Array::from(vec![2, 4]);
+        let values1 = Int32Array::from(vec![10, 20]);
+        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
+        let array1 = array1.slice(0, 0);
+
+        let run_ends2 = Int32Array::from(vec![1, 4]);
+        let values2 = Int32Array::from(vec![30, 40]);
+        let array2 = RunArray::try_new(&run_ends2, &values2).unwrap();
+        let array2 = array2.slice(0, 0);
+
+        let result = concat(&[&array1, &array2]).unwrap();
+        let result_run_array: &arrow_array::RunArray<Int32Type> = result.as_run();
+        assert_eq!(result_run_array.len(), 0);
+        assert_eq!(result_run_array.data_type(), array1.data_type());
     }
 
     #[test]
