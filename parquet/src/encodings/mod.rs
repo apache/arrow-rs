@@ -17,6 +17,7 @@
 
 pub mod decoding;
 pub mod encoding;
+mod fastlanes;
 pub mod levels;
 pub mod pfor;
 experimental!(pub(crate) mod rle);

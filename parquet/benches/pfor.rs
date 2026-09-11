@@ -17,7 +17,7 @@
 
 //! PFOR against the other ways Parquet can carry an integer column.
 //!
-//! Six arms, on the columns the C++ implementation is benchmarked on:
+//! Eight arms, on the columns the C++ implementation is benchmarked on:
 //!
 //! | arm | what it is |
 //! |---|---|
@@ -25,6 +25,8 @@
 //! | `DELTA_BINARY_PACKED` | Parquet's delta bit packing |
 //! | `PFOR` | PFOR with the differencing mode turned off |
 //! | `PFOR+DELTA` | PFOR free to choose differencing per vector, which is the default |
+//! | `PFOR_FASTLANES` | PFOR with byte-oriented FastLanes packing and fused frame addition |
+//! | `PFOR_FASTLANES+DELTA` | the same FastLanes layout with optional differencing |
 //! | `PLAIN+ZSTD` | the raw little-endian values through zstd |
 //! | `PLAIN+LZ4` | the raw little-endian values through lz4 |
 //!
@@ -55,6 +57,7 @@ use parquet::encodings::rle::{RleDecoder, RleEncoder};
 use parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
 use parquet::util::bit_util::FromBitpacked;
 use rand::prelude::*;
+use std::hint::black_box;
 use std::sync::Arc;
 
 /// The element count the C++ comparison benchmark uses, so the two sets of
@@ -398,7 +401,7 @@ enum Arm {
     /// An encoding the crate hands out through `get_encoder`/`get_decoder`.
     Direct(Encoding),
     /// PFOR, with the per-vector differencing mode allowed or forbidden.
-    Pfor { delta: bool },
+    Pfor { delta: bool, fastlanes: bool },
     /// The raw little-endian values through a page compressor.
     PlainCompressed(Compression),
 }
@@ -413,8 +416,38 @@ fn arms() -> Vec<(&'static str, &'static str, Arm)> {
             "DBP",
             Arm::Direct(Encoding::DELTA_BINARY_PACKED),
         ),
-        ("PFOR", "PFOR", Arm::Pfor { delta: false }),
-        ("PFOR+DELTA", "PFOR+D", Arm::Pfor { delta: true }),
+        (
+            "PFOR",
+            "PFOR",
+            Arm::Pfor {
+                delta: false,
+                fastlanes: false,
+            },
+        ),
+        (
+            "PFOR+DELTA",
+            "PFOR+D",
+            Arm::Pfor {
+                delta: true,
+                fastlanes: false,
+            },
+        ),
+        (
+            "PFOR_FASTLANES",
+            "PFOR+FL",
+            Arm::Pfor {
+                delta: false,
+                fastlanes: true,
+            },
+        ),
+        (
+            "PFOR_FASTLANES+DELTA",
+            "PFOR+FL+D",
+            Arm::Pfor {
+                delta: true,
+                fastlanes: true,
+            },
+        ),
         (
             "PLAIN+LZ4",
             "LZ4",
@@ -496,8 +529,10 @@ where
             encoder.put(values).unwrap();
             encoder.flush_buffer().unwrap()
         }
-        Arm::Pfor { delta } => {
-            let mut encoder = PforEncoder::<T>::new().with_delta_enabled(delta);
+        Arm::Pfor { delta, fastlanes } => {
+            let mut encoder = PforEncoder::<T>::new()
+                .with_delta_enabled(delta)
+                .with_fastlanes_enabled(fastlanes);
             encoder.put(values).unwrap();
             encoder.flush_buffer().unwrap()
         }
@@ -600,6 +635,14 @@ where
             .iter()
             .map(|&(_, _, arm)| encode::<T>(arm, values, descr).bytes.len())
             .collect();
+        assert_eq!(
+            sizes[2], sizes[4],
+            "FastLanes changed plain PFOR size for {name}"
+        );
+        assert_eq!(
+            sizes[3], sizes[5],
+            "FastLanes changed delta PFOR size for {name}"
+        );
         let best = sizes
             .iter()
             .enumerate()
@@ -644,7 +687,15 @@ fn bench_type<T: DataType>(
                     })
                 });
             } else {
-                encode_group.bench_function(id, |b| b.iter(|| encode::<T>(arm, values, descr)));
+                encode_group.bench_function(id, |b| {
+                    b.iter(|| {
+                        black_box(encode::<T>(
+                            black_box(arm),
+                            black_box(values),
+                            black_box(descr),
+                        ))
+                    })
+                });
             }
         }
     }
@@ -672,7 +723,15 @@ fn bench_type<T: DataType>(
                 });
             } else {
                 decode_group.bench_function(id, |b| {
-                    b.iter(|| decode::<T>(arm, &encoded, &mut out, descr))
+                    b.iter(|| {
+                        decode::<T>(
+                            black_box(arm),
+                            black_box(&encoded),
+                            black_box(&mut out),
+                            black_box(descr),
+                        );
+                        black_box(&out);
+                    })
                 });
             }
         }
@@ -696,7 +755,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
 criterion_group! {
     name = benches;
-    // 33 columns times six arms times two directions is a lot of benchmarks, so each
+    // 37 columns times eight arms times two directions is a lot of benchmarks, so each
     // one is measured for less than criterion's default.
     config = Criterion::default()
         .sample_size(50)

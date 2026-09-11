@@ -31,8 +31,9 @@ use super::Encoder;
 use crate::basic::Encoding;
 use crate::data_type::DataType;
 use crate::encodings::pfor::{
-    DEFAULT_VECTOR_SIZE, MAX_VECTOR_SIZE, OFFSET_SIZE, PACKING_MODE_FOR_BIT_PACK, PforHeader,
-    PforInt, PforVectorInfo, exception_bits, low_mask, max_compressed_size, validate_vector_size,
+    DEFAULT_VECTOR_SIZE, MAX_VECTOR_SIZE, OFFSET_SIZE, PACKING_MODE_FASTLANES,
+    PACKING_MODE_FOR_BIT_PACK, PforHeader, PforInt, PforVectorInfo, exception_bits, low_mask,
+    max_compressed_size, validate_vector_size,
 };
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::{BitWriter, num_required_bits};
@@ -505,6 +506,8 @@ pub struct PforEncoder<T: DataType> {
     values: Vec<T::T>,
     /// Elements per vector.
     vector_size: usize,
+    /// Whether to use the experimental FastLanes packed representation.
+    fastlanes_enabled: bool,
     /// Whether the planner may difference a vector.
     ///
     /// Nothing here changes how a page is read: a decoder is told which mode each vector used by
@@ -528,6 +531,7 @@ impl<T: DataType> PforEncoder<T> {
         Self {
             values: Vec::new(),
             vector_size: DEFAULT_VECTOR_SIZE,
+            fastlanes_enabled: false,
             delta_enabled: true,
             delta_scratch: Vec::new(),
             _phantom: PhantomData,
@@ -545,6 +549,15 @@ impl<T: DataType> PforEncoder<T> {
     /// Sets whether the planner may difference a vector.
     pub fn with_delta_enabled(mut self, delta_enabled: bool) -> Self {
         self.delta_enabled = delta_enabled;
+        self
+    }
+
+    /// Select the experimental FastLanes packing mode. Pages written with this
+    /// mode require a decoder supporting packing mode 1. The frame/delta planner
+    /// is unchanged; complete 1024-value blocks use FastLanes and tails retain
+    /// sequential packing without padding.
+    pub fn with_fastlanes_enabled(mut self, enabled: bool) -> Self {
+        self.fastlanes_enabled = enabled;
         self
     }
 }
@@ -603,12 +616,23 @@ where
         }
 
         if plan.bit_width > 0 {
+            let sequential = if self.fastlanes_enabled {
+                let mut blocks = residuals.chunks_exact(DEFAULT_VECTOR_SIZE);
+                for block in &mut blocks {
+                    T::T::pack_fastlanes(plan.bit_width as usize, block, out);
+                }
+                blocks.remainder()
+            } else {
+                &residuals
+            };
             // `consume` flushes to a byte boundary, which is where the packed section ends.
-            let mut writer = BitWriter::new_from_buf(std::mem::take(out));
-            for &residual in &residuals {
-                writer.put_value(residual, plan.bit_width as usize);
+            if !sequential.is_empty() {
+                let mut writer = BitWriter::new_from_buf(std::mem::take(out));
+                for &residual in sequential {
+                    writer.put_value(residual, plan.bit_width as usize);
+                }
+                *out = writer.consume();
             }
-            *out = writer.consume();
         }
 
         for position in &exception_positions {
@@ -656,7 +680,11 @@ where
 
         let log_vector_size = validate_vector_size(self.vector_size)?;
         let header = PforHeader {
-            packing_mode: PACKING_MODE_FOR_BIT_PACK,
+            packing_mode: if self.fastlanes_enabled {
+                PACKING_MODE_FASTLANES
+            } else {
+                PACKING_MODE_FOR_BIT_PACK
+            },
             log_vector_size,
             value_byte_width: T::T::BYTE_WIDTH as u8,
             num_elements: num_values as i32,
@@ -719,6 +747,21 @@ mod tests {
         let mut decoder = PforDecoder::<T>::new();
         decoder.set_data(page.clone(), values.len()).unwrap();
         let mut out = vec![T::T::default(); values.len()];
+        assert_eq!(decoder.get(&mut out).unwrap(), values.len());
+        assert_eq!(out, values);
+        assert_eq!(decoder.values_left(), 0);
+
+        // Exercise the same shapes, widths, vector sizes and tails through the
+        // new layout as well. Layout changes must not change the planner or size.
+        let mut encoder = PforEncoder::<T>::new()
+            .with_vector_size(vector_size)
+            .unwrap()
+            .with_fastlanes_enabled(true);
+        encoder.put(values).unwrap();
+        let fastlanes = encoder.flush_buffer().unwrap();
+        assert_eq!(fastlanes[0], PACKING_MODE_FASTLANES);
+        assert_eq!(fastlanes.len(), page.len());
+        decoder.set_data(fastlanes, values.len()).unwrap();
         assert_eq!(decoder.get(&mut out).unwrap(), values.len());
         assert_eq!(out, values);
         assert_eq!(decoder.values_left(), 0);
@@ -1035,6 +1078,48 @@ mod tests {
         let page = round_trip::<Int32Type>(&values, 1024);
         assert!(vector_info::<i32>(&page, 0).is_delta);
         assert!(!vector_info::<i32>(&page, 1).is_delta);
+    }
+
+    #[test]
+    fn test_fastlanes_streaming_and_skipping_across_blocks_and_tails() {
+        let values: Vec<i64> = (0..8199)
+            .map(|i| match i % 1024 {
+                17 => i64::MIN,
+                900 => i64::MAX,
+                _ => -1_000_000 + (i % 37),
+            })
+            .collect();
+        for vector_size in [8, 1024, 2048, 4096] {
+            for delta in [false, true] {
+                let mut encoder = PforEncoder::<Int64Type>::new()
+                    .with_vector_size(vector_size)
+                    .unwrap()
+                    .with_delta_enabled(delta)
+                    .with_fastlanes_enabled(true);
+                for _ in 0..2 {
+                    for part in values.chunks(317) {
+                        encoder.put(part).unwrap();
+                    }
+                    let page = encoder.flush_buffer().unwrap();
+                    for skip in [0, 1, 1023, 1024, 1025, 2048, 8192, 8199] {
+                        let mut decoder = PforDecoder::<Int64Type>::new();
+                        decoder.set_data(page.clone(), values.len()).unwrap();
+                        assert_eq!(decoder.skip(skip).unwrap(), skip);
+                        let mut output = Vec::new();
+                        let mut batch = [0; 317];
+                        loop {
+                            let read = decoder.get(&mut batch).unwrap();
+                            if read == 0 {
+                                break;
+                            }
+                            output.extend_from_slice(&batch[..read]);
+                        }
+                        assert_eq!(output, values[skip..]);
+                        assert_eq!(decoder.values_left(), 0);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

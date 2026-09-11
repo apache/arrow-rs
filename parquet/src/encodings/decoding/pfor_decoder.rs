@@ -25,8 +25,9 @@ use super::Decoder;
 use crate::basic::Encoding;
 use crate::data_type::DataType;
 use crate::encodings::pfor::{
-    DEFAULT_LOG_VECTOR_SIZE, HEADER_SIZE, OFFSET_SIZE, PACKING_MODE_FOR_BIT_PACK, POSITION_SIZE,
-    PforHeader, PforInt, PforVectorInfo, bytes_for_bits, read_offset, validate_offsets,
+    DEFAULT_LOG_VECTOR_SIZE, DEFAULT_VECTOR_SIZE, HEADER_SIZE, OFFSET_SIZE, PACKING_MODE_FASTLANES,
+    PACKING_MODE_FOR_BIT_PACK, POSITION_SIZE, PforHeader, PforInt, PforVectorInfo, bytes_for_bits,
+    read_offset, validate_offsets,
 };
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::BitReader;
@@ -129,7 +130,11 @@ where
             // Slice out of the page rather than out of `src`: BitReader wants an owned `Bytes`.
             let packed_at = HEADER_SIZE + vector_at + layout.packed_at;
             let packed = data.slice(packed_at..packed_at + layout.packed_bytes);
-            unpack_residuals(&mut self.vector, packed, info.bit_width, frame)?;
+            if self.header.packing_mode == PACKING_MODE_FASTLANES {
+                unpack_fastlanes_residuals(&mut self.vector, packed, info.bit_width, frame)?;
+            } else {
+                unpack_residuals(&mut self.vector, packed, info.bit_width, frame)?;
+            }
         } else {
             // Width zero with exceptions: every unpatched slot is the frame itself.
             self.vector.fill(frame);
@@ -372,6 +377,33 @@ fn unpack_residuals<V: PforInt>(
         for slot in out {
             *slot = V::from_bits(slot.to_bits().wrapping_add(frame_bits));
         }
+    }
+    Ok(())
+}
+
+/// Complete blocks use the byte-oriented FastLanes kernel. The remaining
+/// elements use the original format, so a short final vector needs no padding.
+fn unpack_fastlanes_residuals<V: PforInt>(
+    out: &mut [V],
+    packed: Bytes,
+    bit_width: u8,
+    frame: V,
+) -> Result<()> {
+    let block_bytes = DEFAULT_VECTOR_SIZE * bit_width as usize / 8;
+    let mut offset = 0;
+    let mut blocks = out.chunks_exact_mut(DEFAULT_VECTOR_SIZE);
+    for block in &mut blocks {
+        V::unpack_fastlanes(
+            bit_width as usize,
+            &packed[offset..offset + block_bytes],
+            frame,
+            block,
+        );
+        offset += block_bytes;
+    }
+    let tail = blocks.into_remainder();
+    if !tail.is_empty() {
+        unpack_residuals(tail, packed.slice(offset..), bit_width, frame)?;
     }
     Ok(())
 }

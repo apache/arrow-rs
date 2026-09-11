@@ -37,6 +37,7 @@
 //!
 //! Every multi-byte field is little-endian.
 
+use crate::encodings::fastlanes::FastLanesBitPacking;
 use crate::errors::{ParquetError, Result};
 use crate::util::bit_util::FromBitpacked;
 
@@ -65,8 +66,13 @@ pub(crate) const POSITION_SIZE: usize = std::mem::size_of::<u16>();
 /// each, then `num_elements` as a four-byte little-endian signed integer.
 pub(crate) const HEADER_SIZE: usize = 3 + std::mem::size_of::<i32>();
 
-/// Packing mode: frame of reference plus bit-packing, currently the only mode.
+/// Packing mode: frame of reference plus sequential bit-packing.
 pub(crate) const PACKING_MODE_FOR_BIT_PACK: u8 = 0;
+
+/// Experimental FastLanes layout: complete 1024-value blocks use interleaved
+/// packing; any remaining values in a vector use sequential packing. No padding
+/// is added, so both modes have the same encoded length and vector offsets.
+pub(crate) const PACKING_MODE_FASTLANES: u8 = 1;
 
 /// Mask selecting the bit width out of the info block's width byte.
 pub(crate) const BIT_WIDTH_MASK: u8 = 0x7F;
@@ -86,6 +92,14 @@ pub(crate) const fn exception_bits(byte_width: usize) -> i64 {
 /// below the frame wraps to a huge residual, fails the width test like any value above the window,
 /// and is patched from the exception list. Nothing here is exposed outside the crate.
 pub trait PforInt: Copy + Default + Ord + Send + std::fmt::Debug + FromBitpacked + 'static {
+    /// Pack a complete 1024-value block of unsigned residuals as FastLanes bytes.
+    #[doc(hidden)]
+    fn pack_fastlanes(width: usize, residuals: &[u64], out: &mut Vec<u8>);
+
+    /// Unpack a complete FastLanes block, fusing the wrapping frame addition.
+    #[doc(hidden)]
+    fn unpack_fastlanes(width: usize, packed: &[u8], frame: Self, out: &mut [Self]);
+
     /// Width of one value on the wire, in bytes: 4 for INT32, 8 for INT64.
     const BYTE_WIDTH: usize;
 
@@ -129,6 +143,20 @@ pub trait PforInt: Copy + Default + Ord + Send + std::fmt::Debug + FromBitpacked
 }
 
 impl PforInt for i32 {
+    fn pack_fastlanes(width: usize, residuals: &[u64], out: &mut Vec<u8>) {
+        assert_eq!(residuals.len(), DEFAULT_VECTOR_SIZE);
+        let input: [u32; DEFAULT_VECTOR_SIZE] = std::array::from_fn(|i| residuals[i] as u32);
+        u32::pack_bytes(width, &input, out);
+    }
+
+    fn unpack_fastlanes(width: usize, packed: &[u8], frame: Self, out: &mut [Self]) {
+        // SAFETY: i32 and u32 have identical size/alignment and accept all bit
+        // patterns. The mutable borrow remains exclusive for the entire call.
+        let out =
+            unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u32>(), out.len()) };
+        u32::unpack_for_bytes(width, packed, frame as u32, out);
+    }
+
     const BYTE_WIDTH: usize = 4;
     const MAX_BIT_WIDTH: u8 = 32;
 
@@ -154,6 +182,18 @@ impl PforInt for i32 {
 }
 
 impl PforInt for i64 {
+    fn pack_fastlanes(width: usize, residuals: &[u64], out: &mut Vec<u8>) {
+        u64::pack_bytes(width, residuals, out);
+    }
+
+    fn unpack_fastlanes(width: usize, packed: &[u8], frame: Self, out: &mut [Self]) {
+        // SAFETY: i64 and u64 have identical size/alignment and accept all bit
+        // patterns. The mutable borrow remains exclusive for the entire call.
+        let out =
+            unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u64>(), out.len()) };
+        u64::unpack_for_bytes(width, packed, frame as u64, out);
+    }
+
     const BYTE_WIDTH: usize = 8;
     const MAX_BIT_WIDTH: u8 = 64;
 
@@ -215,7 +255,7 @@ pub(crate) fn validate_vector_size(vector_size: usize) -> Result<u8> {
 /// The per-page header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PforHeader {
-    /// How the residuals are laid out. Always [`PACKING_MODE_FOR_BIT_PACK`] today.
+    /// Sequential bit-packing or the experimental FastLanes block layout.
     pub packing_mode: u8,
     /// `log2` of the number of elements per vector.
     pub log_vector_size: u8,
@@ -264,7 +304,10 @@ impl PforHeader {
             value_byte_width: src[2],
             num_elements: i32::from_le_bytes(src[3..7].try_into().unwrap()),
         };
-        if header.packing_mode != PACKING_MODE_FOR_BIT_PACK {
+        if !matches!(
+            header.packing_mode,
+            PACKING_MODE_FOR_BIT_PACK | PACKING_MODE_FASTLANES
+        ) {
             return Err(general_err!(
                 "PFOR unsupported packing mode: {}",
                 header.packing_mode
@@ -568,7 +611,7 @@ mod tests {
 
         // A packing mode this implementation does not have.
         let mut buf = bytes(&good);
-        buf[0] = 1;
+        buf[0] = 2;
         assert!(PforHeader::read::<i32>(&buf).is_err());
 
         // An INT64 page read as INT32.
