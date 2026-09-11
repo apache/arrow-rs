@@ -33,6 +33,7 @@ use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
+use arrow_data::decimal::write_decimal;
 use arrow_schema::*;
 use chrono::format::{Item, StrftimeItems};
 use chrono::{NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
@@ -736,14 +737,14 @@ impl DisplayIndex for &PrimitiveArray<Float16Type> {
 macro_rules! decimal_display {
     ($($t:ty),+) => {
         $(impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
-            type State = (u8, i8);
+            type State = i8;
 
             fn prepare(&self, _options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-                Ok((self.precision(), self.scale()))
+                Ok(self.scale())
             }
 
-            fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
-                write!(f, "{}", <$t>::format_decimal(self.values()[idx], s.0, s.1))?;
+            fn write(&self, scale: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+                write_decimal(f, self.values()[idx], *scale)?;
                 Ok(())
             }
         })+
@@ -1432,7 +1433,6 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 mod tests {
     use super::*;
     use arrow_array::builder::StringRunBuilder;
-
     /// Test to verify options can be constant. See #4580
     const TEST_CONST_OPTIONS: FormatOptions<'static> = FormatOptions::new()
         .with_date_format(Some("foo"))

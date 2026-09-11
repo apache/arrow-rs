@@ -26,6 +26,7 @@
 //! [`Decimal256`]: arrow_schema::DataType::Decimal256
 use arrow_buffer::i256;
 use arrow_schema::ArrowError;
+use std::fmt::{Display, Write};
 
 pub use arrow_schema::{
     DECIMAL_DEFAULT_SCALE, DECIMAL32_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
@@ -932,22 +933,16 @@ pub fn validate_decimal32_precision(
         )));
     }
     if value > MAX_DECIMAL32_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
-        let unscale_max_value = format_decimal_str(
-            &MAX_DECIMAL32_FOR_EACH_PRECISION[precision as usize].to_string(),
-            precision.into(),
-            scale,
-        );
+        let unscaled_value = format_decimal(value, scale);
+        let unscale_max_value =
+            format_decimal(MAX_DECIMAL32_FOR_EACH_PRECISION[precision as usize], scale);
         Err(ArrowError::InvalidArgumentError(format!(
             "{unscaled_value} is too large to store in a Decimal32 of precision {precision}. Max is {unscale_max_value}"
         )))
     } else if value < MIN_DECIMAL32_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
-        let unscale_min_value = format_decimal_str(
-            &MIN_DECIMAL32_FOR_EACH_PRECISION[precision as usize].to_string(),
-            precision.into(),
-            scale,
-        );
+        let unscaled_value = format_decimal(value, scale);
+        let unscale_min_value =
+            format_decimal(MIN_DECIMAL32_FOR_EACH_PRECISION[precision as usize], scale);
         Err(ArrowError::InvalidArgumentError(format!(
             "{unscaled_value} is too small to store in a Decimal32 of precision {precision}. Min is {unscale_min_value}"
         )))
@@ -983,22 +978,16 @@ pub fn validate_decimal64_precision(
         )));
     }
     if value > MAX_DECIMAL64_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
-        let unscaled_max_value = format_decimal_str(
-            &MAX_DECIMAL64_FOR_EACH_PRECISION[precision as usize].to_string(),
-            precision.into(),
-            scale,
-        );
+        let unscaled_value = format_decimal(value, scale);
+        let unscaled_max_value =
+            format_decimal(MAX_DECIMAL64_FOR_EACH_PRECISION[precision as usize], scale);
         Err(ArrowError::InvalidArgumentError(format!(
             "{unscaled_value} is too large to store in a Decimal64 of precision {precision}. Max is {unscaled_max_value}"
         )))
     } else if value < MIN_DECIMAL64_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
-        let unscaled_min_value = format_decimal_str(
-            &MIN_DECIMAL64_FOR_EACH_PRECISION[precision as usize].to_string(),
-            precision.into(),
-            scale,
-        );
+        let unscaled_value = format_decimal(value, scale);
+        let unscaled_min_value =
+            format_decimal(MIN_DECIMAL64_FOR_EACH_PRECISION[precision as usize], scale);
         Err(ArrowError::InvalidArgumentError(format!(
             "{unscaled_value} is too small to store in a Decimal64 of precision {precision}. Min is {unscaled_min_value}"
         )))
@@ -1030,22 +1019,16 @@ pub fn validate_decimal_precision(value: i128, precision: u8, scale: i8) -> Resu
         )));
     }
     if value > MAX_DECIMAL128_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
-        let unscaled_max_value = format_decimal_str(
-            &MAX_DECIMAL128_FOR_EACH_PRECISION[precision as usize].to_string(),
-            precision.into(),
-            scale,
-        );
+        let unscaled_value = format_decimal(value, scale);
+        let unscaled_max_value =
+            format_decimal(MAX_DECIMAL128_FOR_EACH_PRECISION[precision as usize], scale);
         Err(ArrowError::InvalidArgumentError(format!(
             "{unscaled_value} is too large to store in a Decimal128 of precision {precision}. Max is {unscaled_max_value}"
         )))
     } else if value < MIN_DECIMAL128_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
-        let unscaled_min_value = format_decimal_str(
-            &MIN_DECIMAL128_FOR_EACH_PRECISION[precision as usize].to_string(),
-            precision.into(),
-            scale,
-        );
+        let unscaled_value = format_decimal(value, scale);
+        let unscaled_min_value =
+            format_decimal(MIN_DECIMAL128_FOR_EACH_PRECISION[precision as usize], scale);
         Err(ArrowError::InvalidArgumentError(format!(
             "{unscaled_value} is too small to store in a Decimal128 of precision {precision}. Min is {unscaled_min_value}"
         )))
@@ -1082,22 +1065,16 @@ pub fn validate_decimal256_precision(
     }
 
     if value > MAX_DECIMAL256_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
-        let unscaled_max_value = format_decimal_str(
-            &MAX_DECIMAL256_FOR_EACH_PRECISION[precision as usize].to_string(),
-            precision.into(),
-            scale,
-        );
+        let unscaled_value = format_decimal(value, scale);
+        let unscaled_max_value =
+            format_decimal(MAX_DECIMAL256_FOR_EACH_PRECISION[precision as usize], scale);
         Err(ArrowError::InvalidArgumentError(format!(
             "{unscaled_value} is too large to store in a Decimal256 of precision {precision}. Max is {unscaled_max_value}"
         )))
     } else if value < MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
-        let unscaled_min_value = format_decimal_str(
-            &MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize].to_string(),
-            precision.into(),
-            scale,
-        );
+        let unscaled_value = format_decimal(value, scale);
+        let unscaled_min_value =
+            format_decimal(MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize], scale);
         Err(ArrowError::InvalidArgumentError(format!(
             "{unscaled_value} is too small to store in a Decimal256 of precision {precision}. Min is {unscaled_min_value}"
         )))
@@ -1126,36 +1103,148 @@ pub fn format_decimal_str(value_str: &str, _precision: usize, scale: i8) -> Stri
     format_decimal_str_internal(value_str, scale)
 }
 
-// Format a decimal string given the scale.
+/// The native value of a decimal type: `i32`, `i64`, `i128` or `i256`
+pub trait DecimalNativeType: Display + sealed::DecimalNativeTypeSealed {}
+
+mod sealed {
+    pub trait DecimalNativeTypeSealed {}
+}
+
+macro_rules! decimal_native {
+    ($($t:ty),+) => {
+        $(
+            impl sealed::DecimalNativeTypeSealed for $t {}
+            impl DecimalNativeType for $t {}
+        )+
+    };
+}
+
+decimal_native!(i32, i64, i128, i256);
+
+/// Formats the unscaled decimal `value` with `scale` fractional digits: the
+/// decimal point is inserted `scale` digits from the right, with leading
+/// zeros as needed, and a negative scale appends zeros instead. The value is
+/// always formatted in full, whatever its precision.
+pub fn format_decimal<V: DecimalNativeType>(value: V, scale: i8) -> String {
+    format_decimal_str_internal(DigitBuffer::from_value(&value).as_str(), scale)
+}
+
+/// Like [`format_decimal`], but writes the result to `f` instead of returning
+/// a new `String`.
+pub fn write_decimal<V: DecimalNativeType>(
+    f: &mut dyn Write,
+    value: V,
+    scale: i8,
+) -> std::fmt::Result {
+    write_decimal_str(f, DigitBuffer::from_value(&value).as_str(), scale)
+}
+
+/// Formats `value_str` as [`write_decimal_str`] does, into a `String` with
+/// enough capacity to avoid reallocation
 fn format_decimal_str_internal(value_str: &str, scale: i8) -> String {
-    let (sign, rest) = match value_str.strip_prefix('-') {
-        Some(stripped) => ("-", stripped),
+    let mut out = String::with_capacity(value_str.len() + scale.unsigned_abs() as usize + 2);
+    write_decimal_str(&mut out, value_str, scale).expect("writing to a String cannot fail");
+    out
+}
+
+/// The length of the longest decimal native value when formatted: `i256::MIN`
+/// has 77 digits and a sign
+const MAX_DECIMAL_VALUE_LEN: usize = 78;
+
+/// The formatted digits of a decimal native value, with its sign
+struct DigitBuffer {
+    bytes: [u8; MAX_DECIMAL_VALUE_LEN],
+    len: usize,
+}
+
+impl DigitBuffer {
+    /// Formats `value`
+    fn from_value(value: &dyn DecimalNativeType) -> Self {
+        let mut buf = Self {
+            bytes: [0; MAX_DECIMAL_VALUE_LEN],
+            len: 0,
+        };
+        write!(buf, "{value}").expect("a decimal native value fits the digit buffer");
+        buf
+    }
+
+    fn as_str(&self) -> &str {
+        // `write_str` copies complete strings, so the bytes are valid UTF-8
+        std::str::from_utf8(&self.bytes[..self.len]).expect("DigitBuffer contains valid UTF-8")
+    }
+}
+
+impl Write for DigitBuffer {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let end = self.len + s.len();
+        let target = self.bytes.get_mut(self.len..end).ok_or(std::fmt::Error)?;
+        target.copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+/// Writes `value_str`, the digits of an unscaled decimal value with an optional
+/// leading `-`, to `f` as a decimal with `scale` fractional digits: the decimal
+/// point is inserted `scale` digits from the right, with leading zeros as
+/// needed, and a negative scale appends zeros instead. The value is always
+/// written in full, whatever its precision.
+fn write_decimal_str(f: &mut dyn Write, value_str: &str, scale: i8) -> std::fmt::Result {
+    let (sign, digits) = match value_str.strip_prefix('-') {
+        Some(digits) => ("-", digits),
         None => ("", value_str),
     };
 
     if scale == 0 {
-        value_str.to_string()
+        f.write_str(value_str)
     } else if scale < 0 {
-        if rest == "0" {
-            // Zero must not be zero-padded ("000" is not a valid number)
-            value_str.to_string()
-        } else {
-            let padding = value_str.len() + scale.unsigned_abs() as usize;
-            format!("{value_str:0<padding$}")
+        f.write_str(value_str)?;
+        // Zero must not be zero-padded ("000" is not a valid number)
+        if digits != "0" {
+            for _ in 0..scale.unsigned_abs() {
+                f.write_char('0')?;
+            }
         }
-    } else if rest.len() > scale as usize {
-        // Decimal separator is in the middle of the string
-        let (whole, decimal) = value_str.split_at(value_str.len() - scale as usize);
-        format!("{whole}.{decimal}")
+        Ok(())
+    } else if digits.len() > scale as usize {
+        // The decimal point is in the middle of the digits
+        let (whole, fraction) = value_str.split_at(value_str.len() - scale as usize);
+        f.write_str(whole)?;
+        f.write_char('.')?;
+        f.write_str(fraction)
     } else {
-        // String has to be padded
-        format!("{}0.{:0>width$}", sign, rest, width = scale as usize)
+        // The digits are all fractional and may need leading zeros
+        f.write_str(sign)?;
+        f.write_str("0.")?;
+        for _ in digits.len()..scale as usize {
+            f.write_char('0')?;
+        }
+        f.write_str(digits)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_decimal() {
+        assert_eq!(format_decimal(12345_i32, 2), "123.45");
+        assert_eq!(format_decimal(-5_i64, 3), "-0.005");
+        assert_eq!(format_decimal(0_i128, -2), "0");
+        assert_eq!(
+            format_decimal(i128::MIN, 38),
+            "-1.70141183460469231731687303715884105728"
+        );
+        assert_eq!(
+            format_decimal(i256::MIN, 0),
+            "-57896044618658097711785492504343953926634992332820282019728792003956564819968"
+        );
+        assert_eq!(
+            format_decimal(i256::MAX, 76),
+            "5.7896044618658097711785492504343953926634992332820282019728792003956564819967"
+        );
+    }
 
     #[test]
     fn test_format_decimal_str() {
