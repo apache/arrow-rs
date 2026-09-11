@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["downcast","fold","sum_checked","sum_wrapping"]};

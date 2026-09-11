@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_last_offset","resize_for_bits","try_extend_offsets"]};

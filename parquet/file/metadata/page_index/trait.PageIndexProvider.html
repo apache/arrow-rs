@@ -1,0 +1,205 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Trait for accessing Parquet Page Index data for efficient page-level skipping"><title>PageIndexProvider in parquet::file::metadata::page_index - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="parquet" data-themes="" data-resource-suffix="" data-rustdoc-version="1.100.0-nightly (67eda617e 2026-09-10)" data-channel="nightly" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../../static.files/main-1814ead3.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-9f56287d.css"></noscript><link rel="icon" href="https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"></head><body class="rustdoc trait"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">PageIndexProvider</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../../../parquet/index.html"><img src="https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg" alt="logo"></a><h2><a href="../../../../parquet/index.html">parquet</a><span class="version">60.0.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Page<wbr>Index<wbr>Provider</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#structure" title="Structure">Structure</a></li><li><a href="#example-checking-if-page-index-is-available" title="Example: Checking if Page Index is Available">Example: Checking if Page Index is Available</a></li><li><a href="#example-using-page-index-for-predicate-pushdown" title="Example: Using Page Index for Predicate Pushdown">Example: Using Page Index for Predicate Pushdown</a></li></ul><h3><a href="#required-methods">Required Methods</a></h3><ul class="block"><li><a href="#tymethod.as_any" title="as_any">as_any</a></li><li><a href="#tymethod.column_index" title="column_index">column_index</a></li><li><a href="#tymethod.has_column_indexes" title="has_column_indexes">has_column_indexes</a></li><li><a href="#tymethod.has_offset_indexes" title="has_offset_indexes">has_offset_indexes</a></li><li><a href="#tymethod.offset_index" title="offset_index">offset_index</a></li></ul><h3><a href="#provided-methods">Provided Methods</a></h3><ul class="block"><li><a href="#method.is_complete" title="is_complete">is_complete</a></li><li><a href="#method.num_data_pages" title="num_data_pages">num_data_pages</a></li><li><a href="#method.page_locations" title="page_locations">page_locations</a></li></ul><h3><a href="#implementors">Implementors</a></h3></section><div id="rustdoc-modnav"><h2><a href="index.html">In parquet::<wbr>file::<wbr>metadata::<wbr>page_<wbr>index</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../../index.html">parquet</a>::<wbr><a href="../../index.html">file</a>::<wbr><a href="../index.html">metadata</a>::<wbr><a href="index.html">page_index</a></div><h1>Trait <span class="trait">Page<wbr>Index<wbr>Provider</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../../src/parquet/file/metadata/page_index.rs.html#139-239">Source</a> </span></div><pre class="rust item-decl"><code>pub trait PageIndexProvider:
+    <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a>
+    + <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a>
+    + <a class="trait" href="https://doc.rust-lang.org/nightly/core/fmt/trait.Debug.html" title="trait core::fmt::Debug">Debug</a> {
+    // Required methods
+    fn <a href="#tymethod.has_offset_indexes" class="fn">has_offset_indexes</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.has_column_indexes" class="fn">has_column_indexes</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>;
+<span class="item-spacer"></span>    fn <a href="#tymethod.column_index" class="fn">column_index</a>(
+        &amp;self,
+        row_group_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+        column_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="enum" href="../../page_index/column_index/enum.ColumnIndexMetaData.html" title="enum parquet::file::page_index::column_index::ColumnIndexMetaData">ColumnIndexMetaData</a>&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.offset_index" class="fn">offset_index</a>(
+        &amp;self,
+        row_group_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+        column_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="struct" href="../../page_index/offset_index/struct.OffsetIndexMetaData.html" title="struct parquet::file::page_index::offset_index::OffsetIndexMetaData">OffsetIndexMetaData</a>&gt;;
+<span class="item-spacer"></span>    fn <a href="#tymethod.as_any" class="fn">as_any</a>(&amp;self) -&gt; &amp;dyn <a class="trait" href="https://doc.rust-lang.org/nightly/core/any/trait.Any.html" title="trait core::any::Any">Any</a>;
+
+    // Provided methods
+    fn <a href="#method.is_complete" class="fn">is_complete</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.num_data_pages" class="fn">num_data_pages</a>(
+        &amp;self,
+        row_group_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+        column_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.page_locations" class="fn">page_locations</a>(
+        &amp;self,
+        row_group_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+        column_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="struct" href="../../page_index/offset_index/struct.PageLocation.html" title="struct parquet::file::page_index::offset_index::PageLocation">PageLocation</a>&gt;&gt; { ... }
+}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Trait for accessing Parquet <a href="https://parquet.apache.org/docs/file-format/pageindex/">Page Index</a> data for efficient page-level skipping</p>
+<p>The <a href="https://parquet.apache.org/docs/file-format/pageindex/">Page Index</a> enables query engines to skip irrelevant data pages during scans,
+significantly improving I/O efficiency. It provides access to two complementary
+structures:</p>
+<ul>
+<li>
+<p><strong><a href="../../page_index/column_index/enum.ColumnIndexMetaData.html" title="enum parquet::file::page_index::column_index::ColumnIndexMetaData"><code>ColumnIndex</code></a></strong>: Per-page min/max value boundaries that enable predicate-based
+page filtering. Allows determining which pages might contain rows matching a query
+predicate without reading the actual data pages.</p>
+</li>
+<li>
+<p><strong><a href="../../page_index/offset_index/struct.OffsetIndexMetaData.html" title="struct parquet::file::page_index::offset_index::OffsetIndexMetaData"><code>OffsetIndex</code></a></strong>: Physical locations and sizes of data pages, plus the first row
+index of each page. Used to locate and read only the pages identified as relevant
+by the ColumnIndex.</p>
+</li>
+</ul>
+<p>Together, these indexes enable:</p>
+<ul>
+<li>Single-row lookups reading only one data page per column (on sorted columns)</li>
+<li>Range scans reading only pages containing values in the query range</li>
+<li>Efficient cross-column filtering by skipping corresponding row ranges</li>
+</ul>
+<h2 id="structure"><a class="doc-anchor" href="#structure">§</a>Structure</h2>
+<p>Within a Parquet file, both indexes are organized as a two-level structure, with
+indexes arranged first by row group, and then column. The <a href="../struct.ColumnChunkMetaData.html" title="struct parquet::file::metadata::ColumnChunkMetaData"><code>ColumnChunkMetaData</code></a>
+contains pointers to the indexes for a given column chunk, so they may be
+populated piecemeal. This trait allows access by row group index and column number
+(<a href="trait.PageIndexProvider.html#tymethod.column_index" title="method parquet::file::metadata::page_index::PageIndexProvider::column_index">Self::column_index</a>, <a href="trait.PageIndexProvider.html#tymethod.offset_index" title="method parquet::file::metadata::page_index::PageIndexProvider::offset_index">Self::offset_index</a>). Access by row group is provided by
+<a href="struct.RowGroupPageIndex.html" title="struct parquet::file::metadata::page_index::RowGroupPageIndex"><code>RowGroupPageIndex</code></a>.</p>
+<p>Each entry is <code>Option&lt;T&gt;</code> because:</p>
+<ul>
+<li>The entire page index might be absent (old files, disabled during write)</li>
+<li>Individual columns might lack indexes (unsupported types, statistics disabled)</li>
+</ul>
+<h2 id="example-checking-if-page-index-is-available"><a class="doc-anchor" href="#example-checking-if-page-index-is-available">§</a>Example: Checking if Page Index is Available</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>parquet::file::metadata::ParquetMetaData;
+
+<span class="kw">fn </span>check_page_index_availability(metadata: <span class="kw-2">&amp;</span>ParquetMetaData) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(page_index) = metadata.page_index() {
+        <span class="macro">println!</span>(<span class="string">"Page index present:"</span>);
+        <span class="macro">println!</span>(<span class="string">"  Has offset indexes: {}"</span>, page_index.has_offset_indexes());
+        <span class="macro">println!</span>(<span class="string">"  Has column indexes: {}"</span>, page_index.has_column_indexes());
+
+        <span class="comment">// Check availability for first row group, first column
+        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(col_idx) = page_index.column_index(<span class="number">0</span>, <span class="number">0</span>) {
+            <span class="macro">println!</span>(<span class="string">"  Column index found for row group 0, column 0"</span>);
+            <span class="macro">println!</span>(<span class="string">"    Number of pages: {}"</span>, col_idx.num_pages());
+        }
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(offset_idx) = page_index.offset_index(<span class="number">0</span>, <span class="number">0</span>) {
+            <span class="macro">println!</span>(<span class="string">"  Offset index found for row group 0, column 0"</span>);
+            <span class="macro">println!</span>(<span class="string">"    Number of pages: {}"</span>, offset_idx.page_locations().len());
+        }
+    } <span class="kw">else </span>{
+        <span class="macro">println!</span>(<span class="string">"No page index available"</span>);
+    }
+    <span class="prelude-val">Ok</span>(())
+}</code></pre></div><h2 id="example-using-page-index-for-predicate-pushdown"><a class="doc-anchor" href="#example-using-page-index-for-predicate-pushdown">§</a>Example: Using Page Index for Predicate Pushdown</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>parquet::file::metadata::ParquetMetaData;
+<span class="kw">use </span>parquet::file::page_index::column_index::ColumnIndexMetaData;
+
+<span class="doccomment">/// Identifies which pages in a column might contain values &gt;= min_value
+</span><span class="kw">fn </span>find_relevant_pages(
+    metadata: <span class="kw-2">&amp;</span>ParquetMetaData,
+    row_group_idx: usize,
+    column_idx: usize,
+    min_value: i32,
+) -&gt; Vec&lt;usize&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>relevant_pages = Vec::new();
+
+    <span class="kw">let </span><span class="prelude-val">Some</span>(page_index) = metadata.page_index() <span class="kw">else </span>{
+        <span class="comment">// No page index - must read all pages
+        </span><span class="kw">return </span>relevant_pages;
+    };
+
+    <span class="kw">let </span><span class="prelude-val">Some</span>(column_index) = page_index.column_index(row_group_idx, column_idx) <span class="kw">else </span>{
+        <span class="comment">// No column index - must read all pages
+        </span><span class="kw">return </span>relevant_pages;
+    };
+
+    <span class="comment">// Check each page's statistics
+    </span><span class="kw">match </span>column_index {
+        ColumnIndexMetaData::INT32(index) =&gt; {
+            <span class="kw">for </span>(page_num, max_value) <span class="kw">in </span>index.max_values_iter().enumerate() {
+                <span class="comment">// Page might contain matching rows if its max &gt;= our min
+                </span><span class="kw">if let </span><span class="prelude-val">Some</span>(max) = max_value {
+                    <span class="kw">if </span><span class="kw-2">*</span>max &gt;= min_value {
+                        relevant_pages.push(page_num);
+                    }
+                }
+            }
+        }
+        <span class="kw">_ </span>=&gt; {
+            <span class="comment">// Wrong column type - read all pages
+        </span>}
+    }
+
+    relevant_pages
+}</code></pre></div></div></details><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="tymethod.has_offset_indexes" class="method"><a class="src rightside" href="../../../../src/parquet/file/metadata/page_index.rs.html#149">Source</a><h4 class="code-header">fn <a href="#tymethod.has_offset_indexes" class="fn">has_offset_indexes</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Returns <code>true</code> if offset index structures are available via this provider</p>
+<p>This indicates whether <a href="../../page_index/offset_index/struct.OffsetIndexMetaData.html" title="struct parquet::file::page_index::offset_index::OffsetIndexMetaData"><code>OffsetIndexMetaData</code></a> structures were loaded or created.
+Returns <code>true</code> even if some individual columns lack offset indexes.
+This should return <code>false</code> if all calls to <a href="trait.PageIndexProvider.html#tymethod.offset_index" title="method parquet::file::metadata::page_index::PageIndexProvider::offset_index"><code>Self::offset_index</code></a> will return <code>None</code>.</p>
+<p>This does <em>not</em> indicate if the underlying Parquet file contains offset indexes.</p>
+<p>To check if a specific column has an offset index, use <a href="trait.PageIndexProvider.html#tymethod.offset_index" title="method parquet::file::metadata::page_index::PageIndexProvider::offset_index"><code>Self::offset_index</code></a>.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.has_column_indexes" class="method"><a class="src rightside" href="../../../../src/parquet/file/metadata/page_index.rs.html#160">Source</a><h4 class="code-header">fn <a href="#tymethod.has_column_indexes" class="fn">has_column_indexes</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Returns <code>true</code> if column index structures are available via this provider</p>
+<p>This indicates whether <a href="../../page_index/column_index/enum.ColumnIndexMetaData.html" title="enum parquet::file::page_index::column_index::ColumnIndexMetaData"><code>ColumnIndexMetaData</code></a> structures were loaded or created.
+Returns <code>true</code> even if some individual columns lack column indexes.
+This should return <code>false</code> if all calls to <a href="trait.PageIndexProvider.html#tymethod.column_index" title="method parquet::file::metadata::page_index::PageIndexProvider::column_index"><code>Self::column_index</code></a> will return <code>None</code>.</p>
+<p>This does <em>not</em> indicate if the underlying Parquet file contains column indexes.</p>
+<p>To check if a specific column has a column index, use <a href="trait.PageIndexProvider.html#tymethod.column_index" title="method parquet::file::metadata::page_index::PageIndexProvider::column_index"><code>Self::column_index</code></a>.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.column_index" class="method"><a class="src rightside" href="../../../../src/parquet/file/metadata/page_index.rs.html#180-181">Source</a><h4 class="code-header">fn <a href="#tymethod.column_index" class="fn">column_index</a>(
+    &amp;self,
+    row_group_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+    column_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="enum" href="../../page_index/column_index/enum.ColumnIndexMetaData.html" title="enum parquet::file::page_index::column_index::ColumnIndexMetaData">ColumnIndexMetaData</a>&gt;</h4></section></summary><div class="docblock"><p>Returns the column index for a specific row group and column</p>
+<p>This is the primary method for accessing page-level min/max statistics
+used in predicate pushdown and page skipping optimizations.</p>
+<p>Returns:</p>
+<ul>
+<li><code>Some(&amp;ColumnIndexMetaData)</code> - Column index is available with statistics</li>
+<li><code>None</code> - Index unavailable (not loaded, row group/column out of bounds, or no statistics)</li>
+</ul>
+<p>For access to the indexes for a specific row group, use <a href="struct.RowGroupPageIndex.html" title="struct parquet::file::metadata::page_index::RowGroupPageIndex"><code>RowGroupPageIndex</code></a>.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.offset_index" class="method"><a class="src rightside" href="../../../../src/parquet/file/metadata/page_index.rs.html#195-196">Source</a><h4 class="code-header">fn <a href="#tymethod.offset_index" class="fn">offset_index</a>(
+    &amp;self,
+    row_group_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+    column_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="struct" href="../../page_index/offset_index/struct.OffsetIndexMetaData.html" title="struct parquet::file::page_index::offset_index::OffsetIndexMetaData">OffsetIndexMetaData</a>&gt;</h4></section></summary><div class="docblock"><p>Returns the offset index for a specific row group and column</p>
+<p>This provides physical locations and sizes of data pages, enabling:</p>
+<ul>
+<li>Direct seeking to specific pages identified by column index filtering</li>
+<li>Reading only relevant pages without scanning entire column chunks</li>
+<li>Efficient cross-column row-based filtering</li>
+</ul>
+<p>Returns:</p>
+<ul>
+<li><code>Some(&amp;OffsetIndexMetaData)</code> - Offset index is available</li>
+<li><code>None</code> - Index unavailable (not loaded, row group/column out of bounds)</li>
+</ul>
+<p>For access to the indexes for a specific row group, use <a href="struct.RowGroupPageIndex.html" title="struct parquet::file::metadata::page_index::RowGroupPageIndex"><code>RowGroupPageIndex</code></a>.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="tymethod.as_any" class="method"><a class="src rightside" href="../../../../src/parquet/file/metadata/page_index.rs.html#238">Source</a><h4 class="code-header">fn <a href="#tymethod.as_any" class="fn">as_any</a>(&amp;self) -&gt; &amp;dyn <a class="trait" href="https://doc.rust-lang.org/nightly/core/any/trait.Any.html" title="trait core::any::Any">Any</a></h4></section></summary><div class="docblock"><p>Returns a reference to the trait object as <code>&amp;dyn Any</code> for downcasting</p>
+<p>This allows downcasting to concrete types when needed (e.g., for serialization)</p>
+</div></details></div><h2 id="provided-methods" class="section-header">Provided Methods<a href="#provided-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="method.is_complete" class="method"><a class="src rightside" href="../../../../src/parquet/file/metadata/page_index.rs.html#166-168">Source</a><h4 class="code-header">fn <a href="#method.is_complete" class="fn">is_complete</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Returns <code>true</code> if both the offset and column index structures are present</p>
+<p>This is equivalent to both <a href="trait.PageIndexProvider.html#tymethod.has_offset_indexes" title="method parquet::file::metadata::page_index::PageIndexProvider::has_offset_indexes"><code>Self::has_offset_indexes</code></a> and <a href="trait.PageIndexProvider.html#tymethod.has_column_indexes" title="method parquet::file::metadata::page_index::PageIndexProvider::has_column_indexes"><code>Self::has_column_indexes</code></a>
+returning <code>true</code>.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.num_data_pages" class="method"><a class="src rightside" href="../../../../src/parquet/file/metadata/page_index.rs.html#205-210">Source</a><h4 class="code-header">fn <a href="#method.num_data_pages" class="fn">num_data_pages</a>(
+    &amp;self,
+    row_group_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+    column_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>&gt;</h4></section></summary><div class="docblock"><p>Returns the expected number of data pages for a specific column chunk</p>
+<p>This count includes only data pages, not dictionary pages or other metadata pages.</p>
+<p>Returns:</p>
+<ul>
+<li><code>Some(usize)</code> - Number of data pages if any index is available</li>
+<li><code>None</code> - No index information available for this column</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.page_locations" class="method"><a class="src rightside" href="../../../../src/parquet/file/metadata/page_index.rs.html#224-233">Source</a><h4 class="code-header">fn <a href="#method.page_locations" class="fn">page_locations</a>(
+    &amp;self,
+    row_group_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+    column_idx: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.usize.html">usize</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="struct" href="../../page_index/offset_index/struct.PageLocation.html" title="struct parquet::file::page_index::offset_index::PageLocation">PageLocation</a>&gt;&gt;</h4></section></summary><div class="docblock"><p>Returns the physical locations of all data pages in a column chunk</p>
+<p>Each <a href="../../page_index/offset_index/struct.PageLocation.html" title="struct parquet::file::page_index::offset_index::PageLocation"><code>PageLocation</code></a> contains:</p>
+<ul>
+<li>File offset where the page begins</li>
+<li>Compressed size of the page</li>
+<li>First row index within the row group</li>
+</ul>
+<p>This enables direct I/O to specific pages without reading the entire column chunk.</p>
+<p>Returns:</p>
+<ul>
+<li><code>Some(&amp;Vec&lt;PageLocation&gt;)</code> - Vector of page locations if offset index exists</li>
+<li><code>None</code> - Offset index not available</li>
+</ul>
+</div></details></div><h2 id="dyn-compatibility" class="section-header">Dyn Compatibility<a href="#dyn-compatibility" class="anchor">§</a></h2><div class="dyn-compatibility-info"><p>This trait <b>is</b> <a href="https://doc.rust-lang.org/nightly/reference/items/traits.html#dyn-compatibility">dyn compatible</a>.</p><p><i>In older versions of Rust, dyn compatibility was called "object safety".</i></p></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"><div class="negative-marker"></div><section id="impl-PageIndexProvider-for-PageIndex" class="impl"><a class="src rightside" href="../../../../src/parquet/file/metadata/page_index.rs.html#481-511">Source</a><a href="#impl-PageIndexProvider-for-PageIndex" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="trait.PageIndexProvider.html" title="trait parquet::file::metadata::page_index::PageIndexProvider">PageIndexProvider</a> for <a class="struct" href="struct.PageIndex.html" title="struct parquet::file::metadata::page_index::PageIndex">PageIndex</a></h3></section></div><script src="../../../../trait.impl/parquet/file/metadata/page_index/trait.PageIndexProvider.js" async></script></section></div></main></body></html>

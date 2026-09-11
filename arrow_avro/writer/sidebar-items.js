@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["encoder","format"],"struct":["EncodedRows","Encoder","Writer","WriterBuilder"],"type":["AvroStreamWriter","AvroWriter"]};

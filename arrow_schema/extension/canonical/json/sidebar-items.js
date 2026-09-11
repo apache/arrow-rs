@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"static":["EMPTY_FIELDS"],"struct":["Empty","EmptyVisitor","Json","JsonMetadata"]};

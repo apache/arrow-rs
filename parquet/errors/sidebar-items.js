@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ParquetError"],"macro":[["arrow_err",1],["eof_err",1],["general_err",1],["nyi_err",1]],"type":["Result"]};

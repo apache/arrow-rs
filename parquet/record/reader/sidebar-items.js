@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_BATCH_SIZE"],"enum":["Either","Reader"],"struct":["ReaderIter","RowIter","TreeBuilder"]};

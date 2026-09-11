@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["QueuedRowGroupDecision","QueuedRowGroups"],"struct":["NextRowGroup","RemainingRowGroups","RemainingRowGroupsParts","RowGroupFrontier"]};

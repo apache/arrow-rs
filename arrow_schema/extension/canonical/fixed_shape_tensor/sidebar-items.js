@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["MetadataField"],"struct":["FixedShapeTensor","FixedShapeTensorMetadata","FixedShapeTensorMetadataVisitor","MetadataFieldVisitor"]};

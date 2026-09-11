@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["PageIndex","PageIndexBuilder","RowGroupPageIndex"],"trait":["PageIndexProvider"]};

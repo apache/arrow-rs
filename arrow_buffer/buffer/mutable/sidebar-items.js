@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["MutableBufferError"],"fn":["dangling_ptr"],"struct":["MutableBuffer","SetLenOnDrop"]};

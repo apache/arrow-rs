@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_catalogs_schema"],"static":["GET_CATALOG_SCHEMA"],"struct":["GetCatalogsBuilder"]};

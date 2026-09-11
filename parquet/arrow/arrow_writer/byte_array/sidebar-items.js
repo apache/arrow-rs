@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FallbackEncoderImpl"],"fn":["compute_min_max","count_within_budget_offsets","count_within_budget_views","encode","max_view_value_len","update_geo_stats_accumulator"],"macro":[["downcast_dict_impl",1],["downcast_dict_op",1],["downcast_op",1]],"struct":["ByteArrayEncoder","ByteArrayStorage","DictEncoder","FallbackEncoder"]};
