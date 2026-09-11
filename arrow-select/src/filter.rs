@@ -688,46 +688,45 @@ fn gather_bits(src: &BooleanBuffer, filter: &BooleanBuffer, count: usize) -> Buf
 
     let out_u64s = bit_util::ceil(count, 64);
     let mut out: Vec<u64> = Vec::with_capacity(out_u64s);
-    let mut out_word = 0u64;
-    let mut out_bits = 0usize; // bits written into `out_word` so far (0..=63)
+    let mut current_word = 0u64;
+    let mut bits_filled = 0usize; // bits written into `current_word` so far (0..=63)
 
-    macro_rules! push_chunk {
-        ($compressed:expr, $n_set:expr) => {{
-            let free = 64 - out_bits;
-            if $n_set <= free {
-                out_word |= $compressed << out_bits;
-                out_bits += $n_set;
-                if out_bits == 64 {
-                    out.push(out_word);
-                    out_word = 0;
-                    out_bits = 0;
-                }
-            } else {
-                // Fill the current word with the lower `free` bits, then start the next word.
-                out_word |= $compressed << out_bits; // upper bits of compressed shift off; kept in >> below
-                out.push(out_word);
-                out_word = $compressed >> free;
-                out_bits = $n_set - free;
+    // Appends `bits_selected` densely-packed bits from `selected_bits` into the output word stream.
+    let mut push_chunk = |selected_bits: u64, bits_selected: usize| {
+        let bits_remaining = 64 - bits_filled;
+        if bits_selected <= bits_remaining {
+            current_word |= selected_bits << bits_filled;
+            bits_filled += bits_selected;
+            if bits_filled == 64 {
+                out.push(current_word);
+                current_word = 0;
+                bits_filled = 0;
             }
-        }};
-    }
+        } else {
+            // Fill the current word with the lower `bits_remaining` bits, then start the next word.
+            current_word |= selected_bits << bits_filled; // upper bits of selected_bits shift off; kept in >> below
+            out.push(current_word);
+            current_word = selected_bits >> bits_remaining;
+            bits_filled = bits_selected - bits_remaining;
+        }
+    };
 
     for (filter_word, src_word) in filter_chunks.iter().zip(src_chunks.iter()) {
         if filter_word == 0 {
             continue;
         }
         let n_set = filter_word.count_ones() as usize;
-        push_chunk!(pext64(src_word, filter_word), n_set);
+        push_chunk(pext64(src_word, filter_word), n_set);
     }
 
     let rem_filter = filter_chunks.remainder_bits();
     if rem_filter != 0 {
         let n_set = rem_filter.count_ones() as usize;
-        push_chunk!(pext64(src_chunks.remainder_bits(), rem_filter), n_set);
+        push_chunk(pext64(src_chunks.remainder_bits(), rem_filter), n_set);
     }
 
-    if out_bits > 0 {
-        out.push(out_word);
+    if bits_filled > 0 {
+        out.push(current_word);
     }
 
     let mut buf: MutableBuffer = out.into();
@@ -761,9 +760,6 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             gather_bits(buffer, predicate.filter.values(), predicate.count)
         }
         IterationStrategy::Indices(indices) => {
-            // gather_bits scans every filter chunk (filter_len/64 u64 loads).
-            // For very sparse selections the precomputed Vec is smaller and cheaper to walk.
-            // Threshold: switch when the selected count exceeds one u64 per filter chunk.
             if predicate.count.saturating_mul(64) >= predicate.filter.len() {
                 gather_bits(buffer, predicate.filter.values(), predicate.count)
             } else {
