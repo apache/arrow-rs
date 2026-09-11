@@ -734,19 +734,20 @@ fn gather_bits(src: &BooleanBuffer, filter: &BooleanBuffer, count: usize) -> Buf
     buf.into()
 }
 
-/// Software parallel-bits-extract (PEXT): pack the bits of `val` at positions
-/// where `mask` has a 1 into the low bits of the result, in LSB-first order.
+/// Collects the bits of `val` wherever `mask` is 1, packed into the low bits of the result.
 #[inline(always)]
 fn pext64(val: u64, mut mask: u64) -> u64 {
-    let mut result = 0u64;
-    let mut dst = 0u32;
+    let mut packed = 0u64;
+    let mut out_bit = 0u32;
+    // Each iteration finds the lowest set bit in mask, copies the corresponding bit from val
+    // into the next output position, then clears that mask bit to advance to the next one.
     while mask != 0 {
-        let bit = mask.trailing_zeros();
-        result |= ((val >> bit) & 1) << dst;
-        dst += 1;
+        let src_bit = mask.trailing_zeros();
+        packed |= ((val >> src_bit) & 1) << out_bit;
+        out_bit += 1;
         mask &= mask - 1;
     }
-    result
+    packed
 }
 
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
