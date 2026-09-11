@@ -331,8 +331,13 @@ impl<W: Write> Writer<W> {
     }
 
     /// Unwraps this `Writer<W>`, returning the underlying writer.
+    ///
+    /// # Panics
+    ///
+    /// A successful [`Self::write`] flushes the writer, so there is normally nothing
+    /// left to write here. But a `write` that returned an error may have left data
+    /// buffered, and flushing that data can fail again, in which case this panics.
     pub fn into_inner(self) -> W {
-        // Safe to call `unwrap` since `write` always flushes the writer.
         self.writer.into_inner().unwrap()
     }
 }

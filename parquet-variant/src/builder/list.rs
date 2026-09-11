@@ -151,6 +151,10 @@ impl<'a, S: BuilderSpecificState> ListBuilder<'a, S> {
     }
 
     /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the size of the list data overflows a `usize`.
     pub fn finish(mut self) {
         let starting_offset = self.parent_state.saved_value_builder_offset;
         let value_builder = self.parent_state.value_builder();
