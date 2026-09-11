@@ -7097,7 +7097,7 @@ mod tests {
         let c = b.as_primitive::<TimestampSecondType>();
         assert_eq!(c.value(0), DST_SECONDS[1]);
         assert_eq!(c.value(1), DST_SECONDS[3]);
-        // Genuinely unparseable input still becomes null.
+        // Genuinely unparsable input still becomes null.
         assert!(c.is_null(2));
         assert!(c.is_null(3));
         assert_eq!(c.null_count(), 2);
