@@ -149,7 +149,7 @@
 //! #
 //! let file = File::open(path).unwrap();
 //!
-//! // Define the AES encryption keys required required for decrypting the footer metadata
+//! // Define the AES encryption keys required for decrypting the footer metadata
 //! // and column-specific data. If only a footer key is used then it is assumed that the
 //! // file uses uniform encryption and all columns are encrypted with the footer key.
 //! // If any column keys are specified, other columns without a key provided are assumed
