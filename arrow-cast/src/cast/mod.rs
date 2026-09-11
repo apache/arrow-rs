@@ -1818,32 +1818,48 @@ pub fn cast_with_options(
                 .unary::<_, Time64NanosecondType>(|x| x as i64 * (NANOSECONDS / MILLISECONDS)),
         )),
 
-        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
-            array
-                .as_primitive::<Time64MicrosecondType>()
-                .unary::<_, Time32SecondType>(|x| (x / MICROSECONDS) as i32),
-        )),
-        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            array
-                .as_primitive::<Time64MicrosecondType>()
-                .unary::<_, Time32MillisecondType>(|x| (x / (MICROSECONDS / MILLISECONDS)) as i32),
-        )),
-        (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
-            array
-                .as_primitive::<Time64MicrosecondType>()
-                .unary::<_, Time64NanosecondType>(|x| x * (NANOSECONDS / MICROSECONDS)),
-        )),
+        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => {
+            cast_time64_to_time32::<Time64MicrosecondType, Time32SecondType>(
+                array,
+                MICROSECONDS,
+                cast_options,
+            )
+        }
+        (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Millisecond)) => {
+            cast_time64_to_time32::<Time64MicrosecondType, Time32MillisecondType>(
+                array,
+                MICROSECONDS / MILLISECONDS,
+                cast_options,
+            )
+        }
+        (Time64(TimeUnit::Microsecond), Time64(TimeUnit::Nanosecond)) => {
+            let array = array.as_primitive::<Time64MicrosecondType>();
+            let result = if cast_options.safe {
+                array.unary_opt::<_, Time64NanosecondType>(|x| {
+                    x.checked_mul(NANOSECONDS / MICROSECONDS)
+                })
+            } else {
+                array.try_unary::<_, Time64NanosecondType, _>(|x| {
+                    x.mul_checked(NANOSECONDS / MICROSECONDS)
+                })?
+            };
+            Ok(Arc::new(result))
+        }
 
-        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
-            array
-                .as_primitive::<Time64NanosecondType>()
-                .unary::<_, Time32SecondType>(|x| (x / NANOSECONDS) as i32),
-        )),
-        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Millisecond)) => Ok(Arc::new(
-            array
-                .as_primitive::<Time64NanosecondType>()
-                .unary::<_, Time32MillisecondType>(|x| (x / (NANOSECONDS / MILLISECONDS)) as i32),
-        )),
+        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Second)) => {
+            cast_time64_to_time32::<Time64NanosecondType, Time32SecondType>(
+                array,
+                NANOSECONDS,
+                cast_options,
+            )
+        }
+        (Time64(TimeUnit::Nanosecond), Time32(TimeUnit::Millisecond)) => {
+            cast_time64_to_time32::<Time64NanosecondType, Time32MillisecondType>(
+                array,
+                NANOSECONDS / MILLISECONDS,
+                cast_options,
+            )
+        }
         (Time64(TimeUnit::Nanosecond), Time64(TimeUnit::Microsecond)) => Ok(Arc::new(
             array
                 .as_primitive::<Time64NanosecondType>()
@@ -2181,14 +2197,14 @@ pub fn cast_with_options(
         (Date64, Timestamp(TimeUnit::Microsecond, _)) => {
             let array = array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampMicrosecondType>(|x| x * (MICROSECONDS / MILLISECONDS));
+                .reinterpret_cast::<TimestampMillisecondType>();
 
             cast_with_options(&array, to_type, cast_options)
         }
         (Date64, Timestamp(TimeUnit::Nanosecond, _)) => {
             let array = array
                 .as_primitive::<Date64Type>()
-                .unary::<_, TimestampNanosecondType>(|x| x * (NANOSECONDS / MILLISECONDS));
+                .reinterpret_cast::<TimestampMillisecondType>();
 
             cast_with_options(&array, to_type, cast_options)
         }
@@ -2544,6 +2560,33 @@ const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
         TimeUnit::Microsecond => MICROSECONDS,
         TimeUnit::Nanosecond => NANOSECONDS,
     }
+}
+
+fn cast_time64_to_time32<FROM, TO>(
+    array: &dyn Array,
+    divisor: i64,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    FROM: ArrowPrimitiveType<Native = i64>,
+    TO: ArrowPrimitiveType<Native = i32>,
+{
+    let array = array.as_primitive::<FROM>();
+    let result = if cast_options.safe {
+        array.unary_opt::<_, TO>(|value| i32::try_from(value / divisor).ok())
+    } else {
+        array.try_unary::<_, TO, _>(|value| {
+            let value = value / divisor;
+            i32::try_from(value).map_err(|_| {
+                ArrowError::CastError(format!(
+                    "Can't cast value {value:?} to type {}",
+                    TO::DATA_TYPE
+                ))
+            })
+        })?
+    };
+
+    Ok(Arc::new(result))
 }
 
 /// Convert Array into a PrimitiveArray of type, and apply numeric cast
@@ -14197,6 +14240,127 @@ mod tests {
         let err = cast_with_options(&array, &DataType::Time32(TimeUnit::Millisecond), &options)
             .unwrap_err();
         assert!(err.to_string().contains("Overflow"), "{err}");
+    }
+
+    fn assert_temporal_overflow_is_safe(array: &dyn Array, to_type: &DataType) {
+        let result = cast(array, to_type).unwrap();
+        assert_eq!(result.null_count(), array.len());
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        assert!(cast_with_options(array, to_type, &options).is_err());
+    }
+
+    #[test]
+    fn test_cast_time64_overflow() {
+        let microseconds = Time64MicrosecondArray::from(vec![i64::MIN, i64::MAX]);
+        for to_type in [
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time32(TimeUnit::Millisecond),
+            DataType::Time64(TimeUnit::Nanosecond),
+        ] {
+            assert_temporal_overflow_is_safe(&microseconds, &to_type);
+        }
+
+        let nanoseconds = Time64NanosecondArray::from(vec![i64::MIN, i64::MAX]);
+        for to_type in [
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time32(TimeUnit::Millisecond),
+        ] {
+            assert_temporal_overflow_is_safe(&nanoseconds, &to_type);
+        }
+    }
+
+    #[test]
+    fn test_cast_date64_to_timestamp_overflow() {
+        let array = Date64Array::from(vec![i64::MIN, i64::MAX]);
+        for to_type in [
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ] {
+            assert_temporal_overflow_is_safe(&array, &to_type);
+        }
+    }
+
+    #[test]
+    fn test_cast_time64_to_time32_boundaries() {
+        fn check<FROM, TO>(divisor: i64)
+        where
+            FROM: ArrowPrimitiveType<Native = i64>,
+            TO: ArrowPrimitiveType<Native = i32>,
+        {
+            // Division truncates towards zero before the range check. Values
+            // slightly outside the scaled i32 bounds can still be representable.
+            let min = <i64 as From<i32>>::from(i32::MIN) * divisor - (divisor - 1);
+            let max = <i64 as From<i32>>::from(i32::MAX) * divisor + (divisor - 1);
+            let array = PrimitiveArray::<FROM>::new(
+                vec![i64::MAX, min - 1, min, -divisor + 1, i64::MAX, max, max + 1].into(),
+                Some(vec![true, true, true, true, false, true, true].into()),
+            )
+            .slice(1, 6);
+            let expected = PrimitiveArray::<TO>::from_iter([
+                None,
+                Some(i32::MIN),
+                Some(0),
+                None,
+                Some(i32::MAX),
+                None,
+            ]);
+            let result = cast(&array, &TO::DATA_TYPE).unwrap();
+            assert_eq!(result.as_primitive::<TO>(), &expected);
+
+            let options = CastOptions {
+                safe: false,
+                ..Default::default()
+            };
+            assert!(cast_with_options(&array, &TO::DATA_TYPE, &options).is_err());
+            // The invalid physical value under the null must not cause an error.
+            let result = cast_with_options(&array.slice(1, 4), &TO::DATA_TYPE, &options).unwrap();
+            assert_eq!(result.as_primitive::<TO>(), &expected.slice(1, 4));
+        }
+        check::<Time64MicrosecondType, Time32SecondType>(MICROSECONDS);
+        check::<Time64MicrosecondType, Time32MillisecondType>(MICROSECONDS / MILLISECONDS);
+        check::<Time64NanosecondType, Time32SecondType>(NANOSECONDS);
+        check::<Time64NanosecondType, Time32MillisecondType>(NANOSECONDS / MILLISECONDS);
+    }
+
+    #[test]
+    fn test_cast_temporal_scaling_boundaries() {
+        fn check<FROM, TO>(multiplier: i64)
+        where
+            FROM: ArrowPrimitiveType<Native = i64>,
+            TO: ArrowPrimitiveType<Native = i64>,
+        {
+            let min = i64::MIN / multiplier;
+            let max = i64::MAX / multiplier;
+            let array = PrimitiveArray::<FROM>::new(
+                vec![i64::MAX, min - 1, min, -1, i64::MAX, max, max + 1].into(),
+                Some(vec![true, true, true, true, false, true, true].into()),
+            )
+            .slice(1, 6);
+            let expected = PrimitiveArray::<TO>::from_iter([
+                None,
+                Some(min * multiplier),
+                Some(-multiplier),
+                None,
+                Some(max * multiplier),
+                None,
+            ]);
+            let result = cast(&array, &TO::DATA_TYPE).unwrap();
+            assert_eq!(result.as_primitive::<TO>(), &expected);
+            let options = CastOptions {
+                safe: false,
+                ..Default::default()
+            };
+            assert!(cast_with_options(&array, &TO::DATA_TYPE, &options).is_err());
+            let result = cast_with_options(&array.slice(1, 4), &TO::DATA_TYPE, &options).unwrap();
+            assert_eq!(result.as_primitive::<TO>(), &expected.slice(1, 4));
+        }
+        check::<Time64MicrosecondType, Time64NanosecondType>(NANOSECONDS / MICROSECONDS);
+        check::<Date64Type, TimestampMicrosecondType>(MICROSECONDS / MILLISECONDS);
+        check::<Date64Type, TimestampNanosecondType>(NANOSECONDS / MILLISECONDS);
     }
 
     #[test]
