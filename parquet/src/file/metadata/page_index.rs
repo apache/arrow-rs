@@ -460,22 +460,6 @@ impl PageIndex {
     pub fn into_builder(self) -> PageIndexBuilder {
         self.into()
     }
-
-    /// Returns a reference to the raw column indexes structure
-    ///
-    /// This method provides access to the underlying column index data for serialization
-    /// and other low-level operations.
-    pub(crate) fn column_indexes_raw(&self) -> Option<&Vec<Vec<Option<ColumnIndexMetaData>>>> {
-        self.column_indexes.as_ref()
-    }
-
-    /// Returns a reference to the raw offset indexes structure
-    ///
-    /// This method provides access to the underlying offset index data for serialization
-    /// and other low-level operations.
-    pub(crate) fn offset_indexes_raw(&self) -> Option<&Vec<Vec<Option<OffsetIndexMetaData>>>> {
-        self.offset_indexes.as_ref()
-    }
 }
 
 impl PageIndexProvider for PageIndex {
@@ -536,7 +520,10 @@ impl PageIndexBuilder {
     ///
     /// # Type Parameters
     /// * `T` - The type of index this is to be, either `ColumnIndexMetaData` or `OffsetIndexMetaData`
-    fn empty_index<T>(num_row_groups: usize, num_columns: usize) -> Option<Vec<Vec<Option<T>>>> {
+    pub(crate) fn empty_index<T>(
+        num_row_groups: usize,
+        num_columns: usize,
+    ) -> Option<Vec<Vec<Option<T>>>> {
         Some(
             (0..num_row_groups)
                 .map(|_| {
