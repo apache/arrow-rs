@@ -234,22 +234,12 @@ impl ParquetMetaData {
         #[cfg(not(feature = "encryption"))]
         let encryption_size = 0usize;
 
-        // We can only determine the heap size for PageIndex.
-        //
-        // Heap size for custom `PageIndexProvider` tracked by
-        // <https://github.com/apache/arrow-rs/issues/11028>
-        let page_index_size = if let Some(page_index) = self.page_index.as_ref() {
-            if let Some(page_index) = page_index.as_any().downcast_ref::<PageIndex>() {
-                // need to account for the `Arc` wrapper overhead
-                2 * std::mem::size_of::<usize>() // Arc stores weak and strong counts on the heap...
-                    + std::mem::size_of::<PageIndex>() // alongside an instance of PageIndex
-                    + page_index.heap_size()
-            } else {
-                0
-            }
-        } else {
-            0
-        };
+        let page_index_size = self.page_index.as_ref().map_or(0, |page_index| {
+            // The Arc allocation stores weak and strong counts alongside the provider.
+            2 * std::mem::size_of::<usize>()
+                + std::mem::size_of_val(page_index.as_ref())
+                + page_index.heap_size()
+        });
 
         std::mem::size_of::<Self>()
             + self.file_metadata.heap_size()
@@ -2126,6 +2116,57 @@ mod tests {
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
+    }
+
+    #[test]
+    fn test_memory_size_with_custom_page_index_provider() {
+        #[derive(Debug)]
+        struct CustomPageIndexProvider;
+
+        impl PageIndexProvider for CustomPageIndexProvider {
+            fn has_offset_indexes(&self) -> bool {
+                false
+            }
+
+            fn has_column_indexes(&self) -> bool {
+                false
+            }
+
+            fn column_index(
+                &self,
+                _row_group_idx: usize,
+                _column_idx: usize,
+            ) -> Option<&ColumnIndexMetaData> {
+                None
+            }
+
+            fn offset_index(
+                &self,
+                _row_group_idx: usize,
+                _column_idx: usize,
+            ) -> Option<&OffsetIndexMetaData> {
+                None
+            }
+
+            fn heap_size(&self) -> usize {
+                123
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+
+        let file_metadata = FileMetaData::new(1, 0, None, None, get_test_schema_descr(), None);
+        let base = ParquetMetaDataBuilder::new(file_metadata.clone()).build();
+        let with_page_index = ParquetMetaDataBuilder::new(file_metadata)
+            .set_page_index(Some(Arc::new(CustomPageIndexProvider)))
+            .build();
+
+        assert_eq!(
+            with_page_index.memory_size() - base.memory_size(),
+            2 * std::mem::size_of::<usize>() + std::mem::size_of::<CustomPageIndexProvider>() + 123
+        );
     }
 
     #[test]
