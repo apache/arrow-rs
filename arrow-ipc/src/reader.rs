@@ -36,9 +36,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
-};
+use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
@@ -951,12 +949,41 @@ fn get_dictionary_values(
 }
 
 /// Read the data for a given block
-fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, ArrowError> {
-    reader.seek(SeekFrom::Start(block.offset() as u64))?;
-    let body_len = block.bodyLength().to_usize().unwrap();
-    let metadata_len = block.metaDataLength().to_usize().unwrap();
-    let total_len = body_len.checked_add(metadata_len).unwrap();
+fn read_block<R: Read + Seek>(
+    mut reader: R,
+    block: &Block,
+    file_len: u64,
+) -> Result<Buffer, ArrowError> {
+    let offset = u64::try_from(block.offset())
+        .map_err(|_| ArrowError::ParseError(format!("Invalid block offset: {}", block.offset())))?;
+    let body_len = usize::try_from(block.bodyLength()).map_err(|_| {
+        ArrowError::ParseError(format!("Invalid block body length: {}", block.bodyLength()))
+    })?;
+    let metadata_len = usize::try_from(block.metaDataLength()).map_err(|_| {
+        ArrowError::ParseError(format!(
+            "Invalid block metadata length: {}",
+            block.metaDataLength()
+        ))
+    })?;
+    let total_len = body_len.checked_add(metadata_len).ok_or_else(|| {
+        ArrowError::ParseError("Block body length + metadata length overflowed usize".to_string())
+    })?;
 
+    let total_len_u64 = u64::try_from(total_len)
+        .map_err(|_| ArrowError::ParseError("Block total length overflowed u64".to_string()))?;
+    let block_end = offset.checked_add(total_len_u64).ok_or_else(|| {
+        ArrowError::ParseError(format!(
+            "Block offset {offset} + total length {total_len_u64} overflowed u64"
+        ))
+    })?;
+
+    if block_end > file_len {
+        return Err(ArrowError::ParseError(format!(
+            "Invalid block: offset {offset} + length {total_len_u64} exceeds file length {file_len}"
+        )));
+    }
+
+    reader.seek(SeekFrom::Start(offset))?;
     let mut buf = MutableBuffer::try_from_len_zeroed(total_len)
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     reader.read_exact(&mut buf)?;
@@ -1278,7 +1305,10 @@ impl FileReaderBuilder {
     pub fn build<R: Read + Seek>(self, mut reader: R) -> Result<FileReader<R>, ArrowError> {
         // Space for ARROW_MAGIC (6 bytes) and length (4 bytes)
         let mut buffer = [0; 10];
-        reader.seek(SeekFrom::End(-10))?;
+        let end_pos = reader.seek(SeekFrom::End(-10))?;
+        let file_len = end_pos
+            .checked_add(10)
+            .ok_or_else(|| ArrowError::ParseError("File length overflowed u64".to_string()))?;
         reader.read_exact(&mut buffer)?;
 
         let footer_len = read_footer_length(buffer)?;
@@ -1339,7 +1369,7 @@ impl FileReaderBuilder {
         // Create an array of optional dictionary value arrays, one per field.
         if let Some(dictionaries) = footer.dictionaries() {
             for block in dictionaries {
-                let buf = read_block(&mut reader, block)?;
+                let buf = read_block(&mut reader, block, file_len)?;
                 decoder.read_dictionary(block, &buf)?;
             }
         }
@@ -1352,6 +1382,7 @@ impl FileReaderBuilder {
             decoder,
             schema: projected_schema,
             custom_metadata,
+            file_len,
         })
     }
 }
@@ -1423,6 +1454,9 @@ pub struct FileReader<R> {
 
     /// User defined metadata
     custom_metadata: HashMap<String, String>,
+
+    /// Length of the file/reader in bytes
+    file_len: u64,
 }
 
 impl<R> fmt::Debug for FileReader<R> {
@@ -1500,7 +1534,7 @@ impl<R: Read + Seek> FileReader<R> {
         self.current_block += 1;
 
         // read length
-        let buffer = read_block(&mut self.reader, block)?;
+        let buffer = read_block(&mut self.reader, block, self.file_len)?;
         self.decoder.read_record_batch(block, &buffer)
     }
 
@@ -2020,6 +2054,7 @@ mod tests {
     use crate::writer::{
         DictionaryTracker, IpcDataGenerator, IpcWriteOptions, unslice_run_array, write_message,
     };
+    use arrow_buffer::ArrowNativeType;
 
     use super::*;
 
@@ -4263,5 +4298,69 @@ mod tests {
             err.to_string().contains("Unexpected end of stream"),
             "unexpected error: {err}"
         );
+    }
+
+    fn file_with_declared_block(body_length: i64, meta_length: i32, offset: i64) -> Vec<u8> {
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
+
+        let schema = crate::SchemaBuilder::new(&mut fbb).finish();
+        let block = crate::Block::new(offset, meta_length, body_length);
+        let blocks = fbb.create_vector(&[block]);
+
+        let mut footer = crate::FooterBuilder::new(&mut fbb);
+        footer.add_version(crate::MetadataVersion::V5);
+        footer.add_schema(schema);
+        footer.add_recordBatches(blocks);
+        let root = footer.finish();
+        fbb.finish(root, None);
+
+        let footer_data = fbb.finished_data();
+        let footer_len = footer_data.len() as i32;
+
+        let mut file = Vec::new();
+        file.extend_from_slice(&crate::ARROW_MAGIC);
+        file.extend_from_slice(&[0u8; 100]);
+        file.extend_from_slice(footer_data);
+        file.extend_from_slice(&footer_len.to_le_bytes());
+        file.extend_from_slice(&crate::ARROW_MAGIC);
+        file
+    }
+
+    /// A block's declared offset, metadata length, and body length are read from the footer,
+    /// so they cannot be trusted. Declaring implausible lengths or offsets that extend beyond
+    /// the file length must be rejected with an ArrowError before attempting any buffer allocation.
+    #[test]
+    fn test_file_reader_rejects_implausible_block_length() {
+        for (body_length, meta_length, offset) in [
+            (i64::MAX, 10, 8),
+            (1 << 50, 10, 8),
+            (-1, 10, 8),
+            (10, -1, 8),
+            (10, 10, -1),
+            (1000, 100, 8),
+            (100, 100, i64::MAX - 50),
+        ] {
+            let file = file_with_declared_block(body_length, meta_length, offset);
+            let mut reader = match FileReaderBuilder::new().build(std::io::Cursor::new(file)) {
+                Ok(reader) => reader,
+                Err(err) => {
+                    assert!(
+                        matches!(err, ArrowError::ParseError(_)),
+                        "expected ParseError for block ({body_length}, {meta_length}, {offset}): {err}"
+                    );
+                    continue;
+                }
+            };
+            let err = reader
+                .next()
+                .expect("expected batch attempt")
+                .expect_err(&format!(
+                    "block with ({body_length}, {meta_length}, {offset}) must be rejected"
+                ));
+            assert!(
+                matches!(err, ArrowError::ParseError(_)),
+                "expected ParseError for block ({body_length}, {meta_length}, {offset}): {err}"
+            );
+        }
     }
 }
