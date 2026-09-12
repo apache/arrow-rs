@@ -9846,6 +9846,153 @@ mod tests {
     }
 
     #[test]
+    fn test_issue_10975_sliced_list_to_fsl() {
+        fn test<O: OffsetSizeTrait>() {
+            let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+                Some(vec![Some(1), Some(2)]),
+                Some(vec![Some(3), Some(4)]),
+                Some(vec![Some(5), Some(6)]),
+            ]);
+            let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                [Some([Some(3), Some(4)]), Some([Some(5), Some(6)])],
+                2,
+            );
+            for safe in [true, false] {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                let actual =
+                    cast_with_options(&input.slice(1, 2), expected.data_type(), &options).unwrap();
+                assert_eq!(actual.as_ref(), &expected as &dyn Array);
+
+                // A differently sized prefix and invalid excluded children must not
+                // affect selection or the recursive child cast.
+                let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+                    Some(vec![Some(i32::MAX); 3]),
+                    Some(vec![Some(3), None]),
+                    Some(vec![Some(5), Some(6)]),
+                    Some(vec![Some(i32::MAX); 2]),
+                ]);
+                let selected = input.slice(1, 3).slice(0, 2);
+                let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                    [Some([Some(3), None]), Some([Some(5), Some(6)])],
+                    2,
+                );
+                for child_type in [DataType::Int32, DataType::Int64, DataType::Int16] {
+                    let target = DataType::FixedSizeList(
+                        Arc::new(Field::new_list_field(child_type, true)),
+                        2,
+                    );
+                    let actual = cast_with_options(&selected, &target, &options).unwrap();
+                    let expected = cast_with_options(&expected, &target, &options).unwrap();
+                    assert_eq!(actual.as_ref(), expected.as_ref());
+                    assert_eq!(actual.as_fixed_size_list().values().len(), 4);
+                }
+                let empty =
+                    cast_with_options(&input.slice(2, 0), expected.data_type(), &options).unwrap();
+                assert_eq!(
+                    empty.as_ref(),
+                    new_empty_array(expected.data_type()).as_ref()
+                );
+            }
+        }
+        test::<i32>();
+        test::<i64>();
+    }
+
+    #[test]
+    fn test_issue_10975_sliced_list_to_fsl_padding() {
+        fn test<O: OffsetSizeTrait>() {
+            let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+            // Leading/consecutive empty nulls, short/long nulls, and an
+            // exact-width null exercise padding and the unmodified fast path.
+            let lengths = [3, 0, 0, 2, 1, 3, 2, 2, 0, 2];
+            let values = Int32Array::from_iter_values(0..16).slice(1, 15);
+            let input = GenericListArray::<O>::new(
+                field.clone(),
+                OffsetBuffer::from_lengths(lengths),
+                Arc::new(values),
+                Some(NullBuffer::from(vec![
+                    false, false, false, true, false, false, true, false, false, true,
+                ])),
+            );
+            let target = DataType::FixedSizeList(field, 2);
+            for safe in [true, false] {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                let full = cast_with_options(&input, &target, &options).unwrap();
+                for (start, len) in [(1, 8), (1, 2), (3, 4), (6, 2), (8, 1)] {
+                    let selected = input.slice(start, len);
+                    let actual = cast_with_options(&selected, &target, &options).unwrap();
+                    assert_eq!(actual.as_ref(), full.slice(start, len).as_ref());
+                    assert_eq!(actual.as_fixed_size_list().values().len(), len * 2);
+                }
+            }
+        }
+        test::<i32>();
+        test::<i64>();
+    }
+
+    #[test]
+    fn test_issue_10975_sliced_list_to_fsl_safety() {
+        fn test<O: OffsetSizeTrait>() {
+            let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+                Some(vec![Some(99); 3]),
+                Some(vec![Some(1), Some(2)]),
+                Some(vec![]),
+                Some(vec![Some(3)]),
+                Some(vec![Some(4); 3]),
+                Some(vec![Some(5), Some(6)]),
+            ]);
+            let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                [
+                    Some([Some(1), Some(2)]),
+                    None,
+                    None,
+                    None,
+                    Some([Some(5), Some(6)]),
+                ],
+                2,
+            );
+            let actual = cast(&input.slice(1, 5), expected.data_type()).unwrap();
+            assert_eq!(actual.as_ref(), &expected as &dyn Array);
+            assert_eq!(actual.as_fixed_size_list().values().len(), 10);
+            let strict = CastOptions {
+                safe: false,
+                ..Default::default()
+            };
+            let error =
+                cast_with_options(&input.slice(1, 5), expected.data_type(), &strict).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Cast error: Cannot cast to FixedSizeList(2): value at index 1 has length 0"
+            );
+
+            // Direct non-zero offsets with width zero must retain the row count.
+            let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+            for nulls in [None, Some(NullBuffer::from(vec![true, false]))] {
+                let input = GenericListArray::<O>::new(
+                    field.clone(),
+                    OffsetBuffer::new(vec![O::from_usize(3).unwrap(); 3].into()),
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    nulls.clone(),
+                );
+                let target = DataType::FixedSizeList(field.clone(), 0);
+                let actual = cast_with_options(&input, &target, &strict).unwrap();
+                assert_eq!(actual.len(), 2);
+                assert_eq!(actual.data_type(), &target);
+                assert_eq!(actual.nulls(), nulls.as_ref());
+                assert_eq!(actual.as_fixed_size_list().values().len(), 0);
+            }
+        }
+        test::<i32>();
+        test::<i64>();
+    }
+
+    #[test]
     fn test_cast_list_to_fsl() {
         // There four noteworthy cases we should handle:
         // 1. No nulls
