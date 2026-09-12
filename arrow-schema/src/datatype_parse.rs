@@ -1249,27 +1249,55 @@ mod test {
                 true,
             ),
             DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", DataType::UInt32, false)),
-                Arc::new(Field::new("values", DataType::Int32, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::UInt32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    true,
+                )),
             ),
             DataType::RunEndEncoded(
                 Arc::new(Field::new(
-                    "run_ends",
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
                     DataType::RunEndEncoded(
-                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
-                        Arc::new(Field::new("values", DataType::Int32, true)),
+                        Arc::new(Field::new(
+                            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                            DataType::UInt32,
+                            false,
+                        )),
+                        Arc::new(Field::new(
+                            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                            DataType::Int32,
+                            true,
+                        )),
                     ),
                     false,
                 )),
-                Arc::new(Field::new("values", DataType::Int32, true)),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    true,
+                )),
             ),
             // non-default field names trigger verbose display form
             DataType::RunEndEncoded(
                 Arc::new(Field::new(
-                    "run_ends",
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
                     DataType::RunEndEncoded(
-                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
-                        Arc::new(Field::new("values", DataType::Int32, true)),
+                        Arc::new(Field::new(
+                            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                            DataType::UInt32,
+                            false,
+                        )),
+                        Arc::new(Field::new(
+                            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                            DataType::Int32,
+                            true,
+                        )),
                     ),
                     false,
                 )),
@@ -1278,10 +1306,18 @@ mod test {
             // verbose form with non-null inner values
             DataType::RunEndEncoded(
                 Arc::new(Field::new(
-                    "run_ends",
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
                     DataType::RunEndEncoded(
-                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
-                        Arc::new(Field::new("values", DataType::Int32, false)),
+                        Arc::new(Field::new(
+                            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                            DataType::UInt32,
+                            false,
+                        )),
+                        Arc::new(Field::new(
+                            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                            DataType::Int32,
+                            false,
+                        )),
                     ),
                     false,
                 )),
