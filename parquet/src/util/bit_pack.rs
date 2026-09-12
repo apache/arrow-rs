@@ -66,12 +66,34 @@ macro_rules! unpack_impl {
                 }
             });
         }
+
+        #[inline(never)]
+        fn unpack_block<const NUM_BITS: usize>(input: &[u8], output: &mut [$t; $bits]) {
+            unpack::<NUM_BITS>(input, output);
+        }
+
+        pub fn unpack_blocks<const NUM_BITS: usize>(input: &[u8], output: &mut [$t]) {
+            let blocks = output.len() / $bits;
+            if NUM_BITS == 0 {
+                output[..blocks * $bits].fill(0);
+                return;
+            }
+
+            let block_bytes = NUM_BITS * $bytes;
+            assert!(input.len() >= blocks * block_bytes);
+            for (input, output) in input
+                .chunks_exact(block_bytes)
+                .zip(output.chunks_exact_mut($bits))
+            {
+                unpack_block::<NUM_BITS>(input, output.try_into().unwrap());
+            }
+        }
     };
 }
 
 /// Macro that generates unpack functions that accept num_bits as a parameter
 macro_rules! unpack {
-    ($name:ident, $t:ty, $bytes:literal, $bits:tt) => {
+    ($name:ident, $blocks:ident, $t:ty, $bytes:literal, $bits:tt) => {
         mod $name {
             unpack_impl!($t, $bytes, $bits);
         }
@@ -86,13 +108,23 @@ macro_rules! unpack {
             });
             unreachable!("invalid num_bits {}", num_bits);
         }
+
+        #[inline(never)]
+        pub(crate) fn $blocks(input: &[u8], output: &mut [$t], num_bits: usize) {
+            seq_macro::seq!(i in 0..=$bits {
+                if i == num_bits {
+                    return $name::unpack_blocks::<i>(input, output);
+                }
+            });
+            unreachable!("invalid num_bits {}", num_bits);
+        }
     };
 }
 
-unpack!(unpack8, u8, 1, 8);
-unpack!(unpack16, u16, 2, 16);
-unpack!(unpack32, u32, 4, 32);
-unpack!(unpack64, u64, 8, 64);
+unpack!(unpack8, unpack8_blocks, u8, 1, 8);
+unpack!(unpack16, unpack16_blocks, u16, 2, 16);
+unpack!(unpack32, unpack32_blocks, u32, 4, 32);
+unpack!(unpack64, unpack64_blocks, u64, 8, 64);
 
 #[cfg(test)]
 mod tests {
