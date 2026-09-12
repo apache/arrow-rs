@@ -15,7 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines numeric arithmetic kernels on [`PrimitiveArray`], such as [`add`]
+//! Defines numeric arithmetic kernels on [`PrimitiveArray`] and [`RunArray`], such as [`add`].
+//!
+//! Run-end encoded inputs retain their encoding when the other operand is a scalar
+//! or another run-end encoded array. Two encoded operands use the union of their
+//! run boundaries and the wider run-end integer type. Adjacent equal results are
+//! not coalesced. Mixing an encoded input with a non-scalar unencoded array is not
+//! supported. Arithmetic is applied only to values in the logical slice, with the
+//! same null, overflow, decimal and temporal semantics as primitive inputs.
+
+mod run;
 
 use std::cmp::Ordering;
 use std::fmt::Formatter;
@@ -106,6 +115,7 @@ pub fn neg(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     use TimeUnit::*;
 
     match array.data_type() {
+        RunEndEncoded(_, _) => run::unary(array, neg),
         Int8 => neg_checked!(Int8Type, array),
         Int16 => neg_checked!(Int16Type, array),
         Int32 => neg_checked!(Int32Type, array),
@@ -179,6 +189,9 @@ pub fn neg(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
 
 /// Negates each element of  `array`, wrapping on overflow for [`DataType::is_integer`]
 pub fn neg_wrapping(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    if matches!(array.data_type(), DataType::RunEndEncoded(_, _)) {
+        return run::unary(array, neg_wrapping);
+    }
     downcast_integer! {
         array.data_type() => (neg_wrapping, array),
         _ => neg(array),
@@ -235,6 +248,10 @@ fn arithmetic_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<ArrayRef, A
 
     let (l, l_scalar) = lhs.get();
     let (r, r_scalar) = rhs.get();
+    if matches!(l.data_type(), RunEndEncoded(_, _)) || matches!(r.data_type(), RunEndEncoded(_, _))
+    {
+        return run::binary(l, l_scalar, r, r_scalar, |l, r| arithmetic_op(op, l, r));
+    }
     downcast_integer! {
         l.data_type(), r.data_type() => (integer_helper, op, l, l_scalar, r, r_scalar),
         (Float16, Float16) => float_op::<Float16Type>(op, l, l_scalar, r, r_scalar),
