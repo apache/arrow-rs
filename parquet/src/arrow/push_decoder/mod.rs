@@ -320,6 +320,14 @@ impl ParquetPushDecoderBuilder {
             max_predicate_cache_size,
         } = self;
 
+        // Evaluate eligible same-projection predicates as one predicate.
+        let filter = filter.map(|filter| {
+            filter.fuse_same_projection(
+                parquet_metadata.file_metadata().schema_descr(),
+                row_selection_policy,
+            )
+        });
+
         let has_predicates = filter
             .as_ref()
             .is_some_and(|filter| !filter.predicates.is_empty());
@@ -1368,6 +1376,105 @@ mod test {
         assert_eq!(batch2, expected2);
 
         expect_finished(decoder.try_decode());
+    }
+
+    /// Consecutive filters on the same projection share one decode stream.
+    #[test]
+    fn test_decoder_same_projection_filters() {
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let projection_a = ProjectionMask::columns(&schema_descr, ["a"]);
+
+        let row_filter_gt = ArrowPredicateFn::new(projection_a.clone(), |batch: RecordBatch| {
+            let column = batch.column(0).as_primitive::<Int64Type>();
+            gt(column, &Int64Array::new_scalar(175))
+        });
+        let row_filter_lt = ArrowPredicateFn::new(projection_a, |batch: RecordBatch| {
+            let column = batch.column(0).as_primitive::<Int64Type>();
+            assert!(column.iter().flatten().all(|value| value > 175));
+            lt(column, &Int64Array::new_scalar(190))
+        });
+
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_filter(RowFilter::new(vec![
+                Box::new(row_filter_gt),
+                Box::new(row_filter_lt),
+            ]))
+            .with_batch_size(50)
+            .build()
+            .unwrap();
+
+        // One filter-column request, followed by the selected output page.
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let batch = expect_data(decoder.try_decode());
+        let expected = TEST_BATCH.slice(176, 14).project(&[2]).unwrap();
+        assert_eq!(batch, expected);
+
+        // Row group 1 is rejected by the fused predicates, so no output-column
+        // request is made.
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+        expect_finished(decoder.try_decode());
+    }
+
+    /// Fused same-projection filters honour the output limit: evaluation
+    /// stops once enough rows survive the whole group.
+    #[test]
+    fn test_decoder_same_projection_filters_with_limit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let projection_a = ProjectionMask::columns(&schema_descr, ["a"]);
+
+        let rows_evaluated = Arc::new(AtomicUsize::new(0));
+        let rows_evaluated_for_predicate = Arc::clone(&rows_evaluated);
+        let row_filter_gt =
+            ArrowPredicateFn::new(projection_a.clone(), move |batch: RecordBatch| {
+                rows_evaluated_for_predicate.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &Int64Array::new_scalar(175))
+            });
+        let row_filter_lt = ArrowPredicateFn::new(projection_a, |batch: RecordBatch| {
+            let column = batch.column(0).as_primitive::<Int64Type>();
+            lt(column, &Int64Array::new_scalar(190))
+        });
+
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_filter(RowFilter::new(vec![
+                Box::new(row_filter_gt),
+                Box::new(row_filter_lt),
+            ]))
+            .with_batch_size(10)
+            .with_limit(5)
+            .build()
+            .unwrap();
+
+        // One filter-column request for the fused group, then the output page.
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let batch = expect_data(decoder.try_decode());
+        let expected = TEST_BATCH.slice(176, 5).project(&[2]).unwrap();
+        assert_eq!(batch, expected);
+
+        // The limit was satisfied by row group 0.
+        expect_finished(decoder.try_decode());
+
+        // Row 181 is the 6th match, so at most the batch holding it (rows
+        // 180..189) is evaluated.
+        let evaluated = rows_evaluated.load(Ordering::Relaxed);
+        assert!(evaluated <= 190, "evaluated {evaluated} rows");
     }
 
     /// Decode with a filter that uses a column that is also projected, and expect
