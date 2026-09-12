@@ -183,6 +183,7 @@ fn check_decimal_length(type_length: i32) -> Result<()> {
 fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
     match (info.logical_type_ref(), info.converted_type()) {
         (None, ConvertedType::NONE) => Ok(DataType::Int32),
+        (Some(LogicalType::_Unknown { .. }), _) => Ok(DataType::Int32),
         (Some(t @ LogicalType::Integer(int)), _) => match (int.bit_width, int.is_signed) {
             (8, true) => Ok(DataType::Int8),
             (16, true) => Ok(DataType::Int16),
@@ -223,6 +224,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
 fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
     match (info.logical_type_ref(), info.converted_type()) {
         (None, ConvertedType::NONE) => Ok(DataType::Int64),
+        (Some(LogicalType::_Unknown { .. }), _) => Ok(DataType::Int64),
         (
             Some(LogicalType::Integer(IntType {
                 bit_width: 64,
@@ -455,6 +457,39 @@ mod tests {
         assert_eq!(
             convert_primitive(&flba_interval(12), None).unwrap(),
             DataType::Interval(IntervalUnit::DayTime)
+        );
+    }
+
+    fn coerced_unknown(physical: PhysicalType) -> Type {
+        Type::primitive_type_builder("c", physical)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::Uuid))
+            .with_coerce_incompatible_logical_types(true)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn unknown_logical_type_on_int32_is_int32() {
+        assert_eq!(
+            convert_primitive(&coerced_unknown(PhysicalType::INT32), None).unwrap(),
+            DataType::Int32
+        );
+    }
+
+    #[test]
+    fn unknown_logical_type_on_int64_is_int64() {
+        assert_eq!(
+            convert_primitive(&coerced_unknown(PhysicalType::INT64), None).unwrap(),
+            DataType::Int64
+        );
+    }
+
+    #[test]
+    fn unknown_logical_type_on_byte_array_is_binary() {
+        assert_eq!(
+            convert_primitive(&coerced_unknown(PhysicalType::BYTE_ARRAY), None).unwrap(),
+            DataType::Binary
         );
     }
 }

@@ -826,6 +826,18 @@ impl ArrowReaderOptions {
         self
     }
 
+    /// Treat incompatible physical/logical type combinations as an unknown
+    /// logical type when reading (parquet-format GH-607).
+    ///
+    /// Default is `false`: such combinations return an error. When `true`, the
+    /// logical type is rewritten to `_Unknown` with sort order `UNDEFINED`.
+    /// Column statistics are retained.
+    pub fn with_coerce_incompatible_logical_types(mut self, coerce: bool) -> Self {
+        self.metadata_options
+            .set_coerce_incompatible_logical_types(coerce);
+        self
+    }
+
     /// Provide the file decryption properties to use when reading encrypted parquet files.
     ///
     /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.

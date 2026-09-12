@@ -259,6 +259,10 @@ pub struct PrimitiveTypeBuilder<'a> {
     precision: i32,
     scale: i32,
     id: Option<i32>,
+    /// When true, incompatible physical/logical combinations are treated as an
+    /// unknown logical type instead of returning an error. Used when reading
+    /// files, not when constructing a schema to write.
+    coerce_incompatible_logical_types: bool,
 }
 
 impl<'a> PrimitiveTypeBuilder<'a> {
@@ -274,6 +278,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             precision: -1,
             scale: -1,
             id: None,
+            coerce_incompatible_logical_types: false,
         }
     }
 
@@ -325,22 +330,30 @@ impl<'a> PrimitiveTypeBuilder<'a> {
         Self { id, ..self }
     }
 
+    /// Treat incompatible physical/logical type combinations as an unknown
+    /// logical type instead of erroring.
+    ///
+    /// The logical type is rewritten to [`LogicalType::_Unknown`] with sort
+    /// order [`SortOrder::UNDEFINED`]. This is the parquet-format GH-607
+    /// reader behavior. Do not use when building a schema to write; invalid
+    /// combinations should still fail.
+    pub(crate) fn with_coerce_incompatible_logical_types(self, value: bool) -> Self {
+        Self {
+            coerce_incompatible_logical_types: value,
+            ..self
+        }
+    }
+
     /// Creates a new `PrimitiveType` instance from the collected attributes.
     /// Returns `Err` in case of any building conditions are not met.
     pub fn build(self) -> Result<Type> {
-        let sort_order = ColumnOrder::column_order_for_type(
-            self.logical_type.as_ref(),
-            self.converted_type,
-            self.physical_type,
-        )
-        .sort_order();
         let mut basic_info = BasicTypeInfo {
             name: String::from(self.name),
             repetition: Some(self.repetition),
             converted_type: self.converted_type,
             logical_type: self.logical_type.clone(),
             id: self.id,
-            sort_order,
+            sort_order: SortOrder::UNDEFINED,
         };
 
         // Check length before logical type, since it is used for logical type validation.
@@ -355,21 +368,19 @@ impl<'a> PrimitiveTypeBuilder<'a> {
         if let Some(logical_type) = &self.logical_type {
             // If a converted type is populated, check that it is consistent with
             // its logical type
-            if self.converted_type != ConvertedType::NONE {
-                if ConvertedType::from(self.logical_type.clone()) != self.converted_type {
-                    return Err(general_err!(
-                        "Logical type {:?} is incompatible with converted type {} for field '{}'",
-                        logical_type,
-                        self.converted_type,
-                        self.name
-                    ));
-                }
-            } else {
-                // Populate the converted type for backwards compatibility
-                basic_info.converted_type = self.logical_type.clone().into();
+            if self.converted_type != ConvertedType::NONE
+                && ConvertedType::from(self.logical_type.clone()) != self.converted_type
+            {
+                return Err(general_err!(
+                    "Logical type {:?} is incompatible with converted type {} for field '{}'",
+                    logical_type,
+                    self.converted_type,
+                    self.name
+                ));
             }
+
             // Check that logical type and physical type are compatible
-            match (logical_type, self.physical_type) {
+            let combo_error = match (logical_type, self.physical_type) {
                 (LogicalType::Map | LogicalType::List | LogicalType::File, _) => {
                     return Err(general_err!(
                         "{:?} cannot be applied to a primitive type for field '{}'",
@@ -377,7 +388,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         self.name
                     ));
                 }
-                (LogicalType::Enum, PhysicalType::BYTE_ARRAY) => {}
+                (LogicalType::Enum, PhysicalType::BYTE_ARRAY) => None,
                 (LogicalType::Decimal(decimal), _) => {
                     // Check that scale and precision are consistent with legacy values
                     if decimal.scale != self.scale {
@@ -397,41 +408,48 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         ));
                     }
                     self.check_decimal_precision_scale()?;
+                    None
                 }
-                (LogicalType::Date, PhysicalType::INT32) => {}
+                (LogicalType::Date, PhysicalType::INT32) => None,
                 (
                     LogicalType::Time(TimeType {
                         unit: TimeUnit::MILLIS,
                         ..
                     }),
                     PhysicalType::INT32,
-                ) => {}
+                ) => None,
                 (LogicalType::Time(time), PhysicalType::INT64) => {
                     if time.unit == TimeUnit::MILLIS {
-                        return Err(general_err!(
+                        Some(general_err!(
                             "Cannot use millisecond unit on INT64 type for field '{}'",
                             self.name
-                        ));
+                        ))
+                    } else {
+                        None
                     }
                 }
-                (LogicalType::Timestamp(_), PhysicalType::INT64) => {}
-                (LogicalType::Integer(int), PhysicalType::INT32) if int.bit_width <= 32 => {}
-                (LogicalType::Integer(int), PhysicalType::INT64) if int.bit_width == 64 => {}
+                (LogicalType::Timestamp(_), PhysicalType::INT64) => None,
+                (LogicalType::Integer(int), PhysicalType::INT32) if int.bit_width <= 32 => None,
+                (LogicalType::Integer(int), PhysicalType::INT64) if int.bit_width == 64 => None,
                 // Null type
-                (LogicalType::Unknown, _) => {}
-                (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Geometry(_), PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Geography(_), PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 16 => {}
+                (LogicalType::Unknown, _) => None,
+                (LogicalType::String, PhysicalType::BYTE_ARRAY) => None,
+                (LogicalType::Json, PhysicalType::BYTE_ARRAY) => None,
+                (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => None,
+                (LogicalType::Geometry(_), PhysicalType::BYTE_ARRAY) => None,
+                (LogicalType::Geography(_), PhysicalType::BYTE_ARRAY) => None,
+                (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 16 => {
+                    None
+                }
                 (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
                     return Err(general_err!(
                         "UUID cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(16) field",
                         self.name
                     ));
                 }
-                (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 2 => {}
+                (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 2 => {
+                    None
+                }
                 (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
                     return Err(general_err!(
                         "FLOAT16 cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(2) field",
@@ -439,17 +457,35 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     ));
                 }
                 // unknown logical type means just use physical type
-                (LogicalType::_Unknown { .. }, _) => {}
-                (a, b) => {
-                    return Err(general_err!(
-                        "Cannot annotate {:?} from {} for field '{}'",
-                        a,
-                        b,
-                        self.name
-                    ));
+                (LogicalType::_Unknown { .. }, _) => None,
+                (a, b) => Some(general_err!(
+                    "Cannot annotate {:?} from {} for field '{}'",
+                    a,
+                    b,
+                    self.name
+                )),
+            };
+
+            if let Some(err) = combo_error {
+                if self.coerce_incompatible_logical_types {
+                    // parquet-format GH-607: treat as an unknown logical type.
+                    basic_info.logical_type = Some(LogicalType::_Unknown { field_id: 0 });
+                    basic_info.converted_type = ConvertedType::NONE;
+                } else {
+                    return Err(err);
                 }
+            } else if self.converted_type == ConvertedType::NONE {
+                // Populate the converted type for backwards compatibility
+                basic_info.converted_type = self.logical_type.clone().into();
             }
         }
+
+        basic_info.sort_order = ColumnOrder::column_order_for_type(
+            basic_info.logical_type.as_ref(),
+            basic_info.converted_type,
+            self.physical_type,
+        )
+        .sort_order();
 
         match self.converted_type {
             ConvertedType::NONE => {}
@@ -1424,6 +1460,16 @@ fn check_logical_type(logical_type: Option<&LogicalType>) -> Result<()> {
 // convert thrift decoded array of `SchemaElement` into this crate's representation of
 // parquet types. this function consumes `elements`.
 pub(crate) fn parquet_schema_from_array(elements: Vec<SchemaElement<'_>>) -> Result<TypePtr> {
+    parquet_schema_from_array_opts(elements, false)
+}
+
+/// Like [`parquet_schema_from_array`], but when `coerce_incompatible_logical_types`
+/// is true, unknown physical/logical combinations are treated as an unknown
+/// logical type (parquet-format GH-607).
+pub(crate) fn parquet_schema_from_array_opts(
+    elements: Vec<SchemaElement<'_>>,
+    coerce_incompatible_logical_types: bool,
+) -> Result<TypePtr> {
     let mut index = 0;
     let num_elements = elements.len();
     let mut schema_nodes = Vec::with_capacity(1); // there should only be one element when done
@@ -1432,7 +1478,12 @@ pub(crate) fn parquet_schema_from_array(elements: Vec<SchemaElement<'_>>) -> Res
     let mut elements = elements.into_iter();
 
     while index < num_elements {
-        let t = schema_from_array_helper(&mut elements, num_elements, index)?;
+        let t = schema_from_array_helper(
+            &mut elements,
+            num_elements,
+            index,
+            coerce_incompatible_logical_types,
+        )?;
         index = t.0;
         schema_nodes.push(t.1);
     }
@@ -1455,6 +1506,7 @@ fn schema_from_array_helper(
     elements: &mut IntoIter<SchemaElement<'_>>,
     num_elements: usize,
     index: usize,
+    coerce_incompatible_logical_types: bool,
 ) -> Result<(usize, TypePtr)> {
     // Whether or not the current node is root (message type).
     // There is only one message type node in the schema tree.
@@ -1509,7 +1561,8 @@ fn schema_from_array_helper(
                     .with_length(length)
                     .with_precision(precision)
                     .with_scale(scale)
-                    .with_id(field_id);
+                    .with_id(field_id)
+                    .with_coerce_incompatible_logical_types(coerce_incompatible_logical_types);
                 Ok((index + 1, Arc::new(builder.build()?)))
             } else {
                 let mut builder = Type::group_type_builder(element.name)
@@ -1535,7 +1588,12 @@ fn schema_from_array_helper(
             let mut fields = Vec::with_capacity(usize::try_from(n)?);
             let mut next_index = index + 1;
             for _ in 0..n {
-                let child_result = schema_from_array_helper(elements, num_elements, next_index)?;
+                let child_result = schema_from_array_helper(
+                    elements,
+                    num_elements,
+                    next_index,
+                    coerce_incompatible_logical_types,
+                )?;
                 next_index = child_result.0;
                 fields.push(child_result.1);
             }
@@ -2840,5 +2898,223 @@ mod tests {
         }];
         let result = parquet_schema_from_array(elements);
         assert!(result.unwrap_err().to_string().contains("Integer overflow"));
+    }
+
+    fn int32_uuid_schema_elements<'a>() -> Vec<SchemaElement<'a>> {
+        vec![
+            SchemaElement {
+                r#type: None,
+                type_length: None,
+                repetition_type: None,
+                name: "schema",
+                num_children: Some(1),
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: None,
+            },
+            SchemaElement {
+                r#type: Some(PhysicalType::INT32),
+                type_length: None,
+                repetition_type: Some(Repetition::REQUIRED),
+                name: "id",
+                num_children: None,
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: Some(LogicalType::Uuid),
+            },
+        ]
+    }
+
+    #[test]
+    fn test_int32_uuid_rejected_by_default() {
+        let err = parquet_schema_from_array(int32_uuid_schema_elements()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot annotate Uuid from INT32 for field 'id'"),
+            "{err}"
+        );
+    }
+
+    fn primitive_logical_schema_elements(
+        name: &str,
+        physical: PhysicalType,
+        logical: LogicalType,
+    ) -> Vec<SchemaElement<'_>> {
+        vec![
+            SchemaElement {
+                r#type: None,
+                type_length: None,
+                repetition_type: None,
+                name: "schema",
+                num_children: Some(1),
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: None,
+            },
+            SchemaElement {
+                r#type: Some(physical),
+                type_length: None,
+                repetition_type: Some(Repetition::REQUIRED),
+                name,
+                num_children: None,
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: Some(logical),
+            },
+        ]
+    }
+
+    fn assert_coerced_unknown(col: &Type, physical: PhysicalType) {
+        assert_eq!(col.get_physical_type(), physical);
+        assert_eq!(
+            col.get_basic_info().logical_type_ref(),
+            Some(&LogicalType::_Unknown { field_id: 0 })
+        );
+        assert_eq!(col.get_basic_info().converted_type(), ConvertedType::NONE);
+        // UUID would be UNSIGNED and INT32/INT64 would be SIGNED. After coerce
+        // the sort order must be UNDEFINED, not a leftover physical default.
+        assert_eq!(col.get_basic_info().sort_order(), SortOrder::UNDEFINED);
+        assert_eq!(
+            ColumnOrder::column_order_for_type(
+                col.get_basic_info().logical_type_ref(),
+                col.get_basic_info().converted_type(),
+                physical,
+            )
+            .sort_order(),
+            SortOrder::UNDEFINED
+        );
+    }
+
+    #[test]
+    fn test_int32_uuid_coerced_to_physical_type() {
+        let schema = parquet_schema_from_array_opts(int32_uuid_schema_elements(), true).unwrap();
+        let fields = schema.get_fields();
+        assert_eq!(fields.len(), 1);
+        assert_coerced_unknown(&fields[0], PhysicalType::INT32);
+    }
+
+    #[test]
+    fn test_int64_uuid_coerced_sort_order_is_undefined() {
+        let schema = parquet_schema_from_array_opts(
+            primitive_logical_schema_elements("id", PhysicalType::INT64, LogicalType::Uuid),
+            true,
+        )
+        .unwrap();
+        assert_coerced_unknown(&schema.get_fields()[0], PhysicalType::INT64);
+    }
+
+    #[test]
+    fn test_byte_array_uuid_coerced_sort_order_is_undefined() {
+        let schema = parquet_schema_from_array_opts(
+            primitive_logical_schema_elements("id", PhysicalType::BYTE_ARRAY, LogicalType::Uuid),
+            true,
+        )
+        .unwrap();
+        assert_coerced_unknown(&schema.get_fields()[0], PhysicalType::BYTE_ARRAY);
+    }
+
+    #[test]
+    fn test_float16_on_int32_coerced_to_unknown() {
+        let schema = parquet_schema_from_array_opts(
+            primitive_logical_schema_elements("id", PhysicalType::INT32, LogicalType::Float16),
+            true,
+        )
+        .unwrap();
+        assert_coerced_unknown(&schema.get_fields()[0], PhysicalType::INT32);
+    }
+
+    #[test]
+    fn test_writer_still_rejects_int32_uuid() {
+        let err = Type::primitive_type_builder("id", PhysicalType::INT32)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::Uuid))
+            .build()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot annotate Uuid from INT32 for field 'id'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_coerce_does_not_relax_uuid_wrong_length() {
+        let elements = vec![
+            SchemaElement {
+                r#type: None,
+                type_length: None,
+                repetition_type: None,
+                name: "schema",
+                num_children: Some(1),
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: None,
+            },
+            SchemaElement {
+                r#type: Some(PhysicalType::FIXED_LEN_BYTE_ARRAY),
+                type_length: Some(15),
+                repetition_type: Some(Repetition::REQUIRED),
+                name: "id",
+                num_children: None,
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: Some(LogicalType::Uuid),
+            },
+        ];
+        let err = parquet_schema_from_array_opts(elements, true).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "UUID cannot annotate field 'id' because it is not a FIXED_LEN_BYTE_ARRAY(16) field"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_coerce_does_not_allow_list_on_primitive() {
+        let elements = vec![
+            SchemaElement {
+                r#type: None,
+                type_length: None,
+                repetition_type: None,
+                name: "schema",
+                num_children: Some(1),
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: None,
+            },
+            SchemaElement {
+                r#type: Some(PhysicalType::INT32),
+                type_length: None,
+                repetition_type: Some(Repetition::REQUIRED),
+                name: "id",
+                num_children: None,
+                converted_type: None,
+                scale: None,
+                precision: None,
+                field_id: None,
+                logical_type: Some(LogicalType::List),
+            },
+        ];
+        let err = parquet_schema_from_array_opts(elements, true).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("List cannot be applied to a primitive type for field 'id'"),
+            "{err}"
+        );
     }
 }

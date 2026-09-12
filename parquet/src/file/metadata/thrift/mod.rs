@@ -55,6 +55,7 @@ use crate::{
     },
     schema::types::{
         ColumnDescriptor, SchemaDescriptor, TypePtr, num_nodes, parquet_schema_from_array,
+        parquet_schema_from_array_opts,
     },
     thrift_struct,
     util::bit_util::FromBytes,
@@ -805,7 +806,10 @@ pub(crate) fn parquet_metadata_from_bytes(
                     // read schema and convert to SchemaDescriptor for use when reading row groups
                     let val =
                         read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
-                    let val = parquet_schema_from_array(val)?;
+                    let coerce = options
+                        .map(|o| o.coerce_incompatible_logical_types())
+                        .unwrap_or(false);
+                    let val = parquet_schema_from_array_opts(val, coerce)?;
                     schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
                 }
             }

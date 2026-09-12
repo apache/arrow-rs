@@ -205,6 +205,18 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Treat incompatible physical/logical type combinations as an unknown
+    /// logical type when reading (parquet-format GH-607).
+    ///
+    /// Default is `false`: such combinations return an error. When `true`, the
+    /// logical type is rewritten to `_Unknown` with sort order `UNDEFINED`.
+    /// Column statistics are retained.
+    pub fn with_coerce_incompatible_logical_types(mut self, coerce: bool) -> Self {
+        self.metadata_options
+            .set_coerce_incompatible_logical_types(coerce);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -2900,5 +2912,61 @@ mod tests {
             num_rows += 1;
         }
         assert_eq!(num_rows, reader.metadata().file_metadata().num_rows());
+    }
+
+    #[test]
+    fn test_int32_uuid_logical_type_errors_by_default() {
+        let file = get_test_file("int32_with_uuid_logical_type.parquet");
+        let err = SerializedFileReader::new(file)
+            .err()
+            .expect("default should reject INT32+UUID");
+        assert!(
+            err.to_string()
+                .contains("Cannot annotate Uuid from INT32 for field 'int32_uuid'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_int32_uuid_logical_type_coerced_with_option() {
+        let file = get_test_file("int32_with_uuid_logical_type.parquet");
+        let options = ReadOptionsBuilder::new()
+            .with_coerce_incompatible_logical_types(true)
+            .build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let schema = reader.metadata().file_metadata().schema_descr();
+        assert_eq!(schema.column(0).name(), "int32_uuid");
+        assert_eq!(schema.column(0).physical_type(), Type::INT32);
+        assert_eq!(
+            schema.column(0).logical_type_ref(),
+            Some(&basic::LogicalType::_Unknown { field_id: 0 })
+        );
+        assert_eq!(schema.column(0).sort_order(), SortOrder::UNDEFINED);
+        assert_eq!(
+            reader
+                .metadata()
+                .file_metadata()
+                .column_order(0)
+                .sort_order(),
+            SortOrder::UNDEFINED
+        );
+        assert!(
+            reader
+                .metadata()
+                .row_group(0)
+                .column(0)
+                .statistics()
+                .is_some()
+        );
+
+        let mut iter = reader
+            .get_row_iter(None)
+            .expect("Failed to create row iterator");
+        let mut num_rows = 0;
+        while iter.next().is_some() {
+            num_rows += 1;
+        }
+        assert_eq!(num_rows, 10);
     }
 }

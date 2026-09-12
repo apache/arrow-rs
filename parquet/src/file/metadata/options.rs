@@ -94,6 +94,7 @@ pub struct ParquetMetaDataOptions {
     encoding_stats_policy: ParquetStatisticsPolicy,
     column_stats_policy: ParquetStatisticsPolicy,
     size_stats_policy: ParquetStatisticsPolicy,
+    coerce_incompatible_logical_types: bool,
 }
 
 impl Default for ParquetMetaDataOptions {
@@ -104,6 +105,7 @@ impl Default for ParquetMetaDataOptions {
             encoding_stats_policy: ParquetStatisticsPolicy::KeepAll,
             column_stats_policy: ParquetStatisticsPolicy::KeepAll,
             size_stats_policy: ParquetStatisticsPolicy::KeepAll,
+            coerce_incompatible_logical_types: false,
         }
     }
 }
@@ -242,6 +244,29 @@ impl ParquetMetaDataOptions {
     /// Call [`Self::set_size_stats_policy`] and return `Self` for chaining.
     pub fn with_size_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
         self.set_size_stats_policy(policy);
+        self
+    }
+
+    /// Returns whether incompatible physical/logical type combinations should
+    /// be treated as an unknown logical type when reading.
+    ///
+    /// Default is `false`: such combinations return an error, matching historical
+    /// behavior. When `true`, the logical type is rewritten to `_Unknown` with
+    /// sort order `UNDEFINED`. Column statistics are retained.
+    pub fn coerce_incompatible_logical_types(&self) -> bool {
+        self.coerce_incompatible_logical_types
+    }
+
+    /// Sets whether to coerce incompatible physical/logical type combinations.
+    ///
+    /// See [`Self::coerce_incompatible_logical_types`].
+    pub fn set_coerce_incompatible_logical_types(&mut self, val: bool) {
+        self.coerce_incompatible_logical_types = val;
+    }
+
+    /// Call [`Self::set_coerce_incompatible_logical_types`] and return `Self` for chaining.
+    pub fn with_coerce_incompatible_logical_types(mut self, val: bool) -> Self {
+        self.set_coerce_incompatible_logical_types(val);
         self
     }
 }
