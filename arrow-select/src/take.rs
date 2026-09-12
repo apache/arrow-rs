@@ -415,11 +415,11 @@ fn take_union_type_ids<IndexType: ArrowPrimitiveType>(
 
     let null_type_id = fields
         .iter()
-        .next()
+        .find(|(_, field)| field.is_nullable())
         .map(|(type_id, _)| type_id)
         .ok_or_else(|| {
             ArrowError::ComputeError(
-                "Cannot take from a union with zero fields when indices contains nulls".into(),
+                "Cannot take null indices from a union with no nullable fields".into(),
             )
         })?;
     let taken_type_ids = take_native(type_ids, indices);
@@ -3521,7 +3521,7 @@ mod tests {
             let error = take(values, &indices, None).unwrap_err();
             assert_eq!(
                 error.to_string(),
-                "Compute error: Cannot take from a union with zero fields when indices contains nulls"
+                "Compute error: Cannot take null indices from a union with no nullable fields"
             );
         }
     }
