@@ -61,6 +61,10 @@ insta = { workspace = true }
 num-bigint = { version = "0.5", default-features = false, features = ["std"] }
 rand = "0.10"
 
+[[test]]
+name = "cast"
+path = "./tests/cast/mod.rs"
+
 [[bench]]
 name = "parse_timestamp"
 harness = false
