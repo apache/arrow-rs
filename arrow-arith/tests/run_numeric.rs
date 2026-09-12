@@ -305,10 +305,30 @@ fn run_float_ieee_semantics() {
     let scalar = Float64Array::new_scalar(0.0);
     for op in OPS {
         let result = op(&array, &scalar).unwrap();
-        assert_eq!(
-            result.as_run::<Int64Type>().values().to_data(),
-            op(&values, &scalar).unwrap().to_data()
-        );
+        let result = result.as_run::<Int64Type>();
+        assert_eq!(result.run_ends().values(), &[2, 5, 7, 9]);
+
+        let actual = result.values().as_primitive::<Float64Type>();
+        let expected = op(&values, &scalar).unwrap();
+        let expected = expected.as_primitive::<Float64Type>();
+        assert_eq!(actual.len(), expected.len());
+        assert_eq!(actual.nulls(), expected.nulls());
+        for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            match (actual, expected) {
+                (Some(actual), Some(expected)) if expected.is_nan() => {
+                    assert!(actual.is_nan(), "value at index {index} is not NaN");
+                }
+                (Some(actual), Some(expected)) => {
+                    assert_eq!(
+                        actual.to_bits(),
+                        expected.to_bits(),
+                        "value at index {index}"
+                    );
+                }
+                (None, None) => {}
+                _ => unreachable!("null buffers were verified above"),
+            }
+        }
     }
 }
 
