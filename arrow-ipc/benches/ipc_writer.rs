@@ -49,19 +49,23 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("StreamWriter/write_10/zstd", |b| {
         let batch = create_batch(8192, true);
+        let options = IpcWriteOptions::default()
+            .try_with_compression(Some(CompressionType::ZSTD))
+            .unwrap();
         let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
         b.iter(move || {
             buffer.clear();
-            let options = IpcWriteOptions::default()
-                .try_with_compression(Some(CompressionType::ZSTD))
-                .unwrap();
-            let mut writer =
-                StreamWriter::try_new_with_options(&mut buffer, batch.schema().as_ref(), options)
-                    .unwrap();
+            let mut writer = StreamWriter::try_new_with_options(
+                &mut buffer,
+                batch.schema().as_ref(),
+                options.clone(),
+            )
+            .unwrap();
             for _ in 0..10 {
                 writer.write(&batch).unwrap();
             }
             writer.finish().unwrap();
+            black_box(&buffer);
         })
     });
 
