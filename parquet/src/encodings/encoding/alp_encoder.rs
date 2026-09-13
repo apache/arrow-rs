@@ -697,20 +697,18 @@ where
             streaming,
         } = self;
 
-        // The first flush builds the preset from the whole buffered page and
-        // encodes it in one pass; that also arms streaming for later pages.
+        // The first nonempty flush builds the preset from the whole buffered
+        // page and encodes it in one pass; that also arms streaming for later pages.
         let page = match preset {
+            // Nothing to sample, so no preset to build. Leaving it unset keeps the
+            // chunk off the fallback parameters, which would make every later
+            // fractional value an exception.
+            None if values.is_empty() => encode_page(values, &[], scratch)?,
             None => {
                 let built = build_preset(values);
                 let page = encode_page(values, &built, scratch)?;
-                let had_values = !values.is_empty();
                 values.clear();
-                // An empty page yields the fallback preset (exponent 0, factor 0),
-                // which would pin the whole chunk to an integer scale. Leave the
-                // preset unset so the first page with values builds it.
-                if had_values {
-                    *preset = Some(built);
-                }
+                *preset = Some(built);
                 page
             }
             Some(preset) => streaming.finish(preset.as_slice(), scratch)?,
@@ -1109,22 +1107,9 @@ mod tests {
         encoder.put(&values).unwrap();
         let after_empty = encoder.flush_buffer().unwrap();
 
-        assert!(
-            after_empty.len() < values.len() * std::mem::size_of::<f64>(),
-            "page after an empty first page ({} bytes) is no smaller than raw f64 ({} bytes); \
-             the same values encoded as the first page take {} bytes",
-            after_empty.len(),
-            values.len() * std::mem::size_of::<f64>(),
-            baseline.len()
-        );
-
-        assert!(
-            after_empty.len() <= baseline.len() + baseline.len() / 10,
-            "empty first page poisoned the preset: {} bytes vs {} bytes when encoded first ({:.1}x larger)",
-            after_empty.len(),
-            baseline.len(),
-            after_empty.len() as f64 / baseline.len() as f64
+        assert_eq!(
+            after_empty, baseline,
+            "a leading empty page must not affect encoding of the first nonempty page"
         );
     }
-
 }
