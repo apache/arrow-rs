@@ -333,6 +333,10 @@ impl VariantArray {
     /// 3. An optional field named `typed_value` which can be any primitive type
     ///    or be a list, large_list, list_view or struct
     ///
+    /// Dictionary-encoded `value` and primitive `typed_value` fields are accepted,
+    /// including in nested shredding states, and decoded to canonical storage.
+    /// Decoding may allocate new arrays.
+    ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
         // Canonicalize shredded typed_value fields (e.g. decimal narrowing)
         let inner = canonicalize_shredded_types(inner)?;
@@ -774,7 +778,10 @@ impl ShreddedVariantFieldArray {
     /// 2. An optional field named `typed_value` which can be any primitive type
     ///    or be a list, large_list, list_view or struct
     ///
+    /// Dictionary inputs are normalized as in [`VariantArray::try_new`].
+    ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
+        let inner = canonicalize_shredded_types(inner)?;
         let Some(inner_struct) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid ShreddedVariantFieldArray: requires StructArray as input".to_string(),
@@ -1342,7 +1349,10 @@ fn canonicalize_and_verify_data_type_impl(
         }
         Map(..) | Union(..) => fail!(),
 
-        // We can _possibly_ support (some of) these some day?
+        // Decode dictionary-encoded leaves while retaining the canonical storage types.
+        Dictionary(_, values) if !values.is_nested() => {
+            Cow::Owned(canonicalize_and_verify_data_type(values)?.into_owned())
+        }
         Dictionary(..) | RunEndEncoded(..) => fail!(),
     };
     Ok(new_data_type)
@@ -1353,11 +1363,14 @@ fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field
 
     // A shredded FixedSizeBinary(16) column is always a UUID. Tag it with the UUID extension type
     // on read, as a safety net against writers that emit the column without the extension metadata.
-    // Canonicalization never rewrites FixedSizeBinary(16), so the type is already correct here.
     if matches!(new_data_type.as_ref(), DataType::FixedSizeBinary(16))
         && !field.has_valid_extension_type::<UuidExtension>()
     {
-        let new_field = field.as_ref().clone().with_extension_type(UuidExtension);
+        let new_field = field
+            .as_ref()
+            .clone()
+            .with_data_type(new_data_type.into_owned())
+            .with_extension_type(UuidExtension);
         return Ok(Cow::Owned(Arc::new(new_field)));
     }
 
@@ -1541,6 +1554,204 @@ mod test {
                 variant_to_json(&input).unwrap(),
                 StringArray::from(vec![Some(r#"{"a":1}"#), None, Some(r#"{"b":3}"#)])
             );
+        }
+    }
+
+    #[test]
+    fn dictionary_inputs_preserve_nulls_and_slices() {
+        use arrow::array::{BooleanArray, DictionaryArray};
+        use arrow::compute::cast;
+
+        let values =
+            VariantArray::from_iter([Some(Variant::Int32(123)), None, Some(Variant::Int32(-45))]);
+        let raw_values = BinaryArray::from(vec![
+            binary_array_value(values.value_column(), 0),
+            None,
+            binary_array_value(values.value_column(), 2),
+        ]);
+        let mut cases = Vec::new();
+        for data_type in [
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+        ] {
+            cases.push(("value", cast(&raw_values, &data_type).unwrap()));
+        }
+        let typed_values: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![Some(123), None, Some(-45)])),
+            Arc::new(StringArray::from(vec![Some("hello"), None, Some("world")])),
+            Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)])),
+            Arc::new(
+                Decimal128Array::from(vec![Some(123), None, Some(-45)])
+                    .with_precision_and_scale(9, 2)
+                    .unwrap(),
+            ),
+            Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                    [Some([1u8; 16]), None, Some([2u8; 16])].into_iter(),
+                    16,
+                )
+                .unwrap(),
+            ),
+        ];
+        cases.extend(
+            typed_values
+                .into_iter()
+                .map(|values| ("typed_value", values)),
+        );
+
+        for (name, values) in cases {
+            for key_type in [
+                DataType::Int8,
+                DataType::Int16,
+                DataType::Int32,
+                DataType::Int64,
+                DataType::UInt8,
+                DataType::UInt16,
+                DataType::UInt32,
+                DataType::UInt64,
+            ] {
+                // Slice starts after the first key, and includes both a null dictionary value
+                // and a null key. The final non-null value is masked by the parent.
+                let keys = Int8Array::from(vec![Some(2), Some(0), Some(1), None, Some(2), Some(0)]);
+                let dictionary = DictionaryArray::<Int8Type>::new(keys, values.clone());
+                let dictionary = cast(
+                    &dictionary,
+                    &DataType::Dictionary(Box::new(key_type), Box::new(values.data_type().clone())),
+                )
+                .unwrap();
+                let metadata: ArrayRef =
+                    Arc::new(BinaryViewArray::from(vec![EMPTY_VARIANT_METADATA_BYTES; 6]));
+                let metadata = cast(
+                    &metadata,
+                    &DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::BinaryView)),
+                )
+                .unwrap();
+                let metadata_type = metadata.data_type().clone();
+                let mut builder = StructArrayBuilder::new().with_field("metadata", metadata, false);
+                if name == "typed_value" {
+                    builder = builder.with_field("value", all_null_value_column(6), true);
+                }
+                let input = builder
+                    .with_field(name, dictionary, true)
+                    .with_nulls(NullBuffer::from(vec![true, true, true, true, true, false]))
+                    .build()
+                    .slice(1, 5);
+                let variant = VariantArray::try_new(&input).unwrap();
+                let field = ShreddedVariantFieldArray::try_new(&input).unwrap();
+                assert_eq!(field.inner(), variant.inner());
+                assert_eq!(variant.metadata_column().data_type(), &metadata_type);
+                assert_eq!(variant.nulls(), input.nulls());
+                assert!(!matches!(
+                    variant.inner().column_by_name(name).unwrap().data_type(),
+                    DataType::Dictionary(..)
+                ));
+
+                let expected = if name == "value" {
+                    VariantArray::from_iter([
+                        Some(Variant::Int32(123)),
+                        None,
+                        Some(Variant::Int32(-45)),
+                    ])
+                } else {
+                    VariantArray::try_new(&make_variant_struct_with_typed_value(values.clone()))
+                        .unwrap()
+                };
+                assert_eq!(variant.value(0), expected.value(0));
+                assert_eq!(variant.value(1), Variant::Null);
+                assert_eq!(variant.value(2), Variant::Null);
+                assert_eq!(variant.value(3), expected.value(2));
+                assert!(variant.is_null(4));
+                let unshredded = crate::unshred_variant(&variant).unwrap();
+                assert_eq!(
+                    unshredded.iter().collect::<Vec<_>>(),
+                    variant.iter().collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dictionary_inputs_in_nested_shredding_states() {
+        use arrow::compute::cast;
+
+        let json: ArrayRef = Arc::new(StringArray::from(vec![
+            Some(r#"{"a":[{"metadata":0}]}"#),
+            Some(r#"{"a":[{"metadata":1},{"metadata":"fallback","extra":true},{}]}"#),
+            None,
+            Some(r#"{"a":null}"#),
+            Some(r#"{"a":[{"metadata":2},null]}"#),
+        ]));
+        let variant = json_to_variant(&json).unwrap();
+        let object = DataType::Struct(vec![Field::new("metadata", DataType::Int32, true)].into());
+        let shred_type = DataType::Struct(
+            vec![Field::new(
+                "a",
+                DataType::List(Arc::new(Field::new("item", object, true))),
+                true,
+            )]
+            .into(),
+        );
+        let shredded = crate::shred_variant(&variant, &shred_type).unwrap();
+
+        fn encode_fields(data_type: &DataType) -> DataType {
+            match data_type {
+                DataType::Struct(fields) => DataType::Struct(
+                    fields
+                        .iter()
+                        .map(|field| {
+                            Arc::new(
+                                field
+                                    .as_ref()
+                                    .clone()
+                                    .with_data_type(encode_fields(field.data_type())),
+                            )
+                        })
+                        .collect(),
+                ),
+                DataType::List(field) => DataType::List(Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(encode_fields(field.data_type())),
+                )),
+                _ => DataType::Dictionary(Box::new(DataType::Int8), Box::new(data_type.clone())),
+            }
+        }
+        let input = cast(shredded.inner(), &encode_fields(shredded.data_type()))
+            .unwrap()
+            .slice(1, 4);
+        let normalized = VariantArray::try_new(&input).unwrap();
+        let unshredded = crate::unshred_variant(&normalized).unwrap();
+        assert_eq!(
+            unshredded.iter().collect::<Vec<_>>(),
+            crate::unshred_variant(&shredded.slice(1, 4))
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        let options = GetOptions::new_with_path("a[0].metadata".try_into().unwrap()).with_as_type(
+            Some(Arc::new(Field::new("metadata", DataType::Int32, true))),
+        );
+        assert_eq!(
+            variant_get(&input, options)
+                .unwrap()
+                .as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![Some(1), None, None, Some(2)])
+        );
+    }
+
+    #[test]
+    fn dictionary_inputs_reject_unsupported_value_types() {
+        for values in [
+            DataType::UInt32,
+            DataType::Decimal256(39, 2),
+            DataType::FixedSizeBinary(8),
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        ] {
+            let data_type = DataType::Dictionary(Box::new(DataType::Int8), Box::new(values));
+            let input = make_variant_struct_with_typed_value(new_null_array(&data_type, 1));
+            assert!(VariantArray::try_new(&input).is_err());
         }
     }
 
