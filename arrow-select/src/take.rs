@@ -1467,7 +1467,9 @@ where
                 .value(i)
                 .to_usize()
                 .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-            let start = list.value_offset(index) as <UInt32Type as ArrowPrimitiveType>::Native;
+            let start = u32::try_from(index * list.value_length() as usize).map_err(|_| {
+                ArrowError::ComputeError("FixedSizeList offset overflows u32".to_string())
+            })?;
 
             // Safety: Range always has known length.
             unsafe {
