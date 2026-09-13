@@ -188,7 +188,9 @@ where
     // then an increase of scale by 3 will have the following effect on the representation:
     // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
     // needs to provide at least 8 digits precision
-    let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
+    // Physical narrowing must check the conversion, including skipping arbitrary null payloads.
+    let is_infallible_cast = I::MAX_PRECISION <= O::MAX_PRECISION
+        && (input_precision as i8) + delta_scale <= (output_precision as i8);
     let f_infallible = is_infallible_cast
         .then_some(move |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul));
     Some((f_fallible, f_infallible))
@@ -259,7 +261,8 @@ where
     // the output type needs to have at least 3 digits of precision.
     // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
     // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
-    let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
+    let is_infallible_cast = I::MAX_PRECISION <= O::MAX_PRECISION
+        && (input_precision as i8) - delta_scale < (output_precision as i8);
     let f_infallible = is_infallible_cast.then_some(move |x| f_fallible(x).unwrap());
     Some((f_fallible, f_infallible))
 }
@@ -837,6 +840,39 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimal_narrowing_checks_values_and_skips_null_payloads() {
+        use arrow_array::{Decimal128Array, Decimal256Array};
+        use arrow_buffer::NullBuffer;
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        for scale in [0, 2, 3] {
+            let input = Decimal256Array::new(
+                vec![i256::from_i128(12300), i256::MAX].into(),
+                Some(NullBuffer::from(vec![true, false])),
+            )
+            .with_precision_and_scale(38, 2)
+            .unwrap();
+            let output =
+                cast_with_options(&input, &DataType::Decimal128(38, scale), &options).unwrap();
+            let expected = 123 * 10_i128.pow(scale as u32);
+            assert_eq!(
+                output.as_primitive::<Decimal128Type>(),
+                &Decimal128Array::from(vec![Some(expected), None])
+                    .with_precision_and_scale(38, scale)
+                    .unwrap()
+            );
+
+            let input = Decimal256Array::from(vec![i256::MAX])
+                .with_precision_and_scale(38, 2)
+                .unwrap();
+            assert!(cast_with_options(&input, &DataType::Decimal128(38, scale), &options).is_err());
+        }
+    }
 
     #[test]
     #[expect(deprecated)]

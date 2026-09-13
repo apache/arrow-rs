@@ -27,7 +27,7 @@ use arrow::array::{
     new_null_array,
 };
 use arrow::buffer::NullBuffer;
-use arrow::compute::cast;
+use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{
     Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, Float16Type, Float32Type,
     Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time64MicrosecondType,
@@ -312,6 +312,10 @@ pub struct VariantArray {
 
 impl VariantArray {
     /// Creates a new `VariantArray` from a [`StructArray`].
+    ///
+    /// Decimal fields, including Decimal256 with precision at most 38, are narrowed
+    /// to supported Variant decimal types. Narrowing preserves scale and nulls and
+    /// returns an error if a value overflows.
     ///
     /// # Arguments
     /// - `inner` - The underlying [`StructArray`] that contains the variant data.
@@ -775,6 +779,7 @@ impl ShreddedVariantFieldArray {
     ///    or be a list, large_list, list_view or struct
     ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
+        let inner = canonicalize_shredded_types(inner)?;
         let Some(inner_struct) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid ShreddedVariantFieldArray: requires StructArray as input".to_string(),
@@ -1229,7 +1234,14 @@ fn canonicalize_shredded_types(array: &dyn Array) -> Result<ArrayRef> {
     {
         return Ok(Arc::new(array.clone())); // bypass the unnecessary cast
     }
-    cast(array, new_type.as_ref())
+    cast_with_options(
+        array,
+        new_type.as_ref(),
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )
 }
 
 /// Recursively visits a data type, ensuring that it only contains data types that can legally
@@ -1269,15 +1281,20 @@ fn canonicalize_and_verify_data_type_impl(
 
         // Most decimal types are allowed, with restrictions on precision and scale
         //
-        // NOTE: arrow-parquet reads widens 32- and 64-bit decimals to 128-bit, but the variant spec
-        // requires using the narrowest decimal type for a given precision. Fix those up first.
-        Decimal64(p, s) | Decimal128(p, s)
+        // Parquet may use wider physical storage than the declared precision requires.
+        // Normalize to the narrowest Variant decimal type for that precision.
+        Decimal64(p, s) | Decimal128(p, s) | Decimal256(p, s)
             if VariantDecimal4::is_valid_precision_and_scale(p, s) =>
         {
             Cow::Owned(Decimal32(*p, *s))
         }
-        Decimal128(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
+        Decimal128(p, s) | Decimal256(p, s)
+            if VariantDecimal8::is_valid_precision_and_scale(p, s) =>
+        {
             Cow::Owned(Decimal64(*p, *s))
+        }
+        Decimal256(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => {
+            Cow::Owned(Decimal128(*p, *s))
         }
         Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => borrow!(),
         Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => borrow!(),
@@ -1398,9 +1415,9 @@ mod test {
     use super::*;
     use arrow::array::{
         BinaryArray, BinaryDictionaryBuilder, BinaryRunBuilder, BinaryViewArray, Decimal32Array,
-        Decimal64Array, Decimal128Array, FixedSizeBinaryArray, Int8Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray,
-        StringArray, Time64MicrosecondArray,
+        Decimal64Array, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Int8Array,
+        Int32Array, Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray,
+        ListViewArray, StringArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
@@ -1581,6 +1598,93 @@ mod test {
             .with_field("value", value, true)
             .with_field("typed_value", typed_value, true)
             .build()
+    }
+
+    #[test]
+    fn decimal256_inputs_are_narrowed_without_losing_values() {
+        use arrow::datatypes::i256;
+
+        for (precision, scale, expected_type) in [
+            (9, 2, DataType::Decimal32(9, 2)),
+            (18, 2, DataType::Decimal64(18, 2)),
+            (38, 2, DataType::Decimal128(38, 2)),
+            (38, 38, DataType::Decimal128(38, 38)),
+        ] {
+            let max = 10_i128.pow(precision as u32) - 1;
+            let typed_value = Decimal256Array::new(
+                vec![
+                    i256::ZERO,
+                    i256::from_i128(max),
+                    i256::from_i128(-max),
+                    i256::MAX, // Arbitrary payload under a null must not be converted.
+                    i256::ZERO,
+                ]
+                .into(),
+                Some(NullBuffer::from(vec![true, true, true, false, true])),
+            )
+            .with_precision_and_scale(precision, scale)
+            .unwrap();
+            let input = make_variant_struct_with_typed_value(Arc::new(typed_value));
+            let input = StructArray::new(
+                input.fields().clone(),
+                input.columns().to_vec(),
+                Some(NullBuffer::from(vec![true, true, true, true, false])),
+            )
+            .slice(1, 4);
+            let variant = VariantArray::try_new(&input).unwrap();
+            assert_eq!(
+                variant.typed_value_column().unwrap().data_type(),
+                &expected_type
+            );
+            assert_eq!(variant.nulls(), input.nulls());
+            assert!(variant.typed_value_column().unwrap().is_null(2));
+            assert_eq!(variant.value(2), Variant::Null);
+            for (i, raw) in [max, -max].into_iter().enumerate() {
+                let expected = match precision {
+                    9 => Variant::from(VariantDecimal4::try_new(raw as i32, scale as u8).unwrap()),
+                    18 => Variant::from(VariantDecimal8::try_new(raw as i64, scale as u8).unwrap()),
+                    _ => Variant::from(VariantDecimal16::try_new(raw, scale as u8).unwrap()),
+                };
+                assert_eq!(variant.value(i), expected);
+            }
+            let unshredded = crate::unshred_variant(&variant).unwrap();
+            assert_eq!(
+                unshredded.iter().collect::<Vec<_>>(),
+                variant.iter().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn decimal256_inputs_reject_invalid_precision_scale_and_overflow() {
+        use arrow::datatypes::i256;
+
+        for (precision, scale) in [(39, 2), (38, -1), (0, 0), (38, 39)] {
+            let data_type = DataType::Decimal256(precision, scale);
+            let input = make_variant_struct_with_typed_value(new_null_array(&data_type, 1));
+            assert!(matches!(
+                VariantArray::try_new(&input),
+                Err(ArrowError::InvalidArgumentError(_))
+            ));
+        }
+
+        for (precision, raw) in [
+            (9, i256::from_i128(1_000_000_000)),
+            (18, i256::from_i128(1_000_000_000_000_000_000)),
+            (38, i256::from_i128(10_i128.pow(38))),
+            (38, i256::from_i128(-10_i128.pow(38))),
+            (38, i256::MAX),
+            (38, i256::MIN),
+        ] {
+            let typed_value = Decimal256Array::from(vec![raw])
+                .with_precision_and_scale(precision, 2)
+                .unwrap();
+            let input = make_variant_struct_with_typed_value(Arc::new(typed_value));
+            assert!(
+                VariantArray::try_new(&input).is_err(),
+                "accepted {raw} at precision {precision}"
+            );
+        }
     }
 
     #[test]
