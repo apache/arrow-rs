@@ -54,7 +54,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("record_batches_to_csv", |b| {
         b.iter(|| {
-            #[allow(clippy::unit_arg)]
+            #[expect(clippy::unit_arg)]
             hint::black_box(for batch in &batches {
                 writer.write(batch).unwrap()
             });

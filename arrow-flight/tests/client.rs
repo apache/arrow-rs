@@ -65,7 +65,7 @@ async fn test_handshake() {
 #[tokio::test]
 async fn test_handshake_error() {
     do_test(|test_server, mut client| async move {
-        let request_payload = "foo-request-payload".to_string().into_bytes();
+        let request_payload = b"foo-request-payload".to_vec();
         let e = Status::unauthenticated("DENIED");
         test_server.set_handshake_response(Err(e.clone()));
 
@@ -339,9 +339,8 @@ async fn test_do_put_error_server() {
         let input_stream = futures::stream::iter(input_flight_data.clone()).map(Ok);
 
         let response = client.do_put(input_stream).await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         let e = Status::internal("No do_put response configured");
@@ -379,9 +378,8 @@ async fn test_do_put_error_stream_server() {
             .expect("error making request");
 
         let response: Result<Vec<_>, _> = response_stream.try_collect().await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         expect_status(response, e);
@@ -419,9 +417,8 @@ async fn test_do_put_error_client() {
             .expect("error making request");
 
         let response: Result<Vec<_>, _> = response_stream.try_collect().await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         // expect to the error made from the client
@@ -459,9 +456,8 @@ async fn test_do_put_error_client_and_server() {
             .expect("error making request");
 
         let response: Result<Vec<_>, _> = response_stream.try_collect().await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         // expect to the error made from the client (not the server)
@@ -523,9 +519,8 @@ async fn test_do_exchange_error() {
         let response = client
             .do_exchange(futures::stream::iter(input_flight_data.clone()).map(Ok))
             .await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         let e = Status::internal("No do_exchange response configured");
@@ -570,9 +565,8 @@ async fn test_do_exchange_error_stream() {
             .expect("error making request");
 
         let response: Result<Vec<_>, _> = response_stream.try_collect().await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         expect_status(response, e);
@@ -603,9 +597,9 @@ async fn test_do_exchange_error_stream_client() {
 
         let output_flight_data = FlightData::new()
             .with_descriptor(FlightDescriptor::new_cmd("Sample command"))
-            .with_data_body("body".as_bytes())
-            .with_data_header("header".as_bytes())
-            .with_app_metadata("metadata".as_bytes());
+            .with_data_body(b"body".as_slice())
+            .with_data_header(b"header".as_slice())
+            .with_app_metadata(b"metadata".as_slice());
 
         // server responds with one good message
         let response = vec![Ok(output_flight_data)];
@@ -617,9 +611,8 @@ async fn test_do_exchange_error_stream_client() {
             .expect("error making request");
 
         let response: Result<Vec<_>, _> = response_stream.try_collect().await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         // expect to the error made from the client
@@ -660,9 +653,8 @@ async fn test_do_exchange_error_client_and_server() {
             .expect("error making request");
 
         let response: Result<Vec<_>, _> = response_stream.try_collect().await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         // expect to the error made from the client (not the server)
@@ -763,9 +755,8 @@ async fn test_list_flights_error() {
         client.add_header("foo-header", "bar-header-value").unwrap();
 
         let response = client.list_flights("query").await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         let e = Status::internal("No list_flights response configured");
@@ -852,9 +843,8 @@ async fn test_list_actions_error() {
         client.add_header("foo-header", "bar-header-value").unwrap();
 
         let response = client.list_actions().await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         let e = Status::internal("No list_actions response configured");
@@ -938,9 +928,8 @@ async fn test_do_action_error() {
         let request = Action::new("action type", "action body");
 
         let response = client.do_action(request.clone()).await;
-        let response = match response {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => e,
+        let Err(response) = response else {
+            panic!("unexpected success")
         };
 
         let e = Status::internal("No do_action response configured");
@@ -1127,9 +1116,7 @@ where
 }
 
 fn expect_status(error: FlightError, expected: Status) {
-    let status = if let FlightError::Tonic(status) = error {
-        status
-    } else {
+    let FlightError::Tonic(status) = error else {
         panic!("Expected FlightError::Tonic, got: {error:?}");
     };
 

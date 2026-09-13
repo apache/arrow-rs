@@ -1051,12 +1051,12 @@ impl RowConverter {
                 columns.len()
             )));
         }
-        for colum in columns.iter().skip(1) {
-            if colum.len() != columns[0].len() {
+        for column in columns.iter().skip(1) {
+            if column.len() != columns[0].len() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "RowConverter columns must all have the same length, expected {} got {}",
                     columns[0].len(),
-                    colum.len()
+                    column.len()
                 )));
             }
         }
@@ -1342,6 +1342,10 @@ pub type RowLengthIter<'a> = Map<Windows<'a, usize>, fn(&'a [usize]) -> usize>;
 
 impl Rows {
     /// Append a [`Row`] to this [`Rows`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` was not produced by the same [`RowConverter`] as `self`
     pub fn push(&mut self, row: Row<'_>) {
         assert!(
             Arc::ptr_eq(&row.config.fields, &self.config.fields),
@@ -1359,6 +1363,10 @@ impl Rows {
     }
 
     /// Returns the row at index `row`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row >= self.num_rows()`
     pub fn row(&self, row: usize) -> Row<'_> {
         self.checked_row_end(row);
         unsafe { self.row_unchecked(row) }
@@ -2382,7 +2390,7 @@ unsafe fn decode_column(
                             unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
 
                         // advance row slices by the bytes consumed for rows that belong to this field
-                        for (row_idx, child_row) in field_rows.iter() {
+                        for (row_idx, child_row) in field_rows {
                             let remaining_len = sparse_data[*row_idx].len();
                             let consumed_length = 1 + child_row.len() - remaining_len;
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
@@ -2426,7 +2434,6 @@ unsafe fn decode_column(
 mod tests {
     use arrow_array::builder::*;
     use arrow_array::types::*;
-    use arrow_array::*;
     use arrow_buffer::{Buffer, OffsetBuffer};
     use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
@@ -4771,7 +4778,7 @@ mod tests {
         F: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
-        let values_len = offsets.last().unwrap().to_usize().unwrap();
+        let values_len = offsets.last().as_usize();
         let values = values(rng, values_len);
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
@@ -4827,7 +4834,7 @@ mod tests {
         ValuesFn: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
-        let entries_len = offsets.last().unwrap().to_usize().unwrap();
+        let entries_len = offsets.last().as_usize();
         let keys = gen_keys(rng, entries_len);
         let values = gen_values(rng, entries_len);
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
@@ -5192,7 +5199,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_test() {
         let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..100 {
@@ -5390,7 +5397,7 @@ mod tests {
         let second = Int32Array::from(vec![Some(2), None, Some(4)]);
         let arrays = [Arc::new(first) as ArrayRef, Arc::new(second) as ArrayRef];
 
-        for array in arrays.iter() {
+        for array in &arrays {
             rows.clear();
             converter
                 .append(&mut rows, std::slice::from_ref(array))
@@ -5423,7 +5430,7 @@ mod tests {
 
         let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
         let values = BinaryArray::from(vec![
-            Some("a".as_bytes()),
+            Some(b"a".as_slice()),
             Some(b"b"),
             Some(b"c"),
             Some(b"d"),

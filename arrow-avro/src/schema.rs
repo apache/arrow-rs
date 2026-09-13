@@ -177,7 +177,7 @@ pub(crate) enum Schema<'a> {
     /// A direct type name (primitive or reference)
     #[serde(borrow)]
     TypeName(TypeName<'a>),
-    /// A union of multiple schemas (e.g., ["null", "string"])
+    /// A union of multiple schemas (e.g., `["null", "string"]`)
     #[serde(borrow)]
     Union(Vec<Schema<'a>>),
     /// A complex type such as record, array, map, etc.
@@ -3241,7 +3241,7 @@ mod tests {
         let schema: Schema = serde_json::from_str(schema_json).expect("schema should parse");
         match &schema {
             Schema::Complex(ComplexType::Record(_)) => {}
-            other => panic!("expected record schema, got: {:?}", other),
+            other => panic!("expected record schema, got: {other:?}"),
         }
         // Avro to Arrow conversion
         let field = crate::codec::AvroField::try_from(&schema)

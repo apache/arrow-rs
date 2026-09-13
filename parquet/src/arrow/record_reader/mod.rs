@@ -174,7 +174,7 @@ where
     }
 
     /// Returns number of records stored in buffer.
-    #[allow(unused)]
+    #[cfg_attr(not(test), expect(unused))]
     pub fn num_records(&self) -> usize {
         self.num_records
     }
@@ -191,7 +191,7 @@ where
     /// definition level values that have already been read into memory but not counted
     /// as record values, e.g. those from `self.num_values` to `self.values_written`.
     pub fn consume_def_levels(&mut self) -> Option<Vec<i16>> {
-        self.def_levels.as_mut().and_then(|x| x.consume_levels())
+        self.def_levels.as_mut()?.consume_levels()
     }
 
     /// Return repetition level data.
@@ -605,7 +605,7 @@ mod tests {
 
         // Verify bitmap
         let expected_valid = &[false, true, false, true, true, false, true];
-        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().copied());
         assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data
@@ -711,7 +711,7 @@ mod tests {
 
         // Verify bitmap
         let expected_valid = &[true, false, false, true, true, true, true, true, true];
-        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().copied());
         assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data
@@ -1063,7 +1063,7 @@ mod tests {
 
         // Verify bitmap
         let expected_valid = &[false, true, true];
-        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().copied());
         assert_eq!(Some(expected_buffer), record_reader.consume_bitmap());
 
         // Verify result record data

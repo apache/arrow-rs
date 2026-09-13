@@ -85,9 +85,11 @@ impl ParquetField {
         list_data_type: Option<DataType>,
     ) -> Result<Self, ParquetError> {
         let arrow_field = match &list_data_type {
-            Some(DataType::List(field_hint))
-            | Some(DataType::LargeList(field_hint))
-            | Some(DataType::FixedSizeList(field_hint, _)) => Some(field_hint.as_ref()),
+            Some(
+                DataType::List(field_hint)
+                | DataType::LargeList(field_hint)
+                | DataType::FixedSizeList(field_hint, _),
+            ) => Some(field_hint.as_ref()),
             Some(_) => {
                 return Err(general_err!(
                     "Internal error: should be validated earlier that list_data_type is only a type of list"
@@ -747,11 +749,11 @@ fn convert_field(
     match arrow_hint {
         Some(hint) => {
             // If the inferred type is a dictionary, preserve dictionary metadata
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             let field = match (&data_type, hint.dict_id(), hint.dict_is_ordered()) {
                 (DataType::Dictionary(_, _), Some(id), Some(ordered)) =>
                 {
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     Field::new_dict(name, data_type, nullable, id, ordered)
                 }
                 _ => Field::new(name, data_type, nullable),

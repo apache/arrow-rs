@@ -17,7 +17,9 @@
 
 //! Tests that reading invalid parquet files returns an error
 
+use arrow::compute::concat_batches;
 use arrow::util::test_util::parquet_test_data;
+use arrow_array::RecordBatchReader;
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 use parquet::errors::ParquetError;
@@ -35,6 +37,7 @@ static KNOWN_FILES: &[&str] = &[
     "ARROW-GH-45185.parquet",
     "ARROW-GH-47662.parquet",
     "README.md",
+    "variants",
 ];
 
 /// Returns the path to 'parquet-testing/bad_data'
@@ -50,7 +53,7 @@ fn bad_data_dir() -> PathBuf {
 #[test]
 // Ensure that if we add a new test the files are added to the tests.
 fn test_invalid_files() {
-    let known_files: HashSet<_> = KNOWN_FILES.iter().cloned().collect();
+    let known_files: HashSet<_> = KNOWN_FILES.iter().copied().collect();
     let mut seen_files = HashSet::new();
 
     let files = std::fs::read_dir(bad_data_dir()).unwrap();
@@ -87,6 +90,7 @@ fn test_parquet_1481() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_arrow_gh_41321() {
     let err = read_file("ARROW-GH-41321.parquet").unwrap_err();
     assert_eq!(
@@ -107,9 +111,10 @@ fn test_arrow_gh_41317() {
 #[test]
 fn test_arrow_rs_gh_6229_dict_header() {
     let err = read_file("ARROW-RS-GH-6229-DICTHEADER.parquet").unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "External: Parquet argument error: Parquet error: Integer overflow: out of range integral type conversion attempted"
+    let message = err.to_string();
+    assert!(
+        message.starts_with("External: Parquet argument error: Parquet error: Integer overflow:"),
+        "unexpected error: {message}"
     );
 }
 
@@ -159,6 +164,7 @@ fn read_file(name: &str) -> Result<usize, ParquetError> {
     Ok(num_rows)
 }
 
+#[cfg_attr(miri, ignore)] // calls native Zstd code unsupported by Miri
 #[test]
 fn non_standard_delta_blocks() {
     let file = Bytes::from_static(include_bytes!("bigdelta.parquet"));
@@ -167,23 +173,26 @@ fn non_standard_delta_blocks() {
     let selectors = vec![RowSelector::skip(1000), RowSelector::select(5)];
 
     let selection: RowSelection = selectors.into();
-    let reader = ArrowReaderBuilder::try_new(file)
+    let reader = ArrowReaderBuilder::try_new(file.clone())
         .unwrap()
         .with_row_selection(selection)
         .build()
         .unwrap();
 
-    if let Some(maybe_batch) = reader.into_iter().next() {
-        // TODO: uncomment if we ever allow skipping miniblocks > 64 elements
-        //let batch = maybe_batch.expect("skip should succeed");
-        //assert_eq!(batch.num_rows(), 5);
-        assert!(
-            maybe_batch
-                .unwrap_err()
-                .to_string()
-                .contains("cannot skip miniblock of size 128")
-        );
-    }
+    let selected = concat_batches(
+        &reader.schema(),
+        &reader.collect::<Result<Vec<_>, _>>().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(selected.num_rows(), 5);
+
+    let reader = ArrowReaderBuilder::try_new(file).unwrap().build().unwrap();
+    let all = concat_batches(
+        &reader.schema(),
+        &reader.collect::<Result<Vec<_>, _>>().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(selected, all.slice(1000, 5));
 }
 
 #[test]

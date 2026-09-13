@@ -53,6 +53,8 @@ mod compression;
 #[cfg(test)]
 mod tests;
 
+// This code is generated so we don't want to fix any lint violations manually
+#[allow(clippy::allow_attributes)]
 #[allow(mismatched_lifetime_syntaxes)]
 #[allow(clippy::redundant_closure)]
 #[allow(clippy::needless_lifetimes)]

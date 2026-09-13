@@ -86,6 +86,8 @@ pub struct ReadOnlyMetadataBuilder<'m> {
     metadata: &'m VariantMetadata<'m>,
     // A cache that tracks field names this builder has already seen, because finding the field id
     // for a given field name is expensive -- O(n) for a large and unsorted metadata dictionary.
+    // Field names borrowed from a sorted `metadata` bypass this cache; see
+    // `VariantMetadata::borrowed_field_id`.
     known_field_names: HashMap<&'m str, u32>,
 }
 
@@ -101,6 +103,17 @@ impl<'m> ReadOnlyMetadataBuilder<'m> {
 
 impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
     fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        // Callers that copy fields out of an object and back into the same metadata dictionary
+        // (unshredding, shredding, and projection all do this) pass field names that are slices of
+        // the dictionary itself. For a sorted dictionary those resolve without hashing or any
+        // string comparison, which matters because this builder is often created per row and so
+        // its `known_field_names` cache would otherwise be populated and discarded without ever
+        // serving a lookup. An unsorted dictionary may hold duplicate entries, so it keeps using
+        // the cache and the name-based search below.
+        if let Some(field_id) = self.metadata.borrowed_field_id(field_name) {
+            return Ok(field_id);
+        }
+
         if let Some(field_id) = self.known_field_names.get(field_name) {
             return Ok(*field_id);
         }
@@ -198,7 +211,7 @@ impl WritableMetadataBuilder {
         let nkeys = self.num_field_names();
 
         // Calculate metadata size
-        let total_dict_size: usize = self.metadata_size();
+        let total_dict_size = self.metadata_size();
 
         let metadata_buffer = &mut self.metadata_buffer;
         let is_sorted = std::mem::take(&mut self.is_sorted);
@@ -215,14 +228,14 @@ impl WritableMetadataBuilder {
         metadata_buffer.reserve(metadata_size);
 
         // Write header: version=1, field names are sorted, with calculated offset_size
-        metadata_buffer.push(0x01 | (is_sorted as u8) << 4 | ((offset_size - 1) << 6));
+        metadata_buffer.push(0x01 | ((is_sorted as u8) << 4) | ((offset_size - 1) << 6));
 
         // Write dictionary size
         write_offset(metadata_buffer, nkeys, offset_size);
 
         // Write offsets
         let mut cur_offset = 0;
-        for key in field_names.iter() {
+        for key in &field_names {
             write_offset(metadata_buffer, cur_offset, offset_size);
             cur_offset += key.len();
         }

@@ -22,7 +22,7 @@ use criterion::Criterion;
 
 use arrow::array::*;
 use arrow_buffer::i256;
-use rand::Rng;
+use rand::RngExt;
 use std::iter::repeat_n;
 use std::{hint, sync::Arc};
 

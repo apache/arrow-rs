@@ -103,7 +103,7 @@ fn bench_iter(c: &mut Criterion) {
 
     c.bench_function("iterate rows", |b| {
         b.iter(|| {
-            for r in rows.iter() {
+            for r in &rows {
                 hint::black_box(r.as_ref());
             }
         })

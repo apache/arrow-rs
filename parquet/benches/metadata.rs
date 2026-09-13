@@ -158,9 +158,9 @@ fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) 
 fn get_footer_bytes(data: Bytes) -> Bytes {
     let footer_bytes = data.slice(data.len() - 8..);
     let footer_len = footer_bytes[0] as u32
-        | (footer_bytes[1] as u32) << 8
-        | (footer_bytes[2] as u32) << 16
-        | (footer_bytes[3] as u32) << 24;
+        | ((footer_bytes[1] as u32) << 8)
+        | ((footer_bytes[2] as u32) << 16)
+        | ((footer_bytes[3] as u32) << 24);
     let meta_start = data.len() - footer_len as usize - 8;
     let meta_end = data.len() - 8;
     data.slice(meta_start..meta_end)

@@ -418,7 +418,7 @@ impl LevelInfoBuilder {
             // mapping between child elements and rep_level entries, the position
             // of each slot's first element is directly computable from offsets.
             child.visit_leaves(|leaf| {
-                debug_assert!(leaf.max_rep_level == ctx.rep_level);
+                debug_assert_eq!(leaf.max_rep_level, ctx.rep_level);
                 let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
                 let batch_len = values_end - values_start;
                 let batch_base = rep_levels.len() - batch_len;
@@ -2162,12 +2162,12 @@ mod tests {
         let list_field = Field::new("col", list_type, true);
 
         let expected = vec![
-            r#""#.to_string(),
-            r#""#.to_string(),
-            r#"[]"#.to_string(),
-            r#"[{list: [3, ], integers: }]"#.to_string(),
-            r#"[, {list: , integers: 5}]"#.to_string(),
-            r#"[]"#.to_string(),
+            String::new(),
+            String::new(),
+            "[]".to_string(),
+            "[{list: [3, ], integers: }]".to_string(),
+            "[, {list: , integers: 5}]".to_string(),
+            "[]".to_string(),
         ];
 
         let actual: Vec<_> = (0..6)

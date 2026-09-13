@@ -304,7 +304,7 @@ fn string_apply<'a, T: StringArrayType<'a> + 'a>(
     r_s: bool,
     r_v: Option<&'a dyn AnyDictionaryArray>,
 ) -> Result<BooleanArray, ArrowError> {
-    let l_len = l_v.map(|l| l.len()).unwrap_or(l.len());
+    let l_len = l_v.map_or_else(|| l.len(), |l| l.len());
     if r_s {
         let idx = match r_v {
             Some(dict) if dict.null_count() != 0 => return Ok(BooleanArray::new_null(l_len)),
@@ -374,7 +374,7 @@ fn vectored_iter<'a, T: StringArrayType<'a> + 'a>(
     let nulls = a_v.nulls();
     let keys = a_v.normalized_keys();
     keys.into_iter().enumerate().map(move |(idx, key)| {
-        if nulls.map(|n| n.is_null(idx)).unwrap_or_default() || a.is_null(key) {
+        if nulls.is_some_and(|n| n.is_null(idx)) || a.is_null(key) {
             return None;
         }
         Some(a.value(key))
@@ -621,7 +621,7 @@ mod tests {
                 assert_eq!(res, expected);
 
                 let left_binary = $left.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
-                let right_binary = $right.as_bytes();
+                let right_binary: &[u8] = $right.as_ref();
 
                 let left = BinaryArray::from(left_binary.clone());
                 let right = BinaryArray::from_iter_values([right_binary]);

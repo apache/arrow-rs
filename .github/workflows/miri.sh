@@ -18,22 +18,24 @@ CRATES="
     -p arrow-data
     -p arrow-ipc
     -p arrow-json
+    -p arrow-cmp
     -p arrow-ord
     -p arrow-row
     -p arrow-schema
     -p arrow-select
     -p arrow-string
+    -p parquet
 "
 
 setup_miri() {
-    export MIRIFLAGS="-Zmiri-disable-isolation"
+    export MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-no-extra-rounding-error"
     export INSTA_WORKSPACE_ROOT="$PWD"
     cargo miri setup
     cargo clean
 }
 
 
-case $# in 
+case $# in
     0)
         setup_miri
 

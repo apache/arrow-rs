@@ -26,7 +26,7 @@ pub(crate) fn value_to_string<O: OffsetSizeTrait>(
     let formatter = ArrayFormatter::try_new(array, &options.format_options)?;
     let nulls = array.nulls();
     for i in 0..array.len() {
-        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
+        match nulls.is_some_and(|x| x.is_null(i)) {
             true => builder.append_null(),
             false => {
                 formatter.value(i).write(&mut builder)?;
@@ -49,7 +49,7 @@ pub(crate) fn value_to_string_view(
     // TODO: replace with write to builder after https://github.com/apache/arrow-rs/issues/6373
     let mut buffer = String::new();
     for i in 0..array.len() {
-        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
+        match nulls.is_some_and(|x| x.is_null(i)) {
             true => builder.append_null(),
             false => {
                 // write to buffer first and then copy into target array
@@ -123,7 +123,7 @@ fn parse_string_iter<
 /// Casts generic string arrays to an ArrowTimestampType (TimeStampNanosecondArray, etc.)
 pub(crate) fn cast_string_to_timestamp<O: OffsetSizeTrait, T: ArrowTimestampType>(
     array: &dyn Array,
-    to_tz: &Option<Arc<str>>,
+    to_tz: Option<&Arc<str>>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_string::<O>();
@@ -134,13 +134,13 @@ pub(crate) fn cast_string_to_timestamp<O: OffsetSizeTrait, T: ArrowTimestampType
         }
         None => cast_string_to_timestamp_impl(array.iter(), &Utc, cast_options)?,
     };
-    Ok(Arc::new(out.with_timezone_opt(to_tz.clone())))
+    Ok(Arc::new(out.with_timezone_opt(to_tz.cloned())))
 }
 
 /// Casts string view arrays to an ArrowTimestampType (TimeStampNanosecondArray, etc.)
 pub(crate) fn cast_view_to_timestamp<T: ArrowTimestampType>(
     array: &dyn Array,
-    to_tz: &Option<Arc<str>>,
+    to_tz: Option<&Arc<str>>,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_string_view();
@@ -151,7 +151,7 @@ pub(crate) fn cast_view_to_timestamp<T: ArrowTimestampType>(
         }
         None => cast_string_to_timestamp_impl(array.iter(), &Utc, cast_options)?,
     };
-    Ok(Arc::new(out.with_timezone_opt(to_tz.clone())))
+    Ok(Arc::new(out.with_timezone_opt(to_tz.cloned())))
 }
 
 fn cast_string_to_timestamp_impl<
@@ -166,10 +166,8 @@ fn cast_string_to_timestamp_impl<
 ) -> Result<PrimitiveArray<T>, ArrowError> {
     if cast_options.safe {
         let iter = iter.map(|v| {
-            v.and_then(|v| {
-                let naive = string_to_datetime(tz, v).ok()?.naive_utc();
-                T::from_naive_datetime(naive, None)
-            })
+            let naive = string_to_datetime(tz, v?).ok()?.naive_utc();
+            T::from_naive_datetime(naive, None)
         });
         // Benefit:
         //     20% performance improvement
@@ -315,7 +313,7 @@ where
     F: Fn(&str) -> Result<ArrowType::Native, ArrowError> + Copy,
 {
     let interval_array = if cast_options.safe {
-        let iter = iter.map(|v| v.and_then(|v| parse_function(v).ok()));
+        let iter = iter.map(|v| parse_function(v?).ok());
 
         // Benefit:
         //     20% performance improvement
@@ -343,7 +341,7 @@ where
     B: Extend<Option<&'a str>>,
     I: Iterator<Item = Option<&'a [u8]>>,
 {
-    builder.extend(iter.map(|value| value.and_then(|bytes| std::str::from_utf8(bytes).ok())));
+    builder.extend(iter.map(|value| std::str::from_utf8(value?).ok()));
 }
 
 pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(

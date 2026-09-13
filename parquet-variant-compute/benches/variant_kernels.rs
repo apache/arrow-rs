@@ -18,10 +18,10 @@
 use arrow::array::{Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, StringArray, StructArray};
 use arrow::buffer::Buffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields};
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantPath};
 use parquet_variant_compute::{
-    GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, variant_get,
+    GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, shred_variant, variant_get,
 };
 use parquet_variant_json::append_json;
 use rand::RngExt;
@@ -33,6 +33,24 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 const VARIANT_GET_UNSHREDDED_OBJECT_ROWS: usize = 262_144;
+const VARIANT_ARRAY_BUILD_ROWS: usize = 262_144;
+const SHRED_VARIANT_OBJECT_ROWS: usize = 8_192;
+
+fn variant_array_builder_build_bench(c: &mut Criterion) {
+    c.bench_function("variant_array_builder_build_262k_small_values", |b| {
+        b.iter_batched(
+            || {
+                let mut builder = VariantArrayBuilder::new(VARIANT_ARRAY_BUILD_ROWS);
+                for value in 0..VARIANT_ARRAY_BUILD_ROWS {
+                    builder.append_variant(Variant::Int8((value % 128) as i8));
+                }
+                builder
+            },
+            |builder| std::hint::black_box(builder.build()),
+            BatchSize::LargeInput,
+        )
+    });
+}
 
 fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     let input_array = StringArray::from_iter_values(json_repeated_struct(8000));
@@ -184,11 +202,64 @@ pub fn variant_get_unshredded_object_path_bench(c: &mut Criterion) {
     });
 }
 
+/// Shreds objects whose fields only partially match the requested shredding schema.
+///
+/// Every field that is *not* covered by the schema is copied into the leftover `value` column,
+/// which requires the builder to resolve that field's name back to its id in the row's metadata
+/// dictionary. The source array's dictionary holds 300 field names, so the cost of that name
+/// lookup is visible.
+pub fn shred_variant_partial_object_bench(c: &mut Criterion) {
+    let variant_array = create_unshredded_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
+
+    // The source objects have 15 fields (`attr.000`, `attr.020`, ... `attr.280`). Shred the first
+    // 5 of them, leaving the other 10 to be written to the leftover `value` column.
+    let shredded_fields = (0..300)
+        .step_by(20)
+        .take(5)
+        .map(|index| {
+            Arc::new(Field::new(
+                format!("attr.{index:03}"),
+                DataType::Int32,
+                true,
+            ))
+        })
+        .collect::<Vec<FieldRef>>();
+    let as_type = DataType::Struct(Fields::from(shredded_fields));
+
+    c.bench_function("shred_variant_partial_object_8k_rows", |b| {
+        b.iter(|| std::hint::black_box(shred_variant(&variant_array, &as_type).unwrap()))
+    });
+}
+
+/// Same as [`shred_variant_partial_object_bench`], but no field of the source objects is covered
+/// by the shredding schema, so all 15 fields per row take the leftover `value` column path.
+pub fn shred_variant_unmatched_object_bench(c: &mut Criterion) {
+    let variant_array = create_unshredded_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
+
+    let shredded_fields = (0..5)
+        .map(|index| {
+            Arc::new(Field::new(
+                format!("missing.{index}"),
+                DataType::Int32,
+                true,
+            ))
+        })
+        .collect::<Vec<FieldRef>>();
+    let as_type = DataType::Struct(Fields::from(shredded_fields));
+
+    c.bench_function("shred_variant_unmatched_object_8k_rows", |b| {
+        b.iter(|| std::hint::black_box(shred_variant(&variant_array, &as_type).unwrap()))
+    });
+}
+
 criterion_group!(
     benches,
     variant_get_bench,
     variant_get_shredded_utf8_bench,
     variant_get_unshredded_object_path_bench,
+    shred_variant_partial_object_bench,
+    shred_variant_unmatched_object_bench,
+    variant_array_builder_build_bench,
     benchmark_batch_json_string_to_variant
 );
 criterion_main!(benches);
@@ -462,7 +533,7 @@ impl RandomJsonGenerator {
                     let random_string: String = (0..length)
                         .map(|_| rng.sample(Alphanumeric) as char)
                         .collect();
-                    write!(output_buffer, "\"{random_string}\"",).unwrap();
+                    write!(output_buffer, "\"{random_string}\"").unwrap();
                 } else {
                     random_value -= *string_weight;
 
@@ -471,11 +542,11 @@ impl RandomJsonGenerator {
                         if rng.random_bool(0.5) {
                             // Generate a random integer
                             let random_integer: i64 = rng.random_range(-1000..1000);
-                            write!(output_buffer, "{random_integer}",).unwrap();
+                            write!(output_buffer, "{random_integer}").unwrap();
                         } else {
                             // Generate a random float
                             let random_float: f64 = rng.random_range(-1000.0..1000.0);
-                            write!(output_buffer, "{random_float}",).unwrap();
+                            write!(output_buffer, "{random_float}").unwrap();
                         }
                     } else {
                         random_value -= *number_weight;
@@ -483,7 +554,7 @@ impl RandomJsonGenerator {
                         if random_value <= *boolean_weight {
                             // Generate a random boolean
                             let random_boolean: bool = rng.random();
-                            write!(output_buffer, "{random_boolean}",).unwrap();
+                            write!(output_buffer, "{random_boolean}").unwrap();
                         }
                     }
                 }
@@ -539,7 +610,7 @@ impl RandomJsonGenerator {
             let random_string: String = (0..length)
                 .map(|_| rng.sample(Alphanumeric) as char)
                 .collect();
-            write!(output_buffer, "\"{random_string}\"",).unwrap();
+            write!(output_buffer, "\"{random_string}\"").unwrap();
             return;
         }
         random_value -= *string_weight;
@@ -549,11 +620,11 @@ impl RandomJsonGenerator {
             if rng.random_bool(0.5) {
                 // Generate a random integer
                 let random_integer: i64 = rng.random_range(-1000..1000);
-                write!(output_buffer, "{random_integer}",).unwrap();
+                write!(output_buffer, "{random_integer}").unwrap();
             } else {
                 // Generate a random float
                 let random_float: f64 = rng.random_range(-1000.0..1000.0);
-                write!(output_buffer, "{random_float}",).unwrap();
+                write!(output_buffer, "{random_float}").unwrap();
             }
             return;
         }
@@ -562,7 +633,7 @@ impl RandomJsonGenerator {
         if random_value <= *boolean_weight {
             // Generate a random boolean
             let random_boolean: bool = rng.random();
-            write!(output_buffer, "{random_boolean}",).unwrap();
+            write!(output_buffer, "{random_boolean}").unwrap();
             return;
         }
         random_value -= *boolean_weight;

@@ -166,7 +166,7 @@ pub(crate) fn from_thrift_page_stats(
                 stats.max_value
             };
 
-            fn check_len(min: &Option<Vec<u8>>, max: &Option<Vec<u8>>, len: usize) -> Result<()> {
+            fn check_len(min: Option<&[u8]>, max: Option<&[u8]>, len: usize) -> Result<()> {
                 if let Some(min) = min
                     && min.len() < len
                 {
@@ -184,13 +184,16 @@ pub(crate) fn from_thrift_page_stats(
                 Ok(())
             }
 
-            match physical_type {
-                Type::BOOLEAN => check_len(&min, &max, 1),
-                Type::INT32 | Type::FLOAT => check_len(&min, &max, 4),
-                Type::INT64 | Type::DOUBLE => check_len(&min, &max, 8),
-                Type::INT96 => check_len(&min, &max, 12),
-                _ => Ok(()),
-            }?;
+            {
+                let (min, max) = (min.as_deref(), max.as_deref());
+                match physical_type {
+                    Type::BOOLEAN => check_len(min, max, 1),
+                    Type::INT32 | Type::FLOAT => check_len(min, max, 4),
+                    Type::INT64 | Type::DOUBLE => check_len(min, max, 8),
+                    Type::INT96 => check_len(min, max, 12),
+                    _ => Ok(()),
+                }?;
+            }
 
             // Values are encoded using PLAIN encoding definition, except that
             // variable-length byte arrays do not include a length prefix.
@@ -864,30 +867,46 @@ mod tests {
     fn test_statistics_partial_eq() {
         let expected = Statistics::int32(Some(12), Some(45), None, Some(11), true);
 
-        assert!(Statistics::int32(Some(12), Some(45), None, Some(11), true) == expected);
-        assert!(Statistics::int32(Some(11), Some(45), None, Some(11), true) != expected);
-        assert!(Statistics::int32(Some(12), Some(44), None, Some(11), true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, Some(23), true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, Some(11), false) != expected);
-
-        assert!(
-            Statistics::int32(Some(12), Some(45), None, Some(11), false)
-                != Statistics::int64(Some(12), Some(45), None, Some(11), false)
+        assert_eq!(
+            Statistics::int32(Some(12), Some(45), None, Some(11), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(11), Some(45), None, Some(11), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(12), Some(44), None, Some(11), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(12), Some(45), None, Some(23), true),
+            expected
+        );
+        assert_ne!(
+            Statistics::int32(Some(12), Some(45), None, Some(11), false),
+            expected
         );
 
-        assert!(
-            Statistics::boolean(Some(false), Some(true), None, None, true)
-                != Statistics::double(Some(1.2), Some(4.5), None, None, true)
+        assert_ne!(
+            Statistics::int32(Some(12), Some(45), None, Some(11), false),
+            Statistics::int64(Some(12), Some(45), None, Some(11), false)
         );
 
-        assert!(
+        assert_ne!(
+            Statistics::boolean(Some(false), Some(true), None, None, true),
+            Statistics::double(Some(1.2), Some(4.5), None, None, true)
+        );
+
+        assert_ne!(
             Statistics::byte_array(
                 Some(ByteArray::from(vec![1, 2, 3])),
                 Some(ByteArray::from(vec![1, 2, 3])),
                 None,
                 None,
                 true
-            ) != Statistics::fixed_len_byte_array(
+            ),
+            Statistics::fixed_len_byte_array(
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 None,
@@ -896,14 +915,15 @@ mod tests {
             )
         );
 
-        assert!(
+        assert_ne!(
             Statistics::byte_array(
                 Some(ByteArray::from(vec![1, 2, 3])),
                 Some(ByteArray::from(vec![1, 2, 3])),
                 None,
                 None,
                 true,
-            ) != Statistics::ByteArray(
+            ),
+            Statistics::ByteArray(
                 ValueStatistics::new(
                     Some(ByteArray::from(vec![1, 2, 3])),
                     Some(ByteArray::from(vec![1, 2, 3])),
@@ -915,14 +935,15 @@ mod tests {
             )
         );
 
-        assert!(
+        assert_ne!(
             Statistics::fixed_len_byte_array(
                 Some(FixedLenByteArray::from(vec![1, 2, 3])),
                 Some(FixedLenByteArray::from(vec![1, 2, 3])),
                 None,
                 None,
                 true,
-            ) != Statistics::FixedLenByteArray(
+            ),
+            Statistics::FixedLenByteArray(
                 ValueStatistics::new(
                     Some(FixedLenByteArray::from(vec![1, 2, 3])),
                     Some(FixedLenByteArray::from(vec![1, 2, 3])),
@@ -939,10 +960,10 @@ mod tests {
     fn test_statistics_from_thrift() {
         // Helper method to check statistics conversion.
         fn check_stats(stats: Statistics) {
-            let tpe = stats.physical_type();
+            let type_ = stats.physical_type();
             let thrift_stats = page_stats_to_thrift(Some(&stats));
             assert_eq!(
-                from_thrift_page_stats(tpe, thrift_stats).unwrap(),
+                from_thrift_page_stats(type_, thrift_stats).unwrap(),
                 Some(stats)
             );
         }
@@ -1181,7 +1202,7 @@ mod tests {
     // generic function without reyling on a bound to a private trait.
     fn generic_statistics_handler<T: std::fmt::Display>(stats: ValueStatistics<T>) -> String {
         match stats.min_opt() {
-            Some(s) => format!("min: {}", s),
+            Some(s) => format!("min: {s}"),
             None => "min: NA".to_string(),
         }
     }

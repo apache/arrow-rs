@@ -558,7 +558,7 @@ impl ColumnValueDecoder for ValueDecoder {
 // `offset`. Values will be appended to `dst`.
 fn read_byte_stream_split(
     dst: &mut Vec<u8>,
-    src: &mut Bytes,
+    src: &Bytes,
     offset: usize,
     num_values: usize,
     data_width: usize,

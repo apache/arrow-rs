@@ -112,7 +112,7 @@ fn subtract_live_bytes(size: usize) {
     });
 }
 
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = unsafe { self.inner.alloc(layout) };
@@ -178,7 +178,7 @@ fn make_batch(schema: &SchemaRef, batch_index: usize) -> RecordBatch {
     let mut fat: Vec<u8> = vec![0u8; FAT_VALUE_LEN * ROWS_PER_BATCH];
     // A cheap xorshift fill keyed by the batch index → distinct, incompressible.
     let mut state = (batch_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
-    for byte in fat.iter_mut() {
+    for byte in &mut fat {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
@@ -317,6 +317,7 @@ fn write_dict_dataset(options: ArrowWriterOptions) {
 /// fine), but keeping them together also keeps the in-memory/spill comparison on
 /// one consistent baseline.
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn page_store_bounds_write_memory() {
     let props = single_row_group_props();
 
@@ -522,6 +523,7 @@ fn write_dict_columns(page_store_factory: Option<Arc<dyn PageStoreFactory>>, poo
 /// off the heap as its column closes, so at most one is ever resident, keeping
 /// the spilling peak far below the in-memory K × dict_page baseline.
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn page_store_spills_dictionary_pages() {
     // Build the distinct-value pool up front so its bytes sit in the baseline
     // and are not charged to either per-run peak below.

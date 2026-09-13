@@ -18,7 +18,6 @@
 //! Defines sort kernel for `ArrayRef`
 
 use crate::ord::{DynComparator, make_comparator};
-use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -373,7 +372,7 @@ fn sort_bytes<T: ByteArrayType>(
             let len = slice.len() as u64;
             // Compute the 4‑byte prefix in BE order, or left‑pad if shorter
             let prefix = if slice.len() >= 4 {
-                let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u32);
+                let raw = std::ptr::read_unaligned(slice.as_ptr().cast::<u32>());
                 u32::from_be(raw)
             } else if slice.is_empty() {
                 // Handle empty slice case to avoid shift overflow
@@ -722,14 +721,14 @@ fn sort_run_downcasted<R: RunEndIndexType>(
 
     let run_ends = run_array.run_ends();
 
-    let mut new_run_ends_builder = BufferBuilder::<R::Native>::new(run_ends.len());
+    let mut new_run_ends = Vec::with_capacity(run_ends.len());
     let mut new_run_end: usize = 0;
     let mut new_physical_len: usize = 0;
 
     let consume_runs = |run_length, _| {
         new_run_end += run_length;
         new_physical_len += 1;
-        new_run_ends_builder.append(R::Native::from_usize(new_run_end).unwrap());
+        new_run_ends.push(R::Native::from_usize(new_run_end).unwrap());
     };
 
     let (values_indices, run_values) = sort_run_inner(run_array, options, output_len, consume_runs);
@@ -739,7 +738,7 @@ fn sort_run_downcasted<R: RunEndIndexType>(
         // The function builds a valid run_ends array and hence need not be validated.
         ArrayDataBuilder::new(R::DATA_TYPE)
             .len(new_physical_len)
-            .add_buffer(new_run_ends_builder.finish())
+            .add_buffer(new_run_ends.into())
             .build_unchecked()
     };
 
@@ -957,7 +956,7 @@ pub fn lexsort_to_indices(
         return Err(ArrowError::ComputeError(
             "lexical sort columns have different row counts".to_string(),
         ));
-    };
+    }
 
     let len = limit.unwrap_or(row_count).min(row_count);
 
@@ -1132,7 +1131,7 @@ impl LexicographicalComparator {
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for comparator in &self.compare_items {
             match comparator(a_idx, b_idx) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -1168,7 +1167,7 @@ impl<const N: usize> FixedLexicographicalComparator<N> {
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for comparator in &self.compare_items {
             match comparator(a_idx, b_idx) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }

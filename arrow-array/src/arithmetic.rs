@@ -77,12 +77,20 @@ pub trait ArrowNativeTypeOp: ArrowNativeType {
     fn div_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
     /// Wrapping division operation
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rhs` is zero for integer types
     fn div_wrapping(self, rhs: Self) -> Self;
 
     /// Checked remainder operation
     fn mod_checked(self, rhs: Self) -> Result<Self, ArrowError>;
 
     /// Wrapping remainder operation
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rhs` is zero for integer types
     fn mod_wrapping(self, rhs: Self) -> Self;
 
     /// Checked negation operation

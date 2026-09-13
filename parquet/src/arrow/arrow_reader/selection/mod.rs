@@ -229,7 +229,7 @@ impl RowSelection {
     pub fn as_mask(&self) -> Option<&BooleanBuffer> {
         match &self.inner {
             RowSelectionInner::Mask(m) => Some(m.mask()),
-            _ => None,
+            RowSelectionInner::Selectors(_) => None,
         }
     }
 
@@ -305,7 +305,7 @@ impl RowSelection {
 
     /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
     ///
-    /// # Panic
+    /// # Panics
     ///
     /// Panics if any of the [`BooleanArray`] contain nulls
     pub fn from_filters(filters: &[BooleanArray]) -> Self {
@@ -626,6 +626,15 @@ impl RowSelection {
         }
     }
 
+    /// Returns the total number of rows spanned by this selection, both
+    /// selected and skipped
+    pub fn total_row_count(&self) -> usize {
+        match &self.inner {
+            RowSelectionInner::Selectors(s) => s.iter().map(|x| x.row_count).sum(),
+            RowSelectionInner::Mask(m) => m.mask().len(),
+        }
+    }
+
     /// Returns the number of de-selected rows
     pub fn skipped_row_count(&self) -> usize {
         match &self.inner {
@@ -754,6 +763,23 @@ impl FromIterator<RowSelection> for RowSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_total_row_count() {
+        let selection = RowSelection::from(vec![RowSelector::skip(5), RowSelector::select(3)]);
+        assert_eq!(selection.total_row_count(), 8);
+        assert_eq!(selection.row_count(), 3);
+        assert_eq!(selection.skipped_row_count(), 5);
+
+        let selection =
+            RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![true, false, true]));
+        assert_eq!(selection.total_row_count(), 3);
+        assert_eq!(selection.row_count(), 2);
+        assert_eq!(selection.skipped_row_count(), 1);
+
+        let empty = RowSelection::from(vec![]);
+        assert_eq!(empty.total_row_count(), 0);
+    }
 
     #[test]
     fn test_offset_zero_and_zero_batch_expand_are_identity() {

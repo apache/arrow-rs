@@ -242,7 +242,6 @@ impl HeapSize for OffsetIndexMetaData {
 impl HeapSize for ColumnIndexMetaData {
     fn heap_size(&self) -> usize {
         match self {
-            Self::NONE => 0,
             Self::BOOLEAN(native_index) => native_index.heap_size(),
             Self::INT32(native_index) => native_index.heap_size(),
             Self::INT64(native_index) => native_index.heap_size(),

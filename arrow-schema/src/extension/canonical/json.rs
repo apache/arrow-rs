@@ -137,7 +137,7 @@ impl ExtensionType for Json {
                 .as_ref()
                 .map(serde_json::to_string)
                 .map(Result::unwrap)
-                .unwrap_or_else(|| "".to_owned()),
+                .unwrap_or_default(),
         )
     }
 
@@ -196,7 +196,7 @@ mod tests {
         field.try_with_extension_type(Json::default())?;
         assert_eq!(
             field.metadata().get(EXTENSION_TYPE_METADATA_KEY),
-            Some(&"".to_owned())
+            Some(&String::new())
         );
         assert_eq!(
             field.try_extension_type::<Json>()?,

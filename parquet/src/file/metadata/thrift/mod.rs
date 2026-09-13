@@ -397,9 +397,7 @@ fn validate_column_metadata(mask: u16) -> Result<()> {
     Ok(())
 }
 
-fn read_encoding_stats_as_mask<'a>(
-    prot: &mut ThriftSliceInputProtocol<'a>,
-) -> Result<EncodingMask> {
+fn read_encoding_stats_as_mask(prot: &mut ThriftSliceInputProtocol<'_>) -> Result<EncodingMask> {
     // read the vector of stats, setting mask bits for data pages
     let mut mask = 0i32;
     let list_ident = prot.read_list_begin()?;
@@ -419,8 +417,8 @@ fn read_encoding_stats_as_mask<'a>(
 // Decode `ColumnMetaData`. Returns a mask of all required fields that were observed.
 // This mask can be passed to `validate_column_metadata`.
 #[expect(clippy::useless_let_if_seq)] // the `let mut … if let …` below is more readable than the suggestion
-fn read_column_metadata<'a>(
-    prot: &mut ThriftSliceInputProtocol<'a>,
+fn read_column_metadata(
+    prot: &mut ThriftSliceInputProtocol<'_>,
     column: &mut ColumnChunkMetaData,
     col_index: usize,
     options: Option<&ParquetMetaDataOptions>,
@@ -541,17 +539,17 @@ fn read_column_metadata<'a>(
             _ => {
                 prot.skip(field_ident.field_type)?;
             }
-        };
+        }
         last_field_id = field_ident.id;
     }
 
     Ok(seen_mask)
 }
 
-// using ThriftSliceInputProtocol rather than ThriftCompactInputProtocl trait because
+// using ThriftSliceInputProtocol rather than ThriftCompactInputProtocol trait because
 // these are all internal and operate on slices.
-fn read_column_chunk<'a>(
-    prot: &mut ThriftSliceInputProtocol<'a>,
+fn read_column_chunk(
+    prot: &mut ThriftSliceInputProtocol<'_>,
     column_descr: &Arc<ColumnDescriptor>,
     col_index: usize,
     options: Option<&ParquetMetaDataOptions>,
@@ -617,14 +615,14 @@ fn read_column_chunk<'a>(
             _ => {
                 prot.skip(field_ident.field_type)?;
             }
-        };
+        }
         last_field_id = field_ident.id;
     }
 
     // the only required field from ColumnChunk
     if !has_file_offset {
         return Err(general_err!("Required field file_offset is missing"));
-    };
+    }
 
     // if encrypted just return. we'll decrypt after finishing the footer and populate the rest.
     #[cfg(feature = "encryption")]
@@ -709,7 +707,7 @@ fn read_row_group(
             _ => {
                 prot.skip(field_ident.field_type)?;
             }
-        };
+        }
         last_field_id = field_ident.id;
     }
 
@@ -824,12 +822,10 @@ pub(crate) fn parquet_metadata_from_bytes(
                 validate_list_type(ElementType::Struct, &list_ident)?;
                 let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
 
-                // Read row groups and handle ordinal assignment
-                let mut assigner = OrdinalAssigner::new();
-                for ordinal in 0..list_ident.size {
-                    let rg = read_row_group(&mut prot, schema_descr, options)?;
-                    rg_vec.push(assigner.ensure(ordinal, rg)?);
+                for _ in 0..list_ident.size {
+                    rg_vec.push(read_row_group(&mut prot, schema_descr, options)?);
                 }
+                ensure_row_group_ordinals(&mut rg_vec)?;
                 row_groups = Some(rg_vec);
             }
             5 => {
@@ -855,7 +851,7 @@ pub(crate) fn parquet_metadata_from_bytes(
             _ => {
                 prot.skip(field_ident.field_type)?;
             }
-        };
+        }
         last_field_id = field_ident.id;
     }
     let Some(version) = version else {
@@ -923,56 +919,36 @@ pub(crate) fn parquet_metadata_from_bytes(
     Ok(ParquetMetaData::new(fmd, row_groups))
 }
 
-/// Assign [`RowGroupMetaData::ordinal`]  if it is missing.
-#[derive(Debug, Default)]
-pub(crate) struct OrdinalAssigner {
-    first_has_ordinal: Option<bool>,
-}
-
-impl OrdinalAssigner {
-    fn new() -> Self {
-        Default::default()
+/// Ensure [`RowGroupMetaData::ordinal`] is usable after decode without
+/// rejecting spec-valid files (`RowGroup.ordinal` is optional in the
+/// parquet-format Thrift definition, with no uniformity requirement):
+///
+/// - **All row groups carry ordinals** → honor them as written.
+/// - **No row group carries an ordinal** → assign each row group its
+///   position in the file. This happens unconditionally (not only when a
+///   consumer needs it) so downstream users of the ordinal — the row
+///   number virtual column, encryption chunk-key lookup — behave the same
+///   whether the metadata was decoded fresh or reused from a prior read.
+/// - **Mixed** → leave the metadata untouched. Positional backfill could
+///   disagree with the ordinals that are present, and a partial backfill
+///   would make row-number results depend on which row groups a query
+///   happens to select. Consumers that require complete ordinals fail
+///   deterministically instead (see `RowNumberReader::try_new`); plain
+///   reads that never touch ordinals succeed.
+fn ensure_row_group_ordinals(row_groups: &mut [RowGroupMetaData]) -> Result<()> {
+    // All set (honor them as written) or mixed (leave as-is): either way there
+    // is nothing to backfill. Only when *no* row group carries an ordinal do we
+    // assign positions below.
+    if row_groups.iter().any(|rg| rg.ordinal.is_some()) {
+        return Ok(());
     }
-
-    /// Sets [`RowGroupMetaData::ordinal`] if it is missing.
-    ///
-    /// # Arguments
-    /// - actual_ordinal: The ordinal (index) of the row group being processed
-    ///   in the file metadata.
-    /// - rg: The [`RowGroupMetaData`] to potentially modify.
-    ///
-    /// Ensures:
-    /// 1. If the first row group has an ordinal, all subsequent row groups must
-    ///    also have ordinals.
-    /// 2. If the first row group does NOT have an ordinal, all subsequent row
-    ///    groups must also not have ordinals.
-    fn ensure(
-        &mut self,
-        actual_ordinal: i32,
-        mut rg: RowGroupMetaData,
-    ) -> Result<RowGroupMetaData> {
-        let rg_has_ordinal = rg.ordinal.is_some();
-
-        // Only set first_has_ordinal if it's None (first row group that arrives)
-        if self.first_has_ordinal.is_none() {
-            self.first_has_ordinal = Some(rg_has_ordinal);
-        }
-
-        // assign ordinal if missing and consistent with first row group
-        let first_has_ordinal = self.first_has_ordinal.unwrap();
-        if !first_has_ordinal && !rg_has_ordinal {
-            rg.ordinal = Some(actual_ordinal);
-        } else if first_has_ordinal != rg_has_ordinal {
-            return Err(general_err!(
-                "Inconsistent ordinal assignment: first_has_ordinal is set to \
-                {} but row-group with actual ordinal {} has rg_has_ordinal set to {}",
-                first_has_ordinal,
-                actual_ordinal,
-                rg_has_ordinal
-            ));
-        }
-        Ok(rg)
+    for (idx, rg) in row_groups.iter_mut().enumerate() {
+        let ordinal: i32 = idx
+            .try_into()
+            .map_err(|_| general_err!("Row group ordinal {} exceeds i32 max value", idx))?;
+        rg.ordinal = Some(ordinal);
     }
+    Ok(())
 }
 
 thrift_struct!(
@@ -1060,7 +1036,7 @@ impl DataPageHeader {
                 _ => {
                     prot.skip(field_ident.field_type)?;
                 }
-            };
+            }
             last_field_id = field_ident.id;
         }
         let Some(num_values) = num_values else {
@@ -1153,7 +1129,7 @@ impl DataPageHeaderV2 {
                 _ => {
                     prot.skip(field_ident.field_type)?;
                 }
-            };
+            }
             last_field_id = field_ident.id;
         }
         let Some(num_values) = num_values else {
@@ -1271,7 +1247,7 @@ impl PageHeader {
                 _ => {
                     prot.skip(field_ident.field_type)?;
                 }
-            };
+            }
             last_field_id = field_ident.id;
         }
         let Some(type_) = type_ else {
@@ -1440,11 +1416,11 @@ pub(super) struct FileMeta<'a> {
 //   8: optional EncryptionAlgorithm encryption_algorithm
 //   9: optional binary footer_signing_key_metadata
 // }
-impl<'a> WriteThrift for FileMeta<'a> {
+impl WriteThrift for FileMeta<'_> {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
     // needed for last_field_id w/o encryption
-    #[allow(unused_assignments)]
+    #[cfg_attr(not(feature = "encryption"), expect(unused_assignments))]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.set_write_path_in_schema(self.write_path_in_schema);
         // only write ordinal if all values will fit in an i16
@@ -1635,7 +1611,7 @@ impl WriteThrift for RowGroupMetaData {
 impl WriteThrift for ColumnChunkMetaData {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    #[allow(unused_assignments)]
+    #[cfg_attr(not(feature = "encryption"), expect(unused_assignments))]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
         if let Some(file_path) = self.file_path() {
@@ -1776,7 +1752,7 @@ pub(crate) mod tests {
 
     // for testing. decode thrift encoded RowGroup
     pub(crate) fn read_row_group(
-        buf: &mut [u8],
+        buf: &[u8],
         schema_descr: Arc<SchemaDescriptor>,
     ) -> Result<RowGroupMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
@@ -1784,14 +1760,14 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn read_column_chunk(
-        buf: &mut [u8],
+        buf: &[u8],
         column_descr: Arc<ColumnDescriptor>,
     ) -> Result<ColumnChunkMetaData> {
         read_column_chunk_with_options(buf, column_descr, None)
     }
 
     pub(crate) fn read_column_chunk_with_options(
-        buf: &mut [u8],
+        buf: &[u8],
         column_descr: Arc<ColumnDescriptor>,
         options: Option<&ParquetMetaDataOptions>,
     ) -> Result<ColumnChunkMetaData> {
@@ -1828,7 +1804,7 @@ pub(crate) mod tests {
         Ok(buf)
     }
 
-    pub(crate) fn buf_to_schema_list<'a>(buf: &'a mut Vec<u8>) -> Result<Vec<SchemaElement<'a>>> {
+    pub(crate) fn buf_to_schema_list(buf: &mut Vec<u8>) -> Result<Vec<SchemaElement<'_>>> {
         let mut prot = ThriftSliceInputProtocol::new(buf.as_mut_slice());
         read_thrift_vec(&mut prot)
     }
@@ -2025,5 +2001,98 @@ pub(crate) mod tests {
         let err = DataPageHeaderV2::read_thrift_without_stats(&mut prot)
             .expect_err("malformed bool field should return an error");
         assert_malformed_bool_error(err);
+    }
+
+    /// Round-trip [`crate::file::metadata::ParquetMetaData`] with the given
+    /// per-row-group ordinals through thrift encode → decode, returning the
+    /// decoded ordinals. Exercises `ensure_row_group_ordinals`.
+    fn roundtrip_rg_ordinals(ordinals: &[Option<i32>]) -> Vec<Option<i32>> {
+        use crate::file::metadata::ParquetMetaDataWriter;
+        use crate::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataReader};
+        use crate::schema::types::Type as SchemaType;
+
+        let field = SchemaType::primitive_type_builder("c", PhysicalType::INT32)
+            .build()
+            .unwrap();
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![Arc::new(field)])
+            .build()
+            .unwrap();
+        let schema_descr = Arc::new(SchemaDescriptor::new(Arc::new(schema)));
+
+        let row_groups = ordinals
+            .iter()
+            .map(|ordinal| {
+                let columns = schema_descr
+                    .columns()
+                    .iter()
+                    .map(|col| ColumnChunkMetaData::builder(col.clone()).build().unwrap())
+                    .collect();
+                let mut builder =
+                    crate::file::metadata::RowGroupMetaData::builder(schema_descr.clone())
+                        .set_num_rows(10)
+                        .set_total_byte_size(100)
+                        .set_column_metadata(columns);
+                if let Some(ordinal) = ordinal {
+                    builder = builder.set_ordinal(*ordinal);
+                }
+                builder.build().unwrap()
+            })
+            .collect();
+
+        let file_metadata = FileMetaData::new(
+            1,
+            10 * ordinals.len() as i64,
+            None,
+            None,
+            schema_descr,
+            None,
+        );
+        let metadata = ParquetMetaData::new(file_metadata, row_groups);
+
+        let mut buffer = Vec::new();
+        ParquetMetaDataWriter::new(&mut buffer, &metadata)
+            .finish()
+            .unwrap();
+        // strip the 8-byte footer tail (length + magic)
+        let decoded = ParquetMetaDataReader::decode_metadata(&buffer[..buffer.len() - 8]).unwrap();
+        decoded.row_groups().iter().map(|rg| rg.ordinal()).collect()
+    }
+
+    /// All row groups carry ordinals: honored as written, even when they do
+    /// not match file position.
+    #[test]
+    fn ordinals_all_present_are_honored() {
+        assert_eq!(
+            roundtrip_rg_ordinals(&[Some(5), Some(1), Some(3)]),
+            vec![Some(5), Some(1), Some(3)],
+        );
+    }
+
+    /// No row group carries an ordinal: sequential-filled at decode time so
+    /// downstream consumers behave identically on fresh vs reused metadata.
+    #[test]
+    fn ordinals_none_present_are_sequentially_filled() {
+        assert_eq!(
+            roundtrip_rg_ordinals(&[None, None, None]),
+            vec![Some(0), Some(1), Some(2)],
+        );
+    }
+
+    /// Mixed ordinals (spec-valid; produced by e.g. Go parquet writers):
+    /// decode succeeds — the pre-#8715 behavior restored by #10381 — and the
+    /// metadata is left untouched so row numbering fails deterministically
+    /// rather than producing numbers that depend on row-group selection.
+    #[test]
+    fn ordinals_mixed_decode_succeeds_untouched() {
+        assert_eq!(
+            roundtrip_rg_ordinals(&[Some(0), None, Some(2)]),
+            vec![Some(0), None, Some(2)],
+        );
+        // first missing, rest present — the exact Go-writer shape from #10381
+        assert_eq!(
+            roundtrip_rg_ordinals(&[None, Some(1), Some(2)]),
+            vec![None, Some(1), Some(2)],
+        );
     }
 }

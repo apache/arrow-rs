@@ -176,8 +176,7 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 
     // Process 8 elements at a time to issue multiple independent loads
     // and increase memory-level parallelism for random access patterns.
-    let chunks = indices.chunks_exact(8);
-    let remainder = chunks.remainder();
+    let (chunks, remainder) = indices.as_chunks::<8>();
     for chunk in chunks {
         let v0 = arrays[chunk[0].0].value(chunk[0].1);
         let v1 = arrays[chunk[1].0].value(chunk[1].1);
@@ -211,7 +210,7 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
     }
 
     // SAFETY: all `len` elements have been initialized
-    debug_assert!(base == len);
+    debug_assert_eq!(base, len);
     unsafe { output.set_len(len) };
 
     let array = PrimitiveArray::<T>::try_new(output.into(), interleaved.nulls)?;
@@ -310,7 +309,7 @@ fn interleave_views<T: ByteViewType>(
     let mut offsets = Vec::with_capacity(interleaved.arrays.len() + 1);
     offsets.push(0);
     let mut total_buffers = 0;
-    for a in interleaved.arrays.iter() {
+    for a in &interleaved.arrays {
         total_buffers += a.data_buffers().len();
         offsets.push(total_buffers);
     }
@@ -340,7 +339,7 @@ fn interleave_views<T: ByteViewType>(
         .collect();
 
     let array = unsafe {
-        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers, interleaved.nulls)
+        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers.into(), interleaved.nulls)
     };
     Ok(Arc::new(array))
 }
@@ -544,7 +543,13 @@ fn interleave_fixed_size_list(
         }
     };
 
-    let array = FixedSizeListArray::new(field.clone(), size, interleaved_values, interleaved.nulls);
+    let array = FixedSizeListArray::try_new_with_length(
+        field.clone(),
+        size,
+        interleaved_values,
+        interleaved.nulls,
+        indices.len(),
+    )?;
     Ok(Arc::new(array))
 }
 
@@ -768,7 +773,7 @@ fn interleave_fallback(
 ) -> Result<ArrayRef, ArrowError> {
     let arrays: Vec<_> = values.iter().map(|x| x.to_data()).collect();
     let arrays: Vec<_> = arrays.iter().collect();
-    let mut array_data = MutableArrayData::new(arrays, false, indices.len());
+    let mut array_data = MutableArrayData::try_new(arrays, false, indices.len())?;
 
     let mut cur_array = indices[0].0;
     let mut start_row_idx = indices[0].1;
@@ -1956,7 +1961,7 @@ mod tests {
     #[test]
     fn test_interleave_run_end_encoded_empty_runs() {
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-        builder.extend([1].into_iter().map(Some));
+        builder.extend(std::iter::once(Some(1)));
         let a = builder.finish();
 
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
@@ -2031,6 +2036,49 @@ mod tests {
                 Some("qux")
             ]
         );
+    }
+
+    #[test]
+    fn test_interleave_string_view_dictionary_overflow_returns_err() {
+        // interleaving dictionaries which results in overflowing the key type should
+        // surface an error not a panic
+        let values_a: StringViewArray = (0..200).map(|i| Some(format!("a{i}"))).collect();
+        let keys_a = UInt8Array::from_iter_values(0..200);
+        let dict_a = DictionaryArray::<UInt8Type>::new(keys_a, Arc::new(values_a));
+
+        let values_b: StringViewArray = (0..200).map(|i| Some(format!("b{i}"))).collect();
+        let keys_b = UInt8Array::from_iter_values(0..200);
+        let dict_b = DictionaryArray::<UInt8Type>::new(keys_b, Arc::new(values_b));
+
+        let indices: Vec<_> = (0..200).flat_map(|i| [(0, i), (1, i)]).collect();
+
+        let err = interleave(&[&dict_a, &dict_b], &indices).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
+    }
+
+    #[test]
+    fn test_interleave_nested_dictionary_overflow_returns_err() {
+        // same as above, but with the dictionary nested inside a FixedSizeList
+        let field = Arc::new(arrow_schema::Field::new(
+            "item",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8View)),
+            false,
+        ));
+
+        let values_a: StringViewArray = (0..200).map(|i| Some(format!("a{i}"))).collect();
+        let keys_a = UInt8Array::from_iter_values(0..200);
+        let dict_a = DictionaryArray::<UInt8Type>::new(keys_a, Arc::new(values_a));
+        let list_a = FixedSizeListArray::new(field.clone(), 1, Arc::new(dict_a), None);
+
+        let values_b: StringViewArray = (0..200).map(|i| Some(format!("b{i}"))).collect();
+        let keys_b = UInt8Array::from_iter_values(0..200);
+        let dict_b = DictionaryArray::<UInt8Type>::new(keys_b, Arc::new(values_b));
+        let list_b = FixedSizeListArray::new(field, 1, Arc::new(dict_b), None);
+
+        let indices: Vec<_> = (0..200).flat_map(|i| [(0, i), (1, i)]).collect();
+
+        let err = interleave(&[&list_a, &list_b], &indices).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
     }
 
     #[test]
@@ -2144,6 +2192,23 @@ mod tests {
         let values = result.values().as_primitive::<Int32Type>();
         // [[5,6], [7,8], [1,2], [9,10], [3,4]]
         assert_eq!(values.values(), &[5, 6, 7, 8, 1, 2, 9, 10, 3, 4]);
+    }
+
+    #[test]
+    fn test_interleave_zero_sized_fixed_size_list() {
+        let input = FixedSizeListArray::try_new_with_length(
+            Field::new_list_field(DataType::Int32, true).into(),
+            0,
+            Arc::new(Int32Array::new_null(0)),
+            None,
+            3,
+        )
+        .unwrap();
+
+        let indices = [(0, 2), (0, 0)];
+        let result = interleave(&[&input], &indices).unwrap();
+
+        assert_eq!(result.len(), 2);
     }
 
     #[test]

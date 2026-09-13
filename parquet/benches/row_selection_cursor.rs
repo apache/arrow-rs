@@ -181,7 +181,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     for (offset, &column_count) in COLUMN_WIDTHS.iter().enumerate() {
         let parquet_data = write_parquet_batch(build_int32_columns_batch(TOTAL_ROWS, column_count));
-        let variant_label = format!("C{:02}", column_count);
+        let variant_label = format!("C{column_count:02}");
         bench_over_lengths(
             c,
             "columns",
@@ -195,7 +195,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for (offset, &len) in UTF8VIEW_LENS.iter().enumerate() {
         let batch = build_utf8view_batch_with_len(TOTAL_ROWS, len);
         let parquet_data = write_parquet_batch(batch);
-        let variant_label = format!("utf8view-L{:03}", len);
+        let variant_label = format!("utf8view-L{len:03}");
         bench_over_lengths(
             c,
             "utf8view-len",
@@ -316,7 +316,7 @@ fn build_utf8view_batch(total_rows: usize) -> RecordBatch {
 
 fn build_utf8view_batch_with_len(total_rows: usize, len: usize) -> RecordBatch {
     let mut builder = StringViewBuilder::new();
-    let value: String = "a".repeat(len);
+    let value = "a".repeat(len);
     for _ in 0..total_rows {
         builder.append_value(&value);
     }
@@ -331,7 +331,7 @@ fn build_int32_columns_batch(total_rows: usize, num_columns: usize) -> RecordBat
     let mut fields = Vec::with_capacity(num_columns);
     let mut columns = Vec::with_capacity(num_columns);
     for idx in 0..num_columns {
-        fields.push(Field::new(format!("value{}", idx), DataType::Int32, false));
+        fields.push(Field::new(format!("value{idx}"), DataType::Int32, false));
         columns.push(base_values.clone());
     }
     let schema = Arc::new(Schema::new(fields));

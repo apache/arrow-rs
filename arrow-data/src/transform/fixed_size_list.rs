@@ -28,7 +28,7 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
 
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
-            for child in mutable.child_data.iter_mut() {
+            for child in &mut mutable.child_data {
                 child.try_extend(index, start * size, (start + len) * size)?;
             }
             Ok(())
@@ -42,7 +42,7 @@ pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Resul
         _ => unreachable!(),
     };
 
-    for child in mutable.child_data.iter_mut() {
+    for child in &mut mutable.child_data {
         child.try_extend_nulls(len * size)?;
     }
     Ok(())

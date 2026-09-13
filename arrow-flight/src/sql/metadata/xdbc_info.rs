@@ -22,7 +22,7 @@
 //!   and building a conformant `RecordBatch`.
 //! - [`XdbcTypeInfoData`] - a helper type wrapping a `RecordBatch`
 //!   used for storing xdbc server metadata.
-//! - [`GetXdbcTypeInfoBuilder`] - a builder for consructing [`CommandGetXdbcTypeInfo`] responses.
+//! - [`GetXdbcTypeInfoBuilder`] - a builder for constructing [`CommandGetXdbcTypeInfo`] responses.
 //!
 use std::sync::Arc;
 
@@ -86,7 +86,7 @@ pub struct XdbcTypeInfo {
 /// [`CommandGetXdbcTypeInfo`] are metadata requests used by a Flight SQL
 /// server to communicate supported capabilities to Flight SQL clients.
 ///
-/// Servers constuct - usually static - [`XdbcTypeInfoData`] via the [`XdbcTypeInfoDataBuilder`],
+/// Servers construct - usually static - [`XdbcTypeInfoData`] via the [`XdbcTypeInfoDataBuilder`],
 /// and build responses using [`CommandGetXdbcTypeInfo::into_builder`].
 pub struct XdbcTypeInfoData {
     batch: RecordBatch,
@@ -119,7 +119,7 @@ impl XdbcTypeInfoData {
 /// use arrow_flight::sql::{Nullable, Searchable, XdbcDataType};
 /// use arrow_flight::sql::metadata::{XdbcTypeInfo, XdbcTypeInfoDataBuilder};
 /// // Create the list of metadata describing the server. Since this would not change at
-/// // runtime, using once_cell::Lazy or similar patterns to constuct the list is a common approach.
+/// // runtime, using once_cell::Lazy or similar patterns to construct the list is a common approach.
 /// let mut builder = XdbcTypeInfoDataBuilder::new();
 /// builder.append(XdbcTypeInfo {
 ///     type_name: "INTEGER".into(),

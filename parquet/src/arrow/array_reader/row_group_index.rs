@@ -73,8 +73,7 @@ impl RowGroupIndexReader {
                 })
                 .ok_or_else(|| {
                     ParquetError::General(format!(
-                        "Row group with ordinal {} not found in metadata",
-                        ordinal
+                        "Row group with ordinal {ordinal} not found in metadata"
                     ))
                 })?;
 
@@ -112,8 +111,7 @@ impl RowGroupIndexReader {
 
                 let row_group_index = ordinal_to_index.get(&ordinal).ok_or_else(|| {
                     ParquetError::General(format!(
-                        "Row group with ordinal {} not found in metadata",
-                        ordinal
+                        "Row group with ordinal {ordinal} not found in metadata"
                     ))
                 })?;
 

@@ -48,7 +48,8 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
-    let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
+    let mut bool_buf = MutableBuffer::try_from_len_zeroed(num_bytes)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let bool_slice = bool_buf.as_slice_mut();
 
     // if both array slots are valid, check if list contains primitive
@@ -60,7 +61,7 @@ where
             for j in 0..list.len() {
                 if list.is_valid(j) && (left.value(i) == list.value(j)) {
                     bit_util::set_bit(bool_slice, i);
-                    continue;
+                    break;
                 }
             }
         }
@@ -88,7 +89,8 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
-    let mut bool_buf = MutableBuffer::from_len_zeroed(num_bytes);
+    let mut bool_buf = MutableBuffer::try_from_len_zeroed(num_bytes)
+        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
     let bool_slice = &mut bool_buf;
 
     for i in 0..left_len {
@@ -100,7 +102,7 @@ where
             for j in 0..list.len() {
                 if list.is_valid(j) && (left.value(i) == list.value(j)) {
                     bit_util::set_bit(bool_slice, i);
-                    continue;
+                    break;
                 }
             }
         }
@@ -974,7 +976,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_eq_scalar,
         vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
-        "arrow".as_bytes(),
+        b"arrow",
         crate::cmp::eq,
         vec![true, false, false, false, false]
     );
@@ -989,7 +991,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_neq_scalar,
         vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
-        "arrow".as_bytes(),
+        b"arrow",
         crate::cmp::neq,
         vec![false, true, true, true, true]
     );
@@ -1004,7 +1006,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_lt_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        "flight".as_bytes(),
+        b"flight",
         crate::cmp::lt,
         vec![true, true, false, false, false]
     );
@@ -1019,7 +1021,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_lt_eq_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        "flight".as_bytes(),
+        b"flight",
         crate::cmp::lt_eq,
         vec![true, true, true, false, false]
     );
@@ -1034,7 +1036,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_gt_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        "flight".as_bytes(),
+        b"flight",
         crate::cmp::gt,
         vec![false, false, false, true, true]
     );
@@ -1049,7 +1051,7 @@ mod tests {
     test_binary_scalar!(
         test_binary_array_gt_eq_scalar,
         vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        "flight".as_bytes(),
+        b"flight",
         crate::cmp::gt_eq,
         vec![false, false, true, true, true]
     );
