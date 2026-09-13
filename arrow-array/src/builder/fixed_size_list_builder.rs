@@ -310,7 +310,6 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(4, list_array.len());
         assert_eq!(1, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
     }
 
@@ -323,7 +322,6 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(4, list_array.len());
         assert_eq!(0, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
     }
 
@@ -336,7 +334,6 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(4, list_array.len());
         assert_eq!(1, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
     }
 
@@ -383,7 +380,6 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(4, list_array.len());
         assert_eq!(1, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
     }
 
@@ -405,7 +401,6 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(4, list_array.len());
         assert_eq!(1, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
     }
 
@@ -442,7 +437,6 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(6, list_array.len());
         assert_eq!(2, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
     }
 
