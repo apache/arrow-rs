@@ -697,9 +697,13 @@ where
             streaming,
         } = self;
 
-        // The first flush builds the preset from the whole buffered page and
-        // encodes it in one pass; that also arms streaming for later pages.
+        // The first nonempty flush builds the preset from the whole buffered
+        // page and encodes it in one pass; that also arms streaming for later pages.
         let page = match preset {
+            // Nothing to sample, so no preset to build. Leaving it unset keeps the
+            // chunk off the fallback parameters, which would make every later
+            // fractional value an exception.
+            None if values.is_empty() => encode_page(values, &[], scratch)?,
             None => {
                 let built = build_preset(values);
                 let page = encode_page(values, &built, scratch)?;
@@ -1077,5 +1081,35 @@ mod tests {
         // `SAMPLING_EARLY_EXIT_THRESHOLD` non-improving candidates. The
         // round-trip proves the page survives both paths losslessly.
         assert_bits_eq(&roundtrip::<DoubleType>(&values), &values);
+    }
+
+    /// An empty first data page must not pin the chunk's preset to exponent 0 /
+    /// factor 0: `flush_buffer` caches the first page's preset for the whole
+    /// chunk, so a degenerate one makes every later fractional value an exception.
+    #[test]
+    fn test_empty_first_page_does_not_poison_preset() {
+        let values: Vec<f64> = (0..3000).map(|i| (i as f64) * 0.01).collect();
+
+        // Baseline: the same values encoded as the first page of a chunk.
+        let mut baseline_encoder = AlpEncoder::<DoubleType>::new();
+        baseline_encoder.put(&values).unwrap();
+        let baseline = baseline_encoder.flush_buffer().unwrap();
+
+        // The same values, but preceded by an empty first page.
+        let mut encoder = AlpEncoder::<DoubleType>::new();
+        let empty = encoder.flush_buffer().unwrap();
+        assert_eq!(
+            empty.len(),
+            ALP_HEADER_SIZE,
+            "an empty page should be header-only"
+        );
+
+        encoder.put(&values).unwrap();
+        let after_empty = encoder.flush_buffer().unwrap();
+
+        assert_eq!(
+            after_empty, baseline,
+            "a leading empty page must not affect encoding of the first nonempty page"
+        );
     }
 }
