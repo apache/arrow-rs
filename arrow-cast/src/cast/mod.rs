@@ -46,6 +46,9 @@ mod string;
 mod union;
 
 use crate::cast::decimal::*;
+// Keep `arrow_cast::cast::single_decimal_to_float_lossy` reachable at its
+// existing path now that it lives in the private `decimal` module.
+pub use crate::cast::decimal::single_decimal_to_float_lossy;
 use crate::cast::dictionary::*;
 use crate::cast::list::*;
 use crate::cast::map::*;
@@ -76,20 +79,6 @@ use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 pub use decimal::parse_string_to_decimal_native;
 pub use decimal::{DecimalCast, rescale_decimal, single_float_to_decimal};
 pub use string::cast_single_string_to_boolean_default;
-
-/// Lossy conversion from decimal to float.
-///
-/// Conversion is lossy and follows standard floating point semantics. Values
-/// that exceed the representable range become `INFINITY` or `-INFINITY` without
-/// returning an error.
-#[inline(always)]
-pub fn single_decimal_to_float_lossy<D, F>(f: &F, x: D::Native, scale: i32) -> f64
-where
-    D: DecimalType,
-    F: Fn(D::Native) -> f64,
-{
-    f(x) / 10_f64.powi(scale)
-}
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -346,101 +335,6 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 /// See [`cast_with_options`] for more information
 pub fn cast(array: &dyn Array, to_type: &DataType) -> Result<ArrayRef, ArrowError> {
     cast_with_options(array, to_type, &CastOptions::default())
-}
-
-/// Convert an integer to a decimal native value without wrapping.
-///
-/// `AsPrimitive` / `as` silently truncates when the source is wider than `M`
-/// (for example `5_000_000_000i64 as i32`). All integer sources fit in `i128`
-/// losslessly, which [`DecimalCast`] then converts to the decimal native type
-/// with a range check. For types that always fit (e.g. `i64` to `Decimal128`) this
-/// should get optimized to being equivalent to `i64 as i128`.
-fn integer_to_decimal_native<I, M>(value: I) -> Option<M>
-where
-    I: Into<i128>,
-    M: DecimalCast,
-{
-    M::from_decimal(value.into())
-}
-
-fn cast_integer_to_decimal<
-    T: ArrowPrimitiveType,
-    D: DecimalType + ArrowPrimitiveType<Native = M>,
-    M,
->(
-    array: &PrimitiveArray<T>,
-    precision: u8,
-    scale: i8,
-    base: M,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp + Into<i128>,
-    M: ArrowNativeTypeOp + DecimalCast,
-{
-    let overflow = |v: T::Native| {
-        ArrowError::CastError(format!(
-            "Cannot cast to {}({precision}, {scale}). Overflowing on {v:?}",
-            D::PREFIX,
-        ))
-    };
-
-    let array = if scale < 0 {
-        // Compute the scale factor once in the source type. Scaling before the
-        // checked conversion permits values that only fit the decimal native
-        // type after scaling.
-        let scale_factor = T::Native::usize_as(10)
-            .pow_checked(scale.unsigned_abs() as u32)
-            .ok();
-
-        match (scale_factor, cast_options.safe) {
-            (Some(scale_factor), true) => array.unary_opt::<_, D>(|v| {
-                let v = v
-                    .div_checked(scale_factor)
-                    .ok()
-                    .and_then(integer_to_decimal_native::<_, M>)?;
-                (D::is_valid_decimal_precision(v, precision)).then_some(v)
-            }),
-            (Some(scale_factor), false) => array.try_unary::<_, D, _>(|v| {
-                let v = v
-                    .div_checked(scale_factor)
-                    .ok()
-                    .and_then(integer_to_decimal_native::<_, M>)
-                    .ok_or_else(|| overflow(v))?;
-                D::validate_decimal_precision(v, precision, scale).map(|()| v)
-            })?,
-            // A scale factor that overflows the source type is larger than all
-            // source values, so integer division produces zero.
-            //
-            // For a well formed decimal scale, this path should never be reachable.
-            (None, _) => array.unary::<_, D>(|_| M::ZERO),
-        }
-    } else {
-        let scale_factor = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
-            ArrowError::CastError(format!(
-                "Cannot cast to {:?}({}, {}). The scale causes overflow.",
-                D::PREFIX,
-                precision,
-                scale,
-            ))
-        })?;
-
-        match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| {
-                let v = integer_to_decimal_native::<_, M>(v)
-                    .and_then(|v| v.mul_checked(scale_factor).ok())?;
-                (D::is_valid_decimal_precision(v, precision)).then_some(v)
-            }),
-            false => array.try_unary::<_, D, _>(|v| {
-                let v = integer_to_decimal_native::<_, M>(v)
-                    .ok_or_else(|| overflow(v))
-                    .and_then(|v| v.mul_checked(scale_factor))?;
-                D::validate_decimal_precision(v, precision, scale).map(|()| v)
-            })?,
-        }
-    };
-
-    Ok(Arc::new(array.with_precision_and_scale(precision, scale)?))
 }
 
 /// Cast the array from interval year month to month day nano
@@ -2384,156 +2278,6 @@ fn cast_struct_fields_in_order(
         .zip(to_fields.iter())
         .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
         .collect::<Result<Vec<ArrayRef>, ArrowError>>()
-}
-
-fn cast_from_decimal<D, F>(
-    array: &dyn Array,
-    base: D::Native,
-    scale: &i8,
-    from_type: &DataType,
-    to_type: &DataType,
-    as_float: F,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    D: DecimalType + ArrowPrimitiveType,
-    <D as ArrowPrimitiveType>::Native: ToPrimitive,
-    F: Fn(D::Native) -> f64,
-{
-    use DataType::*;
-    // cast decimal to other type
-    match to_type {
-        UInt8 => cast_decimal_to_integer::<D, UInt8Type>(array, base, *scale, cast_options),
-        UInt16 => cast_decimal_to_integer::<D, UInt16Type>(array, base, *scale, cast_options),
-        UInt32 => cast_decimal_to_integer::<D, UInt32Type>(array, base, *scale, cast_options),
-        UInt64 => cast_decimal_to_integer::<D, UInt64Type>(array, base, *scale, cast_options),
-        Int8 => cast_decimal_to_integer::<D, Int8Type>(array, base, *scale, cast_options),
-        Int16 => cast_decimal_to_integer::<D, Int16Type>(array, base, *scale, cast_options),
-        Int32 => cast_decimal_to_integer::<D, Int32Type>(array, base, *scale, cast_options),
-        Int64 => cast_decimal_to_integer::<D, Int64Type>(array, base, *scale, cast_options),
-        Float16 => cast_decimal_to_float::<D, Float16Type, _>(array, |x| {
-            half::f16::from_f64(single_decimal_to_float_lossy::<D, F>(
-                &as_float,
-                x,
-                <i32 as From<i8>>::from(*scale),
-            ))
-        }),
-        Float32 => cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
-            single_decimal_to_float_lossy::<D, F>(&as_float, x, <i32 as From<i8>>::from(*scale))
-                as f32
-        }),
-        Float64 => cast_decimal_to_float::<D, Float64Type, _>(array, |x| {
-            single_decimal_to_float_lossy::<D, F>(&as_float, x, <i32 as From<i8>>::from(*scale))
-        }),
-        Utf8View => value_to_string_view(array, cast_options),
-        Utf8 => value_to_string::<i32>(array, cast_options),
-        LargeUtf8 => value_to_string::<i64>(array, cast_options),
-        Null => Ok(new_null_array(to_type, array.len())),
-        _ => Err(ArrowError::CastError(format!(
-            "Casting from {from_type} to {to_type} not supported"
-        ))),
-    }
-}
-
-fn cast_to_decimal<D, M>(
-    array: &dyn Array,
-    base: M,
-    precision: &u8,
-    scale: &i8,
-    from_type: &DataType,
-    to_type: &DataType,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError>
-where
-    D: DecimalType + ArrowPrimitiveType<Native = M>,
-    M: ArrowNativeTypeOp + DecimalCast,
-{
-    use DataType::*;
-    // cast data to decimal
-    match from_type {
-        UInt8 => cast_integer_to_decimal::<_, D, M>(
-            array.as_primitive::<UInt8Type>(),
-            *precision,
-            *scale,
-            base,
-            cast_options,
-        ),
-        UInt16 => cast_integer_to_decimal::<_, D, _>(
-            array.as_primitive::<UInt16Type>(),
-            *precision,
-            *scale,
-            base,
-            cast_options,
-        ),
-        UInt32 => cast_integer_to_decimal::<_, D, _>(
-            array.as_primitive::<UInt32Type>(),
-            *precision,
-            *scale,
-            base,
-            cast_options,
-        ),
-        UInt64 => cast_integer_to_decimal::<_, D, _>(
-            array.as_primitive::<UInt64Type>(),
-            *precision,
-            *scale,
-            base,
-            cast_options,
-        ),
-        Int8 => cast_integer_to_decimal::<_, D, _>(
-            array.as_primitive::<Int8Type>(),
-            *precision,
-            *scale,
-            base,
-            cast_options,
-        ),
-        Int16 => cast_integer_to_decimal::<_, D, _>(
-            array.as_primitive::<Int16Type>(),
-            *precision,
-            *scale,
-            base,
-            cast_options,
-        ),
-        Int32 => cast_integer_to_decimal::<_, D, _>(
-            array.as_primitive::<Int32Type>(),
-            *precision,
-            *scale,
-            base,
-            cast_options,
-        ),
-        Int64 => cast_integer_to_decimal::<_, D, _>(
-            array.as_primitive::<Int64Type>(),
-            *precision,
-            *scale,
-            base,
-            cast_options,
-        ),
-        Float16 => cast_floating_point_to_decimal::<_, D>(
-            array.as_primitive::<Float16Type>(),
-            *precision,
-            *scale,
-            cast_options,
-        ),
-        Float32 => cast_floating_point_to_decimal::<_, D>(
-            array.as_primitive::<Float32Type>(),
-            *precision,
-            *scale,
-            cast_options,
-        ),
-        Float64 => cast_floating_point_to_decimal::<_, D>(
-            array.as_primitive::<Float64Type>(),
-            *precision,
-            *scale,
-            cast_options,
-        ),
-        Utf8View | Utf8 => {
-            cast_string_to_decimal::<D, i32>(array, *precision, *scale, cast_options)
-        }
-        LargeUtf8 => cast_string_to_decimal::<D, i64>(array, *precision, *scale, cast_options),
-        Null => Ok(new_null_array(to_type, array.len())),
-        _ => Err(ArrowError::CastError(format!(
-            "Casting from {from_type} to {to_type} not supported"
-        ))),
-    }
 }
 
 /// Get the time unit as a multiple of a second
