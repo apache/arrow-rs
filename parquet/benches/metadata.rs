@@ -453,7 +453,7 @@ fn modular_footer_benchmark(c: &mut Criterion) {
 
     let filter_reader = ModularFooterReader::new(vec![1]).with_prefetch_size(MODULAR_PREFETCH_SIZE);
     let mut filter_fetch = MemoryFetch::new(modular.clone());
-    let filter_metadata = runtime
+    let mut filter_metadata = runtime
         .block_on(filter_reader.load(&mut filter_fetch, modular.len() as u64))
         .unwrap();
     let filter_statistics = runtime
@@ -483,7 +483,7 @@ fn modular_footer_benchmark(c: &mut Criterion) {
     c.bench_function("metadata/modular_filter_c0_project_c1", |b| {
         b.iter(|| {
             let mut fetch = MemoryFetch::new(modular.clone());
-            let metadata = runtime
+            let mut metadata = runtime
                 .block_on(filter_reader.load(&mut fetch, modular.len() as u64))
                 .unwrap();
             let statistics = runtime

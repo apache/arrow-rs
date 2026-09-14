@@ -15,99 +15,197 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Scan-oriented footer metadata.
-//!
-//! Unlike [`ParquetMetaData`], this representation does not require metadata for every leaf
-//! column in every row group. This is important for footer formats that can retrieve placement
-//! metadata independently for each projected column.
-
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "staged sparse async decoder integration")
-)]
+//! Query-oriented footer metadata used by the async reader.
 
 use std::sync::Arc;
 
-use crate::errors::Result;
-use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
+use futures::future::BoxFuture;
 
-/// Metadata for one column chunk selected by a scan.
-#[derive(Debug, Clone)]
-pub(crate) struct ScanColumnChunk {
-    /// Ordinal of the row group in the source file.
-    pub(crate) row_group_index: usize,
-    /// Leaf-column ordinal in the source schema.
-    pub(crate) column_index: usize,
-    /// Metadata consumed by the existing Parquet page readers.
-    pub(crate) metadata: ColumnChunkMetaData,
-}
+use crate::arrow::async_reader::MetadataFetch;
+use crate::errors::{ParquetError, Result};
+use crate::file::metadata::{
+    ColumnChunkMetaData, FileMetaData, KeyValue, ParquetMetaData, RowGroupMetaData,
+};
+use crate::schema::types::{ColumnDescPtr, SchemaDescriptor, Type as SchemaType};
 
-/// The subset of footer metadata needed to plan and decode a scan.
-#[derive(Debug, Clone)]
-pub(crate) struct ScanMetadata {
-    pub(crate) row_group_num_rows: Vec<i64>,
-    pub(crate) column_chunks: Vec<ScanColumnChunk>,
-}
+/// The metadata contract between a footer decoder and the existing page decoder.
+///
+/// A legacy implementation can decode eagerly, while a modular implementation can retain
+/// independently addressable modules and decode only chunks requested by the query.
+pub(crate) trait ScanFooter {
+    fn version(&self) -> i32;
+    fn num_rows(&self) -> i64;
+    fn schema(&self) -> &SchemaDescriptor;
+    fn row_group_num_rows(&self) -> &[i64];
+    fn created_by(&self) -> Option<&str>;
+    fn key_value_metadata(&self) -> Option<&[KeyValue]>;
 
-impl ScanMetadata {
-    /// Returns selected chunk metadata without assuming a dense row-group layout.
-    pub(crate) fn column_chunk(
+    fn column_chunk(
         &self,
         row_group_index: usize,
         column_index: usize,
-    ) -> Option<&ColumnChunkMetaData> {
-        self.column_chunks
-            .iter()
-            .find(|chunk| {
-                chunk.row_group_index == row_group_index && chunk.column_index == column_index
-            })
-            .map(|chunk| &chunk.metadata)
+        projected_column: ColumnDescPtr,
+    ) -> Result<ColumnChunkMetaData>;
+}
+
+/// Asynchronously loads a physical footer while retaining state for later optional fetches.
+pub(crate) trait AsyncFooterLoader {
+    type Footer: ScanFooter;
+
+    fn load_footer<'a, F>(
+        &'a self,
+        fetch: &'a mut F,
+        file_size: u64,
+    ) -> BoxFuture<'a, Result<Self::Footer>>
+    where
+        F: MetadataFetch + Send + 'a;
+}
+
+/// Builds the projected metadata expected by the existing page decoder.
+///
+/// This is dense only within the query projection; unprojected chunks have no entries.
+pub(crate) fn projected_parquet_metadata<F: ScanFooter>(
+    footer: &F,
+    columns: &[usize],
+) -> Result<ParquetMetaData> {
+    if columns.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(general_err!("projected columns must be sorted and unique"));
     }
+    if columns
+        .last()
+        .is_some_and(|&column| column >= footer.schema().num_columns())
+    {
+        return Err(general_err!("projected column is out of range"));
+    }
+    let mut leaf_index = 0;
+    let root = project_type(footer.schema().root_schema(), columns, &mut leaf_index)?
+        .ok_or_else(|| general_err!("footer projection selects no columns"))?;
+    let schema = Arc::new(SchemaDescriptor::new(root));
+    let mut row_groups = Vec::with_capacity(footer.row_group_num_rows().len());
+    for (row_group_index, &num_rows) in footer.row_group_num_rows().iter().enumerate() {
+        let mut chunks = Vec::with_capacity(columns.len());
+        for (projected_index, &column_index) in columns.iter().enumerate() {
+            chunks.push(footer.column_chunk(
+                row_group_index,
+                column_index,
+                schema.column(projected_index),
+            )?);
+        }
+        let total_byte_size = chunks.iter().map(|chunk| chunk.uncompressed_size()).sum();
+        row_groups.push(
+            RowGroupMetaData::builder(Arc::clone(&schema))
+                .set_num_rows(num_rows)
+                .set_total_byte_size(total_byte_size)
+                .set_column_metadata(chunks)
+                .set_ordinal(row_group_index as i32)
+                .build()?,
+        );
+    }
+    let file = FileMetaData::new(
+        footer.version(),
+        footer.num_rows(),
+        footer.created_by().map(str::to_owned),
+        footer.key_value_metadata().map(|metadata| {
+            metadata
+                .iter()
+                // The embedded schema describes the unprojected file and cannot be attached to
+                // projected metadata. Parquet logical annotations still preserve scan semantics.
+                .filter(|entry| entry.key != crate::arrow::ARROW_SCHEMA_META_KEY)
+                .cloned()
+                .collect()
+        }),
+        schema,
+        None,
+    );
+    Ok(ParquetMetaData::new(file, row_groups))
 }
 
-/// A decoded footer that can produce metadata for a query projection.
-pub(crate) trait ScanFooter {
-    /// Materializes placement metadata only for the selected row groups and columns.
-    fn scan_metadata(&self, row_groups: &[usize], columns: &[usize]) -> Result<ScanMetadata>;
+fn project_type(
+    field: &SchemaType,
+    columns: &[usize],
+    leaf_index: &mut usize,
+) -> Result<Option<Arc<SchemaType>>> {
+    if field.is_primitive() {
+        let selected = columns.binary_search(leaf_index).is_ok();
+        *leaf_index += 1;
+        return Ok(selected.then(|| Arc::new(field.clone())));
+    }
+    let mut children = Vec::new();
+    for child in field.get_fields() {
+        if let Some(child) = project_type(child, columns, leaf_index)? {
+            children.push(child);
+        }
+    }
+    if children.is_empty() {
+        return Ok(None);
+    }
+    let info = field.get_basic_info();
+    let mut builder = SchemaType::group_type_builder(info.name())
+        .with_fields(children)
+        .with_converted_type(info.converted_type())
+        .with_logical_type(info.logical_type_ref().cloned())
+        .with_id(info.has_id().then(|| info.id()));
+    if info.has_repetition() {
+        builder = builder.with_repetition(info.repetition());
+    }
+    Ok(Some(Arc::new(builder.build()?)))
 }
 
-/// Adapter for the legacy monolithic footer.
+/// Adapter preserving the existing eager legacy-footer behavior.
+#[cfg_attr(not(test), expect(dead_code, reason = "legacy adapter migration seam"))]
 pub(crate) struct LegacyFooter {
     metadata: Arc<ParquetMetaData>,
+    row_group_num_rows: Vec<i64>,
 }
 
 impl LegacyFooter {
+    #[cfg_attr(not(test), expect(dead_code, reason = "legacy adapter migration seam"))]
     pub(crate) fn new(metadata: Arc<ParquetMetaData>) -> Self {
-        Self { metadata }
-    }
-}
-
-impl ScanFooter for LegacyFooter {
-    fn scan_metadata(&self, row_groups: &[usize], columns: &[usize]) -> Result<ScanMetadata> {
-        let row_group_num_rows = self
-            .metadata
+        let row_group_num_rows = metadata
             .row_groups()
             .iter()
             .map(|row_group| row_group.num_rows())
             .collect();
-        let mut column_chunks = Vec::with_capacity(row_groups.len() * columns.len());
-        for &column_index in columns {
-            for &row_group_index in row_groups {
-                let metadata = self
-                    .metadata
-                    .row_group(row_group_index)
-                    .column(column_index);
-                column_chunks.push(ScanColumnChunk {
-                    row_group_index,
-                    column_index,
-                    metadata: metadata.clone(),
-                });
-            }
-        }
-        Ok(ScanMetadata {
+        Self {
+            metadata,
             row_group_num_rows,
-            column_chunks,
-        })
+        }
+    }
+}
+
+impl ScanFooter for LegacyFooter {
+    fn version(&self) -> i32 {
+        self.metadata.file_metadata().version()
+    }
+    fn num_rows(&self) -> i64 {
+        self.metadata.file_metadata().num_rows()
+    }
+    fn schema(&self) -> &SchemaDescriptor {
+        self.metadata.file_metadata().schema_descr()
+    }
+    fn row_group_num_rows(&self) -> &[i64] {
+        &self.row_group_num_rows
+    }
+    fn created_by(&self) -> Option<&str> {
+        self.metadata.file_metadata().created_by()
+    }
+    fn key_value_metadata(&self) -> Option<&[KeyValue]> {
+        self.metadata
+            .file_metadata()
+            .key_value_metadata()
+            .map(Vec::as_slice)
+    }
+    fn column_chunk(
+        &self,
+        row_group_index: usize,
+        column_index: usize,
+        _projected_column: ColumnDescPtr,
+    ) -> Result<ColumnChunkMetaData> {
+        Ok(self
+            .metadata
+            .row_group(row_group_index)
+            .column(column_index)
+            .clone())
     }
 }
 
@@ -115,11 +213,9 @@ impl ScanFooter for LegacyFooter {
 mod tests {
     use super::*;
     use crate::basic::Type;
-    use crate::file::metadata::{FileMetaData, RowGroupMetaData};
-    use crate::schema::types::{SchemaDescriptor, Type as SchemaType};
 
     #[test]
-    fn legacy_scan_metadata_is_sparse() {
+    fn legacy_footer_uses_projection_contract() {
         let field = SchemaType::primitive_type_builder("a", Type::INT32)
             .build()
             .unwrap();
@@ -140,9 +236,8 @@ mod tests {
         let file = FileMetaData::new(1, 3, None, None, schema, None);
         let footer = LegacyFooter::new(Arc::new(ParquetMetaData::new(file, vec![row_group])));
 
-        let scan = footer.scan_metadata(&[0], &[0]).unwrap();
-        assert_eq!(scan.row_group_num_rows, vec![3]);
-        assert!(scan.column_chunk(0, 0).is_some());
-        assert!(scan.column_chunk(0, 1).is_none());
+        let projected = projected_parquet_metadata(&footer, &[0]).unwrap();
+        assert_eq!(projected.row_group(0).num_columns(), 1);
+        assert_eq!(projected.row_group(0).num_rows(), 3);
     }
 }

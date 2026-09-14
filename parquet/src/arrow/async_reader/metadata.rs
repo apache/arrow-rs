@@ -67,11 +67,32 @@ pub trait MetadataFetch {
     ///
     /// [`FutureExt::boxed`]: futures::FutureExt::boxed
     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>>;
+
+    /// Fetch multiple non-contiguous ranges.
+    ///
+    /// Sources that support multi-range or concurrent reads should override this method. The
+    /// default preserves compatibility with simple metadata sources by fetching sequentially.
+    fn fetch_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
+    where
+        Self: Send,
+    {
+        Box::pin(async move {
+            let mut bytes = Vec::with_capacity(ranges.len());
+            for range in ranges {
+                bytes.push(self.fetch(range).await?);
+            }
+            Ok(bytes)
+        })
+    }
 }
 
 impl<T: AsyncFileReader> MetadataFetch for &mut T {
     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
         self.get_bytes(range)
+    }
+
+    fn fetch_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+        self.get_byte_ranges(ranges)
     }
 }
 

@@ -335,20 +335,47 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         columns: Vec<usize>,
         options: ArrowReaderOptions,
     ) -> Result<Self> {
-        if matches!(options.column_index_policy(), PageIndexPolicy::Required)
-            || matches!(options.offset_index_policy(), PageIndexPolicy::Required)
-        {
-            return Err(general_err!(
-                "required page indexes are not yet supported by the modular-footer reader"
-            ));
-        }
-        let metadata = {
+        let column_index_policy = options.column_index_policy();
+        let offset_index_policy = options.offset_index_policy();
+        let (metadata, page_index) = {
             let mut fetch = &mut input;
-            ModularFooterReader::new(columns.clone())
-                .load(&mut fetch, file_size)
-                .await?
+            let footer = ModularFooterReader::new(columns.clone())
+                .with_file_metadata(options.reads_file_metadata())
+                .load_footer(&mut fetch, file_size)
+                .await?;
+            let load_column_indexes = match column_index_policy {
+                PageIndexPolicy::Skip => false,
+                PageIndexPolicy::Optional => footer.has_column_indexes(),
+                PageIndexPolicy::Required => true,
+            };
+            let load_offset_indexes = match offset_index_policy {
+                PageIndexPolicy::Skip => false,
+                PageIndexPolicy::Optional => footer.has_offset_indexes(),
+                PageIndexPolicy::Required => true,
+            };
+            let page_index = if load_column_indexes || load_offset_indexes {
+                Some(
+                    footer
+                        .load_page_indexes(
+                            &mut fetch,
+                            &columns,
+                            load_column_indexes,
+                            load_offset_indexes,
+                        )
+                        .await?,
+                )
+            } else {
+                None
+            };
+            (footer.projected_parquet_metadata(&columns)?, page_index)
         };
-        let metadata = metadata.projected_parquet_metadata(&columns)?;
+        let metadata = match page_index {
+            Some(page_index) => metadata
+                .into_builder()
+                .set_page_index(Some(Arc::new(page_index)))
+                .build(),
+            None => metadata,
+        };
         let metadata = ArrowReaderMetadata::try_new(Arc::new(metadata), options)?;
         Ok(Self::new_with_metadata(input, metadata))
     }
@@ -2174,6 +2201,70 @@ mod tests {
         assert_eq!(modular_batch, legacy_batch);
         assert_eq!(modular_batch.schema().field(0).name(), "s");
         assert_eq!(modular_batch.schema().field(1).name(), "c");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn modular_footer_statistics_prune_before_projected_data_pages() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("filter", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![0, 1, 2, 10, 11, 12])),
+                Arc::new(Int32Array::from(vec![100, 101, 102, 110, 111, 112])),
+            ],
+        )?;
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let mut legacy = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut legacy, schema, Some(properties))?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let legacy = Bytes::from(legacy);
+        let legacy_metadata = ParquetMetaDataReader::new().parse_and_finish(&legacy)?;
+        let modular = modular_footer::modularize_legacy_file(legacy.clone(), &legacy_metadata);
+
+        let mut modular_input = TestReader::new(modular.clone());
+        let (projected_metadata, retained_row_groups) = {
+            let mut fetch = &mut modular_input;
+            let mut footer = ModularFooterReader::new(vec![1])
+                .load(&mut fetch, modular.len() as u64)
+                .await?;
+            let retained = footer
+                .load_row_group_statistics(&mut fetch, 0)
+                .await?
+                .into_iter()
+                .filter_map(|statistics| {
+                    let max: [u8; 4] = statistics.max?.as_ref().try_into().ok()?;
+                    (i32::from_le_bytes(max) >= 10).then_some(statistics.row_group_index)
+                })
+                .collect::<Vec<_>>();
+            (footer.projected_parquet_metadata(&[1])?, retained)
+        };
+        assert_eq!(retained_row_groups, vec![1]);
+
+        let arrow_metadata =
+            ArrowReaderMetadata::try_new(Arc::new(projected_metadata), Default::default())?;
+        let modular_batches =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(modular_input, arrow_metadata)
+                .with_row_groups(retained_row_groups.clone())
+                .build()?
+                .try_collect::<Vec<_>>()
+                .await?;
+
+        let legacy_builder = ParquetRecordBatchStreamBuilder::new(TestReader::new(legacy)).await?;
+        let projection = ProjectionMask::leaves(legacy_builder.parquet_schema(), [1]);
+        let legacy_batches = legacy_builder
+            .with_projection(projection)
+            .with_row_groups(retained_row_groups)
+            .build()?
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(modular_batches, legacy_batches);
         Ok(())
     }
 

@@ -22,23 +22,30 @@
 //! statistics and page indexes are large. Placement arrays are column-major and randomly
 //! accessible, so this reader decodes values only for projected columns.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
 
-use crate::arrow::async_reader::{MetadataFetch, ScanColumnChunk, ScanFooter, ScanMetadata};
-use crate::basic::{CompressionCodec, Encoding, Type};
+use crate::arrow::async_reader::{AsyncFooterLoader, MetadataFetch, ScanFooter};
+use crate::basic::{BoundaryOrder, CompressionCodec, Encoding, Type};
+use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::page_index::{PageIndex, PageIndexBuilder};
 use crate::file::metadata::thrift::parquet_schema_from_bytes;
-use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
+use crate::file::metadata::{
+    ColumnChunkMetaData, ColumnIndexBuilder, KeyValue, OffsetIndexBuilder, ParquetMetaData,
+};
+use crate::file::statistics::{Statistics, ValueStatistics};
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
     ThriftSliceInputProtocol, WriteThrift, WriteThriftField, read_thrift_vec,
 };
-use crate::schema::types::{SchemaDescriptor, Type as SchemaType};
+use crate::schema::types::SchemaDescriptor;
 use crate::{thrift_struct, thrift_union};
+use futures::future::BoxFuture;
 
 const TRAILER_SIZE: usize = 20;
 const MAGIC: &[u8; 4] = b"MFP1";
@@ -46,6 +53,9 @@ const DEFAULT_PREFETCH_SIZE: usize = 64 * 1024;
 const SCHEMA_MODULE: i32 = 0;
 const PLACEMENT_MODULE: i32 = 1;
 const ROW_GROUP_STATISTICS_MODULE: i32 = 2;
+const OFFSET_INDEX_MODULE: i32 = 3;
+const COLUMN_INDEX_MODULE: i32 = 4;
+const FILE_METADATA_MODULE: i32 = 5;
 
 thrift_struct!(
 struct ModuleLocation {
@@ -135,6 +145,41 @@ struct ColumnStatistics<'a> {
 }
 );
 
+thrift_struct!(
+struct PageIndexModule<'a> {
+  1: required ArrayPage<'a> chunk_offsets
+}
+);
+
+thrift_struct!(
+struct OffsetIndexChunk<'a> {
+  1: required ArrayPage<'a> offsets;
+  2: required ArrayPage<'a> compressed_page_sizes;
+  3: required ArrayPage<'a> first_row_indexes
+}
+);
+
+thrift_struct!(
+struct ColumnIndexChunk<'a> {
+  1: required i32 boundary_order;
+  2: required ArrayPage<'a> null_pages;
+  3: optional ArrayPage<'a> null_counts;
+  4: optional ArrayPage<'a> minmax_prefixes;
+  5: optional ArrayPage<'a> min_suffixes;
+  6: optional ArrayPage<'a> max_suffixes;
+  7: optional ArrayPage<'a> min_is_exact;
+  8: optional ArrayPage<'a> max_is_exact;
+  9: optional ArrayPage<'a> nan_counts
+}
+);
+
+thrift_struct!(
+struct FileMetadataModule {
+  1: optional string created_by;
+  2: optional list<KeyValue> key_value_metadata
+}
+);
+
 /// Row-group minimum and maximum for a filter column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModularRowGroupStatistics {
@@ -144,6 +189,14 @@ pub struct ModularRowGroupStatistics {
     pub min: Option<Bytes>,
     /// Encoded maximum value, if present.
     pub max: Option<Bytes>,
+    /// Number of null values, if recorded.
+    pub null_count: Option<u64>,
+    /// Number of NaN values, if recorded for a floating-point column.
+    pub nan_count: Option<u64>,
+    /// Whether the minimum is exact. False when the minimum is absent.
+    pub min_is_exact: bool,
+    /// Whether the maximum is exact. False when the maximum is absent.
+    pub max_is_exact: bool,
 }
 
 /// Placement metadata for one projected column chunk.
@@ -184,79 +237,43 @@ pub struct ModularFooterMetadata {
     pub row_group_num_rows: Vec<i64>,
     /// Decoded Parquet schema.
     pub schema: Arc<SchemaDescriptor>,
+    /// Application that wrote the file, when descriptive metadata is present.
+    pub created_by: Option<String>,
+    /// File key/value metadata, including an embedded `ARROW:schema` when present.
+    pub key_value_metadata: Option<Vec<KeyValue>>,
     /// Placement for only the requested columns, grouped in projection then row-group order.
     pub column_chunks: Vec<ModularColumnChunk>,
     statistics_directory: Option<Range<u64>>,
+    offset_index_directory: Option<Range<u64>>,
+    column_index_directory: Option<Range<u64>>,
     tail: Bytes,
     tail_start: u64,
     modular_start: u64,
     root_start: u64,
     relative_offsets: bool,
+    statistics: HashMap<usize, Vec<Option<Statistics>>>,
 }
 
 impl ModularFooterMetadata {
-    /// Builds dense metadata in a projected schema for the existing page decoder.
-    ///
-    /// The projected schema retains the ancestors and annotations of selected leaves. It contains
-    /// only selected columns; no placeholder metadata is created for unprojected columns.
-    pub(crate) fn projected_parquet_metadata(&self, columns: &[usize]) -> Result<ParquetMetaData> {
-        let root = self.schema.root_schema();
-        if columns.windows(2).any(|pair| pair[0] >= pair[1]) {
-            return Err(general_err!(
-                "projected modular-footer columns must be sorted and unique"
-            ));
-        }
-        if columns
-            .last()
-            .is_some_and(|&column| column >= self.num_columns)
-        {
-            return Err(general_err!("projected column is out of range"));
-        }
-        let mut leaf_index = 0;
-        let projected_root = project_type(root, columns, &mut leaf_index)?
-            .ok_or_else(|| general_err!("modular-footer projection selects no columns"))?;
-        let projected_schema = Arc::new(SchemaDescriptor::new(projected_root));
+    pub(crate) fn has_offset_indexes(&self) -> bool {
+        self.offset_index_directory.is_some()
+    }
 
-        let mut row_groups = Vec::with_capacity(self.row_group_num_rows.len());
-        for (row_group_index, &num_rows) in self.row_group_num_rows.iter().enumerate() {
-            let mut chunks = Vec::with_capacity(columns.len());
-            for (projected_index, &column_index) in columns.iter().enumerate() {
-                let chunk = self
-                    .column_chunks
-                    .iter()
-                    .find(|chunk| {
-                        chunk.column_index == column_index
-                            && chunk.row_group_index == row_group_index
-                    })
-                    .ok_or_else(|| {
-                        general_err!(
-                            "column {column_index} in row group {row_group_index} was not loaded"
-                        )
-                    })?;
-                chunks.push(chunk.to_column_chunk_metadata(
-                    self.schema.column(column_index),
-                    projected_schema.column(projected_index),
-                )?);
-            }
-            let total_byte_size = chunks.iter().map(|chunk| chunk.uncompressed_size()).sum();
-            row_groups.push(
-                RowGroupMetaData::builder(Arc::clone(&projected_schema))
-                    .set_num_rows(num_rows)
-                    .set_total_byte_size(total_byte_size)
-                    .set_column_metadata(chunks)
-                    .set_ordinal(row_group_index as i32)
-                    .build()?,
-            );
-        }
-        let file_metadata = FileMetaData::new(
-            self.version,
-            self.num_rows,
-            None,
-            None,
-            projected_schema,
-            None,
-        );
-        Ok(ParquetMetaData::new(file_metadata, row_groups))
+    pub(crate) fn has_column_indexes(&self) -> bool {
+        self.column_index_directory.is_some()
+    }
+
+    /// Materializes standard Parquet metadata for `columns`.
+    ///
+    /// The projected schema retains the ancestors and annotations of selected leaves and contains
+    /// no placeholder metadata for unprojected columns.
+    ///
+    /// Statistics previously requested with [`Self::load_row_group_statistics`] are installed on
+    /// the corresponding column chunks. This lets callers inspect the ordinary
+    /// [`ParquetMetaData`] statistics, choose row groups, and then construct an async reader with
+    /// [`crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::new_with_metadata`].
+    pub fn projected_parquet_metadata(&self, columns: &[usize]) -> Result<ParquetMetaData> {
+        crate::arrow::async_reader::projected_parquet_metadata(self, columns)
     }
 
     /// Fetches and decodes row-group min/max values for one filter column.
@@ -264,7 +281,7 @@ impl ModularFooterMetadata {
     /// The statistics directory is normally served from the speculative tail read. Only the
     /// selected column's independently serialized descriptor is fetched from storage.
     pub async fn load_row_group_statistics<F: MetadataFetch>(
-        &self,
+        &mut self,
         fetch: &mut F,
         column: usize,
     ) -> Result<Vec<ModularRowGroupStatistics>> {
@@ -305,41 +322,137 @@ impl ModularFooterMetadata {
         }
         let descriptor = get_range(fetch, &self.tail, self.tail_start, start..end).await?;
         let statistics: ColumnStatistics = decode_thrift(&descriptor, "column statistics")?;
-        decode_row_group_statistics(&statistics, self.row_group_num_rows.len())
-    }
-}
-
-fn project_type(
-    field: &SchemaType,
-    columns: &[usize],
-    leaf_index: &mut usize,
-) -> Result<Option<Arc<SchemaType>>> {
-    if field.is_primitive() {
-        let selected = columns.binary_search(leaf_index).is_ok();
-        *leaf_index += 1;
-        return Ok(selected.then(|| Arc::new(field.clone())));
+        let decoded = decode_row_group_statistics(&statistics, self.row_group_num_rows.len())?;
+        let physical_type = self.schema.column(column).physical_type();
+        let standard = decoded
+            .iter()
+            .map(|value| value.to_parquet_statistics(physical_type))
+            .collect::<Result<Vec<_>>>()?;
+        self.statistics.insert(column, standard);
+        Ok(decoded)
     }
 
-    let mut children = Vec::new();
-    for child in field.get_fields() {
-        if let Some(child) = project_type(child, columns, leaf_index)? {
-            children.push(child);
+    /// Fetches standard row-group statistics for the selected filter columns.
+    ///
+    /// No statistics descriptors are fetched until this method is called. Each selected column
+    /// is independently addressable, so descriptors for other projected columns remain unread.
+    pub async fn load_statistics<F: MetadataFetch>(
+        &mut self,
+        fetch: &mut F,
+        filter_columns: &[usize],
+    ) -> Result<()> {
+        if filter_columns.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(general_err!("filter columns must be sorted and unique"));
         }
-    }
-    if children.is_empty() {
-        return Ok(None);
+        for &column in filter_columns {
+            self.load_row_group_statistics(fetch, column).await?;
+        }
+        Ok(())
     }
 
-    let info = field.get_basic_info();
-    let mut builder = SchemaType::group_type_builder(info.name())
-        .with_fields(children)
-        .with_converted_type(info.converted_type())
-        .with_logical_type(info.logical_type_ref().cloned())
-        .with_id(info.has_id().then(|| info.id()));
-    if info.has_repetition() {
-        builder = builder.with_repetition(info.repetition());
+    /// Fetches and decodes page indexes for only the selected leaf columns.
+    pub(crate) async fn load_page_indexes<F: MetadataFetch + Send>(
+        &self,
+        fetch: &mut F,
+        columns: &[usize],
+        load_column_indexes: bool,
+        load_offset_indexes: bool,
+    ) -> Result<PageIndex> {
+        let row_groups = self.row_group_num_rows.len();
+        let mut builder = PageIndexBuilder::default();
+        if load_column_indexes {
+            builder.allocate_column_indexes(row_groups, columns.len());
+            let range = self
+                .column_index_directory
+                .clone()
+                .ok_or_else(|| general_err!("modular footer has no column-index module"))?;
+            let offsets = self.load_page_index_directory(fetch, range).await?;
+            for (projected, row_group, bytes) in self
+                .load_page_index_chunks(fetch, &offsets, columns)
+                .await?
+            {
+                let chunk: ColumnIndexChunk = decode_thrift(&bytes, "column index chunk")?;
+                builder.put_column_index(
+                    decode_column_index_chunk(
+                        &chunk,
+                        self.schema.column(columns[projected]).physical_type(),
+                    )?,
+                    row_group,
+                    projected,
+                );
+            }
+        }
+        if load_offset_indexes {
+            builder.allocate_offset_indexes(row_groups, columns.len());
+            let range = self
+                .offset_index_directory
+                .clone()
+                .ok_or_else(|| general_err!("modular footer has no offset-index module"))?;
+            let offsets = self.load_page_index_directory(fetch, range).await?;
+            for (projected, row_group, bytes) in self
+                .load_page_index_chunks(fetch, &offsets, columns)
+                .await?
+            {
+                let chunk: OffsetIndexChunk = decode_thrift(&bytes, "offset index chunk")?;
+                builder.put_offset_index(decode_offset_index_chunk(&chunk)?, row_group, projected);
+            }
+        }
+        Ok(builder.build())
     }
-    Ok(Some(Arc::new(builder.build()?)))
+
+    async fn load_page_index_directory<F: MetadataFetch>(
+        &self,
+        fetch: &mut F,
+        range: Range<u64>,
+    ) -> Result<Vec<u64>> {
+        let bytes = get_range(fetch, &self.tail, self.tail_start, range).await?;
+        let directory: PageIndexModule = decode_thrift(&bytes, "page index directory")?;
+        let count = self.num_columns * self.row_group_num_rows.len() + 1;
+        validate_array(&directory.chunk_offsets, count, "chunk_offsets")?;
+        (0..count)
+            .map(|index| required_value(&directory.chunk_offsets, index))
+            .collect()
+    }
+
+    async fn load_page_index_chunks<F: MetadataFetch + Send>(
+        &self,
+        fetch: &mut F,
+        offsets: &[u64],
+        columns: &[usize],
+    ) -> Result<Vec<(usize, usize, Bytes)>> {
+        let row_groups = self.row_group_num_rows.len();
+        let mut positions = Vec::new();
+        let mut ranges = Vec::new();
+        for (projected, &column) in columns.iter().enumerate() {
+            for row_group in 0..row_groups {
+                let chunk = column * row_groups + row_group;
+                let (mut start, mut end) = (offsets[chunk], offsets[chunk + 1]);
+                if self.relative_offsets {
+                    start = self
+                        .modular_start
+                        .checked_add(start)
+                        .ok_or_else(|| general_err!("page index chunk offset overflow"))?;
+                    end = self
+                        .modular_start
+                        .checked_add(end)
+                        .ok_or_else(|| general_err!("page index chunk offset overflow"))?;
+                }
+                if start > end || start < self.modular_start || end > self.root_start {
+                    return Err(general_err!("invalid page index chunk range"));
+                }
+                if start != end {
+                    positions.push((projected, row_group));
+                    ranges.push(start..end);
+                }
+            }
+        }
+        let bytes = get_ranges(fetch, &self.tail, self.tail_start, ranges).await?;
+        Ok(positions
+            .into_iter()
+            .zip(bytes)
+            .map(|((projected, row_group), bytes)| (projected, row_group, bytes))
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -371,6 +484,33 @@ pub(super) fn modularize_legacy_file(data: Bytes, metadata: &ParquetMetaData) ->
             parameters: ArrayEncodingParameters::Bitset(BitsetParameters {
                 value_bit_width: width,
                 num_present: values.len() as i32,
+            }),
+        }
+    }
+    fn dense_bytes(values: &[Vec<u8>]) -> ArrayPage<'static> {
+        let positions: Vec<_> = (0..values.len() as u64).collect();
+        let mut offsets = Vec::with_capacity(values.len() + 1);
+        offsets.push(0);
+        for value in values {
+            offsets.push(offsets.last().copied().unwrap() + value.len() as u64);
+        }
+        let position_width = positions.last().map_or(0, |x| 64 - x.leading_zeros() as i8);
+        let offset_width = offsets.last().map_or(0, |x| 64 - x.leading_zeros() as i8);
+        let positions = dense(&positions);
+        let offsets = dense(&offsets);
+        let mut data = positions.data.to_vec();
+        data.extend_from_slice(offsets.data);
+        for value in values {
+            data.extend_from_slice(value);
+        }
+        ArrayPage {
+            data: Box::leak(data.into_boxed_slice()),
+            encoding: 1,
+            num_values: values.len() as i32,
+            parameters: ArrayEncodingParameters::PresentIndex(PresentIndexParameters {
+                num_present: values.len() as i32,
+                position_bit_width: position_width,
+                value_bit_width: offset_width,
             }),
         }
     }
@@ -428,13 +568,61 @@ pub(super) fn modularize_legacy_file(data: Bytes, metadata: &ParquetMetaData) ->
         physical_types: dense(&physical_types),
         is_fully_dictionary_encoded: dense(&dictionary_encoded),
     });
+    let file_metadata = encode(&FileMetadataModule {
+        created_by: metadata.file_metadata().created_by().map(str::to_owned),
+        key_value_metadata: metadata.file_metadata().key_value_metadata().cloned(),
+    });
+
+    // The test converter emits statistics for the first leaf. This is sufficient to exercise a
+    // predicate column that is independent of the projected data column.
+    let mut prefixes = Vec::with_capacity(row_groups);
+    let mut min_suffixes = Vec::with_capacity(row_groups);
+    let mut max_suffixes = Vec::with_capacity(row_groups);
+    let mut null_counts = Vec::with_capacity(row_groups);
+    let mut min_is_exact = Vec::with_capacity(row_groups);
+    let mut max_is_exact = Vec::with_capacity(row_groups);
+    for row_group in metadata.row_groups() {
+        let statistics = row_group
+            .column(0)
+            .statistics()
+            .expect("test data has statistics for its first column");
+        let min = statistics.min_bytes_opt().expect("test data has a minimum");
+        let max = statistics.max_bytes_opt().expect("test data has a maximum");
+        let prefix = min.iter().zip(max).take_while(|(a, b)| a == b).count();
+        prefixes.push(min[..prefix].to_vec());
+        min_suffixes.push(min[prefix..].to_vec());
+        max_suffixes.push(max[prefix..].to_vec());
+        null_counts.push(statistics.null_count_opt().unwrap_or(0));
+        min_is_exact.push(u64::from(statistics.min_is_exact()));
+        max_is_exact.push(u64::from(statistics.max_is_exact()));
+    }
+    let statistics = encode(&ColumnStatistics {
+        null_counts: Some(dense(&null_counts)),
+        minmax_prefixes: Some(dense_bytes(&prefixes)),
+        min_suffixes: Some(dense_bytes(&min_suffixes)),
+        max_suffixes: Some(dense_bytes(&max_suffixes)),
+        min_is_exact: Some(dense(&min_is_exact)),
+        max_is_exact: Some(dense(&max_is_exact)),
+        nan_counts: None,
+    });
 
     let mut output = data.to_vec();
     let modular_start = output.len() as u64;
+    output.extend_from_slice(&statistics);
     let schema_start = output.len() as u64;
     output.extend_from_slice(schema);
     let placement_start = output.len() as u64;
     output.extend_from_slice(&placement);
+    let file_metadata_start = output.len() as u64;
+    output.extend_from_slice(&file_metadata);
+    let statistics_directory_start = output.len() as u64;
+    let statistics_end = modular_start + statistics.len() as u64;
+    let mut statistics_offsets = vec![statistics_end; columns + 1];
+    statistics_offsets[0] = modular_start;
+    let statistics_directory = encode(&RowGroupStatisticsModule {
+        column_offsets: dense(&statistics_offsets),
+    });
+    output.extend_from_slice(&statistics_directory);
     let root_start = output.len() as u64;
     let root = encode(&ModularFooter {
         version: metadata.file_metadata().version(),
@@ -461,6 +649,20 @@ pub(super) fn modularize_legacy_file(data: Bytes, metadata: &ParquetMetaData) ->
                     length: placement.len() as i64,
                 },
             },
+            ModuleDirectoryEntry {
+                kind: FILE_METADATA_MODULE,
+                location: ModuleLocation {
+                    offset: file_metadata_start as i64,
+                    length: file_metadata.len() as i64,
+                },
+            },
+            ModuleDirectoryEntry {
+                kind: ROW_GROUP_STATISTICS_MODULE,
+                location: ModuleLocation {
+                    offset: statistics_directory_start as i64,
+                    length: statistics_directory.len() as i64,
+                },
+            },
         ],
     });
     output.extend_from_slice(&root);
@@ -471,36 +673,200 @@ pub(super) fn modularize_legacy_file(data: Bytes, metadata: &ParquetMetaData) ->
 }
 
 impl ScanFooter for ModularFooterMetadata {
-    fn scan_metadata(&self, row_groups: &[usize], columns: &[usize]) -> Result<ScanMetadata> {
-        let mut column_chunks = Vec::with_capacity(row_groups.len() * columns.len());
-        for &column_index in columns {
-            for &row_group_index in row_groups {
-                let chunk = self
-                    .column_chunks
-                    .iter()
-                    .find(|chunk| {
-                        chunk.column_index == column_index
-                            && chunk.row_group_index == row_group_index
-                    })
-                    .ok_or_else(|| {
-                        general_err!(
-                            "column {column_index} in row group {row_group_index} was not loaded"
-                        )
-                    })?;
-                column_chunks.push(ScanColumnChunk {
-                    row_group_index,
-                    column_index,
-                    metadata: chunk.to_column_chunk_metadata(
-                        self.schema.column(column_index),
-                        self.schema.column(column_index),
-                    )?,
-                });
-            }
+    fn version(&self) -> i32 {
+        self.version
+    }
+
+    fn num_rows(&self) -> i64 {
+        self.num_rows
+    }
+
+    fn schema(&self) -> &SchemaDescriptor {
+        &self.schema
+    }
+
+    fn row_group_num_rows(&self) -> &[i64] {
+        &self.row_group_num_rows
+    }
+
+    fn created_by(&self) -> Option<&str> {
+        self.created_by.as_deref()
+    }
+
+    fn key_value_metadata(&self) -> Option<&[KeyValue]> {
+        self.key_value_metadata.as_deref()
+    }
+
+    fn column_chunk(
+        &self,
+        row_group_index: usize,
+        column_index: usize,
+        projected_column: Arc<crate::schema::types::ColumnDescriptor>,
+    ) -> Result<ColumnChunkMetaData> {
+        let chunk = self
+            .column_chunks
+            .iter()
+            .find(|chunk| {
+                chunk.column_index == column_index && chunk.row_group_index == row_group_index
+            })
+            .ok_or_else(|| {
+                general_err!("column {column_index} in row group {row_group_index} was not loaded")
+            })?;
+        let mut metadata =
+            chunk.to_column_chunk_metadata(self.schema.column(column_index), projected_column)?;
+        if let Some(statistics) = self
+            .statistics
+            .get(&column_index)
+            .and_then(|statistics| statistics.get(row_group_index))
+            .cloned()
+            .flatten()
+        {
+            metadata = metadata.into_builder().set_statistics(statistics).build()?;
         }
-        Ok(ScanMetadata {
-            row_group_num_rows: self.row_group_num_rows.clone(),
-            column_chunks,
-        })
+        Ok(metadata)
+    }
+}
+
+impl ModularRowGroupStatistics {
+    fn to_parquet_statistics(&self, physical_type: Type) -> Result<Option<Statistics>> {
+        let (Some(min), Some(max)) = (&self.min, &self.max) else {
+            if self.min.is_some() != self.max.is_some() {
+                return Err(general_err!(
+                    "modular statistics has only one min/max bound"
+                ));
+            }
+            if self.null_count.is_none() && self.nan_count.is_none() {
+                return Ok(None);
+            }
+            let statistics = match physical_type {
+                Type::BOOLEAN => Statistics::new::<bool>(None, None, None, self.null_count, false),
+                Type::INT32 => Statistics::new::<i32>(None, None, None, self.null_count, false),
+                Type::INT64 => Statistics::new::<i64>(None, None, None, self.null_count, false),
+                Type::INT96 => Statistics::new::<Int96>(None, None, None, self.null_count, false),
+                Type::FLOAT => {
+                    let Statistics::Float(value) =
+                        Statistics::new::<f32>(None, None, None, self.null_count, false)
+                    else {
+                        unreachable!()
+                    };
+                    Statistics::Float(value.with_nan_count(self.nan_count))
+                }
+                Type::DOUBLE => {
+                    let Statistics::Double(value) =
+                        Statistics::new::<f64>(None, None, None, self.null_count, false)
+                    else {
+                        unreachable!()
+                    };
+                    Statistics::Double(value.with_nan_count(self.nan_count))
+                }
+                Type::BYTE_ARRAY => {
+                    Statistics::new::<ByteArray>(None, None, None, self.null_count, false)
+                }
+                Type::FIXED_LEN_BYTE_ARRAY => {
+                    Statistics::new::<FixedLenByteArray>(None, None, None, self.null_count, false)
+                }
+            };
+            return Ok(Some(statistics));
+        };
+        macro_rules! primitive {
+            ($type:ty, $variant:ident) => {{
+                let min = <$type>::from_le_bytes(
+                    min.as_ref()
+                        .try_into()
+                        .map_err(|_| general_err!("invalid modular statistics byte width"))?,
+                );
+                let max = <$type>::from_le_bytes(
+                    max.as_ref()
+                        .try_into()
+                        .map_err(|_| general_err!("invalid modular statistics byte width"))?,
+                );
+                Statistics::$variant(
+                    ValueStatistics::new(Some(min), Some(max), None, self.null_count, false)
+                        .with_min_is_exact(self.min_is_exact)
+                        .with_max_is_exact(self.max_is_exact),
+                )
+            }};
+        }
+        let statistics = match physical_type {
+            Type::BOOLEAN => {
+                if min.len() != 1 || max.len() != 1 || min[0] > 1 || max[0] > 1 {
+                    return Err(general_err!("invalid BOOLEAN modular statistics value"));
+                }
+                Statistics::Boolean(
+                    ValueStatistics::new(
+                        Some(min[0] != 0),
+                        Some(max[0] != 0),
+                        None,
+                        self.null_count,
+                        false,
+                    )
+                    .with_min_is_exact(self.min_is_exact)
+                    .with_max_is_exact(self.max_is_exact),
+                )
+            }
+            Type::INT32 => primitive!(i32, Int32),
+            Type::INT64 => primitive!(i64, Int64),
+            Type::FLOAT => {
+                let Statistics::Float(value) = primitive!(f32, Float) else {
+                    unreachable!()
+                };
+                Statistics::Float(value.with_nan_count(self.nan_count))
+            }
+            Type::DOUBLE => {
+                let Statistics::Double(value) = primitive!(f64, Double) else {
+                    unreachable!()
+                };
+                Statistics::Double(value.with_nan_count(self.nan_count))
+            }
+            Type::INT96 => {
+                if min.len() != 12 || max.len() != 12 {
+                    return Err(general_err!("invalid INT96 modular statistics byte width"));
+                }
+                let decode = |value: &Bytes| {
+                    let mut decoded = Int96::new();
+                    decoded.set_data(
+                        u32::from_le_bytes(value[0..4].try_into().unwrap()),
+                        u32::from_le_bytes(value[4..8].try_into().unwrap()),
+                        u32::from_le_bytes(value[8..12].try_into().unwrap()),
+                    );
+                    decoded
+                };
+                Statistics::Int96(
+                    ValueStatistics::new(
+                        Some(decode(min)),
+                        Some(decode(max)),
+                        None,
+                        self.null_count,
+                        false,
+                    )
+                    .with_min_is_exact(self.min_is_exact)
+                    .with_max_is_exact(self.max_is_exact),
+                )
+            }
+            Type::BYTE_ARRAY => Statistics::ByteArray(
+                ValueStatistics::new(
+                    Some(ByteArray::from(min.clone())),
+                    Some(ByteArray::from(max.clone())),
+                    None,
+                    self.null_count,
+                    false,
+                )
+                .with_min_is_exact(self.min_is_exact)
+                .with_max_is_exact(self.max_is_exact),
+            ),
+            Type::FIXED_LEN_BYTE_ARRAY => Statistics::FixedLenByteArray(
+                ValueStatistics::new(
+                    Some(FixedLenByteArray::from(ByteArray::from(min.clone()))),
+                    Some(FixedLenByteArray::from(ByteArray::from(max.clone()))),
+                    None,
+                    self.null_count,
+                    false,
+                )
+                .with_min_is_exact(self.min_is_exact)
+                .with_max_is_exact(self.max_is_exact),
+            ),
+        };
+        Ok(Some(statistics))
     }
 }
 
@@ -576,6 +942,7 @@ impl ModularColumnChunk {
 pub struct ModularFooterReader {
     prefetch_size: usize,
     projection: Vec<usize>,
+    file_metadata: bool,
 }
 
 impl ModularFooterReader {
@@ -584,6 +951,7 @@ impl ModularFooterReader {
         Self {
             prefetch_size: DEFAULT_PREFETCH_SIZE,
             projection,
+            file_metadata: true,
         }
     }
 
@@ -593,11 +961,20 @@ impl ModularFooterReader {
         self
     }
 
+    /// Controls whether the optional descriptive file-metadata module is loaded.
+    ///
+    /// Disable this when the caller supplies an Arrow schema or explicitly ignores embedded Arrow
+    /// metadata. This avoids an extra request when the optional module is outside the tail read.
+    pub fn with_file_metadata(mut self, file_metadata: bool) -> Self {
+        self.file_metadata = file_metadata;
+        self
+    }
+
     /// Fetches and decodes the root, schema, and projected placement metadata.
     ///
-    /// No additional request is issued when all three are present in the speculative tail read.
-    /// Otherwise only the missing critical module ranges are fetched; optional modules are not
-    /// fetched or decoded.
+    /// No additional request is issued when the requested modules are present in the speculative
+    /// tail read. Otherwise only missing critical ranges and, when enabled, the descriptive file
+    /// metadata range are fetched. Statistics and page indexes remain unloaded until requested.
     pub async fn load<F: MetadataFetch>(
         &self,
         fetch: &mut F,
@@ -645,12 +1022,31 @@ impl ModularFooterReader {
             modular_start,
             root_start,
         )?;
+        let offset_index_directory =
+            optional_module_range(&root, OFFSET_INDEX_MODULE, modular_start, root_start)?;
+        let column_index_directory =
+            optional_module_range(&root, COLUMN_INDEX_MODULE, modular_start, root_start)?;
+        let file_metadata_range = self
+            .file_metadata
+            .then(|| optional_module_range(&root, FILE_METADATA_MODULE, modular_start, root_start))
+            .transpose()?
+            .flatten();
         let schema_bytes = get_range(fetch, &tail, tail_start, schema_range).await?;
         let schema = Arc::new(decode_schema(&schema_bytes)?);
         let placement_bytes = get_range(fetch, &tail, tail_start, placement_range).await?;
         let placement: PlacementModule =
             decode_thrift(&placement_bytes, "modular footer placement module")?;
         let column_chunks = decode_projection(&root, &placement, &self.projection)?;
+        let file_metadata = match file_metadata_range {
+            Some(range) => {
+                let bytes = get_range(fetch, &tail, tail_start, range).await?;
+                decode_thrift::<FileMetadataModule>(&bytes, "modular footer file metadata")?
+            }
+            None => FileMetadataModule {
+                created_by: None,
+                key_value_metadata: None,
+            },
+        };
 
         Ok(ModularFooterMetadata {
             version: root.version,
@@ -658,14 +1054,34 @@ impl ModularFooterReader {
             num_columns: root.num_columns as usize,
             row_group_num_rows: root.row_group_num_rows,
             schema,
+            created_by: file_metadata.created_by,
+            key_value_metadata: file_metadata.key_value_metadata,
             column_chunks,
             statistics_directory,
+            offset_index_directory,
+            column_index_directory,
             tail,
             tail_start,
             modular_start,
             root_start,
             relative_offsets,
+            statistics: HashMap::new(),
         })
+    }
+}
+
+impl AsyncFooterLoader for ModularFooterReader {
+    type Footer = ModularFooterMetadata;
+
+    fn load_footer<'a, F>(
+        &'a self,
+        fetch: &'a mut F,
+        file_size: u64,
+    ) -> BoxFuture<'a, Result<Self::Footer>>
+    where
+        F: MetadataFetch + Send + 'a,
+    {
+        Box::pin(self.load(fetch, file_size))
     }
 }
 
@@ -799,13 +1215,13 @@ pub fn modular_footer_benchmark_file(
         max_suffixes.push(max[prefix_len..].to_vec());
     }
     let column_statistics = encode(&ColumnStatistics {
-        null_counts: None,
+        null_counts: Some(packed(&vec![3; num_row_groups])),
         minmax_prefixes: Some(packed_bytes(&prefixes)),
         min_suffixes: Some(packed_bytes(&min_suffixes)),
         max_suffixes: Some(packed_bytes(&max_suffixes)),
-        min_is_exact: None,
-        max_is_exact: None,
-        nan_counts: None,
+        min_is_exact: Some(packed(&vec![1; num_row_groups])),
+        max_is_exact: Some(packed(&vec![1; num_row_groups])),
+        nan_counts: Some(packed(&vec![2; num_row_groups])),
     });
     assert!(column_statistics.len() <= optional_metadata_size);
     let schema = schema(num_columns);
@@ -949,6 +1365,54 @@ async fn get_range<F: MetadataFetch>(
         return Ok(tail.slice(start..end));
     }
     fetch_exact(fetch, range).await
+}
+
+async fn get_ranges<F: MetadataFetch + Send>(
+    fetch: &mut F,
+    tail: &Bytes,
+    tail_start: u64,
+    ranges: Vec<Range<u64>>,
+) -> Result<Vec<Bytes>> {
+    let mut result = vec![None; ranges.len()];
+    let mut remote_positions = Vec::new();
+    let mut remote_ranges = Vec::new();
+    for (position, range) in ranges.iter().enumerate() {
+        if range.start >= tail_start {
+            let start: usize = (range.start - tail_start).try_into()?;
+            let end: usize = (range.end - tail_start).try_into()?;
+            if end > tail.len() {
+                return Err(eof_err!("modular footer range extends past the file"));
+            }
+            result[position] = Some(tail.slice(start..end));
+        } else {
+            remote_positions.push(position);
+            remote_ranges.push(range.clone());
+        }
+    }
+    if !remote_ranges.is_empty() {
+        let fetched = fetch.fetch_ranges(remote_ranges.clone()).await?;
+        if fetched.len() != remote_ranges.len() {
+            return Err(eof_err!(
+                "modular footer multi-range response count mismatch"
+            ));
+        }
+        for ((position, range), bytes) in
+            remote_positions.into_iter().zip(remote_ranges).zip(fetched)
+        {
+            let expected: usize = (range.end - range.start).try_into()?;
+            if bytes.len() != expected {
+                return Err(eof_err!(
+                    "modular footer requires {expected} bytes, but only read {}",
+                    bytes.len()
+                ));
+            }
+            result[position] = Some(bytes);
+        }
+    }
+    result
+        .into_iter()
+        .map(|bytes| bytes.ok_or_else(|| eof_err!("missing modular footer range response")))
+        .collect()
 }
 
 async fn fetch_exact<F: MetadataFetch>(fetch: &mut F, range: Range<u64>) -> Result<Bytes> {
@@ -1116,22 +1580,165 @@ fn value_at(array: &ArrayPage, index: usize) -> Result<Option<u64>> {
     }
 }
 
+fn decode_offset_index_chunk(
+    chunk: &OffsetIndexChunk<'_>,
+) -> Result<crate::file::page_index::offset_index::OffsetIndexMetaData> {
+    let pages = usize::try_from(chunk.offsets.num_values)
+        .map_err(|_| general_err!("negative offset-index page count"))?;
+    validate_array(&chunk.compressed_page_sizes, pages, "compressed_page_sizes")?;
+    validate_array(&chunk.first_row_indexes, pages, "first_row_indexes")?;
+    let mut builder = OffsetIndexBuilder::new();
+    for page in 0..pages {
+        let offset = i64::try_from(required_value(&chunk.offsets, page)?)
+            .map_err(|_| general_err!("page offset exceeds i64"))?;
+        let size = i32::try_from(required_value(&chunk.compressed_page_sizes, page)?)
+            .map_err(|_| general_err!("compressed page size exceeds i32"))?;
+        builder.append_offset_and_size(offset, size);
+        let first_row = required_value(&chunk.first_row_indexes, page)?;
+        let next_row = if page + 1 == pages {
+            first_row
+        } else {
+            required_value(&chunk.first_row_indexes, page + 1)?
+        };
+        if next_row < first_row {
+            return Err(general_err!("first row indexes are not ordered"));
+        }
+        builder.append_row_count(
+            i64::try_from(next_row - first_row)
+                .map_err(|_| general_err!("page row count exceeds i64"))?,
+        );
+    }
+    Ok(builder.build())
+}
+
+fn decode_column_index_chunk(
+    chunk: &ColumnIndexChunk<'_>,
+    physical_type: Type,
+) -> Result<crate::file::page_index::column_index::ColumnIndexMetaData> {
+    let pages = usize::try_from(chunk.null_pages.num_values)
+        .map_err(|_| general_err!("negative column-index page count"))?;
+    let boundary_order = match chunk.boundary_order {
+        0 => BoundaryOrder::UNORDERED,
+        1 => BoundaryOrder::ASCENDING,
+        2 => BoundaryOrder::DESCENDING,
+        value => return Err(general_err!("invalid boundary order {value}")),
+    };
+    for (array, name) in [
+        (chunk.null_counts.as_ref(), "null_counts"),
+        (chunk.minmax_prefixes.as_ref(), "minmax_prefixes"),
+        (chunk.min_suffixes.as_ref(), "min_suffixes"),
+        (chunk.max_suffixes.as_ref(), "max_suffixes"),
+        (chunk.nan_counts.as_ref(), "nan_counts"),
+    ] {
+        if let Some(array) = array {
+            validate_array(array, pages, name)?;
+        }
+    }
+    let mut builder = ColumnIndexBuilder::new(physical_type);
+    builder.set_boundary_order(boundary_order);
+    for page in 0..pages {
+        let null_page = required_value(&chunk.null_pages, page)? != 0;
+        let null_count = chunk
+            .null_counts
+            .as_ref()
+            .map(|array| value_at(array, page))
+            .transpose()?
+            .flatten()
+            .unwrap_or(0);
+        let nan_count = chunk
+            .nan_counts
+            .as_ref()
+            .map(|array| value_at(array, page))
+            .transpose()?
+            .flatten();
+        let prefix = chunk
+            .minmax_prefixes
+            .as_ref()
+            .map(|array| byte_array_at(array, page))
+            .transpose()?
+            .flatten();
+        let min_suffix = chunk
+            .min_suffixes
+            .as_ref()
+            .map(|array| byte_array_at(array, page))
+            .transpose()?
+            .flatten();
+        let max_suffix = chunk
+            .max_suffixes
+            .as_ref()
+            .map(|array| byte_array_at(array, page))
+            .transpose()?
+            .flatten();
+        let (min, max) = match (prefix, min_suffix, max_suffix) {
+            (Some(prefix), Some(min_suffix), Some(max_suffix)) => {
+                let mut min = prefix.to_vec();
+                min.extend_from_slice(min_suffix);
+                let mut max = prefix.to_vec();
+                max.extend_from_slice(max_suffix);
+                (min, max)
+            }
+            (None, None, None) if null_page => (vec![], vec![]),
+            (None, None, None) => {
+                return Err(general_err!("non-null page has no min/max values"));
+            }
+            _ => return Err(general_err!("inconsistent modular page min/max presence")),
+        };
+        builder.append(
+            null_page,
+            min,
+            max,
+            i64::try_from(null_count).map_err(|_| general_err!("null count exceeds i64"))?,
+            nan_count
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| general_err!("NaN count exceeds i64"))?,
+        );
+    }
+    builder.build()
+}
+
 fn decode_row_group_statistics(
     statistics: &ColumnStatistics,
     row_groups: usize,
 ) -> Result<Vec<ModularRowGroupStatistics>> {
+    for (array, name) in [
+        (statistics.null_counts.as_ref(), "null_counts"),
+        (statistics.min_is_exact.as_ref(), "min_is_exact"),
+        (statistics.max_is_exact.as_ref(), "max_is_exact"),
+        (statistics.nan_counts.as_ref(), "nan_counts"),
+    ] {
+        if let Some(array) = array {
+            validate_array(array, row_groups, name)?;
+        }
+    }
     let (Some(prefixes), Some(min_suffixes), Some(max_suffixes)) = (
         statistics.minmax_prefixes.as_ref(),
         statistics.min_suffixes.as_ref(),
         statistics.max_suffixes.as_ref(),
     ) else {
-        return Ok((0..row_groups)
-            .map(|row_group_index| ModularRowGroupStatistics {
-                row_group_index,
-                min: None,
-                max: None,
+        return (0..row_groups)
+            .map(|row_group_index| {
+                Ok(ModularRowGroupStatistics {
+                    row_group_index,
+                    min: None,
+                    max: None,
+                    null_count: statistics
+                        .null_counts
+                        .as_ref()
+                        .map(|array| value_at(array, row_group_index))
+                        .transpose()?
+                        .flatten(),
+                    nan_count: statistics
+                        .nan_counts
+                        .as_ref()
+                        .map(|array| value_at(array, row_group_index))
+                        .transpose()?
+                        .flatten(),
+                    min_is_exact: false,
+                    max_is_exact: false,
+                })
             })
-            .collect());
+            .collect();
     };
     for (array, name) in [
         (prefixes, "minmax_prefixes"),
@@ -1158,10 +1765,32 @@ fn decode_row_group_statistics(
                 (None, None, None) => (None, None),
                 _ => return Err(general_err!("inconsistent modular min/max presence")),
             };
+            let min_is_exact = match statistics.min_is_exact.as_ref() {
+                Some(array) => value_at(array, row_group_index)?.unwrap_or(0) != 0,
+                None => true,
+            } && min.is_some();
+            let max_is_exact = match statistics.max_is_exact.as_ref() {
+                Some(array) => value_at(array, row_group_index)?.unwrap_or(0) != 0,
+                None => true,
+            } && max.is_some();
             Ok(ModularRowGroupStatistics {
                 row_group_index,
                 min,
                 max,
+                null_count: statistics
+                    .null_counts
+                    .as_ref()
+                    .map(|array| value_at(array, row_group_index))
+                    .transpose()?
+                    .flatten(),
+                nan_count: statistics
+                    .nan_counts
+                    .as_ref()
+                    .map(|array| value_at(array, row_group_index))
+                    .transpose()?
+                    .flatten(),
+                min_is_exact,
+                max_is_exact,
             })
         })
         .collect()
@@ -1279,6 +1908,7 @@ mod tests {
     struct RecordingFetch {
         data: Bytes,
         ranges: Vec<Range<u64>>,
+        range_batches: Vec<Vec<Range<u64>>>,
     }
 
     impl MetadataFetch for RecordingFetch {
@@ -1287,6 +1917,34 @@ mod tests {
             let bytes = self.data.slice(range.start as usize..range.end as usize);
             async move { Ok(bytes) }.boxed()
         }
+
+        fn fetch_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+            self.range_batches.push(ranges.clone());
+            let bytes = ranges
+                .iter()
+                .map(|range| self.data.slice(range.start as usize..range.end as usize))
+                .collect();
+            async move { Ok(bytes) }.boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_range_fetch_batches_remote_ranges_and_reuses_tail() {
+        let data = Bytes::from_static(b"0123456789abcdefghij");
+        let mut fetch = RecordingFetch {
+            data: data.clone(),
+            ranges: vec![],
+            range_batches: vec![],
+        };
+        let bytes = get_ranges(&mut fetch, &data.slice(10..), 10, vec![1..3, 12..14, 5..7])
+            .await
+            .unwrap();
+        assert_eq!(
+            bytes,
+            vec![Bytes::from("12"), Bytes::from("cd"), Bytes::from("56")]
+        );
+        assert!(fetch.ranges.is_empty());
+        assert_eq!(fetch.range_batches, vec![vec![1..3, 5..7]]);
     }
 
     fn dense(values: &[u64]) -> ArrayPage<'static> {
@@ -1322,6 +1980,59 @@ mod tests {
         output
     }
 
+    fn single_byte_array(value: &'static [u8]) -> ArrayPage<'static> {
+        let width = (usize::BITS - value.len().leading_zeros()) as i8;
+        let mut offsets = vec![0; packed_len(2, width as usize).unwrap()];
+        for bit in 0..width as usize {
+            offsets[(width as usize + bit) / 8] |=
+                (((value.len() >> bit) & 1) as u8) << ((width as usize + bit) % 8);
+        }
+        offsets.extend_from_slice(value);
+        ArrayPage {
+            data: Box::leak(offsets.into_boxed_slice()),
+            encoding: 1,
+            num_values: 1,
+            parameters: ArrayEncodingParameters::PresentIndex(PresentIndexParameters {
+                num_present: 1,
+                position_bit_width: 0,
+                value_bit_width: width,
+            }),
+        }
+    }
+
+    #[test]
+    fn decodes_modular_page_index_chunks() {
+        let offset = OffsetIndexChunk {
+            offsets: dense(&[100, 250]),
+            compressed_page_sizes: dense(&[50, 60]),
+            first_row_indexes: dense(&[0, 10]),
+        };
+        let offset = decode_offset_index_chunk(&offset).unwrap();
+        assert_eq!(offset.page_locations[0].offset, 100);
+        assert_eq!(offset.page_locations[1].first_row_index, 10);
+
+        let min = Box::leak(Box::new(1_i32.to_le_bytes()));
+        let max = Box::leak(Box::new(9_i32.to_le_bytes()));
+        let column = ColumnIndexChunk {
+            boundary_order: 1,
+            null_pages: dense(&[0]),
+            null_counts: Some(dense(&[0])),
+            minmax_prefixes: Some(single_byte_array(&[])),
+            min_suffixes: Some(single_byte_array(min)),
+            max_suffixes: Some(single_byte_array(max)),
+            min_is_exact: None,
+            max_is_exact: None,
+            nan_counts: None,
+        };
+        let column = decode_column_index_chunk(&column, Type::INT32).unwrap();
+        let crate::file::page_index::column_index::ColumnIndexMetaData::INT32(column) = column
+        else {
+            panic!("expected INT32 column index")
+        };
+        assert_eq!(column.min_values, vec![1]);
+        assert_eq!(column.max_values, vec![9]);
+    }
+
     fn test_file(optional_prefix: usize) -> Bytes {
         // SchemaModule containing root schema { required INT32 c0, required INT64 c1 }.
         let schema = vec![
@@ -1342,11 +2053,19 @@ mod tests {
             physical_types: dense(&[1, 2]),
             is_fully_dictionary_encoded: dense(&[0, 1, 0, 1]),
         });
+        let file_metadata = encode(&FileMetadataModule {
+            created_by: Some("modular-test-writer".to_string()),
+            key_value_metadata: Some(vec![KeyValue::new(
+                "custom".to_string(),
+                "value".to_string(),
+            )]),
+        });
 
         let modular_start = 4_u64;
         let schema_start = modular_start + optional_prefix as u64;
         let placement_start = schema_start + schema.len() as u64;
-        let root_start = placement_start + placement.len() as u64;
+        let file_metadata_start = placement_start + placement.len() as u64;
+        let root_start = file_metadata_start + file_metadata.len() as u64;
         let root = encode(&ModularFooter {
             version: 2,
             num_row_groups: 2,
@@ -1368,6 +2087,13 @@ mod tests {
                         length: placement.len() as i64,
                     },
                 },
+                ModuleDirectoryEntry {
+                    kind: FILE_METADATA_MODULE,
+                    location: ModuleLocation {
+                        offset: file_metadata_start as i64,
+                        length: file_metadata.len() as i64,
+                    },
+                },
             ],
         });
 
@@ -1375,6 +2101,7 @@ mod tests {
         file.resize(file.len() + optional_prefix, 0xaa);
         file.extend_from_slice(&schema);
         file.extend_from_slice(&placement);
+        file.extend_from_slice(&file_metadata);
         file.extend_from_slice(&root);
         file.extend_from_slice(&(modular_start as i64).to_le_bytes());
         file.extend_from_slice(&((root_start - modular_start) as i64).to_le_bytes());
@@ -1388,6 +2115,7 @@ mod tests {
         let mut fetch = RecordingFetch {
             data: data.clone(),
             ranges: vec![],
+            range_batches: vec![],
         };
         let metadata = ModularFooterReader::new(vec![1])
             .with_prefetch_size(4096)
@@ -1403,14 +2131,50 @@ mod tests {
         assert_eq!(metadata.column_chunks[1].data_page_offset, 40);
         assert_eq!(metadata.column_chunks[1].codec, 3);
         assert!(metadata.column_chunks[1].is_fully_dictionary_encoded);
+        assert_eq!(metadata.created_by.as_deref(), Some("modular-test-writer"));
+        assert_eq!(
+            metadata.key_value_metadata.as_deref(),
+            Some([KeyValue::new("custom".to_string(), "value".to_string())].as_slice())
+        );
 
-        let scan = metadata.scan_metadata(&[1], &[1]).unwrap();
-        assert_eq!(scan.row_group_num_rows, vec![5, 7]);
-        let chunk = scan.column_chunk(1, 1).unwrap();
+        let projected = metadata.projected_parquet_metadata(&[1]).unwrap();
+        assert_eq!(
+            projected.file_metadata().created_by(),
+            Some("modular-test-writer")
+        );
+        assert_eq!(
+            projected.file_metadata().key_value_metadata(),
+            metadata.key_value_metadata.as_ref()
+        );
+        assert_eq!(projected.row_group(0).num_rows(), 5);
+        assert_eq!(projected.row_group(1).num_rows(), 7);
+        let chunk = projected.row_group(1).column(0);
         assert_eq!(chunk.column_type(), Type::INT64);
         assert_eq!(chunk.data_page_offset(), 40);
         assert_eq!(chunk.compressed_size(), 4);
         assert_eq!(chunk.num_values(), 8);
+    }
+
+    #[tokio::test]
+    async fn file_metadata_can_be_skipped() {
+        let data = test_file(128 * 1024);
+        let mut fetch = RecordingFetch {
+            data: data.clone(),
+            ranges: vec![],
+            range_batches: vec![],
+        };
+        let metadata = ModularFooterReader::new(vec![0])
+            .with_file_metadata(false)
+            .load(&mut fetch, data.len() as u64)
+            .await
+            .unwrap();
+
+        assert_eq!(fetch.ranges.len(), 1);
+        assert_eq!(metadata.created_by, None);
+        assert_eq!(metadata.key_value_metadata, None);
+        let projected = metadata.projected_parquet_metadata(&[0]).unwrap();
+        assert_eq!(projected.file_metadata().created_by(), None);
+        assert_eq!(projected.file_metadata().key_value_metadata(), None);
     }
 
     #[tokio::test]
@@ -1419,6 +2183,7 @@ mod tests {
         let mut fetch = RecordingFetch {
             data: data.clone(),
             ranges: vec![],
+            range_batches: vec![],
         };
         let metadata = ModularFooterReader::new(vec![0])
             .with_prefetch_size(TRAILER_SIZE + 64)
@@ -1439,8 +2204,9 @@ mod tests {
         let mut fetch = RecordingFetch {
             data: data.clone(),
             ranges: vec![],
+            range_batches: vec![],
         };
-        let metadata = ModularFooterReader::new(vec![1])
+        let mut metadata = ModularFooterReader::new(vec![0, 1])
             .with_prefetch_size(64 * 1024)
             .load(&mut fetch, data.len() as u64)
             .await
@@ -1461,6 +2227,21 @@ mod tests {
             statistics[5].max.as_deref(),
             Some(5999_f32.to_le_bytes().as_slice())
         );
+        let projected = metadata.projected_parquet_metadata(&[0, 1]).unwrap();
+        let standard = projected.row_group(5).column(0).statistics().unwrap();
+        assert_eq!(
+            standard.min_bytes_opt(),
+            Some(5000_f32.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            standard.max_bytes_opt(),
+            Some(5999_f32.to_le_bytes().as_slice())
+        );
+        assert_eq!(standard.null_count_opt(), Some(3));
+        assert_eq!(standard.nan_count_opt(), Some(2));
+        assert!(standard.min_is_exact());
+        assert!(standard.max_is_exact());
+        assert!(projected.row_group(5).column(1).statistics().is_none());
     }
 
     #[test]
@@ -1501,13 +2282,18 @@ mod tests {
             num_columns: 4,
             row_group_num_rows: vec![3],
             schema: Arc::clone(&schema),
+            created_by: None,
+            key_value_metadata: None,
             column_chunks: chunks,
             statistics_directory: None,
+            offset_index_directory: None,
+            column_index_directory: None,
             tail: Bytes::new(),
             tail_start: 0,
             modular_start: 0,
             root_start: 0,
             relative_offsets: false,
+            statistics: HashMap::new(),
         };
 
         let projected = modular.projected_parquet_metadata(&[1, 2, 3]).unwrap();

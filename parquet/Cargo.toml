@@ -302,7 +302,7 @@ harness = false
 
 [[bench]]
 name = "metadata"
-required-features = ["arrow", "async"]
+required-features = ["arrow", "async", "test_common"]
 harness = false
 
 [[bench]]
