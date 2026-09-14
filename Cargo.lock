@@ -259,6 +259,7 @@ dependencies = [
  "md5",
  "object_store",
  "once_cell",
+ "opendal",
  "rand 0.10.2",
  "serde",
  "serde_json",
