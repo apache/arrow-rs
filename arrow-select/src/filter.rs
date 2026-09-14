@@ -678,55 +678,106 @@ where
 }
 
 /// Extract bits from `src` at positions where `filter` has a 1, packed densely,
-/// processing 64 filter bits at a time
+/// extracting independent 64-bit fragments in batches before packing each batch.
 fn gather_bits(src: &BooleanBuffer, filter: &BooleanBuffer, count: usize) -> Buffer {
     let filter_chunks = filter.bit_chunks();
     let src_chunks = BitChunks::new(src.values(), src.offset(), filter.len());
 
     let out_u64s = bit_util::ceil(count, 64);
     let mut out: Vec<u64> = Vec::with_capacity(out_u64s);
+    let out_ptr = out.as_mut_ptr();
+    let mut out_index = 0usize;
     let mut current_word = 0u64;
     let mut bits_filled = 0usize;
 
     // Appends `bits_selected` densely-packed bits from `selected_bits` into the output word stream.
     let mut push_chunk = |selected_bits: u64, bits_selected: usize| {
-        let bits_remaining = 64 - bits_filled;
         current_word |= selected_bits << bits_filled;
-        if bits_selected < bits_remaining {
-            bits_filled += bits_selected;
-        } else {
-            // Current word is full; carry the overflow into the next word.
-            out.push(current_word);
-            current_word = if bits_selected == bits_remaining {
-                0
-            } else {
-                selected_bits >> bits_remaining
-            };
-            bits_filled = bits_selected - bits_remaining;
+        // SAFETY: Each chunk selects at least one bit, and count is the total number
+        // of selected bits, so out_index is within the allocated output words.
+        unsafe {
+            out_ptr.add(out_index).write(current_word.to_le());
         }
+
+        let total_bits = bits_filled + bits_selected;
+        let full = total_bits >= 64;
+        // Split the shift to handle bits_filled == 0 without shifting by 64.
+        let carry = (selected_bits >> 1) >> (63 - bits_filled);
+        current_word = if full { carry } else { current_word };
+        out_index += usize::from(full);
+        bits_filled = total_bits & 63;
     };
 
-    for (filter_word, src_word) in filter_chunks.iter().zip(src_chunks.iter()) {
-        if filter_word == 0 {
-            continue;
+    let mut masks = filter_chunks.iter();
+    let mut values = src_chunks.iter();
+    // Extract a batch independently, then pack its fragments in order. Keeping
+    // fragments on the stack avoids allocating an input-sized scratch buffer.
+    for _ in 0..filter.len() / (64 * 8) {
+        // Both iterators have eight full words remaining for each batch.
+        let batch_masks: [u64; 8] = std::array::from_fn(|_| masks.next().unwrap());
+        let batch_values = std::array::from_fn(|_| values.next().unwrap());
+        let packed = pext64_batch(batch_values, batch_masks);
+        for (fragment, mask) in packed.into_iter().zip(batch_masks) {
+            if mask != 0 {
+                push_chunk(fragment, mask.count_ones() as usize);
+            }
         }
-        let n_set = filter_word.count_ones() as usize;
-        push_chunk(pext64(src_word, filter_word), n_set);
     }
-
-    let rem_filter = filter_chunks.remainder_bits();
-    if rem_filter != 0 {
-        let n_set = rem_filter.count_ones() as usize;
-        push_chunk(pext64(src_chunks.remainder_bits(), rem_filter), n_set);
+    for (mask, value) in masks.zip(values) {
+        if mask != 0 {
+            push_chunk(pext64(value, mask), mask.count_ones() as usize);
+        }
+    }
+    let mask = filter_chunks.remainder_bits();
+    if mask != 0 {
+        push_chunk(
+            pext64(src_chunks.remainder_bits(), mask),
+            mask.count_ones() as usize,
+        );
     }
 
     if bits_filled > 0 {
-        out.push(current_word);
+        // SAFETY: A partial output word is within the allocation. This also writes
+        // any bits carried from the final input chunk into a new output word.
+        unsafe {
+            out_ptr.add(out_index).write(current_word.to_le());
+        }
+    }
+    // SAFETY: Output words are written in order, and the final partial word, if
+    // present, was initialized above. Exactly count bits have been gathered.
+    unsafe {
+        out.set_len(out_u64s);
     }
 
     let mut buf: MutableBuffer = out.into();
     buf.truncate(bit_util::ceil(count, 8));
     buf.into()
+}
+
+/// Extract one selected bit from every active lane per iteration.
+// Keep the batch as a separate optimization unit for the vectorizer.
+#[inline(never)]
+fn pext64_batch<const N: usize>(values: [u64; N], mut masks: [u64; N]) -> [u64; N] {
+    let mut packed = [0; N];
+    let mut output_bit = 1u64;
+    while masks.iter().fold(0, |bits, &mask| bits | mask) != 0 {
+        for lane in 0..N {
+            let mask = masks[lane];
+            // Test the lowest selected bit directly, avoiding a bit scan and
+            // a variable shift per lane. Empty masks naturally contribute zero.
+            let lowest = mask & mask.wrapping_neg();
+            packed[lane] |= if values[lane] & lowest != 0 {
+                output_bit
+            } else {
+                0
+            };
+            masks[lane] = mask & mask.wrapping_sub(1);
+        }
+        // All active lanes are writing the same output position. After at most
+        // 64 steps every mask is empty, so no further output bit is needed.
+        output_bit <<= 1;
+    }
+    packed
 }
 
 /// Collects the bits of `val` wherever `mask` is 1, packed into the low bits of the result.
@@ -1175,6 +1226,103 @@ mod tests {
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
     use rand::rng;
+
+    #[test]
+    fn test_pext64_batch_different_lane_lengths() {
+        // Include empty lanes, a lane taking all 64 iterations, and lanes that
+        // finish early. A zero-valued source must still consume its mask bits.
+        for rotation in 0..64 {
+            let masks = [
+                0,
+                u64::MAX,
+                1u64.rotate_left(rotation),
+                0x8000_0000_0000_0001u64.rotate_left(rotation),
+                0x5555_5555_5555_5555,
+                0xAAAA_AAAA_AAAA_AAAA,
+                u64::MAX >> rotation,
+                0x0123_4567_89AB_CDEFu64.rotate_left(rotation),
+            ];
+            for values in [
+                [0; 8],
+                [u64::MAX; 8],
+                std::array::from_fn(|i| 0xFEDC_BA98_7654_3210u64.rotate_left(rotation + i as u32)),
+            ] {
+                let expected = std::array::from_fn(|i| {
+                    let mut packed = 0;
+                    let mut dst = 0;
+                    for src in 0..64 {
+                        if masks[i] & (1 << src) != 0 {
+                            packed |= ((values[i] >> src) & 1) << dst;
+                            dst += 1;
+                        }
+                    }
+                    packed
+                });
+                assert_eq!(pext64_batch(values, masks), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_gather_bits_boundaries() {
+        let offsets = [0, 1, 7, 8, 31, 63, 64, 65];
+        let lengths = [
+            0, 1, 7, 8, 9, 63, 64, 65, 127, 128, 129, 191, 192, 193, 257, 511, 512, 513, 1023,
+            1024, 1025,
+        ];
+        for src_offset in offsets {
+            for filter_offset in offsets {
+                for len in lengths {
+                    // Keep the source longer than the filter to exercise its remainder.
+                    let src = BooleanBuffer::collect_bool(src_offset + len + 64, |i| {
+                        (i * 37 + i / 7) % 11 < 5
+                    })
+                    .slice(src_offset, len + 64);
+                    for pattern in 0..7 {
+                        let filter = BooleanBuffer::collect_bool(filter_offset + len, |i| {
+                            let i = i.saturating_sub(filter_offset);
+                            match pattern {
+                                0 => false,
+                                1 => true,
+                                2 => i % 2 == 0,
+                                3 => i % 64 == 0,
+                                4 => i == 0 || i / 64 % 2 == 1,
+                                5 => i % 128 < 63 || i % 128 == 64,
+                                _ => (i * 29 + i / 3) % 17 < 9,
+                            }
+                        })
+                        .slice(filter_offset, len);
+                        let expected: Vec<_> = (0..len)
+                            .filter(|&i| filter.value(i))
+                            .map(|i| src.value(i))
+                            .collect();
+                        let actual = gather_bits(&src, &filter, expected.len());
+                        assert_eq!(actual.len(), bit_util::ceil(expected.len(), 8));
+                        let actual = BooleanBuffer::new(actual, 0, expected.len());
+                        assert_eq!(
+                            actual.iter().collect::<Vec<_>>(),
+                            expected,
+                            "src_offset={src_offset}, filter_offset={filter_offset}, len={len}, pattern={pattern}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_gather_bits_zero_fragments() {
+        let src = BooleanBuffer::new_unset(192);
+        // Equal fragment values with different lengths must retain every zero
+        // bit, including when their total crosses an output-word boundary.
+        for lengths in [[3, 40, 21], [3, 40, 22]] {
+            let filter = BooleanBuffer::collect_bool(192, |i| i % 64 < lengths[i / 64]);
+            let count = lengths.into_iter().sum();
+            let out = gather_bits(&src, &filter, count);
+            assert_eq!(out.len(), bit_util::ceil(count, 8));
+            assert!(out.iter().all(|&byte| byte == 0));
+        }
+    }
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {
