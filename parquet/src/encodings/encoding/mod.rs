@@ -96,11 +96,7 @@ pub(crate) fn get_encoder_with_properties<T: DataType>(
     descr: &ColumnDescPtr,
     column_props: &ResolvedColumnProperties,
 ) -> Result<Box<dyn Encoder<T>>> {
-    <T::T as private::GetEncoder>::get_encoder(
-        descr,
-        encoding,
-        column_props.delta_binary_packed_encoder_options,
-    )
+    <T::T as private::GetEncoder>::get_encoder(descr, encoding, Some(column_props))
 }
 
 pub(crate) mod private {
@@ -114,19 +110,23 @@ pub(crate) mod private {
     ///
     /// [`ParquetValueType`]: crate::data_type::private::ParquetValueType
     pub trait GetEncoder {
+        #[expect(
+            private_interfaces,
+            reason = "this trait is not nameable outside the crate"
+        )]
         fn get_encoder<T: DataType<T = Self>>(
             descr: &ColumnDescPtr,
             encoding: Encoding,
-            delta_options: Option<DeltaBinaryPackedEncoderOptions>,
+            options: Option<&ResolvedColumnProperties>,
         ) -> Result<Box<dyn Encoder<T>>> {
-            get_encoder_default(descr, encoding, delta_options)
+            get_encoder_default(descr, encoding, options)
         }
     }
 
     fn get_encoder_default<T: DataType>(
         descr: &ColumnDescPtr,
         encoding: Encoding,
-        delta_options: Option<DeltaBinaryPackedEncoderOptions>,
+        options: Option<&ResolvedColumnProperties>,
     ) -> Result<Box<dyn Encoder<T>>> {
         let encoder: Box<dyn Encoder<T>> = match encoding {
             Encoding::PLAIN => Box::new(PlainEncoder::new()),
@@ -136,18 +136,24 @@ pub(crate) mod private {
                 ));
             }
             Encoding::RLE => Box::new(RleValueEncoder::new()),
-            Encoding::DELTA_BINARY_PACKED => Box::new(match delta_options {
-                Some(options) => DeltaBitPackEncoder::new_with_options(options),
-                None => DeltaBitPackEncoder::new(),
-            }),
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(match delta_options {
-                Some(options) => DeltaLengthByteArrayEncoder::new_with_options(options),
-                None => DeltaLengthByteArrayEncoder::new(),
-            }),
-            Encoding::DELTA_BYTE_ARRAY => Box::new(match delta_options {
-                Some(options) => DeltaByteArrayEncoder::new_with_options(options),
-                None => DeltaByteArrayEncoder::new(),
-            }),
+            Encoding::DELTA_BINARY_PACKED => Box::new(
+                match options.and_then(|props| props.delta_binary_packed_encoder_options) {
+                    Some(options) => DeltaBitPackEncoder::new_with_options(options),
+                    None => DeltaBitPackEncoder::new(),
+                },
+            ),
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(
+                match options.and_then(|props| props.delta_binary_packed_encoder_options) {
+                    Some(options) => DeltaLengthByteArrayEncoder::new_with_options(options),
+                    None => DeltaLengthByteArrayEncoder::new(),
+                },
+            ),
+            Encoding::DELTA_BYTE_ARRAY => Box::new(
+                match options.and_then(|props| props.delta_binary_packed_encoder_options) {
+                    Some(options) => DeltaByteArrayEncoder::new_with_options(options),
+                    None => DeltaByteArrayEncoder::new(),
+                },
+            ),
             Encoding::BYTE_STREAM_SPLIT => match T::get_physical_type() {
                 Type::FIXED_LEN_BYTE_ARRAY => Box::new(VariableWidthByteStreamSplitEncoder::new(
                     descr.type_length(),
@@ -175,27 +181,35 @@ pub(crate) mod private {
     impl GetEncoder for FixedLenByteArray {}
 
     impl GetEncoder for f32 {
+        #[expect(
+            private_interfaces,
+            reason = "this trait is not nameable outside the crate"
+        )]
         fn get_encoder<T: DataType<T = Self>>(
             descr: &ColumnDescPtr,
             encoding: Encoding,
-            delta_options: Option<DeltaBinaryPackedEncoderOptions>,
+            options: Option<&ResolvedColumnProperties>,
         ) -> Result<Box<dyn Encoder<T>>> {
             match encoding {
                 Encoding::ALP => Ok(Box::new(AlpEncoder::new())),
-                _ => get_encoder_default(descr, encoding, delta_options),
+                _ => get_encoder_default(descr, encoding, options),
             }
         }
     }
 
     impl GetEncoder for f64 {
+        #[expect(
+            private_interfaces,
+            reason = "this trait is not nameable outside the crate"
+        )]
         fn get_encoder<T: DataType<T = Self>>(
             descr: &ColumnDescPtr,
             encoding: Encoding,
-            delta_options: Option<DeltaBinaryPackedEncoderOptions>,
+            options: Option<&ResolvedColumnProperties>,
         ) -> Result<Box<dyn Encoder<T>>> {
             match encoding {
                 Encoding::ALP => Ok(Box::new(AlpEncoder::new())),
-                _ => get_encoder_default(descr, encoding, delta_options),
+                _ => get_encoder_default(descr, encoding, options),
             }
         }
     }
@@ -1038,6 +1052,58 @@ mod tests {
             let error = DeltaBinaryPackedEncoderOptions::try_new(block_size, mini_blocks_per_block)
                 .unwrap_err();
             assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn test_get_encoders_with_properties() {
+        fn check<T: DataType>(
+            encoding: Encoding,
+            values: &[T::T],
+            props: &ResolvedColumnProperties,
+        ) {
+            let desc = create_test_col_desc_ptr(-1, T::get_physical_type());
+            let mut default = get_encoder::<T>(encoding, &desc).unwrap();
+            let mut resolved = get_encoder_with_properties::<T>(encoding, &desc, props).unwrap();
+            default.put(values).unwrap();
+            resolved.put(values).unwrap();
+            assert_eq!(resolved.encoding(), encoding);
+            assert_eq!(
+                resolved.flush_buffer().unwrap(),
+                default.flush_buffer().unwrap()
+            );
+        }
+
+        let path = ColumnPath::from("col");
+        let props = WriterProperties::builder().build();
+        let defaults = props.resolve_column_properties(&path);
+        let ints: Vec<i32> = (0..600).map(|value| value * value).collect();
+        check::<Int32Type>(Encoding::DELTA_BINARY_PACKED, &ints, &defaults);
+        let longs: Vec<i64> = ints.iter().map(|&value| i64::from(value)).collect();
+        check::<Int64Type>(Encoding::DELTA_BINARY_PACKED, &longs, &defaults);
+        let bytes: Vec<ByteArray> = ints
+            .iter()
+            .map(|value| ByteArray::from(format!("prefix-{value}").into_bytes()))
+            .collect();
+        for encoding in [
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ] {
+            check::<ByteArrayType>(encoding, &bytes, &defaults);
+        }
+
+        let props = WriterProperties::builder()
+            .set_delta_binary_packed_encoder_options(
+                DeltaBinaryPackedEncoderOptions::try_new(256, 4).unwrap(),
+            )
+            .build();
+        let custom = props.resolve_column_properties(&path);
+        for props in [&defaults, &custom] {
+            check::<Int32Type>(Encoding::PLAIN, &ints, props);
+            for encoding in [Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT, Encoding::ALP] {
+                check::<FloatType>(encoding, &[1.25, -2.5, 3.75], props);
+                check::<DoubleType>(encoding, &[1.25, -2.5, 3.75], props);
+            }
         }
     }
 
