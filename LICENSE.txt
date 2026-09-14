@@ -200,3 +200,13 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+Third-party components
+----------------------
+
+arrow-array/src/delta.rs contains code derived from the chronoutil crate,
+licensed under the MIT License.
+
+Copyright (c) 2020-2022 Oliver Margetts
+
+See arrow-array/LICENSE-MIT for the full license text.
