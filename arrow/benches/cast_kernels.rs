@@ -22,7 +22,7 @@ use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
 
-use chrono::DateTime;
+use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -615,6 +615,38 @@ fn add_benchmark(c: &mut Criterion) {
             Arc::new(Field::new("values", DataType::Int32, true)),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
+    });
+
+    c.bench_function("cast date to string", |b| {
+        // the min and max of the date32 type
+        let range = NaiveDate::MIN.to_epoch_days()..NaiveDate::MAX.to_epoch_days();
+        let date32_array: PrimitiveArray<Date32Type> =
+            create_primitive_array_range::<Date32Type>(8192, 0.1, range);
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&date32_array, &target_type).unwrap());
+    });
+    c.bench_function("cast time64 to string", |b| {
+        let time64_array: PrimitiveArray<Time64MicrosecondType> =
+            create_primitive_array_range::<Time64MicrosecondType>(8192, 0.1, 0..86400000000);
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&time64_array, &target_type).unwrap());
+    });
+    c.bench_function("cast micro timestamp to string", |b| {
+        let range = NaiveDateTime::MIN.and_utc().timestamp_micros()
+            ..NaiveDateTime::MAX.and_utc().timestamp_micros();
+        let timestamp_micro_array: PrimitiveArray<TimestampMicrosecondType> =
+            create_primitive_array_range::<TimestampMicrosecondType>(8192, 0.1, range);
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&timestamp_micro_array, &target_type).unwrap());
+    });
+    c.bench_function("cast micro timestamp with timezone to string", |b| {
+        let range = NaiveDateTime::MIN.and_utc().timestamp_micros()
+            ..NaiveDateTime::MAX.and_utc().timestamp_micros();
+        let timestamp_micro_utc_array =
+            create_primitive_array_range::<TimestampMicrosecondType>(8192, 0.1, range)
+                .with_timezone("+08:00");
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&timestamp_micro_utc_array, &target_type).unwrap());
     });
 }
 
