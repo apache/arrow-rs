@@ -45,10 +45,21 @@ use crate::bloom_filter::{
     SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
 };
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 
 mod metadata;
 pub use metadata::*;
+
+mod footer;
+pub(crate) use footer::*;
+
+mod modular_footer;
+#[cfg(feature = "test_common")]
+#[doc(hidden)]
+pub use modular_footer::modular_footer_benchmark_file;
+pub use modular_footer::{
+    ModularColumnChunk, ModularFooterMetadata, ModularFooterReader, ModularRowGroupStatistics,
+};
 
 mod spawn;
 pub use spawn::SpawnedReader;
@@ -305,6 +316,43 @@ pub struct AsyncReader<T>(T);
 pub type ParquetRecordBatchStreamBuilder<T> = ArrowReaderBuilder<AsyncReader<T>>;
 
 impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
+    /// Creates a stream builder for a Parquet file with a modular footer.
+    ///
+    /// Only placement metadata for `columns` is decoded. The resulting builder exposes a
+    /// projected schema containing those columns and reads their ordinary Parquet data pages.
+    pub async fn new_with_modular_footer(
+        input: T,
+        file_size: u64,
+        columns: Vec<usize>,
+    ) -> Result<Self> {
+        Self::new_with_modular_footer_options(input, file_size, columns, Default::default()).await
+    }
+
+    /// Creates a stream builder for a modular-footer file with reader options.
+    pub async fn new_with_modular_footer_options(
+        mut input: T,
+        file_size: u64,
+        columns: Vec<usize>,
+        options: ArrowReaderOptions,
+    ) -> Result<Self> {
+        if matches!(options.column_index_policy(), PageIndexPolicy::Required)
+            || matches!(options.offset_index_policy(), PageIndexPolicy::Required)
+        {
+            return Err(general_err!(
+                "required page indexes are not yet supported by the modular-footer reader"
+            ));
+        }
+        let metadata = {
+            let mut fetch = &mut input;
+            ModularFooterReader::new(columns.clone())
+                .load(&mut fetch, file_size)
+                .await?
+        };
+        let metadata = metadata.projected_parquet_metadata(&columns)?;
+        let metadata = ArrowReaderMetadata::try_new(Arc::new(metadata), options)?;
+        Ok(Self::new_with_metadata(input, metadata))
+    }
+
     /// Create a new [`ParquetRecordBatchStreamBuilder`] for reading from the
     /// specified source.
     ///
@@ -2079,6 +2127,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn modular_footer_reads_projected_nested_data_pages() -> Result<()> {
+        let nested = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec![Some("x"), None, Some("z")])) as ArrayRef,
+            ),
+        ]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", nested.data_type().clone(), false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let batch = arrow_array::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(nested),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+            ],
+        )?;
+        let mut legacy = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut legacy, batch.schema(), None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let legacy = Bytes::from(legacy);
+        let metadata = ParquetMetaDataReader::new().parse_and_finish(&legacy)?;
+        let modular = modular_footer::modularize_legacy_file(legacy.clone(), &metadata);
+
+        let mut modular_stream = ParquetRecordBatchStreamBuilder::new_with_modular_footer(
+            TestReader::new(modular.clone()),
+            modular.len() as u64,
+            vec![1, 2],
+        )
+        .await?
+        .build()?;
+        let modular_batch = modular_stream.next().await.unwrap()?;
+
+        let legacy_builder = ParquetRecordBatchStreamBuilder::new(TestReader::new(legacy)).await?;
+        let projection = ProjectionMask::leaves(legacy_builder.parquet_schema(), [1, 2]);
+        let mut legacy_stream = legacy_builder.with_projection(projection).build()?;
+        let legacy_batch = legacy_stream.next().await.unwrap()?;
+
+        assert_eq!(modular_batch, legacy_batch);
+        assert_eq!(modular_batch.schema().field(0).name(), "s");
+        assert_eq!(modular_batch.schema().field(1).name(), "c");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_nested_lists() -> Result<()> {
         // Test case for https://github.com/apache/arrow-rs/issues/8657
         let list_inner_field = Arc::new(Field::new("item", DataType::Float32, true));
@@ -2136,4 +2235,43 @@ mod tests {
 
         Ok(())
     }
+}
+/// Reads a converter-produced modular file through the normal async data-page decoder.
+///
+/// This is ignored because the converter fixture is not distributed with arrow-rs.
+#[tokio::test]
+#[ignore = "requires PARQUET_MODULAR_TEST_FILE and PARQUET_LEGACY_TEST_FILE"]
+async fn modular_footer_reads_real_data_pages() {
+    let path = std::env::var("PARQUET_MODULAR_TEST_FILE").unwrap();
+    let legacy_path = std::env::var("PARQUET_LEGACY_TEST_FILE").unwrap();
+    let file_size = std::fs::metadata(&path).unwrap().len();
+    let file = tokio::fs::File::open(path).await.unwrap();
+    let mut stream =
+        ParquetRecordBatchStreamBuilder::new_with_modular_footer(file, file_size, vec![0])
+            .await
+            .unwrap()
+            .with_batch_size(128)
+            .build()
+            .unwrap();
+    let batch = futures::StreamExt::next(&mut stream)
+        .await
+        .unwrap()
+        .unwrap();
+    let legacy_file = tokio::fs::File::open(legacy_path).await.unwrap();
+    let legacy_builder = ParquetRecordBatchStreamBuilder::new(legacy_file)
+        .await
+        .unwrap();
+    let projection = crate::arrow::ProjectionMask::leaves(legacy_builder.parquet_schema(), [0]);
+    let mut legacy_stream = legacy_builder
+        .with_projection(projection)
+        .with_batch_size(128)
+        .build()
+        .unwrap();
+    let legacy_batch = futures::StreamExt::next(&mut legacy_stream)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(batch.num_columns(), 1);
+    assert_eq!(batch.num_rows(), 128);
+    assert_eq!(batch, legacy_batch);
 }

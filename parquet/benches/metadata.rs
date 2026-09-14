@@ -17,6 +17,7 @@
 
 use std::fmt::Write as _;
 use std::hint::black_box;
+use std::ops::Range;
 use std::sync::Arc;
 
 use parquet::basic::{Encoding, PageType, Type as PhysicalType};
@@ -34,13 +35,69 @@ use parquet::schema::types::{
 use rand::{RngExt, SeedableRng};
 
 use bytes::Bytes;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use futures::FutureExt;
+use futures::future::BoxFuture;
+use parquet::arrow::async_reader::{
+    MetadataFetch, ModularFooterReader, modular_footer_benchmark_file,
+};
+use parquet::errors::Result;
 use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
 use rand::rngs::StdRng;
 
 const NUM_COLUMNS: usize = 10_000;
 const NUM_ROW_GROUPS: usize = 10;
+const MODULAR_PREFETCH_SIZE: usize = 1024 * 1024;
+
+#[derive(Debug)]
+struct MemoryFetch {
+    data: Bytes,
+    requests: usize,
+    bytes: usize,
+}
+
+impl MemoryFetch {
+    fn new(data: Bytes) -> Self {
+        Self {
+            data,
+            requests: 0,
+            bytes: 0,
+        }
+    }
+}
+
+impl MetadataFetch for MemoryFetch {
+    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+        self.requests += 1;
+        self.bytes += (range.end - range.start) as usize;
+        let value = self.data.slice(range.start as usize..range.end as usize);
+        async move { Ok(value) }.boxed()
+    }
+}
+
+fn legacy_file(metadata: &Bytes) -> Bytes {
+    let mut file = Vec::with_capacity(metadata.len() + 8);
+    file.extend_from_slice(metadata);
+    file.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+    file.extend_from_slice(b"PAR1");
+    file.into()
+}
+
+async fn load_legacy_footer(fetch: &mut MemoryFetch, file_size: u64) -> ParquetMetaData {
+    let tail_start = file_size.saturating_sub(MODULAR_PREFETCH_SIZE as u64);
+    let tail = fetch.fetch(tail_start..file_size).await.unwrap();
+    let metadata_len = u32::from_le_bytes(tail[tail.len() - 8..tail.len() - 4].try_into().unwrap());
+    let metadata_start = file_size - 8 - metadata_len as u64;
+    let mut metadata = Vec::with_capacity(metadata_len as usize);
+    if metadata_start < tail_start {
+        let prefix = fetch.fetch(metadata_start..tail_start).await.unwrap();
+        metadata.extend_from_slice(&prefix);
+    }
+    let in_tail_start = metadata_start.max(tail_start) - tail_start;
+    metadata.extend_from_slice(&tail[in_tail_start as usize..tail.len() - 8]);
+    ParquetMetaDataReader::decode_metadata(&metadata).unwrap()
+}
 
 fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) -> Vec<u8> {
     let mut rng = StdRng::seed_from_u64(42);
@@ -89,6 +146,17 @@ fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) 
         .map(|i| {
             let columns = (0..NUM_COLUMNS)
                 .map(|j| {
+                    let column_stats = if j == 0 {
+                        Statistics::float(
+                            Some((i * 1000) as f32),
+                            Some((i * 1000 + 999) as f32),
+                            None,
+                            Some(0),
+                            false,
+                        )
+                    } else {
+                        stats.clone()
+                    };
                     ColumnChunkMetaData::builder(column_desc_ptrs[j].clone())
                         .set_encodings(vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY])
                         .set_compression_codec(parquet::basic::CompressionCodec::UNCOMPRESSED)
@@ -96,7 +164,7 @@ fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) 
                         .set_total_compressed_size(rng.random_range(50000..5000000))
                         .set_data_page_offset(rng.random_range(4..2000000000))
                         .set_dictionary_page_offset(Some(rng.random_range(4..2000000000)))
-                        .set_statistics(stats.clone())
+                        .set_statistics(column_stats)
                         .set_page_encoding_stats(vec![
                             PageEncodingStats {
                                 page_type: PageType::DICTIONARY_PAGE,
@@ -169,74 +237,75 @@ fn get_footer_bytes(data: Bytes) -> Bytes {
 fn criterion_benchmark(c: &mut Criterion) {
     // Read file into memory to isolate filesystem performance
     let file = "../parquet-testing/data/alltypes_tiny_pages.parquet";
-    let data = std::fs::read(file).unwrap();
-    let data = Bytes::from(data);
+    if let Ok(data) = std::fs::read(file) {
+        let data = Bytes::from(data);
 
-    c.bench_function("open(default)", |b| {
-        b.iter(|| {
-            let options = ReadOptionsBuilder::new()
-                .with_encoding_stats_as_mask(false)
-                .build();
-            SerializedFileReader::new_with_options(data.clone(), options).unwrap()
-        })
-    });
+        c.bench_function("open(default)", |b| {
+            b.iter(|| {
+                let options = ReadOptionsBuilder::new()
+                    .with_encoding_stats_as_mask(false)
+                    .build();
+                SerializedFileReader::new_with_options(data.clone(), options).unwrap()
+            })
+        });
 
-    c.bench_function("open(page index)", |b| {
-        b.iter(|| {
-            let options = ReadOptionsBuilder::new()
-                .with_page_index()
-                .with_encoding_stats_as_mask(false)
-                .build();
-            SerializedFileReader::new_with_options(data.clone(), options).unwrap()
-        })
-    });
+        c.bench_function("open(page index)", |b| {
+            b.iter(|| {
+                let options = ReadOptionsBuilder::new()
+                    .with_page_index()
+                    .with_encoding_stats_as_mask(false)
+                    .build();
+                SerializedFileReader::new_with_options(data.clone(), options).unwrap()
+            })
+        });
 
-    let meta_data = get_footer_bytes(data.clone());
-    let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
-    c.bench_function("decode parquet metadata", |b| {
-        b.iter(|| {
-            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
-                .unwrap();
-        })
-    });
+        let meta_data = get_footer_bytes(data.clone());
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
+        c.bench_function("decode parquet metadata", |b| {
+            b.iter(|| {
+                ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                    .unwrap();
+            })
+        });
 
-    let schema = ParquetMetaDataReader::decode_schema(&meta_data).unwrap();
-    let options = ParquetMetaDataOptions::new()
-        .with_schema(schema)
-        .with_encoding_stats_as_mask(false);
-    c.bench_function("decode metadata with schema", |b| {
-        b.iter(|| {
-            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
-                .unwrap();
-        })
-    });
+        let schema = ParquetMetaDataReader::decode_schema(&meta_data).unwrap();
+        let options = ParquetMetaDataOptions::new()
+            .with_schema(schema)
+            .with_encoding_stats_as_mask(false);
+        c.bench_function("decode metadata with schema", |b| {
+            b.iter(|| {
+                ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                    .unwrap();
+            })
+        });
 
-    let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(true);
-    c.bench_function("decode metadata with stats mask", |b| {
-        b.iter(|| {
-            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
-                .unwrap();
-        })
-    });
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(true);
+        c.bench_function("decode metadata with stats mask", |b| {
+            b.iter(|| {
+                ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                    .unwrap();
+            })
+        });
 
-    let options =
-        ParquetMetaDataOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
-    c.bench_function("decode metadata with skip PES", |b| {
-        b.iter(|| {
-            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
-                .unwrap();
-        })
-    });
+        let options = ParquetMetaDataOptions::new()
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
+        c.bench_function("decode metadata with skip PES", |b| {
+            b.iter(|| {
+                ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                    .unwrap();
+            })
+        });
 
-    let options = ParquetMetaDataOptions::new()
-        .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
-        .with_encoding_stats_as_mask(false);
-    c.bench_function("decode metadata with skip column stats", |b| {
-        b.iter(|| {
-            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
-                .unwrap();
-        })
-    });
+        let options = ParquetMetaDataOptions::new()
+            .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .with_encoding_stats_as_mask(false);
+        c.bench_function("decode metadata with skip column stats", |b| {
+            b.iter(|| {
+                ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                    .unwrap();
+            })
+        });
+    }
 
     let buf: Bytes = black_box(encoded_meta(false, false, true)).into();
     let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
@@ -314,5 +383,130 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, criterion_benchmark);
+fn modular_footer_benchmark(c: &mut Criterion) {
+    let legacy_metadata: Bytes = encoded_meta(true, true, true).into();
+    let legacy = legacy_file(&legacy_metadata);
+    let modular = modular_footer_benchmark_file(NUM_COLUMNS, NUM_ROW_GROUPS, legacy_metadata.len());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+
+    let mut verification_fetch = MemoryFetch::new(modular.clone());
+    let metadata = runtime
+        .block_on(
+            ModularFooterReader::new(vec![0])
+                .with_prefetch_size(MODULAR_PREFETCH_SIZE)
+                .load(&mut verification_fetch, modular.len() as u64),
+        )
+        .unwrap();
+    assert_eq!(metadata.column_chunks.len(), NUM_ROW_GROUPS);
+    assert_eq!(verification_fetch.requests, 1);
+    assert_eq!(
+        verification_fetch.bytes,
+        MODULAR_PREFETCH_SIZE.min(modular.len())
+    );
+
+    let mut legacy_fetch = MemoryFetch::new(legacy.clone());
+    let legacy_result =
+        runtime.block_on(load_legacy_footer(&mut legacy_fetch, legacy.len() as u64));
+    assert_eq!(legacy_result.num_row_groups(), NUM_ROW_GROUPS);
+    assert_eq!(legacy_fetch.requests, 2);
+    assert_eq!(legacy_fetch.bytes, legacy.len());
+
+    eprintln!(
+        "metadata I/O: legacy={} requests/{} bytes, modular={} request/{} bytes; modular makes \
+         progress after request 1",
+        legacy_fetch.requests,
+        legacy_fetch.bytes,
+        verification_fetch.requests,
+        verification_fetch.bytes,
+    );
+
+    let mut group = c.benchmark_group("metadata/projected_modular_footer");
+    for projection_width in [1, 10, 100, 1000] {
+        let projection: Vec<_> = (0..projection_width).collect();
+        let reader = ModularFooterReader::new(projection).with_prefetch_size(MODULAR_PREFETCH_SIZE);
+        group.throughput(Throughput::Elements(
+            (projection_width * NUM_ROW_GROUPS) as u64,
+        ));
+        group.bench_with_input(
+            BenchmarkId::new("load", projection_width),
+            &projection_width,
+            |b, _| {
+                b.iter(|| {
+                    let mut fetch = MemoryFetch::new(modular.clone());
+                    black_box(runtime.block_on(reader.load(&mut fetch, modular.len() as u64)))
+                        .unwrap()
+                })
+            },
+        );
+    }
+
+    group.finish();
+
+    c.bench_function("metadata/legacy_footer_two_fetches", |b| {
+        b.iter(|| {
+            let mut fetch = MemoryFetch::new(legacy.clone());
+            black_box(runtime.block_on(load_legacy_footer(&mut fetch, legacy.len() as u64)))
+        })
+    });
+
+    let filter_reader = ModularFooterReader::new(vec![1]).with_prefetch_size(MODULAR_PREFETCH_SIZE);
+    let mut filter_fetch = MemoryFetch::new(modular.clone());
+    let filter_metadata = runtime
+        .block_on(filter_reader.load(&mut filter_fetch, modular.len() as u64))
+        .unwrap();
+    let filter_statistics = runtime
+        .block_on(filter_metadata.load_row_group_statistics(&mut filter_fetch, 0))
+        .unwrap();
+    let kept = filter_statistics
+        .iter()
+        .filter(|statistics| {
+            let max: [u8; 4] = statistics
+                .max
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .try_into()
+                .unwrap();
+            f32::from_le_bytes(max) >= 5000.0
+        })
+        .count();
+    assert_eq!(kept, 5);
+    assert_eq!(filter_fetch.requests, 2);
+    eprintln!(
+        "filter I/O: WHERE c0 >= 5000 keeps {kept}/{NUM_ROW_GROUPS} row groups; {} requests/{} \
+         bytes",
+        filter_fetch.requests, filter_fetch.bytes
+    );
+
+    c.bench_function("metadata/modular_filter_c0_project_c1", |b| {
+        b.iter(|| {
+            let mut fetch = MemoryFetch::new(modular.clone());
+            let metadata = runtime
+                .block_on(filter_reader.load(&mut fetch, modular.len() as u64))
+                .unwrap();
+            let statistics = runtime
+                .block_on(metadata.load_row_group_statistics(&mut fetch, 0))
+                .unwrap();
+            black_box(
+                statistics
+                    .iter()
+                    .filter(|statistics| {
+                        let max: [u8; 4] = statistics
+                            .max
+                            .as_ref()
+                            .unwrap()
+                            .as_ref()
+                            .try_into()
+                            .unwrap();
+                        f32::from_le_bytes(max) >= 5000.0
+                    })
+                    .count(),
+            )
+        })
+    });
+}
+
+criterion_group!(benches, criterion_benchmark, modular_footer_benchmark);
 criterion_main!(benches);

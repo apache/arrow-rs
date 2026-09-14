@@ -90,7 +90,8 @@ arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "jso
 arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs", "sync"] }
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-object_store = { workspace = true, features = ["azure", "fs"] }
+object_store = { workspace = true, features = ["aws", "azure", "fs", "gcp", "http"] }
+url = "2.2"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
@@ -140,7 +141,7 @@ flate2-rust_backened = ["flate2-rust_backend"]
 
 [[example]]
 name = "external_metadata"
-required-features = ["arrow", "async"]
+required-features = ["arrow", "async", "test_common"]
 path = "./examples/external_metadata.rs"
 
 [[example]]
@@ -162,6 +163,11 @@ path = "./examples/read_with_rowgroup.rs"
 name = "object_store"
 required-features = ["arrow", "async"]
 path = "./examples/object_store.rs"
+
+[[example]]
+name = "modular_footer_object_store"
+required-features = ["arrow", "async"]
+path = "./examples/modular_footer_object_store.rs"
 
 [[example]]
 name = "custom_page_index"
@@ -296,6 +302,7 @@ harness = false
 
 [[bench]]
 name = "metadata"
+required-features = ["arrow", "async"]
 harness = false
 
 [[bench]]
