@@ -70,6 +70,10 @@ use std::sync::Arc;
 /// let error = substring(&array, 0, Some(5)).unwrap_err().to_string();
 /// assert!(error.contains("invalid utf-8 boundary"));
 /// ```
+///
+/// # Panics
+///
+/// Panics if a `FixedSizeBinary` array has a negative value length.
 pub fn substring(
     array: &dyn Array,
     start: i64,

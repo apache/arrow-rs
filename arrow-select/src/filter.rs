@@ -164,6 +164,10 @@ impl Iterator for IndexIterator<'_> {
 ///  false, // Null is converted to false
 /// ]));
 /// ```
+///
+/// # Panics
+///
+/// Panics if `filter` has no null buffer.
 pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     let nulls = filter.nulls().unwrap();
     let mask = filter.values() & nulls.inner();

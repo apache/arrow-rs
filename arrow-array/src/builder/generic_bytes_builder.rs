@@ -46,6 +46,10 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     ///   The size of the preallocated buffer of offsets is the number of items plus one.
     /// - `data_capacity` is the total number of bytes of data to pre-allocate
     ///   (for all items, not per item).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `item_capacity + 1` overflows `usize`.
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let mut offsets_builder = Vec::with_capacity(item_capacity + 1);
         offsets_builder.push(T::Offset::from_usize(0).unwrap());

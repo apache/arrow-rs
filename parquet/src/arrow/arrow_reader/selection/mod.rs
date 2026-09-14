@@ -323,6 +323,11 @@ impl RowSelection {
     }
 
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ranges` is not sorted and non overlapping, or if the total row
+    /// count overflows.
     pub fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
         ranges: I,
         total_rows: usize,
