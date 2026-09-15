@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::basic::{ConvertedType, Encoding, LogicalType};
+use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::compare_greater_byte_array_decimals;
+use crate::column::writer::{compare_greater_byte_array_decimals, is_decimal_descr};
 use crate::column::writer::encoder::{
     ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
 };
@@ -471,8 +471,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 
-        let is_decimal = descr.converted_type() == ConvertedType::DECIMAL
-            || matches!(descr.logical_type_ref(), Some(LogicalType::Decimal(_)));
+        let is_decimal = is_decimal_descr(descr.get_basic_info());
 
         Ok(Self {
             fallback,
