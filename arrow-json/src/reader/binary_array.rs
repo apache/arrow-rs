@@ -44,11 +44,11 @@ fn invalid_hex_error_at(index: usize, byte: u8) -> ArrowError {
 
 fn decode_hex_to_writer<W: Write>(hex_string: &str, writer: &mut W) -> Result<(), ArrowError> {
     let bytes = hex_string.as_bytes();
-    let mut iter = bytes.chunks_exact(2);
+    let (iter, remainder) = bytes.as_chunks::<2>();
     let mut buffer = [0u8; 64];
     let mut buffered = 0;
 
-    for (pair_index, pair) in (&mut iter).enumerate() {
+    for (pair_index, pair) in iter.iter().enumerate() {
         let base = pair_index * 2;
         let high = decode_hex_digit(pair[0]).ok_or_else(|| invalid_hex_error_at(base, pair[0]))?;
         let low =
@@ -64,7 +64,6 @@ fn decode_hex_to_writer<W: Write>(hex_string: &str, writer: &mut W) -> Result<()
         }
     }
 
-    let remainder = iter.remainder();
     if !remainder.is_empty() {
         let index = (bytes.len() / 2) * 2;
         let low = decode_hex_digit(remainder[0])

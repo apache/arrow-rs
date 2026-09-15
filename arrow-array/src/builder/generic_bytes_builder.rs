@@ -215,6 +215,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .nulls(self.null_buffer_builder.finish());
 
         self.offsets_builder.push(self.next_offset());
+        // SAFETY: builder is constructed from valid offset and value buffers maintained by the builder
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
     }
@@ -230,6 +231,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .add_buffer(value_buffer)
             .nulls(self.null_buffer_builder.finish_cloned());
 
+        // SAFETY: builder is constructed from valid offset and value buffers maintained by the builder
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
     }

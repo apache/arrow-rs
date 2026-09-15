@@ -59,14 +59,8 @@ impl MapArrayDecoder {
             }
         };
 
-        let keys = ctx.make_decoder(
-            key_value_fields[0].data_type(),
-            key_value_fields[0].is_nullable(),
-        )?;
-        let values = ctx.make_decoder(
-            key_value_fields[1].data_type(),
-            key_value_fields[1].is_nullable(),
-        )?;
+        let keys = ctx.make_decoder(&key_value_fields[0], key_value_fields[0].is_nullable())?;
+        let values = ctx.make_decoder(&key_value_fields[1], key_value_fields[1].is_nullable())?;
 
         Ok(Self {
             entries_field,

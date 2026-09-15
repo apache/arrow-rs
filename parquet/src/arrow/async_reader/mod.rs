@@ -630,10 +630,15 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         }
 
         let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => buffer.slice(
-                (TryInto::<usize>::try_into(bitset_offset).unwrap()
-                    - TryInto::<usize>::try_into(offset).unwrap())..,
-            ),
+            Some(_) => {
+                let bitset_start = bitset_offset
+                    .checked_sub(offset)
+                    .and_then(|start| usize::try_from(start).ok())
+                    .ok_or_else(|| {
+                        ParquetError::General("Bloom filter offset is invalid".to_string())
+                    })?;
+                buffer.slice(bitset_start..)
+            }
             None => {
                 let bitset_length: u64 = header.num_bytes.try_into().map_err(|_| {
                     ParquetError::General("Bloom filter length is invalid".to_string())
@@ -967,8 +972,9 @@ mod tests {
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::virtual_type::RowNumber;
     use crate::arrow::{ArrowWriter, AsyncArrowWriter, ProjectionMask};
+    use crate::file::metadata::PageIndexPolicy;
     use crate::file::metadata::ParquetMetaDataReader;
-    use crate::file::metadata::{PageIndex, PageIndexPolicy};
+    use crate::file::metadata::page_index::PageIndex;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;
@@ -1195,17 +1201,16 @@ mod tests {
         assert_eq!(metadata_with_index.num_row_groups(), 1);
 
         // Check offset indexes are present for all columns of all row groups
-        let page_index = metadata_with_index.page_index().unwrap();
+        let page_index = metadata_with_index
+            .page_index()
+            .expect("page index should be present");
+        assert!(page_index.is_complete());
         let num_rowgroups = metadata_with_index.num_row_groups();
         let num_columns = metadata_with_index
             .file_metadata()
             .schema_descr()
             .num_columns();
         for rgidx in 0..num_rowgroups {
-            let column_index = page_index.column_indexes_for_rowgroup(rgidx);
-            let offset_index = page_index.offset_indexes_for_rowgroup(rgidx);
-            assert!(column_index.is_some_and(|ci| ci.len() == num_columns));
-            assert!(offset_index.is_some_and(|oi| oi.len() == num_columns));
             // some column indexes are not defined, but all offset indexes should be
             for colidx in 0..num_columns {
                 assert!(page_index.offset_index(rgidx, colidx).is_some());
@@ -1781,7 +1786,7 @@ mod tests {
             .unwrap();
 
         let page_index = PageIndex::new(None, Some(vec![]));
-        metadata.set_page_index(Some(page_index));
+        metadata.set_page_index(Some(Arc::new(page_index)));
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =

@@ -85,6 +85,7 @@ use std::{borrow::Cow, ops::Deref};
 ///     VariantPathElement::index(2),
 ///     VariantPathElement::field("3")]);
 /// assert_eq!(path, expected)
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct VariantPath<'a>(Vec<VariantPathElement<'a>>);
 

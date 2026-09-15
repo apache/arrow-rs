@@ -102,7 +102,7 @@ pub(crate) fn string_from_slice(
 }
 
 /// Performs a binary search over a range using a fallible key extraction function; a failed key
-/// extraction immediately terminats the search.
+/// extraction immediately terminates the search.
 ///
 /// This is similar to the standard library's `binary_search_by`, but generalized to ranges instead
 /// of slices.

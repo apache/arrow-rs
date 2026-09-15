@@ -174,10 +174,9 @@ pub fn merge_n(values: &[&dyn Array], indices: &[impl MergeIndex]) -> Result<Arr
 
         if end_row_ix == indices.len() {
             break;
-        } else {
-            // Set the start_row_ix for the next slice.
-            start_row_ix = end_row_ix;
         }
+        // Set the start_row_ix for the next slice.
+        start_row_ix = end_row_ix;
     }
 
     Ok(make_array(mutable.freeze()))

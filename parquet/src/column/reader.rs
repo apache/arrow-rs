@@ -254,9 +254,7 @@ where
                         ));
                     }
                     if levels_read == remaining_levels && self.has_record_delimiter {
-                        // Reached end of page, which implies records_read < remaining_records
-                        // as otherwise would have stopped reading before reaching the end
-                        assert!(records_read < remaining_records); // Sanity check
+                        check_partial_record_fits(records_read, remaining_records)?;
                         records_read += reader.flush_partial() as usize;
                     }
                     (records_read, levels_read)
@@ -359,9 +357,7 @@ where
                         decoder.skip_rep_levels(remaining_records, remaining_levels)?;
 
                     if levels_read == remaining_levels && self.has_record_delimiter {
-                        // Reached end of page, which implies records_read < remaining_records
-                        // as otherwise would have stopped reading before reaching the end
-                        assert!(records_read < remaining_records); // Sanity check
+                        check_partial_record_fits(records_read, remaining_records)?;
                         records_read += decoder.flush_partial() as usize;
                     }
 
@@ -583,6 +579,22 @@ where
             Ok(true)
         }
     }
+}
+
+/// Checks that a partial record can still be flushed into the caller's record budget.
+///
+/// Reaching the end of a page with a record delimiter means the decoder stopped because
+/// it ran out of levels, not records, so it cannot have used up the whole budget. A page
+/// whose repetition levels disagree with its record count breaks that, and flushing the
+/// partial record would then take the count past what was asked for.
+fn check_partial_record_fits(records_read: usize, remaining_records: usize) -> Result<()> {
+    if remaining_records <= records_read {
+        return Err(general_err!(
+            "page ended after {records_read} record(s), which is already all of the \
+             {remaining_records} record(s) asked for, so there is no partial record to flush"
+        ));
+    }
+    Ok(())
 }
 
 fn parse_v1_level(

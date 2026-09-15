@@ -260,7 +260,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.row_group_index = self
             .row_group_index
             .checked_add(1)
-            .expect("SerializedFileWriter::row_group_index overflowed");
+            .ok_or_else(|| ParquetError::General("Row group index overflowed".to_string()))?;
 
         let bloom_filter_position = self.properties().bloom_filter_position();
         let row_groups = &mut self.row_groups;
@@ -2353,6 +2353,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_32k_rowgroups() {
         let message_type = "
             message test_schema {
@@ -2476,7 +2477,7 @@ mod tests {
             reader
                 .metadata()
                 .page_index()
-                .is_some_and(PageIndex::is_complete)
+                .is_some_and(|idx| idx.is_complete())
         );
         let page_index = reader.metadata().page_index().unwrap();
 
@@ -2502,6 +2503,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     #[cfg(feature = "arrow")]
     fn test_byte_stream_split_extended_roundtrip() {
         let path = format!(
@@ -2616,6 +2618,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_rewrite_no_page_indexes() {
         let file = get_test_file("alltypes_tiny_pages.parquet");
         let metadata = ParquetMetaDataReader::new()
@@ -2647,6 +2650,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_rewrite_missing_column_index() {
         // this file has an INT96 column that lacks a column index entry
         let file = get_test_file("alltypes_tiny_pages.parquet");
@@ -2660,23 +2664,12 @@ mod tests {
         let output = Vec::<u8>::new();
         let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
 
-        let page_index = metadata.page_index();
-
         for (rg_idx, rg) in metadata.row_groups().iter().enumerate() {
-            let rg_column_indexes =
-                page_index.and_then(|pi| pi.column_indexes_for_rowgroup(rg_idx));
-            let rg_offset_indexes =
-                page_index.and_then(|pi| pi.offset_indexes_for_rowgroup(rg_idx));
+            let rg_page_index = metadata.page_index_for_row_group(rg_idx);
             let mut rg_out = writer.next_row_group().unwrap();
             for (col_idx, column) in rg.columns().iter().enumerate() {
-                let column_index = rg_column_indexes.and_then(|row| {
-                    let c = row.get(col_idx)?;
-                    c.clone()
-                });
-                let offset_index = rg_offset_indexes.and_then(|row| {
-                    let o = row.get(col_idx)?;
-                    o.clone()
-                });
+                let column_index = rg_page_index.column_index(col_idx).cloned();
+                let offset_index = rg_page_index.offset_index(col_idx).cloned();
 
                 let result = ColumnCloseResult {
                     bytes_written: column.compressed_size() as _,

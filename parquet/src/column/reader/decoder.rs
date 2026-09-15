@@ -514,6 +514,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_skip_rep_levels() {
         for _ in 0..10 {
             let mut rng = rng();

@@ -990,11 +990,11 @@ fn convert_time_micros_to_string(value: i64) -> String {
 }
 
 /// Helper method to convert Parquet decimal into a string.
-/// We assert that `scale >= 0` and `precision > scale`, but this will be enforced
-/// when constructing Parquet schema.
+/// We assert that `scale >= 0` and `precision >= scale`, which is enforced when
+/// constructing a Parquet schema.
 #[inline]
 fn convert_decimal_to_string(decimal: &Decimal) -> String {
-    assert!(decimal.scale() >= 0 && decimal.precision() > decimal.scale());
+    assert!(decimal.scale() >= 0 && decimal.precision() >= decimal.scale());
 
     // Specify as signed bytes to resolve sign as part of conversion.
     let num = BigInt::from_signed_bytes_be(decimal.data());
@@ -1034,19 +1034,19 @@ mod tests {
     /// Creates test column descriptor based on provided type parameters.
     macro_rules! make_column_descr {
         ($physical_type:expr, $logical_type:expr) => {{
-            let tpe = PrimitiveTypeBuilder::new("col", $physical_type)
+            let type_ = PrimitiveTypeBuilder::new("col", $physical_type)
                 .with_converted_type($logical_type)
                 .build()
                 .unwrap();
             Arc::new(ColumnDescriptor::new(
-                Arc::new(tpe),
+                Arc::new(type_),
                 0,
                 0,
                 ColumnPath::from("col"),
             ))
         }};
         ($physical_type:expr, $logical_type:expr, $len:expr, $prec:expr, $scale:expr) => {{
-            let tpe = PrimitiveTypeBuilder::new("col", $physical_type)
+            let type_ = PrimitiveTypeBuilder::new("col", $physical_type)
                 .with_converted_type($logical_type)
                 .with_length($len)
                 .with_precision($prec)
@@ -1054,7 +1054,7 @@ mod tests {
                 .build()
                 .unwrap();
             Arc::new(ColumnDescriptor::new(
-                Arc::new(tpe),
+                Arc::new(type_),
                 0,
                 0,
                 ColumnPath::from("col"),
@@ -1236,13 +1236,13 @@ mod tests {
 
         // FLOAT16
         let descr = {
-            let tpe = PrimitiveTypeBuilder::new("col", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            let type_ = PrimitiveTypeBuilder::new("col", PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_logical_type(Some(LogicalType::Float16))
                 .with_length(2)
                 .build()
                 .unwrap();
             Arc::new(ColumnDescriptor::new(
-                Arc::new(tpe),
+                Arc::new(type_),
                 0,
                 0,
                 ColumnPath::from("col"),
@@ -1360,6 +1360,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_convert_float16_to_string() {
         assert_eq!(format!("{}", Field::Float16(f16::ONE)), "1.0");
         assert_eq!(format!("{}", Field::Float16(f16::PI)), "3.140625");
@@ -1428,9 +1429,13 @@ mod tests {
         check_decimal(vec![0, 0, 0, 0, 1, 201, 195, 140], 18, 2, "300000.12");
         check_decimal(vec![207, 200], 10, 2, "-123.44");
         check_decimal(vec![207, 200], 10, 8, "-0.00012344");
+        check_decimal(vec![48, 57], 5, 5, "0.12345");
+        check_decimal(vec![207, 199], 5, 5, "-0.12345");
+        check_decimal(vec![45], 5, 5, "0.00045");
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_row_display() {
         // Primitive types
         assert_eq!(format!("{}", Field::Null), "null");
@@ -1554,6 +1559,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_row_primitive_field_fmt() {
         // Primitives types
         let row = Row::new(vec![
@@ -1644,6 +1650,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_row_primitive_accessors() {
         // primitives
         let row = Row::new(vec![
@@ -1753,6 +1760,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_row_primitive_invalid_accessors() {
         // primitives
         let row = Row::new(vec![
@@ -1860,6 +1868,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_list_primitive_accessors() {
         // primitives
         let list = make_list(vec![Field::Bool(false)]);
@@ -2044,6 +2053,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn test_to_json_value() {
         assert_eq!(Field::Null.to_json_value(), Value::Null);
         assert_eq!(Field::Bool(true).to_json_value(), Value::Bool(true));

@@ -72,6 +72,17 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         Field::new("binaryview_val", DataType::BinaryView, true),
     ]));
 
+    // Single Utf8 column
+    let single_utf8_schema =
+        SchemaRef::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+
+    // Single Binary column
+    let single_binary_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Binary,
+        true,
+    )]));
+
     // Mixed primitive, StringArray
     let mixed_utf8_schema = SchemaRef::new(Schema::new(vec![
         Field::new("int32_val", DataType::Int32, true),
@@ -153,6 +164,30 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 selectivity,
                 max_string_len: 8,
                 schema: &single_binaryview_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_utf8",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_utf8_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_binary",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_binary_schema,
             }
             .build();
 
@@ -300,6 +335,15 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
         Field::new("utf8", DataType::Utf8, true),
     ]));
 
+    let single_utf8_schema =
+        SchemaRef::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+
+    let single_binary_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Binary,
+        true,
+    )]));
+
     let mixed_dict_schema = SchemaRef::new(Schema::new(vec![
         Field::new(
             "string_dict",
@@ -354,6 +398,18 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
                     num_output_batches: 20,
                     max_string_len: 128,
                     schema: &mixed_binaryview_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "single_utf8",
+                    num_output_batches: 50,
+                    max_string_len: 30,
+                    schema: &single_utf8_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "single_binary",
+                    num_output_batches: 50,
+                    max_string_len: 30,
+                    schema: &single_binary_schema,
                 },
                 TakeBenchmarkScenario {
                     name: "mixed_utf8",
@@ -927,6 +983,16 @@ impl DataStreamBuilder {
                 self.batch_size,
                 self.null_density,
             )), // TODO seed
+            DataType::Binary => Arc::new(create_binary_array_with_len_range_and_prefix_and_seed::<
+                i32,
+            >(
+                self.batch_size,
+                self.null_density,
+                0,
+                self.max_string_len,
+                b"",
+                seed,
+            )),
             DataType::Utf8View => {
                 Arc::new(create_string_view_array_with_max_len(
                     self.batch_size,

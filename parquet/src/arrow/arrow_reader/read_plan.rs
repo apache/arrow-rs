@@ -616,6 +616,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn preferred_selection_strategy_mask_matches_selector_backing() {
         use rand::{RngExt, rng};
 

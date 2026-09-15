@@ -932,8 +932,7 @@ pub fn validate_decimal32_precision(
         )));
     }
     if value > MAX_DECIMAL32_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value =
-            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
         let unscale_max_value = format_decimal_str(
             &MAX_DECIMAL32_FOR_EACH_PRECISION[precision as usize].to_string(),
             precision.into(),
@@ -943,8 +942,7 @@ pub fn validate_decimal32_precision(
             "{unscaled_value} is too large to store in a Decimal32 of precision {precision}. Max is {unscale_max_value}"
         )))
     } else if value < MIN_DECIMAL32_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value =
-            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
         let unscale_min_value = format_decimal_str(
             &MIN_DECIMAL32_FOR_EACH_PRECISION[precision as usize].to_string(),
             precision.into(),
@@ -985,8 +983,7 @@ pub fn validate_decimal64_precision(
         )));
     }
     if value > MAX_DECIMAL64_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value =
-            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
         let unscaled_max_value = format_decimal_str(
             &MAX_DECIMAL64_FOR_EACH_PRECISION[precision as usize].to_string(),
             precision.into(),
@@ -996,8 +993,7 @@ pub fn validate_decimal64_precision(
             "{unscaled_value} is too large to store in a Decimal64 of precision {precision}. Max is {unscaled_max_value}"
         )))
     } else if value < MIN_DECIMAL64_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value =
-            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
         let unscaled_min_value = format_decimal_str(
             &MIN_DECIMAL64_FOR_EACH_PRECISION[precision as usize].to_string(),
             precision.into(),
@@ -1034,8 +1030,7 @@ pub fn validate_decimal_precision(value: i128, precision: u8, scale: i8) -> Resu
         )));
     }
     if value > MAX_DECIMAL128_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value =
-            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
         let unscaled_max_value = format_decimal_str(
             &MAX_DECIMAL128_FOR_EACH_PRECISION[precision as usize].to_string(),
             precision.into(),
@@ -1045,8 +1040,7 @@ pub fn validate_decimal_precision(value: i128, precision: u8, scale: i8) -> Resu
             "{unscaled_value} is too large to store in a Decimal128 of precision {precision}. Max is {unscaled_max_value}"
         )))
     } else if value < MIN_DECIMAL128_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value =
-            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
         let unscaled_min_value = format_decimal_str(
             &MIN_DECIMAL128_FOR_EACH_PRECISION[precision as usize].to_string(),
             precision.into(),
@@ -1088,8 +1082,7 @@ pub fn validate_decimal256_precision(
     }
 
     if value > MAX_DECIMAL256_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value =
-            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
         let unscaled_max_value = format_decimal_str(
             &MAX_DECIMAL256_FOR_EACH_PRECISION[precision as usize].to_string(),
             precision.into(),
@@ -1099,8 +1092,7 @@ pub fn validate_decimal256_precision(
             "{unscaled_value} is too large to store in a Decimal256 of precision {precision}. Max is {unscaled_max_value}"
         )))
     } else if value < MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize] {
-        let unscaled_value =
-            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_value = format_decimal_str_internal(&value.to_string(), scale);
         let unscaled_min_value = format_decimal_str(
             &MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize].to_string(),
             precision.into(),
@@ -1126,36 +1118,31 @@ pub fn is_validate_decimal256_precision(value: i256, precision: u8) -> bool {
 }
 
 #[inline]
-/// Formats a decimal string given the precision and scale.
-pub fn format_decimal_str(value_str: &str, precision: usize, scale: i8) -> String {
-    format_decimal_str_internal(value_str, precision, scale, true)
+/// Formats a decimal string given the scale.
+///
+/// The value is always formatted in full: `_precision` is unused and retained
+/// only for API compatibility.
+pub fn format_decimal_str(value_str: &str, _precision: usize, scale: i8) -> String {
+    format_decimal_str_internal(value_str, scale)
 }
 
-// Format a decimal string given the precision and scale.
-// If `safe_decimal` is true, the function will ensure that the output string
-// does not exceed the specified precision.
-fn format_decimal_str_internal(
-    value_str: &str,
-    precision: usize,
-    scale: i8,
-    safe_decimal: bool,
-) -> String {
+// Format a decimal string given the scale.
+fn format_decimal_str_internal(value_str: &str, scale: i8) -> String {
     let (sign, rest) = match value_str.strip_prefix('-') {
         Some(stripped) => ("-", stripped),
         None => ("", value_str),
     };
-    let bound = if safe_decimal {
-        precision.min(rest.len()) + sign.len()
-    } else {
-        value_str.len()
-    };
-    let value_str = &value_str[0..bound];
 
     if scale == 0 {
         value_str.to_string()
     } else if scale < 0 {
-        let padding = value_str.len() + scale.unsigned_abs() as usize;
-        format!("{value_str:0<padding$}")
+        if rest == "0" {
+            // Zero must not be zero-padded ("000" is not a valid number)
+            value_str.to_string()
+        } else {
+            let padding = value_str.len() + scale.unsigned_abs() as usize;
+            format!("{value_str:0<padding$}")
+        }
     } else if rest.len() > scale as usize {
         // Decimal separator is in the middle of the string
         let (whole, decimal) = value_str.split_at(value_str.len() - scale as usize);
@@ -1163,5 +1150,35 @@ fn format_decimal_str_internal(
     } else {
         // String has to be padded
         format!("{}0.{:0>width$}", sign, rest, width = scale as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_decimal_str() {
+        assert_eq!(format_decimal_str("12345", 7, 0), "12345");
+        assert_eq!(format_decimal_str("12345", 7, 2), "123.45");
+        assert_eq!(format_decimal_str("-12345", 7, 2), "-123.45");
+        assert_eq!(format_decimal_str("45", 7, 3), "0.045");
+        assert_eq!(format_decimal_str("-45", 7, 3), "-0.045");
+        assert_eq!(format_decimal_str("0", 7, 2), "0.00");
+        assert_eq!(format_decimal_str("12345", 7, 5), "0.12345");
+
+        // negative scales multiply the value by 10^|scale|
+        assert_eq!(format_decimal_str("12", 7, -2), "1200");
+        assert_eq!(format_decimal_str("-12", 7, -2), "-1200");
+        // a zero value is not padded
+        // https://github.com/apache/arrow-rs/issues/10865
+        assert_eq!(format_decimal_str("0", 7, -2), "0");
+
+        // values exceeding the declared precision are still formatted in full
+        // https://github.com/apache/arrow-rs/issues/10866
+        assert_eq!(format_decimal_str("12345", 3, 1), "1234.5");
+        assert_eq!(format_decimal_str("12345", 3, 3), "12.345");
+        assert_eq!(format_decimal_str("-12345", 3, 3), "-12.345");
+        assert_eq!(format_decimal_str("12345", 2, 4), "1.2345");
     }
 }

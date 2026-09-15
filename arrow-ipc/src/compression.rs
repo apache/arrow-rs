@@ -201,7 +201,7 @@ impl CompressionCodec {
             // empty input, nothing to do
         } else {
             // write compressed data directly into the output buffer
-            output.extend_from_slice(&uncompressed_data_len.to_le_bytes());
+            output.extend_from_slice(&(uncompressed_data_len as i64).to_le_bytes());
             self.compress(input, output, context)?;
 
             let compression_len = output.len() - original_output_len;
@@ -328,8 +328,15 @@ fn compress_zstd(
     context: &mut IpcWriteContext,
     level: i32,
 ) -> Result<(), ArrowError> {
-    let result = context.zstd_compressor(level).compress(input)?;
-    output.extend_from_slice(&result);
+    let start = output.len();
+    output.reserve(zstd::zstd_safe::compress_bound(input.len()));
+
+    let mut cursor = std::io::Cursor::new(output);
+    cursor.set_position(start as u64);
+    context
+        .zstd_compressor(level)
+        .compress_to_buffer(input, &mut cursor)?;
+
     Ok(())
 }
 
@@ -435,5 +442,21 @@ mod tests {
                 .contains("Compressed IPC buffer is too short"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "lz4")]
+    fn test_compress_to_vec_writes_8_byte_length_prefix() {
+        // The length prefix must always be 8 bytes (i64),
+        // even on platforms where `usize` is narrower (e.g. wasm32).
+        let input_bytes = vec![42u8; 132];
+        let codec = super::CompressionCodec::Lz4Frame;
+        let mut output_bytes: Vec<u8> = Vec::new();
+        codec
+            .compress_to_vec(&input_bytes, &mut output_bytes, &mut Default::default())
+            .unwrap();
+
+        let prefix: [u8; 8] = output_bytes[..8].try_into().unwrap();
+        assert_eq!(i64::from_le_bytes(prefix), input_bytes.len() as i64);
     }
 }

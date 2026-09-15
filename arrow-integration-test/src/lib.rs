@@ -28,6 +28,13 @@
 //! this context](https://github.com/apache/arrow-rs/issues/8684#issuecomment-3433193158).
 //!
 //! </div>
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -962,10 +969,13 @@ pub fn array_from_json(
                         let str = value.as_str().unwrap();
                         let integer = BigInt::parse_bytes(str.as_bytes(), 10).unwrap();
                         let integer_bytes = integer.to_signed_bytes_le();
-                        let mut bytes = if integer.is_positive() {
-                            [0_u8; 32]
-                        } else {
+                        // Sign-extend the minimal-length two's-complement
+                        // encoding to the full 32 bytes: 0x00 fill for
+                        // non-negative values, 0xFF for negative ones.
+                        let mut bytes = if integer.is_negative() {
                             [255_u8; 32]
+                        } else {
+                            [0_u8; 32]
                         };
                         bytes[0..integer_bytes.len()].copy_from_slice(integer_bytes.as_slice());
                         b.append_value(i256::from_le_bytes(bytes));
@@ -1268,6 +1278,34 @@ impl ArrowJsonBatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_decimal256_from_json() {
+        let field = Field::new("c", DataType::Decimal256(76, 0), false);
+        let col: ArrowJsonColumn = serde_json::from_str(
+            r#"{
+                "name": "c",
+                "count": 5,
+                "VALIDITY": [1, 1, 1, 1, 1],
+                "DATA": [
+                    "0",
+                    "1",
+                    "-1",
+                    "123456789012345678901234567890",
+                    "-123456789012345678901234567890"
+                ]
+            }"#,
+        )
+        .unwrap();
+        let arr = array_from_json(&field, col, None).unwrap();
+        let arr = arr.as_any().downcast_ref::<Decimal256Array>().unwrap();
+        assert_eq!(arr.value(0), i256::ZERO);
+        assert_eq!(arr.value(1), i256::from_i128(1));
+        assert_eq!(arr.value(2), i256::from_i128(-1));
+        let big = i256::from_string("123456789012345678901234567890").unwrap();
+        assert_eq!(arr.value(3), big);
+        assert_eq!(arr.value(4), i256::ZERO - big);
+    }
 
     #[test]
     fn test_schema_equality() {
