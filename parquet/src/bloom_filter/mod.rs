@@ -580,17 +580,11 @@ impl Sbbf {
 
     /// Estimate the false positive probability (FPP) of this filter at its current size.
     ///
-    /// A membership check tests 8 bits within a single 256-bit block, so with an average
-    /// fraction `f` of bits set per block the estimated FPP is `f^8`. This is the same
-    /// estimate [`Self::fold_to_target_fpp`] uses to choose how far to fold, and like it,
-    /// assumes set bits are spread evenly across blocks.
+    /// This is the same estimate [`Self::fold_to_target_fpp`] uses to choose how far to fold.
     ///
     /// This lets a caller inspect a filter before folding or writing it, for example to
-    /// discard a filter that already exceeds its target FPP at the size it was built with,
-    /// since folding can only increase the FPP.
-    ///
-    /// Set bits are counted directly on the in-memory blocks, without serializing the
-    /// bitset. Returns `1.0` for a filter with no blocks.
+    /// discard a filter that already exceeds its target FPP. Returns `1.0` for a filter
+    /// with no blocks.
     pub fn estimated_fpp(&self) -> f64 {
         if self.0.is_empty() {
             return 1.0;
