@@ -877,20 +877,13 @@ pub fn cast_with_options(
             let array = array.as_fixed_size_list();
             let values = cast_with_options(array.values(), list_to.data_type(), cast_options)?;
             let nulls = array.nulls().cloned();
-            if *size_from == 0 && nulls.is_none() {
-                return Ok(Arc::new(FixedSizeListArray::try_new_with_length(
-                    list_to.clone(),
-                    *size_from,
-                    values,
-                    nulls,
-                    array.len(),
-                )?));
-            }
-            Ok(Arc::new(FixedSizeListArray::try_new(
+            let len = array.len();
+            Ok(Arc::new(FixedSizeListArray::try_new_with_length(
                 list_to.clone(),
                 *size_from,
                 values,
                 nulls,
+                len,
             )?))
         }
         (ListView(_), ListView(to)) => cast_list_view_values::<i32>(array, to, cast_options),
