@@ -670,7 +670,7 @@ pub type Int32RunArray = RunArray<Int32Type>;
 /// ```
 pub type Int64RunArray = RunArray<Int64Type>;
 
-/// A [`RunArray`] typed typed on its child values array
+/// A [`RunArray`] typed on its child values array
 ///
 /// Implements [`ArrayAccessor`] and [`IntoIterator`] allowing fast access to its elements
 ///
