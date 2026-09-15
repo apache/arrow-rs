@@ -188,7 +188,6 @@ where
     // then an increase of scale by 3 will have the following effect on the representation:
     // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
     // needs to provide at least 8 digits precision
-    // Physical narrowing must check the conversion, including skipping arbitrary null payloads.
     let is_infallible_cast = I::MAX_PRECISION <= O::MAX_PRECISION
         && (input_precision as i8) + delta_scale <= (output_precision as i8);
     let f_infallible = is_infallible_cast

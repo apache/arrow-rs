@@ -1281,8 +1281,8 @@ fn canonicalize_and_verify_data_type_impl(
 
         // Most decimal types are allowed, with restrictions on precision and scale
         //
-        // Parquet may use wider physical storage than the declared precision requires.
-        // Normalize to the narrowest Variant decimal type for that precision.
+        // NOTE: arrow-parquet reads widens 32- and 64-bit decimals to 128-bit, but the variant spec
+        // requires using the narrowest decimal type for a given precision. Fix those up first.
         Decimal64(p, s) | Decimal128(p, s) | Decimal256(p, s)
             if VariantDecimal4::is_valid_precision_and_scale(p, s) =>
         {
