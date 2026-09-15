@@ -17,38 +17,9 @@
 
 name: miri
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs that touch certain files and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - Cargo.toml
-      - Cargo.lock
-      - .github/**
-      - rust-toolchain.toml
-      - arrow/**
-      - arrow-arith/**
-      - arrow-array/**
-      - arrow-avro/**
-      - arrow-buffer/**
-      - arrow-cast/**
-      - arrow-csv/**
-      - arrow-data/**
-      - arrow-ipc/**
-      - arrow-json/**
-      - arrow-cmp/**
-      - arrow-ord/**
-      - arrow-row/**
-      - arrow-schema/**
-      - arrow-select/**
-      - arrow-string/**
-      - parquet/**
+  workflow_call:
 
 permissions:
   contents: read
@@ -56,6 +27,7 @@ permissions:
 jobs:
   miri-checks:
     name: MIRI
+    if: github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
