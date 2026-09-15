@@ -69,10 +69,11 @@ branch does not activate the queue.
 
 One approving review is required. Auto-merge lets a maintainer arrange for a
 PR to enter the queue when its prerequisites pass. The queue runs up to two
-builds concurrently, requires each entry's checks to pass (`ALLGREEN`), and
-squashes one PR at a time to preserve attribution. The check timeout is five
-hours, including runner scheduling time. ASF Infra's `apache/root` team can
-bypass the queue to recover a blocked repository.
+builds concurrently and requires each entry's checks to pass (`ALLGREEN`). Up
+to five already-green entries can merge together, with a separate squash commit
+for each PR. This limit does not batch CI builds. The check timeout is five hours,
+including runner scheduling time. ASF Infra's `apache/root` team can bypass the
+queue to recover a blocked repository.
 
 If an entry fails, inspect its **Required Checks** dependencies, fix the
 failure, and enqueue it again. Keep the required check name and configuration
