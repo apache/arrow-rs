@@ -1178,7 +1178,7 @@ pub(crate) struct PageHeader {
   /// Compressed (and potentially encrypted) page size in bytes, not including this header
   3: required i32 compressed_page_size
 
-  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
+  /// The 32-bit CRC checksum for the page, to be calculated as follows:
   4: optional i32 crc
 
   // Headers for page specific data.  One only will be set.
