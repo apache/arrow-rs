@@ -333,10 +333,6 @@ impl VariantArray {
     /// 3. An optional field named `typed_value` which can be any primitive type
     ///    or be a list, large_list, list_view or struct
     ///
-    /// Dictionary-encoded `value` and primitive `typed_value` fields are accepted,
-    /// including in nested shredding states, and decoded to canonical storage.
-    /// Decoding may allocate new arrays.
-    ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
         // Canonicalize shredded typed_value fields (e.g. decimal narrowing)
         let inner = canonicalize_shredded_types(inner)?;
@@ -777,8 +773,6 @@ impl ShreddedVariantFieldArray {
     ///
     /// 2. An optional field named `typed_value` which can be any primitive type
     ///    or be a list, large_list, list_view or struct
-    ///
-    /// Dictionary inputs are normalized as in [`VariantArray::try_new`].
     ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
         let inner = canonicalize_shredded_types(inner)?;
@@ -1349,10 +1343,12 @@ fn canonicalize_and_verify_data_type_impl(
         }
         Map(..) | Union(..) => fail!(),
 
-        // Decode dictionary-encoded leaves while retaining the canonical storage types.
+        // Dictionaries of supported scalar types are allowed.
         Dictionary(_, values) if !values.is_nested() => {
             Cow::Owned(canonicalize_and_verify_data_type(values)?.into_owned())
         }
+
+        // We can _possibly_ support (some of) these some day?
         Dictionary(..) | RunEndEncoded(..) => fail!(),
     };
     Ok(new_data_type)
