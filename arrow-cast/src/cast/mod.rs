@@ -321,13 +321,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (_, Duration(_)) if from_type.is_numeric() => true,
         (Duration(_), _) if to_type.is_numeric() => true,
         (Duration(_), Duration(_)) => true,
-        (Interval(from_type), Int64) => {
-            match from_type {
-                YearMonth => true,
-                DayTime => true,
-                MonthDayNano => false, // Native type is i128
-            }
-        }
+        // No `(Interval(_), Int64)` arm: `cast_with_options` implements no such cast.
         (Int32, Interval(to_type)) => match to_type {
             YearMonth => true,
             DayTime => false,
@@ -12448,6 +12442,56 @@ mod tests {
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
         assert_eq!(casted_array.value(0), IntervalMonthDayNano::new(0, 123, 0));
+    }
+
+    #[test]
+    fn test_can_cast_interval_to_int64_matches_cast() {
+        // Assert the two agree for every interval unit, rather than hard coding the answer.
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(IntervalYearMonthArray::from(vec![12])),
+            Arc::new(IntervalDayTimeArray::from(vec![IntervalDayTime::new(1, 2)])),
+            Arc::new(IntervalMonthDayNanoArray::from(vec![
+                IntervalMonthDayNano::new(1, 2, 3),
+            ])),
+        ];
+        for array in arrays {
+            let from = array.data_type();
+            assert_eq!(
+                can_cast_types(from, &DataType::Int64),
+                cast(&array, &DataType::Int64).is_ok(),
+                "can_cast_types disagrees with cast for {from} -> Int64"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_union_to_int64_skips_uncastable_interval_child() {
+        // `resolve_child_array` picks the first child `can_cast_types` accepts, so an
+        // over-permissive answer made it pick the interval child instead of the `Utf8` one.
+        let fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("iv", DataType::Interval(IntervalUnit::YearMonth), true),
+                Field::new("s", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            vec![0, 1, 0].into(),
+            None,
+            vec![
+                Arc::new(IntervalYearMonthArray::from(vec![Some(12), None, Some(24)])),
+                Arc::new(StringArray::from(vec![None, Some("77"), None])),
+            ],
+        )
+        .unwrap();
+
+        let casted = cast(&union, &DataType::Int64).unwrap();
+        let casted = casted.as_primitive::<Int64Type>();
+        assert!(casted.is_null(0));
+        assert_eq!(casted.value(1), 77);
+        assert!(casted.is_null(2));
     }
 
     #[test]
