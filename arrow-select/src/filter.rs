@@ -1017,17 +1017,13 @@ fn filter_fixed_size_binary(
 
     let nulls = predicate.filter_nulls(array.nulls());
 
-    if array.value_length() == 0 && nulls.is_none() {
-        FixedSizeBinaryArray::try_new_with_len(
-            array.value_length(),
-            buffer.into(),
-            None,
-            predicate.count,
-        )
-        .unwrap()
-    } else {
-        FixedSizeBinaryArray::new(array.value_length(), buffer.into(), nulls)
-    }
+    FixedSizeBinaryArray::try_new_with_len(
+        array.value_length(),
+        buffer.into(),
+        nulls,
+        predicate.count,
+    )
+    .unwrap()
 }
 
 /// `filter` implementation for dictionaries
