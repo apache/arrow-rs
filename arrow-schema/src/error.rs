@@ -27,7 +27,9 @@ use arrow_buffer::BufferError;
 #[derive(Debug)]
 pub enum ArrowError {
     /// Error returned by a buffer operation.
-    BufferError(BufferError),
+    ///
+    /// Boxed to keep the size of `ArrowError` down.
+    BufferError(Box<BufferError>),
     /// Returned when functionality is not yet available.
     NotYetImplemented(String),
     /// Wraps an external error.
@@ -72,7 +74,7 @@ pub enum ArrowError {
 
 impl From<BufferError> for ArrowError {
     fn from(err: BufferError) -> Self {
-        Self::BufferError(err)
+        Self::BufferError(Box::new(err))
     }
 }
 
@@ -152,7 +154,7 @@ impl Display for ArrowError {
 impl Error for ArrowError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            ArrowError::BufferError(err) => Some(err),
+            ArrowError::BufferError(err) => Some(err.as_ref()),
             ArrowError::ExternalError(source) => Some(source.as_ref()),
             ArrowError::IoError(_, source) => Some(source),
             _ => None,
