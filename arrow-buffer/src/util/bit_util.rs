@@ -872,6 +872,36 @@ fn handle_mutable_buffer_remainder_unary<F>(
     set_remainder_bits(start_remainder_mut, rem, remainder_len);
 }
 
+/// For each set bit in `mask`, extract the corresponding bit from `value`
+/// and pack them into the low bits of the result (equivalent to x86 PEXT).
+/// Uses the hardware instruction when `bmi2` is available; otherwise falls
+/// back to a portable scalar loop.
+#[inline]
+pub fn compress(value: u64, mask: u64) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    {
+        // SAFETY: the `bmi2` target feature is statically enabled for this
+        // build, so the `pext` instruction is guaranteed to be available.
+        unsafe { std::arch::x86_64::_pext_u64(value, mask) }
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        let mut mask = mask;
+        let mut result: u64 = 0;
+        let mut dest_bit: u64 = 1;
+        while mask != 0 {
+            let lowest = mask & mask.wrapping_neg();
+            if value & lowest != 0 {
+                result |= dest_bit;
+            }
+            dest_bit <<= 1;
+            mask ^= lowest;
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;

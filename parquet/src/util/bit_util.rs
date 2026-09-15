@@ -943,6 +943,11 @@ impl From<Vec<u8>> for BitReader {
     }
 }
 
+// When arrow-buffer is available, reuse its `compress` implementation so
+// there is a single canonical definition in the codebase.
+#[cfg(feature = "arrow")]
+pub(crate) use arrow_buffer::bit_util::compress;
+
 /// Parallel bit extract: for each set bit in `mask`, extract the
 /// corresponding bit from `value` and pack them contiguously into the low
 /// bits of the return value.
@@ -954,7 +959,7 @@ impl From<Vec<u8>> for BitReader {
 ///
 /// Replace with `value.compress(mask)` when `uint_gather_scatter_bits`
 /// is stabilised: <https://github.com/rust-lang/rust/issues/149069>
-#[cfg_attr(all(not(feature = "arrow"), not(test)), expect(dead_code))]
+#[cfg(not(feature = "arrow"))]
 #[inline]
 pub(crate) fn compress(value: u64, mask: u64) -> u64 {
     #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]

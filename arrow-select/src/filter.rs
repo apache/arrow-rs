@@ -688,21 +688,21 @@ fn gather_bits(src: &BooleanBuffer, filter: &BooleanBuffer, count: usize) -> Buf
     let mut current_word = 0u64;
     let mut bits_filled = 0usize;
 
-    // Appends `bits_selected` densely-packed bits from `selected_bits` into the output word stream.
-    let mut push_chunk = |selected_bits: u64, bits_selected: usize| {
+    // Appends `n_bits` densely-packed bits from `source_bits` into the output word stream.
+    let mut push_chunk = |source_bits: u64, n_bits: usize| {
         let bits_remaining = 64 - bits_filled;
-        current_word |= selected_bits << bits_filled;
-        if bits_selected < bits_remaining {
-            bits_filled += bits_selected;
+        current_word |= source_bits << bits_filled;
+        if n_bits < bits_remaining {
+            bits_filled += n_bits;
         } else {
             // Current word is full; carry the overflow into the next word.
             out.push(current_word);
-            current_word = if bits_selected == bits_remaining {
+            current_word = if n_bits == bits_remaining {
                 0
             } else {
-                selected_bits >> bits_remaining
+                source_bits >> bits_remaining
             };
-            bits_filled = bits_selected - bits_remaining;
+            bits_filled = n_bits - bits_remaining;
         }
     };
 
@@ -711,13 +711,16 @@ fn gather_bits(src: &BooleanBuffer, filter: &BooleanBuffer, count: usize) -> Buf
             continue;
         }
         let n_set = filter_word.count_ones() as usize;
-        push_chunk(pext64(src_word, filter_word), n_set);
+        push_chunk(bit_util::compress(src_word, filter_word), n_set);
     }
 
     let rem_filter = filter_chunks.remainder_bits();
     if rem_filter != 0 {
         let n_set = rem_filter.count_ones() as usize;
-        push_chunk(pext64(src_chunks.remainder_bits(), rem_filter), n_set);
+        push_chunk(
+            bit_util::compress(src_chunks.remainder_bits(), rem_filter),
+            n_set,
+        );
     }
 
     if bits_filled > 0 {
@@ -727,22 +730,6 @@ fn gather_bits(src: &BooleanBuffer, filter: &BooleanBuffer, count: usize) -> Buf
     let mut buf: MutableBuffer = out.into();
     buf.truncate(bit_util::ceil(count, 8));
     buf.into()
-}
-
-/// Collects the bits of `val` wherever `mask` is 1, packed into the low bits of the result.
-#[inline(always)]
-fn pext64(val: u64, mut mask: u64) -> u64 {
-    let mut packed = 0u64;
-    let mut out_bit = 0u32;
-    // Each iteration finds the lowest set bit in mask, copies the corresponding bit from val
-    // into the next output position, then clears that mask bit to advance to the next one.
-    while mask != 0 {
-        let src_bit = mask.trailing_zeros();
-        packed |= ((val >> src_bit) & 1) << out_bit;
-        out_bit += 1;
-        mask &= mask - 1;
-    }
-    packed
 }
 
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
@@ -759,9 +746,13 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
             if predicate.count.saturating_mul(64) >= predicate.filter.len() {
                 gather_bits(buffer, predicate.filter.values(), predicate.count)
             } else {
+                // SAFETY: indices are valid bit offsets within the buffer,
+                // guaranteed by the index iterator construction.
                 let bits = indices.iter().map(|src_idx| unsafe {
                     bit_util::get_bit_raw(buffer.values().as_ptr(), *src_idx + offset)
                 });
+                // SAFETY: the iterator yields exactly `predicate.count` items,
+                // matching the capacity allocated above.
                 unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
             }
         }
