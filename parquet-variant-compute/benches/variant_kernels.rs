@@ -15,11 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::env::var;
 use arrow::array::{Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, StringArray, StructArray};
 use arrow::buffer::Buffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantPath};
+use parquet_variant::{
+    EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantBuilderExt, VariantDecimal8,
+    VariantPath,
+};
 use parquet_variant_compute::{
     GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, shred_variant, variant_get,
 };
@@ -252,6 +257,61 @@ pub fn shred_variant_unmatched_object_bench(c: &mut Criterion) {
     });
 }
 
+pub fn variant_get_utf8_from_unshredded_string_bench(c: &mut Criterion) {
+    bench_variant_get_utf8(c, "variant_get_utf8_from_unshredded_string", |_rng, array_size| {
+        let mut vab = VariantArrayBuilder::new(array_size);
+        for i in 0..array_size {
+            vab.append_variant(Variant::String(format!("value_{i}").as_str()));
+        }
+        vab.build()
+    })
+}
+
+fn bench_variant_get_utf8(
+    c: &mut Criterion,
+    name: &str,
+    variant_gen_fun: impl Fn(&mut StdRng, usize) -> VariantArray,
+) {
+    let field: FieldRef = Arc::new(Field::new("typed_value", DataType::Utf8, true));
+    let options = GetOptions::new().with_as_type(Some(field));
+
+    bench_variant_get(c, name, variant_gen_fun, options);
+}
+
+fn bench_variant_get(
+    c: &mut Criterion,
+    name: &str,
+    variant_gen_fun: impl Fn(&mut StdRng, usize) -> VariantArray,
+    options: GetOptions
+) {
+    let array_size = 8192;
+    let mut rng = StdRng::seed_from_u64(42);
+
+    let array = variant_gen_fun(&mut rng, array_size);
+
+    let input = ArrayRef::from(array);
+    c.bench_function(name, |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
+    });
+}
+
+pub fn variant_get_binary_from_unshredded_binary_bench(c: &mut Criterion) {
+    let field: FieldRef = Arc::new(Field::new("typed_value", DataType::Binary, true));
+    let options = GetOptions::new().with_as_type(Some(field));
+    bench_variant_get(
+        c,
+        "variant_get_binary_from_unshredded_binary",
+        |_rng, array_size| {
+            let mut vab = VariantArrayBuilder::new(array_size);
+            for i in 0..array_size {
+                vab.append_variant(Variant::Binary(format!("value_{i}").as_bytes()));
+            }
+            vab.build()
+        },
+        options,
+    )
+}
+
 criterion_group!(
     benches,
     variant_get_bench,
@@ -260,8 +320,11 @@ criterion_group!(
     shred_variant_partial_object_bench,
     shred_variant_unmatched_object_bench,
     variant_array_builder_build_bench,
-    benchmark_batch_json_string_to_variant
+    benchmark_batch_json_string_to_variant,
+    variant_get_utf8_from_unshredded_string_bench,
+    variant_get_binary_from_unshredded_binary_bench,
 );
+
 criterion_main!(benches);
 
 /// Creates a `VariantArray` with a specified number of Variant::Int64 values each with random value.
