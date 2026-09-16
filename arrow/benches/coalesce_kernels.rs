@@ -106,19 +106,13 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
     // FixedSizeList<Float32>(size=4) — small struct-like layout, geospatial coords
     let single_fsl_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "embeddings",
-        DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            4,
-        ),
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), 4),
         true,
     )]));
     // FixedSizeList<Float32>(size=128) — ML embedding vectors
     let single_fsl128_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "embeddings",
-        DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            128,
-        ),
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), 128),
         true,
     )]));
 
@@ -630,8 +624,11 @@ fn add_all_stable_dict_benchmarks(c: &mut Criterion) {
 
     for null_density in [0.0f32, 0.1] {
         for selectivity in [0.001f32, 0.01, 0.1, 0.8] {
-            let batches: Arc<[RecordBatch]> =
-                Arc::from(make_stable_dict_batches(batch_size, num_batches, null_density));
+            let batches: Arc<[RecordBatch]> = Arc::from(make_stable_dict_batches(
+                batch_size,
+                num_batches,
+                null_density,
+            ));
             let schema = batches[0].schema();
 
             let filters: Arc<[BooleanArray]> = Arc::from(

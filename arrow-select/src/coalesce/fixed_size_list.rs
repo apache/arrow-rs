@@ -189,8 +189,11 @@ impl InProgressArray for InProgressFixedSizeListArray {
             0 => new_empty_array(self.field.data_type()),
             1 => self.buffered_child_values.pop().unwrap(),
             _ => {
-                let refs: Vec<&dyn Array> =
-                    self.buffered_child_values.iter().map(|a| a.as_ref()).collect();
+                let refs: Vec<&dyn Array> = self
+                    .buffered_child_values
+                    .iter()
+                    .map(|a| a.as_ref())
+                    .collect();
                 concat(&refs)?
             }
         };
@@ -284,7 +287,10 @@ mod tests {
         ip.copy_rows(0, 3).unwrap();
 
         let result = ip.finish().unwrap();
-        let result_fsl = result.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+        let result_fsl = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
 
         assert_eq!(result_fsl.len(), 3);
         assert_eq!(result_fsl.null_count(), 0);
@@ -318,7 +324,10 @@ mod tests {
         ip.copy_rows(1, 2).unwrap();
 
         let result = ip.finish().unwrap();
-        let result_fsl = result.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+        let result_fsl = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
         assert_eq!(result_fsl.len(), 2);
 
         let child = result_fsl
@@ -348,7 +357,10 @@ mod tests {
         ip.copy_rows(0, 3).unwrap();
 
         let result = ip.finish().unwrap();
-        let result_fsl = result.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+        let result_fsl = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
         assert_eq!(result_fsl.len(), 3);
         assert_eq!(result_fsl.null_count(), 1);
         assert!(result_fsl.is_valid(0));
@@ -379,7 +391,10 @@ mod tests {
         ip.copy_rows(0, 2).unwrap();
 
         let result = ip.finish().unwrap();
-        let result_fsl = result.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+        let result_fsl = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
         assert_eq!(result_fsl.len(), 4);
 
         let child = result_fsl
@@ -414,7 +429,10 @@ mod tests {
         ip.copy_rows_by_filter_from(src, &predicate).unwrap();
 
         let result = ip.finish().unwrap();
-        let result_fsl = result.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+        let result_fsl = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
         assert_eq!(result_fsl.len(), 2);
 
         let child = result_fsl
@@ -456,15 +474,17 @@ mod tests {
             1.0f32, 2.0, 3.0, 4.0, // row 0
             5.0, 6.0, 7.0, 8.0, // row 1
         ])) as ArrayRef;
-        let src: ArrayRef = Arc::new(
-            FixedSizeListArray::try_new(Arc::clone(&field), size, values, None).unwrap(),
-        );
+        let src: ArrayRef =
+            Arc::new(FixedSizeListArray::try_new(Arc::clone(&field), size, values, None).unwrap());
 
         ip.set_source(Some(src));
         ip.copy_rows(0, 2).unwrap();
 
         let result = ip.finish().unwrap();
-        let result_fsl = result.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+        let result_fsl = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
         assert_eq!(result_fsl.len(), 2);
         assert_eq!(result_fsl.null_count(), 0);
 
