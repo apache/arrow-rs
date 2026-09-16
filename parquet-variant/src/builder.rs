@@ -1002,6 +1002,18 @@ pub trait VariantBuilderExt {
     /// Appends a new variant value to this builder. See e.g. [`VariantBuilder::append_value`].
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
+    /// Appends a new variant value, returning an error if it cannot be appended.
+    ///
+    /// The default delegates to [`Self::append_value`]. Implementations whose append operation
+    /// can fail should override this method to return the error instead of panicking.
+    fn try_append_value<'m, 'v>(
+        &mut self,
+        value: impl Into<Variant<'m, 'v>>,
+    ) -> Result<(), ArrowError> {
+        self.append_value(value);
+        Ok(())
+    }
+
     /// Creates a nested list builder. See e.g. [`VariantBuilder::new_list`]. Panics if the nested
     /// builder cannot be created, see e.g. [`ObjectBuilder::new_list`].
     fn new_list(&mut self) -> ListBuilder<'_, Self::State<'_>> {
@@ -1036,6 +1048,13 @@ impl VariantBuilderExt for VariantBuilder {
     }
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
+    }
+
+    fn try_append_value<'m, 'v>(
+        &mut self,
+        value: impl Into<Variant<'m, 'v>>,
+    ) -> Result<(), ArrowError> {
+        self.try_append_value(value)
     }
 
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
