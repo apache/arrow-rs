@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::env::var;
 use arrow::array::{Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, StringArray, StructArray};
 use arrow::buffer::Buffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields};
@@ -34,6 +33,7 @@ use rand::SeedableRng;
 use rand::distr::Alphanumeric;
 use rand::rngs::StdRng;
 use serde_json::Value;
+use std::env::var;
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -390,13 +390,17 @@ pub fn variant_get_utf8_from_map_in_list_bench(c: &mut Criterion) {
 }
 
 pub fn variant_get_utf8_from_unshredded_string_bench(c: &mut Criterion) {
-    bench_variant_get_utf8(c, "variant_get_utf8_from_unshredded_string", |_rng, array_size| {
-        let mut vab = VariantArrayBuilder::new(array_size);
-        for i in 0..array_size {
-            vab.append_variant(Variant::String(format!("value_{i}").as_str()));
-        }
-        vab.build()
-    })
+    bench_variant_get_utf8(
+        c,
+        "variant_get_utf8_from_unshredded_string",
+        |_rng, array_size| {
+            let mut vab = VariantArrayBuilder::new(array_size);
+            for i in 0..array_size {
+                vab.append_variant(Variant::String(format!("value_{i}").as_str()));
+            }
+            vab.build()
+        },
+    )
 }
 
 fn bench_variant_get_utf8(
@@ -414,7 +418,7 @@ fn bench_variant_get(
     c: &mut Criterion,
     name: &str,
     variant_gen_fun: impl Fn(&mut StdRng, usize) -> VariantArray,
-    options: GetOptions
+    options: GetOptions,
 ) {
     let array_size = 8192;
     let mut rng = StdRng::seed_from_u64(42);
@@ -457,7 +461,7 @@ pub fn variant_get_binary_from_string_bench(c: &mut Criterion) {
             }
             vab.build()
         },
-        options
+        options,
     );
 }
 
