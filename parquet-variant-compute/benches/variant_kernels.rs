@@ -33,7 +33,6 @@ use rand::SeedableRng;
 use rand::distr::Alphanumeric;
 use rand::rngs::StdRng;
 use serde_json::Value;
-use std::env::var;
 use std::fmt::Write;
 use std::sync::Arc;
 
