@@ -3494,66 +3494,6 @@ mod tests {
         assert_eq!(float_idx.max_value(3), Some(&1.0));
     }
 
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn i8_single_column() {
-        required_and_optional::<Int8Array, _>(0..SMALL_SIZE as i8);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn i16_single_column() {
-        required_and_optional::<Int16Array, _>(0..SMALL_SIZE as i16);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn i32_single_column() {
-        required_and_optional::<Int32Array, _>(0..SMALL_SIZE as i32);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn i64_single_column() {
-        required_and_optional::<Int64Array, _>(0..SMALL_SIZE as i64);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn u8_single_column() {
-        required_and_optional::<UInt8Array, _>(0..SMALL_SIZE as u8);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn u16_single_column() {
-        required_and_optional::<UInt16Array, _>(0..SMALL_SIZE as u16);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn u32_single_column() {
-        required_and_optional::<UInt32Array, _>(0..SMALL_SIZE as u32);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn u64_single_column() {
-        required_and_optional::<UInt64Array, _>(0..SMALL_SIZE as u64);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn f32_single_column() {
-        required_and_optional::<Float32Array, _>((0..SMALL_SIZE).map(|i| i as f32));
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn f64_single_column() {
-        required_and_optional::<Float64Array, _>((0..SMALL_SIZE).map(|i| i as f64));
-    }
-
     // The timestamp array types don't implement From<Vec<T>> because they need the timezone
     // argument, and they also doesn't support building from a Vec<Option<T>>, so call
     // RoundTripTest manually instead of calling required_and_optional for these tests.

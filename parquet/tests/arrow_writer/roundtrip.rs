@@ -17,6 +17,8 @@
 
 //! Round-trip tests for Arrow data written to Parquet.
 
+use super::roundtrip_helpers::{SMALL_SIZE, required_and_optional};
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -27,9 +29,10 @@ use arrow_array::types::{
 };
 use arrow_array::{
     Array, ArrayRef, Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray,
-    Float16Array, Int32Array, ListArray, PrimitiveArray, RecordBatch, RecordBatchReader,
-    StringArray, StructArray, Time32MillisecondArray, Time64MicrosecondArray, UInt8Array,
-    UInt8DictionaryArray, UInt32Array, UInt64Array,
+    Float16Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    ListArray, PrimitiveArray, RecordBatch, RecordBatchReader, StringArray, StructArray,
+    Time32MillisecondArray, Time64MicrosecondArray, UInt8Array, UInt8DictionaryArray, UInt16Array,
+    UInt32Array, UInt64Array,
 };
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, i256};
 use arrow_data::ArrayDataBuilder;
@@ -42,6 +45,66 @@ use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchR
 use parquet::basic::Type as PhysicalType;
 use parquet::errors::Result;
 use parquet::file::properties::WriterProperties;
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn i8_single_column() {
+    required_and_optional::<Int8Array, _>(0..SMALL_SIZE as i8);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn i16_single_column() {
+    required_and_optional::<Int16Array, _>(0..SMALL_SIZE as i16);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn i32_single_column() {
+    required_and_optional::<Int32Array, _>(0..SMALL_SIZE as i32);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn i64_single_column() {
+    required_and_optional::<Int64Array, _>(0..SMALL_SIZE as i64);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn u8_single_column() {
+    required_and_optional::<UInt8Array, _>(0..SMALL_SIZE as u8);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn u16_single_column() {
+    required_and_optional::<UInt16Array, _>(0..SMALL_SIZE as u16);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn u32_single_column() {
+    required_and_optional::<UInt32Array, _>(0..SMALL_SIZE as u32);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn u64_single_column() {
+    required_and_optional::<UInt64Array, _>(0..SMALL_SIZE as u64);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn f32_single_column() {
+    required_and_optional::<Float32Array, _>((0..SMALL_SIZE).map(|i| i as f32));
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn f64_single_column() {
+    required_and_optional::<Float64Array, _>((0..SMALL_SIZE).map(|i| i as f64));
+}
 
 #[test]
 fn test_unsigned_roundtrip() {
