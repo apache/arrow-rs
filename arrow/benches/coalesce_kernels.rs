@@ -103,6 +103,19 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         // TODO model other dictionary types here (FixedSizeBinary for example)
     ]));
 
+    // FixedSizeBinary(16) — typical for UUIDs
+    let single_fsb16_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(16),
+        true,
+    )]));
+    // FixedSizeBinary(32) — typical for SHA256 hashes
+    let single_fsb32_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(32),
+        true,
+    )]));
+
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
         // Selectivity: 0.1%, 1%, 10%, 80%
@@ -288,6 +301,30 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 schema: &mixed_dict_schema,
             }
             .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_fsb16",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 16,
+                schema: &single_fsb16_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_fsb32",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 32,
+                schema: &single_fsb32_schema,
+            }
+            .build();
         }
     }
 }
@@ -353,6 +390,19 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
         Field::new("float_val1", DataType::Float64, true),
         Field::new("float_val2", DataType::Float64, true),
     ]));
+
+    // FixedSizeBinary(16) — typical for UUIDs
+    let single_fsb16_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(16),
+        true,
+    )]));
+    // FixedSizeBinary(32) — typical for SHA256 hashes
+    let single_fsb32_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(32),
+        true,
+    )]));
 
     for null_density in [0.0, 0.1] {
         for selectivity in [0.001, 0.01, 0.1, 0.8] {
@@ -422,6 +472,18 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
                     num_output_batches: 10,
                     max_string_len: 30,
                     schema: &mixed_dict_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "single_fsb16",
+                    num_output_batches: 50,
+                    max_string_len: 16,
+                    schema: &single_fsb16_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "single_fsb32",
+                    num_output_batches: 50,
+                    max_string_len: 32,
+                    schema: &single_fsb32_schema,
                 },
             ] {
                 TakeBenchmarkBuilder::from_scenario(
@@ -1020,6 +1082,23 @@ impl DataStreamBuilder {
                     self.null_density,
                     self.max_string_len,
                 )) // TODO seed
+            }
+            DataType::FixedSizeBinary(size) => {
+                let size = *size as usize;
+                let mut rng = StdRng::seed_from_u64(seed);
+                let mut builder = arrow_array::builder::FixedSizeBinaryBuilder::with_capacity(
+                    self.batch_size,
+                    size as i32,
+                );
+                for _ in 0..self.batch_size {
+                    if rng.random::<f32>() < self.null_density {
+                        builder.append_null();
+                    } else {
+                        let value: Vec<u8> = (0..size).map(|_| rng.random::<u8>()).collect();
+                        builder.append_value(&value).unwrap();
+                    }
+                }
+                Arc::new(builder.finish())
             }
             _ => panic!("Unsupported data type: {field:?}"),
         }
