@@ -179,6 +179,31 @@ impl ExtensionType for VariantType {
 /// See the examples below from converting between `VariantArray` and
 /// `StructArray`.
 ///
+/// # Example: collecting optional values
+///
+/// `VariantArray` can collect optional values that convert into [`Variant`].
+/// `None` creates a null row, while `Some(Variant::Null)` creates a valid row
+/// whose value is `Variant::Null`.
+///
+/// ```
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::VariantArray;
+/// let values = [Some(42_i64), None, Some(-1_i64)];
+/// let array: VariantArray = values.into_iter().collect();
+///
+/// assert_eq!(array.value(0), Variant::Int64(42));
+/// assert!(array.is_null(1));
+/// ```
+///
+/// For an all-null array, specify the type when no `Some` value can infer it:
+///
+/// ```
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::VariantArray;
+/// let null_rows = VariantArray::from_iter(vec![None::<Variant>; 3]);
+/// assert!(null_rows.is_null(0));
+/// ```
+///
 /// [`VariantArrayBuilder`]: crate::VariantArrayBuilder
 ///
 /// # Documentation
