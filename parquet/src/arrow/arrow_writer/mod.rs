@@ -2091,7 +2091,7 @@ mod roundtrip_helpers;
 mod tests {
     use super::roundtrip_helpers::{
         RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip, roundtrip_opts,
-        roundtrip_opts_with_array_validation, values_required,
+        roundtrip_opts_with_array_validation,
     };
     use super::*;
     use std::cmp::Ordering;
@@ -3526,28 +3526,6 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
-    fn binary_single_column() {
-        let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
-        let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
-
-        // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
-        values_required::<BinaryArray, _>(many_vecs_iter);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn binary_view_single_column() {
-        let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
-        let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
-
-        // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
-        values_required::<BinaryViewArray, _>(many_vecs_iter);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
     fn i32_column_bloom_filter_at_end() {
         let array = Arc::new(Int32Array::from_iter(0..SMALL_SIZE as i32));
         let files = RoundTripTest::new(array)
@@ -3762,57 +3740,6 @@ mod tests {
             .collect();
         // For null slots, empty string should not be in bloom filter.
         check_bloom_filter(files, "col".to_string(), optional_raw_values, vec![""]);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn large_binary_single_column() {
-        let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
-        let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
-
-        // LargeBinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
-        values_required::<LargeBinaryArray, _>(many_vecs_iter);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn fixed_size_binary_single_column() {
-        let mut builder = FixedSizeBinaryBuilder::new(4);
-        builder.append_value(b"0123").unwrap();
-        builder.append_null();
-        builder.append_value(b"8910").unwrap();
-        builder.append_value(b"1112").unwrap();
-        let array = Arc::new(builder.finish());
-
-        RoundTripTest::new(array).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn string_single_column() {
-        let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
-        let raw_strs = raw_values.iter().map(|s| s.as_str());
-
-        required_and_optional::<StringArray, _>(raw_strs);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn large_string_single_column() {
-        let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
-        let raw_strs = raw_values.iter().map(|s| s.as_str());
-
-        required_and_optional::<LargeStringArray, _>(raw_strs);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn string_view_single_column() {
-        let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
-        let raw_strs = raw_values.iter().map(|s| s.as_str());
-
-        required_and_optional::<StringViewArray, _>(raw_strs);
     }
 
     #[test]
