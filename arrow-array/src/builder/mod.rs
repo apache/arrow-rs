@@ -261,6 +261,8 @@ mod primitive_run_builder;
 pub use primitive_run_builder::*;
 mod struct_builder;
 pub use struct_builder::*;
+mod struct_array_builder;
+pub use struct_array_builder::*;
 mod generic_bytes_dictionary_builder;
 pub use generic_bytes_dictionary_builder::*;
 mod generic_byte_run_builder;
