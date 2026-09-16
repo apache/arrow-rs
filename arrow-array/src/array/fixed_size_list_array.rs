@@ -375,7 +375,7 @@ impl FixedSizeListArray {
     /// # Panics
     ///
     /// Panics if the offset exceeds `i32::MAX`.
-    #[deprecated(since = "60.1.0", note = "Use i * value_length() as usize instead")]
+    #[deprecated(since = "60.0.0", note = "Use value_offset_at instead")]
     #[inline]
     pub fn value_offset(&self, i: usize) -> i32 {
         i32::try_from(self.value_offset_at(i)).expect("offset overflow")
@@ -389,8 +389,12 @@ impl FixedSizeListArray {
         self.value_length
     }
 
+    /// Returns the offset in the child array of the value at index `i`, in
+    /// elements.
+    ///
+    /// Note this doesn't do any bound checking, for performance reason.
     #[inline]
-    const fn value_offset_at(&self, i: usize) -> usize {
+    pub const fn value_offset_at(&self, i: usize) -> usize {
         i * self.value_length as usize
     }
 
