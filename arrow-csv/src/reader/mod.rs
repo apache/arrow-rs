@@ -411,6 +411,15 @@ impl Format {
             }
             records_count += 1;
 
+            let record_len = record.len();
+            if !self.truncated_rows && record_len < header_length {
+                let line = record.position().map(|p| p.line()).unwrap_or_default();
+                return Err(ArrowError::CsvError(format!(
+                    "incorrect number of fields for line {line}, expected {header_length} got {record_len}"
+                )));
+            }
+
+
             // Note since we may be looking at a sample of the data, we make the safe assumption that
             // they could be nullable
             for (i, column_type) in column_types.iter_mut().enumerate().take(header_length) {
@@ -1663,6 +1672,64 @@ mod tests {
 
         assert_eq!("Aberdeen, Aberdeen City, UK", city.value(13));
     }
+
+    #[test]
+    fn test_infer_schema_extra_fields_ignore_rejects_truncated_rows() {
+        let csv = "a,b\n1\n";
+
+        let result = Format::default()
+            .with_header(true)
+            .with_extra_fields(ExtraFields::Ignore)
+            .infer_schema(std::io::Cursor::new(csv), None);
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("incorrect number of fields for line 2, expected 2 got 1"));
+    }
+
+    #[test]
+    fn test_infer_schema_extra_fields_ignore_accepts_long_rows() {
+        let csv = "a,b\n1,2,3\n";
+
+        let (schema, count) = Format::default()
+            .with_header(true)
+            .with_extra_fields(ExtraFields::Ignore)
+            .infer_schema(std::io::Cursor::new(csv), None)
+            .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(schema.fields().len(), 2);
+    }
+
+    #[test]
+    fn test_infer_schema_extra_fields_ignore_truncated_rows_true_accepts_short_rows() {
+        let csv = "a,b\n1\n";
+
+        let (schema, count) = Format::default()
+            .with_header(true)
+            .with_extra_fields(ExtraFields::Ignore)
+            .with_truncated_rows(true)
+            .infer_schema(std::io::Cursor::new(csv), None)
+            .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(schema.fields().len(), 2);
+    }
+
+    #[test]
+    fn test_infer_schema_extra_fields_ignore_truncated_rows_true_accepts_long_rows() {
+        let csv = "a,b\n1,2,3\n";
+
+        let (schema, count) = Format::default()
+            .with_header(true)
+            .with_extra_fields(ExtraFields::Ignore)
+            .with_truncated_rows(true)
+            .infer_schema(std::io::Cursor::new(csv), None)
+            .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(schema.fields().len(), 2);
+    }
+
 
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
