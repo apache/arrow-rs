@@ -56,7 +56,8 @@ use parquet::file::FOOTER_SIZE;
 use parquet::file::metadata::PageIndexPolicy;
 #[cfg(feature = "async")]
 use parquet::file::metadata::ParquetMetaDataReader;
-use parquet::file::metadata::{FooterTail, ParquetMetaData, ParquetOffsetIndex};
+use parquet::file::metadata::page_index::PageIndexProvider;
+use parquet::file::metadata::{FooterTail, ParquetMetaData};
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::SchemaDescriptor;
@@ -261,11 +262,12 @@ impl TestParquetFile {
 
         let parquet_metadata = Arc::clone(builder.metadata());
 
-        let offset_index = parquet_metadata
-            .offset_index()
-            .expect("Parquet metadata should have a page index");
+        let page_index = parquet_metadata
+            .page_index()
+            .expect("Parquet metadata should have a page index")
+            .as_ref();
 
-        let row_groups = TestRowGroups::new(&parquet_metadata, offset_index);
+        let row_groups = TestRowGroups::new(&parquet_metadata, page_index);
 
         // figure out the footer location in the file
         let footer_location = bytes.len() - FOOTER_SIZE..bytes.len();
@@ -342,7 +344,7 @@ struct TestRowGroups {
 }
 
 impl TestRowGroups {
-    fn new(parquet_metadata: &ParquetMetaData, offset_index: &ParquetOffsetIndex) -> Self {
+    fn new(parquet_metadata: &ParquetMetaData, page_index: &dyn PageIndexProvider) -> Self {
         let row_groups = parquet_metadata
             .row_groups()
             .iter()
@@ -354,7 +356,10 @@ impl TestRowGroups {
                     .enumerate()
                     .map(|(col_idx, col_meta)| {
                         let column_name = col_meta.column_descr().name().to_string();
-                        let page_locations = offset_index[rg_index][col_idx].page_locations();
+                        let page_locations = page_index
+                            .offset_index(rg_index, col_idx)
+                            .unwrap()
+                            .page_locations();
                         let dictionary_page_location = col_meta.dictionary_page_offset();
 
                         // We can find the byte range of the entire column chunk
@@ -479,12 +484,12 @@ enum LogEntry {
     /// Read the metadata of the parquet file
     ReadMetadata(Range<usize>),
     /// Access previously parsed metadata
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "async"), expect(dead_code))]
     GetProvidedMetadata,
     /// Read a single logical data object
     ReadData(ReadInfo),
     /// Read one or more logical data objects in a single operation
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "async"), expect(dead_code))]
     ReadMultipleData(Vec<LogEntry>),
     /// Not known where the read came from
     Unknown(Range<usize>),

@@ -21,12 +21,11 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use core::str;
 use futures::{Stream, TryStreamExt, stream};
-use once_cell::sync::Lazy;
 use prost::Message;
 use std::collections::HashSet;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
@@ -70,7 +69,7 @@ const FAKE_TOKEN: &str = "uuid_token";
 const FAKE_HANDLE: &str = "uuid_handle";
 const FAKE_UPDATE_RESULT: i64 = 1;
 
-static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
+static INSTANCE_SQL_DATA: LazyLock<SqlInfoData> = LazyLock::new(|| {
     let mut builder = SqlInfoDataBuilder::new();
     // Server information
     builder.append(SqlInfo::FlightSqlServerName, "Example Flight SQL Server");
@@ -80,7 +79,7 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
     builder.build().unwrap()
 });
 
-static INSTANCE_XBDC_DATA: Lazy<XdbcTypeInfoData> = Lazy::new(|| {
+static INSTANCE_XBDC_DATA: LazyLock<XdbcTypeInfoData> = LazyLock::new(|| {
     let mut builder = XdbcTypeInfoDataBuilder::new();
     builder.append(XdbcTypeInfo {
         type_name: "INTEGER".into(),
@@ -106,13 +105,12 @@ static INSTANCE_XBDC_DATA: Lazy<XdbcTypeInfoData> = Lazy::new(|| {
     builder.build().unwrap()
 });
 
-static TABLES: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["flight_sql.example.table"]);
+static TABLES: LazyLock<Vec<&'static str>> = LazyLock::new(|| vec!["flight_sql.example.table"]);
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {}
 
 impl FlightSqlServiceImpl {
-    #[allow(clippy::result_large_err)]
     fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
         let metadata = req.metadata();
         let auth = metadata.get("authorization").ok_or_else(|| {
@@ -208,7 +206,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let batch = Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
         let schema = batch.schema_ref();
         let batches = vec![batch.clone()];
-        let flight_data = batches_to_flight_data(schema, batches)
+        let flight_data = batches_to_flight_data(schema, &batches)
             .map_err(|e| status!("Could not convert batches", e))?
             .into_iter()
             .map(Ok);

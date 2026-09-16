@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::builder::ArrayBuilder;
 use crate::builder::buffer_builder::{Int8BufferBuilder, Int32BufferBuilder};
-use crate::builder::{ArrayBuilder, BufferBuilder};
 use crate::{ArrayRef, ArrowPrimitiveType, UnionArray, make_array};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, ScalarBuffer};
@@ -41,7 +41,7 @@ struct FieldData {
     null_buffer_builder: NullBufferBuilder,
 }
 
-/// A type-erased [`BufferBuilder`] used by [`FieldData`]
+/// A type-erased growable value buffer used by [`FieldData`]
 trait FieldDataValues: std::fmt::Debug + Send + Sync {
     fn as_mut_any(&mut self) -> &mut dyn Any;
 
@@ -52,17 +52,17 @@ trait FieldDataValues: std::fmt::Debug + Send + Sync {
     fn finish_cloned(&self) -> Buffer;
 }
 
-impl<T: ArrowNativeType> FieldDataValues for BufferBuilder<T> {
+impl<T: ArrowNativeType> FieldDataValues for Vec<T> {
     fn as_mut_any(&mut self) -> &mut dyn Any {
         self
     }
 
     fn append_null(&mut self) {
-        self.advance(1)
+        self.push(T::default())
     }
 
     fn finish(&mut self) -> Buffer {
-        self.finish()
+        Buffer::from_vec(std::mem::take(self))
     }
 
     fn finish_cloned(&self) -> Buffer {
@@ -77,7 +77,7 @@ impl FieldData {
             type_id,
             data_type,
             slots: 0,
-            values_buffer: Box::new(BufferBuilder::<T::Native>::new(capacity)),
+            values_buffer: Box::new(Vec::<T::Native>::with_capacity(capacity)),
             null_buffer_builder: NullBufferBuilder::new(capacity),
         }
     }
@@ -86,9 +86,9 @@ impl FieldData {
     fn append_value<T: ArrowPrimitiveType>(&mut self, v: T::Native) {
         self.values_buffer
             .as_mut_any()
-            .downcast_mut::<BufferBuilder<T::Native>>()
+            .downcast_mut::<Vec<T::Native>>()
             .expect("Tried to append unexpected type")
-            .append(v);
+            .push(v);
 
         self.null_buffer_builder.append(true);
         self.slots += 1;
@@ -263,7 +263,7 @@ impl UnionBuilder {
             }
             // Sparse Union
             None => {
-                for (_, fd) in self.fields.iter_mut() {
+                for fd in self.fields.values_mut() {
                     // Append to all bar the FieldData currently being appended to
                     fd.append_null();
                 }
@@ -297,6 +297,7 @@ impl UnionBuilder {
                         mut null_buffer_builder,
                     },
                 )| {
+                    // SAFETY: builder is constructed from valid value buffer, slot count, and null buffer maintained by the builder
                     let array_ref = make_array(unsafe {
                         ArrayDataBuilder::new(data_type.clone())
                             .add_buffer(values_buffer.finish())
@@ -334,6 +335,7 @@ impl UnionBuilder {
                     null_buffer_builder,
                 } = field_data;
 
+                // SAFETY: builder is constructed from valid value buffer, slot count, and null buffer maintained by the builder
                 let array_ref = make_array(unsafe {
                     ArrayDataBuilder::new(data_type.clone())
                         .add_buffer(values_buffer.finish_cloned())
@@ -378,9 +380,11 @@ impl ArrayBuilder for UnionBuilder {
     fn finish_cloned(&self) -> ArrayRef {
         // We construct the UnionArray carefully to ensure try_new cannot fail.
         // Since UnionBuilder controls all the invariants, this should never panic.
-        Arc::new(self.build_cloned().unwrap_or_else(|err| {
-            panic!("UnionBuilder::build_cloned failed unexpectedly: {}", err)
-        }))
+        Arc::new(
+            self.build_cloned().unwrap_or_else(|err| {
+                panic!("UnionBuilder::build_cloned failed unexpectedly: {err}")
+            }),
+        )
     }
 
     /// Returns the builder as a non-mutable `Any` reference

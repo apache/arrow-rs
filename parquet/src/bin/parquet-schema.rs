@@ -63,7 +63,7 @@ fn main() {
         Err(e) => panic!("Error when parsing Parquet file: {e}"),
         Ok(parquet_reader) => {
             let metadata = parquet_reader.metadata();
-            println!("Metadata for file: {}", &filename);
+            println!("Metadata for file: {filename}");
             println!();
             if verbose {
                 print_parquet_metadata(&mut std::io::stdout(), metadata);

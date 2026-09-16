@@ -30,24 +30,29 @@ on:
     paths:
       - .github/**
       - rust-toolchain.toml
+      - arrow-arith/**
       - arrow-array/**
       - arrow-buffer/**
       - arrow-cast/**
+      - arrow-cmp/**
       - arrow-csv/**
       - arrow-data/**
+      - arrow-flight/**
       - arrow-integration-test/**
       - arrow-integration-testing/**
       - arrow-ipc/**
       - arrow-json/**
-      - arrow-avro/**
       - arrow-ord/**
       - arrow-pyarrow-integration-testing/**
       - arrow-pyarrow/**
+      - arrow-row/**
       - arrow-schema/**
       - arrow-select/**
-      - arrow-sort/**
       - arrow-string/**
       - arrow/**
+
+permissions:
+  contents: read
 
 jobs:
   integration:
@@ -117,43 +122,43 @@ jobs:
 
       # Checkout repos (using shallow clones with fetch-depth: 1)
       - name: Checkout Arrow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow
           submodules: true
           fetch-depth: 1
       - name: Checkout Arrow Rust
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           path: rust
           submodules: true
           fetch-depth: 1
       - name: Checkout Arrow .NET
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow-dotnet
           path: dotnet
           fetch-depth: 1
       - name: Checkout Arrow Go
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow-go
           path: go
           fetch-depth: 1
       - name: Checkout Arrow Java
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow-java
           path: java
           fetch-depth: 1
       - name: Checkout Arrow JavaScript
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow-js
           path: js
           fetch-depth: 1
       - name: Checkout Arrow nanoarrow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: apache/arrow-nanoarrow
           path: nanoarrow
@@ -195,7 +200,7 @@ jobs:
         # PyArrow 15 was the first version to introduce StringView/BinaryView support
         pyarrow: ["15", "16", "17"]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -214,7 +219,7 @@ jobs:
           path: /home/runner/target
           # this key is not equal because maturin uses different compilation flags.
           key: ${{ runner.os }}-${{ matrix.arch }}-target-maturin-cache-${{ matrix.rust }}-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.8'
       - name: Upgrade pip and setuptools
@@ -227,8 +232,22 @@ jobs:
       - name: Run Rust tests
         run: |
           source venv/bin/activate
+          # arrow-pyarrow's own tests are feature-gated, so the workspace-wide `cargo test` in
+          # rust.yml (default features) does not build them. They need no interpreter at runtime,
+          # but pyo3 needs one to link against, hence the active venv.
+          cargo test -p arrow-pyarrow --all-features
           cd arrow-pyarrow-testing
           cargo test
+      - name: Clippy arrow-pyarrow
+        run: |
+          source venv/bin/activate
+          # Here rather than in arrow.yml's clippy job: that one runs in a
+          # container with no interpreter for pyo3 to link against.
+          cargo clippy -p arrow-pyarrow --all-targets --all-features -- -D warnings
+          # Dependency check excluding tests & benches. The crate declares no
+          # default features, so the --no-default-features variant arrow.yml
+          # also runs would be this same command.
+          cargo clippy -p arrow-pyarrow --all-features -- -D unused_crate_dependencies
       - name: Run Python tests
         run: |
           source venv/bin/activate

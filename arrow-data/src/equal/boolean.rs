@@ -37,10 +37,10 @@ pub(super) fn boolean_equal(
 
     if !contains_nulls {
         // Optimize performance for starting offset at u8 boundary.
-        if lhs_start % 8 == 0
-            && rhs_start % 8 == 0
-            && lhs.offset() % 8 == 0
-            && rhs.offset() % 8 == 0
+        if lhs_start.is_multiple_of(8)
+            && rhs_start.is_multiple_of(8)
+            && lhs.offset().is_multiple_of(8)
+            && rhs.offset().is_multiple_of(8)
         {
             let quot = len / 8;
             if quot > 0
@@ -59,12 +59,12 @@ pub(super) fn boolean_equal(
             let rem = len % 8;
             if rem == 0 {
                 return true;
-            } else {
-                let aligned_bits = len - rem;
-                lhs_start += aligned_bits;
-                rhs_start += aligned_bits;
-                len = rem
             }
+
+            let aligned_bits = len - rem;
+            lhs_start += aligned_bits;
+            rhs_start += aligned_bits;
+            len = rem;
         }
 
         equal_bits(

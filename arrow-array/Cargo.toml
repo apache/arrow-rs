@@ -69,12 +69,12 @@ all-features = true
 [features]
 async = ["dep:futures"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "dep:libc"]
-force_validate = []
+force_validate = ["arrow-data/force_validate"]
 # Enable memory tracking support
 pool = ["arrow-buffer/pool", "arrow-data/pool"]
 
 [dev-dependencies]
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 criterion = { workspace = true, default-features = false }
 
 [[bench]]
@@ -108,3 +108,10 @@ harness = false
 [[bench]]
 name = "boolean_array"
 harness = false
+
+[[bench]]
+name = "primitive_array"
+harness = false
+
+[lints]
+workspace = true

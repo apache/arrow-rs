@@ -35,7 +35,6 @@ logging = ["tracing-subscriber"]
 
 [dependencies]
 arrow = { path = "../arrow", default-features = false, features = ["test_utils", "ipc", "ipc_compression", "json", "ffi"] }
-arrow-data = { workspace = true }
 arrow-flight = { path = "../arrow-flight", default-features = false }
 arrow-integration-test = { path = "../arrow-integration-test", default-features = false }
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "error-context", "usage"] }
@@ -50,3 +49,6 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 [dev-dependencies]
 arrow-buffer = { path = "../arrow-buffer", default-features = false }
 tempfile = { version = "3", default-features = false }
+
+[lints]
+workspace = true

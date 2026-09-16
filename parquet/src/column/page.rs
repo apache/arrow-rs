@@ -382,7 +382,7 @@ impl TryFrom<&crate::file::metadata::thrift::PageHeader> for PageMetadata {
                     is_dict: false,
                 })
             }
-            other => Err(ParquetError::General(format!(
+            other @ PageType::INDEX_PAGE => Err(ParquetError::General(format!(
                 "page type {other:?} cannot be converted to PageMetadata"
             ))),
         }

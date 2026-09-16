@@ -60,6 +60,8 @@ pub enum AvroError {
     /// Returned when a function needs more data to complete properly.
     /// The `Range<u64>` indicates the range of bytes that are needed.
     NeedMoreDataRange(std::ops::Range<u64>),
+    /// Returned when an unframed datum cannot be decoded until the current batch is flushed.
+    BatchFull,
 }
 
 impl std::fmt::Display for AvroError {
@@ -84,6 +86,9 @@ impl std::fmt::Display for AvroError {
             AvroError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
             AvroError::NeedMoreDataRange(range) => {
                 write!(fmt, "NeedMoreDataRange: {}..{}", range.start, range.end)
+            }
+            AvroError::BatchFull => {
+                write!(fmt, "Batch is full; flush before decoding another datum")
             }
         }
     }
@@ -127,6 +132,13 @@ impl From<FromUtf8Error> for AvroError {
 impl From<ArrowError> for AvroError {
     fn from(e: ArrowError) -> Self {
         AvroError::ArrowError(Box::new(e))
+    }
+}
+
+#[cfg(feature = "object_store")]
+impl From<object_store::Error> for AvroError {
+    fn from(e: object_store::Error) -> AvroError {
+        AvroError::External(Box::new(e))
     }
 }
 

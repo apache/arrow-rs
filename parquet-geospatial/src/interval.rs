@@ -423,11 +423,11 @@ impl IntervalTrait for WraparoundInterval {
                 let new_right = right.merge_interval(&other_right);
 
                 // If the left and right intervals intersect each other, we need the full interval
-                if new_left.intersects_interval(&new_right) {
-                    return WraparoundInterval::full();
+                return if new_left.intersects_interval(&new_right) {
+                    WraparoundInterval::full()
                 } else {
-                    return WraparoundInterval::new(new_right.lo(), new_left.hi());
-                }
+                    WraparoundInterval::new(new_right.lo(), new_left.hi())
+                };
             }
             // Neither are wraparound: just merge the inner intervals
             (false, false) => {
@@ -526,7 +526,7 @@ mod test {
 
     fn test_empty<T: IntervalTrait>(empty: T) {
         // Equals itself
-        #[allow(clippy::eq_op)]
+        #[expect(clippy::eq_op)]
         {
             assert_eq!(empty, empty);
         }

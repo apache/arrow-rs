@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -30,24 +31,24 @@ use parquet::schema::parser::parse_message_type;
 use parquet::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as SchemaType,
 };
-use rand::Rng;
+use rand::{RngExt, SeedableRng};
 
-use arrow::util::test_util::seedable_rng;
 use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
+use rand::rngs::StdRng;
 
 const NUM_COLUMNS: usize = 10_000;
 const NUM_ROW_GROUPS: usize = 10;
 
 fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) -> Vec<u8> {
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
 
     let mut column_desc_ptrs: Vec<ColumnDescPtr> = Vec::with_capacity(NUM_COLUMNS);
     let mut message_type = "message test_schema {".to_string();
     for i in 0..NUM_COLUMNS {
-        message_type.push_str(&format!("REQUIRED FLOAT {};", i));
+        write!(message_type, "REQUIRED FLOAT {i};").ok();
         column_desc_ptrs.push(ColumnDescPtr::new(ColumnDescriptor::new(
             Arc::new(
                 SchemaType::primitive_type_builder(&i.to_string(), PhysicalType::FLOAT)
@@ -124,7 +125,7 @@ fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) 
                 .set_column_metadata(columns)
                 .set_total_byte_size(rng.random_range(1..2000000000))
                 .set_num_rows(rng.random_range(1..10000000000))
-                .set_ordinal(i as i16)
+                .set_ordinal(i as i32)
                 .build()
                 .unwrap()
         })
@@ -157,9 +158,9 @@ fn encoded_meta(is_nullable: bool, has_lists: bool, write_path_in_schema: bool) 
 fn get_footer_bytes(data: Bytes) -> Bytes {
     let footer_bytes = data.slice(data.len() - 8..);
     let footer_len = footer_bytes[0] as u32
-        | (footer_bytes[1] as u32) << 8
-        | (footer_bytes[2] as u32) << 16
-        | (footer_bytes[3] as u32) << 24;
+        | ((footer_bytes[1] as u32) << 8)
+        | ((footer_bytes[2] as u32) << 16)
+        | ((footer_bytes[3] as u32) << 24);
     let meta_start = data.len() - footer_len as usize - 8;
     let meta_end = data.len() - 8;
     data.slice(meta_start..meta_end)

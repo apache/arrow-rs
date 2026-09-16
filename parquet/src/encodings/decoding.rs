@@ -21,11 +21,12 @@ use bytes::Bytes;
 use num_traits::{FromPrimitive, WrappingAdd};
 use std::{cmp, marker::PhantomData, mem};
 
-use super::rle::RleDecoder;
+use super::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
+use crate::encodings::decoding::alp_decoder::AlpDecoder;
 use crate::encodings::decoding::byte_stream_split_decoder::{
     ByteStreamSplitDecoder, VariableWidthByteStreamSplitDecoder,
 };
@@ -33,6 +34,7 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{self, BitReader, FromBitpacked};
 
+pub(crate) mod alp_decoder;
 mod byte_stream_split_decoder;
 
 pub(crate) mod private {
@@ -63,7 +65,8 @@ pub(crate) mod private {
             Encoding::RLE
             | Encoding::DELTA_BINARY_PACKED
             | Encoding::DELTA_BYTE_ARRAY
-            | Encoding::DELTA_LENGTH_BYTE_ARRAY => Err(general_err!(
+            | Encoding::DELTA_LENGTH_BYTE_ARRAY
+            | Encoding::ALP => Err(general_err!(
                 "Encoding {} is not supported for type",
                 encoding
             )),
@@ -116,6 +119,7 @@ pub(crate) mod private {
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
                 Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
+                Encoding::ALP => Ok(Box::new(AlpDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -127,6 +131,7 @@ pub(crate) mod private {
         ) -> Result<Box<dyn Decoder<T>>> {
             match encoding {
                 Encoding::BYTE_STREAM_SPLIT => Ok(Box::new(ByteStreamSplitDecoder::new())),
+                Encoding::ALP => Ok(Box::new(AlpDecoder::new())),
                 _ => get_decoder_default(descr, encoding),
             }
         }
@@ -386,10 +391,9 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
         }
 
         let bit_width = data.as_ref()[0];
-        if bit_width > 32 {
+        if bit_width > MAX_RLE_DICTIONARY_BIT_WIDTH {
             return Err(general_err!(
-                "Invalid or corrupted RLE bit width {}. Max allowed is 32",
-                bit_width
+                "Invalid or corrupted RLE bit width {bit_width}. Max allowed is {MAX_RLE_DICTIONARY_BIT_WIDTH}"
             ));
         }
         let mut rle_decoder = RleDecoder::new(bit_width);
@@ -510,6 +514,11 @@ where
 
 // ----------------------------------------------------------------------
 // DELTA_BINARY_PACKED Decoding
+
+/// Upper bound on the scratch buffer [`DeltaBitPackDecoder::skip`] decodes into.
+/// Matches the widest miniblock this crate writes, and the widest unpack
+/// [`BitReader::get_batch`] performs in one step for a 64 bit type.
+const MAX_SKIP_BUFFER_VALUES: usize = 64;
 
 /// Delta binary packed decoder.
 /// Supports INT32 and INT64 types.
@@ -703,14 +712,14 @@ where
         self.first_value =
             Some(T::T::from_i64(first_value).ok_or_else(|| general_err!("first value too large"))?);
 
-        if self.block_size % 128 != 0 {
+        if !self.block_size.is_multiple_of(128) {
             return Err(general_err!(
                 "'block_size' must be a multiple of 128, got {}",
                 self.block_size
             ));
         }
 
-        if self.block_size % self.mini_blocks_per_block != 0 {
+        if !self.block_size.is_multiple_of(self.mini_blocks_per_block) {
             return Err(general_err!(
                 "'block_size' must be a multiple of 'mini_blocks_per_block' got {} and {}",
                 self.block_size,
@@ -724,7 +733,7 @@ where
         self.mini_block_remaining = 0;
         self.mini_block_bit_widths.clear();
 
-        if self.values_per_mini_block % 32 != 0 {
+        if !self.values_per_mini_block.is_multiple_of(32) {
             return Err(general_err!(
                 "'values_per_mini_block' must be a multiple of 32 got {}",
                 self.values_per_mini_block
@@ -848,23 +857,12 @@ where
         }
 
         // See https://github.com/apache/arrow-rs/pull/9794.
-        // The parquet spec actually allows for miniblock sizes other than 32 or 64, but
-        // no current writers use anything else. Using values_per_mini_block directly
-        // for the skip_buffer doesn't allow stack allocation and leads to a significant
-        // drop in performance. We'll settle for erroring out here and come up with a
-        // better fix if writers ever start getting creative with block sizes.
-        let mini_block_batch_size = match self.values_per_mini_block {
-            32 => 32,
-            64 => 64,
-            _ => {
-                return Err(general_err!(
-                    "cannot skip miniblock of size {}",
-                    self.values_per_mini_block
-                ));
-            }
-        };
-
-        let mut skip_buffer = vec![T::T::default(); mini_block_batch_size];
+        // The parquet spec allows miniblock sizes other than the 32 and 64 this crate
+        // writes, and sizing skip_buffer off values_per_mini_block costs us the stack
+        // allocation that keeps skip fast. The buffer only exists to walk last_value
+        // forward, so keep it fixed at the widest size the common cases need and
+        // consume wider miniblocks a chunk at a time.
+        let mut skip_buffer = [T::T::default(); MAX_SKIP_BUFFER_VALUES];
         while skip < to_skip {
             if self.mini_block_remaining == 0 {
                 self.next_mini_block()?;
@@ -890,30 +888,37 @@ where
                 // bit_width=0 payloads occupy zero bytes; no bit_reader advancement needed.
             } else {
                 // bw>0: must decode to track last_value for subsequent get() calls.
-                let skip_count = self
-                    .bit_reader
-                    .get_batch(&mut skip_buffer[0..mini_block_to_skip], bit_width);
+                let mut skipped_in_mini_block = 0;
+                while skipped_in_mini_block < mini_block_to_skip {
+                    let batch_to_skip =
+                        (mini_block_to_skip - skipped_in_mini_block).min(skip_buffer.len());
+                    let skip_count = self
+                        .bit_reader
+                        .get_batch(&mut skip_buffer[0..batch_to_skip], bit_width);
 
-                if skip_count != mini_block_to_skip {
-                    return Err(general_err!(
-                        "Expected to skip {} values from mini block got {}.",
-                        mini_block_to_skip,
-                        skip_count
-                    ));
-                }
+                    if skip_count != batch_to_skip {
+                        return Err(general_err!(
+                            "Expected to skip {} values from mini block got {}.",
+                            batch_to_skip,
+                            skip_count
+                        ));
+                    }
 
-                if min_delta == 0 {
-                    for v in &mut skip_buffer[0..skip_count] {
-                        *v = v.wrapping_add(&self.last_value);
-                        self.last_value = *v;
+                    if min_delta == 0 {
+                        for v in &mut skip_buffer[0..skip_count] {
+                            *v = v.wrapping_add(&self.last_value);
+                            self.last_value = *v;
+                        }
+                    } else {
+                        for v in &mut skip_buffer[0..skip_count] {
+                            *v = v
+                                .wrapping_add(&self.min_delta)
+                                .wrapping_add(&self.last_value);
+                            self.last_value = *v;
+                        }
                     }
-                } else {
-                    for v in &mut skip_buffer[0..skip_count] {
-                        *v = v
-                            .wrapping_add(&self.min_delta)
-                            .wrapping_add(&self.last_value);
-                        self.last_value = *v;
-                    }
+
+                    skipped_in_mini_block += batch_to_skip;
                 }
             }
 
@@ -1299,6 +1304,8 @@ mod tests {
         create_and_check_decoder::<ByteArrayType>(Encoding::DELTA_LENGTH_BYTE_ARRAY, None);
         create_and_check_decoder::<ByteArrayType>(Encoding::DELTA_BYTE_ARRAY, None);
         create_and_check_decoder::<BoolType>(Encoding::RLE, None);
+        create_and_check_decoder::<FloatType>(Encoding::ALP, None);
+        create_and_check_decoder::<DoubleType>(Encoding::ALP, None);
 
         // error when initializing
         create_and_check_decoder::<Int32Type>(
@@ -1327,7 +1334,7 @@ mod tests {
         );
 
         // unsupported
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         create_and_check_decoder::<Int32Type>(
             Encoding::BIT_PACKED,
             Some(nyi_err!("Encoding BIT_PACKED is not supported")),
@@ -1907,6 +1914,56 @@ mod tests {
     }
 
     #[test]
+    fn test_delta_bit_packed_skip_wide_miniblocks() {
+        // 1024 values per block over 4 miniblocks is 256 values per miniblock, which is
+        // spec legal but wider than anything this crate writes. Databricks Photon 0.2
+        // emits pages shaped like this. See
+        // https://github.com/apache/arrow-rs/issues/11018.
+        let header = vec![
+            128, 8, // block_size = 1024
+            4, // mini_blocks_per_block = 4
+            172, 2, // total_values = 300
+            0, // first_value = 0
+        ];
+
+        let block_header = vec![
+            0, // min_delta = 0
+            1, 0, 0, 0, // bit widths
+        ];
+
+        // Miniblock 1 - bit width 1, all deltas 1 => 256 bits
+        // Miniblocks 2 to 4 - bit width 0 => no bytes
+        let block = vec![0xFF; 32];
+
+        let data: Vec<u8> = header
+            .into_iter()
+            .chain(block_header)
+            .chain(block)
+            .collect();
+        let data = Bytes::from(data);
+
+        // Values are 0..=256 followed by 43 more copies of 256.
+        let expected: Vec<i32> = (200..=256).chain(std::iter::repeat_n(256, 43)).collect();
+
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        decoder.set_data(data.clone(), 0).unwrap();
+        assert_eq!(decoder.skip(200).unwrap(), 200);
+
+        let mut output = vec![0_i32; 100];
+        assert_eq!(decoder.get(&mut output).unwrap(), 100);
+        assert_eq!(output, expected);
+
+        // Skipping across the miniblock boundary must leave last_value on the plateau.
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        decoder.set_data(data, 0).unwrap();
+        assert_eq!(decoder.skip(299).unwrap(), 299);
+
+        let mut output = vec![0_i32; 1];
+        assert_eq!(decoder.get(&mut output).unwrap(), 1);
+        assert_eq!(output, vec![256]);
+    }
+
+    #[test]
     fn test_delta_bit_packed_padding() {
         // Page header
         let header = vec![
@@ -1990,6 +2047,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_delta_bit_packed_int32_single_value_skip_large() {
         let block_data = vec![3; 10240];
         test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
@@ -2003,6 +2061,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_delta_bit_packed_int32_increasing_value_skip_large() {
         let block_data = (0i32..10240).collect::<Vec<i32>>();
         test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
@@ -2016,6 +2075,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_delta_bit_packed_int32_stepped_value_skip_large() {
         let block_data = (0i32..10240).map(|i| i / 2).collect::<Vec<i32>>();
         test_skip::<Int32Type>(block_data.clone(), Encoding::DELTA_BINARY_PACKED, 50);
@@ -2266,14 +2326,14 @@ mod tests {
         let mut decoder = get_decoder::<T>(col_descr, encoding).expect("get decoder");
         decoder.set_data(bytes, data.len()).expect("ok to set data");
 
+        let skipped = decoder.skip(skip).expect("ok to skip");
+
         if skip >= data.len() {
-            let skipped = decoder.skip(skip).expect("ok to skip");
             assert_eq!(skipped, data.len());
 
             let skipped_again = decoder.skip(skip).expect("ok to skip again");
             assert_eq!(skipped_again, 0);
         } else {
-            let skipped = decoder.skip(skip).expect("ok to skip");
             assert_eq!(skipped, skip);
 
             let remaining = data.len() - skip;
@@ -2322,14 +2382,12 @@ mod tests {
 
     /// A util trait to convert slices of different types to byte arrays
     trait ToByteArray<T: DataType> {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[T::T]) -> Vec<u8>;
     }
 
     macro_rules! to_byte_array_impl {
         ($ty: ty) => {
             impl ToByteArray<$ty> for $ty {
-                #[allow(clippy::wrong_self_convention)]
                 fn to_byte_array(data: &[<$ty as DataType>::T]) -> Vec<u8> {
                     <$ty as DataType>::T::slice_as_bytes(data).to_vec()
                 }
@@ -2343,7 +2401,6 @@ mod tests {
     to_byte_array_impl!(DoubleType);
 
     impl ToByteArray<BoolType> for BoolType {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[bool]) -> Vec<u8> {
             let mut v = vec![];
             for (i, item) in data.iter().enumerate() {
@@ -2359,7 +2416,6 @@ mod tests {
     }
 
     impl ToByteArray<Int96Type> for Int96Type {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[Int96]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -2370,7 +2426,6 @@ mod tests {
     }
 
     impl ToByteArray<ByteArrayType> for ByteArrayType {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[ByteArray]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -2384,7 +2439,6 @@ mod tests {
     }
 
     impl ToByteArray<FixedLenByteArrayType> for FixedLenByteArrayType {
-        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[FixedLenByteArray]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -2397,7 +2451,7 @@ mod tests {
 
     #[test]
     // Allow initializing a vector and pushing to it for clarity in this test
-    #[allow(clippy::vec_init_then_push)]
+    #[expect(clippy::vec_init_then_push)]
     fn test_delta_bit_packed_invalid_bit_width() {
         // Manually craft a buffer with an invalid bit width
         let mut buffer = vec![];

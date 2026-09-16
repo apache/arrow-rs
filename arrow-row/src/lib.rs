@@ -152,6 +152,13 @@
 //! [compared]: PartialOrd
 //! [compare]: PartialOrd
 //! [the issue]: https://github.com/apache/arrow-rs/issues/4811
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -1051,12 +1058,12 @@ impl RowConverter {
                 columns.len()
             )));
         }
-        for colum in columns.iter().skip(1) {
-            if colum.len() != columns[0].len() {
+        for column in columns.iter().skip(1) {
+            if column.len() != columns[0].len() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "RowConverter columns must all have the same length, expected {} got {}",
                     columns[0].len(),
-                    colum.len()
+                    column.len()
                 )));
             }
         }
@@ -1342,6 +1349,10 @@ pub type RowLengthIter<'a> = Map<Windows<'a, usize>, fn(&'a [usize]) -> usize>;
 
 impl Rows {
     /// Append a [`Row`] to this [`Rows`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` was not produced by the same [`RowConverter`] as `self`
     pub fn push(&mut self, row: Row<'_>) {
         assert!(
             Arc::ptr_eq(&row.config.fields, &self.config.fields),
@@ -1359,6 +1370,10 @@ impl Rows {
     }
 
     /// Returns the row at index `row`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row >= self.num_rows()`
     pub fn row(&self, row: usize) -> Row<'_> {
         self.checked_row_end(row);
         unsafe { self.row_unchecked(row) }
@@ -2367,13 +2382,13 @@ unsafe fn decode_column(
                         let null_row_bytes: &[u8] = &null_rows[field_idx].data;
 
                         for idx in 0..len {
-                            if let Some((next_idx, bytes)) = field_row_iter.peek() {
-                                if *next_idx == idx {
-                                    sparse_data.push(*bytes);
+                            if let Some((next_idx, bytes)) = field_row_iter.peek()
+                                && *next_idx == idx
+                            {
+                                sparse_data.push(*bytes);
 
-                                    field_row_iter.next();
-                                    continue;
-                                }
+                                field_row_iter.next();
+                                continue;
                             }
                             sparse_data.push(null_row_bytes);
                         }
@@ -2382,7 +2397,7 @@ unsafe fn decode_column(
                             unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
 
                         // advance row slices by the bytes consumed for rows that belong to this field
-                        for (row_idx, child_row) in field_rows.iter() {
+                        for (row_idx, child_row) in field_rows {
                             let remaining_len = sparse_data[*row_idx].len();
                             let consumed_length = 1 + child_row.len() - remaining_len;
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
@@ -2426,7 +2441,6 @@ unsafe fn decode_column(
 mod tests {
     use arrow_array::builder::*;
     use arrow_array::types::*;
-    use arrow_array::*;
     use arrow_buffer::{Buffer, OffsetBuffer};
     use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
@@ -2434,7 +2448,7 @@ mod tests {
     use rand::distr::uniform::SampleUniform;
     use rand::distr::{Distribution, StandardUniform};
     use rand::prelude::StdRng;
-    use rand::{Rng, RngCore, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
@@ -4583,7 +4597,7 @@ mod tests {
     }
 
     fn generate_primitive_array<K>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> PrimitiveArray<K>
@@ -4596,10 +4610,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_all_unique_primitive_array<K>(
-        rng: &mut impl RngCore,
-        len: usize,
-    ) -> PrimitiveArray<K>
+    fn generate_all_unique_primitive_array<K>(rng: &mut StdRng, len: usize) -> PrimitiveArray<K>
     where
         K: ArrowPrimitiveType,
         K::Native: Hash + Eq,
@@ -4628,18 +4639,14 @@ mod tests {
             .collect()
     }
 
-    fn generate_boolean_array(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> BooleanArray {
+    fn generate_boolean_array(rng: &mut StdRng, len: usize, valid_percent: f64) -> BooleanArray {
         (0..len)
             .map(|_| rng.random_bool(valid_percent).then(|| rng.random_bool(0.5)))
             .collect()
     }
 
     fn generate_strings<O: OffsetSizeTrait>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> GenericStringArray<O> {
@@ -4654,11 +4661,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_string_view(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> StringViewArray {
+    fn generate_string_view(rng: &mut StdRng, len: usize, valid_percent: f64) -> StringViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -4670,11 +4673,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_byte_view(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> BinaryViewArray {
+    fn generate_byte_view(rng: &mut StdRng, len: usize, valid_percent: f64) -> BinaryViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -4715,7 +4714,7 @@ mod tests {
     }
 
     fn generate_dictionary<K>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         values: ArrayRef,
         len: usize,
         valid_percent: f64,
@@ -4748,7 +4747,7 @@ mod tests {
     }
 
     fn generate_fixed_size_binary(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> FixedSizeBinaryArray {
@@ -4769,7 +4768,7 @@ mod tests {
         builder.finish()
     }
 
-    fn generate_struct(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> StructArray {
+    fn generate_struct(rng: &mut StdRng, len: usize, valid_percent: f64) -> StructArray {
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let a = generate_primitive_array::<Int32Type>(rng, len, valid_percent);
         let b = generate_strings::<i32>(rng, len, valid_percent);
@@ -4781,17 +4780,12 @@ mod tests {
         StructArray::new(fields, values, Some(nulls))
     }
 
-    fn generate_list<R: RngCore, F>(
-        rng: &mut R,
-        len: usize,
-        valid_percent: f64,
-        values: F,
-    ) -> ListArray
+    fn generate_list<F>(rng: &mut StdRng, len: usize, valid_percent: f64, values: F) -> ListArray
     where
-        F: FnOnce(&mut R, usize) -> ArrayRef,
+        F: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
-        let values_len = offsets.last().unwrap().to_usize().unwrap();
+        let values_len = offsets.last().as_usize();
         let values = values(rng, values_len);
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
@@ -4799,18 +4793,18 @@ mod tests {
     }
 
     fn generate_list_view<F>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
         values: F,
     ) -> ListViewArray
     where
-        F: FnOnce(usize) -> ArrayRef,
+        F: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         // Generate sizes first, then create a values array large enough
         let sizes: Vec<i32> = (0..len).map(|_| rng.random_range(0..10)).collect();
         let values_len: usize = sizes.iter().map(|s| *s as usize).sum::<usize>().max(1);
-        let values = values(values_len);
+        let values = values(rng, values_len);
 
         // Generate offsets that can overlap, be non-monotonic, or share ranges
         let offsets: Vec<i32> = sizes
@@ -4835,19 +4829,19 @@ mod tests {
         )
     }
 
-    fn generate_map<R: RngCore, KeysFn, ValuesFn>(
-        rng: &mut R,
+    fn generate_map<KeysFn, ValuesFn>(
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
         gen_keys: KeysFn,
         gen_values: ValuesFn,
     ) -> MapArray
     where
-        KeysFn: FnOnce(&mut R, usize) -> ArrayRef,
-        ValuesFn: FnOnce(&mut R, usize) -> ArrayRef,
+        KeysFn: FnOnce(&mut StdRng, usize) -> ArrayRef,
+        ValuesFn: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
-        let entries_len = offsets.last().unwrap().to_usize().unwrap();
+        let entries_len = offsets.last().as_usize();
         let keys = gen_keys(rng, entries_len);
         let values = gen_values(rng, entries_len);
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
@@ -4897,7 +4891,7 @@ mod tests {
         let keys_arrow_row_converter =
             RowConverter::new(vec![SortField::new(array.key_type().clone())]).unwrap();
 
-        array.iter().enumerate().flat_map(|(index, entry)| entry.map(|entry| (index, Arc::clone(entry.column(0))))).for_each(|(entry_index, keys)| {
+        array.iter().enumerate().filter_map(|(index, entry)| entry.map(|entry| (index, Arc::clone(entry.column(0))))).for_each(|(entry_index, keys)| {
             let keys_as_rows = keys_arrow_row_converter.convert_columns(&[Arc::clone(&keys)]).expect("should be able to convert keys");
 
             for i in 0..keys_as_rows.num_rows() {
@@ -4913,7 +4907,7 @@ mod tests {
         })
     }
 
-    fn generate_nulls(rng: &mut impl RngCore, len: usize) -> Option<NullBuffer> {
+    fn generate_nulls(rng: &mut StdRng, len: usize) -> Option<NullBuffer> {
         Some(NullBuffer::from_iter(
             (0..len).map(|_| rng.random_bool(0.8)),
         ))
@@ -5099,7 +5093,7 @@ mod tests {
         )
     }
 
-    fn generate_column(rng: &mut (impl RngCore + Clone), len: usize) -> ArrayRef {
+    fn generate_column(rng: &mut StdRng, len: usize) -> ArrayRef {
         match rng.random_range(0..24) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
@@ -5139,32 +5133,23 @@ mod tests {
             15 => Arc::new(generate_byte_view(rng, len, 0.8)),
             16 => Arc::new(generate_fixed_stringview_column(len)),
             17 => Arc::new(
-                generate_list(&mut rng.clone(), len + 1000, 0.8, |rng, values_len| {
+                generate_list(rng, len + 1000, 0.8, |rng, values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
             ),
             18 => Arc::new(generate_boolean_array(rng, len, 0.8)),
-            19 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8)),
-            )),
-            20 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.8)),
-            )),
-            21 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_struct(rng, values_len, 0.8)),
-            )),
+            19 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
+            })),
+            20 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_strings::<i32>(rng, values_len, 0.8))
+            })),
+            21 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_struct(rng, values_len, 0.8))
+            })),
             22 => Arc::new(
-                generate_list_view(&mut rng.clone(), len + 1000, 0.8, |values_len| {
+                generate_list_view(rng, len + 1000, 0.8, |rng, values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
@@ -5221,7 +5206,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_test() {
         let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..100 {
@@ -5419,7 +5404,7 @@ mod tests {
         let second = Int32Array::from(vec![Some(2), None, Some(4)]);
         let arrays = [Arc::new(first) as ArrayRef, Arc::new(second) as ArrayRef];
 
-        for array in arrays.iter() {
+        for array in &arrays {
             rows.clear();
             converter
                 .append(&mut rows, std::slice::from_ref(array))
@@ -5452,7 +5437,7 @@ mod tests {
 
         let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
         let values = BinaryArray::from(vec![
-            Some("a".as_bytes()),
+            Some(b"a".as_slice()),
             Some(b"b"),
             Some(b"c"),
             Some(b"d"),
@@ -6167,6 +6152,61 @@ mod tests {
         let back = converter.convert_rows(&rows).unwrap();
 
         assert_eq!(&list, &back[0]);
+    }
+
+    /// Ensure dictionaries nested within FixedSizeLists are not flattened
+    #[test]
+    fn test_fixed_size_list_of_dictionaries_round_trips() {
+        // Build one row = ["a", "b"] as
+        // `FixedSizeList<Dictionary<Int32, Utf8>, 2>`.
+        let dict_dt = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let element_field = Arc::new(Field::new("item", dict_dt.clone(), true));
+        let fsl_dt = DataType::FixedSizeList(Arc::clone(&element_field), 2);
+
+        let values = Arc::new(StringArray::from(vec!["a", "b"]));
+        let keys = Int32Array::from(vec![0, 1]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        let fsl: ArrayRef = Arc::new(FixedSizeListArray::new(
+            Arc::clone(&element_field),
+            2,
+            Arc::new(dict),
+            None,
+        ));
+
+        assert!(RowConverter::supports_fields(&[SortField::new(
+            fsl_dt.clone()
+        )]));
+
+        let converter = RowConverter::new(vec![SortField::new(fsl_dt.clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&fsl)]).unwrap();
+
+        // Before the fix this panicked at the `.unwrap()` because
+        // `convert_rows` returned `Err(InvalidArgumentError(...))`.
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+
+        // The returned array is a `FixedSizeList` with a decoded
+        // (flattened) child — same self-consistent shape the other
+        // list-like decoders produce for dictionary children.
+        let out = back[0]
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .expect("decoded array must be a FixedSizeListArray");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out.value_length(), 2);
+        // Child data type is the flattened `Utf8`, not the declared
+        // `Dictionary`. Callers that want the dictionary back need to
+        // re-encode (see the module docs).
+        assert_eq!(out.values().data_type(), &DataType::Utf8);
+
+        // Sanity: values survived the round trip.
+        let values = out
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("child must be a StringArray after flattening");
+        assert_eq!(values.value(0), "a");
+        assert_eq!(values.value(1), "b");
     }
 
     // Test List<Null> with various combinations of nulls and empty lists

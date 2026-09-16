@@ -31,8 +31,12 @@
 //! [Thrift compact]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
 //! [THRIFT.md]: https://github.com/apache/arrow-rs/blob/main/parquet/THRIFT.md
 
+// These macros generate `allow` attributes for lints that may not fire on every
+// invocation, so we keep `allow` instead of `expect`.
+
 #[doc(hidden)]
 #[macro_export]
+#[expect(clippy::allow_attributes)]
 #[allow(clippy::crate_in_macro_def)]
 /// Macro used to generate rust enums from a Thrift `enum` definition.
 ///
@@ -43,6 +47,7 @@ macro_rules! thrift_enum {
     ($(#[$($def_attrs:tt)*])* enum $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_name:ident = $field_value:literal;)* }) => {
         $(#[$($def_attrs)*])*
         #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+        #[allow(clippy::allow_attributes)]
         #[allow(non_camel_case_types)]
         #[allow(missing_docs)]
         pub enum $identifier {
@@ -50,6 +55,7 @@ macro_rules! thrift_enum {
         }
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier {
+            #[allow(clippy::allow_attributes)]
             #[allow(deprecated)]
             fn read_thrift(prot: &mut R) -> Result<Self> {
                 let val = prot.read_i32()?;
@@ -83,6 +89,7 @@ macro_rules! thrift_enum {
         }
 
         impl $identifier {
+            #[allow(clippy::allow_attributes)]
             #[allow(deprecated)]
             #[doc = "Returns a slice containing every variant of this enum."]
             #[allow(dead_code)]
@@ -90,6 +97,7 @@ macro_rules! thrift_enum {
                 $(Self::$field_name),*
             ];
 
+            #[allow(clippy::allow_attributes)]
             #[allow(deprecated)]
             const fn max_discriminant_impl() -> i32 {
                 let values: &[i32] = &[$($field_value),*];
@@ -105,6 +113,7 @@ macro_rules! thrift_enum {
                 max
             }
 
+            #[allow(clippy::allow_attributes)]
             #[allow(deprecated)]
             #[doc = "Returns the largest discriminant value defined for this enum."]
             #[allow(dead_code)]
@@ -127,11 +136,13 @@ macro_rules! thrift_enum {
 ///  - When utilizing this macro the Thrift serialization traits and structs need to be in scope.
 #[doc(hidden)]
 #[macro_export]
+#[expect(clippy::allow_attributes)]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union_all_empty {
     ($(#[$($def_attrs:tt)*])* union $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_id:literal : $field_type:ident $(< $element_type:ident >)? $field_name:ident $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[allow(clippy::allow_attributes)]
         #[allow(non_camel_case_types)]
         #[allow(non_snake_case)]
         #[allow(missing_docs)]
@@ -201,11 +212,13 @@ macro_rules! thrift_union_all_empty {
 ///  - When utilizing this macro the Thrift serialization traits and structs need to be in scope.
 #[doc(hidden)]
 #[macro_export]
+#[expect(clippy::allow_attributes)]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union {
     ($(#[$($def_attrs:tt)*])* union $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $( ( $field_type:ident $(< $element_type:ident >)? $(< $field_lt:lifetime >)?) )? $field_name:ident $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Debug, Eq, PartialEq)]
+        #[allow(clippy::allow_attributes)]
         #[allow(non_camel_case_types)]
         #[allow(non_snake_case)]
         #[allow(missing_docs)]
@@ -273,11 +286,13 @@ macro_rules! thrift_union {
 /// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
 #[doc(hidden)]
 #[macro_export]
+#[expect(clippy::allow_attributes)]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union_with_unknown {
     ($(#[$($def_attrs:tt)*])* union $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $( ( $field_type:ident $(< $element_type:ident >)? $(< $field_lt:lifetime >)?) )? $field_name:ident $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Debug, Eq, PartialEq)]
+        #[allow(clippy::allow_attributes)]
         #[allow(non_camel_case_types)]
         #[allow(non_snake_case)]
         #[allow(missing_docs)]
@@ -353,6 +368,7 @@ macro_rules! thrift_struct {
     ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Debug, Eq, PartialEq)]
+        #[allow(clippy::allow_attributes)]
         #[allow(non_camel_case_types)]
         #[allow(non_snake_case)]
         #[allow(missing_docs)]
@@ -390,6 +406,7 @@ macro_rules! thrift_struct {
         impl $(<$lt>)? WriteThrift for $identifier $(<$lt>)? {
             const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
+            #[allow(clippy::allow_attributes)]
             #[allow(unused_assignments)]
             fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
                 #[allow(unused_mut, unused_variables)]

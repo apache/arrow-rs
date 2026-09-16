@@ -51,7 +51,7 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ListLikeArrayDecoder<O, IS_VIEW> {
             (true, DataType::LargeListView(f)) if O::IS_LARGE => f,
             _ => unreachable!(),
         };
-        let decoder = ctx.make_decoder(field.data_type(), field.is_nullable())?;
+        let decoder = ctx.make_decoder(field, field.is_nullable())?;
 
         Ok(Self {
             field: field.clone(),
@@ -112,16 +112,13 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
                 sizes.push(offsets[i] - offsets[i - 1]);
             }
             offsets.pop();
-            // SAFETY: offsets and sizes are constructed correctly from the tape
-            let array = unsafe {
-                GenericListViewArray::<O>::new_unchecked(
-                    self.field.clone(),
-                    ScalarBuffer::from(offsets),
-                    ScalarBuffer::from(sizes),
-                    values,
-                    nulls,
-                )
-            };
+            let array = GenericListViewArray::<O>::try_new(
+                self.field.clone(),
+                ScalarBuffer::from(offsets),
+                ScalarBuffer::from(sizes),
+                values,
+                nulls,
+            )?;
             Ok(Arc::new(array))
         } else {
             // SAFETY: offsets are built monotonically starting from 0
@@ -151,7 +148,7 @@ impl FixedSizeListArrayDecoder {
             DataType::FixedSizeList(f, s) => (f, *s),
             _ => unreachable!(),
         };
-        let decoder = ctx.make_decoder(field.data_type(), field.is_nullable())?;
+        let decoder = ctx.make_decoder(field, field.is_nullable())?;
 
         Ok(Self {
             field: field.clone(),

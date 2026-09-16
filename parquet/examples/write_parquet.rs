@@ -76,7 +76,7 @@ fn mem(system: &mut System) -> String {
     system
         .process(pid)
         .map(|proc| format!("{}MB", proc.memory() / 1_000_000))
-        .unwrap_or("N/A".to_string())
+        .unwrap_or_else(|| "N/A".to_string())
 }
 
 fn main() -> Result<()> {
@@ -109,7 +109,7 @@ fn main() -> Result<()> {
     let mut array_builder = UInt64Builder::new();
     let mut last_log = Instant::now();
     for i in 0..args.iterations {
-        if Instant::now() - last_log > Duration::new(10, 0) {
+        if last_log.elapsed() > Duration::new(10, 0) {
             last_log = Instant::now();
             eprintln!(
                 "{} Iteration {}/{}. RSS = {}",

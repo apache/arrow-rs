@@ -196,10 +196,7 @@ impl Fields {
                 Struct(fields) => {
                     let filtered: Result<Vec<_>, _> =
                         fields.iter().map(|f| filter_field(f, filter)).collect();
-                    let filtered: Fields = filtered?
-                        .iter()
-                        .filter_map(|f| f.as_ref().cloned())
-                        .collect();
+                    let filtered: Fields = filtered?.iter().filter_map(|f| f.clone()).collect();
 
                     if filtered.is_empty() {
                         return Ok(None);
@@ -212,10 +209,8 @@ impl Fields {
                         .iter()
                         .map(|(id, f)| filter_field(f, filter).map(|f| f.map(|f| (id, f))))
                         .collect();
-                    let filtered: UnionFields = filtered?
-                        .iter()
-                        .filter_map(|f| f.as_ref().cloned())
-                        .collect();
+                    let filtered: UnionFields =
+                        filtered?.iter().filter_map(|f| f.clone()).collect();
 
                     if filtered.is_empty() {
                         return Ok(None);
@@ -250,10 +245,7 @@ impl Fields {
             .iter()
             .map(|f| filter_field(f, &mut filter))
             .collect();
-        let filtered = filtered?
-            .iter()
-            .filter_map(|f| f.as_ref().cloned())
-            .collect();
+        let filtered = filtered?.iter().filter_map(|f| f.clone()).collect();
         Ok(filtered)
     }
 }
@@ -601,7 +593,7 @@ impl UnionFields {
         let mut output: Vec<_> = self.iter().map(|(id, f)| (id, f.clone())).collect();
         for (field_type_id, from_field) in other.iter() {
             let mut is_new_field = true;
-            for (self_type_id, self_field) in output.iter_mut() {
+            for (self_type_id, self_field) in &mut output {
                 if from_field == self_field {
                     // If the nested fields in two unions are the same, they must have same
                     // type id.
@@ -935,7 +927,7 @@ mod tests {
     #[test]
     fn test_union_fields_try_from_fields_too_many() {
         let many_fields: Vec<_> = (0..200)
-            .map(|i| Field::new(format!("field{}", i), DataType::Int32, false))
+            .map(|i| Field::new(format!("field{i}"), DataType::Int32, false))
             .collect();
         let res = UnionFields::try_from_fields(many_fields);
         assert!(res.is_err());
@@ -949,7 +941,7 @@ mod tests {
     #[test]
     fn test_union_fields_try_from_fields_max_valid() {
         let fields: Vec<_> = (0..=i8::MAX)
-            .map(|i| Field::new(format!("field{}", i), DataType::Int32, false))
+            .map(|i| Field::new(format!("field{i}"), DataType::Int32, false))
             .collect();
         let res = UnionFields::try_from_fields(fields);
         assert!(res.is_ok());
@@ -963,7 +955,7 @@ mod tests {
     fn test_union_fields_try_from_fields_over_max() {
         // 129 fields should fail
         let fields: Vec<_> = (0..129)
-            .map(|i| Field::new(format!("field{}", i), DataType::Int32, false))
+            .map(|i| Field::new(format!("field{i}"), DataType::Int32, false))
             .collect();
         let res = UnionFields::try_from_fields(fields);
         assert!(res.is_err());

@@ -20,7 +20,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow_array::builder::{BufferBuilder, FixedSizeBinaryBuilder, make_view};
+use arrow_array::builder::{FixedSizeBinaryBuilder, make_view};
 use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
@@ -28,6 +28,11 @@ use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 
 /// Returns the elementwise concatenation of a [`GenericByteArray`].
+///
+/// # Errors
+///
+/// Returns an error if the arrays have different lengths, or if the concatenated
+/// data is too long for the offset type.
 pub fn concat_elements_bytes<T: ByteArrayType>(
     left: &GenericByteArray<T>,
     right: &GenericByteArray<T>,
@@ -48,24 +53,29 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
     let left_values = left.value_data();
     let right_values = right.value_data();
 
-    let mut output_values = BufferBuilder::<u8>::new(
+    let mut output_values = Vec::with_capacity(
         left_values.len() + right_values.len()
             - left_offsets[0].as_usize()
             - right_offsets[0].as_usize(),
     );
 
-    let mut output_offsets = BufferBuilder::<T::Offset>::new(left_offsets.len());
-    output_offsets.append(T::Offset::usize_as(0));
+    let mut output_offsets = Vec::with_capacity(left_offsets.len());
+    output_offsets.push(T::Offset::usize_as(0));
     for (left_idx, right_idx) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
-        output_values.append_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
-        output_values.append_slice(&right_values[right_idx[0].as_usize()..right_idx[1].as_usize()]);
-        output_offsets.append(T::Offset::from_usize(output_values.len()).unwrap());
+        output_values
+            .extend_from_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
+        output_values
+            .extend_from_slice(&right_values[right_idx[0].as_usize()..right_idx[1].as_usize()]);
+        let output_len = output_values.len();
+        let offset =
+            T::Offset::from_usize(output_len).ok_or(ArrowError::OffsetOverflowError(output_len))?;
+        output_offsets.push(offset);
     }
 
     let builder = ArrayDataBuilder::new(T::DATA_TYPE)
         .len(left.len())
-        .add_buffer(output_offsets.finish())
-        .add_buffer(output_values.finish())
+        .add_buffer(output_offsets.into())
+        .add_buffer(output_values.into())
         .nulls(nulls);
 
     // SAFETY - offsets valid by construction
@@ -108,6 +118,11 @@ pub fn concat_element_binary<Offset: OffsetSizeTrait>(
 /// ```
 ///
 /// An error will be returned if the [`StringArray`] are of different lengths
+///
+/// # Errors
+///
+/// Returns an error if the arrays have different lengths, or if the concatenated
+/// data is too long for the offset type.
 pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
     arrays: &[&GenericStringArray<Offset>],
 ) -> Result<GenericStringArray<Offset>, ArrowError> {
@@ -138,7 +153,7 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         .map(|a| a.value_offsets().iter().peekable())
         .collect::<Vec<_>>();
 
-    let mut output_values = BufferBuilder::<u8>::new(
+    let mut output_values = Vec::with_capacity(
         data_values
             .iter()
             .zip(offsets.iter_mut())
@@ -146,8 +161,8 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
             .sum(),
     );
 
-    let mut output_offsets = BufferBuilder::<Offset>::new(size + 1);
-    output_offsets.append(Offset::zero());
+    let mut output_offsets = Vec::with_capacity(size + 1);
+    output_offsets.push(Offset::zero());
     for _ in 0..size {
         data_values
             .iter()
@@ -155,15 +170,18 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
             .for_each(|(values, offset)| {
                 let index_start = offset.next().unwrap().as_usize();
                 let index_end = offset.peek().unwrap().as_usize();
-                output_values.append_slice(&values[index_start..index_end]);
+                output_values.extend_from_slice(&values[index_start..index_end]);
             });
-        output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
+        let output_len = output_values.len();
+        let offset =
+            Offset::from_usize(output_len).ok_or(ArrowError::OffsetOverflowError(output_len))?;
+        output_offsets.push(offset);
     }
 
     let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::DATA_TYPE)
         .len(size)
-        .add_buffer(output_offsets.finish())
-        .add_buffer(output_values.finish())
+        .add_buffer(output_offsets.into())
+        .add_buffer(output_values.into())
         .nulls(nulls);
 
     // SAFETY - offsets valid by construction
@@ -201,19 +219,28 @@ pub fn concat_elements_fixed_size_binary(
         ))
     })?;
     let output_size = left_size + right_size;
+    let output_value_length = i32::try_from(output_size).map_err(|_| {
+        ArrowError::InvalidArgumentError(format!(
+            "Concatenated FixedSizeBinary value length {output_size} exceeds i32"
+        ))
+    })?;
 
     // Pre-compute combined null bitmap so the per-row NULL check is efficient
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
-    let mut result = FixedSizeBinaryBuilder::with_capacity(left.len(), output_size as i32);
+    let mut result = FixedSizeBinaryBuilder::with_capacity(left.len(), output_value_length);
     let mut buffer = MutableBuffer::with_capacity(output_size);
     for i in 0..left.len() {
         if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
             result.append_null();
         } else {
             buffer.clear();
-            buffer.extend_from_slice(left.value(i));
-            buffer.extend_from_slice(right.value(i));
+            buffer
+                .try_extend_from_slice(left.value(i))
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+            buffer
+                .try_extend_from_slice(right.value(i))
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
             result.append_value(&buffer)?;
         }
     }
@@ -294,7 +321,7 @@ where
                     }
                 }
             }
-        };
+        }
 
         builder.finish(null_buffer)
     }
@@ -318,7 +345,7 @@ where
             // in `concat_elements_view_array`, so offset cannot exceed it.
             // Not using `u32::try_from` on each insertion makes a ~5% difference
             // in benchmarking
-            debug_assert!(offset <= i32::MAX as usize);
+            debug_assert!(i32::try_from(offset).is_ok());
             let view_offset: u32 = offset as u32;
 
             self.data.extend_from_slice(left);
@@ -330,7 +357,7 @@ where
             self.inline.extend_from_slice(right);
             self.views.push(make_view(&self.inline, 0, 0));
             self.inline.clear();
-        };
+        }
     }
 
     /// Append an empty view.
@@ -343,14 +370,14 @@ where
         self,
         null_buffer: Option<NullBuffer>,
     ) -> Result<GenericByteViewArray<T>, ArrowError> {
-        if let Some(ref nulls) = null_buffer {
-            if nulls.len() != self.views.len() {
-                return Err(ArrowError::ComputeError(format!(
-                    "Null buffer length ({}) must match row count ({})",
-                    nulls.len(),
-                    self.views.len()
-                )));
-            }
+        if let Some(ref nulls) = null_buffer
+            && nulls.len() != self.views.len()
+        {
+            return Err(ArrowError::ComputeError(format!(
+                "Null buffer length ({}) must match row count ({})",
+                nulls.len(),
+                self.views.len()
+            )));
         }
 
         let buffers = if self.data.is_empty() {
@@ -457,8 +484,7 @@ pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayR
         (l, r) => {
             if l != r {
                 Err(ArrowError::ComputeError(format!(
-                    "Cannot concat arrays of different types: {} != {}",
-                    l, r
+                    "Cannot concat arrays of different types: {l} != {r}"
                 )))
             } else {
                 Err(ArrowError::NotYetImplemented(format!(
@@ -667,6 +693,21 @@ mod tests {
         assert_eq!(
             output.unwrap_err().to_string(),
             "Compute error: Arrays must have the same length: 2 != 1".to_string()
+        );
+    }
+
+    #[test]
+    fn test_fixed_size_binary_concat_width_overflow() {
+        let width = 0x7000_0000_i32;
+        let left =
+            FixedSizeBinaryArray::try_new(width, Buffer::from(Vec::<u8>::new()), None).unwrap();
+        let right =
+            FixedSizeBinaryArray::try_new(width, Buffer::from(Vec::<u8>::new()), None).unwrap();
+
+        let output = concat_elements_fixed_size_binary(&left, &right);
+        assert_eq!(
+            output.unwrap_err().to_string(),
+            "Invalid argument error: Concatenated FixedSizeBinary value length 3758096384 exceeds i32".to_string()
         );
     }
 

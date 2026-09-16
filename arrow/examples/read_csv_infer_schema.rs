@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
-
 use arrow::csv;
 use arrow::util::pretty::print_batches;
 use arrow_csv::reader::Format;

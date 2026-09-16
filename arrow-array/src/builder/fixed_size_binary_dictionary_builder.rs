@@ -159,9 +159,13 @@ where
         Ok(Self {
             state,
             dedup,
-            keys_builder: new_keys
-                .into_builder()
-                .expect("underlying buffer has no references"),
+            keys_builder: new_keys.into_builder().map_err(|_| {
+                ArrowError::ComputeError(
+                    "Internal Error: the keys just derived from the source builder are \
+                     unexpectedly shared, so they cannot be reused as a builder"
+                        .to_string(),
+                )
+            })?,
             values_builder,
             byte_width,
         })
@@ -316,6 +320,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -335,6 +340,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
@@ -370,6 +376,7 @@ where
             .data_type(data_type)
             .child_data(vec![values.into_data()]);
 
+        // SAFETY: builder is constructed from valid key/value arrays produced by the builder
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 }
@@ -631,9 +638,9 @@ mod tests {
         assert_eq!(
             values,
             vec![
-                Some("aaa".as_bytes()),
-                Some("bbb".as_bytes()),
-                Some("ccc".as_bytes())
+                Some(b"aaa".as_slice()),
+                Some(b"bbb".as_slice()),
+                Some(b"ccc".as_slice())
             ]
         );
 
@@ -650,7 +657,7 @@ mod tests {
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
-        assert_eq!(values, [Some("ddd".as_bytes()), Some("eee".as_bytes())]);
+        assert_eq!(values, [Some(b"ddd".as_slice()), Some(b"eee".as_slice())]);
 
         // Check that we have all of the expected values
         let all_values = dict2
@@ -663,11 +670,11 @@ mod tests {
         assert_eq!(
             all_values,
             [
-                Some("aaa".as_bytes()),
-                Some("bbb".as_bytes()),
-                Some("ccc".as_bytes()),
-                Some("ddd".as_bytes()),
-                Some("eee".as_bytes())
+                Some(b"aaa".as_slice()),
+                Some(b"bbb".as_slice()),
+                Some(b"ccc".as_slice()),
+                Some(b"ddd".as_slice()),
+                Some(b"eee".as_slice())
             ]
         );
     }

@@ -124,7 +124,7 @@ impl<T> Stream for FallibleTonicResponseStream<T> {
         // polling the response_stream
         if let Poll::Ready(Ok(err)) = receiver.poll_unpin(cx) {
             return Poll::Ready(Some(Err(err)));
-        };
+        }
 
         match ready!(pinned.response_stream.poll_next_unpin(cx)) {
             Some(Ok(res)) => Poll::Ready(Some(Ok(res))),

@@ -27,7 +27,6 @@ use std::hint;
 use std::io::Cursor;
 use std::sync::Arc;
 
-#[allow(deprecated)]
 fn do_bench(c: &mut Criterion, name: &str, json: &str, schema: SchemaRef) {
     c.bench_function(name, |b| {
         b.iter(|| {

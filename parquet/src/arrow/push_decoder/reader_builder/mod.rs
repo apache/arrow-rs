@@ -21,7 +21,7 @@ mod filter;
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
+use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionStrategy};
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
     RowSelectionPolicy,
@@ -32,7 +32,7 @@ use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
 use data::DataRequest;
@@ -158,10 +158,10 @@ impl RowBudget {
             *offset = offset.saturating_sub(rows_before_budget - rows_after_budget);
         }
 
-        if rows_after_budget != 0 {
-            if let Some(limit) = &mut self.limit {
-                *limit -= rows_after_budget;
-            }
+        if rows_after_budget != 0
+            && let Some(limit) = &mut self.limit
+        {
+            *limit -= rows_after_budget;
         }
 
         self
@@ -351,8 +351,12 @@ impl RowGroupReaderBuilder {
     }
 
     /// Push new data buffers that can be used to satisfy pending requests
-    pub fn push_data(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
-        self.buffers.push_ranges(ranges, buffers);
+    pub fn push_data(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+        buffers: Vec<Bytes>,
+    ) -> Result<(), ParquetError> {
+        self.buffers.push_ranges(ranges, buffers)
     }
 
     /// True iff the inner state is `Finished`. This is the only state in
@@ -491,7 +495,7 @@ impl RowGroupReaderBuilder {
                         column_chunks,
                         cache_info: None,
                     }));
-                };
+                }
 
                 // we have predicates to evaluate
                 let cache_projection =
@@ -550,7 +554,9 @@ impl RowGroupReaderBuilder {
                     predicate.projection(), // use the predicate's projection
                 )
                 .with_selection(plan_builder.selection())
-                // Fetch predicate columns; expand selection only for cached predicate columns
+                // Cached output columns reuse these predicate-stage chunks. Expand their
+                // selection to cache batch boundaries so a cache miss can safely fetch a
+                // complete batch from the retained sparse column data.
                 .with_cache_projection(Some(filter_info.cache_projection()))
                 .with_column_chunks(column_chunks)
                 .build();
@@ -613,20 +619,17 @@ impl RowGroupReaderBuilder {
                     .with_parquet_metadata(&self.metadata)
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
-                // Reset to original policy before each predicate so the override
-                // can detect page skipping for THIS predicate's columns.
-                // Without this reset, a prior predicate's override (e.g. Mask)
-                // carries forward and the check returns early, missing unfetched
-                // pages for subsequent predicates.
+                // Auto resolution and loaded ranges are projection-specific, so restore the
+                // configured policy before preparing each predicate.
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
 
-                // Prepare to evaluate the filter.
-                // Note: first update the selection strategy to properly handle any pages
-                // pruned during fetch
-                plan_builder = override_selector_strategy_if_needed(
+                // Prepare selection execution for pages pruned during fetch.
+                plan_builder = prepare_selection_for_page_skipping(
                     plan_builder,
                     predicate.projection(),
                     self.row_group_offset_index(row_group_idx),
+                    self.metadata.file_metadata().schema_descr().num_columns(),
+                    row_count,
                 );
 
                 // When this is the final predicate in the chain and an output
@@ -729,10 +732,12 @@ impl RowGroupReaderBuilder {
 
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
 
-                plan_builder = override_selector_strategy_if_needed(
+                plan_builder = prepare_selection_for_page_skipping(
                     plan_builder,
                     &self.projection,
                     self.row_group_offset_index(row_group_idx),
+                    self.metadata.file_metadata().schema_descr().num_columns(),
+                    row_count,
                 );
 
                 let row_group_info = RowGroupInfo {
@@ -835,7 +840,7 @@ impl RowGroupReaderBuilder {
             return None;
         }
         let mut cache_projection = filter.predicates.first()?.projection().clone();
-        for predicate in filter.predicates.iter() {
+        for predicate in &filter.predicates {
             cache_projection.union(predicate.projection());
         }
         cache_projection.intersect(&self.projection);
@@ -848,16 +853,20 @@ impl RowGroupReaderBuilder {
     }
 
     /// Get the offset index for the specified row group, if any
-    fn row_group_offset_index(&self, row_group_idx: usize) -> Option<&[OffsetIndexMetaData]> {
-        self.metadata
-            .offset_index()
-            .filter(|index| !index.is_empty())
-            .and_then(|index| index.get(row_group_idx))
-            .map(|columns| columns.as_slice())
+    fn row_group_offset_index(&self, row_group_idx: usize) -> Option<RowGroupPageIndex> {
+        if self
+            .metadata
+            .page_index()
+            .is_some_and(|pi| pi.has_offset_indexes())
+        {
+            Some(self.metadata.page_index_for_row_group(row_group_idx))
+        } else {
+            None
+        }
     }
 }
 
-/// Override the selection strategy if needed.
+/// Prepare row selection execution when page pruning produced sparse column data.
 ///
 /// Some pages can be skipped during row-group construction if they are not read
 /// by the selections. This means that the data pages for those rows are never
@@ -865,58 +874,164 @@ impl RowGroupReaderBuilder {
 /// `RowSelections` selection works because `skip_records()` handles this
 /// case and skips the page accordingly.
 ///
-/// However, with the current mask design, all values must be read and decoded
-/// and then a mask filter is applied. Thus if any pages are skipped during
-/// row-group construction, the data pages are missing and cannot be decoded.
+/// However, with the current mask design, all values covered by a mask chunk
+/// are decoded before the mask filter is applied. Thus a chunk cannot cross a
+/// page that was skipped during row-group construction.
 ///
 /// A simple example:
 /// * the page size is 2, the mask is 100001, row selection should be read(1) skip(4) read(1)
 /// * the `ColumnChunkData` would be page1(10), page2(skipped), page3(01)
 ///
-/// Using the row selection to skip(4), page2 won't be read at all, so in this
-/// case we can't decode all the rows and apply a mask. To correctly apply the
-/// bit mask, we need all 6 values be read, but page2 is not in memory.
-fn override_selector_strategy_if_needed(
+/// Mask execution records the row ranges loaded for every projected column, so
+/// each mask chunk stays within loaded data and `skip_records()` crosses the
+/// gaps. This applies both to an explicit mask policy and to Auto when it
+/// resolves to mask execution.
+fn prepare_selection_for_page_skipping(
     plan_builder: ReadPlanBuilder,
     projection_mask: &ProjectionMask,
-    offset_index: Option<&[OffsetIndexMetaData]>,
+    page_index: Option<RowGroupPageIndex>,
+    num_columns: usize,
+    total_rows: usize,
 ) -> ReadPlanBuilder {
-    // override only applies to Auto policy, If the policy is already Mask or Selectors, respect that
-    let RowSelectionPolicy::Auto { .. } = plan_builder.row_selection_policy() else {
-        return plan_builder;
-    };
+    match plan_builder.resolve_selection_strategy() {
+        RowSelectionStrategy::Mask => {
+            let loaded = loaded_row_ranges_for_projection(
+                plan_builder.selection(),
+                projection_mask,
+                page_index,
+                num_columns,
+                total_rows,
+            );
+            plan_builder
+                .with_row_selection_policy(RowSelectionPolicy::Mask)
+                .with_loaded_row_ranges(loaded)
+        }
+        RowSelectionStrategy::Selectors => {
+            plan_builder.with_row_selection_policy(RowSelectionPolicy::Selectors)
+        }
+    }
+}
 
-    let preferred_strategy = plan_builder.resolve_selection_strategy();
+/// Computes row ranges for which every projected column has page data loaded.
+fn loaded_row_ranges_for_projection(
+    selection: Option<&RowSelection>,
+    projection_mask: &ProjectionMask,
+    page_index: Option<RowGroupPageIndex>,
+    num_columns: usize,
+    total_rows: usize,
+) -> Option<LoadedRowRanges> {
+    let selection = selection?;
+    let page_index = page_index?;
 
-    let force_selectors = matches!(preferred_strategy, RowSelectionStrategy::Mask)
-        && plan_builder.selection().is_some_and(|selection| {
-            selection.should_force_selectors(projection_mask, offset_index)
-        });
-
-    let resolved_strategy = if force_selectors {
-        RowSelectionStrategy::Selectors
-    } else {
-        preferred_strategy
-    };
-
-    // override the plan builder strategy with the resolved one
-    let new_policy = match resolved_strategy {
-        RowSelectionStrategy::Mask => RowSelectionPolicy::Mask,
-        RowSelectionStrategy::Selectors => RowSelectionPolicy::Selectors,
-    };
-
-    plan_builder.with_row_selection_policy(new_policy)
+    (0..num_columns)
+        .into_iter()
+        .filter_map(|leaf_idx| {
+            let column_metadata = page_index.offset_index(leaf_idx)?;
+            let pages = column_metadata.page_locations();
+            (projection_mask.leaf_included(leaf_idx) && !pages.is_empty()).then(|| {
+                RowSelection::from_consecutive_ranges(
+                    selection
+                        .row_ranges_for_selected_pages(pages, total_rows)
+                        .into_iter(),
+                    total_rows,
+                )
+            })
+        })
+        .reduce(|loaded, column| loaded.intersection(&column))
+        .filter(|loaded| loaded.skipped_row_count() != 0)
+        .map(LoadedRowRanges::from_selection)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::arrow::arrow_reader::{RowSelection, RowSelector};
+    use crate::file::metadata::page_index::{PageIndexBuilder, PageIndexProvider};
+    use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 232);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 240);
+    }
+
+    #[test]
+    fn test_loaded_row_ranges_intersect_column_page_boundaries() {
+        let mut page_index = PageIndexBuilder::new(1, 2);
+        let column = |first_rows: &[i64]| OffsetIndexMetaData {
+            page_locations: first_rows
+                .iter()
+                .enumerate()
+                .map(|(idx, first_row_index)| PageLocation {
+                    offset: (idx * 10) as i64,
+                    compressed_page_size: 10,
+                    first_row_index: *first_row_index,
+                })
+                .collect(),
+            unencoded_byte_array_data_bytes: None,
+        };
+        page_index.put_offset_index(column(&[0, 4, 8]), 0, 0);
+        page_index.put_offset_index(column(&[0, 6, 10]), 0, 1);
+        let page_index: Option<Arc<dyn PageIndexProvider>> = Some(Arc::new(page_index.build()));
+        let page_index = RowGroupPageIndex::new(0, page_index);
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(1),
+            RowSelector::select(1),
+            RowSelector::skip(9),
+            RowSelector::select(1),
+        ]);
+
+        let loaded = loaded_row_ranges_for_projection(
+            Some(&selection),
+            &ProjectionMask::all(),
+            Some(page_index),
+            2,
+            12,
+        )
+        .unwrap();
+
+        assert_eq!(loaded.ranges(), &[0..4, 10..12]);
+    }
+
+    #[test]
+    fn test_auto_keeps_mask_when_page_pruning_skips_pages() {
+        let mut page_index = PageIndexBuilder::new(1, 1);
+        page_index.put_offset_index(
+            OffsetIndexMetaData {
+                page_locations: [0, 2, 4, 6, 8, 10]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, first_row_index)| PageLocation {
+                        offset: (idx * 10) as i64,
+                        compressed_page_size: 10,
+                        first_row_index,
+                    })
+                    .collect(),
+                unencoded_byte_array_data_bytes: None,
+            },
+            0,
+            0,
+        );
+        let page_index: Option<Arc<dyn PageIndexProvider>> = Some(Arc::new(page_index.build()));
+        let page_index = RowGroupPageIndex::new(0, page_index);
+        let selection = RowSelection::from(vec![
+            RowSelector::select(1),
+            RowSelector::skip(10),
+            RowSelector::select(1),
+        ]);
+        let plan_builder = ReadPlanBuilder::new(12)
+            .with_selection(Some(selection))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 });
+
+        let prepared = prepare_selection_for_page_skipping(
+            plan_builder,
+            &ProjectionMask::all(),
+            Some(page_index),
+            1,
+            12,
+        );
+
+        assert_eq!(prepared.row_selection_policy(), &RowSelectionPolicy::Mask);
     }
 
     #[test]

@@ -85,6 +85,7 @@ use std::{borrow::Cow, ops::Deref};
 ///     VariantPathElement::index(2),
 ///     VariantPathElement::field("3")]);
 /// assert_eq!(path, expected)
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct VariantPath<'a>(Vec<VariantPathElement<'a>>);
 
@@ -132,7 +133,7 @@ impl<'a> TryFrom<&'a str> for VariantPath<'a> {
 }
 
 /// Create from usize
-impl<'a> From<usize> for VariantPath<'a> {
+impl From<usize> for VariantPath<'_> {
     fn from(index: usize) -> Self {
         VariantPath::new(vec![VariantPathElement::index(index)])
     }
@@ -194,7 +195,7 @@ impl<'a> From<&'a str> for VariantPathElement<'a> {
     }
 }
 
-impl<'a> From<String> for VariantPathElement<'a> {
+impl From<String> for VariantPathElement<'_> {
     fn from(name: String) -> Self {
         VariantPathElement::field(Cow::Owned(name))
     }
@@ -206,7 +207,7 @@ impl<'a> From<&'a String> for VariantPathElement<'a> {
     }
 }
 
-impl<'a> From<usize> for VariantPathElement<'a> {
+impl From<usize> for VariantPathElement<'_> {
     fn from(index: usize) -> Self {
         VariantPathElement::index(index)
     }

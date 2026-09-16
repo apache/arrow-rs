@@ -365,10 +365,18 @@ impl IterationStrategy {
 }
 
 /// Borrowed description of which rows a [`FilterPredicate`] selects.
+///
+/// This is used for filtering multiple arrays with the same predicate without
+/// having to clone the predicate's internal data structures (e.g. the list of
+/// indices or slices).
 pub(crate) enum FilterSelection<'a> {
+    /// No rows are selected
     None,
+    /// All `len` rows are selected
     All { len: usize },
+    /// Iterator of `(start, end)` slices, each a run of contiguous selected rows
     Slices(FilterSlices<'a>),
+    /// Iterator of the indices of the selected rows
     Indices(FilterIndices<'a>),
 }
 
@@ -378,7 +386,9 @@ pub(crate) type FilterSlices<'a> =
 pub(crate) type FilterIndices<'a> =
     FilterIterator<std::iter::Copied<std::slice::Iter<'a, usize>>, IndexIterator<'a>>;
 
-/// Holds either materialized rows or a lazy iterator.
+/// Internal implementation of [`FilterSelection`] that holds either an iterator
+/// over a precomputed (materialized) list of rows, or a lazy iterator that
+/// derives the selected rows from the predicate on the fly.
 ///
 /// This does not implement [`Iterator`] on purpose. Callers use
 /// [`Self::for_each`] or [`Self::try_for_each`] so the enum is matched once
@@ -393,6 +403,7 @@ where
     M: Iterator,
     I: Iterator<Item = M::Item>,
 {
+    /// Call the infallible function `f` for each item in this [`FilterIterator`]
     pub(crate) fn for_each<F>(self, f: F)
     where
         F: FnMut(M::Item),
@@ -403,6 +414,8 @@ where
         }
     }
 
+    /// Call the fallible function `f` for each item in this [`FilterIterator`],
+    /// stopping and returning the error if `f` returns `Err`.
     pub(crate) fn try_for_each<F, E>(self, mut f: F) -> Result<(), E>
     where
         F: FnMut(M::Item) -> Result<(), E>,
@@ -429,6 +442,7 @@ where
 pub struct FilterPredicate {
     filter: BooleanArray,
     count: usize,
+    /// Precomputed strategy for iterating over the selected rows of this predicate
     strategy: IterationStrategy,
 }
 
@@ -468,6 +482,8 @@ impl FilterPredicate {
         self.count
     }
 
+    /// Return a [`FilterSelection`] for iterating over the rows selected by
+    /// this [`FilterPredicate`].
     pub(crate) fn selection(&self) -> FilterSelection<'_> {
         match &self.strategy {
             IterationStrategy::None => FilterSelection::None,
@@ -658,33 +674,6 @@ where
 
     let run_ends = PrimitiveArray::<R>::try_new(new_run_ends.into(), None)?;
     RunArray::try_new(&run_ends, &values)
-}
-
-/// Computes a new null mask for `data` based on `predicate`
-///
-/// If the predicate selected no null-rows, returns `None`, otherwise returns
-/// `Some((null_count, null_buffer))` where `null_count` is the number of nulls
-/// in the filtered output, and `null_buffer` is the filtered null buffer
-///
-pub(crate) fn filter_null_mask(
-    nulls: Option<&NullBuffer>,
-    predicate: &FilterPredicate,
-) -> Option<(usize, Buffer)> {
-    let nulls = nulls?;
-    if nulls.null_count() == 0 {
-        return None;
-    }
-
-    let nulls = filter_bits(nulls.inner(), predicate);
-    // The filtered `nulls` has a length of `predicate.count` bits and
-    // therefore the null count is this minus the number of valid bits
-    let null_count = predicate.count - nulls.count_set_bits_offset(0, predicate.count);
-
-    if null_count == 0 {
-        return None;
-    }
-
-    Some((null_count, nulls))
 }
 
 /// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
@@ -913,16 +902,16 @@ where
             filter.extend_slices(SlicesIterator::new(&predicate.filter))
         }
         IterationStrategy::Slices(slices) => {
-            filter.extend_offsets_slices(slices.iter().cloned(), predicate.count);
-            filter.extend_slices(slices.iter().cloned())
+            filter.extend_offsets_slices(slices.iter().copied(), predicate.count);
+            filter.extend_slices(slices.iter().copied())
         }
         IterationStrategy::IndexIterator => {
             filter.extend_offsets_idx(IndexIterator::new(&predicate.filter, predicate.count));
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
         IterationStrategy::Indices(indices) => {
-            filter.extend_offsets_idx(indices.iter().cloned());
-            filter.extend_idx(indices.iter().cloned())
+            filter.extend_offsets_idx(indices.iter().copied());
+            filter.extend_idx(indices.iter().copied())
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
@@ -945,13 +934,44 @@ fn filter_byte_view<T: ByteViewType>(
 ) -> GenericByteViewArray<T> {
     let new_view_buffer = filter_native(array.views(), predicate);
     let views = ScalarBuffer::new(new_view_buffer, 0, predicate.count);
-    let buffers = array.data_buffers().to_vec();
+    let buffers = Arc::clone(array.data_buffers());
     let nulls = predicate.filter_nulls(array.nulls());
 
     // SAFETY: each view is copied unchanged from `array.views()` and `buffers`
     // is the same buffer list, so every view still points to an in-bounds
     // (and, for strings, UTF-8 valid) range.
     unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) }
+}
+
+/// Copies fixed-size binary elements at `indices` from `values` into a new `MutableBuffer`.
+/// Uses raw pointer writes and `with_capacity` to avoid zero-initialization and per-call overhead.
+#[inline(always)]
+fn copy_fsb_indices(
+    values: &[u8],
+    value_length: usize,
+    indices: impl Iterator<Item = usize>,
+    count: usize,
+) -> MutableBuffer {
+    let total = count * value_length;
+    let mut buffer = MutableBuffer::with_capacity(total);
+    let dst_base = buffer.as_mut_ptr();
+    let mut write_offset = 0usize;
+    for idx in indices {
+        let src_start = idx * value_length;
+        // SAFETY: `idx` is derived from the filter predicate so it is a valid array index;
+        // we allocated `count * value_length` bytes and advance by `value_length` per step.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                values.as_ptr().add(src_start),
+                dst_base.add(write_offset),
+                value_length,
+            );
+        }
+        write_offset += value_length;
+    }
+    // SAFETY: we wrote exactly `count * value_length` bytes into the buffer.
+    unsafe { buffer.set_len(total) };
+    buffer
 }
 
 fn filter_fixed_size_binary(
@@ -980,30 +1000,30 @@ fn filter_fixed_size_binary(
             }
             buffer
         }
-        IterationStrategy::IndexIterator => {
-            let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| {
-                &values[calculate_offset_from_index(x)..calculate_offset_from_index(x + 1)]
-            });
-
-            let mut buffer = MutableBuffer::new(predicate.count * value_length);
-            iter.for_each(|item| buffer.extend_from_slice(item));
-            buffer
-        }
-        IterationStrategy::Indices(indices) => {
-            let iter = indices.iter().map(|x| {
-                &values[calculate_offset_from_index(*x)..calculate_offset_from_index(*x + 1)]
-            });
-
-            let mut buffer = MutableBuffer::new(predicate.count * value_length);
-            iter.for_each(|item| buffer.extend_from_slice(item));
-            buffer
-        }
+        IterationStrategy::IndexIterator => copy_fsb_indices(
+            values,
+            value_length,
+            IndexIterator::new(&predicate.filter, predicate.count),
+            predicate.count,
+        ),
+        IterationStrategy::Indices(indices) => copy_fsb_indices(
+            values,
+            value_length,
+            indices.iter().copied(),
+            predicate.count,
+        ),
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
 
     let nulls = predicate.filter_nulls(array.nulls());
 
-    FixedSizeBinaryArray::new(array.value_length(), buffer.into(), nulls)
+    FixedSizeBinaryArray::try_new_with_len(
+        array.value_length(),
+        buffer.into(),
+        nulls,
+        predicate.count,
+    )
+    .unwrap()
 }
 
 /// `filter` implementation for dictionaries
@@ -1308,6 +1328,9 @@ mod tests {
             let actual = filter(&array, &predicate).unwrap();
 
             assert_eq!(actual.len(), 3);
+            let actual_buffers = actual.as_byte_view::<T>().data_buffers();
+            let input_buffers = array.data_buffers();
+            assert!(Arc::ptr_eq(actual_buffers, input_buffers));
 
             let expected = {
                 // ["hello", null, "large payload over 12 bytes"]
@@ -1799,7 +1822,7 @@ mod tests {
             .take(mask_len)
             .collect();
 
-        let buffer = Buffer::from_iter(bools.iter().cloned());
+        let buffer = Buffer::from_iter(bools.iter().copied());
 
         let truncated_length = mask_len - offset - truncate;
 
@@ -1817,7 +1840,7 @@ mod tests {
             .skip(offset)
             .take(truncated_length)
             .enumerate()
-            .flat_map(|(idx, v)| v.then(|| idx))
+            .filter_map(|(idx, v)| v.then_some(idx))
             .collect();
 
         assert_eq!(slice_bits, expected_bits);
@@ -1825,7 +1848,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_test_slices_iterator() {
         let mut rng = rng();
 
@@ -1897,7 +1920,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_filter() {
         let mut rng = rng();
 
@@ -1920,7 +1943,7 @@ mod tests {
                 .take(array_len + filter_offset - filter_truncate)
                 .collect();
 
-            let predicate = BooleanArray::from_iter(bools.iter().cloned().map(Some));
+            let predicate = BooleanArray::from_iter(bools.iter().copied().map(Some));
 
             // Offset predicate
             let predicate = predicate.slice(filter_offset, array_len - filter_truncate);
@@ -1929,7 +1952,7 @@ mod tests {
 
             // Test i32
             let values = gen_primitive(array_len + array_offset, valid_percent);
-            let src = Int32Array::from_iter(values.iter().cloned());
+            let src = Int32Array::from_iter(values.iter().copied());
 
             let src = src.slice(array_offset, array_len);
             let src = src.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -1939,7 +1962,7 @@ mod tests {
             let array = filtered.as_any().downcast_ref::<Int32Array>().unwrap();
             let actual: Vec<_> = array.iter().collect();
 
-            assert_eq!(actual, filter_rust(values.iter().cloned(), bools));
+            assert_eq!(actual, filter_rust(values.iter().copied(), bools));
 
             // Test string
             let strings = gen_strings(array_len + array_offset, valid_percent, 0..20);
@@ -2087,6 +2110,22 @@ mod tests {
             &[6, 7],
             list.as_any().downcast_ref::<Int32Array>().unwrap().values()
         );
+    }
+
+    #[test]
+    fn test_filter_zero_width_fixed_size_binary() {
+        // value_length=0 with no nulls: row count cannot be inferred from the empty
+        // buffer, so filter must preserve it explicitly.
+        let array = FixedSizeBinaryArray::try_new_with_len(
+            0,
+            Buffer::from_slice_ref(&[] as &[u8]),
+            None,
+            3,
+        )
+        .unwrap();
+        let filter_array = BooleanArray::from(vec![true, false, true]);
+        let result = filter(&array, &filter_array).unwrap();
+        assert_eq!(result.len(), 2);
     }
 
     fn test_filter_union_array(array: UnionArray) {
@@ -2384,7 +2423,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "buffer.len() >= predicate.filter.len()")]
     fn test_filter_bits_too_large() {
         let buffer = BooleanBuffer::from(vec![false; 8]);
         let predicate = BooleanArray::from(vec![true; 9]);
@@ -2393,7 +2432,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "values.len() >= predicate.filter.len()")]
     fn test_filter_native_too_large() {
         let values = vec![1; 8];
         let predicate = BooleanArray::from(vec![false; 9]);

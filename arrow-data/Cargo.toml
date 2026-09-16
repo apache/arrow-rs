@@ -57,3 +57,6 @@ half = { version = "2.1", default-features = false }
 [dev-dependencies]
 
 [build-dependencies]
+
+[lints]
+workspace = true
