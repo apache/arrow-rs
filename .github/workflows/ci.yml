@@ -49,15 +49,13 @@ jobs:
       - name: Install CI configuration dependency
         run: python3 -m pip install PyYAML==6.0.3
       - name: Validate CI configuration and routing
-        run: |
-          python3 .github/ci/scripts/ci.py validate
-          python3 -m unittest discover -s .github/ci/scripts -p 'test_ci.py'
+        run: python3 .github/ci/scripts/check-ci-config.py
       - name: Select suites
         id: select
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 .github/ci/scripts/ci.py select
+        run: python3 .github/ci/scripts/compute-changes.py
 
   arrow:
     needs: changes

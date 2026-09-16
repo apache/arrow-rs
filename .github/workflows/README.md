@@ -39,9 +39,9 @@ merge result against `main` and any earlier entries in the queue.
 
 `.github/ci/paths.yaml` keeps the per-suite PR filters. Shared build inputs
 such as the workspace manifests, toolchain and CI configuration select every
-PR suite. `.github/ci/scripts/ci.py` compares the PR head with its merge base,
-including both paths of a renamed file. Queue builds run every suite regardless
-of changed paths.
+PR suite. `.github/ci/scripts/compute-changes.py` compares the PR head with its
+merge base, including both paths of a renamed file. Queue builds run every
+suite regardless of changed paths.
 
 The required workflow has no path filter: otherwise a docs-only PR could wait
 forever for a check that never starts. **Required Checks** runs even after a
@@ -49,14 +49,14 @@ dependency fails. Intentionally skipped suites are allowed; a failed or
 cancelled suite, or unsuccessful suite selection, blocks merging.
 
 When adding a suite, register it in `ci.yml`, the aggregator's `needs`, and the
-path filters (or the always-run set in `ci.py`). The configuration validator
-checks that every reusable workflow is covered and that `.asf.yaml` names the
-actual aggregator job. To check changes locally:
+path filters (or the always-run set in `compute-changes.py`).
+`check-ci-config.py` validates routing policy and checks that every reusable
+workflow is covered and that `.asf.yaml` names the actual aggregator job.
+To check changes locally:
 
 ```sh
 python3 -m pip install PyYAML==6.0.3
-python3 .github/ci/scripts/ci.py validate
-python3 -m unittest discover -s .github/ci/scripts -p 'test_ci.py'
+python3 .github/ci/scripts/check-ci-config.py
 ```
 
 ## Queue configuration
