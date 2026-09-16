@@ -433,14 +433,6 @@ pub struct ByteArrayEncoder {
     bloom_filter: Option<Sbbf>,
     bloom_filter_target_fpp: f64,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
-    /// Whether this column is a `BYTE_ARRAY` logically typed as `DECIMAL`.
-    ///
-    /// Decimal values stored as `BYTE_ARRAY` use two's-complement, big-endian
-    /// encoding, so plain unsigned byte-wise comparison (used for min/max
-    /// statistics on every other `BYTE_ARRAY` column) gives the wrong
-    /// ordering for negative values. When this is set, statistics use
-    /// [`compare_greater_byte_array_decimals`] instead, matching the
-    /// comparator used by the non-Arrow column writer path.
     is_decimal: bool,
 }
 
@@ -824,13 +816,6 @@ fn count_within_budget_offsets<T: ByteArrayType>(
 }
 
 /// Returns `true` if `a > b`.
-///
-/// `BYTE_ARRAY` columns logically typed as `DECIMAL` store values as
-/// two's-complement, big-endian bytes, so they must be compared with
-/// [`compare_greater_byte_array_decimals`] rather than plain unsigned
-/// byte-wise `Ord`, or negative values would sort as the largest values.
-/// This mirrors the comparator `compare_greater` uses in the non-Arrow
-/// column writer path (`crate::column::writer`).
 #[inline]
 fn is_greater(is_decimal: bool, a: &[u8], b: &[u8]) -> bool {
     if is_decimal {

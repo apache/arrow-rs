@@ -1357,11 +1357,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             {
                 true
             }
-            // Decimal values encoded as BYTE_ARRAY use two's-complement, signed
-            // big-endian comparison, which differs from the unsigned, byte-wise
-            // comparison used to truncate/increment other BYTE_ARRAY values.
-            // Truncating such a value could produce an incorrect min/max, so skip
-            // truncation for Decimal BYTE_ARRAY columns as well.
+            // As with FIXED_LEN_BYTE_ARRAY, do not truncate Decimal values
             Type::BYTE_ARRAY if !is_decimal_descr(self.descr.get_basic_info()) => true,
             // Truncation only applies for fba/binary physical types
             _ => false,
@@ -2001,14 +1997,6 @@ fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Returns `true` if the column described by `basic_type_info` is a Decimal column
-/// (either via `ConvertedType::DECIMAL` or `LogicalType::Decimal`), regardless of
-/// whether its physical type is `BYTE_ARRAY` or `FIXED_LEN_BYTE_ARRAY`.
-///
-/// Decimal values stored as (FIXED_LEN_)BYTE_ARRAY use two's-complement, big-endian
-/// signed-integer encoding, which sorts differently from the unsigned, byte-wise
-/// lexicographic order used for other BYTE_ARRAY/FIXED_LEN_BYTE_ARRAY data. Callers
-/// that need unsigned byte-wise comparisons or increments (e.g. statistics
-/// truncation) must special-case or skip Decimal columns.
 pub(crate) fn is_decimal_descr(basic_type_info: &BasicTypeInfo) -> bool {
     basic_type_info.converted_type() == ConvertedType::DECIMAL
         || matches!(
@@ -4586,12 +4574,7 @@ mod tests {
 
     #[test]
     fn test_decimal_byte_array_min_max_no_statistics_truncation() {
-        // Regression test for the truncation path re-introducing the unsigned vs.
-        // signed two's-complement comparison bug fixed for apache/arrow-rs#11073:
-        // `truncate_statistics` must not byte-wise truncate/increment
-        // `Statistics::ByteArray` min/max for a Decimal-typed BYTE_ARRAY column,
-        // even when `statistics_truncate_length` is configured and the encoded
-        // value is longer than the truncate length.
+        // See https://github.com/apache/arrow-rs/issues/11073
         let page_writer = get_test_page_writer();
 
         // Truncate at 1 byte -- far shorter than either encoded value below.

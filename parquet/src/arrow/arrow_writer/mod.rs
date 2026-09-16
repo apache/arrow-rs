@@ -6568,18 +6568,10 @@ mod tests {
 
     /// Regression test for https://github.com/apache/arrow-rs/issues/11073
     ///
-    /// Decimal values backed by `BYTE_ARRAY`/`FIXED_LEN_BYTE_ARRAY` are
-    /// stored as two's-complement, big-endian bytes. Statistics for such a
-    /// column must therefore be compared with sign-awareness rather than
-    /// plain unsigned byte-wise `Ord`, or negative values (whose leading
-    /// byte has the sign bit set) sort as the largest values.
-    ///
-    /// This checks that the `ArrowColumnWriter` path (going through
-    /// `byte_array.rs`'s `ByteArrayEncoder`) produces the same min/max
+    /// This checks that the `ArrowColumnWriter` path produces the same min/max
     /// statistics as writing the column directly with the low-level
     /// `SerializedFileWriter` API, for both `BinaryArray` (the buggy case)
-    /// and `FixedSizeBinaryArray` (which already worked correctly), using
-    /// the exact 1-byte-decimal repro from the issue: values -1, 0, 1.
+    /// and `FixedSizeBinaryArray` (which already worked correctly).
     #[test]
     fn test_decimal_byte_array_statistics_signed_comparison() {
         use crate::basic::{LogicalType, Repetition, Type as PhysicalType};
