@@ -257,6 +257,138 @@ pub fn shred_variant_unmatched_object_bench(c: &mut Criterion) {
     });
 }
 
+pub fn variant_get_utf8_from_int_bench(c: &mut Criterion) {
+    bench_variant_get_utf8(c, "variant_get_utf8_from_int", |rng, array_size| {
+        let mut vab = VariantArrayBuilder::new(array_size);
+        for _ in 0..array_size {
+            vab.append_variant(Variant::Int64(rng.random()));
+        }
+        vab.build()
+    });
+}
+
+pub fn variant_get_utf8_from_decimal_bench(c: &mut Criterion) {
+    bench_variant_get_utf8(c, "variant_get_utf8_from_decimal", |rng, array_size| {
+        let mut vab = VariantArrayBuilder::new(array_size);
+        for _ in 0..array_size {
+            vab.append_variant(Variant::Decimal8(
+                VariantDecimal8::try_new(rng.random_range(0..10000000000), 2).unwrap(),
+            ));
+        }
+        vab.build()
+    });
+}
+
+pub fn variant_get_utf8_from_float_bench(c: &mut Criterion) {
+    bench_variant_get_utf8(c, "variant_get_utf8_from_float", |rng, array_size| {
+        let mut vab = VariantArrayBuilder::new(array_size);
+        for _ in 0..array_size {
+            vab.append_variant(Variant::Double(rng.random()))
+        }
+        vab.build()
+    });
+}
+
+pub fn variant_get_utf8_from_timestamp_without_timezone_bench(c: &mut Criterion) {
+    bench_variant_get_utf8(
+        c,
+        "variant_get_utf8_from_timestamp_without_timezone",
+        |rng, array_size| {
+            let mut vab = VariantArrayBuilder::new(array_size);
+            for _ in 0..array_size {
+                let timestamp = rng.random_range(
+                    NaiveDateTime::MIN.and_utc().timestamp_micros()
+                        ..=NaiveDateTime::MAX.and_utc().timestamp_micros(),
+                );
+                vab.append_variant(Variant::TimestampNtzMicros(
+                    DateTime::from_timestamp_micros(timestamp)
+                        .unwrap() // input always valid
+                        .naive_utc(),
+                ));
+            }
+            vab.build()
+        },
+    );
+}
+
+pub fn variant_get_utf8_from_timestamp_with_timezone_bench(c: &mut Criterion) {
+    bench_variant_get_utf8(
+        c,
+        "variant_get_utf8_from_timestamp_with_timezone",
+        |rng, array_size| {
+            let mut vab = VariantArrayBuilder::new(array_size);
+            for _ in 0..array_size {
+                let timestamp = rng.random_range(
+                    NaiveDateTime::MIN.and_utc().timestamp_micros()
+                        ..=NaiveDateTime::MAX.and_utc().timestamp_micros(),
+                );
+                vab.append_variant(Variant::TimestampMicros(
+                    DateTime::from_timestamp_micros(timestamp).unwrap(), // input always valid
+                ));
+            }
+            vab.build()
+        },
+    );
+}
+
+pub fn variant_get_utf8_from_date_bench(c: &mut Criterion) {
+    bench_variant_get_utf8(c, "variant_get_utf8_from_date", |rng, array_size| {
+        let mut vab = VariantArrayBuilder::new(array_size);
+        for _ in 0..array_size {
+            let days_since_epoch =
+                rng.random_range(NaiveDate::MIN.to_epoch_days()..=NaiveDate::MAX.to_epoch_days());
+            vab.append_variant(Variant::Date(
+                NaiveDate::from_epoch_days(days_since_epoch).unwrap(),
+            ));
+        }
+        vab.build()
+    });
+}
+
+pub fn variant_get_utf8_from_time_bench(c: &mut Criterion) {
+    bench_variant_get_utf8(c, "variant_get_utf8_from_time", |rng, array_size| {
+        let mut vab = VariantArrayBuilder::new(array_size);
+        for _ in 0..array_size {
+            let micros_since_midnight = rng.random_range(0..=86_400_000_000i64);
+            let sec = (micros_since_midnight / 1_000_000) as u32;
+            let nano = ((micros_since_midnight % 1_000_000) * 1000) as u32;
+            vab.append_variant(Variant::Time(
+                NaiveTime::from_num_seconds_from_midnight_opt(sec, nano).unwrap(),
+            ));
+        }
+        vab.build()
+    });
+}
+
+pub fn variant_get_utf8_from_list_bench(c: &mut Criterion) {
+    bench_variant_get_utf8(c, "variant_get_utf8_from_list", |rng, array_size| {
+        let mut vab = VariantArrayBuilder::new(array_size);
+        for _ in 0..array_size {
+            let mut list_builder = vab.new_list();
+            list_builder.append_value(Variant::from(rng.random::<i64>()));
+            list_builder.append_value(Variant::from(rng.random::<i64>()));
+            list_builder.finish();
+        }
+        vab.build()
+    });
+}
+
+pub fn variant_get_utf8_from_map_in_list_bench(c: &mut Criterion) {
+    bench_variant_get_utf8(c, "variant_get_utf8_from_map_in_list", |rng, array_size| {
+        let mut vab = VariantArrayBuilder::new(array_size);
+        for _ in 0..array_size {
+            let mut list_builder = vab.new_list();
+            let mut inner_map_builder = list_builder.new_object();
+            inner_map_builder.insert("key1", rng.random::<i64>());
+            inner_map_builder.insert("key2", rng.random::<i64>());
+            inner_map_builder.insert("key3", rng.random::<i64>());
+            inner_map_builder.finish();
+            list_builder.finish();
+        }
+        vab.build()
+    })
+}
+
 pub fn variant_get_utf8_from_unshredded_string_bench(c: &mut Criterion) {
     bench_variant_get_utf8(c, "variant_get_utf8_from_unshredded_string", |_rng, array_size| {
         let mut vab = VariantArrayBuilder::new(array_size);
@@ -312,6 +444,23 @@ pub fn variant_get_binary_from_unshredded_binary_bench(c: &mut Criterion) {
     )
 }
 
+pub fn variant_get_binary_from_string_bench(c: &mut Criterion) {
+    let field: FieldRef = Arc::new(Field::new("typed_value", DataType::Binary, true));
+    let options = GetOptions::new().with_as_type(Some(field));
+    bench_variant_get(
+        c,
+        "variant_get_binary_from_string",
+        |_rng, array_size| {
+            let mut vab = VariantArrayBuilder::new(array_size);
+            for i in 0..array_size {
+                vab.append_variant(Variant::String(format!("value_{i}").as_str()));
+            }
+            vab.build()
+        },
+        options
+    );
+}
+
 criterion_group!(
     benches,
     variant_get_bench,
@@ -323,6 +472,16 @@ criterion_group!(
     benchmark_batch_json_string_to_variant,
     variant_get_utf8_from_unshredded_string_bench,
     variant_get_binary_from_unshredded_binary_bench,
+    variant_get_utf8_from_int_bench,
+    variant_get_utf8_from_decimal_bench,
+    variant_get_utf8_from_float_bench,
+    variant_get_utf8_from_timestamp_without_timezone_bench,
+    variant_get_utf8_from_timestamp_with_timezone_bench,
+    variant_get_utf8_from_date_bench,
+    variant_get_utf8_from_time_bench,
+    variant_get_utf8_from_list_bench,
+    variant_get_utf8_from_map_in_list_bench,
+    variant_get_binary_from_string_bench,
 );
 
 criterion_main!(benches);
