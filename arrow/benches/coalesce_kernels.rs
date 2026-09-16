@@ -103,6 +103,39 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         // TODO model other dictionary types here (FixedSizeBinary for example)
     ]));
 
+    // FixedSizeList<Float32>(size=4) — small struct-like layout, geospatial coords
+    let single_fsl_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "embeddings",
+        DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Float32, true)),
+            4,
+        ),
+        true,
+    )]));
+    // FixedSizeList<Float32>(size=128) — ML embedding vectors
+    let single_fsl128_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "embeddings",
+        DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Float32, true)),
+            128,
+        ),
+        true,
+    )]));
+
+    // Single Boolean column
+    let single_boolean_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Boolean,
+        true,
+    )]));
+
+    // Mixed primitive + Boolean column
+    let mixed_boolean_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("int32_val", DataType::Int32, true),
+        Field::new("float_val", DataType::Float64, true),
+        Field::new("bool_val", DataType::Boolean, true),
+    ]));
+
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
         // Selectivity: 0.1%, 1%, 10%, 80%
@@ -288,6 +321,54 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 schema: &mixed_dict_schema,
             }
             .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_fsl(size=4)",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_fsl_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_fsl(size=128)",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_fsl128_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_boolean",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &single_boolean_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "mixed_boolean",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &mixed_boolean_schema,
+            }
+            .build();
         }
     }
 }
@@ -352,6 +433,18 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
         ),
         Field::new("float_val1", DataType::Float64, true),
         Field::new("float_val2", DataType::Float64, true),
+    ]));
+
+    let single_boolean_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Boolean,
+        true,
+    )]));
+
+    let mixed_boolean_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("int32_val", DataType::Int32, true),
+        Field::new("float_val", DataType::Float64, true),
+        Field::new("bool_val", DataType::Boolean, true),
     ]));
 
     for null_density in [0.0, 0.1] {
@@ -423,6 +516,18 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
                     max_string_len: 30,
                     schema: &mixed_dict_schema,
                 },
+                TakeBenchmarkScenario {
+                    name: "single_boolean",
+                    num_output_batches: 50,
+                    max_string_len: 30,
+                    schema: &single_boolean_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "mixed_boolean",
+                    num_output_batches: 50,
+                    max_string_len: 30,
+                    schema: &mixed_boolean_schema,
+                },
             ] {
                 TakeBenchmarkBuilder::from_scenario(
                     c,
@@ -461,7 +566,111 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, add_all_filter_benchmarks, add_all_take_benchmarks);
+/// Create `num_batches` of `batch_size` rows where all batches share the same
+/// dictionary values `Arc` (the "stable dict" case, common in analytics engines).
+fn make_stable_dict_batches(
+    batch_size: usize,
+    num_batches: usize,
+    null_density: f32,
+) -> Vec<RecordBatch> {
+    // Create the shared dictionary values ONCE — this Arc will be reused across batches.
+    let dict_values = Arc::new(StringArray::from(vec![
+        "category_a",
+        "category_b",
+        "category_c",
+        "category_d",
+        "category_e",
+        "category_f",
+        "category_g",
+        "category_h",
+        "category_i",
+        "category_j",
+    ])) as ArrayRef;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "category",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+        Field::new("value", DataType::Float64, true),
+    ]));
+
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..num_batches)
+        .map(|_| {
+            let keys: Int32Array = (0..batch_size)
+                .map(|_| {
+                    if rng.random::<f32>() < null_density {
+                        None
+                    } else {
+                        Some(rng.random_range(0..10i32))
+                    }
+                })
+                .collect();
+            // Reuse the same dict_values Arc — all batches are pointer-equal.
+            let dict = unsafe {
+                DictionaryArray::<Int32Type>::new_unchecked(keys, Arc::clone(&dict_values))
+            };
+            let floats = Arc::new(Float64Array::from_iter(
+                (0..batch_size).map(|_| Some(rng.random::<f64>())),
+            ));
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(dict), floats]).unwrap()
+        })
+        .collect()
+}
+
+/// Benchmarks for the stable-dictionary case.
+///
+/// All batches share the same dictionary values `Arc`, which is the typical
+/// pattern in analytics engines (DataFusion, Polars, etc.).
+fn add_all_stable_dict_benchmarks(c: &mut Criterion) {
+    let batch_size = 8192;
+    let num_batches = 10;
+
+    for null_density in [0.0f32, 0.1] {
+        for selectivity in [0.001f32, 0.01, 0.1, 0.8] {
+            let batches: Arc<[RecordBatch]> =
+                Arc::from(make_stable_dict_batches(batch_size, num_batches, null_density));
+            let schema = batches[0].schema();
+
+            let filters: Arc<[BooleanArray]> = Arc::from(
+                (0..num_batches)
+                    .map(|_| create_boolean_array(batch_size, 0.0, selectivity))
+                    .collect::<Vec<_>>(),
+            );
+
+            let id = format!(
+                "filter: stable_dict, {batch_size}, nulls: {null_density}, selectivity: {selectivity}"
+            );
+            c.bench_function(&id, |b| {
+                b.iter(|| {
+                    let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
+                    let mut collected = 0;
+                    let mut idx = 0;
+                    while collected < num_batches {
+                        let filter = &filters[idx % filters.len()];
+                        let batch = &batches[idx % batches.len()];
+                        coalescer
+                            .push_batch_with_filter(batch.clone(), filter)
+                            .unwrap();
+                        if coalescer.next_completed_batch().is_some() {
+                            collected += 1;
+                        }
+                        idx += 1;
+                    }
+                })
+            });
+        }
+    }
+}
+
+criterion_group!(
+    benches,
+    add_all_filter_benchmarks,
+    add_all_take_benchmarks,
+    add_all_stable_dict_benchmarks,
+);
 criterion_main!(benches);
 
 /// Run the filters with a batch_size, null_density, selectivity, and schema
@@ -1021,6 +1230,30 @@ impl DataStreamBuilder {
                     self.max_string_len,
                 )) // TODO seed
             }
+            DataType::FixedSizeList(inner_field, size) => {
+                let size = *size as usize;
+                let mut rng = StdRng::seed_from_u64(seed);
+                // Generate flat float values and wrap them into a FixedSizeListArray
+                let flat_values: Vec<Option<f32>> = (0..self.batch_size * size)
+                    .map(|_| {
+                        if rng.random::<f32>() < self.null_density {
+                            None
+                        } else {
+                            Some(rng.random::<f32>())
+                        }
+                    })
+                    .collect();
+                let values = Arc::new(Float32Array::from(flat_values)) as ArrayRef;
+                let inner_field = Arc::clone(inner_field);
+                Arc::new(
+                    FixedSizeListArray::try_new(inner_field, size as i32, values, None).unwrap(),
+                )
+            }
+            DataType::Boolean => Arc::new(create_boolean_array(
+                self.batch_size,
+                self.null_density,
+                0.5,
+            )),
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
