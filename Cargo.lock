@@ -258,6 +258,7 @@ dependencies = [
  "liblzma",
  "md5",
  "object_store",
+ "opendal",
  "rand 0.10.2",
  "serde",
  "serde_json",
