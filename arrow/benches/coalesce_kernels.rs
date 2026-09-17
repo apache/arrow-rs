@@ -464,7 +464,12 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
 
     let single_fsl4_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
+<<<<<<< HEAD
         DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 4),
+||||||| parent of 152faa50f0 (bench(coalesce): add FixedSizeList and List benchmarks, extract FSB helper)
+=======
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 4),
+>>>>>>> 152faa50f0 (bench(coalesce): add FixedSizeList and List benchmarks, extract FSB helper)
         true,
     )]));
 
@@ -1183,12 +1188,21 @@ impl DataStreamBuilder {
                 0.5,
                 seed,
             )),
+<<<<<<< HEAD
             DataType::FixedSizeList(item_field, list_size) => {
                 let raw = create_primitive_fixed_size_list_array::<Int32Type>(
+||||||| parent of 152faa50f0 (bench(coalesce): add FixedSizeList and List benchmarks, extract FSB helper)
+            DataType::FixedSizeList(_, list_size) => {
+                Arc::new(create_primitive_fixed_size_list_array::<Int32Type>(
+=======
+            DataType::FixedSizeList(_, list_size) => Arc::new(
+                create_primitive_fixed_size_list_array::<Int32Type>(
+>>>>>>> 152faa50f0 (bench(coalesce): add FixedSizeList and List benchmarks, extract FSB helper)
                     self.batch_size,
                     self.null_density,
                     0.0,
                     *list_size,
+<<<<<<< HEAD
                 );
                 Arc::new(FixedSizeListArray::new(
                     Arc::clone(item_field),
@@ -1212,6 +1226,22 @@ impl DataStreamBuilder {
                     raw.nulls().cloned(),
                 ))
             }
+||||||| parent of 152faa50f0 (bench(coalesce): add FixedSizeList and List benchmarks, extract FSB helper)
+                ))
+            }
+=======
+                ),
+            ),
+            DataType::List(_) => Arc::new(
+                create_primitive_list_array_with_seed::<i32, Int32Type>(
+                    self.batch_size,
+                    self.null_density,
+                    0.0,
+                    10,
+                    seed,
+                ),
+            ),
+>>>>>>> 152faa50f0 (bench(coalesce): add FixedSizeList and List benchmarks, extract FSB helper)
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
