@@ -1183,35 +1183,21 @@ impl DataStreamBuilder {
                 0.5,
                 seed,
             )),
-            DataType::FixedSizeList(item_field, list_size) => {
-                let raw = create_primitive_fixed_size_list_array::<Int32Type>(
+            DataType::FixedSizeList(_, list_size) => {
+                Arc::new(create_primitive_fixed_size_list_array::<Int32Type>(
                     self.batch_size,
                     self.null_density,
                     0.0,
                     *list_size,
-                );
-                Arc::new(FixedSizeListArray::new(
-                    Arc::clone(item_field),
-                    *list_size,
-                    raw.values().clone(),
-                    raw.nulls().cloned(),
                 ))
             }
-            DataType::List(item_field) => {
-                let raw = create_primitive_list_array_with_seed::<i32, Int32Type>(
-                    self.batch_size,
-                    self.null_density,
-                    0.0,
-                    10,
-                    seed,
-                );
-                Arc::new(ListArray::new(
-                    Arc::clone(item_field),
-                    raw.offsets().clone(),
-                    raw.values().clone(),
-                    raw.nulls().cloned(),
-                ))
-            }
+            DataType::List(_) => Arc::new(create_primitive_list_array_with_seed::<i32, Int32Type>(
+                self.batch_size,
+                self.null_density,
+                0.0,
+                10,
+                seed,
+            )),
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
