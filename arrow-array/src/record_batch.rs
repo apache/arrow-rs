@@ -115,7 +115,9 @@ macro_rules! create_array {
     (@from TimestampMillisecond) => { $crate::TimestampMillisecondArray };
     (@from TimestampMicrosecond) => { $crate::TimestampMicrosecondArray };
     (@from TimestampNanosecond) => { $crate::TimestampNanosecondArray };
-
+    (@from Binary) => { $crate::BinaryArray };
+    (@from BinaryView) => { $crate::BinaryViewArray };
+    (@from LargeBinary) => { $crate::LargeBinaryArray };
     (@from $ty: ident) => {
         compile_error!(concat!("Unsupported data type: ", stringify!($ty)))
     };
@@ -124,24 +126,8 @@ macro_rules! create_array {
         std::sync::Arc::new($crate::NullArray::new($size))
     };
 
-    (Binary, [$($values: expr),*]) => {
-        std::sync::Arc::new($crate::BinaryArray::from_vec(vec![$($values),*]))
-    };
-
-    (LargeBinary, [$($values: expr),*]) => {
-        std::sync::Arc::new($crate::LargeBinaryArray::from_vec(vec![$($values),*]))
-    };
-
     ($ty: tt, [$($values: expr),*]) => {
         std::sync::Arc::new(<$crate::create_array!(@from $ty)>::from(vec![$($values),*]))
-    };
-
-    (Binary, $values: expr) => {
-        std::sync::Arc::new($crate::BinaryArray::from_vec($values))
-    };
-
-    (LargeBinary, $values: expr) => {
-        std::sync::Arc::new($crate::LargeBinaryArray::from_vec($values))
     };
 
     ($ty: tt, $values: expr) => {
