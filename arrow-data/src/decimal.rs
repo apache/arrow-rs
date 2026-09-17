@@ -1232,6 +1232,8 @@ mod tests {
         assert_eq!(format_decimal(12345_i32, 2), "123.45");
         assert_eq!(format_decimal(-5_i64, 3), "-0.005");
         assert_eq!(format_decimal(0_i128, -2), "0");
+        assert_eq!(format_decimal(i32::MIN, 9), "-2.147483648");
+        assert_eq!(format_decimal(i64::MIN, 18), "-9.223372036854775808");
         assert_eq!(
             format_decimal(i128::MIN, 38),
             "-1.70141183460469231731687303715884105728"
