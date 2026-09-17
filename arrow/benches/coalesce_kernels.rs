@@ -21,6 +21,8 @@ use arrow::util::bench_util::*;
 use std::sync::Arc;
 
 use arrow::array::*;
+use arrow_array::FixedSizeBinaryArray;
+use arrow_array::builder::FixedSizeBinaryBuilder;
 use arrow_array::types::{Float64Type, Int32Type, TimestampNanosecondType};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::coalesce::BatchCoalescer;
@@ -1181,23 +1183,21 @@ impl DataStreamBuilder {
                 0.5,
                 seed,
             )),
-            DataType::FixedSizeList(_, list_size) => Arc::new(
-                create_primitive_fixed_size_list_array::<Int32Type>(
+            DataType::FixedSizeList(_, list_size) => {
+                Arc::new(create_primitive_fixed_size_list_array::<Int32Type>(
                     self.batch_size,
                     self.null_density,
                     0.0,
                     *list_size,
-                ),
-            ),
-            DataType::List(_) => Arc::new(
-                create_primitive_list_array_with_seed::<i32, Int32Type>(
-                    self.batch_size,
-                    self.null_density,
-                    0.0,
-                    10,
-                    seed,
-                ),
-            ),
+                ))
+            }
+            DataType::List(_) => Arc::new(create_primitive_list_array_with_seed::<i32, Int32Type>(
+                self.batch_size,
+                self.null_density,
+                0.0,
+                10,
+                seed,
+            )),
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
@@ -1208,11 +1208,10 @@ fn create_fixed_size_binary_array(
     null_density: f32,
     value_length: i32,
     seed: u64,
-) -> arrow_array::FixedSizeBinaryArray {
+) -> FixedSizeBinaryArray {
     let size = value_length as usize;
     let mut rng = StdRng::seed_from_u64(seed);
-    let mut builder =
-        arrow_array::builder::FixedSizeBinaryBuilder::with_capacity(batch_size, value_length);
+    let mut builder = FixedSizeBinaryBuilder::with_capacity(batch_size, value_length);
     for _ in 0..batch_size {
         if rng.random::<f32>() < null_density {
             builder.append_null();
