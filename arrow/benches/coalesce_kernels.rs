@@ -21,6 +21,8 @@ use arrow::util::bench_util::*;
 use std::sync::Arc;
 
 use arrow::array::*;
+use arrow_array::FixedSizeBinaryArray;
+use arrow_array::builder::FixedSizeBinaryBuilder;
 use arrow_array::types::{Float64Type, Int32Type, TimestampNanosecondType};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::coalesce::BatchCoalescer;
@@ -102,6 +104,35 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         Field::new("float_val2", DataType::Float64, true),
         // TODO model other dictionary types here (FixedSizeBinary for example)
     ]));
+
+    let single_fsb16_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(16),
+        true,
+    )]));
+    let single_fsb32_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(32),
+        true,
+    )]));
+
+    let single_boolean_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Boolean,
+        true,
+    )]));
+
+    let single_fsl4_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 4),
+        true,
+    )]));
+
+    let single_list_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        true,
+    )]));
 
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
@@ -288,6 +319,66 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 schema: &mixed_dict_schema,
             }
             .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_fsb16",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 16,
+                schema: &single_fsb16_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_fsb32",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 32,
+                schema: &single_fsb32_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_boolean",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 0,
+                schema: &single_boolean_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_fsl4",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 0,
+                schema: &single_fsl4_schema,
+            }
+            .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_list",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 0,
+                schema: &single_list_schema,
+            }
+            .build();
         }
     }
 }
@@ -353,6 +444,35 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
         Field::new("float_val1", DataType::Float64, true),
         Field::new("float_val2", DataType::Float64, true),
     ]));
+
+    let single_fsb16_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(16),
+        true,
+    )]));
+    let single_fsb32_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeBinary(32),
+        true,
+    )]));
+
+    let single_boolean_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Boolean,
+        true,
+    )]));
+
+    let single_fsl4_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 4),
+        true,
+    )]));
+
+    let single_list_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+        true,
+    )]));
 
     for null_density in [0.0, 0.1] {
         for selectivity in [0.001, 0.01, 0.1, 0.8] {
@@ -422,6 +542,36 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
                     num_output_batches: 10,
                     max_string_len: 30,
                     schema: &mixed_dict_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "single_fsb16",
+                    num_output_batches: 50,
+                    max_string_len: 16,
+                    schema: &single_fsb16_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "single_fsb32",
+                    num_output_batches: 50,
+                    max_string_len: 32,
+                    schema: &single_fsb32_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "single_boolean",
+                    num_output_batches: 50,
+                    max_string_len: 0,
+                    schema: &single_boolean_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "single_fsl4",
+                    num_output_batches: 50,
+                    max_string_len: 0,
+                    schema: &single_fsl4_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "single_list",
+                    num_output_batches: 50,
+                    max_string_len: 0,
+                    schema: &single_list_schema,
                 },
             ] {
                 TakeBenchmarkBuilder::from_scenario(
@@ -1021,7 +1171,54 @@ impl DataStreamBuilder {
                     self.max_string_len,
                 )) // TODO seed
             }
+            DataType::FixedSizeBinary(size) => Arc::new(create_fixed_size_binary_array(
+                self.batch_size,
+                self.null_density,
+                *size,
+                seed,
+            )),
+            DataType::Boolean => Arc::new(create_boolean_array_with_seed(
+                self.batch_size,
+                self.null_density,
+                0.5,
+                seed,
+            )),
+            DataType::FixedSizeList(_, list_size) => {
+                Arc::new(create_primitive_fixed_size_list_array::<Int32Type>(
+                    self.batch_size,
+                    self.null_density,
+                    0.0,
+                    *list_size,
+                ))
+            }
+            DataType::List(_) => Arc::new(create_primitive_list_array_with_seed::<i32, Int32Type>(
+                self.batch_size,
+                self.null_density,
+                0.0,
+                10,
+                seed,
+            )),
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
+}
+
+fn create_fixed_size_binary_array(
+    batch_size: usize,
+    null_density: f32,
+    value_length: i32,
+    seed: u64,
+) -> FixedSizeBinaryArray {
+    let size = value_length as usize;
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut builder = FixedSizeBinaryBuilder::with_capacity(batch_size, value_length);
+    for _ in 0..batch_size {
+        if rng.random::<f32>() < null_density {
+            builder.append_null();
+        } else {
+            let value: Vec<u8> = (0..size).map(|_| rng.random::<u8>()).collect();
+            builder.append_value(&value).unwrap();
+        }
+    }
+    builder.finish()
 }
