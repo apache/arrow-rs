@@ -103,7 +103,6 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         // TODO model other dictionary types here (FixedSizeBinary for example)
     ]));
 
-    // FixedSizeBinary(16) — typical for UUIDs
     let single_fsb16_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
         DataType::FixedSizeBinary(16),
@@ -391,7 +390,6 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
         Field::new("float_val2", DataType::Float64, true),
     ]));
 
-    // FixedSizeBinary(16) — typical for UUIDs
     let single_fsb16_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
         DataType::FixedSizeBinary(16),
