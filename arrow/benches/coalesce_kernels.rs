@@ -114,6 +114,12 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         true,
     )]));
 
+    let single_boolean_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Boolean,
+        true,
+    )]));
+
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
         // Selectivity: 0.1%, 1%, 10%, 80%
@@ -323,6 +329,18 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 schema: &single_fsb32_schema,
             }
             .build();
+
+            FilterBenchmarkBuilder {
+                c,
+                name: "single_boolean",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 0,
+                schema: &single_boolean_schema,
+            }
+            .build();
         }
     }
 }
@@ -397,6 +415,12 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
     let single_fsb32_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
         DataType::FixedSizeBinary(32),
+        true,
+    )]));
+
+    let single_boolean_schema = SchemaRef::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Boolean,
         true,
     )]));
 
@@ -480,6 +504,12 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
                     num_output_batches: 50,
                     max_string_len: 32,
                     schema: &single_fsb32_schema,
+                },
+                TakeBenchmarkScenario {
+                    name: "single_boolean",
+                    num_output_batches: 50,
+                    max_string_len: 0,
+                    schema: &single_boolean_schema,
                 },
             ] {
                 TakeBenchmarkBuilder::from_scenario(
@@ -1096,6 +1126,12 @@ impl DataStreamBuilder {
                 }
                 Arc::new(builder.finish())
             }
+            DataType::Boolean => Arc::new(create_boolean_array_with_seed(
+                self.batch_size,
+                self.null_density,
+                0.5,
+                seed,
+            )),
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
