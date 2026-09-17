@@ -702,12 +702,10 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
         }
         DataType::FixedSizeList(field, list_size) => {
-            let child = create_in_progress_array(field.data_type(), batch_size);
             Box::new(InProgressFixedSizeListArray::new(
                 *list_size,
                 Arc::clone(field),
                 batch_size,
-                child,
             ))
         }
         _ => Box::new(GenericInProgressArray::new()),
