@@ -277,7 +277,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         column_props: &ResolvedColumnProperties,
     ) -> Result<Self> {
         let dict_supported = column_props.dictionary_enabled
-            && has_dictionary_support(T::get_physical_type(), props);
+            && has_dictionary_support(T::get_physical_type(), props, descr.path());
         let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
 
         // Set either main encoder or fallback encoder.
