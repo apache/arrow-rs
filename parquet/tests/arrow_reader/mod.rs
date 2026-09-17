@@ -38,6 +38,8 @@ use parquet::file::properties::{
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+#[cfg(feature = "async")]
+mod async_reader;
 mod bad_data;
 mod bloom_filter;
 #[cfg(feature = "crc")]
