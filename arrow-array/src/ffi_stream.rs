@@ -189,10 +189,6 @@ impl FFI_ArrowArrayStream {
 
     /// Creates a new [`FFI_ArrowArrayStream`] from its raw parts.
     ///
-    /// This is the escape hatch for producers that [`FFI_ArrowArrayStream::new`]
-    /// cannot express, such as a stream of arrays that are not record batches.
-    /// See <https://github.com/apache/arrow-rs/issues/6586>.
-    ///
     /// # Safety
     ///
     /// The caller takes responsibility for the [C stream interface] contract:
