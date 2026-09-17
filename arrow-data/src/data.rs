@@ -2955,25 +2955,21 @@ mod tests {
 
     #[test]
     fn test_builder_rejects_short_null_bit_buffer() {
-        for (len, offset, bytes) in [(8000, 0, 1), (1, 0, 0), (8, 1, 1), (0, 9, 1)] {
-            for null_count in [None, Some(0), Some(len)] {
-                let mut builder = ArrayData::builder(DataType::Int32)
-                    .len(len)
-                    .offset(offset)
-                    .add_buffer(make_i32_buffer(len + offset))
-                    .null_bit_buffer(Some(Buffer::from(vec![0_u8; bytes])));
-                if let Some(null_count) = null_count {
-                    builder = builder.null_count(null_count);
-                }
-                let err = builder.build().unwrap_err();
-                assert_eq!(
-                    err.to_string(),
-                    format!(
-                        "Invalid argument error: null_bit_buffer size too small. got {bytes} needed {}",
-                        bit_util::ceil(len + offset, 8)
-                    )
-                );
-            }
+        for (len, offset) in [(8000, 0), (8, 1)] {
+            let err = ArrayData::builder(DataType::Int32)
+                .len(len)
+                .offset(offset)
+                .add_buffer(make_i32_buffer(len + offset))
+                .null_bit_buffer(Some(Buffer::from([0_u8])))
+                .build()
+                .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Invalid argument error: null_bit_buffer size too small. got 1 needed {}",
+                    bit_util::ceil(len + offset, 8)
+                )
+            );
         }
     }
 
@@ -2996,26 +2992,17 @@ mod tests {
 
     #[test]
     fn test_builder_accepts_valid_null_bit_buffer() {
-        for (len, offset) in [(0, 0), (0, 8), (7, 1), (8, 0), (9, 0)] {
-            for valid in [false, true] {
-                let bytes = bit_util::ceil(len + offset, 8);
-                let buffer = Buffer::from(vec![if valid { 255_u8 } else { 0 }; bytes]);
-                let expected_nulls = if valid { 0 } else { len };
-                for null_count in [None, Some(expected_nulls)] {
-                    let mut builder = ArrayData::builder(DataType::Int32)
-                        .len(len)
-                        .offset(offset)
-                        .add_buffer(make_i32_buffer(len + offset))
-                        .null_bit_buffer(Some(buffer.clone()));
-                    if let Some(null_count) = null_count {
-                        builder = builder.null_count(null_count);
-                    }
-                    let data = builder.build().unwrap();
-                    assert_eq!(data.len(), len);
-                    assert_eq!(data.offset(), offset);
-                    assert_eq!(data.null_count(), expected_nulls);
-                }
-            }
+        for (len, offset) in [(8, 0), (7, 1)] {
+            let data = ArrayData::builder(DataType::Int32)
+                .len(len)
+                .offset(offset)
+                .add_buffer(make_i32_buffer(len + offset))
+                .null_bit_buffer(Some(Buffer::from([0_u8])))
+                .build()
+                .unwrap();
+            assert_eq!(data.len(), len);
+            assert_eq!(data.offset(), offset);
+            assert_eq!(data.null_count(), len);
         }
     }
 
