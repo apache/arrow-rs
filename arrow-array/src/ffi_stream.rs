@@ -187,6 +187,46 @@ impl FFI_ArrowArrayStream {
         }
     }
 
+    /// Creates a new [`FFI_ArrowArrayStream`] from its raw parts.
+    ///
+    /// This is the escape hatch for producers that [`FFI_ArrowArrayStream::new`]
+    /// cannot express, such as a stream of arrays that are not record batches.
+    /// See <https://github.com/apache/arrow-rs/issues/6586>.
+    ///
+    /// # Safety
+    ///
+    /// The caller takes responsibility for the [C stream interface] contract:
+    ///
+    /// * Each callback that is `Some` must be sound to invoke with a pointer to
+    ///   this struct, and must implement the semantics the C stream interface
+    ///   specifies for it.
+    /// * `private_data` must own everything the callbacks rely on, and must
+    ///   remain valid until `release` is called.
+    /// * `release`, if `Some`, is invoked by [`Drop`] with a pointer to this
+    ///   struct. It must free `private_data` exactly once and then set the
+    ///   release callback to `None` to mark the stream released.
+    /// * If `release` is `None` the stream is already released, so dropping it
+    ///   must not leak: nothing may be left for the callback to free.
+    ///
+    /// [C stream interface]: https://arrow.apache.org/docs/format/CStreamInterface.html
+    pub unsafe fn new_unchecked(
+        get_schema: Option<
+            unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int,
+        >,
+        get_next: Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowArray) -> c_int>,
+        get_last_error: Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char>,
+        release: Option<unsafe extern "C" fn(arg1: *mut Self)>,
+        private_data: *mut c_void,
+    ) -> Self {
+        Self {
+            get_schema,
+            get_next,
+            get_last_error,
+            release,
+            private_data,
+        }
+    }
+
     /// Takes ownership of the pointed to [`FFI_ArrowArrayStream`]
     ///
     /// This acts to [move] the data out of `raw_stream`, setting the release callback to NULL
@@ -783,5 +823,115 @@ mod tests {
 
         drop(stream); // runs wrapping_release, which chains to the original
         assert!(STREAM_WRAPPER_RAN.load(Ordering::SeqCst));
+    }
+
+    // A producer that exports a stream of plain arrays rather than record batches.
+    // `FFI_ArrowArrayStream::new` cannot express this, since it takes a
+    // `RecordBatchReader`. See <https://github.com/apache/arrow-rs/issues/6586>.
+    struct ArrayStreamPrivateData {
+        field: Field,
+        arrays: std::vec::IntoIter<Int32Array>,
+    }
+
+    unsafe extern "C" fn array_stream_get_schema(
+        stream: *mut FFI_ArrowArrayStream,
+        out: *mut FFI_ArrowSchema,
+    ) -> c_int {
+        let private_data = unsafe { &*(*stream).private_data().cast::<ArrayStreamPrivateData>() };
+        let schema = FFI_ArrowSchema::try_from(&private_data.field).unwrap();
+        unsafe { std::ptr::write(out, schema) };
+        0
+    }
+
+    unsafe extern "C" fn array_stream_get_next(
+        stream: *mut FFI_ArrowArrayStream,
+        out: *mut FFI_ArrowArray,
+    ) -> c_int {
+        let private_data =
+            unsafe { &mut *(*stream).private_data().cast::<ArrayStreamPrivateData>() };
+        match private_data.arrays.next() {
+            // Marks ArrowArray released to indicate reaching the end of stream.
+            None => unsafe { std::ptr::write(out, FFI_ArrowArray::empty()) },
+            Some(array) => unsafe {
+                std::ptr::write_unaligned(out, FFI_ArrowArray::new(&array.to_data()))
+            },
+        }
+        0
+    }
+
+    unsafe extern "C" fn array_stream_get_last_error(
+        _stream: *mut FFI_ArrowArrayStream,
+    ) -> *const c_char {
+        std::ptr::null()
+    }
+
+    unsafe extern "C" fn array_stream_release(stream: *mut FFI_ArrowArrayStream) {
+        let private_data =
+            unsafe { Box::from_raw((*stream).private_data().cast::<ArrayStreamPrivateData>()) };
+        drop(private_data);
+        // Clears every callback and marks the stream released, without dropping the
+        // value being overwritten.
+        unsafe { std::ptr::write(stream, FFI_ArrowArrayStream::empty()) };
+    }
+
+    fn array_stream(field: Field, arrays: Vec<Int32Array>) -> FFI_ArrowArrayStream {
+        let private_data = Box::new(ArrayStreamPrivateData {
+            field,
+            arrays: arrays.into_iter(),
+        });
+
+        unsafe {
+            FFI_ArrowArrayStream::new_unchecked(
+                Some(array_stream_get_schema),
+                Some(array_stream_get_next),
+                Some(array_stream_get_last_error),
+                Some(array_stream_release),
+                Box::into_raw(private_data).cast::<c_void>(),
+            )
+        }
+    }
+
+    #[test]
+    fn test_new_unchecked_exports_stream_of_arrays() {
+        let field = Field::new("a", DataType::Int32, true);
+        let arrays = vec![
+            Int32Array::from(vec![1, 2, 3]),
+            Int32Array::from(vec![4, 5]),
+        ];
+        let mut stream = array_stream(field.clone(), arrays.clone());
+
+        // Drive the stream through the callbacks the constructor stored, so a
+        // field the constructor put in the wrong place would surface here.
+        let get_schema_fn = stream.get_schema.unwrap();
+        let get_next_fn = stream.get_next.unwrap();
+        let get_last_error_fn = stream.get_last_error.unwrap();
+
+        let mut ffi_schema = FFI_ArrowSchema::empty();
+        let ret_code = unsafe { get_schema_fn(&raw mut stream, &raw mut ffi_schema) };
+        assert_eq!(ret_code, 0);
+        assert_eq!(Field::try_from(&ffi_schema).unwrap(), field);
+
+        let mut produced = vec![];
+        loop {
+            let mut ffi_array = FFI_ArrowArray::empty();
+            let ret_code = unsafe { get_next_fn(&raw mut stream, &raw mut ffi_array) };
+            assert_eq!(ret_code, 0);
+
+            // The end of stream has been reached
+            if ffi_array.is_released() {
+                break;
+            }
+
+            let data = unsafe { from_ffi(ffi_array, &ffi_schema) }.unwrap();
+            produced.push(Int32Array::from(data));
+        }
+
+        assert_eq!(produced, arrays);
+
+        // This producer never fails, so it reports no error message.
+        assert!(unsafe { get_last_error_fn(&raw mut stream) }.is_null());
+
+        // Runs the stored release callback, freeing the private data exactly once.
+        drop(stream);
     }
 }
