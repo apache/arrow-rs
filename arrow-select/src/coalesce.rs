@@ -32,11 +32,13 @@ use std::sync::Arc;
 
 mod byte_view;
 mod fixed_size_binary;
+mod fixed_size_list;
 mod generic;
 mod primitive;
 
 use byte_view::InProgressByteViewArray;
 use fixed_size_binary::InProgressFixedSizeBinaryArray;
+use fixed_size_list::InProgressFixedSizeListArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
@@ -703,6 +705,15 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         }
         DataType::FixedSizeBinary(size) => {
             Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
+        }
+        DataType::FixedSizeList(field, list_size) => {
+            let child = create_in_progress_array(field.data_type(), batch_size);
+            Box::new(InProgressFixedSizeListArray::new(
+                *list_size,
+                Arc::clone(field),
+                batch_size,
+                child,
+            ))
         }
         _ => Box::new(GenericInProgressArray::new()),
     }
