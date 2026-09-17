@@ -122,18 +122,6 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         true,
     )]));
 
-    let single_fsl4_schema = SchemaRef::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 4),
-        true,
-    )]));
-
-    let single_list_schema = SchemaRef::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-        true,
-    )]));
-
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
         // Selectivity: 0.1%, 1%, 10%, 80%
@@ -355,30 +343,6 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
                 schema: &single_boolean_schema,
             }
             .build();
-
-            FilterBenchmarkBuilder {
-                c,
-                name: "single_fsl4",
-                batch_size,
-                num_output_batches: 50,
-                null_density,
-                selectivity,
-                max_string_len: 0,
-                schema: &single_fsl4_schema,
-            }
-            .build();
-
-            FilterBenchmarkBuilder {
-                c,
-                name: "single_list",
-                batch_size,
-                num_output_batches: 50,
-                null_density,
-                selectivity,
-                max_string_len: 0,
-                schema: &single_list_schema,
-            }
-            .build();
         }
     }
 }
@@ -459,18 +423,6 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
     let single_boolean_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
         DataType::Boolean,
-        true,
-    )]));
-
-    let single_fsl4_schema = SchemaRef::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 4),
-        true,
-    )]));
-
-    let single_list_schema = SchemaRef::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         true,
     )]));
 
@@ -560,18 +512,6 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
                     num_output_batches: 50,
                     max_string_len: 0,
                     schema: &single_boolean_schema,
-                },
-                TakeBenchmarkScenario {
-                    name: "single_fsl4",
-                    num_output_batches: 50,
-                    max_string_len: 0,
-                    schema: &single_fsl4_schema,
-                },
-                TakeBenchmarkScenario {
-                    name: "single_list",
-                    num_output_batches: 50,
-                    max_string_len: 0,
-                    schema: &single_list_schema,
                 },
             ] {
                 TakeBenchmarkBuilder::from_scenario(
@@ -1191,13 +1131,6 @@ impl DataStreamBuilder {
                     *list_size,
                 ))
             }
-            DataType::List(_) => Arc::new(create_primitive_list_array_with_seed::<i32, Int32Type>(
-                self.batch_size,
-                self.null_density,
-                0.0,
-                10,
-                seed,
-            )),
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
