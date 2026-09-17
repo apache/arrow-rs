@@ -235,6 +235,21 @@ fn add_benchmark(c: &mut Criterion) {
             |b| b.iter(|| bench_concat_arrays(&array_refs)),
         );
     }
+
+    // (name, logical_len, physical_len, num_arrays)
+    for (name, logical, physical, n) in [
+        ("small logical=32 physical=4 x4", 32usize, 4usize, 4usize),
+        ("logical=1024 physical=128 x8", 1024, 128, 8),
+        ("logical=8192 physical=1024 x10", 8192, 1024, 10),
+    ] {
+        let arrays: Vec<RunArray<Int32Type>> = (0..n)
+            .map(|_| create_primitive_run_array::<Int32Type, Int32Type>(logical, physical))
+            .collect();
+        let array_refs: Vec<&dyn Array> = arrays.iter().map(|a| a as &dyn Array).collect();
+        c.bench_function(&format!("concat run i32 {name}"), |b| {
+            b.iter(|| bench_concat_arrays(&array_refs))
+        });
+    }
 }
 
 criterion_group!(benches, add_benchmark);
