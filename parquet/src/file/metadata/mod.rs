@@ -726,7 +726,7 @@ impl RowGroupMetaDataBuilder {
         self
     }
 
-    /// Takes ownership of the the column metadata in this builder, and clears
+    /// Takes ownership of the column metadata in this builder, and clears
     /// the list of columns.
     ///
     /// This can be used for more efficient creation of a new RowGroupMetaData
@@ -843,7 +843,7 @@ impl LevelHistogram {
             None
         }
     }
-    /// Returns a reference to the the histogram's values.
+    /// Returns a reference to the histogram's values.
     pub fn values(&self) -> &[i64] {
         &self.inner
     }

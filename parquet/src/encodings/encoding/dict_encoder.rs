@@ -116,6 +116,11 @@ impl<T: DataType> DictEncoder<T> {
         self.interner.storage().uniques.len()
     }
 
+    /// Returns the distinct values interned so far, in dictionary order.
+    pub fn uniques(&self) -> &[T::T] {
+        &self.interner.storage().uniques
+    }
+
     /// Returns size of unique values (keys) in the dictionary, in bytes.
     pub fn dict_encoded_size(&self) -> usize {
         self.interner.storage().size_in_bytes

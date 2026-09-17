@@ -1494,7 +1494,7 @@ impl ArrayData {
     ///
     /// Does not (yet) check
     /// 1. Union type_ids are valid see [#85](https://github.com/apache/arrow-rs/issues/85)
-    /// 2. the the null count is correct and that any
+    /// 2. the null count is correct and that any
     /// 3. nullability requirements of its children are correct
     ///
     /// [#85]: https://github.com/apache/arrow-rs/issues/85

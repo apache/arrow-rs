@@ -186,8 +186,8 @@ use arrow_array::timezone::Tz;
 static REGEX_SET: LazyLock<RegexSet> = LazyLock::new(|| {
     RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?(\d+)$",                   //INTEGER
-        r"^-?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
+        r"^[+-]?(\d+)$",                //INTEGER
+        r"^[+-]?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
         r"^\d{4}-\d\d-\d\d$",           //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
@@ -1387,6 +1387,30 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_cast::display::array_value_to_string;
+
+    #[test]
+    fn test_infer_schema_leading_plus_numbers() {
+        for (csv, expected_type) in [
+            ("+1\n2\n-3\n", DataType::Int64),
+            ("+1.5\n2.5\n-3.5\n", DataType::Float64),
+            ("+1e3\n+2.5e-2\n-3E+2\n", DataType::Float64),
+            ("+9223372036854775807\n0\n", DataType::Int64),
+            ("+9223372036854775808\n0\n", DataType::Utf8),
+            ("+-1\n2\n", DataType::Utf8),
+            ("+\n2\n", DataType::Utf8),
+        ] {
+            let (schema, records_read) = Format::default()
+                .infer_schema(Cursor::new(csv), None)
+                .unwrap();
+            assert_eq!(schema.field(0).data_type(), &expected_type, "CSV: {csv:?}");
+            // Inferred numeric types must also be accepted by the CSV decoder.
+            let reader = ReaderBuilder::new(Arc::new(schema))
+                .build(Cursor::new(csv))
+                .unwrap();
+            let rows: usize = reader.map(|batch| batch.unwrap().num_rows()).sum();
+            assert_eq!(rows, records_read, "CSV: {csv:?}");
+        }
+    }
 
     #[test]
     fn test_csv() {

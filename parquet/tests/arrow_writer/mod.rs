@@ -18,6 +18,7 @@
 //! Tests for [`ArrowWriter`]
 
 mod layout;
+mod roundtrip;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
