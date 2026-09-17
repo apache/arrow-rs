@@ -132,7 +132,8 @@ mod tests {
 
     #[test]
     fn test_offset_copy() {
-        let source = Arc::new(make_fsb(4, &[Some(b"aaaa"), Some(b"bbbb"), Some(b"cccc")])) as ArrayRef;
+        let source =
+            Arc::new(make_fsb(4, &[Some(b"aaaa"), Some(b"bbbb"), Some(b"cccc")])) as ArrayRef;
         let mut coalescer = InProgressFixedSizeBinaryArray::new(4, 8);
         coalescer.set_source(Some(Arc::clone(&source)));
         coalescer.copy_rows(1, 2).unwrap();
@@ -162,7 +163,9 @@ mod tests {
         let filter_mask = BooleanArray::from(vec![true, false, true, false]);
         let predicate = FilterBuilder::new(&filter_mask).build();
         let mut coalescer = InProgressFixedSizeBinaryArray::new(4, 8);
-        coalescer.copy_rows_by_filter_from(source, &predicate).unwrap();
+        coalescer
+            .copy_rows_by_filter_from(source, &predicate)
+            .unwrap();
         let output = coalescer.finish().unwrap();
         let output = output.as_fixed_size_binary();
         assert_eq!(output.len(), 2);
