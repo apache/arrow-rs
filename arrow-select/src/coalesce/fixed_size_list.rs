@@ -16,13 +16,22 @@
 // under the License.
 
 use super::InProgressArray;
-use crate::filter::FilterPredicate;
+use crate::concat::concat;
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, FixedSizeListArray};
+use arrow_array::{new_empty_array, Array, ArrayRef, FixedSizeListArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_schema::{ArrowError, Field};
 use std::sync::Arc;
 
+/// Specialized [`InProgressArray`] for [`FixedSizeListArray`].
+///
+/// Instead of recursively delegating child rows to a child `InProgressArray`
+/// (which has per-call Arc overhead and eager `set_source`/`copy_rows`
+/// management), we buffer O(1) Arc-cloned child value slices and then
+/// `concat` them once at [`Self::finish`].  This matches the strategy used by
+/// [`super::generic::GenericInProgressArray`] for the outer array, applied to
+/// just the flat values child — letting us skip the FSL structure rebuild
+/// overhead and avoid the eager `filter` call in the filter path.
 #[derive(Debug)]
 pub(crate) struct InProgressFixedSizeListArray {
     source: Option<ArrayRef>,
@@ -30,24 +39,20 @@ pub(crate) struct InProgressFixedSizeListArray {
     batch_size: usize,
     field: Arc<Field>,
     nulls: NullBufferBuilder,
-    values: Box<dyn InProgressArray>,
+    /// Slices of the child values array, collected O(1) per call.
+    value_slices: Vec<ArrayRef>,
     rows: usize,
 }
 
 impl InProgressFixedSizeListArray {
-    pub(crate) fn new(
-        list_size: i32,
-        field: Arc<Field>,
-        batch_size: usize,
-        values: Box<dyn InProgressArray>,
-    ) -> Self {
+    pub(crate) fn new(list_size: i32, field: Arc<Field>, batch_size: usize) -> Self {
         Self {
             source: None,
             list_size,
             batch_size,
             field,
             nulls: NullBufferBuilder::new(batch_size),
-            values,
+            value_slices: Vec::new(),
             rows: 0,
         }
     }
@@ -58,6 +63,10 @@ impl InProgressArray for InProgressFixedSizeListArray {
         self.source = source;
     }
 
+    /// Copy `len` FSL rows starting at `offset` into the in-progress buffer.
+    ///
+    /// This is O(1): we just push an Arc-cloned slice of the child values
+    /// array — no data is copied until [`Self::finish`].
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
         let source = self.source.as_ref().ok_or_else(|| {
             ArrowError::InvalidArgumentError(
@@ -67,10 +76,9 @@ impl InProgressArray for InProgressFixedSizeListArray {
         let fsl = source.as_fixed_size_list();
         let list_size = self.list_size as usize;
 
-        self.values
-            .set_source(Some(Arc::clone(fsl.values())));
-        self.values.copy_rows(offset * list_size, len * list_size)?;
-        self.values.set_source(None);
+        // Push a slice of the flat child values — O(1) Arc clone, no copy.
+        let child_slice = fsl.values().slice(offset * list_size, len * list_size);
+        self.value_slices.push(child_slice);
 
         if let Some(nulls) = fsl.nulls() {
             self.nulls.append_buffer(&nulls.slice(offset, len));
@@ -81,30 +89,19 @@ impl InProgressArray for InProgressFixedSizeListArray {
         Ok(())
     }
 
-    fn copy_rows_by_filter_from(
-        &mut self,
-        source: ArrayRef,
-        filter: &FilterPredicate,
-    ) -> Result<(), ArrowError> {
-        let filtered = filter.filter(source.as_ref())?;
-        let len = filtered.len();
-        if len > 0 {
-            self.set_source(Some(filtered));
-            self.copy_rows(0, len)?;
-            self.set_source(None);
-        }
-        Ok(())
-    }
-
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         let nulls = self.nulls.finish();
         self.nulls = NullBufferBuilder::new(self.batch_size);
         let rows = std::mem::replace(&mut self.rows, 0);
+
         let values = if rows == 0 {
-            arrow_array::new_empty_array(self.field.data_type())
+            new_empty_array(self.field.data_type())
         } else {
-            self.values.finish()?
+            let refs: Vec<&dyn Array> = self.value_slices.iter().map(|a| a.as_ref()).collect();
+            concat(&refs)?
         };
+        self.value_slices.clear();
+
         Ok(Arc::new(FixedSizeListArray::new(
             Arc::clone(&self.field),
             self.list_size,
@@ -115,7 +112,11 @@ impl InProgressArray for InProgressFixedSizeListArray {
 
     fn size(&self) -> usize {
         self.nulls.allocated_size()
-            + self.values.size()
+            + self
+                .value_slices
+                .iter()
+                .map(|a| a.get_array_memory_size())
+                .sum::<usize>()
             + self.source.as_ref().map_or(0, |a| a.get_array_memory_size())
     }
 }
@@ -123,7 +124,6 @@ impl InProgressArray for InProgressFixedSizeListArray {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coalesce::generic::GenericInProgressArray;
     use arrow_array::{Array, Int32Array};
     use arrow_schema::DataType;
 
@@ -139,12 +139,7 @@ mod tests {
 
     fn make_ip(list_size: i32) -> InProgressFixedSizeListArray {
         let field = Arc::new(Field::new("item", DataType::Int32, true));
-        InProgressFixedSizeListArray::new(
-            list_size,
-            field,
-            8,
-            Box::new(GenericInProgressArray::new()),
-        )
+        InProgressFixedSizeListArray::new(list_size, field, 8)
     }
 
     #[test]
