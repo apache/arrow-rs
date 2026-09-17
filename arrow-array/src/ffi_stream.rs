@@ -250,12 +250,9 @@ impl FFI_ArrowArrayStream {
         }
     }
 
-    /// Returns the producer-provided callback that writes this stream's schema,
-    /// if any.
+    /// Returns the producer-provided callback that writes this stream's schema, if any.
     ///
-    /// A stream that has not been released always supplies this callback. It is
-    /// `unsafe` to invoke: it must be passed a pointer to the very stream it was
-    /// read from, and `out` must be valid for writes.
+    /// The callback must be invoked with a pointer to the stream it was read from.
     pub fn get_schema(
         &self,
     ) -> Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int> {
@@ -264,9 +261,7 @@ impl FFI_ArrowArrayStream {
 
     /// Returns the producer-provided callback that yields the next array, if any.
     ///
-    /// A stream that has not been released always supplies this callback. It is
-    /// `unsafe` to invoke: it must be passed a pointer to the very stream it was
-    /// read from, and `out` must be valid for writes.
+    /// The callback must be invoked with a pointer to the stream it was read from.
     pub fn get_next(
         &self,
     ) -> Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowArray) -> c_int> {
@@ -275,10 +270,9 @@ impl FFI_ArrowArrayStream {
 
     /// Returns the producer-provided callback that describes the last error, if any.
     ///
-    /// Unlike the other two callbacks, a producer need not supply this one. It is
-    /// `unsafe` to invoke: it must be passed a pointer to the very stream it was
-    /// read from. The string it returns is owned by the producer and is only valid
-    /// until the next call on this stream.
+    /// The callback must be invoked with a pointer to the stream it was read from.
+    /// The string it returns is owned by the producer and valid only until the next
+    /// call on the stream.
     pub fn get_last_error(&self) -> Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char> {
         self.get_last_error
     }
