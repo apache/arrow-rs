@@ -90,7 +90,11 @@ impl InProgressArray for InProgressFixedSizeBinaryArray {
         let builder_size = self.builder.as_ref().map_or(0, |b| {
             b.len() * self.value_length as usize + b.len().div_ceil(8)
         });
-        builder_size + self.source.as_ref().map_or(0, |a| a.get_array_memory_size())
+        builder_size
+            + self
+                .source
+                .as_ref()
+                .map_or(0, |a| a.get_array_memory_size())
     }
 }
 
