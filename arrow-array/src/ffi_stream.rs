@@ -250,6 +250,39 @@ impl FFI_ArrowArrayStream {
         }
     }
 
+    /// Returns the producer-provided callback that writes this stream's schema,
+    /// if any.
+    ///
+    /// A stream that has not been released always supplies this callback. It is
+    /// `unsafe` to invoke: it must be passed a pointer to the very stream it was
+    /// read from, and `out` must be valid for writes.
+    pub fn get_schema(
+        &self,
+    ) -> Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowSchema) -> c_int> {
+        self.get_schema
+    }
+
+    /// Returns the producer-provided callback that yields the next array, if any.
+    ///
+    /// A stream that has not been released always supplies this callback. It is
+    /// `unsafe` to invoke: it must be passed a pointer to the very stream it was
+    /// read from, and `out` must be valid for writes.
+    pub fn get_next(
+        &self,
+    ) -> Option<unsafe extern "C" fn(arg1: *mut Self, out: *mut FFI_ArrowArray) -> c_int> {
+        self.get_next
+    }
+
+    /// Returns the producer-provided callback that describes the last error, if any.
+    ///
+    /// Unlike the other two callbacks, a producer need not supply this one. It is
+    /// `unsafe` to invoke: it must be passed a pointer to the very stream it was
+    /// read from. The string it returns is owned by the producer and is only valid
+    /// until the next call on this stream.
+    pub fn get_last_error(&self) -> Option<unsafe extern "C" fn(arg1: *mut Self) -> *const c_char> {
+        self.get_last_error
+    }
+
     /// Returns the producer-provided release callback, if any.
     pub fn release(&self) -> Option<unsafe extern "C" fn(arg1: *mut Self)> {
         self.release
@@ -898,9 +931,9 @@ mod tests {
 
         // Drive the stream through the callbacks the constructor stored, so a
         // field the constructor put in the wrong place would surface here.
-        let get_schema_fn = stream.get_schema.unwrap();
-        let get_next_fn = stream.get_next.unwrap();
-        let get_last_error_fn = stream.get_last_error.unwrap();
+        let get_schema_fn = stream.get_schema().unwrap();
+        let get_next_fn = stream.get_next().unwrap();
+        let get_last_error_fn = stream.get_last_error().unwrap();
 
         let mut ffi_schema = FFI_ArrowSchema::empty();
         let ret_code = unsafe { get_schema_fn(&raw mut stream, &raw mut ffi_schema) };
@@ -929,5 +962,15 @@ mod tests {
 
         // Runs the stored release callback, freeing the private data exactly once.
         drop(stream);
+    }
+
+    #[test]
+    fn test_accessors_report_an_empty_stream_as_released() {
+        let stream = FFI_ArrowArrayStream::empty();
+        assert!(stream.get_schema().is_none());
+        assert!(stream.get_next().is_none());
+        assert!(stream.get_last_error().is_none());
+        assert!(stream.release().is_none());
+        assert!(stream.private_data().is_null());
     }
 }
