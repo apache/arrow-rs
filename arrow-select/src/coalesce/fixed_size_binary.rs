@@ -87,10 +87,11 @@ impl InProgressArray for InProgressFixedSizeBinaryArray {
     }
 
     fn size(&self) -> usize {
-        let builder_size = self.builder.as_ref().map_or(0, |b| {
-            b.len() * self.value_length as usize + b.len().div_ceil(8)
-        });
-        builder_size
+        let rows = self.builder.as_ref().map_or(0, |b| b.len());
+        let values_bytes = rows * self.value_length as usize;
+        let null_bitmap_bytes = rows.div_ceil(8);
+        values_bytes
+            + null_bitmap_bytes
             + self
                 .source
                 .as_ref()
@@ -102,9 +103,9 @@ impl InProgressArray for InProgressFixedSizeBinaryArray {
 mod tests {
     use super::*;
     use crate::filter::FilterBuilder;
-    use arrow_array::BooleanArray;
+    use arrow_array::{BooleanArray, FixedSizeBinaryArray};
 
-    fn make_fsb(value_length: i32, data: &[Option<&[u8]>]) -> arrow_array::FixedSizeBinaryArray {
+    fn make_fsb(value_length: i32, data: &[Option<&[u8]>]) -> FixedSizeBinaryArray {
         let mut b = FixedSizeBinaryBuilder::with_capacity(data.len(), value_length);
         for v in data {
             match v {
@@ -117,52 +118,55 @@ mod tests {
 
     #[test]
     fn test_roundtrip_with_nulls() {
-        let src = Arc::new(make_fsb(4, &[Some(b"abcd"), None, Some(b"ijkl")])) as ArrayRef;
-        let mut ip = InProgressFixedSizeBinaryArray::new(4, 8);
-        ip.set_source(Some(Arc::clone(&src)));
-        ip.copy_rows(0, 3).unwrap();
-        let result = ip.finish().unwrap();
-        let result = result.as_fixed_size_binary();
-        assert_eq!(result.len(), 3);
-        assert_eq!(result.value(0), b"abcd");
-        assert!(result.is_null(1));
-        assert_eq!(result.value(2), b"ijkl");
+        let source = Arc::new(make_fsb(4, &[Some(b"abcd"), None, Some(b"ijkl")])) as ArrayRef;
+        let mut coalescer = InProgressFixedSizeBinaryArray::new(4, 8);
+        coalescer.set_source(Some(Arc::clone(&source)));
+        coalescer.copy_rows(0, 3).unwrap();
+        let output = coalescer.finish().unwrap();
+        let output = output.as_fixed_size_binary();
+        assert_eq!(output.len(), 3);
+        assert_eq!(output.value(0), b"abcd");
+        assert!(output.is_null(1));
+        assert_eq!(output.value(2), b"ijkl");
     }
 
     #[test]
     fn test_offset_copy() {
-        let src = Arc::new(make_fsb(4, &[Some(b"aaaa"), Some(b"bbbb"), Some(b"cccc")])) as ArrayRef;
-        let mut ip = InProgressFixedSizeBinaryArray::new(4, 8);
-        ip.set_source(Some(Arc::clone(&src)));
-        ip.copy_rows(1, 2).unwrap();
-        let result = ip.finish().unwrap();
-        let result = result.as_fixed_size_binary();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result.value(0), b"bbbb");
-        assert_eq!(result.value(1), b"cccc");
+        let source = Arc::new(make_fsb(4, &[Some(b"aaaa"), Some(b"bbbb"), Some(b"cccc")])) as ArrayRef;
+        let mut coalescer = InProgressFixedSizeBinaryArray::new(4, 8);
+        coalescer.set_source(Some(Arc::clone(&source)));
+        coalescer.copy_rows(1, 2).unwrap();
+        let output = coalescer.finish().unwrap();
+        let output = output.as_fixed_size_binary();
+        assert_eq!(output.len(), 2);
+        assert_eq!(output.value(0), b"bbbb");
+        assert_eq!(output.value(1), b"cccc");
     }
 
     #[test]
-    fn test_empty_finish() {
-        let mut ip = InProgressFixedSizeBinaryArray::new(16, 8);
-        let result = ip.finish().unwrap();
-        assert_eq!(result.len(), 0);
+    fn test_finish_preserves_value_length() {
+        // finish() with no rows written should still produce an array with the correct value_length
+        let mut coalescer = InProgressFixedSizeBinaryArray::new(16, 8);
+        let output = coalescer.finish().unwrap();
+        let output = output.as_fixed_size_binary();
+        assert_eq!(output.len(), 0);
+        assert_eq!(output.value_length(), 16);
     }
 
     #[test]
     fn test_filter_path() {
-        let src = Arc::new(make_fsb(
+        let source = Arc::new(make_fsb(
             4,
             &[Some(b"aaaa"), Some(b"bbbb"), Some(b"cccc"), Some(b"dddd")],
         )) as ArrayRef;
-        let filter_arr = BooleanArray::from(vec![true, false, true, false]);
-        let predicate = FilterBuilder::new(&filter_arr).build();
-        let mut ip = InProgressFixedSizeBinaryArray::new(4, 8);
-        ip.copy_rows_by_filter_from(src, &predicate).unwrap();
-        let result = ip.finish().unwrap();
-        let result = result.as_fixed_size_binary();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result.value(0), b"aaaa");
-        assert_eq!(result.value(1), b"cccc");
+        let filter_mask = BooleanArray::from(vec![true, false, true, false]);
+        let predicate = FilterBuilder::new(&filter_mask).build();
+        let mut coalescer = InProgressFixedSizeBinaryArray::new(4, 8);
+        coalescer.copy_rows_by_filter_from(source, &predicate).unwrap();
+        let output = coalescer.finish().unwrap();
+        let output = output.as_fixed_size_binary();
+        assert_eq!(output.len(), 2);
+        assert_eq!(output.value(0), b"aaaa");
+        assert_eq!(output.value(1), b"cccc");
     }
 }
