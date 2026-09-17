@@ -108,7 +108,6 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         DataType::FixedSizeBinary(16),
         true,
     )]));
-    // FixedSizeBinary(32) — typical for SHA256 hashes
     let single_fsb32_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
         DataType::FixedSizeBinary(32),
@@ -395,7 +394,6 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
         DataType::FixedSizeBinary(16),
         true,
     )]));
-    // FixedSizeBinary(32) — typical for SHA256 hashes
     let single_fsb32_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
         DataType::FixedSizeBinary(32),
