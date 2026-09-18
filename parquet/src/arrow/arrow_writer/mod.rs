@@ -2081,12 +2081,14 @@ use crate as parquet_crate;
 
 #[cfg(test)]
 #[path = "../../../tests/arrow_writer/roundtrip_helpers.rs"]
+// The unit tests currently use only part of the shared helpers.
+#[expect(dead_code)]
 mod roundtrip_helpers;
 
 #[cfg(test)]
 mod tests {
     use super::roundtrip_helpers::{
-        RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip, roundtrip_opts,
+        RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip_opts,
         roundtrip_opts_with_array_validation,
     };
     use super::*;
@@ -2108,9 +2110,8 @@ mod tests {
     use arrow::util::data_gen::create_random_array;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, OffsetBuffer};
+    use arrow_buffer::{IntervalMonthDayNano, NullBuffer, OffsetBuffer};
     use arrow_schema::Fields;
-    use half::f16;
     use tempfile::tempfile;
 
     use crate::basic::{Encoding, EncodingMask};
@@ -2337,24 +2338,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn arrow_writer() {
-        // define schema
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, true),
-        ]);
-
-        // create some data
-        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let b = Int32Array::from(vec![Some(1), None, None, Some(4), Some(5)]);
-
-        // build a record batch
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
-
-        roundtrip(batch, Some(SMALL_SIZE / 2));
-    }
-
     fn get_bytes_after_close(schema: SchemaRef, expected_batch: &RecordBatch) -> Vec<u8> {
         let mut buffer = vec![];
 
@@ -2409,112 +2392,6 @@ mod tests {
                 assert_eq!(expected_data, actual_data);
             }
         }
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_non_null() {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
-
-        RoundTripTest::new(Arc::new(a))
-            .with_schema(Arc::new(schema))
-            .run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_binary() {
-        let raw_string_values = vec!["foo", "bar", "baz", "quux"];
-        let raw_binary_values = [
-            b"foo".to_vec(),
-            b"bar".to_vec(),
-            b"baz".to_vec(),
-            b"quux".to_vec(),
-        ];
-        let raw_binary_value_refs = raw_binary_values
-            .iter()
-            .map(|x| x.as_slice())
-            .collect::<Vec<_>>();
-
-        let string_values = StringArray::from(raw_string_values.clone());
-        let binary_values = BinaryArray::from(raw_binary_value_refs);
-        assert_eq!(string_values.null_count(), 0);
-        assert_eq!(binary_values.null_count(), 0);
-
-        RoundTripTest::new(Arc::new(string_values)).run();
-        RoundTripTest::new(Arc::new(binary_values)).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_binary_view() {
-        let raw_string_values = vec!["foo", "bar", "large payload over 12 bytes", "lulu"];
-        let raw_binary_values = vec![
-            b"foo".to_vec(),
-            b"bar".to_vec(),
-            b"large payload over 12 bytes".to_vec(),
-            b"lulu".to_vec(),
-        ];
-        let nullable_string_values =
-            vec![Some("foo"), None, Some("large payload over 12 bytes"), None];
-
-        let string_view_values = StringViewArray::from(raw_string_values);
-        let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
-        let nullable_string_view_values = StringViewArray::from(nullable_string_values);
-
-        RoundTripTest::new(Arc::new(string_view_values)).run();
-        RoundTripTest::new(Arc::new(binary_view_values)).run();
-        RoundTripTest::new(Arc::new(nullable_string_view_values)).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_binary_view_long_value() {
-        // There is special case validation for long values (greater than 128)
-        // 128 encodes as 0x80 0x00 0x00 0x00 in little endian, which should
-        // trigger the long-string UTF-8 validation branch in the plain decoder.
-        let long = "a".repeat(128);
-        let raw_string_values = vec!["foo", long.as_str(), "bar"];
-        let raw_binary_values = vec![b"foo".to_vec(), long.as_bytes().to_vec(), b"bar".to_vec()];
-
-        let string_view_values: ArrayRef = Arc::new(StringViewArray::from(raw_string_values));
-        let binary_view_values: ArrayRef =
-            Arc::new(BinaryViewArray::from_iter_values(raw_binary_values));
-
-        RoundTripTest::new(Arc::clone(&string_view_values))
-            .with_nullable(false)
-            .run();
-        RoundTripTest::new(Arc::clone(&binary_view_values))
-            .with_nullable(false)
-            .run();
-    }
-
-    fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
-        let decimal_field = Field::new("a", DataType::Decimal128(precision, scale), false);
-        let schema = Schema::new(vec![decimal_field]);
-
-        let decimal_values = vec![10_000, 50_000, 0, -100]
-            .into_iter()
-            .map(Some)
-            .collect::<Decimal128Array>()
-            .with_precision_and_scale(precision, scale)
-            .unwrap();
-
-        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(decimal_values)]).unwrap()
-    }
-
-    #[test]
-    fn arrow_writer_decimal() {
-        // int32 to store the decimal value
-        let batch_int32_decimal = get_decimal_batch(5, 2);
-        roundtrip(batch_int32_decimal, Some(SMALL_SIZE / 2));
-        // int64 to store the decimal value
-        let batch_int64_decimal = get_decimal_batch(12, 2);
-        roundtrip(batch_int64_decimal, Some(SMALL_SIZE / 2));
-        // fixed_length_byte_array to store the decimal value
-        let batch_fixed_len_byte_array_decimal = get_decimal_batch(30, 2);
-        roundtrip(batch_fixed_len_byte_array_decimal, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -2586,45 +2463,6 @@ mod tests {
         );
     }
 
-    #[test]
-    #[cfg_attr(miri, ignore)] // inline assembly is not supported
-    fn arrow_writer_float_nans() {
-        let f16_field = Field::new("a", DataType::Float16, false);
-        let f32_field = Field::new("b", DataType::Float32, false);
-        let f64_field = Field::new("c", DataType::Float64, false);
-        let schema = Schema::new(vec![f16_field, f32_field, f64_field]);
-
-        let f16_values = (0..MEDIUM_SIZE)
-            .map(|i| {
-                Some(if i % 2 == 0 {
-                    f16::NAN
-                } else {
-                    f16::from_f32(i as f32)
-                })
-            })
-            .collect::<Float16Array>();
-
-        let f32_values = (0..MEDIUM_SIZE)
-            .map(|i| Some(if i % 2 == 0 { f32::NAN } else { i as f32 }))
-            .collect::<Float32Array>();
-
-        let f64_values = (0..MEDIUM_SIZE)
-            .map(|i| Some(if i % 2 == 0 { f64::NAN } else { i as f64 }))
-            .collect::<Float64Array>();
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![
-                Arc::new(f16_values),
-                Arc::new(f32_values),
-                Arc::new(f64_values),
-            ],
-        )
-        .unwrap();
-
-        roundtrip(batch, None);
-    }
-
     const MEDIUM_SIZE: usize = 63;
 
     fn check_bloom_filter<T: AsBytes>(
@@ -2687,28 +2525,6 @@ mod tests {
                 );
             });
         });
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn all_null_primitive_single_column() {
-        let values = Arc::new(Int32Array::from(vec![None; SMALL_SIZE]));
-        RoundTripTest::new(values).run();
-    }
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn null_single_column() {
-        let values = Arc::new(NullArray::new(SMALL_SIZE));
-        RoundTripTest::new(values).run();
-        // null arrays are always nullable, a test with non-nullable nulls fails
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn bool_single_column() {
-        required_and_optional::<BooleanArray, _>(
-            [true, false].iter().cycle().copied().take(SMALL_SIZE),
-        );
     }
 
     #[test]
@@ -2864,23 +2680,6 @@ mod tests {
         assert_eq!(float_idx.max_value(2), Some(&0.0));
         assert_eq!(float_idx.min_value(3), Some(&-1.0));
         assert_eq!(float_idx.max_value(3), Some(&1.0));
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn interval_year_month_single_column() {
-        required_and_optional::<IntervalYearMonthArray, _>(0..SMALL_SIZE as i32);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn interval_day_time_single_column() {
-        required_and_optional::<IntervalDayTimeArray, _>(vec![
-            IntervalDayTime::new(0, 1),
-            IntervalDayTime::new(0, 3),
-            IntervalDayTime::new(3, -2),
-            IntervalDayTime::new(-200, 4),
-        ]);
     }
 
     #[test]
