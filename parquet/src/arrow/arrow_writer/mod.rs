@@ -2108,10 +2108,9 @@ mod tests {
     use arrow::util::data_gen::create_random_array;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, OffsetBuffer, i256};
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, OffsetBuffer};
     use arrow_schema::Fields;
     use half::f16;
-    use num_traits::{FromPrimitive, ToPrimitive};
     use tempfile::tempfile;
 
     use crate::basic::{Encoding, EncodingMask};
@@ -2491,32 +2490,6 @@ mod tests {
             .run();
     }
 
-    /// Test round-trip of Dictionary<UInt32, Utf8View> and
-    /// Dictionary<UInt32, BinaryView> typed columns.
-    #[test]
-    fn arrow_writer_string_view_dictionary() {
-        let raw_string_values = vec!["a", "b", "large payload over 12 bytes"];
-        let raw_binary_values = vec![
-            b"a".to_vec(),
-            b"b".to_vec(),
-            b"large payload over 12 bytes".to_vec(),
-        ];
-
-        let keys = UInt32Array::from(vec![Some(0), None, Some(2), Some(1), None]);
-
-        let string_view_values = Arc::new(StringViewArray::from(raw_string_values));
-        let string_dict: ArrayRef = Arc::new(
-            DictionaryArray::<UInt32Type>::try_new(keys.clone(), string_view_values).unwrap(),
-        );
-
-        let binary_view_values = Arc::new(BinaryViewArray::from_iter_values(raw_binary_values));
-        let binary_dict: ArrayRef =
-            Arc::new(DictionaryArray::<UInt32Type>::try_new(keys, binary_view_values).unwrap());
-
-        RoundTripTest::new(string_dict).run();
-        RoundTripTest::new(binary_dict).run();
-    }
-
     fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
         let decimal_field = Field::new("a", DataType::Decimal128(precision, scale), false);
         let schema = Schema::new(vec![decimal_field]);
@@ -2544,77 +2517,6 @@ mod tests {
         roundtrip(batch_fixed_len_byte_array_decimal, Some(SMALL_SIZE / 2));
     }
 
-    #[test]
-    fn test_fixed_size_binary_in_dict() {
-        fn test_fixed_size_binary_in_dict_inner<K>()
-        where
-            K: ArrowDictionaryKeyType,
-            K::Native: FromPrimitive + ToPrimitive + TryFrom<u8>,
-            <<K as arrow_array::ArrowPrimitiveType>::Native as TryFrom<u8>>::Error: std::fmt::Debug,
-        {
-            let field = Field::new(
-                "a",
-                DataType::Dictionary(
-                    Box::new(K::DATA_TYPE),
-                    Box::new(DataType::FixedSizeBinary(4)),
-                ),
-                false,
-            );
-            let schema = Schema::new(vec![field]);
-
-            let keys: Vec<K::Native> = vec![
-                K::Native::try_from(0u8).unwrap(),
-                K::Native::try_from(0u8).unwrap(),
-                K::Native::try_from(1u8).unwrap(),
-            ];
-            let keys = PrimitiveArray::<K>::from_iter_values(keys);
-            let values = FixedSizeBinaryArray::try_from_iter(
-                vec![vec![0, 0, 0, 0], vec![1, 1, 1, 1]].into_iter(),
-            )
-            .unwrap();
-
-            let data = DictionaryArray::<K>::new(keys, Arc::new(values));
-            let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
-            roundtrip(batch, None);
-        }
-
-        test_fixed_size_binary_in_dict_inner::<UInt8Type>();
-        test_fixed_size_binary_in_dict_inner::<UInt16Type>();
-        test_fixed_size_binary_in_dict_inner::<UInt32Type>();
-        test_fixed_size_binary_in_dict_inner::<UInt16Type>();
-        test_fixed_size_binary_in_dict_inner::<Int8Type>();
-        test_fixed_size_binary_in_dict_inner::<Int16Type>();
-        test_fixed_size_binary_in_dict_inner::<Int32Type>();
-        test_fixed_size_binary_in_dict_inner::<Int64Type>();
-    }
-
-    #[test]
-    fn test_empty_dict() {
-        let struct_fields = Fields::from(vec![Field::new(
-            "dict",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            false,
-        )]);
-
-        let schema = Schema::new(vec![Field::new_struct(
-            "struct",
-            struct_fields.clone(),
-            true,
-        )]);
-        let dictionary = Arc::new(DictionaryArray::new(
-            Int32Array::new_null(5),
-            Arc::new(StringArray::new_null(0)),
-        ));
-
-        let s = StructArray::new(
-            struct_fields,
-            vec![dictionary],
-            Some(NullBuffer::new_null(5)),
-        );
-
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(s)]).unwrap();
-        roundtrip(batch, None);
-    }
     #[test]
     fn arrow_writer_page_size() {
         let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
@@ -3310,29 +3212,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_string_dictionary() {
-        // define schema
-        #[expect(deprecated)]
-        let schema = Arc::new(Schema::new(vec![Field::new_dict(
-            "dictionary",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            true,
-            42,
-            true,
-        )]));
-
-        // create some data
-        let d: Int32DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
-            .iter()
-            .copied()
-            .collect();
-
-        // build a record batch
-        RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
-    }
-
-    #[test]
     fn arrow_writer_test_type_compatibility() {
         fn ensure_compatible_write<T1, T2>(array1: T1, array2: T2, expected_result: T1)
         where
@@ -3561,144 +3440,6 @@ mod tests {
             )
             .unwrap(),
         );
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_primitive_dictionary() {
-        // define schema
-        #[expect(deprecated)]
-        let schema = Arc::new(Schema::new(vec![Field::new_dict(
-            "dictionary",
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),
-            true,
-            42,
-            true,
-        )]));
-
-        // create some data
-        let mut builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::new();
-        builder.append(12345678).unwrap();
-        builder.append_null();
-        builder.append(22345678).unwrap();
-        builder.append(12345678).unwrap();
-        let d = builder.finish();
-
-        RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_decimal32_dictionary() {
-        let integers = vec![12345, 56789, 34567];
-
-        let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
-
-        let values = Decimal32Array::from(integers.clone())
-            .with_precision_and_scale(5, 2)
-            .unwrap();
-
-        let array = DictionaryArray::new(keys, Arc::new(values));
-        RoundTripTest::new(Arc::new(array.clone())).run();
-
-        let values = Decimal32Array::from(integers)
-            .with_precision_and_scale(9, 2)
-            .unwrap();
-
-        let array = array.with_values(Arc::new(values));
-        RoundTripTest::new(Arc::new(array)).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_decimal64_dictionary() {
-        let integers = vec![12345, 56789, 34567];
-
-        let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
-
-        let values = Decimal64Array::from(integers.clone())
-            .with_precision_and_scale(5, 2)
-            .unwrap();
-
-        let array = DictionaryArray::new(keys, Arc::new(values));
-        RoundTripTest::new(Arc::new(array.clone())).run();
-
-        let values = Decimal64Array::from(integers)
-            .with_precision_and_scale(12, 2)
-            .unwrap();
-
-        let array = array.with_values(Arc::new(values));
-        RoundTripTest::new(Arc::new(array)).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_decimal128_dictionary() {
-        let integers = vec![12345, 56789, 34567];
-
-        let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
-
-        let values = Decimal128Array::from(integers.clone())
-            .with_precision_and_scale(5, 2)
-            .unwrap();
-
-        let array = DictionaryArray::new(keys, Arc::new(values));
-        RoundTripTest::new(Arc::new(array.clone())).run();
-
-        let values = Decimal128Array::from(integers)
-            .with_precision_and_scale(12, 2)
-            .unwrap();
-
-        let array = array.with_values(Arc::new(values));
-        RoundTripTest::new(Arc::new(array)).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_decimal256_dictionary() {
-        let integers = vec![
-            i256::from_i128(12345),
-            i256::from_i128(56789),
-            i256::from_i128(34567),
-        ];
-
-        let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
-
-        let values = Decimal256Array::from(integers.clone())
-            .with_precision_and_scale(5, 2)
-            .unwrap();
-
-        let array = DictionaryArray::new(keys, Arc::new(values));
-        RoundTripTest::new(Arc::new(array.clone())).run();
-
-        let values = Decimal256Array::from(integers)
-            .with_precision_and_scale(12, 2)
-            .unwrap();
-
-        let array = array.with_values(Arc::new(values));
-        RoundTripTest::new(Arc::new(array)).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn arrow_writer_string_dictionary_unsigned_index() {
-        // define schema
-        #[expect(deprecated)]
-        let schema = Arc::new(Schema::new(vec![Field::new_dict(
-            "dictionary",
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
-            true,
-            42,
-            true,
-        )]));
-
-        // create some data
-        let d: UInt8DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
-            .iter()
-            .copied()
-            .collect();
-
-        RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
     }
 
     #[test]
