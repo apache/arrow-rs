@@ -17,6 +17,7 @@
 
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
+use crate::column::writer::{compare_greater_byte_array_decimals, is_decimal_descr};
 use crate::column::writer::encoder::{
     ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
 };
@@ -432,6 +433,7 @@ pub struct ByteArrayEncoder {
     bloom_filter: Option<Sbbf>,
     bloom_filter_target_fpp: f64,
     geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
+    is_decimal: bool,
 }
 
 impl ColumnValueEncoder for ByteArrayEncoder {
@@ -461,6 +463,8 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 
+        let is_decimal = is_decimal_descr(descr.get_basic_info());
+
         Ok(Self {
             fallback,
             statistics_enabled,
@@ -470,6 +474,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             min_value: None,
             max_value: None,
             geo_stats_accumulator,
+            is_decimal,
         })
     }
 
@@ -669,18 +674,28 @@ where
     if encoder.statistics_enabled != EnabledStatistics::None {
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
             update_geo_stats_accumulator(accumulator.as_mut(), values, indices.clone());
-        } else if let Some((min, max)) = compute_min_max(values, indices.clone()) {
+        } else if let Some((min, max)) =
+            compute_min_max(values, indices.clone(), encoder.is_decimal)
+        {
             // Compare before copying: `write_gather` runs once per
             // mini-batch, and a byte-budgeted mini-batch of large values can
             // hold a single value, so an unconditional copy here would
             // duplicate every value once for `min` and once for `max`.
             let min = min.as_ref();
-            if encoder.min_value.as_ref().is_none_or(|m| m.data() > min) {
+            if encoder
+                .min_value
+                .as_ref()
+                .is_none_or(|m| is_greater(encoder.is_decimal, m.data(), min))
+            {
                 encoder.min_value = Some(min.to_vec().into());
             }
 
             let max = max.as_ref();
-            if encoder.max_value.as_ref().is_none_or(|m| m.data() < max) {
+            if encoder
+                .max_value
+                .as_ref()
+                .is_none_or(|m| is_greater(encoder.is_decimal, max, m.data()))
+            {
                 encoder.max_value = Some(max.to_vec().into());
             }
         }
@@ -800,12 +815,23 @@ fn count_within_budget_offsets<T: ByteArrayType>(
     n
 }
 
+/// Returns `true` if `a > b`.
+#[inline]
+fn is_greater(is_decimal: bool, a: &[u8], b: &[u8]) -> bool {
+    if is_decimal {
+        compare_greater_byte_array_decimals(a, b)
+    } else {
+        a > b
+    }
+}
+
 /// Computes the min and max for the provided array and indices
 ///
 /// This is a free function so it can be used with `downcast_op!`
 fn compute_min_max<T>(
     array: T,
     mut valid: impl Iterator<Item = usize>,
+    is_decimal: bool,
 ) -> Option<(T::Item, T::Item)>
 where
     T: ArrayAccessor,
@@ -818,8 +844,12 @@ where
     let mut max = first_val;
     for idx in valid {
         let val = array.value(idx);
-        min = min.min(val);
-        max = max.max(val);
+        if is_greater(is_decimal, min.as_ref(), val.as_ref()) {
+            min = val;
+        }
+        if is_greater(is_decimal, val.as_ref(), max.as_ref()) {
+            max = val;
+        }
     }
     Some((min, max))
 }

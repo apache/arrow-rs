@@ -6565,4 +6565,102 @@ mod tests {
         );
         assert_eq!(parquet_schema.column(1).path().string(), "row.b");
     }
+
+    /// Regression test for https://github.com/apache/arrow-rs/issues/11073
+    ///
+    /// This checks that the `ArrowColumnWriter` path produces the same min/max
+    /// statistics as writing the column directly with the low-level
+    /// `SerializedFileWriter` API, for both `BinaryArray` (the buggy case)
+    /// and `FixedSizeBinaryArray` (which already worked correctly).
+    #[test]
+    fn test_decimal_byte_array_statistics_signed_comparison() {
+        use crate::basic::{LogicalType, Repetition, Type as PhysicalType};
+        use crate::data_type::{ByteArray, ByteArrayType};
+        use crate::schema::types::Type as SchemaType;
+
+        // 1-byte two's-complement decimal values: -1, 0, 1
+        const VALUES: [&[u8]; 3] = [&[0xffu8], &[0x00], &[0x01]];
+
+        fn new_file(physical: PhysicalType) -> SerializedFileWriter<Vec<u8>> {
+            let mut field = SchemaType::primitive_type_builder("value", physical)
+                .with_repetition(Repetition::REQUIRED)
+                .with_logical_type(Some(LogicalType::decimal(0, 2)))
+                .with_precision(2)
+                .with_scale(0);
+            if physical == PhysicalType::FIXED_LEN_BYTE_ARRAY {
+                field = field.with_length(1);
+            }
+            let root = SchemaType::group_type_builder("root")
+                .with_fields(vec![Arc::new(field.build().unwrap())])
+                .build()
+                .unwrap();
+            SerializedFileWriter::new(Vec::new(), Arc::new(root), Default::default()).unwrap()
+        }
+
+        fn read_minmax(file: Vec<u8>) -> (i8, i8) {
+            let reader = SerializedFileReader::new(Bytes::from(file)).unwrap();
+            let metadata = reader.metadata();
+            assert_eq!(metadata.file_metadata().num_rows(), 3);
+            let stats = metadata
+                .row_group(0)
+                .column(0)
+                .statistics()
+                .expect("missing statistics");
+            (
+                stats.min_bytes_opt().unwrap()[0] as i8,
+                stats.max_bytes_opt().unwrap()[0] as i8,
+            )
+        }
+
+        fn direct_parquet() -> Vec<u8> {
+            let mut file = new_file(PhysicalType::BYTE_ARRAY);
+            let mut group = file.next_row_group().unwrap();
+            let mut column = group.next_column().unwrap().unwrap();
+            let values = VALUES
+                .iter()
+                .map(|v| ByteArray::from(v.to_vec()))
+                .collect::<Vec<_>>();
+            column
+                .typed::<ByteArrayType>()
+                .write_batch(&values, None, None)
+                .unwrap();
+            column.close().unwrap();
+            group.close().unwrap();
+            file.into_inner().unwrap()
+        }
+
+        fn arrow_bounds(mut file: SerializedFileWriter<Vec<u8>>, array: ArrayRef) -> Vec<u8> {
+            let field = Field::new("value", array.data_type().clone(), false);
+            let schema = Arc::new(Schema::new(vec![field.clone()]));
+            let factory = ArrowRowGroupWriterFactory::new(&file, schema);
+            let mut writer: ArrowColumnWriter = factory.create_column_writers(0).unwrap().remove(0);
+            let leaf = compute_leaves(&field, &array).unwrap().remove(0);
+            writer.write(&leaf).unwrap();
+            let mut group = file.next_row_group().unwrap();
+            writer.close().unwrap().append_to_row_group(&mut group).unwrap();
+            group.close().unwrap();
+            file.into_inner().unwrap()
+        }
+
+        fn arrow_binary() -> Vec<u8> {
+            let file = new_file(PhysicalType::BYTE_ARRAY);
+            let array: ArrayRef = Arc::new(BinaryArray::from_vec(VALUES.to_vec()));
+            arrow_bounds(file, array)
+        }
+
+        fn arrow_fixed_size_binary() -> Vec<u8> {
+            let file = new_file(PhysicalType::FIXED_LEN_BYTE_ARRAY);
+            let array: ArrayRef =
+                Arc::new(FixedSizeBinaryArray::try_from_iter(VALUES.into_iter()).unwrap());
+            arrow_bounds(file, array)
+        }
+
+        let direct = read_minmax(direct_parquet());
+        let fixed = read_minmax(arrow_fixed_size_binary());
+        let binary = read_minmax(arrow_binary());
+
+        assert_eq!(direct, (-1, 1), "incorrect direct Parquet stats");
+        assert_eq!(fixed, (-1, 1), "incorrect Arrow FixedSizeBinaryArray stats");
+        assert_eq!(binary, (-1, 1), "incorrect Arrow BinaryArray stats");
+    }
 }

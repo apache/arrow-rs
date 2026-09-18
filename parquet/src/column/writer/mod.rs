@@ -1352,14 +1352,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             // from that of FIXED_LEN_BYTE_ARRAY sort order.
             // So truncation of those types could lead to inaccurate min/max statistics
             Type::FIXED_LEN_BYTE_ARRAY
-                if !matches!(
-                    self.descr.logical_type_ref(),
-                    Some(&LogicalType::Decimal { .. } | &LogicalType::Float16)
-                ) =>
+                if !is_decimal_descr(self.descr.get_basic_info())
+                    && !matches!(self.descr.logical_type_ref(), Some(&LogicalType::Float16)) =>
             {
                 true
             }
-            Type::BYTE_ARRAY => true,
+            // As with FIXED_LEN_BYTE_ARRAY, do not truncate Decimal values
+            Type::BYTE_ARRAY if !is_decimal_descr(self.descr.get_basic_info()) => true,
             // Truncation only applies for fba/binary physical types
             _ => false,
         }
@@ -1435,7 +1434,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     fn truncate_statistics(&self, statistics: Statistics) -> Statistics {
         let backwards_compatible_min_max = self.descr.sort_order().is_signed();
         match statistics {
-            Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
+            Statistics::ByteArray(stats)
+                if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
+            {
                 let (min, did_truncate_min) = self.truncate_min_value(
                     self.props.statistics_truncate_length(),
                     stats.min_bytes_opt().unwrap(),
@@ -1942,13 +1943,7 @@ fn compare_greater<T: ParquetValueType>(basic_type_info: &BasicTypeInfo, a: &T, 
         {
             return compare_greater_f16(a.as_bytes(), b.as_bytes());
         }
-        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY
-            if matches!(basic_type_info.converted_type(), ConvertedType::DECIMAL)
-                || matches!(
-                    basic_type_info.logical_type_ref(),
-                    Some(LogicalType::Decimal(_))
-                ) =>
-        {
+        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY if is_decimal_descr(basic_type_info) => {
             return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
         }
 
@@ -2001,8 +1996,17 @@ fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
     a.total_cmp(&b) == Ordering::Greater
 }
 
+/// Returns `true` if the column described by `basic_type_info` is a Decimal column
+pub(crate) fn is_decimal_descr(basic_type_info: &BasicTypeInfo) -> bool {
+    basic_type_info.converted_type() == ConvertedType::DECIMAL
+        || matches!(
+            basic_type_info.logical_type_ref(),
+            Some(LogicalType::Decimal(_))
+        )
+}
+
 /// Signed comparison of bytes arrays
-fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     let a_length = a.len();
     let b_length = b.len();
 
@@ -4565,6 +4569,53 @@ mod tests {
             assert_eq!(expected_value, stats_max_bytes);
         } else {
             panic!("expecting Statistics::FixedLenByteArray");
+        }
+    }
+
+    #[test]
+    fn test_decimal_byte_array_min_max_no_statistics_truncation() {
+        // See https://github.com/apache/arrow-rs/issues/11073
+        let page_writer = get_test_page_writer();
+
+        // Truncate at 1 byte -- far shorter than either encoded value below.
+        let builder = WriterProperties::builder().set_statistics_truncate_length(Some(1));
+        let props = Arc::new(builder.build());
+        let mut writer =
+            get_test_decimals_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+
+        // Two's-complement, big-endian encodings of 200 and -200 (2 bytes each).
+        // Naive unsigned byte-wise truncation to 1 byte followed by an unsigned
+        // increment of the max value would corrupt these:
+        //   max: truncate([0x00, 0xC8], 1) -> [0x00], increment -> [0x01],
+        //        which decodes to 1 -- far less than the true max of 200.
+        let positive_200 = vec![0x00u8, 0xC8u8];
+        let negative_200 = vec![0xFFu8, 0x38u8];
+
+        let data = vec![
+            ByteArray::from(positive_200.clone()),
+            ByteArray::from(negative_200.clone()),
+        ];
+        writer.write_batch(&data, None, None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+        assert_eq!(2, r.rows_written);
+
+        let stats = r.metadata.statistics().expect("statistics");
+        if let Statistics::ByteArray(stats) = stats {
+            // Decimal columns must never be truncated, regardless of
+            // `statistics_truncate_length`.
+            assert!(stats.min_is_exact());
+            assert!(stats.max_is_exact());
+
+            let min_value = stats.min_bytes_opt().unwrap();
+            let max_value = stats.max_bytes_opt().unwrap();
+
+            // Correct signed (two's-complement) ordering: -200 < 200.
+            assert_eq!(negative_200, min_value);
+            assert_eq!(positive_200, max_value);
+        } else {
+            panic!("expecting Statistics::ByteArray");
         }
     }
 
