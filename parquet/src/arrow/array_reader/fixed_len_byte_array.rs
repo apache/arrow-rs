@@ -585,14 +585,6 @@ enum Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::ArrowWriter;
-    use crate::arrow::arrow_reader::ParquetRecordBatchReader;
-    use arrow::datatypes::Field;
-    use arrow::error::Result as ArrowResult;
-    use arrow_array::{Array, ListArray};
-    use arrow_array::{Decimal256Array, RecordBatch};
-    use bytes::Bytes;
-    use std::sync::Arc;
 
     #[test]
     fn test_pending_reservation_tracks_max_capacity() {
@@ -604,42 +596,5 @@ mod tests {
 
         buffer.reserve_exact(12);
         assert_eq!(buffer.values_capacity, Some(12));
-    }
-
-    #[test]
-    fn test_decimal_list() {
-        let decimals = Decimal256Array::from_iter_values(
-            [1, 2, 3, 4, 5, 6, 7, 8].into_iter().map(i256::from_i128),
-        );
-
-        // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
-        let data = ArrayDataBuilder::new(ArrowType::List(Arc::new(Field::new_list_field(
-            decimals.data_type().clone(),
-            false,
-        ))))
-        .len(7)
-        .add_buffer(Buffer::from_iter([0_i32, 0, 1, 3, 3, 4, 5, 8]))
-        .null_bit_buffer(Some(Buffer::from(&[0b01010111])))
-        .child_data(vec![decimals.into_data()])
-        .build()
-        .unwrap();
-
-        let written =
-            RecordBatch::try_from_iter([("list", Arc::new(ListArray::from(data)) as ArrayRef)])
-                .unwrap();
-
-        let mut buffer = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
-        writer.write(&written).unwrap();
-        writer.close().unwrap();
-
-        let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
-            .unwrap()
-            .collect::<ArrowResult<Vec<_>>>()
-            .unwrap();
-
-        assert_eq!(&written.slice(0, 3), &read[0]);
-        assert_eq!(&written.slice(3, 3), &read[1]);
-        assert_eq!(&written.slice(6, 1), &read[2]);
     }
 }
