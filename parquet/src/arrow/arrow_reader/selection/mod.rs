@@ -701,12 +701,15 @@ impl RowSelection {
     }
 }
 
-/// Returns the minimum normalized run count for which Auto prefers a mask.
+/// Returns the minimum normalized run count for which the Auto selection policy
+/// would prefer a mask to RLE.
 ///
-/// This matches `total_rows < run_count.saturating_mul(threshold)`. For totals
-/// below `usize::MAX`, the first matching run count is
-/// `floor(total_rows / threshold) + 1`. `None` means no attainable run count
-/// can select a mask for a non-empty selection.
+/// Auto prefers masks when the average run length is strictly below `threshold`.
+/// For positive thresholds and totals below `usize::MAX`, the first qualifying
+/// run count is `floor(total_rows / threshold) + 1`.
+///
+/// Returns `None` when selectors are always preferred for a non-empty selection.
+/// Callers handle empty selections separately.
 #[inline]
 fn auto_min_mask_runs(total_rows: usize, threshold: usize) -> Option<usize> {
     // The strict comparison against a saturated product cannot succeed when
