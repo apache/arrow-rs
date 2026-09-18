@@ -496,12 +496,11 @@ impl ParquetMetaDataReader {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<ArrayRef>> {
-        let Some((start, end)) = dictionary_page_byte_range(metadata, row_group_idx, column_idx)?
-        else {
+        let Some(range) = dictionary_page_byte_range(metadata, row_group_idx, column_idx)? else {
             return Ok(None);
         };
-        let length = usize::try_from(end - start)?;
-        let buffer = reader.get_bytes(start, length)?;
+        let length = usize::try_from(range.end - range.start)?;
+        let buffer = reader.get_bytes(range.start, length)?;
         decode_dictionary_page(buffer, metadata, row_group_idx, column_idx).map(Some)
     }
 
@@ -513,11 +512,10 @@ impl ParquetMetaDataReader {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<ArrayRef>> {
-        let Some((start, end)) = dictionary_page_byte_range(metadata, row_group_idx, column_idx)?
-        else {
+        let Some(range) = dictionary_page_byte_range(metadata, row_group_idx, column_idx)? else {
             return Ok(None);
         };
-        let buffer = fetch.fetch(start..end).await?;
+        let buffer = fetch.fetch(range).await?;
         decode_dictionary_page(buffer, metadata, row_group_idx, column_idx).map(Some)
     }
 
@@ -899,7 +897,7 @@ fn dictionary_page_byte_range(
     metadata: &ParquetMetaData,
     row_group_idx: usize,
     column_idx: usize,
-) -> Result<Option<(u64, u64)>> {
+) -> Result<Option<Range<u64>>> {
     let column_metadata = metadata.row_group(row_group_idx).column(column_idx);
     let column_descriptor = column_metadata.column_descr();
 
@@ -922,7 +920,7 @@ fn dictionary_page_byte_range(
         ));
     }
 
-    Ok(Some((start, end)))
+    Ok(Some(start..end))
 }
 
 #[cfg(test)]

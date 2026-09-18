@@ -690,7 +690,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// the dictionary as an exhaustive set of the column's values) should
     /// check
     /// [`crate::file::metadata::ColumnChunkMetaData::page_encoding_stats_mask`].
-    pub async fn get_row_group_column_dictionary(
+    pub async fn get_column_chunk_dictionary(
         &mut self,
         row_group_idx: usize,
         column_idx: usize,
@@ -1157,7 +1157,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_row_group_column_dictionary() {
+    async fn test_get_column_chunk_dictionary() {
         let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
         let values: Vec<&str> = ["alpha", "beta", "gamma"]
             .iter()
@@ -1185,7 +1185,7 @@ mod tests {
             .unwrap();
 
         let dictionary = builder
-            .get_row_group_column_dictionary(0, 0)
+            .get_column_chunk_dictionary(0, 0)
             .await
             .unwrap()
             .unwrap();
@@ -1194,8 +1194,13 @@ mod tests {
         assert_eq!(dictionary_values, vec!["alpha", "beta", "gamma"]);
     }
 
+    // This test demonstrates row group pruning using dictionary pages,
+    // verifying that data pages of skipped row groups are not read
     #[tokio::test]
     async fn test_dictionary_selects_row_groups_without_reading_skipped_data() {
+        // Write two row groups, each dictionary-encoded and containing a single
+        // distinct string repeated 30 times: row group 0 is all "skip", row
+        // group 1 is all "target".
         let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
         let row_group_values = ["skip", "target"];
         let props = WriterProperties::builder()
@@ -1214,6 +1219,8 @@ mod tests {
         }
 
         let async_reader = TestReader::new(Bytes::from(buf));
+        // `requests` records the byte ranges fetched from the underlying reader,
+        // which we later use to check that we read only the needed page
         let requests = async_reader.requests.clone();
         let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
             .await
@@ -1221,6 +1228,8 @@ mod tests {
         let metadata = builder.metadata().clone();
         assert_eq!(metadata.num_row_groups(), 2);
 
+        // For each row group, fetch and decode just the dictionary page
+        // to decide whether to read the whole row group
         let mut selected_row_groups = Vec::new();
         let mut dictionary_ranges = Vec::new();
         for row_group_idx in 0..metadata.num_row_groups() {
@@ -1236,7 +1245,7 @@ mod tests {
             dictionary_ranges.push(dictionary_start..data_start);
 
             let dictionary = builder
-                .get_row_group_column_dictionary(row_group_idx, 0)
+                .get_column_chunk_dictionary(row_group_idx, 0)
                 .await
                 .unwrap()
                 .unwrap();
@@ -1247,6 +1256,7 @@ mod tests {
         }
         assert_eq!(selected_row_groups, vec![1]);
 
+        // Read the filtered row group and verify the values
         let batches: Vec<_> = builder
             .with_row_groups(selected_row_groups)
             .build()
@@ -1260,6 +1270,8 @@ mod tests {
             .collect();
         assert_eq!(values, vec![Some("target"); 30]);
 
+        // Finally, verify none of the requests overlapped the data pages
+        // of the skipped row group
         let skipped_column = metadata.row_group(0).column(0);
         let (skipped_start, skipped_len) = skipped_column.byte_range();
         let skipped_data_range =
