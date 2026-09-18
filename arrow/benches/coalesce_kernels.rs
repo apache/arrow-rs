@@ -124,7 +124,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
 
     let single_fsl4_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 4),
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 4),
         true,
     )]));
 
@@ -464,7 +464,7 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
 
     let single_fsl4_schema = SchemaRef::new(Schema::new(vec![Field::new(
         "value",
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 4),
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 4),
         true,
     )]));
 
