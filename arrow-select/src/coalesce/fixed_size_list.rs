@@ -19,7 +19,7 @@ use super::InProgressArray;
 use crate::concat::concat;
 use arrow_array::cast::AsArray;
 use arrow_array::{new_empty_array, Array, ArrayRef, FixedSizeListArray};
-use arrow_buffer::NullBufferBuilder;
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBuffer};
 use arrow_schema::{ArrowError, Field};
 use std::sync::Arc;
 
@@ -27,13 +27,21 @@ use std::sync::Arc;
 ///
 /// Buffers Arc-cloned child value slices per `copy_rows` call and concatenates
 /// them once at `finish`, avoiding per-row child array reconstruction.
+///
+/// Null bits are accumulated as `BooleanBuffer` slices (zero extra bit-counting)
+/// and merged into a single `NullBuffer` only at `finish`, matching the strategy
+/// used by `concat` internally.
 #[derive(Debug)]
 pub(crate) struct InProgressFixedSizeListArray {
     source: Option<ArrayRef>,
     list_size: i32,
     batch_size: usize,
     field: Arc<Field>,
-    nulls: NullBufferBuilder,
+    /// Null-bit slices collected per `copy_rows` call.
+    /// `None` means all rows in that slice are valid.
+    /// Using `BooleanBuffer` (not `NullBuffer`) avoids `count_set_bits` on every slice.
+    null_slices: Vec<(Option<BooleanBuffer>, usize)>,
+    has_nulls: bool,
     value_slices: Vec<ArrayRef>,
     rows: usize,
 }
@@ -45,7 +53,8 @@ impl InProgressFixedSizeListArray {
             list_size,
             batch_size,
             field,
-            nulls: NullBufferBuilder::new(batch_size),
+            null_slices: Vec::new(),
+            has_nulls: false,
             value_slices: Vec::new(),
             rows: 0,
         }
@@ -71,19 +80,39 @@ impl InProgressArray for InProgressFixedSizeListArray {
         let child_slice = fsl.values().slice(child_start, len * list_size);
         self.value_slices.push(child_slice);
 
-        if let Some(nulls) = fsl.nulls() {
-            self.nulls.append_buffer(&nulls.slice(offset, len));
+        // Slice the BooleanBuffer directly (no count_set_bits) and defer null
+        // buffer construction to finish(). null_count() on the outer FSL is O(1).
+        let null_slice = if fsl.null_count() > 0 {
+            let bool_buf = fsl.nulls().unwrap().inner().slice(fsl.offset() + offset, len);
+            self.has_nulls = true;
+            Some(bool_buf)
         } else {
-            self.nulls.append_n_non_nulls(len);
-        }
+            None
+        };
+        self.null_slices.push((null_slice, len));
         self.rows += len;
         Ok(())
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        let nulls = self.nulls.finish();
-        self.nulls = NullBufferBuilder::new(self.batch_size);
         let rows = std::mem::take(&mut self.rows);
+
+        // Build null buffer from deferred BooleanBuffer slices — one count_set_bits
+        // call total (inside NullBuffer::new), matching what concat does internally.
+        let nulls = if self.has_nulls {
+            let mut builder = BooleanBufferBuilder::new(rows);
+            for (null_slice, len) in &self.null_slices {
+                match null_slice {
+                    Some(buf) => builder.append_buffer(buf),
+                    None => builder.append_n(*len, true),
+                }
+            }
+            Some(NullBuffer::new(builder.finish()))
+        } else {
+            None
+        };
+        self.null_slices.clear();
+        self.has_nulls = false;
 
         let values = if rows == 0 {
             new_empty_array(self.field.data_type())
@@ -102,12 +131,10 @@ impl InProgressArray for InProgressFixedSizeListArray {
     }
 
     fn size(&self) -> usize {
-        self.nulls.allocated_size()
-            + self
-                .value_slices
-                .iter()
-                .map(|slice| slice.get_array_memory_size())
-                .sum::<usize>()
+        self.value_slices
+            .iter()
+            .map(|slice| slice.get_array_memory_size())
+            .sum::<usize>()
             + self
                 .source
                 .as_ref()
