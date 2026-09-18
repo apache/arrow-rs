@@ -25,13 +25,8 @@ use std::sync::Arc;
 
 /// Specialized [`InProgressArray`] for [`FixedSizeListArray`].
 ///
-/// Instead of recursively delegating child rows to a child `InProgressArray`
-/// (which has per-call Arc overhead and eager `set_source`/`copy_rows`
-/// management), we buffer O(1) Arc-cloned child value slices and then
-/// `concat` them once at [`Self::finish`].  This matches the strategy used by
-/// [`super::generic::GenericInProgressArray`] for the outer array, applied to
-/// just the flat values child — letting us skip the FSL structure rebuild
-/// overhead and avoid the eager `filter` call in the filter path.
+/// Buffers Arc-cloned child value slices per `copy_rows` call and concatenates
+/// them once at `finish`, avoiding per-row child array reconstruction.
 #[derive(Debug)]
 pub(crate) struct InProgressFixedSizeListArray {
     source: Option<ArrayRef>,
@@ -39,7 +34,6 @@ pub(crate) struct InProgressFixedSizeListArray {
     batch_size: usize,
     field: Arc<Field>,
     nulls: NullBufferBuilder,
-    /// Slices of the child values array, collected O(1) per call.
     value_slices: Vec<ArrayRef>,
     rows: usize,
 }
@@ -63,10 +57,6 @@ impl InProgressArray for InProgressFixedSizeListArray {
         self.source = source;
     }
 
-    /// Copy `len` FSL rows starting at `offset` into the in-progress buffer.
-    ///
-    /// This is O(1): we just push an Arc-cloned slice of the child values
-    /// array — no data is copied until [`Self::finish`].
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
         let source = self.source.as_ref().ok_or_else(|| {
             ArrowError::InvalidArgumentError(
@@ -76,8 +66,9 @@ impl InProgressArray for InProgressFixedSizeListArray {
         let fsl = source.as_fixed_size_list();
         let list_size = self.list_size as usize;
 
-        // Push a slice of the flat child values — O(1) Arc clone, no copy.
-        let child_slice = fsl.values().slice(offset * list_size, len * list_size);
+        // Account for the FSL's own offset into the child values buffer.
+        let child_start = (fsl.offset() + offset) * list_size;
+        let child_slice = fsl.values().slice(child_start, len * list_size);
         self.value_slices.push(child_slice);
 
         if let Some(nulls) = fsl.nulls() {
@@ -92,12 +83,12 @@ impl InProgressArray for InProgressFixedSizeListArray {
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         let nulls = self.nulls.finish();
         self.nulls = NullBufferBuilder::new(self.batch_size);
-        let rows = std::mem::replace(&mut self.rows, 0);
+        let rows = std::mem::take(&mut self.rows);
 
         let values = if rows == 0 {
             new_empty_array(self.field.data_type())
         } else {
-            let refs: Vec<&dyn Array> = self.value_slices.iter().map(|a| a.as_ref()).collect();
+            let refs: Vec<&dyn Array> = self.value_slices.iter().map(|s| s.as_ref()).collect();
             concat(&refs)?
         };
         self.value_slices.clear();
@@ -115,16 +106,19 @@ impl InProgressArray for InProgressFixedSizeListArray {
             + self
                 .value_slices
                 .iter()
-                .map(|a| a.get_array_memory_size())
+                .map(|slice| slice.get_array_memory_size())
                 .sum::<usize>()
-            + self.source.as_ref().map_or(0, |a| a.get_array_memory_size())
+            + self
+                .source
+                .as_ref()
+                .map_or(0, |source| source.get_array_memory_size())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{Array, Int32Array};
+    use arrow_array::Int32Array;
     use arrow_schema::DataType;
 
     fn make_fsl(list_size: i32, values: &[i32]) -> ArrayRef {
@@ -137,45 +131,113 @@ mod tests {
         ))
     }
 
-    fn make_ip(list_size: i32) -> InProgressFixedSizeListArray {
+    fn make_coalescer(list_size: i32) -> InProgressFixedSizeListArray {
         let field = Arc::new(Field::new("item", DataType::Int32, true));
         InProgressFixedSizeListArray::new(list_size, field, 8)
     }
 
-    #[test]
-    fn test_roundtrip() {
-        let src = make_fsl(2, &[1, 2, 3, 4]);
-        let mut ip = make_ip(2);
-        ip.set_source(Some(Arc::clone(&src)));
-        ip.copy_rows(0, 2).unwrap();
-        let result = ip.finish().unwrap();
-        assert_eq!(result.len(), 2);
-        let fsl = result.as_fixed_size_list();
-        let vals = fsl.values().as_any().downcast_ref::<Int32Array>().unwrap();
-        assert_eq!(vals.values(), &[1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn test_offset_copy() {
-        let src = make_fsl(2, &[1, 2, 3, 4, 5, 6]);
-        let mut ip = make_ip(2);
-        ip.set_source(Some(Arc::clone(&src)));
-        ip.copy_rows(1, 2).unwrap();
-        let result = ip.finish().unwrap();
-        assert_eq!(result.len(), 2);
-        let vals = result
+    fn child_values(output: &ArrayRef) -> Vec<i32> {
+        output
             .as_fixed_size_list()
             .values()
             .as_any()
             .downcast_ref::<Int32Array>()
-            .unwrap();
-        assert_eq!(vals.values(), &[3, 4, 5, 6]);
+            .unwrap()
+            .values()
+            .to_vec()
+    }
+
+    #[test]
+    fn test_roundtrip() {
+        let input = make_fsl(2, &[1, 2, 3, 4]);
+        let mut coalescer = make_coalescer(2);
+        coalescer.set_source(Some(Arc::clone(&input)));
+        coalescer.copy_rows(0, 2).unwrap();
+        let output = coalescer.finish().unwrap();
+        assert_eq!(output.len(), 2);
+        assert_eq!(child_values(&output), [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_offset_copy() {
+        let input = make_fsl(2, &[1, 2, 3, 4, 5, 6]);
+        let mut coalescer = make_coalescer(2);
+        coalescer.set_source(Some(Arc::clone(&input)));
+        coalescer.copy_rows(1, 2).unwrap();
+        let output = coalescer.finish().unwrap();
+        assert_eq!(output.len(), 2);
+        assert_eq!(child_values(&output), [3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_sliced_source() {
+        // Sliced source has a non-zero FSL offset; verify child range is correct.
+        let base = make_fsl(2, &[1, 2, 3, 4, 5, 6]);
+        let sliced = base.slice(1, 2); // logical rows: [3,4] and [5,6]
+        let mut coalescer = make_coalescer(2);
+        coalescer.set_source(Some(sliced));
+        coalescer.copy_rows(0, 2).unwrap();
+        let output = coalescer.finish().unwrap();
+        assert_eq!(output.len(), 2);
+        assert_eq!(child_values(&output), [3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_nulls() {
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let nulls = arrow_buffer::NullBuffer::from(vec![true, false, true]);
+        let input = Arc::new(FixedSizeListArray::new(
+            Arc::clone(&field),
+            2,
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+            Some(nulls),
+        ));
+        let mut coalescer = InProgressFixedSizeListArray::new(2, field, 8);
+        coalescer.set_source(Some(input));
+        coalescer.copy_rows(0, 3).unwrap();
+        let output = coalescer.finish().unwrap();
+        assert_eq!(output.len(), 3);
+        assert!(output.as_fixed_size_list().is_valid(0));
+        assert!(output.as_fixed_size_list().is_null(1));
+        assert!(output.as_fixed_size_list().is_valid(2));
+    }
+
+    #[test]
+    fn test_multi_source_coalesce() {
+        let input_a = make_fsl(2, &[1, 2, 3, 4]);
+        let input_b = make_fsl(2, &[5, 6, 7, 8]);
+        let mut coalescer = make_coalescer(2);
+        coalescer.set_source(Some(Arc::clone(&input_a)));
+        coalescer.copy_rows(0, 2).unwrap();
+        coalescer.set_source(Some(Arc::clone(&input_b)));
+        coalescer.copy_rows(0, 2).unwrap();
+        let output = coalescer.finish().unwrap();
+        assert_eq!(output.len(), 4);
+        assert_eq!(child_values(&output), [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn test_finish_reuse() {
+        let input = make_fsl(2, &[1, 2, 3, 4]);
+        let mut coalescer = make_coalescer(2);
+
+        coalescer.set_source(Some(Arc::clone(&input)));
+        coalescer.copy_rows(0, 2).unwrap();
+        let first = coalescer.finish().unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(child_values(&first), [1, 2, 3, 4]);
+
+        coalescer.set_source(Some(Arc::clone(&input)));
+        coalescer.copy_rows(0, 1).unwrap();
+        let second = coalescer.finish().unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(child_values(&second), [1, 2]);
     }
 
     #[test]
     fn test_empty_finish() {
-        let mut ip = make_ip(4);
-        let result = ip.finish().unwrap();
-        assert_eq!(result.len(), 0);
+        let mut coalescer = make_coalescer(4);
+        let output = coalescer.finish().unwrap();
+        assert_eq!(output.len(), 0);
     }
 }
