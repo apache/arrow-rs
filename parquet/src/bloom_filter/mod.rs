@@ -402,7 +402,9 @@ impl Sbbf {
     /// Creates a new [Sbbf] from a raw byte slice.
     pub fn new(bitset: &[u8]) -> Self {
         let data = bitset
-            .chunks_exact(4 * 8)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|chunk| {
                 let mut block = Block::ZERO;
                 let (words, _remainder) = chunk.as_chunks::<4>();
@@ -576,6 +578,26 @@ impl Sbbf {
         self.0.len()
     }
 
+    /// Estimate the false positive probability (FPP) of this filter at its current size.
+    ///
+    /// This is the same estimate [`Self::fold_to_target_fpp`] uses to choose how far to fold.
+    ///
+    /// This lets a caller inspect a filter before folding or writing it, for example to
+    /// discard a filter that already exceeds its target FPP. Returns `1.0` for a filter
+    /// with no blocks.
+    pub fn estimated_fpp(&self) -> f64 {
+        if self.0.is_empty() {
+            return 1.0;
+        }
+        self.average_fill().powi(8)
+    }
+
+    /// Average fraction of bits set per block. The filter must have at least one block.
+    fn average_fill(&self) -> f64 {
+        let total_set_bits: u64 = self.0.iter().map(|b| u64::from(b.count_ones())).sum();
+        total_set_bits as f64 / (self.0.len() as f64 * 256.0)
+    }
+
     /// Fold the bloom filter down to the smallest size that still meets the target FPP
     /// (False Positive Percentage).
     ///
@@ -644,8 +666,7 @@ impl Sbbf {
         }
 
         // Single pass: compute average per-block fill rate.
-        let total_set_bits: u64 = self.0.iter().map(|b| u64::from(b.count_ones())).sum();
-        let avg_fill = total_set_bits as f64 / (len as f64 * 256.0);
+        let avg_fill = self.average_fill();
 
         // Empty filter: can fold all the way down.
         if avg_fill == 0.0 {
@@ -950,6 +971,51 @@ mod tests {
         let mut sbbf = Sbbf::new_with_num_of_bytes(1024); // 32 blocks
         sbbf.fold_to_target_fpp(0.01);
         assert_eq!(sbbf.num_blocks(), 1);
+    }
+
+    #[test]
+    fn test_estimated_fpp_matches_serialized_bitset() {
+        for num_bytes in [BITSET_MIN_LENGTH, 1024, 64 * 1024] {
+            for ndv in [0u64, 1, 10, 100, 1_000, 10_000, 100_000] {
+                let mut sbbf = Sbbf::new_with_num_of_bytes(num_bytes);
+                for i in 0..ndv {
+                    sbbf.insert(&i);
+                }
+
+                let mut bitset = Vec::new();
+                sbbf.write_bitset(&mut bitset).unwrap();
+                let set_bits: u64 = bitset.iter().map(|b| u64::from(b.count_ones())).sum();
+                let expected = (set_bits as f64 / (bitset.len() as f64 * 8.0)).powi(8);
+
+                assert_eq!(
+                    sbbf.estimated_fpp().to_bits(),
+                    expected.to_bits(),
+                    "{num_bytes} bytes, {ndv} values"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_estimated_fpp_bounds() {
+        assert_eq!(Sbbf::new_with_num_of_bytes(1024).estimated_fpp(), 0.0);
+        assert_eq!(Sbbf::new(&[0xFF; 1024]).estimated_fpp(), 1.0);
+        assert_eq!(Sbbf::new(&[]).estimated_fpp(), 1.0);
+    }
+
+    #[test]
+    fn test_estimated_fpp_increases_when_folded() {
+        let mut sbbf = Sbbf::new_with_num_of_bytes(64 * 1024);
+        for i in 0..1_000 {
+            sbbf.insert(&i);
+        }
+        let before = sbbf.estimated_fpp();
+        sbbf.fold_n(3);
+        assert!(
+            sbbf.estimated_fpp() > before,
+            "folding must not lower the estimate: {before} -> {}",
+            sbbf.estimated_fpp()
+        );
     }
 
     #[test]

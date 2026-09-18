@@ -149,7 +149,7 @@
 //! #
 //! let file = File::open(path).unwrap();
 //!
-//! // Define the AES encryption keys required required for decrypting the footer metadata
+//! // Define the AES encryption keys required for decrypting the footer metadata
 //! // and column-specific data. If only a footer key is used then it is assumed that the
 //! // file uses uniform encryption and all columns are encrypted with the footer key.
 //! // If any column keys are specified, other columns without a key provided are assumed
@@ -179,7 +179,13 @@
 //! assert_eq!(50, record_batch.num_rows());
 //! ```
 
-experimental!(mod array_reader);
+// Keep these module declarations explicit so rustfmt discovers their source files.
+// See the comment in the crate root.
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+pub mod array_reader;
+#[cfg(not(feature = "experimental"))]
+mod array_reader;
 pub mod arrow_reader;
 pub mod arrow_writer;
 mod buffer;
@@ -195,7 +201,11 @@ pub mod push_decoder;
 mod in_memory_row_group;
 mod record_reader;
 
-experimental!(mod schema);
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
+pub mod schema;
+#[cfg(not(feature = "experimental"))]
+mod schema;
 
 use std::fmt::Debug;
 

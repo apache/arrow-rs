@@ -32,7 +32,6 @@ use std::sync::Arc;
 
 use flatbuffers::FlatBufferBuilder;
 
-use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
@@ -1295,17 +1294,18 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 
     // build new run_ends array by subtracting offset from run ends.
     let offset = R::Native::usize_as(run_ends.offset());
-    let mut builder = BufferBuilder::<R::Native>::new(physical_length);
+    let mut run_ends_values = Vec::<R::Native>::with_capacity(physical_length);
     for run_end_value in &run_ends.values()[start_physical_index..end_physical_index] {
-        builder.append(run_end_value.sub_wrapping(offset));
+        run_ends_values.push(run_end_value.sub_wrapping(offset));
     }
-    builder.append(R::Native::from_usize(run_array.len()).unwrap());
+    run_ends_values.push(R::Native::from_usize(run_array.len()).unwrap());
+    let offset_buffer = Buffer::from_vec(run_ends_values);
     let new_run_ends = unsafe {
         // Safety:
         // The function builds a valid run_ends array and hence need not be validated.
         ArrayDataBuilder::new(R::DATA_TYPE)
             .len(physical_length)
-            .add_buffer(builder.finish())
+            .add_buffer(offset_buffer)
             .build_unchecked()
     };
 

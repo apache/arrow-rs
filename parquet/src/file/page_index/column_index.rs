@@ -551,7 +551,7 @@ macro_rules! colidx_enum_func {
 ///
 /// See [`PageIndex`] for more information.
 ///
-/// [`PageIndex`]: crate::file::metadata::PageIndex
+/// [`PageIndex`]: crate::file::metadata::page_index::PageIndex
 /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq)]
 #[expect(non_camel_case_types)]

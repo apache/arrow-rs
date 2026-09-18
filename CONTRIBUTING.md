@@ -159,13 +159,6 @@ PR be sure to run the following and check for lint issues:
 cargo +stable fmt --all -- --check
 ```
 
-Note that currently the above will not check all source files in the parquet crate. To check all
-parquet files run the following from the top-level `arrow-rs` directory:
-
-```bash
-cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
-```
-
 ## Miri
 
 Run tests under [`Miri`](https://github.com/rust-lang/miri) like so, assuming
