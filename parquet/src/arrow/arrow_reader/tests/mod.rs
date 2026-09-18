@@ -20,7 +20,6 @@
 //! This module keeps read-plan tests and helpers shared by the test modules.
 
 mod column_reader;
-mod fixtures;
 mod options;
 mod row_selection;
 mod schema;
@@ -63,14 +62,11 @@ use crate::schema::types::{Type, TypePtr};
 use crate::util::test_common::rand_gen::RandGen;
 use arrow_array::builder::*;
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Decimal128Type, Float16Type, Float32Type, Float64Type};
 use arrow_array::*;
 use arrow_buffer::{BooleanBuffer, IntervalDayTime};
-use arrow_data::ArrayData;
 use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
-use half::f16;
 
 fn row_selection(rows: usize) -> RowSelection {
     RowSelection::from(vec![RowSelector::select(rows)])
