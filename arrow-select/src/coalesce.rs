@@ -22,7 +22,9 @@
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
 use crate::take::take_record_batch;
-use arrow_array::types::{BinaryViewType, StringViewType};
+use arrow_array::types::{
+    BinaryViewType, GenericBinaryType, GenericStringType, StringViewType,
+};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
@@ -30,16 +32,27 @@ use std::sync::Arc;
 // Originally From DataFusion's coalesce module:
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
+mod byte;
 mod byte_view;
 mod generic;
 mod primitive;
 
+use byte::InProgressByteArray;
 use byte_view::InProgressByteViewArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
 fn has_sparse_filter_copy(data_type: &DataType) -> bool {
-    data_type.is_primitive() || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
+    data_type.is_primitive()
+        || matches!(
+            data_type,
+            DataType::Utf8View
+                | DataType::BinaryView
+                | DataType::Utf8
+                | DataType::Binary
+                | DataType::LargeUtf8
+                | DataType::LargeBinary
+        )
 }
 
 /// Maximum selected row fraction for the fused sparse-filter copy path.
@@ -698,6 +711,14 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::Utf8View => Box::new(InProgressByteViewArray::<StringViewType>::new(batch_size)),
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
+        }
+        DataType::Utf8 => Box::new(InProgressByteArray::<GenericStringType<i32>>::new(batch_size)),
+        DataType::LargeUtf8 => {
+            Box::new(InProgressByteArray::<GenericStringType<i64>>::new(batch_size))
+        }
+        DataType::Binary => Box::new(InProgressByteArray::<GenericBinaryType<i32>>::new(batch_size)),
+        DataType::LargeBinary => {
+            Box::new(InProgressByteArray::<GenericBinaryType<i64>>::new(batch_size))
         }
         _ => Box::new(GenericInProgressArray::new()),
     }
@@ -1651,9 +1672,21 @@ mod tests {
         let coalescer = BatchCoalescer::new(supported, 100);
         assert!(!coalescer.has_non_specialized_filter_columns);
 
-        let utf8 = Arc::new(Schema::new(vec![Field::new("utf8", DataType::Utf8, true)]));
-        let coalescer = BatchCoalescer::new(utf8, 100);
-        assert!(coalescer.has_non_specialized_filter_columns);
+        // Utf8/Binary/LargeUtf8/LargeBinary are now specialized, so a schema
+        // with only those columns has no non-specialized filter columns.
+        for dt in [
+            DataType::Utf8,
+            DataType::Binary,
+            DataType::LargeUtf8,
+            DataType::LargeBinary,
+        ] {
+            let schema = Arc::new(Schema::new(vec![Field::new("col", dt.clone(), true)]));
+            let coalescer = BatchCoalescer::new(schema, 100);
+            assert!(
+                !coalescer.has_non_specialized_filter_columns,
+                "{dt} should be specialized"
+            );
+        }
 
         let boolean = Arc::new(Schema::new(vec![Field::new(
             "boolean",
