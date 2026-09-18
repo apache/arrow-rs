@@ -17,12 +17,15 @@
 
 //! Round-trip tests for Arrow data written to Parquet.
 
-use super::roundtrip_helpers::{RoundTripTest, SMALL_SIZE, required_and_optional, values_required};
+use super::roundtrip_helpers::{
+    RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip, values_required,
+};
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::builder::FixedSizeBinaryBuilder;
+use arrow::datatypes::ToByteSlice;
+use arrow_array::builder::{FixedSizeBinaryBuilder, ListBuilder, StringViewBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
@@ -32,15 +35,15 @@ use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, Date32Array, Date64Array, Decimal128Array,
     Decimal256Array, DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array,
-    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray,
-    LargeStringArray, ListArray, PrimitiveArray, RecordBatch, RecordBatchReader, StringArray,
-    StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray, LargeListArray,
+    LargeStringArray, ListArray, NullArray, PrimitiveArray, RecordBatch, RecordBatchReader,
+    StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
     Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
     UInt8DictionaryArray, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, i256};
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema, TimeUnit};
 use bytes::Bytes;
 use half::f16;
@@ -283,6 +286,140 @@ fn string_view_single_column() {
     let raw_strs = raw_values.iter().map(|s| s.as_str());
 
     required_and_optional::<StringViewArray, _>(raw_strs);
+}
+
+#[test]
+fn null_list_single_column() {
+    let null_field = Field::new_list_field(ArrowDataType::Null, true);
+    let list_field = Field::new("emptylist", ArrowDataType::List(Arc::new(null_field)), true);
+
+    let schema = Schema::new(vec![list_field]);
+
+    // Build [[], null, [null, null]]
+    let a_values = NullArray::new(2);
+    let a_value_offsets = arrow::buffer::Buffer::from([0, 0, 0, 2].to_byte_slice());
+    let a_list_data = ArrayData::builder(ArrowDataType::List(Arc::new(Field::new_list_field(
+        ArrowDataType::Null,
+        true,
+    ))))
+    .len(3)
+    .add_buffer(a_value_offsets)
+    .null_bit_buffer(Some(Buffer::from([0b00000101])))
+    .add_child_data(a_values.into_data())
+    .build()
+    .unwrap();
+
+    let a = ListArray::from(a_list_data);
+
+    assert!(a.is_valid(0));
+    assert!(!a.is_valid(1));
+    assert!(a.is_valid(2));
+
+    assert_eq!(a.value(0).len(), 0);
+    assert_eq!(a.value(2).len(), 2);
+    assert_eq!(a.value(2).logical_nulls().unwrap().null_count(), 2);
+
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+    roundtrip(batch, None);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn list_single_column() {
+    let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
+    let a_list_data = ArrayData::builder(ArrowDataType::List(Arc::new(Field::new_list_field(
+        ArrowDataType::Int32,
+        false,
+    ))))
+    .len(5)
+    .add_buffer(a_value_offsets)
+    .null_bit_buffer(Some(Buffer::from([0b00011011])))
+    .add_child_data(a_values.into_data())
+    .build()
+    .unwrap();
+
+    assert_eq!(a_list_data.null_count(), 1);
+
+    let a = ListArray::from(a_list_data);
+    let values = Arc::new(a);
+
+    RoundTripTest::new(values).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn large_list_single_column() {
+    let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    let a_value_offsets = arrow::buffer::Buffer::from([0i64, 1, 3, 3, 6, 10].to_byte_slice());
+    let a_list_data = ArrayData::builder(ArrowDataType::LargeList(Arc::new(Field::new(
+        "large_item",
+        ArrowDataType::Int32,
+        true,
+    ))))
+    .len(5)
+    .add_buffer(a_value_offsets)
+    .add_child_data(a_values.into_data())
+    .null_bit_buffer(Some(Buffer::from([0b00011011])))
+    .build()
+    .unwrap();
+
+    // I think this setup is incorrect because this should pass
+    assert_eq!(a_list_data.null_count(), 1);
+
+    let a = LargeListArray::from(a_list_data);
+    let values = Arc::new(a);
+
+    RoundTripTest::new(values).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn list_nested_nulls() {
+    use arrow::datatypes::Int32Type;
+    let data = vec![
+        Some(vec![Some(1)]),
+        Some(vec![Some(2), Some(3)]),
+        None,
+        Some(vec![Some(4), Some(5), None]),
+        Some(vec![None]),
+        Some(vec![Some(6), Some(7)]),
+    ];
+
+    let list = ListArray::from_iter_primitive::<Int32Type, _, _>(data.clone());
+    RoundTripTest::new(Arc::new(list)).run();
+
+    let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(data);
+    RoundTripTest::new(Arc::new(list)).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn list_utf8_view_selective_padding_roundtrip() {
+    let item = Arc::new(Field::new_list_field(ArrowDataType::Utf8View, true));
+    let mut builder = ListBuilder::new(StringViewBuilder::new()).with_field(item);
+    builder.values().append_value("a");
+    builder.values().append_null();
+    builder.append(true);
+    // The null parent list covers selective padding dropping values below
+    // the list definition level while preserving the preceding item null.
+    builder.append(false);
+    // The long string covers the non-inlined Utf8View buffer path.
+    builder.values().append_value("large payload over 12 bytes");
+    builder.append(true);
+
+    RoundTripTest::new(Arc::new(builder.finish())).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn struct_single_column() {
+    let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    let struct_field_a = Arc::new(Field::new("f", ArrowDataType::Int32, false));
+    let s = StructArray::from(vec![(struct_field_a, Arc::new(a_values) as ArrayRef)]);
+
+    let values = Arc::new(s);
+    RoundTripTest::new(values).with_nullable(false).run();
 }
 
 #[test]
