@@ -250,7 +250,10 @@ impl FFI_ArrowArrayStream {
         }
     }
 
+    #[expect(clippy::unnecessary_safety_doc)]
     /// Returns the producer-provided callback that writes this stream's schema, if any.
+    ///
+    /// # Safety
     ///
     /// The callback must be invoked with a pointer to the stream it was read from.
     pub fn get_schema(
@@ -259,7 +262,10 @@ impl FFI_ArrowArrayStream {
         self.get_schema
     }
 
+    #[expect(clippy::unnecessary_safety_doc)]
     /// Returns the producer-provided callback that yields the next array, if any.
+    ///
+    /// # Safety
     ///
     /// The callback must be invoked with a pointer to the stream it was read from.
     pub fn get_next(
@@ -268,7 +274,10 @@ impl FFI_ArrowArrayStream {
         self.get_next
     }
 
+    #[expect(clippy::unnecessary_safety_doc)]
     /// Returns the producer-provided callback that describes the last error, if any.
+    ///
+    /// # Safety
     ///
     /// The callback must be invoked with a pointer to the stream it was read from.
     /// The string it returns is owned by the producer and valid only until the next
