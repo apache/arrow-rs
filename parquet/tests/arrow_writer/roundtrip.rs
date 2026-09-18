@@ -25,21 +25,24 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::ToByteSlice;
-use arrow_array::builder::{FixedSizeBinaryBuilder, ListBuilder, StringViewBuilder};
+use arrow_array::builder::{
+    FixedSizeBinaryBuilder, ListBuilder, PrimitiveDictionaryBuilder, StringViewBuilder,
+};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
-    DecimalType, Float16Type, Time32MillisecondType, Time64MicrosecondType,
+    ArrowDictionaryKeyType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type,
+    Decimal256Type, DecimalType, Float16Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Time32MillisecondType, Time64MicrosecondType, UInt8Type, UInt16Type, UInt32Type,
 };
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, Date32Array, Date64Array, Decimal128Array,
-    Decimal256Array, DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array,
-    Float64Array, Int8Array, Int16Array, Int32Array, Int32DictionaryArray, Int64Array,
-    LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
-    ListViewArray, NullArray, PrimitiveArray, RecordBatch, RecordBatchReader, StringArray,
-    StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, Date32Array, Date64Array, Decimal32Array,
+    Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
+    Float16Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int32DictionaryArray, Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray,
+    LargeStringArray, ListArray, ListViewArray, NullArray, PrimitiveArray, RecordBatch,
+    RecordBatchReader, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
     UInt8DictionaryArray, UInt16Array, UInt32Array, UInt64Array,
 };
@@ -48,7 +51,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema, TimeUnit};
 use bytes::Bytes;
 use half::f16;
-use num_traits::PrimInt;
+use num_traits::{FromPrimitive, PrimInt, ToPrimitive};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use parquet::basic::Type as PhysicalType;
@@ -956,6 +959,276 @@ fn arrow_writer_2_level_struct_mixed_null_2() {
     let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
     roundtrip(batch, Some(SMALL_SIZE / 2));
+}
+
+/// Test round-trip of Dictionary<UInt32, Utf8View> and
+/// Dictionary<UInt32, BinaryView> typed columns.
+#[test]
+fn arrow_writer_string_view_dictionary() {
+    let raw_string_values = vec!["a", "b", "large payload over 12 bytes"];
+    let raw_binary_values = vec![
+        b"a".to_vec(),
+        b"b".to_vec(),
+        b"large payload over 12 bytes".to_vec(),
+    ];
+
+    let keys = UInt32Array::from(vec![Some(0), None, Some(2), Some(1), None]);
+
+    let string_view_values = Arc::new(StringViewArray::from(raw_string_values));
+    let string_dict: ArrayRef =
+        Arc::new(DictionaryArray::<UInt32Type>::try_new(keys.clone(), string_view_values).unwrap());
+
+    let binary_view_values = Arc::new(BinaryViewArray::from_iter_values(raw_binary_values));
+    let binary_dict: ArrayRef =
+        Arc::new(DictionaryArray::<UInt32Type>::try_new(keys, binary_view_values).unwrap());
+
+    RoundTripTest::new(string_dict).run();
+    RoundTripTest::new(binary_dict).run();
+}
+
+#[test]
+fn test_fixed_size_binary_in_dict() {
+    fn test_fixed_size_binary_in_dict_inner<K>()
+    where
+        K: ArrowDictionaryKeyType,
+        K::Native: FromPrimitive + ToPrimitive + TryFrom<u8>,
+        <<K as arrow_array::ArrowPrimitiveType>::Native as TryFrom<u8>>::Error: std::fmt::Debug,
+    {
+        let field = Field::new(
+            "a",
+            ArrowDataType::Dictionary(
+                Box::new(K::DATA_TYPE),
+                Box::new(ArrowDataType::FixedSizeBinary(4)),
+            ),
+            false,
+        );
+        let schema = Schema::new(vec![field]);
+
+        let keys: Vec<K::Native> = vec![
+            K::Native::try_from(0u8).unwrap(),
+            K::Native::try_from(0u8).unwrap(),
+            K::Native::try_from(1u8).unwrap(),
+        ];
+        let keys = PrimitiveArray::<K>::from_iter_values(keys);
+        let values = FixedSizeBinaryArray::try_from_iter(
+            vec![vec![0, 0, 0, 0], vec![1, 1, 1, 1]].into_iter(),
+        )
+        .unwrap();
+
+        let data = DictionaryArray::<K>::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
+        roundtrip(batch, None);
+    }
+
+    test_fixed_size_binary_in_dict_inner::<UInt8Type>();
+    test_fixed_size_binary_in_dict_inner::<UInt16Type>();
+    test_fixed_size_binary_in_dict_inner::<UInt32Type>();
+    test_fixed_size_binary_in_dict_inner::<UInt16Type>();
+    test_fixed_size_binary_in_dict_inner::<Int8Type>();
+    test_fixed_size_binary_in_dict_inner::<Int16Type>();
+    test_fixed_size_binary_in_dict_inner::<Int32Type>();
+    test_fixed_size_binary_in_dict_inner::<Int64Type>();
+}
+
+#[test]
+fn test_empty_dict() {
+    let struct_fields = Fields::from(vec![Field::new(
+        "dict",
+        ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::Int32),
+            Box::new(ArrowDataType::Utf8),
+        ),
+        false,
+    )]);
+
+    let schema = Schema::new(vec![Field::new_struct(
+        "struct",
+        struct_fields.clone(),
+        true,
+    )]);
+    let dictionary = Arc::new(DictionaryArray::new(
+        Int32Array::new_null(5),
+        Arc::new(StringArray::new_null(0)),
+    ));
+
+    let s = StructArray::new(
+        struct_fields,
+        vec![dictionary],
+        Some(NullBuffer::new_null(5)),
+    );
+
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(s)]).unwrap();
+    roundtrip(batch, None);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_string_dictionary() {
+    // define schema
+    #[expect(deprecated)]
+    let schema = Arc::new(Schema::new(vec![Field::new_dict(
+        "dictionary",
+        ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::Int32),
+            Box::new(ArrowDataType::Utf8),
+        ),
+        true,
+        42,
+        true,
+    )]));
+
+    // create some data
+    let d: Int32DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
+        .iter()
+        .copied()
+        .collect();
+
+    // build a record batch
+    RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_primitive_dictionary() {
+    // define schema
+    #[expect(deprecated)]
+    let schema = Arc::new(Schema::new(vec![Field::new_dict(
+        "dictionary",
+        ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::UInt8),
+            Box::new(ArrowDataType::UInt32),
+        ),
+        true,
+        42,
+        true,
+    )]));
+
+    // create some data
+    let mut builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::new();
+    builder.append(12345678).unwrap();
+    builder.append_null();
+    builder.append(22345678).unwrap();
+    builder.append(12345678).unwrap();
+    let d = builder.finish();
+
+    RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_decimal32_dictionary() {
+    let integers = vec![12345, 56789, 34567];
+
+    let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
+
+    let values = Decimal32Array::from(integers.clone())
+        .with_precision_and_scale(5, 2)
+        .unwrap();
+
+    let array = DictionaryArray::new(keys, Arc::new(values));
+    RoundTripTest::new(Arc::new(array.clone())).run();
+
+    let values = Decimal32Array::from(integers)
+        .with_precision_and_scale(9, 2)
+        .unwrap();
+
+    let array = array.with_values(Arc::new(values));
+    RoundTripTest::new(Arc::new(array)).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_decimal64_dictionary() {
+    let integers = vec![12345, 56789, 34567];
+
+    let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
+
+    let values = Decimal64Array::from(integers.clone())
+        .with_precision_and_scale(5, 2)
+        .unwrap();
+
+    let array = DictionaryArray::new(keys, Arc::new(values));
+    RoundTripTest::new(Arc::new(array.clone())).run();
+
+    let values = Decimal64Array::from(integers)
+        .with_precision_and_scale(12, 2)
+        .unwrap();
+
+    let array = array.with_values(Arc::new(values));
+    RoundTripTest::new(Arc::new(array)).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_decimal128_dictionary() {
+    let integers = vec![12345, 56789, 34567];
+
+    let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
+
+    let values = Decimal128Array::from(integers.clone())
+        .with_precision_and_scale(5, 2)
+        .unwrap();
+
+    let array = DictionaryArray::new(keys, Arc::new(values));
+    RoundTripTest::new(Arc::new(array.clone())).run();
+
+    let values = Decimal128Array::from(integers)
+        .with_precision_and_scale(12, 2)
+        .unwrap();
+
+    let array = array.with_values(Arc::new(values));
+    RoundTripTest::new(Arc::new(array)).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_decimal256_dictionary() {
+    let integers = vec![
+        i256::from_i128(12345),
+        i256::from_i128(56789),
+        i256::from_i128(34567),
+    ];
+
+    let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
+
+    let values = Decimal256Array::from(integers.clone())
+        .with_precision_and_scale(5, 2)
+        .unwrap();
+
+    let array = DictionaryArray::new(keys, Arc::new(values));
+    RoundTripTest::new(Arc::new(array.clone())).run();
+
+    let values = Decimal256Array::from(integers)
+        .with_precision_and_scale(12, 2)
+        .unwrap();
+
+    let array = array.with_values(Arc::new(values));
+    RoundTripTest::new(Arc::new(array)).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_string_dictionary_unsigned_index() {
+    // define schema
+    #[expect(deprecated)]
+    let schema = Arc::new(Schema::new(vec![Field::new_dict(
+        "dictionary",
+        ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::UInt8),
+            Box::new(ArrowDataType::Utf8),
+        ),
+        true,
+        42,
+        true,
+    )]));
+
+    // create some data
+    let d: UInt8DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
+        .iter()
+        .copied()
+        .collect();
+
+    RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
 }
 
 #[test]
