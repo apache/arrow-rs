@@ -18,7 +18,8 @@
 //! Round-trip tests for Arrow data written to Parquet.
 
 use super::roundtrip_helpers::{
-    RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip, values_required,
+    RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip,
+    roundtrip_opts_with_array_validation, values_required,
 };
 
 use std::collections::HashMap;
@@ -26,6 +27,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::ToByteSlice;
 use arrow::error::Result as ArrowResult;
+use arrow::util::pretty::pretty_format_batches;
 use arrow_array::builder::{
     FixedSizeBinaryBuilder, Int32Builder, ListBuilder, PrimitiveDictionaryBuilder,
     PrimitiveRunBuilder, StringViewBuilder, StructBuilder,
@@ -58,10 +60,12 @@ use num_traits::{FromPrimitive, PrimInt, ToPrimitive};
 use parquet::arrow::arrow_reader::{
     ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
 };
+use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
-use parquet::basic::Type as PhysicalType;
+use parquet::basic::{Encoding, Type as PhysicalType};
 use parquet::errors::Result;
-use parquet::file::properties::WriterProperties;
+use parquet::file::metadata::ParquetMetaData;
+use parquet::file::properties::{WriterProperties, WriterVersion};
 use tempfile::tempfile;
 
 #[test]
@@ -2029,6 +2033,345 @@ fn test_roundtrip_empty_schema() {
         .collect::<ArrowResult<Vec<_>>>()
         .unwrap();
     assert_eq!(batches.len(), 0);
+}
+
+fn row_group_sizes(metadata: &ParquetMetaData) -> Vec<i64> {
+    metadata.row_groups().iter().map(|x| x.num_rows()).collect()
+}
+
+/// A dictionary-encoded column written through the deferred-ordering Arrow
+/// path must round-trip correctly even with the offset index disabled, when
+/// only the chunk-level dictionary/data page offsets are rewritten (there is
+/// no offset index to rebuild). Spans multiple data pages so the
+/// dictionary-first reordering is exercised.
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn dictionary_column_round_trips_with_offset_index_disabled() {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "k",
+        ArrowDataType::Int32,
+        true,
+    )]));
+
+    // Low cardinality so the column stays dictionary-encoded; enough rows to
+    // span several data pages within a single row group.
+    let values: Vec<Option<i32>> = (0..50_000).map(|i| Some(i % 8)).collect();
+    let array = Int32Array::from(values.clone());
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+
+    let props = WriterProperties::builder()
+        .set_offset_index_disabled(true)
+        .set_data_page_row_count_limit(4096)
+        .build();
+    let opts = ArrowWriterOptions::new().with_properties(props);
+
+    let mut buffer = Vec::new();
+    let mut writer = ArrowWriter::try_new_with_options(&mut buffer, schema.clone(), opts).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let reader = ParquetRecordBatchReader::try_new(Bytes::from(buffer), values.len()).unwrap();
+    let read: Vec<RecordBatch> = reader.collect::<ArrowResult<_>>().unwrap();
+    let read_values: Vec<Option<i32>> = read
+        .iter()
+        .flat_map(|b| b.column(0).as_primitive::<Int32Type>().iter())
+        .collect();
+    assert_eq!(read_values, values);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn fallback_flush_data_page() {
+    const MEDIUM_SIZE: usize = 63;
+
+    //tests if the Fallback::flush_data_page clears all buffers correctly
+    let raw_values: Vec<_> = (0..MEDIUM_SIZE).map(|i| i.to_string()).collect();
+    let values = Arc::new(StringArray::from(raw_values));
+    let encodings = vec![
+        Encoding::DELTA_BYTE_ARRAY,
+        Encoding::DELTA_LENGTH_BYTE_ARRAY,
+    ];
+    let data_type = values.data_type().clone();
+    let schema = Arc::new(Schema::new(vec![Field::new("col", data_type, false)]));
+    let expected_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+
+    let row_group_sizes = [1024, SMALL_SIZE, SMALL_SIZE / 2, SMALL_SIZE / 2 + 1, 10];
+    let data_page_size_limit: usize = 32;
+    let write_batch_size: usize = 16;
+
+    for encoding in &encodings {
+        for row_group_size in row_group_sizes {
+            let props = WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_2_0)
+                .set_max_row_group_row_count(Some(row_group_size))
+                .set_dictionary_enabled(false)
+                .set_encoding(*encoding)
+                .set_data_page_size_limit(data_page_size_limit)
+                .set_write_batch_size(write_batch_size)
+                .build();
+
+            roundtrip_opts_with_array_validation(&expected_batch, props, |a, b| {
+                let string_array_a = StringArray::from(a.clone());
+                let string_array_b = StringArray::from(b.clone());
+                let vec_a: Vec<&str> = string_array_a.iter().map(|v| v.unwrap()).collect();
+                let vec_b: Vec<&str> = string_array_b.iter().map(|v| v.unwrap()).collect();
+                assert_eq!(
+                    vec_a, vec_b,
+                    "failed for encoder: {encoding:?} and row_group_size: {row_group_size:?}"
+                );
+            });
+        }
+    }
+}
+
+#[test]
+fn test_aggregates_records() {
+    let arrays = [
+        Int32Array::from((0..100).collect::<Vec<_>>()),
+        Int32Array::from((0..50).collect::<Vec<_>>()),
+        Int32Array::from((200..500).collect::<Vec<_>>()),
+    ];
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "int",
+        ArrowDataType::Int32,
+        false,
+    )]));
+
+    let file = tempfile::tempfile().unwrap();
+
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(200))
+        .build();
+
+    let mut writer =
+        ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), Some(props)).unwrap();
+
+    for array in arrays {
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+        writer.write(&batch).unwrap();
+    }
+
+    writer.close().unwrap();
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+    assert_eq!(&row_group_sizes(builder.metadata()), &[200, 200, 50]);
+
+    let batches = builder
+        .with_batch_size(100)
+        .build()
+        .unwrap()
+        .collect::<ArrowResult<Vec<_>>>()
+        .unwrap();
+
+    assert_eq!(batches.len(), 5);
+    assert!(batches.iter().all(|x| x.num_columns() == 1));
+
+    let batch_sizes: Vec<_> = batches.iter().map(|x| x.num_rows()).collect();
+
+    assert_eq!(&batch_sizes, &[100, 100, 100, 100, 50]);
+
+    let values: Vec<_> = batches
+        .iter()
+        .flat_map(|x| {
+            x.column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .iter()
+                .copied()
+        })
+        .collect();
+
+    let expected_values: Vec<_> = [0..100, 0..50, 200..500].into_iter().flatten().collect();
+    assert_eq!(&values, &expected_values)
+}
+
+#[test]
+fn complex_aggregate() {
+    // Tests aggregating nested data
+    let field_a = Arc::new(Field::new("leaf_a", ArrowDataType::Int32, false));
+    let field_b = Arc::new(Field::new("leaf_b", ArrowDataType::Int32, true));
+    let struct_a = Arc::new(Field::new(
+        "struct_a",
+        ArrowDataType::Struct(vec![field_a.clone(), field_b.clone()].into()),
+        true,
+    ));
+
+    let list_a = Arc::new(Field::new("list", ArrowDataType::List(struct_a), true));
+    let struct_b = Arc::new(Field::new(
+        "struct_b",
+        ArrowDataType::Struct(vec![list_a.clone()].into()),
+        false,
+    ));
+
+    let schema = Arc::new(Schema::new(vec![struct_b]));
+
+    // create nested data
+    let field_a_array = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+    let field_b_array = Int32Array::from_iter(vec![Some(1), None, Some(2), None, None, Some(6)]);
+
+    let struct_a_array = StructArray::from(vec![
+        (field_a.clone(), Arc::new(field_a_array) as ArrayRef),
+        (field_b.clone(), Arc::new(field_b_array) as ArrayRef),
+    ]);
+
+    let list_data = ArrayDataBuilder::new(list_a.data_type().clone())
+        .len(5)
+        .add_buffer(Buffer::from_iter(vec![
+            0_i32, 1_i32, 1_i32, 3_i32, 3_i32, 5_i32,
+        ]))
+        .null_bit_buffer(Some(Buffer::from_iter(vec![
+            true, false, true, false, true,
+        ])))
+        .child_data(vec![struct_a_array.into_data()])
+        .build()
+        .unwrap();
+
+    let list_a_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
+    let struct_b_array = StructArray::from(vec![(list_a.clone(), list_a_array)]);
+
+    let batch1 =
+        RecordBatch::try_from_iter(vec![("struct_b", Arc::new(struct_b_array) as ArrayRef)])
+            .unwrap();
+
+    let field_a_array = Int32Array::from(vec![6, 7, 8, 9, 10]);
+    let field_b_array = Int32Array::from_iter(vec![None, None, None, Some(1), None]);
+
+    let struct_a_array = StructArray::from(vec![
+        (field_a, Arc::new(field_a_array) as ArrayRef),
+        (field_b, Arc::new(field_b_array) as ArrayRef),
+    ]);
+
+    let list_data = ArrayDataBuilder::new(list_a.data_type().clone())
+        .len(2)
+        .add_buffer(Buffer::from_iter(vec![0_i32, 4_i32, 5_i32]))
+        .child_data(vec![struct_a_array.into_data()])
+        .build()
+        .unwrap();
+
+    let list_a_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
+    let struct_b_array = StructArray::from(vec![(list_a, list_a_array)]);
+
+    let batch2 =
+        RecordBatch::try_from_iter(vec![("struct_b", Arc::new(struct_b_array) as ArrayRef)])
+            .unwrap();
+
+    let batches = &[batch1, batch2];
+
+    // Verify data is as expected
+
+    let expected = r"
+            +-------------------------------------------------------------------------------------------------------+
+            | struct_b                                                                                              |
+            +-------------------------------------------------------------------------------------------------------+
+            | {list: [{leaf_a: 1, leaf_b: 1}]}                                                                      |
+            | {list: }                                                                                              |
+            | {list: [{leaf_a: 2, leaf_b: }, {leaf_a: 3, leaf_b: 2}]}                                               |
+            | {list: }                                                                                              |
+            | {list: [{leaf_a: 4, leaf_b: }, {leaf_a: 5, leaf_b: }]}                                                |
+            | {list: [{leaf_a: 6, leaf_b: }, {leaf_a: 7, leaf_b: }, {leaf_a: 8, leaf_b: }, {leaf_a: 9, leaf_b: 1}]} |
+            | {list: [{leaf_a: 10, leaf_b: }]}                                                                      |
+            +-------------------------------------------------------------------------------------------------------+
+        ".trim().split('\n').map(|x| x.trim()).collect::<Vec<_>>().join("\n");
+
+    let actual = pretty_format_batches(batches).unwrap().to_string();
+    assert_eq!(actual, expected);
+
+    // Write data
+    let file = tempfile::tempfile().unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(6))
+        .build();
+
+    let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema, Some(props)).unwrap();
+
+    for batch in batches {
+        writer.write(batch).unwrap();
+    }
+    writer.close().unwrap();
+
+    // Read Data
+    // Should have written entire first batch and first row of second to the first row group
+    // leaving a single row in the second row group
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+    assert_eq!(&row_group_sizes(builder.metadata()), &[6, 1]);
+
+    let batches = builder
+        .with_batch_size(2)
+        .build()
+        .unwrap()
+        .collect::<ArrowResult<Vec<_>>>()
+        .unwrap();
+
+    assert_eq!(batches.len(), 4);
+    let batch_counts: Vec<_> = batches.iter().map(|x| x.num_rows()).collect();
+    assert_eq!(&batch_counts, &[2, 2, 2, 1]);
+
+    let actual = pretty_format_batches(&batches).unwrap().to_string();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_arrow_writer_granular_mode_roundtrip() {
+    // Granular mode subdivides chunks and writes more pages than the
+    // default batched path. Make sure the data we write back is
+    // bit-identical to what went in — page-count assertions elsewhere
+    // only prove pages were cut, not that the encoded data is correct.
+    //
+    // Mix value sizes so that the cumulative-byte-budget cutoff
+    // lands mid-chunk, exercising both batched and granular paths
+    // within the same `write_batch_internal` call.
+    let small = "tiny".to_string();
+    let big = "x".repeat(64 * 1024);
+    let strings: Vec<String> = (0..256)
+        .map(|i| {
+            if i % 16 == 0 {
+                big.clone()
+            } else {
+                small.clone()
+            }
+        })
+        .collect();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        ArrowDataType::Utf8,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(StringArray::from(strings.clone())) as _],
+    )
+    .unwrap();
+
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_data_page_size_limit(16 * 1024)
+        .build();
+    let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    let data = Bytes::from(writer.into_inner().unwrap());
+
+    let mut reader = ParquetRecordBatchReader::try_new(data, 1024).unwrap();
+    let read = reader.next().unwrap().unwrap();
+    assert!(reader.next().is_none(), "expected one batch");
+    let col = read
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(col.len(), strings.len());
+    for (i, expected) in strings.iter().enumerate() {
+        assert_eq!(
+            col.value(i),
+            expected.as_str(),
+            "value mismatch at index {i}"
+        );
+    }
 }
 
 #[test]
