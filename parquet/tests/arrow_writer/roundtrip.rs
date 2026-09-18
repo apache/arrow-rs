@@ -29,10 +29,11 @@ use arrow::datatypes::ToByteSlice;
 use arrow::error::Result as ArrowResult;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::builder::{
-    FixedSizeBinaryBuilder, Int32Builder, ListBuilder, PrimitiveDictionaryBuilder,
-    PrimitiveRunBuilder, StringViewBuilder, StructBuilder,
+    FixedSizeBinaryBuilder, Int32Builder, ListBuilder, MapBuilder, PrimitiveBuilder,
+    PrimitiveDictionaryBuilder, PrimitiveRunBuilder, StringBuilder, StringViewBuilder,
+    StructBuilder,
 };
-use arrow_array::cast::AsArray;
+use arrow_array::cast::{AsArray, as_map_array, as_string_array, as_struct_array};
 use arrow_array::types::{
     ArrowDictionaryKeyType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type,
     Decimal256Type, DecimalType, Float16Type, Int8Type, Int16Type, Int32Type, Int64Type,
@@ -42,14 +43,15 @@ use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
     Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray,
     DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
-    DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int8Array,
-    Int16Array, Int32Array, Int32DictionaryArray, Int32RunArray, Int64Array, IntervalDayTimeArray,
-    IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
-    ListArray, ListViewArray, NullArray, PrimitiveArray, RecordBatch, RecordBatchOptions,
-    RecordBatchReader, RunArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
-    UInt8DictionaryArray, UInt16Array, UInt32Array, UInt64Array,
+    DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array, Float32Array,
+    Float64Array, Int8Array, Int16Array, Int32Array, Int32DictionaryArray, Int32RunArray,
+    Int64Array, IntervalDayTimeArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
+    LargeListViewArray, LargeStringArray, ListArray, ListViewArray, NullArray, PrimitiveArray,
+    RecordBatch, RecordBatchOptions, RecordBatchReader, RunArray, StringArray, StringViewArray,
+    StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt8DictionaryArray, UInt16Array,
+    UInt32Array, UInt64Array,
 };
 use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, NullBuffer, OffsetBuffer, i256};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -58,7 +60,8 @@ use bytes::Bytes;
 use half::f16;
 use num_traits::{FromPrimitive, PrimInt, ToPrimitive};
 use parquet::arrow::arrow_reader::{
-    ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+    ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
+    ParquetRecordBatchReaderBuilder,
 };
 use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
@@ -2371,6 +2374,296 @@ fn test_arrow_writer_granular_mode_roundtrip() {
             expected.as_str(),
             "value mismatch at index {i}"
         );
+    }
+}
+
+#[test]
+fn test_arrow_writer_nullable() {
+    let batch_schema = Schema::new(vec![Field::new("int32", ArrowDataType::Int32, false)]);
+    let file_schema = Schema::new(vec![Field::new("int32", ArrowDataType::Int32, true)]);
+    let file_schema = Arc::new(file_schema);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(batch_schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+    )
+    .unwrap();
+
+    let mut buf = Vec::with_capacity(1024);
+    let mut writer = ArrowWriter::try_new(&mut buf, file_schema.clone(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let mut read = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024).unwrap();
+    let back = read.next().unwrap().unwrap();
+    assert_eq!(back.schema(), file_schema);
+    assert_ne!(back.schema(), batch.schema());
+    assert_eq!(back.column(0).as_ref(), batch.column(0).as_ref());
+}
+
+#[test]
+fn test_read_list_column() {
+    // This test writes a Parquet file containing a fixed-length array column and a primitive column,
+    // then reads the columns back from the file.
+
+    // [
+    //   [1, 2, 3, null],
+    //   [5, 6, 7, 8],
+    //   null,
+    //   [9, null, 11, 12],
+    // ]
+    let list = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+        vec![
+            Some(vec![Some(1), Some(2), Some(3), None]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            None,
+            Some(vec![Some(9), None, Some(11), Some(12)]),
+            Some(vec![None, None, None, None]),
+        ],
+        4,
+    );
+
+    // [null, 2, 3, null, 5]
+    let primitive =
+        PrimitiveArray::<Int32Type>::from_iter(vec![None, Some(2), Some(3), None, Some(5)]);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "list",
+            ArrowDataType::FixedSizeList(
+                Arc::new(Field::new_list_field(ArrowDataType::Int32, true)),
+                4,
+            ),
+            true,
+        ),
+        Field::new("primitive", ArrowDataType::Int32, true),
+    ]));
+
+    // Create record batch with a fixed-length array column and a primitive column
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(list.clone()), Arc::new(primitive.clone())],
+    )
+    .expect("unable to create record batch");
+
+    // Write record batch to Parquet
+    let mut buffer = Vec::with_capacity(1024);
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), None)
+        .expect("unable to create parquet writer");
+    writer.write(&batch).expect("unable to write record batch");
+    writer.close().expect("unable to close parquet writer");
+
+    // Read record batch from Parquet
+    let reader = Bytes::from(buffer);
+    let mut batch_reader =
+        ParquetRecordBatchReader::try_new(reader, 1024).expect("unable to create parquet reader");
+    let actual = batch_reader
+        .next()
+        .expect("missing record batch")
+        .expect("unable to read record batch");
+
+    // Verify values of both read columns match
+    assert_eq!(schema, actual.schema());
+    let actual_list = actual
+        .column(0)
+        .as_any()
+        .downcast_ref::<FixedSizeListArray>()
+        .expect("unable to cast array to FixedSizeListArray");
+    let actual_primitive = actual.column(1).as_primitive::<Int32Type>();
+    assert_eq!(actual_list, &list);
+    assert_eq!(actual_primitive, &primitive);
+}
+
+#[test]
+fn test_read_as_dyn_list() {
+    // This test verifies that fixed-size list arrays can be read from Parquet
+    // as variable-length list arrays.
+
+    // [
+    //   [1, 2, 3, null],
+    //   [5, 6, 7, 8],
+    //   null,
+    //   [9, null, 11, 12],
+    // ]
+    let list = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+        vec![
+            Some(vec![Some(1), Some(2), Some(3), None]),
+            Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+            None,
+            Some(vec![Some(9), None, Some(11), Some(12)]),
+            Some(vec![None, None, None, None]),
+        ],
+        4,
+    );
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "list",
+        ArrowDataType::FixedSizeList(
+            Arc::new(Field::new_list_field(ArrowDataType::Int32, true)),
+            4,
+        ),
+        true,
+    )]));
+
+    // Create record batch with a single fixed-length array column
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(list)]).unwrap();
+
+    // Write record batch to Parquet
+    let mut buffer = Vec::with_capacity(1024);
+    let mut writer =
+        ArrowWriter::try_new(&mut buffer, schema, None).expect("unable to create parquet writer");
+    writer.write(&batch).expect("unable to write record batch");
+    writer.close().expect("unable to close parquet writer");
+
+    // Read record batch from Parquet - ignoring arrow metadata
+    let reader = Bytes::from(buffer);
+    let mut batch_reader = ArrowReaderBuilder::try_new_with_options(
+        reader,
+        ArrowReaderOptions::new().with_skip_arrow_metadata(true),
+    )
+    .expect("unable to create reader builder")
+    .build()
+    .expect("unable to create parquet reader");
+    let actual = batch_reader
+        .next()
+        .expect("missing record batch")
+        .expect("unable to read record batch");
+
+    // Verify the read column is a variable length list with values that match the input
+    let col = actual.column(0).as_list::<i32>();
+    let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+        Some(vec![Some(1), Some(2), Some(3), None]),
+        Some(vec![Some(5), Some(6), Some(7), Some(8)]),
+        None,
+        Some(vec![Some(9), None, Some(11), Some(12)]),
+        Some(vec![None, None, None, None]),
+    ]);
+    assert_eq!(col, &expected);
+}
+
+#[test]
+fn test_decimal256_list() {
+    let decimals = Decimal256Array::from_iter_values(
+        [1, 2, 3, 4, 5, 6, 7, 8].into_iter().map(i256::from_i128),
+    );
+
+    // [[], [1], [2, 3], null, [4], null, [6, 7, 8]]
+    let data = ArrayDataBuilder::new(ArrowDataType::List(Arc::new(Field::new_list_field(
+        decimals.data_type().clone(),
+        false,
+    ))))
+    .len(7)
+    .add_buffer(Buffer::from_iter([0_i32, 0, 1, 3, 3, 4, 5, 8]))
+    .null_bit_buffer(Some(Buffer::from(&[0b01010111])))
+    .child_data(vec![decimals.into_data()])
+    .build()
+    .unwrap();
+
+    let written =
+        RecordBatch::try_from_iter([("list", Arc::new(ListArray::from(data)) as ArrayRef)])
+            .unwrap();
+
+    let mut buffer = Vec::with_capacity(1024);
+    let mut writer = ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
+    writer.write(&written).unwrap();
+    writer.close().unwrap();
+
+    let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
+        .unwrap()
+        .collect::<ArrowResult<Vec<_>>>()
+        .unwrap();
+
+    assert_eq!(&written.slice(0, 3), &read[0]);
+    assert_eq!(&written.slice(3, 3), &read[1]);
+    assert_eq!(&written.slice(6, 1), &read[2]);
+}
+
+#[test]
+// This test writes a parquet file with the following data:
+// +--------------------------------------------------------+
+// |map                                                     |
+// +--------------------------------------------------------+
+// |null                                                    |
+// |null                                                    |
+// |{three -> 3, four -> 4, five -> 5, six -> 6, seven -> 7}|
+// +--------------------------------------------------------+
+//
+// It then attempts to read the data back and checks that the third record
+// contains the expected values.
+fn read_map_array_column() {
+    // Schema for single map of string to int32
+    let schema = Schema::new(vec![Field::new(
+        "map",
+        ArrowDataType::Map(
+            Arc::new(Field::new(
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                ArrowDataType::Struct(Fields::from(vec![
+                    Field::new(
+                        Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                        ArrowDataType::Utf8,
+                        false,
+                    ),
+                    Field::new(
+                        Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                        ArrowDataType::Int32,
+                        true,
+                    ),
+                ])),
+                false,
+            )),
+            false, // Map field not sorted
+        ),
+        true,
+    )]);
+
+    // Create builders for map
+    let string_builder = StringBuilder::new();
+    let ints_builder: PrimitiveBuilder<Int32Type> = PrimitiveBuilder::new();
+    let mut map_builder = MapBuilder::new(None, string_builder, ints_builder);
+
+    // Add two null records and one record with five entries
+    map_builder.append(false).expect("adding null map entry");
+    map_builder.append(false).expect("adding null map entry");
+    map_builder.keys().append_value("three");
+    map_builder.keys().append_value("four");
+    map_builder.keys().append_value("five");
+    map_builder.keys().append_value("six");
+    map_builder.keys().append_value("seven");
+
+    map_builder.values().append_value(3);
+    map_builder.values().append_value(4);
+    map_builder.values().append_value(5);
+    map_builder.values().append_value(6);
+    map_builder.values().append_value(7);
+    map_builder.append(true).expect("adding map entry");
+
+    // Create record batch
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(map_builder.finish())])
+        .expect("create record batch");
+
+    // Write record batch to file
+    let mut buffer = Vec::with_capacity(1024);
+    let mut writer =
+        ArrowWriter::try_new(&mut buffer, batch.schema(), None).expect("creat file writer");
+    writer.write(&batch).expect("writing file");
+    writer.close().expect("close writer");
+
+    // Read file
+    let reader = Bytes::from(buffer);
+    let record_batch_reader = ParquetRecordBatchReader::try_new(reader, 1024).unwrap();
+    for maybe_record_batch in record_batch_reader {
+        let record_batch = maybe_record_batch.expect("Getting current batch");
+        let col = record_batch.column(0);
+        assert!(col.is_null(0));
+        assert!(col.is_null(1));
+        let map_entry = as_map_array(col).value(2);
+        let struct_col = as_struct_array(&map_entry);
+        let key_col = as_string_array(struct_col.column(0)); // Key column
+        assert_eq!(key_col.value(0), "three");
+        assert_eq!(key_col.value(1), "four");
+        assert_eq!(key_col.value(2), "five");
+        assert_eq!(key_col.value(3), "six");
+        assert_eq!(key_col.value(4), "seven");
     }
 }
 

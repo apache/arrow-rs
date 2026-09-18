@@ -2097,7 +2097,7 @@ mod tests {
     use std::fs::File;
 
     use crate::arrow::ARROW_SCHEMA_META_KEY;
-    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::column::page::{Page, PageReader};
     use crate::file::metadata::thrift::PageHeader;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
@@ -2999,30 +2999,6 @@ mod tests {
         let mut writer = ArrowWriter::try_new(&mut buf, Arc::new(file_schema), None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
-    }
-
-    #[test]
-    fn test_arrow_writer_nullable() {
-        let batch_schema = Schema::new(vec![Field::new("int32", DataType::Int32, false)]);
-        let file_schema = Schema::new(vec![Field::new("int32", DataType::Int32, true)]);
-        let file_schema = Arc::new(file_schema);
-
-        let batch = RecordBatch::try_new(
-            Arc::new(batch_schema),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
-        )
-        .unwrap();
-
-        let mut buf = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buf, file_schema.clone(), None).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let mut read = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024).unwrap();
-        let back = read.next().unwrap().unwrap();
-        assert_eq!(back.schema(), file_schema);
-        assert_ne!(back.schema(), batch.schema());
-        assert_eq!(back.column(0).as_ref(), batch.column(0).as_ref());
     }
 
     #[test]
