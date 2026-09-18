@@ -771,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
+    #[should_panic(expected = "buffer out of bounds: offset 80 + length 8 exceeds length 40")]
     fn test_fixed_size_list_array_index_out_of_bound() {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
