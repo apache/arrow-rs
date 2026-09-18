@@ -232,6 +232,14 @@ pub trait PageIndexProvider: Send + Sync + std::fmt::Debug {
         )
     }
 
+    /// Returns the number of bytes allocated on the heap by this provider.
+    ///
+    /// The default implementation returns `0`, preserving the memory accounting
+    /// behavior of existing custom providers.
+    fn heap_size(&self) -> usize {
+        0
+    }
+
     /// Returns a reference to the trait object as `&dyn Any` for downcasting
     ///
     /// This allows downcasting to concrete types when needed (e.g., for serialization)
@@ -503,6 +511,10 @@ impl PageIndexProvider for PageIndex {
     ) -> Option<&OffsetIndexMetaData> {
         let rg = self.offset_indexes.as_ref()?.get(row_group_idx)?;
         rg.get(column_idx)?.as_ref()
+    }
+
+    fn heap_size(&self) -> usize {
+        HeapSize::heap_size(self)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
