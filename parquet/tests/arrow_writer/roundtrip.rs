@@ -35,9 +35,10 @@ use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, Date32Array, Date64Array, Decimal128Array,
     Decimal256Array, DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array,
-    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray, LargeListArray,
-    LargeStringArray, ListArray, NullArray, PrimitiveArray, RecordBatch, RecordBatchReader,
-    StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Float64Array, Int8Array, Int16Array, Int32Array, Int32DictionaryArray, Int64Array,
+    LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
+    ListViewArray, NullArray, PrimitiveArray, RecordBatch, RecordBatchReader, StringArray,
+    StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
     Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
     UInt8DictionaryArray, UInt16Array, UInt32Array, UInt64Array,
@@ -420,6 +421,541 @@ fn struct_single_column() {
 
     let values = Arc::new(s);
     RoundTripTest::new(values).with_nullable(false).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_list() {
+    // define schema
+    let schema = Schema::new(vec![Field::new(
+        "a",
+        ArrowDataType::List(Arc::new(Field::new_list_field(ArrowDataType::Int32, false))),
+        true,
+    )]);
+
+    // create some data
+    let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+    // Construct a buffer for value offsets, for the nested array:
+    //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
+    let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
+
+    // Construct a list array from the above two
+    let a_list_data = ArrayData::builder(ArrowDataType::List(Arc::new(Field::new_list_field(
+        ArrowDataType::Int32,
+        false,
+    ))))
+    .len(5)
+    .add_buffer(a_value_offsets)
+    .add_child_data(a_values.into_data())
+    .null_bit_buffer(Some(Buffer::from([0b00011011])))
+    .build()
+    .unwrap();
+    let a = ListArray::from(a_list_data);
+    assert_eq!(a.null_count(), 1);
+
+    RoundTripTest::new(Arc::new(a))
+        .with_schema(Arc::new(schema))
+        .run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_list_non_null() {
+    // define schema
+    let schema = Schema::new(vec![Field::new(
+        "a",
+        ArrowDataType::List(Arc::new(Field::new_list_field(ArrowDataType::Int32, false))),
+        false,
+    )]);
+
+    // create some data
+    let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+    // Construct a buffer for value offsets, for the nested array:
+    //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
+    let a_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
+
+    // Construct a list array from the above two
+    let a_list_data = ArrayData::builder(ArrowDataType::List(Arc::new(Field::new_list_field(
+        ArrowDataType::Int32,
+        false,
+    ))))
+    .len(5)
+    .add_buffer(a_value_offsets)
+    .add_child_data(a_values.into_data())
+    .build()
+    .unwrap();
+    let a = ListArray::from(a_list_data);
+    assert_eq!(a.null_count(), 0);
+
+    RoundTripTest::new(Arc::new(a))
+        .with_schema(Arc::new(schema))
+        .run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_list_view() {
+    let list_field = Arc::new(Field::new_list_field(ArrowDataType::Int32, false));
+    let schema = Schema::new(vec![Field::new(
+        "a",
+        ArrowDataType::ListView(list_field.clone()),
+        true,
+    )]);
+
+    //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
+    let a = ListViewArray::new(
+        list_field,
+        vec![0, 1, 0, 3, 6].into(),
+        vec![1, 2, 0, 3, 4].into(),
+        Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+        Some(vec![true, true, false, true, true].into()),
+    );
+    assert_eq!(a.null_count(), 1);
+
+    RoundTripTest::new(Arc::new(a))
+        .with_schema(Arc::new(schema))
+        .run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_list_view_non_null() {
+    let list_field = Arc::new(Field::new_list_field(ArrowDataType::Int32, false));
+    let schema = Schema::new(vec![Field::new(
+        "a",
+        ArrowDataType::ListView(list_field.clone()),
+        false,
+    )]);
+
+    //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
+    let a = ListViewArray::new(
+        list_field,
+        vec![0, 1, 0, 3, 6].into(),
+        vec![1, 2, 0, 3, 4].into(),
+        Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+        None,
+    );
+    assert_eq!(a.null_count(), 0);
+
+    RoundTripTest::new(Arc::new(a))
+        .with_schema(Arc::new(schema))
+        .run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_list_view_out_of_order() {
+    let list_field = Arc::new(Field::new_list_field(ArrowDataType::Int32, false));
+    let schema = Schema::new(vec![Field::new(
+        "a",
+        ArrowDataType::ListView(list_field.clone()),
+        false,
+    )]);
+
+    // [[1], [2, 3], [], [7, 8, 9, 10], [4, 5, 6]] - out of order offsets
+    let a = ListViewArray::new(
+        list_field,
+        vec![0, 1, 0, 6, 3].into(),
+        vec![1, 2, 0, 4, 3].into(),
+        Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+        None,
+    );
+    assert_eq!(a.null_count(), 0);
+
+    RoundTripTest::new(Arc::new(a))
+        .with_schema(Arc::new(schema))
+        .run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_large_list_view() {
+    let list_field = Arc::new(Field::new_list_field(ArrowDataType::Int32, false));
+    let schema = Schema::new(vec![Field::new(
+        "a",
+        ArrowDataType::LargeListView(list_field.clone()),
+        true,
+    )]);
+
+    //  [[1], [2, 3], null, [4, 5, 6], [7, 8, 9, 10]]
+    let a = LargeListViewArray::new(
+        list_field,
+        vec![0i64, 1, 0, 3, 6].into(),
+        vec![1i64, 2, 0, 3, 4].into(),
+        Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+        Some(vec![true, true, false, true, true].into()),
+    );
+    assert_eq!(a.null_count(), 1);
+
+    RoundTripTest::new(Arc::new(a))
+        .with_schema(Arc::new(schema))
+        .run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_list_view_with_struct() {
+    // Test ListView containing Struct: ListView<Struct<Int32, Utf8>>
+    let struct_fields = Fields::from(vec![
+        Field::new("id", ArrowDataType::Int32, false),
+        Field::new("name", ArrowDataType::Utf8, false),
+    ]);
+    let struct_type = ArrowDataType::Struct(struct_fields.clone());
+    let list_field = Arc::new(Field::new("item", struct_type.clone(), false));
+
+    let schema = Schema::new(vec![Field::new(
+        "a",
+        ArrowDataType::ListView(list_field.clone()),
+        true,
+    )]);
+
+    // Create struct values
+    let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    let name_array = StringArray::from(vec!["a", "b", "c", "d", "e"]);
+    let struct_array = StructArray::new(
+        struct_fields,
+        vec![Arc::new(id_array), Arc::new(name_array)],
+        None,
+    );
+
+    // Create ListView: [{1, "a"}, {2, "b"}], null, [{3, "c"}, {4, "d"}, {5, "e"}]
+    let list_view = ListViewArray::new(
+        list_field,
+        vec![0, 2, 2].into(), // offsets
+        vec![2, 0, 3].into(), // sizes
+        Arc::new(struct_array),
+        Some(vec![true, false, true].into()),
+    );
+    assert_eq!(list_view.null_count(), 1);
+
+    RoundTripTest::new(Arc::new(list_view))
+        .with_schema(Arc::new(schema))
+        .run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_complex() {
+    // define schema
+    let struct_field_d = Arc::new(Field::new("d", ArrowDataType::Float64, true));
+    let struct_field_f = Arc::new(Field::new("f", ArrowDataType::Float32, true));
+    let struct_field_g = Arc::new(Field::new_list(
+        "g",
+        Field::new_list_field(ArrowDataType::Int16, true),
+        false,
+    ));
+    let struct_field_h = Arc::new(Field::new_list(
+        "h",
+        Field::new_list_field(ArrowDataType::Int16, false),
+        true,
+    ));
+    let struct_field_e = Arc::new(Field::new_struct(
+        "e",
+        vec![
+            struct_field_f.clone(),
+            struct_field_g.clone(),
+            struct_field_h.clone(),
+        ],
+        false,
+    ));
+    let schema = Schema::new(vec![
+        Field::new("a", ArrowDataType::Int32, false),
+        Field::new("b", ArrowDataType::Int32, true),
+        Field::new_struct(
+            "c",
+            vec![struct_field_d.clone(), struct_field_e.clone()],
+            false,
+        ),
+    ]);
+
+    // create some data
+    let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    let b = Int32Array::from(vec![Some(1), None, None, Some(4), Some(5)]);
+    let d = Float64Array::from(vec![None, None, None, Some(1.0), None]);
+    let f = Float32Array::from(vec![Some(0.0), None, Some(333.3), None, Some(5.25)]);
+
+    let g_value = Int16Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+    // Construct a buffer for value offsets, for the nested array:
+    //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
+    let g_value_offsets = arrow::buffer::Buffer::from([0, 1, 3, 3, 6, 10].to_byte_slice());
+
+    // Construct a list array from the above two
+    let g_list_data = ArrayData::builder(struct_field_g.data_type().clone())
+        .len(5)
+        .add_buffer(g_value_offsets.clone())
+        .add_child_data(g_value.to_data())
+        .build()
+        .unwrap();
+    let g = ListArray::from(g_list_data);
+    // The difference between g and h is that h has a null bitmap
+    let h_list_data = ArrayData::builder(struct_field_h.data_type().clone())
+        .len(5)
+        .add_buffer(g_value_offsets)
+        .add_child_data(g_value.to_data())
+        .null_bit_buffer(Some(Buffer::from([0b00011011])))
+        .build()
+        .unwrap();
+    let h = ListArray::from(h_list_data);
+
+    let e = StructArray::from(vec![
+        (struct_field_f, Arc::new(f) as ArrayRef),
+        (struct_field_g, Arc::new(g) as ArrayRef),
+        (struct_field_h, Arc::new(h) as ArrayRef),
+    ]);
+
+    let c = StructArray::from(vec![
+        (struct_field_d, Arc::new(d) as ArrayRef),
+        (struct_field_e, Arc::new(e) as ArrayRef),
+    ]);
+
+    // build a record batch
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+    )
+    .unwrap();
+
+    roundtrip(batch.clone(), Some(SMALL_SIZE / 2));
+    roundtrip(batch, Some(SMALL_SIZE / 3));
+}
+
+#[test]
+fn arrow_writer_complex_mixed() {
+    // This test was added while investigating https://github.com/apache/arrow-rs/issues/244.
+    // It was subsequently fixed while investigating https://github.com/apache/arrow-rs/issues/245.
+
+    // define schema
+    let offset_field = Arc::new(Field::new("offset", ArrowDataType::Int32, false));
+    let partition_field = Arc::new(Field::new("partition", ArrowDataType::Int64, true));
+    let topic_field = Arc::new(Field::new("topic", ArrowDataType::Utf8, true));
+    let schema = Schema::new(vec![Field::new(
+        "some_nested_object",
+        ArrowDataType::Struct(Fields::from(vec![
+            offset_field.clone(),
+            partition_field.clone(),
+            topic_field.clone(),
+        ])),
+        false,
+    )]);
+
+    // create some data
+    let offset = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    let partition = Int64Array::from(vec![Some(1), None, None, Some(4), Some(5)]);
+    let topic = StringArray::from(vec![Some("A"), None, Some("A"), Some(""), None]);
+
+    let some_nested_object = StructArray::from(vec![
+        (offset_field, Arc::new(offset) as ArrayRef),
+        (partition_field, Arc::new(partition) as ArrayRef),
+        (topic_field, Arc::new(topic) as ArrayRef),
+    ]);
+
+    // build a record batch
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(some_nested_object)]).unwrap();
+
+    roundtrip(batch, Some(SMALL_SIZE / 2));
+}
+
+#[test]
+fn arrow_writer_map() {
+    // Note: we are using the JSON Arrow reader for brevity
+    let json_content = r#"
+        {"stocks":{"long": "$AAA", "short": "$BBB"}}
+        {"stocks":{"long": null, "long": "$CCC", "short": null}}
+        {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
+        "#;
+    let entries_struct_type = ArrowDataType::Struct(Fields::from(vec![
+        Field::new(
+            Field::MAP_KEY_FIELD_DEFAULT_NAME,
+            ArrowDataType::Utf8,
+            false,
+        ),
+        Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            ArrowDataType::Utf8,
+            true,
+        ),
+    ]));
+    let stocks_field = Field::new(
+        "stocks",
+        ArrowDataType::Map(
+            Arc::new(Field::new(
+                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+                entries_struct_type,
+                false,
+            )),
+            false,
+        ),
+        true,
+    );
+    let schema = Arc::new(Schema::new(vec![stocks_field]));
+    let builder = arrow::json::ReaderBuilder::new(schema).with_batch_size(64);
+    let mut reader = builder.build(std::io::Cursor::new(json_content)).unwrap();
+
+    let batch = reader.next().unwrap().unwrap();
+    roundtrip(batch, None);
+}
+
+#[test]
+fn arrow_writer_2_level_struct() {
+    // tests writing <struct<struct<primitive>>
+    let field_c = Field::new("c", ArrowDataType::Int32, true);
+    let field_b = Field::new("b", ArrowDataType::Struct(vec![field_c].into()), true);
+    let type_a = ArrowDataType::Struct(vec![field_b.clone()].into());
+    let field_a = Field::new("a", type_a, true);
+    let schema = Schema::new(vec![field_a.clone()]);
+
+    // create data
+    let c = Int32Array::from(vec![Some(1), None, Some(3), None, None, Some(6)]);
+    let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
+        .len(6)
+        .null_bit_buffer(Some(Buffer::from([0b00100111])))
+        .add_child_data(c.into_data())
+        .build()
+        .unwrap();
+    let b = StructArray::from(b_data);
+    let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
+        .len(6)
+        .null_bit_buffer(Some(Buffer::from([0b00101111])))
+        .add_child_data(b.into_data())
+        .build()
+        .unwrap();
+    let a = StructArray::from(a_data);
+
+    assert_eq!(a.null_count(), 1);
+    assert_eq!(a.column(0).null_count(), 2);
+
+    // build a racord batch
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+    roundtrip(batch, Some(SMALL_SIZE / 2));
+}
+
+#[test]
+fn arrow_writer_2_level_struct_non_null() {
+    // tests writing <struct<struct<primitive>>
+    let field_c = Field::new("c", ArrowDataType::Int32, false);
+    let type_b = ArrowDataType::Struct(vec![field_c].into());
+    let field_b = Field::new("b", type_b.clone(), false);
+    let type_a = ArrowDataType::Struct(vec![field_b].into());
+    let field_a = Field::new("a", type_a.clone(), false);
+    let schema = Schema::new(vec![field_a]);
+
+    // create data
+    let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+    let b_data = ArrayDataBuilder::new(type_b)
+        .len(6)
+        .add_child_data(c.into_data())
+        .build()
+        .unwrap();
+    let b = StructArray::from(b_data);
+    let a_data = ArrayDataBuilder::new(type_a)
+        .len(6)
+        .add_child_data(b.into_data())
+        .build()
+        .unwrap();
+    let a = StructArray::from(a_data);
+
+    assert_eq!(a.null_count(), 0);
+    assert_eq!(a.column(0).null_count(), 0);
+
+    // build a racord batch
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+    roundtrip(batch, Some(SMALL_SIZE / 2));
+}
+
+#[test]
+fn arrow_writer_2_level_struct_mixed_null() {
+    // tests writing <struct<struct<primitive>>
+    let field_c = Field::new("c", ArrowDataType::Int32, false);
+    let type_b = ArrowDataType::Struct(vec![field_c].into());
+    let field_b = Field::new("b", type_b.clone(), true);
+    let type_a = ArrowDataType::Struct(vec![field_b].into());
+    let field_a = Field::new("a", type_a.clone(), false);
+    let schema = Schema::new(vec![field_a]);
+
+    // create data
+    let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+    let b_data = ArrayDataBuilder::new(type_b)
+        .len(6)
+        .null_bit_buffer(Some(Buffer::from([0b00100111])))
+        .add_child_data(c.into_data())
+        .build()
+        .unwrap();
+    let b = StructArray::from(b_data);
+    // a intentionally has no null buffer, to test that this is handled correctly
+    let a_data = ArrayDataBuilder::new(type_a)
+        .len(6)
+        .add_child_data(b.into_data())
+        .build()
+        .unwrap();
+    let a = StructArray::from(a_data);
+
+    assert_eq!(a.null_count(), 0);
+    assert_eq!(a.column(0).null_count(), 2);
+
+    // build a racord batch
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+    roundtrip(batch, Some(SMALL_SIZE / 2));
+}
+
+#[test]
+fn arrow_writer_2_level_struct_mixed_null_2() {
+    // tests writing <struct<struct<primitive>>, where the primitive columns are non-null.
+    let field_c = Field::new("c", ArrowDataType::Int32, false);
+    let field_d = Field::new("d", ArrowDataType::FixedSizeBinary(4), false);
+    let field_e = Field::new(
+        "e",
+        ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::Int32),
+            Box::new(ArrowDataType::Utf8),
+        ),
+        false,
+    );
+
+    let field_b = Field::new(
+        "b",
+        ArrowDataType::Struct(vec![field_c, field_d, field_e].into()),
+        false,
+    );
+    let type_a = ArrowDataType::Struct(vec![field_b.clone()].into());
+    let field_a = Field::new("a", type_a, true);
+    let schema = Schema::new(vec![field_a.clone()]);
+
+    // create data
+    let c = Int32Array::from_iter_values(0..6);
+    let d = FixedSizeBinaryArray::try_from_iter(
+        ["aaaa", "bbbb", "cccc", "dddd", "eeee", "ffff"].into_iter(),
+    )
+    .expect("four byte values");
+    let e = Int32DictionaryArray::from_iter(["one", "two", "three", "four", "five", "one"]);
+    let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
+        .len(6)
+        .add_child_data(c.into_data())
+        .add_child_data(d.into_data())
+        .add_child_data(e.into_data())
+        .build()
+        .unwrap();
+    let b = StructArray::from(b_data);
+    let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
+        .len(6)
+        .null_bit_buffer(Some(Buffer::from([0b00100101])))
+        .add_child_data(b.into_data())
+        .build()
+        .unwrap();
+    let a = StructArray::from(a_data);
+
+    assert_eq!(a.null_count(), 3);
+    assert_eq!(a.column(0).null_count(), 0);
+
+    // build a record batch
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+
+    roundtrip(batch, Some(SMALL_SIZE / 2));
 }
 
 #[test]
