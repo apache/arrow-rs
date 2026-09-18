@@ -9860,6 +9860,38 @@ mod tests {
         ));
         let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
         assert_eq!(&expected, &fsl);
+
+        // Direct non-zero offsets must retain the row count and validity.
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let target = DataType::FixedSizeList(field.clone(), 0);
+        let strict = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        for nulls in [None, Some(NullBuffer::from(vec![true, false]))] {
+            let values = Arc::new(Int32Array::from(vec![1, 2, 3]));
+            let inputs: [ArrayRef; 2] = [
+                Arc::new(ListArray::new(
+                    field.clone(),
+                    OffsetBuffer::new(vec![3; 3].into()),
+                    values.clone(),
+                    nulls.clone(),
+                )),
+                Arc::new(LargeListArray::new(
+                    field.clone(),
+                    OffsetBuffer::new(vec![3; 3].into()),
+                    values,
+                    nulls.clone(),
+                )),
+            ];
+            for input in inputs {
+                let actual = cast_with_options(input.as_ref(), &target, &strict).unwrap();
+                assert_eq!(actual.len(), 2);
+                assert_eq!(actual.data_type(), &target);
+                assert_eq!(actual.nulls(), nulls.as_ref());
+                assert_eq!(actual.as_fixed_size_list().values().len(), 0);
+            }
+        }
     }
 
     #[test]
@@ -9882,20 +9914,33 @@ mod tests {
                 let actual =
                     cast_with_options(&input.slice(1, 2), expected.data_type(), &options).unwrap();
                 assert_eq!(actual.as_ref(), &expected as &dyn Array);
+            }
+        }
+        test::<i32>();
+        test::<i64>();
+    }
 
-                // A differently sized prefix and invalid excluded children must not
-                // affect selection or the recursive child cast.
-                let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
-                    Some(vec![Some(i32::MAX); 3]),
-                    Some(vec![Some(3), None]),
-                    Some(vec![Some(5), Some(6)]),
-                    Some(vec![Some(i32::MAX); 2]),
-                ]);
-                let selected = input.slice(1, 3).slice(0, 2);
-                let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
-                    [Some([Some(3), None]), Some([Some(5), Some(6)])],
-                    2,
-                );
+    #[test]
+    fn test_issue_10975_sliced_list_to_fsl_subcast() {
+        fn test<O: OffsetSizeTrait>() {
+            // A differently sized prefix and invalid excluded children must not
+            // affect selection or the recursive child cast.
+            let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+                Some(vec![Some(i32::MAX); 3]),
+                Some(vec![Some(3), None]),
+                Some(vec![Some(5), Some(6)]),
+                Some(vec![Some(i32::MAX); 2]),
+            ]);
+            let selected = input.slice(1, 3).slice(0, 2);
+            let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                [Some([Some(3), None]), Some([Some(5), Some(6)])],
+                2,
+            );
+            for safe in [true, false] {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
                 for child_type in [DataType::Int32, DataType::Int64, DataType::Int16] {
                     let target = DataType::FixedSizeList(
                         Arc::new(Field::new_list_field(child_type, true)),
@@ -9906,12 +9951,6 @@ mod tests {
                     assert_eq!(actual.as_ref(), expected.as_ref());
                     assert_eq!(actual.as_fixed_size_list().values().len(), 4);
                 }
-                let empty =
-                    cast_with_options(&input.slice(2, 0), expected.data_type(), &options).unwrap();
-                assert_eq!(
-                    empty.as_ref(),
-                    new_empty_array(expected.data_type()).as_ref()
-                );
             }
         }
         test::<i32>();
@@ -9922,8 +9961,6 @@ mod tests {
     fn test_issue_10975_sliced_list_to_fsl_padding() {
         fn test<O: OffsetSizeTrait>() {
             let field = Arc::new(Field::new_list_field(DataType::Int32, true));
-            // Leading/consecutive empty nulls, short/long nulls, and an
-            // exact-width null exercise padding and the unmodified fast path.
             let lengths = [3, 0, 0, 2, 1, 3, 2, 2, 0, 2];
             let values = Int32Array::from_iter_values(0..16).slice(1, 15);
             let input = GenericListArray::<O>::new(
@@ -9941,7 +9978,13 @@ mod tests {
                     ..Default::default()
                 };
                 let full = cast_with_options(&input, &target, &options).unwrap();
-                for (start, len) in [(1, 8), (1, 2), (3, 4), (6, 2), (8, 1)] {
+                for (start, len) in [
+                    (1, 8), // Leading/consecutive empty nulls, short/long and exact-width nulls.
+                    (1, 2), // Only consecutive empty nulls.
+                    (3, 4), // Short and long nulls between valid rows.
+                    (6, 2), // Valid row and exact-width null: no padding needed.
+                    (8, 1), // Only one empty null at a non-zero child offset.
+                ] {
                     let selected = input.slice(start, len);
                     let actual = cast_with_options(&selected, &target, &options).unwrap();
                     assert_eq!(actual.as_ref(), full.slice(start, len).as_ref());
@@ -9987,23 +10030,6 @@ mod tests {
                 error.to_string(),
                 "Cast error: Cannot cast to FixedSizeList(2): value at index 1 has length 0"
             );
-
-            // Direct non-zero offsets with width zero must retain the row count.
-            let field = Arc::new(Field::new_list_field(DataType::Int32, true));
-            for nulls in [None, Some(NullBuffer::from(vec![true, false]))] {
-                let input = GenericListArray::<O>::new(
-                    field.clone(),
-                    OffsetBuffer::new(vec![O::from_usize(3).unwrap(); 3].into()),
-                    Arc::new(Int32Array::from(vec![1, 2, 3])),
-                    nulls.clone(),
-                );
-                let target = DataType::FixedSizeList(field.clone(), 0);
-                let actual = cast_with_options(&input, &target, &strict).unwrap();
-                assert_eq!(actual.len(), 2);
-                assert_eq!(actual.data_type(), &target);
-                assert_eq!(actual.nulls(), nulls.as_ref());
-                assert_eq!(actual.as_fixed_size_list().values().len(), 0);
-            }
         }
         test::<i32>();
         test::<i64>();
@@ -10351,29 +10377,26 @@ mod tests {
         let target_type = DataType::FixedSizeList(inner_field.clone(), 3);
         let expected = new_empty_array(&target_type);
 
-        // list
-        let array = new_empty_array(&DataType::List(inner_field.clone()));
-        assert!(can_cast_types(array.data_type(), &target_type));
-        let actual = cast(array.as_ref(), &target_type).unwrap();
-        assert_eq!(expected.as_ref(), actual.as_ref());
-
-        // largelist
-        let array = new_empty_array(&DataType::LargeList(inner_field.clone()));
-        assert!(can_cast_types(array.data_type(), &target_type));
-        let actual = cast(array.as_ref(), &target_type).unwrap();
-        assert_eq!(expected.as_ref(), actual.as_ref());
-
-        // listview
-        let array = new_empty_array(&DataType::ListView(inner_field.clone()));
-        assert!(can_cast_types(array.data_type(), &target_type));
-        let actual = cast(array.as_ref(), &target_type).unwrap();
-        assert_eq!(expected.as_ref(), actual.as_ref());
-
-        // largelistview
-        let array = new_empty_array(&DataType::LargeListView(inner_field.clone()));
-        assert!(can_cast_types(array.data_type(), &target_type));
-        let actual = cast(array.as_ref(), &target_type).unwrap();
-        assert_eq!(expected.as_ref(), actual.as_ref());
+        let cases = [
+            new_empty_array(&DataType::List(inner_field.clone())),
+            new_empty_array(&DataType::LargeList(inner_field.clone())),
+            new_empty_array(&DataType::ListView(inner_field.clone())),
+            new_empty_array(&DataType::LargeListView(inner_field.clone())),
+            // Empty slices with non-zero child offsets (issue #10975).
+            make_list_array().slice(2, 0),
+            make_large_list_array().slice(2, 0),
+        ];
+        for array in cases {
+            assert!(can_cast_types(array.data_type(), &target_type));
+            for safe in [true, false] {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                let actual = cast_with_options(array.as_ref(), &target_type, &options).unwrap();
+                assert_eq!(expected.as_ref(), actual.as_ref());
+            }
+        }
     }
 
     fn make_list_array() -> ArrayRef {
