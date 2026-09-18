@@ -3587,6 +3587,30 @@ mod tests {
     }
 
     #[test]
+    fn test_stream_reader_rejects_short_validity_buffer() {
+        // Reproduce #7124: serialize an Int32Array with too few validity bits.
+        let data = ArrayDataBuilder::new(DataType::Int32)
+            .len(8000)
+            .add_buffer(ScalarBuffer::<i32>::from_iter(0..8000).into())
+            .nulls(Some(NullBuffer::from(&[true, false, true, false])));
+        let array: ArrayRef = unsafe { Arc::new(Int32Array::from(data.build_unchecked())) };
+        let batch = RecordBatch::try_from_iter([("a", array)]).unwrap();
+
+        let mut stream = Vec::new();
+        let mut writer =
+            crate::writer::StreamWriter::try_new(&mut stream, &batch.schema()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+
+        let mut reader = StreamReader::try_new(Cursor::new(stream), None).unwrap();
+        let err = reader.next().unwrap().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: null_bit_buffer size too small. got 1 needed 1000"
+        );
+    }
+
+    #[test]
     fn test_invalid_struct_array_ipc_read_errors() {
         let a_field = Field::new("a", DataType::Int32, false);
         let b_field = Field::new("b", DataType::Int32, false);
