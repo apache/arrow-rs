@@ -35,6 +35,14 @@ pub(super) const SMALL_SIZE: usize = 7;
 
 // Write the batch to parquet and read it back out, ensuring
 // that what comes out is the same as what was written in
+#[expect(
+    clippy::allow_attributes,
+    reason = "The helper is used in one test crate and unused in the other, so expect(dead_code) cannot apply to both"
+)]
+#[allow(
+    dead_code,
+    reason = "Only used by integration tests; this module is also compiled by unit tests"
+)]
 pub(super) fn roundtrip(
     expected_batch: RecordBatch,
     max_row_group_size: Option<usize>,
@@ -128,6 +136,14 @@ impl RoundTripTest {
     }
 
     /// Set the schema
+    #[expect(
+        clippy::allow_attributes,
+        reason = "The helper is used in one test crate and unused in the other, so expect(dead_code) cannot apply to both"
+    )]
+    #[allow(
+        dead_code,
+        reason = "Only used by integration tests; this module is also compiled by unit tests"
+    )]
     pub(super) fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = Some(schema);
         self
@@ -140,18 +156,42 @@ impl RoundTripTest {
     }
 
     /// Set bloom filter
+    #[expect(
+        clippy::allow_attributes,
+        reason = "The helper is used in one test crate and unused in the other, so expect(dead_code) cannot apply to both"
+    )]
+    #[allow(
+        dead_code,
+        reason = "Only used by unit tests; this module is also compiled by integration tests"
+    )]
     pub(super) fn with_bloom_filter(mut self, bloom_filter: bool) -> Self {
         self.bloom_filter = bloom_filter;
         self
     }
 
     /// Set bloom filter max ndv
+    #[expect(
+        clippy::allow_attributes,
+        reason = "The helper is used in one test crate and unused in the other, so expect(dead_code) cannot apply to both"
+    )]
+    #[allow(
+        dead_code,
+        reason = "Only used by unit tests; this module is also compiled by integration tests"
+    )]
     pub(super) fn with_bloom_filter_ndv(mut self, bloom_filter_ndv: u64) -> Self {
         self.bloom_filter_ndv = Some(bloom_filter_ndv);
         self
     }
 
     /// Set bloom filter position
+    #[expect(
+        clippy::allow_attributes,
+        reason = "The helper is used in one test crate and unused in the other, so expect(dead_code) cannot apply to both"
+    )]
+    #[allow(
+        dead_code,
+        reason = "Only used by unit tests; this module is also compiled by integration tests"
+    )]
     pub(super) fn with_bloom_filter_position(
         mut self,
         bloom_filter_position: BloomFilterPosition,
