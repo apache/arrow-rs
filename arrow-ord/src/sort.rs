@@ -943,6 +943,7 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 /// use arrow_ord::sort::{lexsort_to_indices, SortColumn};
 /// use arrow_select::take::take_record_batch;
 ///
+/// // Two columns (a, b). Values (2,x), (1, z), (1(a))
 /// let batch = RecordBatch::try_from_iter(vec![
 ///     ("a", Arc::new(Int32Array::from(vec![2, 1, 1])) as ArrayRef),
 ///     ("b", Arc::new(StringArray::from(vec!["x", "z", "a"])) as ArrayRef),
