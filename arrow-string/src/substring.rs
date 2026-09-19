@@ -26,7 +26,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
-use num_traits::Zero;
+use num_traits::{CheckedAdd, Zero};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -81,13 +81,15 @@ pub fn substring(
             let values = substring(dictionary.values(), start, length)?;
             Ok(Arc::new(dictionary.with_values(values)))
         }
-        DataType::LargeBinary => {
-            byte_substring(array.as_binary::<i64>(), start, length.map(|e| e as i64))
-        }
+        DataType::LargeBinary => byte_substring(
+            array.as_binary::<i64>(),
+            start,
+            length.map(saturating_length_i64),
+        ),
         DataType::Binary => byte_substring(
             array.as_binary::<i32>(),
-            start as i32,
-            length.map(|e| e as i32),
+            saturating_start_i32(start),
+            length.map(saturating_length_i32),
         ),
         DataType::FixedSizeBinary(old_len) => {
             let old_len: usize = (*old_len)
@@ -95,13 +97,15 @@ pub fn substring(
                 .expect("negative FixedSizeBinary value length");
             fixed_size_binary_substring(array.as_fixed_size_binary(), old_len, start, length)
         }
-        DataType::LargeUtf8 => {
-            byte_substring(array.as_string::<i64>(), start, length.map(|e| e as i64))
-        }
+        DataType::LargeUtf8 => byte_substring(
+            array.as_string::<i64>(),
+            start,
+            length.map(saturating_length_i64),
+        ),
         DataType::Utf8 => byte_substring(
             array.as_string::<i32>(),
-            start as i32,
-            length.map(|e| e as i32),
+            saturating_start_i32(start),
+            length.map(saturating_length_i32),
         ),
         DataType::Utf8View => string_view_substring(array.as_string_view(), start, length),
         DataType::BinaryView => binary_view_substring(array.as_binary_view(), start, length),
@@ -316,6 +320,30 @@ fn binary_view_substring(
     Ok(Arc::new(builder.finish()))
 }
 
+/// Clamps a 64 bit `start` into the 32 bit offset domain.
+///
+/// A `start` past `i32::MAX` means "past the end of every value", and saturating
+/// keeps that meaning. Casting wrapped it to a negative start, which
+/// [`byte_substring`] reads as counting from the end of the value instead, so the
+/// same call returned different data on `Utf8` than on `LargeUtf8`.
+fn saturating_start_i32(start: i64) -> i32 {
+    start.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
+/// Clamps a `length` into the 32 bit offset domain. Lengths are unsigned, so only
+/// the upper bound can be exceeded.
+fn saturating_length_i32(length: u64) -> i32 {
+    length.min(i32::MAX as u64) as i32
+}
+
+/// Clamps a `length` into the 64 bit offset domain.
+///
+/// `u64::MAX as i64` is -1, and a negative length puts the end of the substring
+/// before its start, which drives the output offsets negative.
+fn saturating_length_i64(length: u64) -> i64 {
+    length.min(i64::MAX as u64) as i64
+}
+
 fn byte_substring<T: ByteArrayType>(
     array: &GenericByteArray<T>,
     start: T::Offset,
@@ -357,12 +385,21 @@ where
         .windows(2)
         .try_for_each(|pair| -> Result<(), ArrowError> {
             let new_start = match start.cmp(&zero) {
-                Ordering::Greater => check_char_boundary((pair[0] + start).min(pair[1]))?,
+                Ordering::Greater => {
+                    // a saturated start can carry pair[0] + start past the offset
+                    // type. that means past the end of this value, so clamp to the
+                    // end rather than let the add wrap.
+                    let shifted = pair[0].checked_add(&start).unwrap_or(pair[1]);
+                    check_char_boundary(shifted.min(pair[1]))?
+                }
                 Ordering::Equal => pair[0],
                 Ordering::Less => check_char_boundary((pair[1] + start).max(pair[0]))?,
             };
             let new_end = match length {
-                Some(length) => check_char_boundary((length + new_start).min(pair[1]))?,
+                Some(length) => {
+                    let end = length.checked_add(&new_start).unwrap_or(pair[1]);
+                    check_char_boundary(end.min(pair[1]))?
+                }
                 None => pair[1],
             };
             len_so_far += new_end - new_start;
@@ -1234,6 +1271,59 @@ mod tests {
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
             vec![Some("hel"), Some("bye")]
+        );
+    }
+
+    /// A `start` or `length` past the 32 bit offset domain used to be cast
+    /// straight to `i32`, wrapping negative. `byte_substring` reads a negative
+    /// start as counting from the end, so the 32 bit arms silently did something
+    /// different from the 64 bit arms for the same call. They agree now.
+    #[test]
+    fn out_of_range_start_and_length_match_the_64_bit_arms() {
+        let values = vec![Some("hello"), Some("world"), None];
+        let utf8 = StringArray::from(values.clone());
+        let large = LargeStringArray::from(values.clone());
+        let binary = BinaryArray::from_iter(values.iter().map(|v| v.map(|s| s.as_bytes())));
+        let large_binary =
+            LargeBinaryArray::from_iter(values.iter().map(|v| v.map(|s| s.as_bytes())));
+
+        // starts and lengths that do not survive a cast to i32
+        let starts: [i64; 4] = [1 << 31, (1 << 31) + 5, 1 << 32, i64::MAX];
+        let lengths: [Option<u64>; 3] = [None, Some(1 << 31), Some(u64::MAX)];
+
+        for start in starts {
+            for length in lengths {
+                let narrow = substring(&utf8, start, length).unwrap();
+                let wide = substring(&large, start, length).unwrap();
+                assert_eq!(
+                    narrow.as_string::<i32>().iter().collect::<Vec<_>>(),
+                    wide.as_string::<i64>().iter().collect::<Vec<_>>(),
+                    "Utf8 and LargeUtf8 disagree at start {start}, length {length:?}"
+                );
+
+                let narrow = substring(&binary, start, length).unwrap();
+                let wide = substring(&large_binary, start, length).unwrap();
+                assert_eq!(
+                    narrow.as_binary::<i32>().iter().collect::<Vec<_>>(),
+                    wide.as_binary::<i64>().iter().collect::<Vec<_>>(),
+                    "Binary and LargeBinary disagree at start {start}, length {length:?}"
+                );
+            }
+        }
+
+        // and the answer itself is the sensible one: skipping more characters
+        // than the value holds leaves nothing behind.
+        let out = substring(&utf8, 1 << 31, None).unwrap();
+        assert_eq!(
+            out.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some(""), Some(""), None]
+        );
+
+        // starts that already fit are untouched
+        let out = substring(&utf8, 3, None).unwrap();
+        assert_eq!(
+            out.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("lo"), Some("ld"), None]
         );
     }
 }
