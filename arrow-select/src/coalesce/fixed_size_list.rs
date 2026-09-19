@@ -19,7 +19,7 @@ use super::InProgressArray;
 use crate::concat::concat;
 use arrow_array::cast::AsArray;
 use arrow_array::{new_empty_array, Array, ArrayRef, FixedSizeListArray};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBuffer};
 use arrow_schema::{ArrowError, Field};
 use std::sync::Arc;
 
@@ -28,34 +28,40 @@ use std::sync::Arc;
 /// Buffers Arc-cloned child value slices per `copy_rows` call and concatenates
 /// them once at `finish`, avoiding per-row child array reconstruction.
 ///
-/// Null handling uses [`BooleanBufferBuilder`] with [`BooleanBuffer::slice`]
-/// (O(1)) to defer all `count_set_bits` work to a single call in `finish`,
-/// matching the cost of the generic path's [`concat`]-based null handling.
+/// Null handling uses a two-phase strategy:
+/// * When all sources so far have been null-free, only a `non_null_prefix`
+///   counter is kept (zero heap overhead).
+/// * On the first null-bearing `copy_rows` call, O(1) `BooleanBuffer` slices
+///   are stored in `null_slices`; a `BooleanBufferBuilder` is built once at
+///   `finish()` with exact capacity, deferring the single `count_set_bits`
+///   call to that point.  This avoids the eager over-allocation of
+///   `batch_size` bits that would otherwise inflate memory pressure on every
+///   batch cycle.
 #[derive(Debug)]
 pub(crate) struct InProgressFixedSizeListArray {
     source: Option<ArrayRef>,
     list_size: i32,
-    batch_size: usize,
     field: Arc<Field>,
-    /// Validity bits accumulated across `copy_rows` calls.
-    /// `None` until the first source with nulls is seen; all-valid batches
-    /// never allocate here.
-    null_bits: Option<BooleanBufferBuilder>,
-    /// Non-null rows accumulated before `null_bits` was first materialized.
+    /// All-valid rows accumulated before the first null-bearing source.
+    /// When `null_slices` is empty this counter is the only null-tracking
+    /// state, keeping the no-null path allocation-free.
     non_null_prefix: usize,
+    /// Null-bit slices collected once the first null-bearing source is seen.
+    /// `None` means all rows in that slice were valid.
+    /// Built on demand; empty when no nulls have been seen yet.
+    null_slices: Vec<(Option<BooleanBuffer>, usize)>,
     value_slices: Vec<ArrayRef>,
     rows: usize,
 }
 
 impl InProgressFixedSizeListArray {
-    pub(crate) fn new(list_size: i32, field: Arc<Field>, batch_size: usize) -> Self {
+    pub(crate) fn new(list_size: i32, field: Arc<Field>, _batch_size: usize) -> Self {
         Self {
             source: None,
             list_size,
-            batch_size,
             field,
-            null_bits: None,
             non_null_prefix: 0,
+            null_slices: Vec::new(),
             value_slices: Vec::new(),
             rows: 0,
         }
@@ -82,33 +88,45 @@ impl InProgressArray for InProgressFixedSizeListArray {
         self.value_slices.push(child_slice);
 
         if let Some(src_nulls) = fsl.nulls() {
-            // Materialize on first null-bearing source, catching up any
-            // all-valid rows accumulated before this point.
-            let builder = self.null_bits.get_or_insert_with(|| {
-                let mut b = BooleanBufferBuilder::new(self.batch_size.max(self.rows + len));
-                b.append_n(self.non_null_prefix, true);
-                b
-            });
-            // BooleanBuffer::slice is O(1) — adjusts offset/len without bit-counting.
-            // BooleanBufferBuilder::append_buffer copies bits without calling
-            // count_set_bits; that cost is deferred to the single NullBuffer::new
-            // call in finish(), matching the generic path's concat overhead.
-            builder.append_buffer(&src_nulls.inner().slice(offset, len));
-        } else {
-            match self.null_bits.as_mut() {
-                Some(b) => b.append_n(len, true),
-                None => self.non_null_prefix += len,
+            // First null-bearing source: flush the all-valid prefix into
+            // null_slices so the BooleanBuffer accounting stays coherent.
+            if self.null_slices.is_empty() && self.non_null_prefix > 0 {
+                self.null_slices
+                    .push((None, std::mem::take(&mut self.non_null_prefix)));
             }
+            // BooleanBuffer::slice is O(1) — no bit-counting.
+            let bool_buf = src_nulls.inner().slice(fsl.offset() + offset, len);
+            self.null_slices.push((Some(bool_buf), len));
+        } else if self.null_slices.is_empty() {
+            // Still in the all-valid prefix phase; keep it as a single counter.
+            self.non_null_prefix += len;
+        } else {
+            // Already tracking nulls; record this all-valid slice.
+            self.null_slices.push((None, len));
         }
         self.rows += len;
         Ok(())
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        // count_set_bits is called at most once per output batch.
-        let nulls = self.null_bits.take().map(|mut b| NullBuffer::new(b.finish()));
-        self.non_null_prefix = 0;
         let rows = std::mem::take(&mut self.rows);
+        self.non_null_prefix = 0;
+
+        // Build the null buffer only if at least one source contributed nulls.
+        // Using exact capacity `rows` keeps the count_set_bits scan tight.
+        let nulls = if !self.null_slices.is_empty() {
+            let mut builder = BooleanBufferBuilder::new(rows);
+            for (null_slice, len) in &self.null_slices {
+                match null_slice {
+                    Some(buf) => builder.append_buffer(buf),
+                    None => builder.append_n(*len, true),
+                }
+            }
+            self.null_slices.clear();
+            Some(NullBuffer::new(builder.finish()))
+        } else {
+            None
+        };
 
         let values = if rows == 0 {
             new_empty_array(self.field.data_type())
@@ -127,14 +145,10 @@ impl InProgressArray for InProgressFixedSizeListArray {
     }
 
     fn size(&self) -> usize {
-        self.null_bits
-            .as_ref()
-            .map_or(0, |b| b.len().div_ceil(8))
-            + self
-                .value_slices
-                .iter()
-                .map(|slice| slice.get_array_memory_size())
-                .sum::<usize>()
+        self.value_slices
+            .iter()
+            .map(|slice| slice.get_array_memory_size())
+            .sum::<usize>()
             + self
                 .source
                 .as_ref()
@@ -266,5 +280,34 @@ mod tests {
         let mut coalescer = make_coalescer(4);
         let output = coalescer.finish().unwrap();
         assert_eq!(output.len(), 0);
+    }
+
+    #[test]
+    fn test_mixed_null_nonnull_sources() {
+        // Verify the prefix flush path: non-null source, then null source, then non-null source.
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let no_null = make_fsl(2, &[1, 2, 3, 4]);
+        let with_null: ArrayRef = Arc::new(FixedSizeListArray::new(
+            Arc::clone(&field),
+            2,
+            Arc::new(Int32Array::from(vec![5, 6, 7, 8])),
+            Some(arrow_buffer::NullBuffer::from(vec![true, false])),
+        ));
+        let no_null2: ArrayRef = make_fsl(2, &[9, 10]);
+        let mut coalescer = InProgressFixedSizeListArray::new(2, Arc::clone(&field), 8);
+        coalescer.set_source(Some(Arc::clone(&no_null)));
+        coalescer.copy_rows(0, 2).unwrap();
+        coalescer.set_source(Some(Arc::clone(&with_null)));
+        coalescer.copy_rows(0, 2).unwrap();
+        coalescer.set_source(Some(Arc::clone(&no_null2)));
+        coalescer.copy_rows(0, 1).unwrap();
+        let output = coalescer.finish().unwrap();
+        assert_eq!(output.len(), 5);
+        let out_fsl = output.as_fixed_size_list();
+        assert!(out_fsl.is_valid(0)); // from no_null
+        assert!(out_fsl.is_valid(1)); // from no_null
+        assert!(out_fsl.is_valid(2)); // from with_null row 0
+        assert!(out_fsl.is_null(3)); // from with_null row 1
+        assert!(out_fsl.is_valid(4)); // from no_null2
     }
 }
