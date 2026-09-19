@@ -1,0 +1,103 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Shared build inputs select all suites on pull requests.
+common:
+  - .asf.yaml
+  - .github/**
+  - .gitmodules
+  - Cargo.toml
+  - Cargo.lock
+  - rust-toolchain.toml
+suites:
+  arrow:
+    - arrow-arith/**
+    - arrow-array/**
+    - arrow-buffer/**
+    - arrow-cast/**
+    - arrow-cmp/**
+    - arrow-csv/**
+    - arrow-data/**
+    - arrow-integration-test/**
+    - arrow-ipc/**
+    - arrow-json/**
+    - arrow-avro/**
+    - arrow-ord/**
+    - arrow-row/**
+    - arrow-schema/**
+    - arrow-select/**
+    - arrow-string/**
+    - arrow/**
+  arrow-flight:
+    - arrow-array/**
+    - arrow-buffer/**
+    - arrow-cast/**
+    - arrow-data/**
+    - arrow-flight/**
+    - arrow-ipc/**
+    - arrow-schema/**
+    - arrow-select/**
+  parquet:
+    - arrow/**
+    - arrow-array/**
+    - arrow-buffer/**
+    - arrow-cast/**
+    - arrow-data/**
+    - arrow-schema/**
+    - arrow-select/**
+    - arrow-ipc/**
+    - arrow-csv/**
+    - arrow-json/**
+    - arrow-avro/**
+    - parquet/**
+    - parquet-variant/**
+    - parquet-variant-compute/**
+    - parquet-variant-json/**
+  parquet-derive:
+    - parquet/**
+    - parquet_derive/**
+    - parquet_derive_test/**
+  parquet-variant:
+    - parquet-variant/**
+    - parquet-variant-json/**
+    - parquet-variant-compute/**
+  parquet-geospatial:
+    - parquet-geospatial/**
+  integration:
+    - arrow-arith/**
+    - arrow-array/**
+    - arrow-buffer/**
+    - arrow-cast/**
+    - arrow-cmp/**
+    - arrow-csv/**
+    - arrow-data/**
+    - arrow-flight/**
+    - arrow-integration-test/**
+    - arrow-integration-testing/**
+    - arrow-ipc/**
+    - arrow-json/**
+    - arrow-ord/**
+    - arrow-pyarrow-integration-testing/**
+    - arrow-pyarrow/**
+    - arrow-row/**
+    - arrow-schema/**
+    - arrow-select/**
+    - arrow-string/**
+    - arrow/**
+  audit:
+    - '**/Cargo.toml'
+    - '**/Cargo.lock'
