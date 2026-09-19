@@ -56,7 +56,8 @@ use uuid::Uuid;
 /// A new VariantArray with all data in the value column and no typed_value column
 ///
 /// # Errors
-/// - If the shredded data contains spec violations (e.g., field name conflicts)
+/// - If the shredded data contains spec violations (e.g., field name conflicts or missing
+///   field names in metadata)
 /// - If unsupported data types are encountered in typed_value columns
 pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
     let nulls = array.nulls();
@@ -147,6 +148,10 @@ impl<B: VariantBuilderExt> VariantBuilderExt for TopLevelRowSink<B> {
 
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.0.append_value(value);
+    }
+
+    fn try_append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) -> Result<()> {
+        self.0.try_append_value(value)
     }
 
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>> {
@@ -366,8 +371,7 @@ impl NullUnshredVariantBuilder {
         _metadata: &VariantMetadata,
         _index: usize,
     ) -> Result<()> {
-        builder.append_value(Variant::Null);
-        Ok(())
+        builder.try_append_value(Variant::Null)
     }
 }
 
@@ -396,7 +400,7 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
                 )
             })?;
             let variant = Variant::try_new_with_metadata(metadata.clone(), value_bytes)?;
-            builder.append_value(variant);
+            builder.try_append_value(variant)?;
         }
         Ok(())
     }
@@ -432,7 +436,7 @@ macro_rules! handle_unshredded_case {
         // If typed_value is null, handle unshredded case and return early
         if $self.typed_value.is_null($index) {
             match value {
-                Some(value) => $builder.append_value(value),
+                Some(value) => $builder.try_append_value(value)?,
                 None => $builder.append_null(),
             }
             return Ok(());
@@ -488,8 +492,7 @@ macro_rules! impl_append_to_variant_builder {
                     let $v = value;
                     let value = $transform;
                 )?
-                builder.append_value(value);
-                Ok(())
+                builder.try_append_value(value)
             }
         }
     };
@@ -581,9 +584,9 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
         let timestamp_value = self.typed_value.value(index);
         let dt = T::to_datetime_utc(timestamp_value)?;
         if self.has_timezone {
-            builder.append_value(dt);
+            builder.try_append_value(dt)?;
         } else {
-            builder.append_value(dt.naive_utc());
+            builder.try_append_value(dt.naive_utc())?;
         }
         Ok(())
     }
@@ -623,8 +626,7 @@ where
 
         let raw = self.typed_value.value(index);
         let variant = V::try_new_with_signed_scale(raw, self.scale)?;
-        builder.append_value(variant);
-        Ok(())
+        builder.try_append_value(variant)
     }
 }
 
@@ -692,7 +694,7 @@ impl<'a> StructUnshredVariantBuilder<'a> {
                         "Field '{field_name}' appears in both typed_value and value",
                     )));
                 }
-                object_builder.insert_bytes(field_name, field_value);
+                object_builder.try_insert_bytes(field_name, field_value)?;
             }
         }
 
@@ -759,12 +761,16 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{VariantArray, VariantArrayBuilder, shred_variant};
+    use crate::variant_array::StructArrayBuilder;
+    use crate::{VariantArray, VariantArrayBuilder, json_to_variant, shred_variant};
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, Int64Array, LargeBinaryArray,
-        LargeStringArray, StringViewArray,
+        Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, Decimal64Array, Int64Array,
+        LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
+        TimestampMicrosecondArray, make_array,
     };
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
+    use arrow::error::ArrowError;
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal8};
     use std::sync::Arc;
 
@@ -1055,5 +1061,149 @@ mod tests {
             result.is_err(),
             "unshred_variant must return Err on malformed metadata, not panic",
         );
+    }
+
+    #[test]
+    fn test_unshred_missing_metadata_field() {
+        let object_type =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)]));
+        let nested_type = DataType::Struct(Fields::from(vec![Field::new(
+            "outer",
+            object_type.clone(),
+            true,
+        )]));
+        let list_type = DataType::List(Arc::new(Field::new_list_field(object_type.clone(), false)));
+        let outer_json: ArrayRef = Arc::new(StringArray::from(vec![r#"{"outer":0}"#]));
+        let outer_metadata = json_to_variant(&outer_json).unwrap();
+
+        for (json, data_type, metadata) in [
+            (
+                r#"{"a":1}"#,
+                object_type.clone(),
+                EMPTY_VARIANT_METADATA_BYTES,
+            ),
+            (
+                r#"{"a":"fallback"}"#,
+                object_type.clone(),
+                EMPTY_VARIANT_METADATA_BYTES,
+            ),
+            (
+                r#"{"a":null}"#,
+                object_type.clone(),
+                EMPTY_VARIANT_METADATA_BYTES,
+            ),
+            (
+                r#"{"outer":{"a":1}}"#,
+                nested_type,
+                outer_metadata.metadata_column().as_binary_view().value(0),
+            ),
+            (r#"[{"a":1}]"#, list_type, EMPTY_VARIANT_METADATA_BYTES),
+        ] {
+            let json_array: ArrayRef = Arc::new(StringArray::from(vec![json]));
+            let original = json_to_variant(&json_array).unwrap();
+            let shredded = shred_variant(&original, &data_type).unwrap();
+            crate::unshred_variant(&shredded).unwrap();
+            let input = VariantArray::from_parts(
+                Arc::new(BinaryArray::from_vec(vec![metadata])),
+                shredded.value_column().clone(),
+                shredded.typed_value_column().cloned(),
+                None,
+            );
+            let input = VariantArray::try_new(input.inner()).unwrap();
+            let err = crate::unshred_variant(&input).unwrap_err();
+            assert!(matches!(err, ArrowError::InvalidArgumentError(_)), "{err}");
+            assert_eq!(
+                err.to_string(),
+                "Invalid argument error: Field name 'a' not found in metadata dictionary",
+                "{json}"
+            );
+
+            // Non-null child values are ignored when the enclosing row is null.
+            let masked = VariantArray::from_parts(
+                input.metadata_column().clone(),
+                input.value_column().clone(),
+                input.typed_value_column().cloned(),
+                Some(NullBuffer::new_null(1)),
+            );
+            assert!(crate::unshred_variant(&masked).unwrap().is_null(0));
+
+            // A null typed object or list also masks its children.
+            let typed_value = make_array(
+                input
+                    .typed_value_column()
+                    .unwrap()
+                    .to_data()
+                    .into_builder()
+                    .nulls(Some(NullBuffer::new_null(1)))
+                    .build()
+                    .unwrap(),
+            );
+            let masked = VariantArray::from_parts(
+                input.metadata_column().clone(),
+                input.value_column().clone(),
+                Some(typed_value),
+                None,
+            );
+            assert_eq!(
+                crate::unshred_variant(&masked).unwrap().value(0),
+                Variant::Null
+            );
+        }
+    }
+
+    #[test]
+    fn test_unshred_missing_metadata_for_decimal_timestamp_and_value_only() {
+        let decimal: ArrayRef = Arc::new(
+            Decimal64Array::from(vec![1234])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+        let timestamp: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![1]));
+        let timestamp_utc: ArrayRef =
+            Arc::new(TimestampMicrosecondArray::from(vec![1]).with_timezone("UTC"));
+        for typed_value in [Some(decimal), Some(timestamp), Some(timestamp_utc), None] {
+            let value: ArrayRef = Arc::new(BinaryArray::from(vec![
+                typed_value.is_none().then_some(&[0u8][..]),
+            ]));
+            let mut field = StructArrayBuilder::new().with_field("value", value, true);
+            if let Some(typed_value) = typed_value {
+                field = field.with_field("typed_value", typed_value, true);
+            }
+            let object = StructArrayBuilder::new()
+                .with_field("a", Arc::new(field.build()), false)
+                .build();
+            let input = VariantArray::perfectly_shredded(
+                Arc::new(BinaryArray::from_vec(vec![EMPTY_VARIANT_METADATA_BYTES])),
+                Arc::new(object),
+                None,
+            );
+            let err = crate::unshred_variant(&input).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Invalid argument error: Field name 'a' not found in metadata dictionary"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unshred_missing_metadata_for_absent_fields() {
+        let object_type =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)]));
+        let nested_type = DataType::Struct(Fields::from(vec![Field::new(
+            "outer",
+            object_type.clone(),
+            true,
+        )]));
+        let list_type = DataType::List(Arc::new(Field::new_list_field(object_type.clone(), false)));
+        for (json, data_type) in [
+            ("{}", object_type),
+            (r#"{"outer":{}}"#, nested_type),
+            ("[{}]", list_type),
+        ] {
+            let json_array: ArrayRef = Arc::new(StringArray::from(vec![json]));
+            let original = json_to_variant(&json_array).unwrap();
+            let shredded = shred_variant(&original, &data_type).unwrap();
+            assert_eq!(crate::unshred_variant(&shredded).unwrap(), original);
+        }
     }
 }
