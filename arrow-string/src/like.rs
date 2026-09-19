@@ -410,21 +410,48 @@ fn str_contains(haystack: &str, needle: &str) -> bool {
     memchr::memmem::find(haystack.as_bytes(), needle.as_bytes()).is_some()
 }
 
+/// Bound on compiled LIKE/ILIKE predicates retained for an array/array
+/// pattern column. Distinct patterns beyond this limit are still evaluated,
+/// but are not retained, so a unique pattern per row cannot accumulate an
+/// unbounded number of `Regex` values.
+const LIKE_PREDICATE_CACHE_SIZE: usize = 8;
+
 fn binary_predicate<'a>(
     l: impl Iterator<Item = Option<&'a str>>,
     r: impl Iterator<Item = Option<&'a str>>,
     neg: bool,
     f: impl Fn(&'a str) -> Result<Predicate<'a>, ArrowError>,
 ) -> Result<BooleanArray, ArrowError> {
-    let mut previous = None;
+    // `previous` is the most recently used predicate and is kept even when the
+    // pattern was not inserted into `cache` (cache already full). Consecutive
+    // repeats of an uncached pattern must not recompile on every row.
+    // Only Regex predicates are cached: prefix/suffix/contains/equality are
+    // cheaper to rebuild than to promote through the cache.
+    let mut previous: Option<(&'a str, Predicate<'a>)> = None;
+    let mut cache: Vec<(&'a str, Predicate<'a>)> = Vec::with_capacity(LIKE_PREDICATE_CACHE_SIZE);
     l.zip(r)
         .map(|(l, r)| match (l, r) {
             (Some(l), Some(r)) => {
-                let p: &Predicate = match previous {
-                    Some((expr, ref predicate)) if expr == r => predicate,
-                    _ => &previous.insert((r, f(r)?)).1,
-                };
-                Ok(Some(p.evaluate(l) != neg))
+                match previous.as_ref() {
+                    Some((expr, pred)) if *expr == r => {
+                        return Ok(Some(pred.evaluate(l) != neg));
+                    }
+                    _ => {}
+                }
+
+                if let Some((_, pred)) = cache.iter().find(|(expr, _)| *expr == r) {
+                    return Ok(Some(pred.evaluate(l) != neg));
+                }
+
+                let pred = f(r)?;
+                let v = pred.evaluate(l) != neg;
+                if let Some(old) = previous.replace((r, pred))
+                    && matches!(old.1, Predicate::Regex(_))
+                    && cache.len() < LIKE_PREDICATE_CACHE_SIZE
+                {
+                    cache.push(old);
+                }
+                Ok(Some(v))
             }
             _ => Ok(None),
         })
@@ -662,6 +689,14 @@ mod tests {
         vec![true, true, true, false, false, true, false, false]
     );
 
+    test_utf8!(
+        test_utf8_array_like_alternating_complex,
+        vec!["xxxxxxxx", "xxxxxxxx", "xxxxxxxx", "xxxxxxxx"],
+        vec!["%x_x%x", "x%_x%", "%x_x%x", "x%_x%"],
+        like,
+        vec![true, true, true, true]
+    );
+
     test_utf8_scalar!(
         #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_like_scalar_escape_testing,
@@ -873,6 +908,14 @@ mod tests {
         vec![false, false, false, true, true, false, true]
     );
 
+    test_utf8!(
+        test_utf8_array_nlike_alternating_complex,
+        vec!["xxxxxxxx", "xxxxxxxx", "xxxxxxxx", "xxxxxxxx"],
+        vec!["%x_x%x", "x%_x%", "%x_x%x", "x%_x%"],
+        nlike,
+        vec![false, false, false, false]
+    );
+
     test_utf8_scalar!(
         #[cfg_attr(miri, ignore)] // Takes too long
         test_utf8_array_nlike_escape_testing,
@@ -988,6 +1031,14 @@ mod tests {
         vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
         ilike,
         vec![true, true, true, false, false, true, false]
+    );
+
+    test_utf8!(
+        test_utf8_array_ilike_alternating_complex,
+        vec!["XxXxXxXx", "XxXxXxXx", "XxXxXxXx", "XxXxXxXx"],
+        vec!["%x_x%x", "x%_x%", "%x_x%x", "x%_x%"],
+        ilike,
+        vec![true, true, true, true]
     );
 
     test_utf8_scalar!(
@@ -1252,6 +1303,14 @@ mod tests {
         vec![false, false, false, true, true, false, true]
     );
 
+    test_utf8!(
+        test_utf8_array_nilike_alternating_complex,
+        vec!["XxXxXxXx", "XxXxXxXx", "XxXxXxXx", "XxXxXxXx"],
+        vec!["%x_x%x", "x%_x%", "%x_x%x", "x%_x%"],
+        nilike,
+        vec![false, false, false, false]
+    );
+
     test_utf8_scalar!(
         #[cfg_attr(miri, ignore)] // Takes too long
         nilike_utf8_scalar_escape_testing,
@@ -1434,6 +1493,59 @@ mod tests {
             Some(false)
         ]
     );
+
+    #[test]
+    fn test_array_like_alternating_complex_nulls() {
+        let left = StringArray::from(vec![
+            Some("xxxxxxxx"),
+            None,
+            Some("xxxxxxxx"),
+            Some("yyyyyyyy"),
+        ]);
+        let right = StringArray::from(vec![Some("%x_x%x"), Some("x%_x%"), None, Some("%x_x%x")]);
+        let expected = BooleanArray::from(vec![Some(true), None, None, Some(false)]);
+        assert_eq!(like(&left, &right).unwrap(), expected);
+        assert_eq!(ilike(&left, &right).unwrap(), expected);
+        assert_eq!(
+            nlike(&left, &right).unwrap(),
+            BooleanArray::from(vec![Some(false), None, None, Some(true)])
+        );
+        assert_eq!(
+            nilike(&left, &right).unwrap(),
+            BooleanArray::from(vec![Some(false), None, None, Some(true)])
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn test_array_like_more_patterns_than_cache() {
+        // More distinct Regex patterns than LIKE_PREDICATE_CACHE_SIZE, then a
+        // consecutive run of one pattern that did not fit in the cache.
+        let n_unique = LIKE_PREDICATE_CACHE_SIZE + 4;
+        let extra_repeats = 3;
+        let mut haystacks = Vec::with_capacity(n_unique + extra_repeats + 1);
+        let mut patterns = Vec::with_capacity(n_unique + extra_repeats + 1);
+        let mut expected = Vec::with_capacity(n_unique + extra_repeats + 1);
+        for i in 0..n_unique {
+            haystacks.push(format!("x{i}x"));
+            patterns.push(format!("%x{i}x%"));
+            expected.push(true);
+        }
+        let last_h = format!("x{}x", n_unique - 1);
+        let last_p = format!("%x{}x%", n_unique - 1);
+        for _ in 0..extra_repeats {
+            haystacks.push(last_h.clone());
+            patterns.push(last_p.clone());
+            expected.push(true);
+        }
+        haystacks.push("zzzz".to_string());
+        patterns.push("%x0x%".to_string());
+        expected.push(false);
+
+        let left = StringArray::from(haystacks);
+        let right = StringArray::from(patterns);
+        assert_eq!(like(&left, &right).unwrap(), BooleanArray::from(expected));
+    }
 
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
