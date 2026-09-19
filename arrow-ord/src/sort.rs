@@ -934,6 +934,43 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 /// Sort elements lexicographically from a list of `ArrayRef` into an unsigned integer
 /// (`UInt32Array`) of indices.
 ///
+/// # Example
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+/// # use arrow_ord::sort::{lexsort_to_indices, SortColumn};
+/// # use arrow_select::take::take_record_batch;
+///
+/// // Two columns (a, b). Values (2,x), (1, z), (1(a))
+/// let batch = RecordBatch::try_from_iter(vec![
+///     ("a", Arc::new(Int32Array::from(vec![2, 1, 1])) as ArrayRef),
+///     ("b", Arc::new(StringArray::from(vec!["x", "z", "a"])) as ArrayRef),
+/// ])
+/// .unwrap();
+///
+/// // Configure sort by (a, b)
+/// let sort_columns = vec![
+///     SortColumn {
+///         values: batch.column(0).clone(),
+///         options: None,
+///     },
+///     SortColumn {
+///         values: batch.column(1).clone(),
+///         options: None,
+///     },
+/// ];
+///
+/// // indices of the rows of (a,b), in lexographic order
+/// let indices = lexsort_to_indices(&sort_columns, None).unwrap();
+/// assert_eq!(&indices, [2,1,0]); 
+/// // Create new sorted RecordBatch by copying values at indices
+/// let sorted = take_record_batch(&batch, &indices).unwrap();
+///
+/// assert_eq!(sorted.column(0).as_ref(), &Int32Array::from(vec![1, 1, 2]));
+/// assert_eq!(sorted.column(1).as_ref(), &StringArray::from(vec!["a", "z", "x"]));
+/// ```
+///
 /// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow-row/latest/arrow_row/)
 /// may be significantly faster
 pub fn lexsort_to_indices(
