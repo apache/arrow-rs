@@ -960,7 +960,9 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 ///     },
 /// ];
 ///
+/// // indices of the rows of (a,b), in lexographic order
 /// let indices = lexsort_to_indices(&sort_columns, None).unwrap();
+/// assert_eq!(&indices, [2,1,0]); 
 /// // Create new sorted RecordBatch by copying values at indices
 /// let sorted = take_record_batch(&batch, &indices).unwrap();
 ///
