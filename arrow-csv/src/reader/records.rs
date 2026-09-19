@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::reader::ExtraFields;
 use arrow_schema::ArrowError;
 use csv_core::{ReadRecordResult, Reader};
 
@@ -69,10 +70,21 @@ pub struct RecordDecoder {
     /// lifetime of this decoder, i.e. not reset by [`Self::flush`], but reset by
     /// [`Self::clear`] along with the buffered rows it counted
     truncated_row_count: usize,
+
+    /// Whether to ignore extra fields when parsing
+    extra_fields: ExtraFields,
+
+    /// Whether the decoder is currently skipping extra fields from a previous chunk
+    skipping_extra_fields: bool,
 }
 
 impl RecordDecoder {
-    pub fn new(delimiter: Reader, num_columns: usize, truncated_rows: bool) -> Self {
+    pub fn new(
+        delimiter: Reader,
+        num_columns: usize,
+        truncated_rows: bool,
+        extra_fields: ExtraFields,
+    ) -> Self {
         Self {
             delimiter,
             num_columns,
@@ -85,6 +97,8 @@ impl RecordDecoder {
             num_rows: 0,
             truncated_rows,
             truncated_row_count: 0,
+            extra_fields,
+            skipping_extra_fields: false,
         }
     }
 
@@ -96,15 +110,25 @@ impl RecordDecoder {
             return Ok((0, 0));
         }
 
-        // Reserve sufficient capacity in offsets
-        self.offsets
-            .resize(self.offsets_len + to_read * self.num_columns, 0);
-
         // The current offset into `input`
         let mut input_offset = 0;
 
         // The number of rows decoded in this pass
         let mut read = 0;
+
+        // Resume skipping extra fields if we were in the middle of it from a previous chunk
+        if self.skipping_extra_fields {
+            if !self.skip_extra_fields(input, &mut input_offset, &mut read) {
+                return Ok((read, input_offset));
+            }
+            if read == to_read || input.len() == input_offset {
+                return Ok((read, input_offset));
+            }
+        }
+
+        // Reserve sufficient capacity in offsets
+        self.offsets
+            .resize(self.offsets_len + (to_read - read) * self.num_columns, 0);
 
         loop {
             // Reserve necessary space in output data based on best estimate
@@ -115,11 +139,17 @@ impl RecordDecoder {
 
             // Try to read a record
             loop {
+                let ends_bound = match self.extra_fields {
+                    ExtraFields::Ignore => {
+                        self.offsets_len + (self.num_columns - self.current_field)
+                    }
+                    ExtraFields::Error => self.offsets.len(),
+                };
                 let (result, bytes_read, bytes_written, end_positions) =
                     self.delimiter.read_record(
                         &input[input_offset..],
                         &mut self.data[self.data_len..],
-                        &mut self.offsets[self.offsets_len..],
+                        &mut self.offsets[self.offsets_len..ends_bound],
                     );
 
                 self.current_field += end_positions;
@@ -135,10 +165,25 @@ impl RecordDecoder {
                     // Need to allocate more capacity
                     ReadRecordResult::OutputFull => break,
                     ReadRecordResult::OutputEndsFull => {
-                        return Err(ArrowError::CsvError(format!(
-                            "incorrect number of fields for line {}, expected {} got more than {}",
-                            self.line_number, self.num_columns, self.current_field
-                        )));
+                        match self.extra_fields {
+                            ExtraFields::Error => {
+                                return Err(ArrowError::CsvError(format!(
+                                    "incorrect number of fields for line {}, expected {} got more than {}",
+                                    self.line_number, self.num_columns, self.current_field
+                                )));
+                            }
+                            ExtraFields::Ignore => {
+                                self.skipping_extra_fields = true;
+                                if !self.skip_extra_fields(input, &mut input_offset, &mut read) {
+                                    return Ok((read, input_offset));
+                                }
+
+                                if read == to_read || input.len() == input_offset {
+                                    // Read sufficient rows or reached end of input
+                                    return Ok((read, input_offset));
+                                }
+                            }
+                        }
                     }
                     ReadRecordResult::Record => {
                         if self.current_field != self.num_columns {
@@ -174,6 +219,39 @@ impl RecordDecoder {
                             return Ok((read, input_offset));
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// Skips extra fields for the current record, returning `true` if it finished skipping
+    fn skip_extra_fields(
+        &mut self,
+        input: &[u8],
+        input_offset: &mut usize,
+        read: &mut usize,
+    ) -> bool {
+        let mut dummy_data = [0u8; 128];
+        let mut dummy_ends = [0usize; 1];
+        loop {
+            let (res, b_read, _, _) = self.delimiter.read_record(
+                &input[*input_offset..],
+                &mut dummy_data,
+                &mut dummy_ends,
+            );
+            *input_offset += b_read;
+            match res {
+                ReadRecordResult::Record => {
+                    self.skipping_extra_fields = false;
+                    *read += 1;
+                    self.current_field = 0;
+                    self.line_number += 1;
+                    self.num_rows += 1;
+                    return true;
+                }
+                ReadRecordResult::OutputFull | ReadRecordResult::OutputEndsFull => {}
+                ReadRecordResult::End | ReadRecordResult::InputEmpty => {
+                    return false;
                 }
             }
         }
@@ -333,6 +411,7 @@ impl std::fmt::Display for StringRecord<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::reader::ExtraFields;
     use crate::reader::records::RecordDecoder;
     use csv_core::Reader;
     use std::io::{BufRead, BufReader, Cursor};
@@ -356,7 +435,7 @@ mod tests {
         .into_iter();
 
         let mut reader = BufReader::with_capacity(3, Cursor::new(csv.as_bytes()));
-        let mut decoder = RecordDecoder::new(Reader::new(), 3, false);
+        let mut decoder = RecordDecoder::new(Reader::new(), 3, false, ExtraFields::Error);
 
         loop {
             let to_read = 3;
@@ -390,7 +469,7 @@ mod tests {
     #[test]
     fn test_invalid_fields() {
         let csv = "a,b\nb,c\na\n";
-        let mut decoder = RecordDecoder::new(Reader::new(), 2, false);
+        let mut decoder = RecordDecoder::new(Reader::new(), 2, false, ExtraFields::Error);
         let err = decoder.decode(csv.as_bytes(), 4).unwrap_err().to_string();
 
         let expected = "Csv error: incorrect number of fields for line 3, expected 2 got 1";
@@ -398,7 +477,7 @@ mod tests {
         assert_eq!(err, expected);
 
         // Test with initial skip
-        let mut decoder = RecordDecoder::new(Reader::new(), 2, false);
+        let mut decoder = RecordDecoder::new(Reader::new(), 2, false, ExtraFields::Error);
         let (skipped, bytes) = decoder.decode(csv.as_bytes(), 1).unwrap();
         assert_eq!(skipped, 1);
         decoder.clear();
@@ -411,7 +490,7 @@ mod tests {
     #[test]
     fn test_skip_insufficient_rows() {
         let csv = "a\nv\n";
-        let mut decoder = RecordDecoder::new(Reader::new(), 1, false);
+        let mut decoder = RecordDecoder::new(Reader::new(), 1, false, ExtraFields::Error);
         let (read, bytes) = decoder.decode(csv.as_bytes(), 3).unwrap();
         assert_eq!(read, 2);
         assert_eq!(bytes, csv.len());
@@ -420,7 +499,7 @@ mod tests {
     #[test]
     fn test_truncated_rows() {
         let csv = "a,b\nv\n,1\n,2\n,3\n";
-        let mut decoder = RecordDecoder::new(Reader::new(), 2, true);
+        let mut decoder = RecordDecoder::new(Reader::new(), 2, true, ExtraFields::Error);
         let (read, bytes) = decoder.decode(csv.as_bytes(), 5).unwrap();
         assert_eq!(read, 5);
         assert_eq!(bytes, csv.len());
@@ -431,7 +510,7 @@ mod tests {
     #[test]
     fn test_truncated_row_count_not_reset_by_flush() {
         let csv = "a\nb,2\nc\n";
-        let mut decoder = RecordDecoder::new(Reader::new(), 2, true);
+        let mut decoder = RecordDecoder::new(Reader::new(), 2, true, ExtraFields::Error);
 
         let (read, _) = decoder.decode(csv.as_bytes(), 2).unwrap();
         assert_eq!(read, 2);
@@ -449,7 +528,7 @@ mod tests {
     #[test]
     fn test_truncated_row_count_reset_by_clear() {
         let csv = "a\nb,2\n";
-        let mut decoder = RecordDecoder::new(Reader::new(), 2, true);
+        let mut decoder = RecordDecoder::new(Reader::new(), 2, true, ExtraFields::Error);
 
         let (read, _) = decoder.decode(csv.as_bytes(), 2).unwrap();
         assert_eq!(read, 2);
@@ -468,7 +547,7 @@ mod tests {
     /// surfaces the condition as `ArrowError::CsvError`.
     #[test]
     fn test_flush_offset_overflow_returns_csv_error() {
-        let mut decoder = RecordDecoder::new(Reader::new(), 1, false);
+        let mut decoder = RecordDecoder::new(Reader::new(), 1, false, ExtraFields::Error);
         decoder.offsets = vec![0, usize::MAX, 1];
         decoder.offsets_len = 3;
         decoder.num_rows = 2;
