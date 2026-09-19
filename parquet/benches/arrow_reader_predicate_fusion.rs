@@ -27,6 +27,13 @@
 //! rates, where `all<N>` keeps N% per predicate, `early1` / `late1` keep 1% in
 //! the first or last predicate and 99% elsewhere, and `run<N>` keeps half of
 //! the runs of `N` rows to probe the selection representation threshold of 32.
+//!
+//! The 30 cases cover single-predicate controls and four-predicate chains for
+//! every type/layout/cache combination. Fragmented two-predicate `all99` and
+//! `all50` cases cover the smallest fusible chain and probe compaction costs.
+//! Predicate ordering is covered by int64/fragmented `early1` and `late1`.
+//! Run lengths 16 and 64 cover either side of the selection representation
+//! threshold without a full cross product.
 
 use std::fmt::{Display, Formatter};
 use std::hint::black_box;
@@ -64,14 +71,8 @@ const LAYOUTS: [&str; 4] = [
     "string/fragmented",
     "string/clustered",
 ];
-const PROFILES: [Profile; 4] = [
-    Profile::Uniform(99),
-    Profile::Uniform(50),
-    Profile::EarlySelective,
-    Profile::LateSelective,
-];
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy)]
 enum Profile {
     Uniform(u64),
     EarlySelective,
@@ -366,26 +367,30 @@ fn benchmark(c: &mut Criterion) {
     for (column, name) in LAYOUTS.iter().enumerate() {
         for project_filter in [false, true] {
             let cache = if project_filter { "cached" } else { "uncached" };
-            for predicates in [1, 2, 4] {
-                for profile in PROFILES {
-                    if predicates == 1 && profile != Profile::Uniform(99) {
-                        continue;
-                    }
-                    let case = Case {
-                        column,
-                        project_filter,
-                        predicates,
-                        profile,
-                    };
-                    register_case(
-                        &mut group,
-                        &runtime,
-                        &dataset,
-                        format!("{name}/{cache}"),
-                        format!("{predicates}/{profile}"),
-                        case,
-                    );
-                }
+            let mut cases = vec![(1, Profile::Uniform(99)), (4, Profile::Uniform(99))];
+            // Cover the smallest fusible chain and fragmented compaction costs.
+            if column % 2 == 0 {
+                cases.extend([(2, Profile::Uniform(99)), (2, Profile::Uniform(50))]);
+            }
+            // One type/layout is sufficient to isolate predicate ordering.
+            if column == 0 {
+                cases.extend([(4, Profile::EarlySelective), (4, Profile::LateSelective)]);
+            }
+            for (predicates, profile) in cases {
+                let case = Case {
+                    column,
+                    project_filter,
+                    predicates,
+                    profile,
+                };
+                register_case(
+                    &mut group,
+                    &runtime,
+                    &dataset,
+                    format!("{name}/{cache}"),
+                    format!("{predicates}/{profile}"),
+                    case,
+                );
             }
         }
     }
@@ -393,7 +398,7 @@ fn benchmark(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("same_projection_filter/selection_boundary");
     configure(&mut group);
-    for length in [16, 32, 64] {
+    for length in [16, 64] {
         let profile = Profile::RunLength(length);
         let dataset = Dataset::generate(&runtime, profile);
         let case = Case {
