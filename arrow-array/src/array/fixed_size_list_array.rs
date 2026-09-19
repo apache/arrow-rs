@@ -371,9 +371,14 @@ impl FixedSizeListArray {
     /// Returns the offset for value at index `i`.
     ///
     /// Note this doesn't do any bound checking, for performance reason.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the offset exceeds `i32::MAX`.
+    #[deprecated(since = "60.0.0", note = "Use value_offset_at instead")]
     #[inline]
     pub fn value_offset(&self, i: usize) -> i32 {
-        self.value_offset_at(i) as i32
+        i32::try_from(self.value_offset_at(i)).expect("offset overflow")
     }
 
     /// Returns the length for an element.
@@ -384,8 +389,12 @@ impl FixedSizeListArray {
         self.value_length
     }
 
+    /// Returns the offset in the child array of the value at index `i`, in
+    /// elements.
+    ///
+    /// Note this doesn't do any bound checking, for performance reason.
     #[inline]
-    const fn value_offset_at(&self, i: usize) -> usize {
+    pub const fn value_offset_at(&self, i: usize) -> usize {
         i * self.value_length as usize
     }
 
@@ -662,7 +671,6 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(2));
         assert_eq!(3, list_array.value_length());
         assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         for i in 0..3 {
@@ -684,7 +692,6 @@ mod tests {
         assert_eq!(2, list_array.len());
         assert_eq!(0, list_array.null_count());
         assert_eq!(3, list_array.value(0).as_primitive::<Int32Type>().value(0));
-        assert_eq!(3, list_array.value_offset(1));
         assert_eq!(3, list_array.value_length());
     }
 
@@ -745,7 +752,6 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(5, list_array.len());
         assert_eq!(2, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(3));
         assert_eq!(2, list_array.value_length());
 
         let sliced_array = list_array.slice(1, 4);
@@ -760,14 +766,26 @@ mod tests {
             }
         }
 
-        // Check offset and length for each non-null value.
+        // Check where each non-null value starts, and its length.
         let sliced_list_array = sliced_array
             .as_any()
             .downcast_ref::<FixedSizeListArray>()
             .unwrap();
         assert_eq!(2, sliced_list_array.value_length());
-        assert_eq!(4, sliced_list_array.value_offset(2));
-        assert_eq!(6, sliced_list_array.value_offset(3));
+        assert_eq!(
+            6,
+            sliced_list_array
+                .value(2)
+                .as_primitive::<Int32Type>()
+                .value(0)
+        );
+        assert_eq!(
+            8,
+            sliced_list_array
+                .value(3)
+                .as_primitive::<Int32Type>()
+                .value(0)
+        );
     }
 
     #[test]
