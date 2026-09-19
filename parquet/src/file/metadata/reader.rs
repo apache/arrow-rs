@@ -27,6 +27,7 @@ use crate::file::metadata::{
 use crate::file::reader::ChunkReader;
 use crate::schema::types::SchemaDescriptor;
 use bytes::Bytes;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::{io::Read, ops::Range};
 
@@ -71,6 +72,8 @@ pub struct ParquetMetaDataReader {
     metadata: Option<ParquetMetaData>,
     column_index: PageIndexPolicy,
     offset_index: PageIndexPolicy,
+    column_index_selection: PageIndexSelection,
+    offset_index_selection: PageIndexSelection,
     prefetch_hint: Option<usize>,
     metadata_options: Option<Arc<ParquetMetaDataOptions>>,
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
@@ -104,6 +107,89 @@ impl From<bool> for PageIndexPolicy {
     }
 }
 
+/// Selects the row groups and columns for which page indexes are read.
+///
+/// This is independent of [`PageIndexPolicy`], which controls whether selected
+/// indexes are optional or required. By default, all row groups and columns are selected.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PageIndexSelection {
+    // using i32 because that's how thrift vectors are sized
+    row_groups: Option<Arc<BTreeSet<i32>>>,
+    columns: Option<Arc<BTreeSet<i32>>>,
+}
+
+// TODO(ets): add unit tests for PageIndexSelection
+impl PageIndexSelection {
+    /// Select all row groups and columns.
+    pub fn all() -> Self {
+        Self::default()
+    }
+
+    /// Select page indexes for only the listed columns.
+    ///
+    /// Any indices in `columns` that are less than zero will be ignored.
+    pub fn columns(columns: impl IntoIterator<Item = i32>) -> Self {
+        Self {
+            row_groups: None,
+            columns: Some(Arc::new(columns.into_iter().filter(|&i| i >= 0).collect())),
+        }
+    }
+
+    /// Select page indexes for only the listed row groups.
+    ///
+    /// Any indices in `row_groups` that are less than zero will be ignored.
+    pub fn row_groups(row_groups: impl IntoIterator<Item = i32>) -> Self {
+        Self {
+            row_groups: Some(Arc::new(
+                row_groups.into_iter().filter(|&i| i >= 0).collect(),
+            )),
+            columns: None,
+        }
+    }
+
+    /// Select page indexes for only the listed row groups and columns.
+    ///
+    /// Any indices in `row_groups` or `columns that are less than zero will be ignored.
+    pub fn row_groups_and_columns(
+        row_groups: impl IntoIterator<Item = i32>,
+        columns: impl IntoIterator<Item = i32>,
+    ) -> Self {
+        Self {
+            row_groups: Some(Arc::new(
+                row_groups.into_iter().filter(|&i| i >= 0).collect(),
+            )),
+            columns: Some(Arc::new(columns.into_iter().filter(|&i| i >= 0).collect())),
+        }
+    }
+
+    // test if `idx` is in the row group set. returns false if idx > i32::MAX
+    pub(crate) fn includes_row_group(&self, idx: usize) -> bool {
+        let Ok(idx) = i32::try_from(idx) else {
+            return false;
+        };
+        self.row_groups
+            .as_ref()
+            .is_none_or(|keep| keep.contains(&idx))
+    }
+
+    // test if `idx` is in the column set. returns false if idx > i32::MAX
+    pub(crate) fn includes_column(&self, idx: usize) -> bool {
+        let Ok(idx) = i32::try_from(idx) else {
+            return false;
+        };
+        self.columns.as_ref().is_none_or(|keep| keep.contains(&idx))
+    }
+
+    // FIXME(ets): these will be used later
+    /*pub(crate) fn selected_row_groups(&self) -> Option<&BTreeSet<usize>> {
+        self.row_groups.as_deref()
+    }
+
+    pub(crate) fn selected_columns(&self) -> Option<&BTreeSet<usize>> {
+        self.columns.as_deref()
+    }*/
+}
+
 impl ParquetMetaDataReader {
     /// Create a new [`ParquetMetaDataReader`]
     pub fn new() -> Self {
@@ -134,6 +220,24 @@ impl ParquetMetaDataReader {
     /// Sets the [`PageIndexPolicy`] for the offset index
     pub fn with_offset_index_policy(mut self, policy: PageIndexPolicy) -> Self {
         self.offset_index = policy;
+        self
+    }
+
+    /// Selects the row groups and columns for which both page index structures are read.
+    pub fn with_page_index_selection(self, selection: PageIndexSelection) -> Self {
+        self.with_column_index_selection(selection.clone())
+            .with_offset_index_selection(selection)
+    }
+
+    /// Selects the row groups and columns for which column indexes are read.
+    pub fn with_column_index_selection(mut self, selection: PageIndexSelection) -> Self {
+        self.column_index_selection = selection;
+        self
+    }
+
+    /// Selects the row groups and columns for which offset indexes are read.
+    pub fn with_offset_index_selection(mut self, selection: PageIndexSelection) -> Self {
+        self.offset_index_selection = selection;
         self
     }
 
@@ -341,6 +445,8 @@ impl ParquetMetaDataReader {
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
             .with_column_index_policy(self.column_index)
+            .with_offset_index_selection(self.offset_index_selection.clone())
+            .with_column_index_selection(self.column_index_selection.clone())
             .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
@@ -488,6 +594,8 @@ impl ParquetMetaDataReader {
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
             .with_column_index_policy(self.column_index)
+            .with_offset_index_selection(self.offset_index_selection.clone())
+            .with_column_index_selection(self.column_index_selection.clone())
             .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 

@@ -45,8 +45,8 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
-    ParquetStatisticsPolicy, RowGroupMetaData,
+    PageIndexPolicy, PageIndexSelection, ParquetMetaData, ParquetMetaDataOptions,
+    ParquetMetaDataReader, ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
@@ -593,8 +593,10 @@ pub struct ArrowReaderOptions {
     /// [ARROW_SCHEMA_META_KEY]: crate::arrow::ARROW_SCHEMA_META_KEY
     supplied_schema: Option<SchemaRef>,
 
-    pub(crate) column_index: PageIndexPolicy,
-    pub(crate) offset_index: PageIndexPolicy,
+    column_index: PageIndexPolicy,
+    offset_index: PageIndexPolicy,
+    column_index_selection: PageIndexSelection,
+    offset_index_selection: PageIndexSelection,
 
     /// Options to control reading of Parquet metadata
     metadata_options: ParquetMetaDataOptions,
@@ -774,6 +776,32 @@ impl ArrowReaderOptions {
         self
     }
 
+    /// Sets the [`PageIndexSelection`] for the Parquet [ColumnIndex] structure.
+    ///
+    /// The column index can be costly to decode and store, especially when it is needed
+    /// only for a subset of row groups or columns (such as when filtering by a predicate
+    /// on a single column). Providing a [`PageIndexSelection`] can greatly decrease
+    /// the time needed to decode this metadata.
+    ///
+    /// [ColumnIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    pub fn with_column_index_selection(mut self, selection: PageIndexSelection) -> Self {
+        self.column_index_selection = selection;
+        self
+    }
+
+    /// Sets the [`PageIndexSelection`] for the Parquet [OffsetIndex] structure.
+    ///
+    /// The offset index can be costly to decode and store, especially when it is needed
+    /// only for a subset of row groups or columns (such as when projecting a small subset
+    /// of columns). Providing a [`PageIndexSelection`] can greatly decrease
+    /// the time needed to decode this metadata.
+    ///
+    /// [OffsetIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    pub fn with_offset_index_selection(mut self, selection: PageIndexSelection) -> Self {
+        self.offset_index_selection = selection;
+        self
+    }
+
     /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
     /// footer will be skipped.
     ///
@@ -924,6 +952,20 @@ impl ArrowReaderOptions {
         self.column_index
     }
 
+    /// Retrieve the currently set [`PageIndexSelection`] for the offset index.
+    ///
+    /// This can be set via [`with_offset_index_selection`][Self::with_offset_index_selection].
+    pub fn offset_index_selection(&self) -> &PageIndexSelection {
+        &self.offset_index_selection
+    }
+
+    /// Retrieve the currently set [`PageIndexSelection`] for the column index.
+    ///
+    /// This can be set via [`with_column_index_selection`][Self::with_column_index_selection].
+    pub fn column_index_selection(&self) -> &PageIndexSelection {
+        &self.column_index_selection
+    }
+
     /// Retrieve the currently set metadata decoding options.
     pub fn metadata_options(&self) -> &ParquetMetaDataOptions {
         &self.metadata_options
@@ -970,7 +1012,9 @@ impl ParquetMetaDataReader {
         {
             self = self
                 .with_column_index_policy(options.column_index_policy())
-                .with_offset_index_policy(options.offset_index_policy());
+                .with_offset_index_policy(options.offset_index_policy())
+                .with_column_index_selection(options.column_index_selection().clone())
+                .with_offset_index_selection(options.offset_index_selection().clone());
         }
 
         self
@@ -1019,6 +1063,8 @@ impl ArrowReaderMetadata {
         let metadata = ParquetMetaDataReader::new()
             .with_column_index_policy(options.column_index_policy())
             .with_offset_index_policy(options.offset_index_policy())
+            .with_column_index_selection(options.column_index_selection().clone())
+            .with_offset_index_selection(options.offset_index_selection().clone())
             .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
