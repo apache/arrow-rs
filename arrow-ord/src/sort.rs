@@ -961,6 +961,7 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 /// ];
 ///
 /// let indices = lexsort_to_indices(&sort_columns, None).unwrap();
+/// // Create new sorted RecordBatch by copying values at indices
 /// let sorted = take_record_batch(&batch, &indices).unwrap();
 ///
 /// assert_eq!(sorted.column(0).as_ref(), &Int32Array::from(vec![1, 1, 2]));
