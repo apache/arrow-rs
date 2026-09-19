@@ -386,7 +386,7 @@ impl PageIndexProvider for SelectivePageIndexProvider {
 }
 
 /// Create a test parquet file with multiple row groups and multiple pages per column
-fn create_test_file() -> NamedTempFile {
+pub(super) fn create_test_file() -> NamedTempFile {
     let temp_file = tempfile::Builder::new()
         .prefix("custom_page_index_test")
         .suffix(".parquet")
