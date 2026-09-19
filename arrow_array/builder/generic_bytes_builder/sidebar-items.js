@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["AVERAGE_BINARY_LENGTH","AVERAGE_STRING_LENGTH"],"struct":["GenericByteBuilder"],"trait":["BinaryLikeArrayBuilder","StringLikeArrayBuilder"],"type":["GenericBinaryBuilder","GenericStringBuilder"]};

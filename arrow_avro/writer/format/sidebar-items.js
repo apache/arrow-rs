@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["write_bytes","write_string"],"struct":["AvroBinaryFormat","AvroOcfFormat","AvroSoeFormat"],"trait":["AvroFormat"]};

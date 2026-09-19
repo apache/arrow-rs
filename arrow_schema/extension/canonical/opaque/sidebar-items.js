@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["MetadataField"],"struct":["MetadataFieldVisitor","Opaque","OpaqueMetadata","OpaqueMetadataVisitor"]};

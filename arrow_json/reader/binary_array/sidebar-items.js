@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["decode_hex_digit","decode_hex_to_writer","estimate_data_capacity","invalid_hex_error_at"],"struct":["BinaryArrayDecoder","BinaryViewDecoder","FixedSizeBinaryArrayDecoder"]};

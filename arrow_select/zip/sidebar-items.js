@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["count_true_runs","empty_arc_buffers","interleave_arrays","maybe_prep_null_mask_filter","should_use_interleave","zip","zip_impl"],"static":["EMPTY_ARC"],"struct":["ByteViewScalarImpl","BytesScalarImpl","FallbackImpl","PrimitiveScalarImpl","ScalarZipper"],"trait":["ZipImpl"]};

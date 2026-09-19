@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CORRECT_VERSION_VALUE","EMPTY_VARIANT_METADATA","EMPTY_VARIANT_METADATA_BYTES","NUM_HEADER_BYTES"],"struct":["VariantMetadata","VariantMetadataHeader"]};
