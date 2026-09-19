@@ -132,7 +132,9 @@ impl AsyncFileReader for TestReader {
         if let Some(options) = options {
             metadata_reader = metadata_reader
                 .with_column_index_policy(options.column_index_policy())
-                .with_offset_index_policy(options.offset_index_policy());
+                .with_offset_index_policy(options.offset_index_policy())
+                .with_column_index_selection(options.column_index_selection().clone())
+                .with_offset_index_selection(options.offset_index_selection().clone());
         }
 
         self.metadata = Some(Arc::new(

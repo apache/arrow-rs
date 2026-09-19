@@ -21,8 +21,10 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
 use crate::file::metadata::parser::{MetadataParser, parse_page_index};
-use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions};
-use crate::file::page_index::index_reader::acc_range;
+use crate::file::metadata::{
+    ColumnChunkMetaData, FooterTail, PageIndexPolicy, PageIndexSelection, ParquetMetaData,
+    ParquetMetaDataOptions,
+};
 use crate::file::reader::ChunkReader;
 use bytes::Bytes;
 use std::ops::Range;
@@ -226,6 +228,10 @@ pub struct ParquetMetaDataPushDecoder {
     column_index_policy: PageIndexPolicy,
     /// policy for loading OffsetIndex (part of the PageIndex)
     offset_index_policy: PageIndexPolicy,
+    /// which rows and columns of the column index should be read
+    column_index_selection: PageIndexSelection,
+    /// which rows and columns of the offset index should be read
+    offset_index_selection: PageIndexSelection,
     /// Underlying buffers
     buffers: crate::util::push_buffers::PushBuffers,
     /// Encryption API
@@ -250,6 +256,8 @@ impl ParquetMetaDataPushDecoder {
             state: DecodeState::ReadingFooter,
             column_index_policy: PageIndexPolicy::Optional,
             offset_index_policy: PageIndexPolicy::Optional,
+            column_index_selection: PageIndexSelection::all(),
+            offset_index_selection: PageIndexSelection::all(),
             buffers: crate::util::push_buffers::PushBuffers::new(file_len),
             metadata_parser: MetadataParser::new(),
         })
@@ -297,6 +305,25 @@ impl ParquetMetaDataPushDecoder {
     /// Set the policy for reading the OffsetIndex (part of the PageIndex)
     pub fn with_offset_index_policy(mut self, offset_index_policy: PageIndexPolicy) -> Self {
         self.offset_index_policy = offset_index_policy;
+        self
+    }
+
+    /// Select the row groups and columns for which both page index structures are read.
+    pub fn with_page_index_selection(mut self, selection: PageIndexSelection) -> Self {
+        self.column_index_selection = selection.clone();
+        self.offset_index_selection = selection;
+        self
+    }
+
+    /// Select the row groups and columns for which column indexes are read.
+    pub fn with_column_index_selection(mut self, selection: PageIndexSelection) -> Self {
+        self.column_index_selection = selection;
+        self
+    }
+
+    /// Select the row groups and columns for which offset indexes are read.
+    pub fn with_offset_index_selection(mut self, selection: PageIndexSelection) -> Self {
+        self.offset_index_selection = selection;
         self
     }
 
@@ -408,30 +435,36 @@ impl ParquetMetaDataPushDecoder {
                 DecodeState::ReadingPageIndex(mut metadata) => {
                     // First determine if any page indexes are needed based on
                     // the specified policies
-                    let range = range_for_page_index(
+                    let ranges = ranges_for_page_index(
                         &metadata,
                         self.column_index_policy,
                         self.offset_index_policy,
+                        &self.column_index_selection,
+                        &self.offset_index_selection,
                     );
 
-                    let Some(page_index_range) = range else {
+                    if ranges.is_empty() {
                         self.state = DecodeState::Finished;
                         return Ok(DecodeResult::Data(*metadata));
-                    };
-
-                    if !self.buffers.has_range(&page_index_range) {
-                        self.state = DecodeState::ReadingPageIndex(metadata);
-                        return Ok(needs_range(page_index_range));
                     }
 
-                    let buffer = self.get_bytes(&page_index_range)?;
-                    let offset = page_index_range.start;
+                    let needed_ranges = ranges
+                        .into_iter()
+                        .filter(|r| !self.buffers.has_range(r))
+                        .collect::<Vec<_>>();
+
+                    if !needed_ranges.is_empty() {
+                        self.state = DecodeState::ReadingPageIndex(metadata);
+                        return Ok(DecodeResult::NeedsData(needed_ranges));
+                    }
+
                     parse_page_index(
                         &mut metadata,
                         self.column_index_policy,
                         self.offset_index_policy,
-                        &buffer,
-                        offset,
+                        &self.column_index_selection,
+                        &self.offset_index_selection,
+                        &self.buffers,
                     )?;
                     self.state = DecodeState::Finished;
                     return Ok(DecodeResult::Data(*metadata));
@@ -481,25 +514,81 @@ enum DecodeState {
     Intermediate,
 }
 
-/// Returns the byte range needed to read the offset/page indexes, based on the
-/// specified policies
+/// Returns the minimum set of non-overlapping ranges needed to cover the requested
+/// offset and column indexes.
 ///
-/// Returns None if no page indexes are needed
-pub fn range_for_page_index(
+/// If no page indexes are present in the file, or none are actually
+/// requested by the policies passed in, this will return an empty
+/// vector.
+///
+/// This may result in more ranges to fetch but may also result in fewer bytes
+/// being read (and stored). To get a single range for all indexes, sort
+/// the resultant vector by the range starts, and then create a single range
+/// using `start` from the head and `end` from the tail.
+///
+/// ```rust
+/// # use core::ops::Range;
+/// # fn coalesce_page_index_ranges(ranges: &mut Vec<Range<u64>>) -> Option<Range<u64>> {
+///     ranges.sort_by(|r1, r2| r1.start.cmp(&r2.start));
+///     let range = (ranges.first()?.start..ranges.last()?.end);
+///     Some(range)
+/// # }
+/// ```
+pub fn ranges_for_page_index(
     metadata: &ParquetMetaData,
     column_index_policy: PageIndexPolicy,
     offset_index_policy: PageIndexPolicy,
-) -> Option<Range<u64>> {
-    let mut range = None;
-    for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
-        if column_index_policy != PageIndexPolicy::Skip {
-            range = acc_range(range, c.column_index_range());
-        }
-        if offset_index_policy != PageIndexPolicy::Skip {
-            range = acc_range(range, c.offset_index_range());
+    column_index_selection: &PageIndexSelection,
+    offset_index_selection: &PageIndexSelection,
+) -> Vec<Range<u64>> {
+    let mut result = Vec::new();
+
+    fn add_ranges<T>(
+        metadata: &ParquetMetaData,
+        selection: &PageIndexSelection,
+        ranges: &mut Vec<Range<u64>>,
+        f: T,
+    ) where
+        T: Fn(&ColumnChunkMetaData) -> Option<Range<u64>>,
+    {
+        for (rg_idx, rg) in metadata.row_groups().iter().enumerate() {
+            if selection.includes_row_group(rg_idx) {
+                for (col_idx, col) in rg.columns().iter().enumerate() {
+                    if selection.includes_column(col_idx) {
+                        if let Some(range) = f(col) {
+                            // ranges shouldn't overlap, so only check for contiguous ranges
+                            // [s1..e1], [s2..e2] where e1 == s2
+                            if let Some(last) = ranges.last_mut()
+                                && last.end == range.start
+                            {
+                                last.end = range.end;
+                            } else {
+                                ranges.push(range);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
-    range
+
+    if column_index_policy != PageIndexPolicy::Skip {
+        add_ranges(
+            metadata,
+            column_index_selection,
+            &mut result,
+            ColumnChunkMetaData::column_index_range,
+        );
+    }
+    if offset_index_policy != PageIndexPolicy::Skip {
+        add_ranges(
+            metadata,
+            offset_index_selection,
+            &mut result,
+            ColumnChunkMetaData::offset_index_range,
+        );
+    }
+    result
 }
 
 // These tests use the arrow writer to create a parquet file in memory
@@ -649,6 +738,90 @@ mod tests {
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
         assert!(metadata.page_index().is_none()); // of course, we did not read the page index
+    }
+
+    /// Decode the metadata incrementally, with a partial page index
+    #[test]
+    fn test_metadata_decoder_incremental_partial_page_index() {
+        let file_len = TEST_FILE_DATA.len() as u64;
+        let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(file_len)
+            .unwrap()
+            .with_page_index_policy(PageIndexPolicy::Required)
+            .with_page_index_selection(PageIndexSelection::columns([0]));
+        let ranges = expect_needs_data(metadata_decoder.try_decode());
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0], test_file_len() - 8..test_file_len());
+        push_ranges_to_metadata_decoder(&mut metadata_decoder, ranges);
+
+        // expect the first request to read the footer
+        let ranges = expect_needs_data(metadata_decoder.try_decode());
+        push_ranges_to_metadata_decoder(&mut metadata_decoder, ranges);
+
+        // expect the second request to read the page indexes
+        let ranges = expect_needs_data(metadata_decoder.try_decode());
+        // one for column index and one for offset index for each row group
+        assert_eq!(ranges.len(), 4);
+        push_ranges_to_metadata_decoder(&mut metadata_decoder, ranges);
+
+        // expect the third request to read the actual data
+        let metadata = expect_data(metadata_decoder.try_decode());
+        expect_finished(metadata_decoder.try_decode());
+
+        assert_eq!(metadata.num_row_groups(), 2);
+        assert_eq!(metadata.row_group(0).num_rows(), 200);
+        assert_eq!(metadata.row_group(1).num_rows(), 200);
+        assert!(metadata.page_index().is_some());
+        let page_index = metadata.page_index().unwrap();
+        for rg in 0..metadata.num_row_groups() {
+            for col in 0..metadata.file_metadata().schema_descr().num_columns() {
+                assert_eq!(page_index.column_index(rg, col).is_some(), col == 0);
+                assert_eq!(page_index.offset_index(rg, col).is_some(), col == 0);
+            }
+        }
+    }
+
+    /// Decode the metadata incrementally, with a partial page index, but coalesced
+    /// range request.
+    #[test]
+    fn test_metadata_decoder_incremental_partial_page_index_one_fetch() {
+        let file_len = TEST_FILE_DATA.len() as u64;
+        let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(file_len)
+            .unwrap()
+            .with_page_index_policy(PageIndexPolicy::Required)
+            .with_page_index_selection(PageIndexSelection::columns([0]));
+        let ranges = expect_needs_data(metadata_decoder.try_decode());
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0], test_file_len() - 8..test_file_len());
+        push_ranges_to_metadata_decoder(&mut metadata_decoder, ranges);
+
+        // expect the first request to read the footer
+        let ranges = expect_needs_data(metadata_decoder.try_decode());
+        push_ranges_to_metadata_decoder(&mut metadata_decoder, ranges);
+
+        // expect the second request to read the page indexes
+        let mut ranges = expect_needs_data(metadata_decoder.try_decode());
+        // one for column index and one for offset index for each row group
+        assert_eq!(ranges.len(), 4);
+        // collapse ranges into a single range
+        ranges.sort_by(|r1, r2| r1.start.cmp(&r2.start));
+        let range = ranges.first().unwrap().start..ranges.last().unwrap().end;
+        push_ranges_to_metadata_decoder(&mut metadata_decoder, vec![range]);
+
+        // expect the third request to read the actual data
+        let metadata = expect_data(metadata_decoder.try_decode());
+        expect_finished(metadata_decoder.try_decode());
+
+        assert_eq!(metadata.num_row_groups(), 2);
+        assert_eq!(metadata.row_group(0).num_rows(), 200);
+        assert_eq!(metadata.row_group(1).num_rows(), 200);
+        assert!(metadata.page_index().is_some());
+        let page_index = metadata.page_index().unwrap();
+        for rg in 0..metadata.num_row_groups() {
+            for col in 0..metadata.file_metadata().schema_descr().num_columns() {
+                assert_eq!(page_index.column_index(rg, col).is_some(), col == 0);
+                assert_eq!(page_index.offset_index(rg, col).is_some(), col == 0);
+            }
+        }
     }
 
     static TEST_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
