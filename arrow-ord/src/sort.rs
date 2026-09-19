@@ -949,6 +949,7 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 /// ])
 /// .unwrap();
 ///
+/// // Configure sort by (a, b)
 /// let sort_columns = vec![
 ///     SortColumn {
 ///         values: batch.column(0).clone(),
