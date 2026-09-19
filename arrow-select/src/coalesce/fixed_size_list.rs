@@ -33,10 +33,9 @@ use std::sync::Arc;
 ///   counter is kept (zero heap overhead).
 /// * On the first null-bearing `copy_rows` call, O(1) `BooleanBuffer` slices
 ///   are stored in `null_slices`; a `BooleanBufferBuilder` is built once at
-///   `finish()` with exact capacity, deferring the single `count_set_bits`
-///   call to that point.  This avoids the eager over-allocation of
-///   `batch_size` bits that would otherwise inflate memory pressure on every
-///   batch cycle.
+///   `finish()` with exact capacity.  The running `null_count` is tracked
+///   incrementally so `finish()` can use `NullBuffer::new_unchecked`, avoiding
+///   a full `count_set_bits` scan over the assembled bitmap.
 #[derive(Debug)]
 pub(crate) struct InProgressFixedSizeListArray {
     source: Option<ArrayRef>,
@@ -50,6 +49,9 @@ pub(crate) struct InProgressFixedSizeListArray {
     /// `None` means all rows in that slice were valid.
     /// Built on demand; empty when no nulls have been seen yet.
     null_slices: Vec<(Option<BooleanBuffer>, usize)>,
+    /// Accumulated FSL-level null count across all `null_slices` entries.
+    /// Maintained incrementally so `finish()` avoids a `count_set_bits` scan.
+    null_count: usize,
     value_slices: Vec<ArrayRef>,
     rows: usize,
 }
@@ -62,6 +64,7 @@ impl InProgressFixedSizeListArray {
             field,
             non_null_prefix: 0,
             null_slices: Vec::new(),
+            null_count: 0,
             value_slices: Vec::new(),
             rows: 0,
         }
@@ -96,6 +99,16 @@ impl InProgressArray for InProgressFixedSizeListArray {
             }
             // BooleanBuffer::slice is O(1) — no bit-counting.
             let bool_buf = src_nulls.inner().slice(fsl.offset() + offset, len);
+            // Track null_count incrementally so finish() can skip count_set_bits.
+            // For full-source slices (offset 0, full length) we can reuse the
+            // already-computed null_count on the FSL.  For partial slices we
+            // pay one count_set_bits here rather than a full-bitmap scan later.
+            let nc = if fsl.offset() == 0 && offset == 0 && len == fsl.len() {
+                fsl.null_count()
+            } else {
+                len - bool_buf.count_set_bits()
+            };
+            self.null_count += nc;
             self.null_slices.push((Some(bool_buf), len));
         } else if self.null_slices.is_empty() {
             // Still in the all-valid prefix phase; keep it as a single counter.
@@ -113,8 +126,10 @@ impl InProgressArray for InProgressFixedSizeListArray {
         self.non_null_prefix = 0;
 
         // Build the null buffer only if at least one source contributed nulls.
-        // Using exact capacity `rows` keeps the count_set_bits scan tight.
+        // `null_count` was accumulated incrementally in `copy_rows` so we can
+        // use `new_unchecked` and skip the `count_set_bits` scan over `rows` bits.
         let nulls = if !self.null_slices.is_empty() {
+            let null_count = std::mem::take(&mut self.null_count);
             let mut builder = BooleanBufferBuilder::new(rows);
             for (null_slice, len) in &self.null_slices {
                 match null_slice {
@@ -123,7 +138,10 @@ impl InProgressArray for InProgressFixedSizeListArray {
                 }
             }
             self.null_slices.clear();
-            Some(NullBuffer::new(builder.finish()))
+            // SAFETY: null_count was accumulated from per-source null counts,
+            // which are exact (fsl.null_count() for full slices, count_set_bits
+            // for partial slices).
+            Some(unsafe { NullBuffer::new_unchecked(builder.finish(), null_count) })
         } else {
             None
         };
