@@ -28,9 +28,10 @@
 //! the first or last predicate and 99% elsewhere, and `run<N>` keeps half of
 //! the runs of `N` rows to probe the selection representation threshold of 32.
 //!
-//! The 30 cases cover single-predicate controls and four-predicate chains for
-//! every type/layout/cache combination. Fragmented two-predicate `all99` and
-//! `all50` cases cover the smallest fusible chain and probe compaction costs.
+//! The 30 cases cover four-predicate `all99` chains for every type/layout/cache
+//! combination. Fragmented layouts also cover single-predicate controls and
+//! two-predicate `all99` / `all50` chains. Clustered uncached `all50` chains with
+//! two and four predicates retain cases where fusion has shown regressions.
 //! Predicate ordering is covered by int64/fragmented `early1` and `late1`.
 //! Run lengths 16 and 64 cover either side of the selection representation
 //! threshold without a full cross product.
@@ -367,10 +368,17 @@ fn benchmark(c: &mut Criterion) {
     for (column, name) in LAYOUTS.iter().enumerate() {
         for project_filter in [false, true] {
             let cache = if project_filter { "cached" } else { "uncached" };
-            let mut cases = vec![(1, Profile::Uniform(99)), (4, Profile::Uniform(99))];
-            // Cover the smallest fusible chain and fragmented compaction costs.
+            let mut cases = vec![(4, Profile::Uniform(99))];
             if column % 2 == 0 {
-                cases.extend([(2, Profile::Uniform(99)), (2, Profile::Uniform(50))]);
+                // Controls, the smallest fusible chain, and compaction costs.
+                cases.extend([
+                    (1, Profile::Uniform(99)),
+                    (2, Profile::Uniform(99)),
+                    (2, Profile::Uniform(50)),
+                ]);
+            } else if !project_filter {
+                // Retain known regressions where compaction outweighs saved decoding.
+                cases.extend([(2, Profile::Uniform(50)), (4, Profile::Uniform(50))]);
             }
             // One type/layout is sufficient to isolate predicate ordering.
             if column == 0 {
