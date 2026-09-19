@@ -2190,6 +2190,35 @@ mod tests {
         test_byte_stream_split_decode::<Int64Type>(data, -1);
     }
 
+    #[test]
+    fn test_byte_stream_split_uses_encoded_value_count() {
+        let mut decoder = ByteStreamSplitDecoder::<DoubleType>::new();
+
+        decoder.set_data(Bytes::from(vec![0; 64]), 63).unwrap();
+        assert_eq!(decoder.values_left(), 8);
+
+        let mut values = vec![0.; 63];
+        assert_eq!(decoder.get(&mut values).unwrap(), 8);
+        assert_eq!(decoder.values_left(), 0);
+    }
+
+    #[test]
+    fn test_byte_stream_split_rejects_invalid_data_length() {
+        let mut decoder = ByteStreamSplitDecoder::<DoubleType>::new();
+
+        let err = decoder.set_data(Bytes::from(vec![0; 63]), 8).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid BYTE_STREAM_SPLIT data length 63 for values of size 8"
+        );
+
+        let err = decoder.set_data(Bytes::from(vec![0; 72]), 8).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid BYTE_STREAM_SPLIT data length: expected at most 64 bytes for 8 values of size 8, got 72"
+        );
+    }
+
     fn test_byte_stream_split_flba(type_width: usize) {
         let data = vec![
             vec![
