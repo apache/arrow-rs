@@ -47,6 +47,7 @@ mod int96_stats_roundtrip;
 mod invalid_utf8;
 mod io;
 mod large_string_overflow;
+mod page_index;
 mod parquet_testing;
 mod partial_offset_index;
 #[cfg(feature = "async")]
