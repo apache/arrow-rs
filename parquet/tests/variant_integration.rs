@@ -480,3 +480,86 @@ fn variant_is_valid(batch: &RecordBatch, filename: &str) -> bool {
 
     Variant::try_new(metadata.value(0), value.value(0)).is_ok()
 }
+
+#[test]
+fn test_variant_wide_physical_decimal() {
+    use arrow::array::{Array, AsArray};
+    use arrow::datatypes::{DataType, Decimal128Type};
+    use bytes::Bytes;
+    use parquet::data_type::{ByteArray, ByteArrayType, FixedLenByteArrayType};
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
+    use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, VariantDecimal16};
+    use std::sync::Arc;
+
+    for width in [17, 32] {
+        let schema = parse_message_type(&format!(
+            "message test {{ required group v (VARIANT) {{
+                required binary metadata;
+                optional binary value;
+                optional fixed_len_byte_array({width}) typed_value (DECIMAL(38,2));
+            }} }}"
+        ))
+        .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer =
+            SerializedFileWriter::new(&mut bytes, Arc::new(schema), Default::default()).unwrap();
+        let mut group = writer.next_row_group().unwrap();
+        let mut column = group.next_column().unwrap().unwrap();
+        column
+            .typed::<ByteArrayType>()
+            .write_batch(
+                &vec![ByteArray::from(EMPTY_VARIANT_METADATA_BYTES); 3],
+                None,
+                None,
+            )
+            .unwrap();
+        column.close().unwrap();
+        let mut column = group.next_column().unwrap().unwrap();
+        column
+            .typed::<ByteArrayType>()
+            .write_batch(&[], Some(&[0, 0, 0]), None)
+            .unwrap();
+        column.close().unwrap();
+        let values = [12345_i128, -12345].map(|raw| {
+            let mut bytes = vec![if raw < 0 { 0xff } else { 0 }; width];
+            bytes[width - 16..].copy_from_slice(&raw.to_be_bytes());
+            bytes.into()
+        });
+        let mut column = group.next_column().unwrap().unwrap();
+        column
+            .typed::<FixedLenByteArrayType>()
+            .write_batch(&values, Some(&[1, 1, 0]), None)
+            .unwrap();
+        column.close().unwrap();
+        group.close().unwrap();
+        writer.close().unwrap();
+
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes))
+            .unwrap()
+            .build()
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        let input = batch.column(0).as_struct();
+        assert_eq!(
+            input.column_by_name("typed_value").unwrap().data_type(),
+            &DataType::Decimal256(38, 2)
+        );
+        let variant = VariantArray::try_new(input).unwrap();
+        let decimals = variant
+            .typed_value_column()
+            .unwrap()
+            .as_primitive::<Decimal128Type>();
+        assert_eq!(decimals.value(0), 12345);
+        assert_eq!(decimals.value(1), -12345);
+        assert!(decimals.is_null(2));
+        for (i, raw) in [12345, -12345].into_iter().enumerate() {
+            assert_eq!(
+                variant.value(i),
+                Variant::from(VariantDecimal16::try_new(raw, 2).unwrap())
+            );
+        }
+        assert_eq!(variant.value(2), Variant::Null);
+        assert!(reader.next().is_none());
+    }
+}
