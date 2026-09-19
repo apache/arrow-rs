@@ -18,6 +18,7 @@
 //! Generated row numbers and row-group indices, including ordering and filtering.
 
 use super::*;
+use std::collections::HashMap;
 
 #[test]
 fn test_read_row_numbers() {
