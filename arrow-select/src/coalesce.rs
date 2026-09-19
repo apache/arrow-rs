@@ -31,10 +31,12 @@ use std::sync::Arc;
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
 mod byte_view;
+mod fixed_size_list;
 mod generic;
 mod primitive;
 
 use byte_view::InProgressByteViewArray;
+use fixed_size_list::InProgressFixedSizeListArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
@@ -698,6 +700,13 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::Utf8View => Box::new(InProgressByteViewArray::<StringViewType>::new(batch_size)),
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
+        }
+        DataType::FixedSizeList(field, list_size) => {
+            Box::new(InProgressFixedSizeListArray::new(
+                *list_size,
+                Arc::clone(field),
+                batch_size,
+            ))
         }
         _ => Box::new(GenericInProgressArray::new()),
     }
