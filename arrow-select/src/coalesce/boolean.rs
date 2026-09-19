@@ -56,9 +56,7 @@ impl InProgressArray for InProgressBooleanArray {
     }
 
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
-        if self.values.capacity() == 0 {
-            self.values = BooleanBufferBuilder::new(self.batch_size);
-        }
+        self.ensure_capacity();
 
         let source = self.source.as_ref().ok_or_else(|| {
             ArrowError::InvalidArgumentError(
@@ -154,18 +152,16 @@ impl InProgressArray for InProgressBooleanArray {
                 self.len += count;
             }
 
-            FilterSelection::Indices(_) => {
+            FilterSelection::Indices(indices) => {
                 self.ensure_capacity();
                 let count = filter.count();
-                let filtered: ArrayRef = {
-                    let source = self.source.as_ref().unwrap();
-                    let bool_arr = source.as_boolean();
-                    filter.filter(bool_arr)?
-                };
-                let filtered_bool = filtered.as_boolean();
+                let source = self.source.as_ref().unwrap();
+                let bool_arr = source.as_boolean();
 
-                if let Some(nulls) = filtered_bool.nulls() {
-                    let null_buf = nulls.inner();
+                // Handle nulls via filter_nulls (does not consume `indices`)
+                let null_data = filter.filter_nulls(bool_arr.nulls());
+                if let Some(filtered_nulls) = null_data {
+                    let null_buf = filtered_nulls.inner();
                     let null_builder = self.null_bits.get_or_insert_with(|| {
                         let mut builder = BooleanBufferBuilder::new(self.batch_size);
                         builder.append_n(self.len, true);
@@ -176,7 +172,16 @@ impl InProgressArray for InProgressBooleanArray {
                     null_builder.append_n(count, true);
                 }
 
-                self.values.append_buffer(filtered_bool.values());
+                // Gather value bits directly from packed storage, avoiding an
+                // intermediate BooleanArray allocation.
+                let values = bool_arr.values();
+                let bit_offset = values.offset();
+                let raw = values.inner().as_slice();
+                indices.for_each(|idx| {
+                    let bit_idx = bit_offset + idx;
+                    self.values
+                        .append((raw[bit_idx >> 3] >> (bit_idx & 7)) & 1 != 0);
+                });
                 self.len += count;
             }
         }
@@ -191,7 +196,8 @@ impl InProgressArray for InProgressBooleanArray {
             .take()
             .map(|mut null_builder| NullBuffer::new(null_builder.finish()));
         self.values = BooleanBufferBuilder::new(0);
-        self.source = None;
+        // Do NOT clear self.source here — push_batch sets it once and may call
+        // finish_buffered_batch mid-loop, expecting source to remain valid.
         self.len = 0;
         Ok(Arc::new(BooleanArray::new(values, nulls)))
     }
@@ -439,6 +445,27 @@ mod tests {
         assert_eq!(out.value(3), true);
         // null_bits must cover all 4 rows
         assert_eq!(out.nulls().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_copy_rows_after_mid_loop_finish() {
+        // Simulates the push_batch pattern: source is set once, copy_rows is
+        // called, finish() is called (flushing one output batch), then
+        // copy_rows is called again on the same still-set source.
+        let source = make_bool(&[Some(true), Some(false), Some(true), Some(false), Some(true)]);
+        let mut ip = InProgressBooleanArray::new(8);
+        ip.set_source(Some(Arc::clone(&source)));
+        ip.copy_rows(0, 3).unwrap();
+        let first = ip.finish().unwrap(); // source must survive finish
+        assert_eq!(first.len(), 3);
+        // source is still set — copy the remaining rows
+        ip.copy_rows(3, 2).unwrap();
+        let second = ip.finish().unwrap();
+        let second = second.as_boolean();
+        assert_eq!(second.len(), 2);
+        assert_eq!(second.value(0), false);
+        assert_eq!(second.value(1), true);
+        assert!(second.nulls().is_none());
     }
 
     #[test]
