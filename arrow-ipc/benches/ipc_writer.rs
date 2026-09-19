@@ -15,15 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::RecordBatch;
 use arrow_array::builder::{
     Date32Builder, Decimal128Builder, Int32Builder, StringBuilder, StringDictionaryBuilder,
 };
 use arrow_array::types::UInt32Type;
+use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch};
 use arrow_ipc::CompressionType;
+use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::{
-    DictionaryHandling, FileWriter, IpcWriteOptions, StreamEncoder, StreamWriter,
+    DictionaryHandling, DictionaryTracker, FileWriter, IpcDataGenerator, IpcWriteContext,
+    IpcWriteOptions, StreamEncoder, StreamWriter,
 };
+use arrow_ipc::{BodyCompressionMethod, MessageHeader, root_as_message};
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
@@ -60,6 +63,74 @@ fn criterion_benchmark(c: &mut Criterion) {
                 writer.write(&batch).unwrap();
             }
             writer.finish().unwrap();
+        })
+    });
+
+    group.bench_function("StreamWriter/write_10/lz4", |b| {
+        let batch = create_batch(8192, true);
+        let options = lz4_options();
+        let stream = write_stream(&batch, options.clone());
+        validate_stream(&stream, &batch);
+        assert_lz4_compressed_buffers(&batch, false);
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            write_stream_into(&mut buffer, &batch, options.clone());
+            black_box(buffer.len());
+        })
+    });
+
+    group.bench_function("StreamWriter/write_10/fixed_size_binary_256", |b| {
+        let batch = create_fixed_size_binary_batch(1, 256);
+        let options = IpcWriteOptions::default();
+        let stream = write_stream(&batch, options.clone());
+        validate_stream(&stream, &batch);
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            write_stream_into(&mut buffer, &batch, options.clone());
+            black_box(buffer.len());
+        })
+    });
+
+    group.bench_function("StreamWriter/write_10/fixed_size_binary_256/lz4", |b| {
+        let batch = create_fixed_size_binary_batch(1, 256);
+        let options = lz4_options();
+        let stream = write_stream(&batch, options.clone());
+        validate_stream(&stream, &batch);
+        assert_lz4_compressed_buffers(&batch, true);
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            write_stream_into(&mut buffer, &batch, options.clone());
+            black_box(buffer.len());
+        })
+    });
+
+    group.bench_function("StreamWriter/write_10/fixed_size_binary_16x16", |b| {
+        let batch = create_fixed_size_binary_batch(16, 16);
+        let options = IpcWriteOptions::default();
+        let stream = write_stream(&batch, options.clone());
+        validate_stream(&stream, &batch);
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            write_stream_into(&mut buffer, &batch, options.clone());
+            black_box(buffer.len());
+        })
+    });
+
+    group.bench_function("StreamWriter/write_10/fixed_size_binary_16x16/lz4", |b| {
+        let batch = create_fixed_size_binary_batch(16, 16);
+        let options = lz4_options();
+        let stream = write_stream(&batch, options.clone());
+        validate_stream(&stream, &batch);
+        assert_lz4_compressed_buffers(&batch, true);
+        let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+        b.iter(move || {
+            buffer.clear();
+            write_stream_into(&mut buffer, &batch, options.clone());
+            black_box(buffer.len());
         })
     });
 
@@ -276,6 +347,101 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
         vec![Arc::new(a), Arc::new(b), Arc::new(c), Arc::new(d)],
     )
     .unwrap()
+}
+
+fn lz4_options() -> IpcWriteOptions {
+    IpcWriteOptions::default()
+        .try_with_compression(Some(CompressionType::LZ4_FRAME))
+        .unwrap()
+}
+
+fn write_stream(batch: &RecordBatch, options: IpcWriteOptions) -> Vec<u8> {
+    let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
+    write_stream_into(&mut buffer, batch, options);
+    buffer
+}
+
+fn write_stream_into(buffer: &mut Vec<u8>, batch: &RecordBatch, options: IpcWriteOptions) {
+    let mut writer =
+        StreamWriter::try_new_with_options(buffer, batch.schema().as_ref(), options).unwrap();
+    for _ in 0..10 {
+        writer.write(batch).unwrap();
+    }
+    writer.finish().unwrap();
+}
+
+fn validate_stream(buffer: &[u8], expected: &RecordBatch) {
+    let mut reader = StreamReader::try_new(buffer, None).unwrap();
+    for _ in 0..10 {
+        let actual = reader.next().unwrap().unwrap();
+        assert_eq!(&actual, expected);
+    }
+    assert!(reader.next().is_none());
+}
+
+fn assert_lz4_compressed_buffers(batch: &RecordBatch, require_all_positive: bool) {
+    let mut dictionary_tracker = DictionaryTracker::new(false);
+    let mut write_context = IpcWriteContext::default();
+    let (_, encoded) = IpcDataGenerator::default()
+        .encode(
+            batch,
+            &mut dictionary_tracker,
+            &lz4_options(),
+            &mut write_context,
+        )
+        .unwrap();
+    let message = root_as_message(&encoded.ipc_message).unwrap();
+    assert_eq!(message.header_type(), MessageHeader::RecordBatch);
+    let record_batch = message.header_as_record_batch().unwrap();
+    let compression = record_batch.compression().unwrap();
+    assert_eq!(compression.codec(), CompressionType::LZ4_FRAME);
+    assert_eq!(compression.method(), BodyCompressionMethod::BUFFER);
+
+    let buffers = record_batch.buffers().unwrap();
+    let mut compressed_buffers = 0;
+    for buffer in buffers {
+        let length = usize::try_from(buffer.length()).unwrap();
+        if length == 0 {
+            continue;
+        }
+        let offset = usize::try_from(buffer.offset()).unwrap();
+        let prefix_end = offset.checked_add(8).unwrap();
+        assert!(prefix_end <= encoded.arrow_data.len());
+        let prefix = i64::from_le_bytes(encoded.arrow_data[offset..prefix_end].try_into().unwrap());
+        assert!(prefix == -1 || prefix > 0);
+        if prefix > 0 {
+            compressed_buffers += 1;
+        }
+        if require_all_positive {
+            assert!(prefix > 0);
+        }
+    }
+    assert!(compressed_buffers > 0);
+}
+
+fn create_fixed_size_binary_batch(num_columns: usize, value_size: usize) -> RecordBatch {
+    const NUM_ROWS: usize = 1024;
+    let value = vec![0xa5; value_size];
+    let value_size = i32::try_from(value_size).unwrap();
+    let fields = (0..num_columns)
+        .map(|column| {
+            Field::new(
+                format!("c{column}"),
+                DataType::FixedSizeBinary(value_size),
+                false,
+            )
+        })
+        .collect::<Vec<_>>();
+    let schema = Arc::new(Schema::new(fields));
+    let columns = (0..num_columns)
+        .map(|_| {
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter((0..NUM_ROWS).map(|_| value.as_slice()))
+                    .unwrap(),
+            ) as ArrayRef
+        })
+        .collect::<Vec<_>>();
+    RecordBatch::try_new(schema, columns).unwrap()
 }
 
 fn config() -> Criterion {
