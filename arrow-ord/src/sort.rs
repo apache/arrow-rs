@@ -937,11 +937,10 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 /// # Example
 ///
 /// ```
-/// use std::sync::Arc;
-///
-/// use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-/// use arrow_ord::sort::{lexsort_to_indices, SortColumn};
-/// use arrow_select::take::take_record_batch;
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+/// # use arrow_ord::sort::{lexsort_to_indices, SortColumn};
+/// # use arrow_select::take::take_record_batch;
 ///
 /// // Two columns (a, b). Values (2,x), (1, z), (1(a))
 /// let batch = RecordBatch::try_from_iter(vec![
