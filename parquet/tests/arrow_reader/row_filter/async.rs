@@ -69,6 +69,68 @@ fn make_two_column_i64_file(values: &[i64], rows_per_page: usize) -> Bytes {
 }
 
 #[tokio::test]
+async fn test_default_auto_filter_cache_with_skipped_page() {
+    let values = (0..60).collect::<Vec<i64>>();
+    let data = make_two_column_i64_file(&values, 20);
+    let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+        TestReader::new(data),
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        builder
+            .metadata()
+            .page_index()
+            .unwrap()
+            .page_locations(0, 0)
+            .unwrap()
+            .iter()
+            .map(|page| page.first_row_index)
+            .collect::<Vec<_>>(),
+        vec![0, 20, 40]
+    );
+
+    let schema = builder.parquet_schema();
+    let key_projection = ProjectionMask::leaves(schema, [0]);
+    let value_projection = ProjectionMask::leaves(schema, [1]);
+    let first = ArrowPredicateFn::new(key_projection, |batch: RecordBatch| {
+        let column = batch.column(0);
+        let match_first = eq(column, &Int64Array::new_scalar(0))?;
+        let match_last = eq(column, &Int64Array::new_scalar(40))?;
+        or(&match_first, &match_last)
+    });
+    let second = ArrowPredicateFn::new(value_projection.clone(), |batch: RecordBatch| {
+        Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+    });
+
+    // The first predicate skips the entire middle page. The second predicate
+    // caches the value column; its 8-row cache batch at 16..24 must not cross
+    // into that unloaded page when Auto materialises the selected rows.
+    let metrics = ArrowReaderMetrics::enabled();
+    let stream = builder
+        .with_projection(value_projection)
+        .with_row_filter(RowFilter::new(vec![Box::new(first), Box::new(second)]))
+        .with_batch_size(8)
+        .with_metrics(metrics.clone())
+        .build()
+        .unwrap();
+    let output_schema = stream.schema().clone();
+    let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+    let output = concat_batches(&output_schema, &batches).unwrap();
+    assert_eq!(
+        output
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .values(),
+        &[0, 40]
+    );
+    assert!(metrics.records_read_from_cache().unwrap() > 0);
+}
+
+#[tokio::test]
 async fn test_row_filter_full_page_skip_is_handled_async() {
     let first_value: i64 = 1111;
     let last_value: i64 = 9999;
