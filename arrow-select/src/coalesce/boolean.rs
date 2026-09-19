@@ -233,10 +233,10 @@ mod tests {
         let out = ip.finish().unwrap();
         let out = out.as_boolean();
         assert_eq!(out.len(), 4);
-        assert_eq!(out.value(0), true);
-        assert_eq!(out.value(1), false);
-        assert_eq!(out.value(2), true);
-        assert_eq!(out.value(3), false);
+        assert!(out.value(0));
+        assert!(!out.value(1));
+        assert!(out.value(2));
+        assert!(!out.value(3));
         assert!(out.nulls().is_none());
     }
 
@@ -249,9 +249,9 @@ mod tests {
         let out = ip.finish().unwrap();
         let out = out.as_boolean();
         assert_eq!(out.len(), 3);
-        assert_eq!(out.value(0), true);
+        assert!(out.value(0));
         assert!(out.is_null(1));
-        assert_eq!(out.value(2), false);
+        assert!(!out.value(2));
     }
 
     #[test]
@@ -263,9 +263,9 @@ mod tests {
         let out = ip.finish().unwrap();
         let out = out.as_boolean();
         assert_eq!(out.len(), 3);
-        assert_eq!(out.value(0), true);
-        assert_eq!(out.value(1), false);
-        assert_eq!(out.value(2), true);
+        assert!(out.value(0));
+        assert!(!out.value(1));
+        assert!(out.value(2));
     }
 
     #[test]
@@ -278,10 +278,10 @@ mod tests {
         let out = ip.finish().unwrap();
         let out = out.as_boolean();
         assert_eq!(out.len(), 4);
-        assert_eq!(out.value(0), true);
-        assert_eq!(out.value(1), false);
-        assert_eq!(out.value(2), true);
-        assert_eq!(out.value(3), false);
+        assert!(out.value(0));
+        assert!(!out.value(1));
+        assert!(out.value(2));
+        assert!(!out.value(3));
     }
 
     #[test]
@@ -309,10 +309,10 @@ mod tests {
         let out = ip.finish().unwrap();
         let out = out.as_boolean();
         assert_eq!(out.len(), 9);
-        assert_eq!(out.value(0), true);
-        assert_eq!(out.value(1), false);
-        assert_eq!(out.value(4), true);
-        assert_eq!(out.value(8), true);
+        assert!(out.value(0));
+        assert!(!out.value(1));
+        assert!(out.value(4));
+        assert!(out.value(8));
     }
 
     #[test]
@@ -326,9 +326,9 @@ mod tests {
         let out = ip.finish().unwrap();
         let out = out.as_boolean();
         assert_eq!(out.len(), 3);
-        assert_eq!(out.value(0), true);
-        assert_eq!(out.value(1), true);
-        assert_eq!(out.value(2), true);
+        assert!(out.value(0));
+        assert!(out.value(1));
+        assert!(out.value(2));
     }
 
     #[test]
@@ -356,10 +356,10 @@ mod tests {
         let out = ip.finish().unwrap();
         let out = out.as_boolean();
         assert_eq!(out.len(), 9);
-        assert_eq!(out.value(0), true);
+        assert!(out.value(0));
         assert!(out.is_null(1));
-        assert_eq!(out.value(2), false);
-        assert_eq!(out.value(3), true);
+        assert!(!out.value(2));
+        assert!(out.value(3));
         assert!(out.is_null(5));
         assert!(out.is_null(8));
     }
@@ -375,7 +375,7 @@ mod tests {
         let out = ip.finish().unwrap();
         let out = out.as_boolean();
         assert_eq!(out.len(), 3);
-        assert_eq!(out.value(0), true);
+        assert!(out.value(0));
         assert!(out.is_null(1));
         assert!(out.is_null(2));
     }
@@ -391,9 +391,9 @@ mod tests {
         let out = ip.finish().unwrap();
         let out = out.as_boolean();
         assert_eq!(out.len(), 3);
-        assert_eq!(out.value(0), true);
-        assert_eq!(out.value(1), false);
-        assert_eq!(out.value(2), true);
+        assert!(out.value(0));
+        assert!(!out.value(1));
+        assert!(out.value(2));
     }
 
     #[test]
@@ -440,9 +440,9 @@ mod tests {
         assert!(!out.is_null(1));
         assert!(out.is_null(2));
         assert!(!out.is_null(3));
-        assert_eq!(out.value(0), true);
-        assert_eq!(out.value(1), false);
-        assert_eq!(out.value(3), true);
+        assert!(out.value(0));
+        assert!(!out.value(1));
+        assert!(out.value(3));
         // null_bits must cover all 4 rows
         assert_eq!(out.nulls().unwrap().len(), 4);
     }
@@ -463,8 +463,8 @@ mod tests {
         let second = ip.finish().unwrap();
         let second = second.as_boolean();
         assert_eq!(second.len(), 2);
-        assert_eq!(second.value(0), false);
-        assert_eq!(second.value(1), true);
+        assert!(!second.value(0));
+        assert!(second.value(1));
         assert!(second.nulls().is_none());
     }
 
@@ -483,8 +483,8 @@ mod tests {
         let second = ip.finish().unwrap();
         let second = second.as_boolean();
         assert_eq!(second.len(), 2);
-        assert_eq!(second.value(0), true);
-        assert_eq!(second.value(1), false);
+        assert!(second.value(0));
+        assert!(!second.value(1));
         assert!(second.nulls().is_none());
     }
 }
