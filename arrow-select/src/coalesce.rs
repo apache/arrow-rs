@@ -30,16 +30,22 @@ use std::sync::Arc;
 // Originally From DataFusion's coalesce module:
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
+mod boolean;
 mod byte_view;
 mod generic;
 mod primitive;
 
+use boolean::InProgressBooleanArray;
 use byte_view::InProgressByteViewArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
 fn has_sparse_filter_copy(data_type: &DataType) -> bool {
-    data_type.is_primitive() || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
+    data_type.is_primitive()
+        || matches!(
+            data_type,
+            DataType::Boolean | DataType::Utf8View | DataType::BinaryView
+        )
 }
 
 /// Maximum selected row fraction for the fused sparse-filter copy path.
@@ -699,6 +705,7 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
         }
+        DataType::Boolean => Box::new(InProgressBooleanArray::new(batch_size)),
         _ => Box::new(GenericInProgressArray::new()),
     }
 }
@@ -1661,7 +1668,7 @@ mod tests {
             true,
         )]));
         let coalescer = BatchCoalescer::new(boolean, 100);
-        assert!(coalescer.has_non_specialized_filter_columns);
+        assert!(!coalescer.has_non_specialized_filter_columns);
     }
 
     #[derive(Debug, Clone, PartialEq)]
