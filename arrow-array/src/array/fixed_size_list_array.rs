@@ -372,13 +372,13 @@ impl FixedSizeListArray {
     ///
     /// Note this doesn't do any bound checking, for performance reason.
     ///
-    /// # Panics
-    ///
-    /// Panics if the offset exceeds `i32::MAX`.
+    /// Past `i32::MAX` child elements the offset does not fit the return type
+    /// and wraps negative. Use [`Self::value_offset_at`], which stays in
+    /// `usize`.
     #[deprecated(since = "60.0.0", note = "Use value_offset_at instead")]
     #[inline]
     pub fn value_offset(&self, i: usize) -> i32 {
-        i32::try_from(self.value_offset_at(i)).expect("offset overflow")
+        self.value_offset_at(i) as i32
     }
 
     /// Returns the length for an element.
