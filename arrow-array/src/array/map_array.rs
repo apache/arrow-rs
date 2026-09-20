@@ -216,11 +216,23 @@ impl MapArray {
     }
 
     /// Returns a reference to the keys of this map
+    ///
+    /// Note: The map array may not refer to all keys in the returned array.
+    /// For example, after slicing via [`Self::slice`], the returned array may
+    /// contain keys both before and after the slice. Use [`Self::value_offsets`]
+    /// to determine the range of keys for each map. These offsets index into
+    /// the returned array and may not start at zero.
     pub fn keys(&self) -> &ArrayRef {
         self.entries.column(0)
     }
 
     /// Returns a reference to the values of this map
+    ///
+    /// Note: The map array may not refer to all values in the returned array.
+    /// For example, after slicing via [`Self::slice`], the returned array may
+    /// contain values both before and after the slice. Use [`Self::value_offsets`]
+    /// to determine the range of values for each map. These offsets index into
+    /// the returned array and may not start at zero.
     pub fn values(&self) -> &ArrayRef {
         self.entries.column(1)
     }
