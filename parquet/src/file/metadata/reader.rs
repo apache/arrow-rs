@@ -114,10 +114,27 @@ impl From<bool> for PageIndexPolicy {
 /// horizontal slices (via [`Self::row_groups`]), or the intersection of the two
 /// (via [`Self::row_groups_and_columns`]).
 ///
-/// # Example
-/// TODO(ets): example
-///
 /// At present this is only used to select elements of the [Page Index] for decoding.
+///
+/// # Examples
+///
+/// To select columns 0 and 1 from all row groups:
+/// ```rust
+/// # use parquet::file::metadata::ColumnChunkMask;
+/// let mask = ColumnChunkMask::columns([0, 1]);
+/// ```
+///
+/// To select all columns from row group 2:
+/// ```rust
+/// # use parquet::file::metadata::ColumnChunkMask;
+/// let mask = ColumnChunkMask::row_groups([2]);
+/// ```
+///
+/// To select columns 1 and 3 from row group 0:
+/// ```rust
+/// # use parquet::file::metadata::ColumnChunkMask;
+/// let mask = ColumnChunkMask::row_groups_and_columns([0], [1, 3]);
+/// ```
 ///
 /// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -127,7 +144,6 @@ pub struct ColumnChunkMask {
     columns: Option<Arc<BTreeSet<i32>>>,
 }
 
-// TODO(ets): add unit tests for ColumnChunkMask
 impl ColumnChunkMask {
     /// Select all row groups and columns.
     pub fn all() -> Self {
@@ -136,22 +152,22 @@ impl ColumnChunkMask {
 
     /// Select only the listed columns.
     ///
-    /// Any indices in `columns` that are less than zero will be ignored.
+    /// Any indices in `columns` that are less than zero will be ignored. Passing an empty
+    /// set is treated the same as selecting all columns.
     pub fn columns(columns: impl IntoIterator<Item = i32>) -> Self {
         Self {
             row_groups: None,
-            columns: Some(Arc::new(columns.into_iter().filter(|&i| i >= 0).collect())),
+            columns: Self::iter_to_set(columns),
         }
     }
 
     /// Select only the listed row groups.
     ///
-    /// Any indices in `row_groups` that are less than zero will be ignored.
+    /// Any indices in `row_groups` that are less than zero will be ignored. Passing an empty
+    /// set is treated the same as selecting all row groups.
     pub fn row_groups(row_groups: impl IntoIterator<Item = i32>) -> Self {
         Self {
-            row_groups: Some(Arc::new(
-                row_groups.into_iter().filter(|&i| i >= 0).collect(),
-            )),
+            row_groups: Self::iter_to_set(row_groups),
             columns: None,
         }
     }
@@ -159,20 +175,22 @@ impl ColumnChunkMask {
     /// Select only the listed row groups and columns.
     ///
     /// Any indices in `row_groups` or `columns` that are less than zero will be ignored.
+    /// Passing an empty set for `row_groups` is treated as selecting all row groups, and
+    /// an empty set for `columns` as selectiong all columns.
     pub fn row_groups_and_columns(
         row_groups: impl IntoIterator<Item = i32>,
         columns: impl IntoIterator<Item = i32>,
     ) -> Self {
         Self {
-            row_groups: Some(Arc::new(
-                row_groups.into_iter().filter(|&i| i >= 0).collect(),
-            )),
-            columns: Some(Arc::new(columns.into_iter().filter(|&i| i >= 0).collect())),
+            row_groups: Self::iter_to_set(row_groups),
+            columns: Self::iter_to_set(columns),
         }
     }
 
-    // test if `idx` is in the row group set. returns false if idx > i32::MAX
-    pub(crate) fn includes_row_group(&self, idx: usize) -> bool {
+    /// Test if `idx` is in the row group set.
+    ///
+    /// Returns `false` if `idx > `[`i32::MAX`].
+    pub fn includes_row_group(&self, idx: usize) -> bool {
         let Ok(idx) = i32::try_from(idx) else {
             return false;
         };
@@ -181,22 +199,20 @@ impl ColumnChunkMask {
             .is_none_or(|keep| keep.contains(&idx))
     }
 
-    // test if `idx` is in the column set. returns false if idx > i32::MAX
-    pub(crate) fn includes_column(&self, idx: usize) -> bool {
+    /// Test if `idx` is in the column set.
+    ///
+    /// Returns `false` if `idx > `[`i32::MAX`].
+    pub fn includes_column(&self, idx: usize) -> bool {
         let Ok(idx) = i32::try_from(idx) else {
             return false;
         };
         self.columns.as_ref().is_none_or(|keep| keep.contains(&idx))
     }
 
-    // FIXME(ets): these will be used later
-    /*pub(crate) fn selected_row_groups(&self) -> Option<&BTreeSet<usize>> {
-        self.row_groups.as_deref()
+    fn iter_to_set(indices: impl IntoIterator<Item = i32>) -> Option<Arc<BTreeSet<i32>>> {
+        let set: BTreeSet<i32> = indices.into_iter().filter(|&i| i >= 0).collect();
+        (!set.is_empty()).then_some(Arc::new(set))
     }
-
-    pub(crate) fn selected_columns(&self) -> Option<&BTreeSet<usize>> {
-        self.columns.as_deref()
-    }*/
 }
 
 impl ParquetMetaDataReader {
@@ -1537,5 +1553,33 @@ mod async_tests {
         ));
         read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
         read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
+    }
+
+    #[test]
+    fn test_chunk_mask() {
+        // basic test
+        let mask = ColumnChunkMask::row_groups_and_columns([0], [1]);
+        assert!(mask.includes_row_group(0));
+        assert!(!mask.includes_row_group(1));
+        assert!(!mask.includes_column(0));
+        assert!(mask.includes_column(1));
+
+        // test that negative numbers are ignored
+        let mask = ColumnChunkMask::columns([-1, 0, 1]);
+        assert!(mask.columns.as_ref().is_some_and(|c| c.len() == 2));
+        assert!(mask.includes_column(0));
+        assert!(mask.includes_column(1));
+        assert!(!mask.includes_column(2));
+
+        // empty set should behave as "all"
+        let mask = ColumnChunkMask::columns([]);
+        assert!(mask.includes_column(0));
+        assert!(mask.includes_column(1));
+        assert!(mask.includes_column(2));
+
+        // indexing beyond i32::MAX should return false
+        let mask = ColumnChunkMask::all();
+        assert!(mask.includes_column(i32::MAX as usize));
+        assert!(!mask.includes_column(u32::MAX as usize));
     }
 }
