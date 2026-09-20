@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use parquet::basic::{Encoding, PageType, Type as PhysicalType};
 use parquet::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, LevelHistogram, PageEncodingStats, PageIndexPolicy,
-    PageIndexSelection, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+    ColumnChunkMask, ColumnChunkMetaData, FileMetaData, LevelHistogram, PageEncodingStats,
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
     ParquetMetaDataWriter, ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use parquet::file::statistics::Statistics;
@@ -205,8 +205,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
         .with_page_index_policy(PageIndexPolicy::Required)
-        .with_column_index_selection(PageIndexSelection::columns([0]))
-        .with_offset_index_selection(PageIndexSelection::columns([0, 1, 4]));
+        .with_column_index_mask(ColumnChunkMask::columns([0]))
+        .with_offset_index_mask(ColumnChunkMask::columns([0, 1, 4]));
     c.bench_function("read page index reduced columns", |b| {
         b.iter(|| {
             reader.read_page_indexes(&data).unwrap();

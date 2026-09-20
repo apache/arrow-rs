@@ -72,8 +72,8 @@ pub struct ParquetMetaDataReader {
     metadata: Option<ParquetMetaData>,
     column_index: PageIndexPolicy,
     offset_index: PageIndexPolicy,
-    column_index_selection: PageIndexSelection,
-    offset_index_selection: PageIndexSelection,
+    column_index_mask: ColumnChunkMask,
+    offset_index_mask: ColumnChunkMask,
     prefetch_hint: Option<usize>,
     metadata_options: Option<Arc<ParquetMetaDataOptions>>,
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
@@ -107,25 +107,34 @@ impl From<bool> for PageIndexPolicy {
     }
 }
 
-/// Selects the row groups and columns for which page indexes are read.
+/// Struct to specify column chunks for which metadata is required.
 ///
-/// This is independent of [`PageIndexPolicy`], which controls whether selected
-/// indexes are optional or required. By default, all row groups and columns are selected.
+/// Column chunks are identified by row group index and column index. This struct
+/// allows for specifying vertical slices of column chunk data (via [`Self::columns`]),
+/// horizontal slices (via [`Self::row_groups`]), or the intersection of the two
+/// (via [`Self::row_groups_and_columns`]).
+///
+/// # Example
+/// TODO(ets): example
+///
+/// At present this is only used to select elements of the [Page Index] for decoding.
+///
+/// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PageIndexSelection {
+pub struct ColumnChunkMask {
     // using i32 because that's how thrift vectors are sized
     row_groups: Option<Arc<BTreeSet<i32>>>,
     columns: Option<Arc<BTreeSet<i32>>>,
 }
 
-// TODO(ets): add unit tests for PageIndexSelection
-impl PageIndexSelection {
+// TODO(ets): add unit tests for ColumnChunkMask
+impl ColumnChunkMask {
     /// Select all row groups and columns.
     pub fn all() -> Self {
         Self::default()
     }
 
-    /// Select page indexes for only the listed columns.
+    /// Select only the listed columns.
     ///
     /// Any indices in `columns` that are less than zero will be ignored.
     pub fn columns(columns: impl IntoIterator<Item = i32>) -> Self {
@@ -135,7 +144,7 @@ impl PageIndexSelection {
         }
     }
 
-    /// Select page indexes for only the listed row groups.
+    /// Select only the listed row groups.
     ///
     /// Any indices in `row_groups` that are less than zero will be ignored.
     pub fn row_groups(row_groups: impl IntoIterator<Item = i32>) -> Self {
@@ -147,9 +156,9 @@ impl PageIndexSelection {
         }
     }
 
-    /// Select page indexes for only the listed row groups and columns.
+    /// Select only the listed row groups and columns.
     ///
-    /// Any indices in `row_groups` or `columns that are less than zero will be ignored.
+    /// Any indices in `row_groups` or `columns` that are less than zero will be ignored.
     pub fn row_groups_and_columns(
         row_groups: impl IntoIterator<Item = i32>,
         columns: impl IntoIterator<Item = i32>,
@@ -224,20 +233,20 @@ impl ParquetMetaDataReader {
     }
 
     /// Selects the row groups and columns for which both page index structures are read.
-    pub fn with_page_index_selection(self, selection: PageIndexSelection) -> Self {
-        self.with_column_index_selection(selection.clone())
-            .with_offset_index_selection(selection)
+    pub fn with_page_index_mask(self, mask: ColumnChunkMask) -> Self {
+        self.with_column_index_mask(mask.clone())
+            .with_offset_index_mask(mask)
     }
 
     /// Selects the row groups and columns for which column indexes are read.
-    pub fn with_column_index_selection(mut self, selection: PageIndexSelection) -> Self {
-        self.column_index_selection = selection;
+    pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.column_index_mask = mask;
         self
     }
 
     /// Selects the row groups and columns for which offset indexes are read.
-    pub fn with_offset_index_selection(mut self, selection: PageIndexSelection) -> Self {
-        self.offset_index_selection = selection;
+    pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.offset_index_mask = mask;
         self
     }
 
@@ -445,8 +454,8 @@ impl ParquetMetaDataReader {
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
             .with_column_index_policy(self.column_index)
-            .with_offset_index_selection(self.offset_index_selection.clone())
-            .with_column_index_selection(self.column_index_selection.clone())
+            .with_offset_index_mask(self.offset_index_mask.clone())
+            .with_column_index_mask(self.column_index_mask.clone())
             .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
@@ -594,8 +603,8 @@ impl ParquetMetaDataReader {
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
             .with_column_index_policy(self.column_index)
-            .with_offset_index_selection(self.offset_index_selection.clone())
-            .with_column_index_selection(self.column_index_selection.clone())
+            .with_offset_index_mask(self.offset_index_mask.clone())
+            .with_column_index_mask(self.column_index_mask.clone())
             .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 

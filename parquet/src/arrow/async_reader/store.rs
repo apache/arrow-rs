@@ -243,8 +243,8 @@ impl AsyncFileReader for ParquetObjectReader {
                 metadata = metadata
                     .with_column_index_policy(options.column_index_policy())
                     .with_offset_index_policy(options.offset_index_policy())
-                    .with_column_index_selection(options.column_index_selection().clone())
-                    .with_offset_index_selection(options.offset_index_selection().clone());
+                    .with_column_index_mask(options.column_index_mask().clone())
+                    .with_offset_index_mask(options.offset_index_mask().clone());
             }
 
             let metadata = if let Some(file_size) = self.file_size {

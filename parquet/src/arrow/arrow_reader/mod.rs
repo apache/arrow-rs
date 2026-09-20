@@ -45,7 +45,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
-    PageIndexPolicy, PageIndexSelection, ParquetMetaData, ParquetMetaDataOptions,
+    ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
     ParquetMetaDataReader, ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
@@ -595,8 +595,8 @@ pub struct ArrowReaderOptions {
 
     column_index: PageIndexPolicy,
     offset_index: PageIndexPolicy,
-    column_index_selection: PageIndexSelection,
-    offset_index_selection: PageIndexSelection,
+    column_index_mask: ColumnChunkMask,
+    offset_index_mask: ColumnChunkMask,
 
     /// Options to control reading of Parquet metadata
     metadata_options: ParquetMetaDataOptions,
@@ -776,29 +776,29 @@ impl ArrowReaderOptions {
         self
     }
 
-    /// Sets the [`PageIndexSelection`] for the Parquet [ColumnIndex] structure.
+    /// Sets the [`ColumnChunkMask`] for the Parquet [ColumnIndex] structure.
     ///
     /// The column index can be costly to decode and store, especially when it is needed
     /// only for a subset of row groups or columns (such as when filtering by a predicate
-    /// on a single column). Providing a [`PageIndexSelection`] can greatly decrease
+    /// on a single column). Providing a [`ColumnChunkMask`] can greatly decrease
     /// the time needed to decode this metadata.
     ///
     /// [ColumnIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    pub fn with_column_index_selection(mut self, selection: PageIndexSelection) -> Self {
-        self.column_index_selection = selection;
+    pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.column_index_mask = mask;
         self
     }
 
-    /// Sets the [`PageIndexSelection`] for the Parquet [OffsetIndex] structure.
+    /// Sets the [`ColumnChunkMask`] for the Parquet [OffsetIndex] structure.
     ///
     /// The offset index can be costly to decode and store, especially when it is needed
     /// only for a subset of row groups or columns (such as when projecting a small subset
-    /// of columns). Providing a [`PageIndexSelection`] can greatly decrease
+    /// of columns). Providing a [`ColumnChunkMask`] can greatly decrease
     /// the time needed to decode this metadata.
     ///
     /// [OffsetIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    pub fn with_offset_index_selection(mut self, selection: PageIndexSelection) -> Self {
-        self.offset_index_selection = selection;
+    pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.offset_index_mask = mask;
         self
     }
 
@@ -952,18 +952,18 @@ impl ArrowReaderOptions {
         self.column_index
     }
 
-    /// Retrieve the currently set [`PageIndexSelection`] for the offset index.
+    /// Retrieve the currently set [`ColumnChunkMask`] for the offset index.
     ///
-    /// This can be set via [`with_offset_index_selection`][Self::with_offset_index_selection].
-    pub fn offset_index_selection(&self) -> &PageIndexSelection {
-        &self.offset_index_selection
+    /// This can be set via [`with_offset_index_mask`][Self::with_offset_index_mask].
+    pub fn offset_index_mask(&self) -> &ColumnChunkMask {
+        &self.offset_index_mask
     }
 
-    /// Retrieve the currently set [`PageIndexSelection`] for the column index.
+    /// Retrieve the currently set [`ColumnChunkMask`] for the column index.
     ///
-    /// This can be set via [`with_column_index_selection`][Self::with_column_index_selection].
-    pub fn column_index_selection(&self) -> &PageIndexSelection {
-        &self.column_index_selection
+    /// This can be set via [`with_column_index_mask`][Self::with_column_index_mask].
+    pub fn column_index_mask(&self) -> &ColumnChunkMask {
+        &self.column_index_mask
     }
 
     /// Retrieve the currently set metadata decoding options.
@@ -1013,8 +1013,8 @@ impl ParquetMetaDataReader {
             self = self
                 .with_column_index_policy(options.column_index_policy())
                 .with_offset_index_policy(options.offset_index_policy())
-                .with_column_index_selection(options.column_index_selection().clone())
-                .with_offset_index_selection(options.offset_index_selection().clone());
+                .with_column_index_mask(options.column_index_mask().clone())
+                .with_offset_index_mask(options.offset_index_mask().clone());
         }
 
         self
@@ -1063,8 +1063,8 @@ impl ArrowReaderMetadata {
         let metadata = ParquetMetaDataReader::new()
             .with_column_index_policy(options.column_index_policy())
             .with_offset_index_policy(options.offset_index_policy())
-            .with_column_index_selection(options.column_index_selection().clone())
-            .with_offset_index_selection(options.offset_index_selection().clone())
+            .with_column_index_mask(options.column_index_mask().clone())
+            .with_offset_index_mask(options.offset_index_mask().clone())
             .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
