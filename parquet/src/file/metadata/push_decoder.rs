@@ -22,7 +22,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
 use crate::file::metadata::parser::{MetadataParser, parse_page_index};
 use crate::file::metadata::{
-    ColumnChunkMetaData, FooterTail, PageIndexPolicy, PageIndexSelection, ParquetMetaData,
+    ColumnChunkMask, ColumnChunkMetaData, FooterTail, PageIndexPolicy, ParquetMetaData,
     ParquetMetaDataOptions,
 };
 use crate::file::reader::ChunkReader;
@@ -229,9 +229,9 @@ pub struct ParquetMetaDataPushDecoder {
     /// policy for loading OffsetIndex (part of the PageIndex)
     offset_index_policy: PageIndexPolicy,
     /// which rows and columns of the column index should be read
-    column_index_selection: PageIndexSelection,
+    column_index_mask: ColumnChunkMask,
     /// which rows and columns of the offset index should be read
-    offset_index_selection: PageIndexSelection,
+    offset_index_mask: ColumnChunkMask,
     /// Underlying buffers
     buffers: crate::util::push_buffers::PushBuffers,
     /// Encryption API
@@ -256,8 +256,8 @@ impl ParquetMetaDataPushDecoder {
             state: DecodeState::ReadingFooter,
             column_index_policy: PageIndexPolicy::Optional,
             offset_index_policy: PageIndexPolicy::Optional,
-            column_index_selection: PageIndexSelection::all(),
-            offset_index_selection: PageIndexSelection::all(),
+            column_index_mask: ColumnChunkMask::all(),
+            offset_index_mask: ColumnChunkMask::all(),
             buffers: crate::util::push_buffers::PushBuffers::new(file_len),
             metadata_parser: MetadataParser::new(),
         })
@@ -309,21 +309,21 @@ impl ParquetMetaDataPushDecoder {
     }
 
     /// Select the row groups and columns for which both page index structures are read.
-    pub fn with_page_index_selection(mut self, selection: PageIndexSelection) -> Self {
-        self.column_index_selection = selection.clone();
-        self.offset_index_selection = selection;
+    pub fn with_page_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.column_index_mask = mask.clone();
+        self.offset_index_mask = mask;
         self
     }
 
     /// Select the row groups and columns for which column indexes are read.
-    pub fn with_column_index_selection(mut self, selection: PageIndexSelection) -> Self {
-        self.column_index_selection = selection;
+    pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.column_index_mask = mask;
         self
     }
 
     /// Select the row groups and columns for which offset indexes are read.
-    pub fn with_offset_index_selection(mut self, selection: PageIndexSelection) -> Self {
-        self.offset_index_selection = selection;
+    pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.offset_index_mask = mask;
         self
     }
 
@@ -439,8 +439,8 @@ impl ParquetMetaDataPushDecoder {
                         &metadata,
                         self.column_index_policy,
                         self.offset_index_policy,
-                        &self.column_index_selection,
-                        &self.offset_index_selection,
+                        &self.column_index_mask,
+                        &self.offset_index_mask,
                     );
 
                     if ranges.is_empty() {
@@ -462,8 +462,8 @@ impl ParquetMetaDataPushDecoder {
                         &mut metadata,
                         self.column_index_policy,
                         self.offset_index_policy,
-                        &self.column_index_selection,
-                        &self.offset_index_selection,
+                        &self.column_index_mask,
+                        &self.offset_index_mask,
                         &self.buffers,
                     )?;
                     self.state = DecodeState::Finished;
@@ -526,10 +526,10 @@ enum DecodeState {
 /// the resultant vector by the range starts, and then create a single range
 /// using `start` from the head and `end` from the tail.
 ///
-/// ```rust
+/// ```ignore
 /// # use core::ops::Range;
 /// # fn coalesce_page_index_ranges(ranges: &mut Vec<Range<u64>>) -> Option<Range<u64>> {
-///     ranges.sort_by(|r1, r2| r1.start.cmp(&r2.start));
+///     ranges.sort_by_key(|r| r.start);
 ///     let range = (ranges.first()?.start..ranges.last()?.end);
 ///     Some(range)
 /// # }
@@ -538,33 +538,33 @@ pub fn ranges_for_page_index(
     metadata: &ParquetMetaData,
     column_index_policy: PageIndexPolicy,
     offset_index_policy: PageIndexPolicy,
-    column_index_selection: &PageIndexSelection,
-    offset_index_selection: &PageIndexSelection,
+    column_index_mask: &ColumnChunkMask,
+    offset_index_mask: &ColumnChunkMask,
 ) -> Vec<Range<u64>> {
     let mut result = Vec::new();
 
     fn add_ranges<T>(
         metadata: &ParquetMetaData,
-        selection: &PageIndexSelection,
+        mask: &ColumnChunkMask,
         ranges: &mut Vec<Range<u64>>,
         f: T,
     ) where
         T: Fn(&ColumnChunkMetaData) -> Option<Range<u64>>,
     {
         for (rg_idx, rg) in metadata.row_groups().iter().enumerate() {
-            if selection.includes_row_group(rg_idx) {
+            if mask.includes_row_group(rg_idx) {
                 for (col_idx, col) in rg.columns().iter().enumerate() {
-                    if selection.includes_column(col_idx) {
-                        if let Some(range) = f(col) {
-                            // ranges shouldn't overlap, so only check for contiguous ranges
-                            // [s1..e1], [s2..e2] where e1 == s2
-                            if let Some(last) = ranges.last_mut()
-                                && last.end == range.start
-                            {
-                                last.end = range.end;
-                            } else {
-                                ranges.push(range);
-                            }
+                    if mask.includes_column(col_idx)
+                        && let Some(range) = f(col)
+                    {
+                        // ranges shouldn't overlap, so only check for contiguous ranges
+                        // [s1..e1], [s2..e2] where e1 == s2
+                        if let Some(last) = ranges.last_mut()
+                            && last.end == range.start
+                        {
+                            last.end = range.end;
+                        } else {
+                            ranges.push(range);
                         }
                     }
                 }
@@ -575,7 +575,7 @@ pub fn ranges_for_page_index(
     if column_index_policy != PageIndexPolicy::Skip {
         add_ranges(
             metadata,
-            column_index_selection,
+            column_index_mask,
             &mut result,
             ColumnChunkMetaData::column_index_range,
         );
@@ -583,7 +583,7 @@ pub fn ranges_for_page_index(
     if offset_index_policy != PageIndexPolicy::Skip {
         add_ranges(
             metadata,
-            offset_index_selection,
+            offset_index_mask,
             &mut result,
             ColumnChunkMetaData::offset_index_range,
         );
@@ -747,7 +747,7 @@ mod tests {
         let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(file_len)
             .unwrap()
             .with_page_index_policy(PageIndexPolicy::Required)
-            .with_page_index_selection(PageIndexSelection::columns([0]));
+            .with_page_index_mask(ColumnChunkMask::columns([0]));
         let ranges = expect_needs_data(metadata_decoder.try_decode());
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0], test_file_len() - 8..test_file_len());
@@ -788,7 +788,7 @@ mod tests {
         let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(file_len)
             .unwrap()
             .with_page_index_policy(PageIndexPolicy::Required)
-            .with_page_index_selection(PageIndexSelection::columns([0]));
+            .with_page_index_mask(ColumnChunkMask::columns([0]));
         let ranges = expect_needs_data(metadata_decoder.try_decode());
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0], test_file_len() - 8..test_file_len());
@@ -803,7 +803,7 @@ mod tests {
         // one for column index and one for offset index for each row group
         assert_eq!(ranges.len(), 4);
         // collapse ranges into a single range
-        ranges.sort_by(|r1, r2| r1.start.cmp(&r2.start));
+        ranges.sort_by_key(|r| r.start);
         let range = ranges.first().unwrap().start..ranges.last().unwrap().end;
         push_ranges_to_metadata_decoder(&mut metadata_decoder, vec![range]);
 

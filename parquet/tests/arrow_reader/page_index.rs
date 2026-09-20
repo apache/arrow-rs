@@ -17,7 +17,7 @@
 
 //! Tests of selective page index population
 
-use parquet::file::metadata::{PageIndexPolicy, PageIndexSelection, ParquetMetaDataReader};
+use parquet::file::metadata::{ColumnChunkMask, PageIndexPolicy, ParquetMetaDataReader};
 use std::fs::File;
 
 use crate::custom_page_index_provider::create_test_file;
@@ -31,8 +31,8 @@ fn test_parse_selected_columns() {
     // populate column 0 for column index and columns 0 & 2 for the offset index
     let mut reader = ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Optional)
-        .with_column_index_selection(PageIndexSelection::columns([0]))
-        .with_offset_index_selection(PageIndexSelection::columns([0, 2]));
+        .with_column_index_mask(ColumnChunkMask::columns([0]))
+        .with_offset_index_mask(ColumnChunkMask::columns([0, 2]));
 
     // parse metadata
     reader.try_parse(&file).unwrap();
@@ -66,8 +66,8 @@ fn test_parse_selected_columns_mixed() {
     // populate column 0 for column index and all columns for offset index
     let mut reader = ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Optional)
-        .with_column_index_selection(PageIndexSelection::columns([0]))
-        .with_offset_index_selection(PageIndexSelection::all());
+        .with_column_index_mask(ColumnChunkMask::columns([0]))
+        .with_offset_index_mask(ColumnChunkMask::all());
 
     // parse metadata
     reader.try_parse(&file).unwrap();
@@ -101,8 +101,8 @@ fn test_parse_selected_row_groups() {
     // populate indexes for row groups 0 and 2
     let mut reader = ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Optional)
-        .with_column_index_selection(PageIndexSelection::row_groups([0, 2]))
-        .with_offset_index_selection(PageIndexSelection::row_groups([0, 2]));
+        .with_column_index_mask(ColumnChunkMask::row_groups([0, 2]))
+        .with_offset_index_mask(ColumnChunkMask::row_groups([0, 2]));
 
     // parse metadata
     reader.try_parse(&file).unwrap();
@@ -134,8 +134,8 @@ fn test_parse_selected_row_groups_and_columns() {
     // columns 0 and 2.
     let mut reader = ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Optional)
-        .with_column_index_selection(PageIndexSelection::row_groups_and_columns([1], [0]))
-        .with_offset_index_selection(PageIndexSelection::row_groups_and_columns([1], [0, 2]));
+        .with_column_index_mask(ColumnChunkMask::row_groups_and_columns([1], [0]))
+        .with_offset_index_mask(ColumnChunkMask::row_groups_and_columns([1], [0, 2]));
 
     // parse metadata
     reader.try_parse(&file).unwrap();
@@ -197,8 +197,8 @@ fn test_page_index_sizes() {
     // populate column 0 for column index and all columns for offset index
     let mut reader = ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Optional)
-        .with_column_index_selection(PageIndexSelection::columns([0]))
-        .with_offset_index_selection(PageIndexSelection::all());
+        .with_column_index_mask(ColumnChunkMask::columns([0]))
+        .with_offset_index_mask(ColumnChunkMask::all());
 
     // parse metadata
     reader.try_parse(&file).unwrap();
@@ -212,8 +212,8 @@ fn test_page_index_sizes() {
     // populate column 0 for column index and columns 0 & 2 for the offset index
     let mut reader = ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Optional)
-        .with_column_index_selection(PageIndexSelection::columns([0]))
-        .with_offset_index_selection(PageIndexSelection::columns([0, 2]));
+        .with_column_index_mask(ColumnChunkMask::columns([0]))
+        .with_offset_index_mask(ColumnChunkMask::columns([0, 2]));
 
     // parse metadata
     reader.try_parse(&file).unwrap();
@@ -228,8 +228,8 @@ fn test_page_index_sizes() {
     // columns 0 and 2.
     let mut reader = ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Optional)
-        .with_column_index_selection(PageIndexSelection::row_groups_and_columns([1], [0]))
-        .with_offset_index_selection(PageIndexSelection::row_groups_and_columns([1], [0, 2]));
+        .with_column_index_mask(ColumnChunkMask::row_groups_and_columns([1], [0]))
+        .with_offset_index_mask(ColumnChunkMask::row_groups_and_columns([1], [0, 2]));
 
     // parse metadata
     reader.try_parse(&file).unwrap();
