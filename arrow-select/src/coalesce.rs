@@ -22,9 +22,7 @@
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
 use crate::take::take_record_batch;
-use arrow_array::types::{
-    BinaryViewType, GenericBinaryType, GenericStringType, StringViewType,
-};
+use arrow_array::types::{BinaryViewType, GenericBinaryType, GenericStringType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
