@@ -17,7 +17,7 @@
 
 use super::InProgressArray;
 use crate::filter::FilterPredicate;
-use arrow_array::builder::{ArrayBuilder, FixedSizeBinaryBuilder};
+use arrow_array::builder::FixedSizeBinaryBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::ArrowError;
@@ -87,11 +87,7 @@ impl InProgressArray for InProgressFixedSizeBinaryArray {
     }
 
     fn size(&self) -> usize {
-        let rows = self.builder.as_ref().map_or(0, |b| b.len());
-        let values_bytes = rows * self.value_length as usize;
-        let null_bitmap_bytes = rows.div_ceil(8);
-        values_bytes
-            + null_bitmap_bytes
+        self.builder.as_ref().map_or(0, |b| b.capacity())
             + self
                 .source
                 .as_ref()
