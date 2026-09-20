@@ -84,12 +84,14 @@ pub fn substring(
         DataType::LargeBinary => byte_substring(
             array.as_binary::<i64>(),
             start,
-            length.map(saturating_length_i64),
+            // ensure we saturate to not wrap around to a negative length
+            length.map(u64_to_i64_saturating),
         ),
         DataType::Binary => byte_substring(
             array.as_binary::<i32>(),
-            saturating_start_i32(start),
-            length.map(saturating_length_i32),
+            // ensure to saturate to avoid wrapping to negative which is a different behaviour
+            i64_to_i32_saturating(start),
+            length.map(u64_to_i32_saturating),
         ),
         DataType::FixedSizeBinary(old_len) => {
             let old_len: usize = (*old_len)
@@ -100,12 +102,14 @@ pub fn substring(
         DataType::LargeUtf8 => byte_substring(
             array.as_string::<i64>(),
             start,
-            length.map(saturating_length_i64),
+            // ensure we saturate to not wrap around to a negative length
+            length.map(u64_to_i64_saturating),
         ),
         DataType::Utf8 => byte_substring(
             array.as_string::<i32>(),
-            saturating_start_i32(start),
-            length.map(saturating_length_i32),
+            // ensure to saturate to avoid wrapping to negative which is a different behaviour
+            i64_to_i32_saturating(start),
+            length.map(u64_to_i32_saturating),
         ),
         DataType::Utf8View => string_view_substring(array.as_string_view(), start, length),
         DataType::BinaryView => binary_view_substring(array.as_binary_view(), start, length),
@@ -320,28 +324,16 @@ fn binary_view_substring(
     Ok(Arc::new(builder.finish()))
 }
 
-/// Clamps a 64 bit `start` into the 32 bit offset domain.
-///
-/// A `start` past `i32::MAX` means "past the end of every value", and saturating
-/// keeps that meaning. Casting wrapped it to a negative start, which
-/// [`byte_substring`] reads as counting from the end of the value instead, so the
-/// same call returned different data on `Utf8` than on `LargeUtf8`.
-fn saturating_start_i32(start: i64) -> i32 {
-    start.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+fn i64_to_i32_saturating(value: i64) -> i32 {
+    value.clamp(i32::MIN as i64, i32::MAX as i64) as i32
 }
 
-/// Clamps a `length` into the 32 bit offset domain. Lengths are unsigned, so only
-/// the upper bound can be exceeded.
-fn saturating_length_i32(length: u64) -> i32 {
-    length.min(i32::MAX as u64) as i32
+fn u64_to_i32_saturating(value: u64) -> i32 {
+    value.min(i32::MAX as u64) as i32
 }
 
-/// Clamps a `length` into the 64 bit offset domain.
-///
-/// `u64::MAX as i64` is -1, and a negative length puts the end of the substring
-/// before its start, which drives the output offsets negative.
-fn saturating_length_i64(length: u64) -> i64 {
-    length.min(i64::MAX as u64) as i64
+fn u64_to_i64_saturating(value: u64) -> i64 {
+    value.min(i64::MAX as u64) as i64
 }
 
 fn byte_substring<T: ByteArrayType>(
@@ -1274,12 +1266,10 @@ mod tests {
         );
     }
 
-    /// A `start` or `length` past the 32 bit offset domain used to be cast
-    /// straight to `i32`, wrapping negative. `byte_substring` reads a negative
-    /// start as counting from the end, so the 32 bit arms silently did something
-    /// different from the 64 bit arms for the same call. They agree now.
     #[test]
     fn out_of_range_start_and_length_match_the_64_bit_arms() {
+        // use 64 bit offset versions as expected behaviour for extreme start & length values
+        // which should saturate and not wrap
         let values = vec![Some("hello"), Some("world"), None];
         let utf8 = StringArray::from(values.clone());
         let large = LargeStringArray::from(values.clone());
