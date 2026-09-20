@@ -701,6 +701,8 @@ mod tests {
 
         // expect the second request to read the offset indexes
         let ranges = expect_needs_data(metadata_decoder.try_decode());
+        // since we're reading all indexes, there should be a single range needed
+        assert_eq!(ranges.len(), 1);
         push_ranges_to_metadata_decoder(&mut metadata_decoder, ranges);
 
         // expect the third request to read the actual data

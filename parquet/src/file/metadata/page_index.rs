@@ -17,7 +17,6 @@
 
 //! Page Index structures for efficient page-level skipping
 
-use crate::file::metadata::ColumnChunkMask;
 use crate::file::metadata::memory::HeapSize;
 use crate::file::page_index::{
     column_index::ColumnIndexMetaData,
@@ -556,21 +555,6 @@ impl PageIndexBuilder {
         Self {
             column_indexes: page_index.column_indexes,
             offset_indexes: page_index.offset_indexes,
-        }
-    }
-
-    /// Creates a new [`PageIndexBuilder`] where storage is defined by the policy
-    ///
-    /// For sparse indexes, this can save a great deal of memory
-    pub fn new_with_mask(
-        num_row_groups: usize,
-        num_columns: usize,
-        _column_index_mask: ColumnChunkMask,
-        _offset_index_mask: ColumnChunkMask,
-    ) -> Self {
-        Self {
-            column_indexes: Self::empty_index(num_row_groups, num_columns),
-            offset_indexes: Self::empty_index(num_row_groups, num_columns),
         }
     }
 
