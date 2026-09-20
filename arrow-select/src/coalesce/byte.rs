@@ -231,7 +231,9 @@ where
     /// If streaming data exists (from a prior `copy_rows_by_filter` call), it
     /// is first flushed to `buffered_arrays` to preserve insertion order.
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
-        self.flush_streaming_to_buffered();
+        if !self.offsets.is_empty() {
+            self.flush_streaming_to_buffered();
+        }
         let source = self.source.as_ref().ok_or_else(|| {
             ArrowError::InvalidArgumentError(
                 "Internal Error: InProgressByteArray: source not set".to_string(),
@@ -268,9 +270,7 @@ where
                     self.ensure_capacity_bytes(avg);
                 }
                 let source = byte_source::<T>(self.source.as_ref())?;
-                let avg = avg_bytes_per_row(source);
                 self.offsets.reserve(filter.count());
-                self.values.reserve(filter.count() * avg);
                 Self::append_filtered_nulls(&mut self.nulls, source.nulls(), filter);
                 Self::append_rows_by_indices(&mut self.offsets, &mut self.values, source, indices);
                 Ok(())
@@ -283,9 +283,7 @@ where
                     self.ensure_capacity_bytes(avg);
                 }
                 let source = byte_source::<T>(self.source.as_ref())?;
-                let avg = avg_bytes_per_row(source);
                 self.offsets.reserve(filter.count());
-                self.values.reserve(filter.count() * avg);
                 Self::append_filtered_nulls(&mut self.nulls, source.nulls(), filter);
                 Self::append_rows_by_slices(&mut self.offsets, &mut self.values, source, slices);
                 Ok(())
@@ -295,7 +293,6 @@ where
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        let mut buffered = std::mem::take(&mut self.buffered_arrays);
         let nulls = self.nulls.finish();
         self.nulls = NullBufferBuilder::new(self.batch_size);
 
@@ -315,10 +312,10 @@ where
             // In pure streaming mode, buffered is empty, so streaming data
             // goes first (and last). In mixed mode this branch shouldn't be
             // reached (streaming was flushed to buffered_arrays in copy_rows).
-            buffered.push(Arc::new(array) as ArrayRef);
+            self.buffered_arrays.push(Arc::new(array) as ArrayRef);
         }
 
-        match buffered.len() {
+        let result = match self.buffered_arrays.len() {
             0 => {
                 // Nothing was written — return an empty array.
                 let array = GenericByteArray::<T>::new(
@@ -326,15 +323,21 @@ where
                     Buffer::from_vec(vec![0u8; 0]),
                     None,
                 );
-                Ok(Arc::new(array))
+                Ok(Arc::new(array) as ArrayRef)
             }
-            1 => Ok(Arc::clone(&buffered[0])),
+            1 => Ok(Arc::clone(&self.buffered_arrays[0])),
             _ => {
-                let refs: Vec<&dyn Array> =
-                    buffered.iter().map(|a| a.as_ref() as &dyn Array).collect();
+                let refs: Vec<&dyn Array> = self
+                    .buffered_arrays
+                    .iter()
+                    .map(|a| a.as_ref() as &dyn Array)
+                    .collect();
                 concat_arrays(&refs)
             }
-        }
+        };
+
+        self.buffered_arrays.clear(); // preserve Vec capacity for the next batch
+        result
     }
 
     fn size(&self) -> usize {
