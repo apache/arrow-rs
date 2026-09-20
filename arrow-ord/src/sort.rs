@@ -938,10 +938,9 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+/// # use arrow_array::{ArrayRef, UInt32Array, Int32Array, RecordBatch, StringArray};
 /// # use arrow_ord::sort::{lexsort_to_indices, SortColumn};
 /// # use arrow_select::take::take_record_batch;
-///
 /// // Two columns (a, b). Values (2,x), (1, z), (1(a))
 /// let batch = RecordBatch::try_from_iter(vec![
 ///     ("a", Arc::new(Int32Array::from(vec![2, 1, 1])) as ArrayRef),
@@ -963,7 +962,7 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 ///
 /// // indices of the rows of (a,b), in lexicographic order
 /// let indices = lexsort_to_indices(&sort_columns, None).unwrap();
-/// assert_eq!(&indices, [2,1,0]); 
+/// assert_eq!(&indices, &UInt32Array::from(vec![2, 1, 0]));
 /// // Create new sorted RecordBatch by copying values at indices
 /// let sorted = take_record_batch(&batch, &indices).unwrap();
 ///
