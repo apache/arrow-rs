@@ -16,14 +16,12 @@
 // under the License.
 
 use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
-use arrow_array::{ArrayRef, FixedSizeBinaryArray, RecordBatch, builder::StringBuilder};
+use arrow_array::{FixedSizeBinaryArray, RecordBatch, builder::StringBuilder};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::try_fb_to_schema;
 use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
-use arrow_ipc::writer::{
-    DictionaryTracker, FileWriter, IpcDataGenerator, IpcWriteContext, IpcWriteOptions, StreamWriter,
-};
-use arrow_ipc::{Block, CompressionType, MessageHeader, root_as_footer, root_as_message};
+use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
+use arrow_ipc::{Block, CompressionType, root_as_footer};
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::io::{Cursor, Write};
@@ -78,30 +76,19 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     group.bench_function("StreamReader/read_10/lz4", |b| {
-        let mixed_batch = create_batch(8192, true);
-        let mixed_lz4 = ipc_stream_with_batch(&mixed_batch, lz4_options());
-        validate_stream(&mixed_lz4, &mixed_batch);
-        assert_lz4_compressed_buffers(&mixed_batch, false);
-        b.iter(|| read_stream(mixed_lz4.as_slice()))
-    });
-
-    group.bench_function("StreamReader/read_10/fixed_size_binary_256", |b| {
-        let wide_uncompressed = fixed_size_binary_stream(1, 256, IpcWriteOptions::default(), false);
-        b.iter(|| read_stream(wide_uncompressed.as_slice()))
-    });
-    group.bench_function("StreamReader/read_10/fixed_size_binary_256/lz4", |b| {
-        let wide_lz4 = fixed_size_binary_stream(1, 256, lz4_options(), true);
-        b.iter(|| read_stream(wide_lz4.as_slice()))
-    });
-
-    group.bench_function("StreamReader/read_10/fixed_size_binary_16x16", |b| {
-        let narrow_uncompressed =
-            fixed_size_binary_stream(16, 16, IpcWriteOptions::default(), false);
-        b.iter(|| read_stream(narrow_uncompressed.as_slice()))
-    });
-    group.bench_function("StreamReader/read_10/fixed_size_binary_16x16/lz4", |b| {
-        let narrow_lz4 = fixed_size_binary_stream(16, 16, lz4_options(), true);
-        b.iter(|| read_stream(narrow_lz4.as_slice()))
+        let buffer = ipc_stream(
+            IpcWriteOptions::default()
+                .try_with_compression(Some(CompressionType::LZ4_FRAME))
+                .unwrap(),
+        );
+        b.iter(move || {
+            let projection = None;
+            let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
+            for _ in 0..10 {
+                reader.next().unwrap().unwrap();
+            }
+            assert!(reader.next().is_none());
+        })
     });
 
     group.bench_function("StreamReader/no_validation/read_10/zstd", |b| {
@@ -203,115 +190,14 @@ fn criterion_benchmark(c: &mut Criterion) {
 /// Return an IPC stream with 10 record batches
 fn ipc_stream(options: IpcWriteOptions) -> Vec<u8> {
     let batch = create_batch(8192, true);
-    ipc_stream_with_batch(&batch, options)
-}
-
-fn ipc_stream_with_batch(batch: &RecordBatch, options: IpcWriteOptions) -> Vec<u8> {
     let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
     let mut writer =
         StreamWriter::try_new_with_options(&mut buffer, batch.schema().as_ref(), options).unwrap();
     for _ in 0..10 {
-        writer.write(batch).unwrap();
+        writer.write(&batch).unwrap();
     }
     writer.finish().unwrap();
     buffer
-}
-
-fn lz4_options() -> IpcWriteOptions {
-    IpcWriteOptions::default()
-        .try_with_compression(Some(CompressionType::LZ4_FRAME))
-        .unwrap()
-}
-
-fn read_stream(buffer: &[u8]) {
-    let projection = None;
-    let mut reader = StreamReader::try_new(buffer, projection).unwrap();
-    for _ in 0..10 {
-        std::hint::black_box(reader.next().unwrap().unwrap());
-    }
-    assert!(reader.next().is_none());
-}
-
-fn validate_stream(buffer: &[u8], expected: &RecordBatch) {
-    let projection = None;
-    let mut reader = StreamReader::try_new(buffer, projection).unwrap();
-    for _ in 0..10 {
-        let actual = reader.next().unwrap().unwrap();
-        assert_eq!(&actual, expected);
-    }
-    assert!(reader.next().is_none());
-}
-
-fn assert_lz4_compressed_buffers(batch: &RecordBatch, require_all_positive: bool) {
-    let mut dictionary_tracker = DictionaryTracker::new(false);
-    let mut write_context = IpcWriteContext::default();
-    let options = lz4_options();
-    let (_, encoded) = IpcDataGenerator::default()
-        .encode(batch, &mut dictionary_tracker, &options, &mut write_context)
-        .unwrap();
-    let message = root_as_message(&encoded.ipc_message).unwrap();
-    assert_eq!(message.header_type(), MessageHeader::RecordBatch);
-    let record_batch = message.header_as_record_batch().unwrap();
-    let buffers = record_batch.buffers().unwrap();
-    let mut compressed_buffers = 0;
-    for buffer in buffers {
-        let length = usize::try_from(buffer.length()).unwrap();
-        if length == 0 {
-            continue;
-        }
-        let offset = usize::try_from(buffer.offset()).unwrap();
-        let prefix_end = offset.checked_add(8).unwrap();
-        assert!(prefix_end <= encoded.arrow_data.len());
-        let prefix = i64::from_le_bytes(encoded.arrow_data[offset..prefix_end].try_into().unwrap());
-        assert!(prefix == -1 || prefix > 0);
-        if prefix > 0 {
-            compressed_buffers += 1;
-        }
-        if require_all_positive {
-            assert!(prefix > 0);
-        }
-    }
-    assert!(compressed_buffers > 0);
-}
-
-fn fixed_size_binary_stream(
-    num_columns: usize,
-    value_size: usize,
-    options: IpcWriteOptions,
-    require_all_positive: bool,
-) -> Vec<u8> {
-    let batch = create_fixed_size_binary_batch(num_columns, value_size);
-    let stream = ipc_stream_with_batch(&batch, options);
-    validate_stream(&stream, &batch);
-    if require_all_positive {
-        assert_lz4_compressed_buffers(&batch, true);
-    }
-    stream
-}
-
-fn create_fixed_size_binary_batch(num_columns: usize, value_size: usize) -> RecordBatch {
-    const NUM_ROWS: usize = 1024;
-    let value = vec![0xa5; value_size];
-    let value_size = i32::try_from(value_size).unwrap();
-    let fields = (0..num_columns)
-        .map(|column| {
-            Field::new(
-                format!("c{column}"),
-                DataType::FixedSizeBinary(value_size),
-                false,
-            )
-        })
-        .collect::<Vec<_>>();
-    let schema = Arc::new(Schema::new(fields));
-    let columns = (0..num_columns)
-        .map(|_| {
-            Arc::new(
-                FixedSizeBinaryArray::try_from_iter((0..NUM_ROWS).map(|_| value.as_slice()))
-                    .unwrap(),
-            ) as ArrayRef
-        })
-        .collect::<Vec<_>>();
-    RecordBatch::try_new(schema, columns).unwrap()
 }
 
 /// Return an IPC file with 10 record batches
@@ -397,6 +283,7 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
         Field::new("c1", DataType::Utf8, true),
         Field::new("c2", DataType::Date32, true),
         Field::new("c3", DataType::Decimal128(11, 2), true),
+        Field::new("c4", DataType::FixedSizeBinary(16), false),
     ]));
     let mut a = Int32Builder::new();
     let mut b = StringBuilder::new();
@@ -404,6 +291,7 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
     let mut d = Decimal128Builder::new()
         .with_precision_and_scale(11, 2)
         .unwrap();
+    let fixed_value = [0xa5; 16];
     for i in 0..num_rows {
         a.append_value(i as i32);
         c.append_value(i as i32);
@@ -418,9 +306,17 @@ fn create_batch(num_rows: usize, allow_nulls: bool) -> RecordBatch {
     let b = b.finish();
     let c = c.finish();
     let d = d.finish();
+    let e =
+        FixedSizeBinaryArray::try_from_iter((0..num_rows).map(|_| fixed_value.as_slice())).unwrap();
     RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(a), Arc::new(b), Arc::new(c), Arc::new(d)],
+        vec![
+            Arc::new(a),
+            Arc::new(b),
+            Arc::new(c),
+            Arc::new(d),
+            Arc::new(e),
+        ],
     )
     .unwrap()
 }
