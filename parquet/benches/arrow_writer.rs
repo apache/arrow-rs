@@ -321,8 +321,16 @@ fn create_ree_bench_batch(
     let fields = vec![Field::new(
         "_1",
         DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", value_dt, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                value_dt,
+                true,
+            )),
         ),
         true,
     )];

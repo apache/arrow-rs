@@ -4482,8 +4482,16 @@ mod test {
             Some(Variant::from("banana")),
             Some(Variant::from("banana")),
         ]));
-        let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
-        let values = Arc::new(Field::new("values", DataType::Utf8, true));
+        let run_ends = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
+        let values = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            DataType::Utf8,
+            true,
+        ));
         let data_type = DataType::RunEndEncoded(run_ends, values);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
             "ree",
@@ -5409,8 +5417,16 @@ mod test {
         let encoded_types = [
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             ),
         ];
 

@@ -1452,8 +1452,16 @@ mod tests {
             Field::new(
                 "runendencoded",
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Int16, false)),
-                    Arc::new(Field::new("values", DataType::Int32, true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Int16,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        true,
+                    )),
                 ),
                 true,
             ),
@@ -1569,8 +1577,16 @@ mod tests {
         let ree_run_ends = Int16Array::from(vec![2, 3]);
         let ree_values = Int32Array::from(vec![Some(100), None]);
         let ree_data_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int16, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int16,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         let ree_data = ArrayData::builder(ree_data_type)
             .len(3)
