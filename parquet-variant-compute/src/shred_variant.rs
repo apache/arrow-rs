@@ -329,7 +329,6 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
                 self.nulls.append_non_null();
                 self.value_builder.append_null();
 
-                // NOTE: A `FixedSizeList` with incorrect size will hard fail during shredding.
                 self.typed_value_builder
                     .append_value(&Variant::List(list))?;
                 Ok(true)
