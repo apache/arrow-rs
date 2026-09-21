@@ -433,11 +433,7 @@ where
     // Reject lengths that do not fit in `R` before any `R::Native` arithmetic can wrap.
     let total_len: usize = run_arrays.iter().map(|r| r.len()).sum();
     if R::Native::from_usize(total_len).is_none() {
-        return Err(ArrowError::ComputeError(format!(
-            "Concatenating RunArrays results in a logical length of {total_len}, \
-             which overflows the run-end type {}",
-            R::DATA_TYPE
-        )));
+        return Err(ArrowError::RunEndIndexOverflowError);
     }
 
     // The run ends need to be adjusted by the sum of the lengths of the previous arrays.
@@ -1911,10 +1907,7 @@ mod tests {
         .unwrap();
 
         let err = concat(&[&array1, &array2]).unwrap_err();
-        assert!(
-            err.to_string().contains("overflows the run-end type"),
-            "expected a run-end overflow error, got: {err}"
-        );
+        assert!(matches!(err, ArrowError::RunEndIndexOverflowError));
     }
 
     #[test]

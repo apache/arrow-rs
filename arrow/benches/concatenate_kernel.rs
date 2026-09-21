@@ -246,7 +246,7 @@ fn add_benchmark(c: &mut Criterion) {
             .map(|_| create_primitive_run_array::<Int32Type, Int32Type>(logical, physical))
             .collect();
         let array_refs: Vec<&dyn Array> = arrays.iter().map(|a| a as &dyn Array).collect();
-        c.bench_function(&format!("concat run i32 {name}"), |b| {
+        c.bench_function(&format!("concat run_end i32 {name}"), |b| {
             b.iter(|| bench_concat_arrays(&array_refs))
         });
     }
