@@ -580,15 +580,13 @@ impl<'a> Parser<'a> {
     fn parse_map(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_field()?;
-        if let DataType::Struct(fields) = field.data_type() {
-            if let Some(key) = fields
+        if let DataType::Struct(fields) = field.data_type()
+            && let Some(key) = fields
                 .iter()
                 .find(|f| f.name() == Field::MAP_KEY_FIELD_DEFAULT_NAME)
-            {
-                if key.is_nullable() {
-                    return Err(make_error(self.val, "Map key field cannot be nullable"));
-                }
-            }
+            && key.is_nullable()
+        {
+            return Err(make_error(self.val, "Map key field cannot be nullable"));
         }
         self.expect_token(Token::Comma)?;
         let sorted = self.parse_map_sorted()?;
