@@ -976,6 +976,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn auto_construction_randomized_equivalence() {
         let mut rng = StdRng::seed_from_u64(0x1077_6000_5eed);
         let mut case_idx = 0usize;
