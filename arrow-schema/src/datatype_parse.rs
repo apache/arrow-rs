@@ -576,7 +576,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the next Map (called after `Map` has been consumed)
-    /// E.g: Map("entries": Struct("key": non-null Utf8, "value": nullable Int32), sorted)
+    /// E.g: Map("entries": Struct("key": Utf8, "value": non-null Int32), sorted)
     fn parse_map(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_field()?;
