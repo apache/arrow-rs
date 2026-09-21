@@ -1017,6 +1017,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_put_batch_matches_put() {
         // `put_batch` must produce byte-identical output to a `put` loop, for any
         // input, any split of the input into batches, and mixed use of both APIs

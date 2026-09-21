@@ -4015,6 +4015,7 @@ mod tests {
     /// After falling back from dictionary encoding the filter holds the dictionary's values
     /// and every value written plain afterwards.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn string_column_bloom_filter_across_dictionary_fallback() {
         let values: Vec<String> = (0..2000).map(|i| format!("value-{i}")).collect();
         let array = Arc::new(StringArray::from_iter_values(&values));
@@ -4050,6 +4051,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i64_column_bloom_filter_across_dictionary_fallback() {
         let array = Arc::new(Int64Array::from_iter_values(0..2000i64));
         let file = write_with_bloom_filter(array, 1024);

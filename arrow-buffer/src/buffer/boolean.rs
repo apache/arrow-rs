@@ -995,6 +995,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_from_bitwise_unary_op() {
         // Use 1024 boolean values so that at least some of the tests cover multiple u64 chunks and
         // perfect alignment

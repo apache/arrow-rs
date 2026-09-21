@@ -2248,6 +2248,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_bloom_filter_for_dictionary_encoded_chunks() {
         fn bloom_filter_written(dictionary_enabled: bool, for_dictionary_chunks: bool) -> bool {
             let props = Arc::new(

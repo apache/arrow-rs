@@ -974,6 +974,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_estimated_fpp_matches_serialized_bitset() {
         for num_bytes in [BITSET_MIN_LENGTH, 1024, 64 * 1024] {
             for ndv in [0u64, 1, 10, 100, 1_000, 10_000, 100_000] {

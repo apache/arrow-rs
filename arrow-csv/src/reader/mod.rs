@@ -1389,6 +1389,7 @@ mod tests {
     use arrow_cast::display::array_value_to_string;
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_infer_schema_leading_plus_numbers() {
         for (csv, expected_type) in [
             ("+1\n2\n-3\n", DataType::Int64),
