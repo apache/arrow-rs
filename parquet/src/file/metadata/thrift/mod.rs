@@ -546,7 +546,7 @@ fn read_column_metadata(
     Ok(seen_mask)
 }
 
-// using ThriftSliceInputProtocol rather than ThriftCompactInputProtocl trait because
+// using ThriftSliceInputProtocol rather than ThriftCompactInputProtocol trait because
 // these are all internal and operate on slices.
 fn read_column_chunk(
     prot: &mut ThriftSliceInputProtocol<'_>,
@@ -1178,7 +1178,7 @@ pub(crate) struct PageHeader {
   /// Compressed (and potentially encrypted) page size in bytes, not including this header
   3: required i32 compressed_page_size
 
-  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
+  /// The 32-bit CRC checksum for the page, to be calculated as follows:
   4: optional i32 crc
 
   // Headers for page specific data.  One only will be set.

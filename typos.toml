@@ -1,0 +1,55 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[default.extend-words]
+# String values in tests that are the subject of the test and cannot be renamed
+ba = "ba"       # sort/comparison test data e.g. vec!["ab", "ba", ...]
+fo = "fo"       # rank test data e.g. vec!["foo", "fo", ...]
+tru = "tru"     # partial boolean match arm: "t" | "tr" | "tru" | "true"
+fals = "fals"   # partial boolean match arm: "f" | "fa" | "fal" | "fals" | "false"
+Ue = "Ue"       # extracted from mixed-case test input "trUe"
+Arro = "Arro"   # extracted from LIKE test input "ArroW"
+Byt = "Byt"     # sort ordering test strings e.g. b"than12Byt", "LongerThan12Byt"
+hel = "hel"     # substring test data e.g. vec![Some("hel"), ...]
+mis = "mis"     # used in comment "mis-identifying" in parquet_derive
+
+# flate2 is the crate name for the deflate/inflate compression library
+flate = "flate"
+
+[files]
+extend-exclude = [
+    "*.lock",
+    "*.csv",
+    "*.parquet",
+    "*.avro",
+    # Git submodules with upstream test data we don't control
+    "parquet-testing/",
+    "testing/",
+    # Generated code from flatbuffers / protobuf
+    "arrow-ipc/src/gen/",
+    "arrow-flight/gen/",
+    "arrow-flight/src/sql/arrow.flight.protocol.sql.rs",
+    # Arrow format spec files with spec-defined identifiers
+    "format/",
+    # Binary test fixtures
+    "arrow-avro/test/",
+    # Benchmarks reference external dataset column names verbatim
+    "parquet/benches/",
+    # Historical changelogs contain PR titles we don't own
+    "CHANGELOG.md",
+    "CHANGELOG-old.md",
+]

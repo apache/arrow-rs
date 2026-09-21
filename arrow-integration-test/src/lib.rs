@@ -28,6 +28,13 @@
 //! this context](https://github.com/apache/arrow-rs/issues/8684#issuecomment-3433193158).
 //!
 //! </div>
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -1452,8 +1459,16 @@ mod tests {
             Field::new(
                 "runendencoded",
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Int16, false)),
-                    Arc::new(Field::new("values", DataType::Int32, true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Int16,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        true,
+                    )),
                 ),
                 true,
             ),
@@ -1569,8 +1584,16 @@ mod tests {
         let ree_run_ends = Int16Array::from(vec![2, 3]);
         let ree_values = Int32Array::from(vec![Some(100), None]);
         let ree_data_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int16, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int16,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         let ree_data = ArrayData::builder(ree_data_type)
             .len(3)

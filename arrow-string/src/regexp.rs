@@ -433,14 +433,14 @@ pub fn regexp_match(
         None => (None, None),
     };
 
-    if is_flags_scalar.is_some() && is_rhs_scalar != is_flags_scalar.unwrap() {
+    if is_flags_scalar.is_some_and(|is_flags_scalar| is_rhs_scalar != is_flags_scalar) {
         return Err(ArrowError::ComputeError(
             "regexp_match() requires both pattern and flags to be either scalar or array"
                 .to_string(),
         ));
     }
 
-    if flags_array.is_some() && rhs.data_type() != flags.unwrap().data_type() {
+    if flags.is_some_and(|flags| rhs.data_type() != flags.data_type()) {
         return Err(ArrowError::ComputeError(
             "regexp_match() requires both pattern and flags to be either Utf8, Utf8View or LargeUtf8"
                 .to_string(),
@@ -461,7 +461,7 @@ pub fn regexp_match(
             }
         };
 
-        if regex.is_none() {
+        let Some(regex) = regex else {
             return Ok(new_null_array(
                 &DataType::List(Arc::new(Field::new_list_field(
                     array.data_type().clone(),
@@ -469,9 +469,7 @@ pub fn regexp_match(
                 ))),
                 array.len(),
             ));
-        }
-
-        let regex = regex.unwrap();
+        };
 
         let pattern = if let Some(flag) = flag {
             format!("(?{flag}){regex}")

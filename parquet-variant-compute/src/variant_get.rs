@@ -182,6 +182,9 @@ pub(crate) fn follow_shredded_path_element(
                 None => Ok(missing_path_step()),
             }
         }
+        VariantPathElement::ListElement => Err(ArrowError::InvalidArgumentError(
+            "variant_get does not support [*] path elements".to_string(),
+        )),
     }
 }
 
@@ -454,6 +457,15 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
         path,
         cast_options,
     } = options;
+
+    if path
+        .iter()
+        .any(|element| matches!(element, VariantPathElement::ListElement))
+    {
+        return Err(ArrowError::InvalidArgumentError(
+            "variant_get does not support [*] path elements".to_string(),
+        ));
+    }
 
     shredded_get_path(&variant_array, &path, as_type.as_deref(), &cast_options)
 }
@@ -1649,7 +1661,7 @@ mod test {
 
     // We append null values if type miss match happens in safe mode
     perfectly_shredded_to_arrow_primitive_test!(
-        get_variant_perfectly_shredded_null_with_type_missmatch_in_safe_mode,
+        get_variant_perfectly_shredded_null_with_type_mismatch_in_safe_mode,
         DataType::Null,
         perfectly_shredded_null_variant_array_with_int,
         arrow::array::NullArray::new(3)
@@ -1657,7 +1669,7 @@ mod test {
 
     // We'll return an error if type miss match happens in strict mode
     #[test]
-    fn get_variant_perfectly_shredded_null_as_null_with_type_missmatch_in_strict_mode() {
+    fn get_variant_perfectly_shredded_null_as_null_with_type_mismatch_in_strict_mode() {
         let array = perfectly_shredded_null_variant_array_with_int();
         let field = Field::new("typed_value", DataType::Null, true);
         let options = GetOptions::new()
@@ -2471,6 +2483,17 @@ mod test {
         assert!(
             matches!(err, ArrowError::NotYetImplemented(_)),
             "expected NotYetImplemented, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_variant_get_list_element_wildcard_is_invalid_argument() {
+        let (unshredded, _) = create_variant_get_as_variant_test_data();
+        let options = GetOptions::new_with_path(VariantPath::try_from("field_name[*]").unwrap());
+        let err = variant_get(&unshredded, options).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "expected InvalidArgumentError, got {err:?}"
         );
     }
 
@@ -4482,8 +4505,16 @@ mod test {
             Some(Variant::from("banana")),
             Some(Variant::from("banana")),
         ]));
-        let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
-        let values = Arc::new(Field::new("values", DataType::Utf8, true));
+        let run_ends = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
+        let values = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            DataType::Utf8,
+            true,
+        ));
         let data_type = DataType::RunEndEncoded(run_ends, values);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
             "ree",
@@ -5409,8 +5440,16 @@ mod test {
         let encoded_types = [
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             ),
         ];
 

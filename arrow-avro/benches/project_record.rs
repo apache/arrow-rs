@@ -205,7 +205,7 @@ const MIX_SCHEMA: &str = r#"
     }
     "#;
 
-// Project the record type writen to MIX_SCHEMA:
+// Project the record type written to MIX_SCHEMA:
 // skip "f2" and "f4", add "f5" with a default
 const PROJECT_READER_SCHEMA: &str = r#"
     {

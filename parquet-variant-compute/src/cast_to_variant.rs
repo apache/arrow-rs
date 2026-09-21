@@ -1059,7 +1059,7 @@ mod tests {
             vec![Some(1), Some(1001), Some(123_456_789_012), None].into();
         run_test(
             Arc::new(array),
-            // as we can only present with micro second, so the nano second will round donw to 0
+            // as we can only present with micro second, so the nano second will round down to 0
             vec![
                 Some(Variant::Time(
                     NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap(),

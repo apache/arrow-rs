@@ -69,7 +69,7 @@ all-features = true
 [features]
 async = ["dep:futures"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "dep:libc"]
-force_validate = []
+force_validate = ["arrow-data/force_validate"]
 # Enable memory tracking support
 pool = ["arrow-buffer/pool", "arrow-data/pool"]
 
