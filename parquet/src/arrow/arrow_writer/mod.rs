@@ -6637,7 +6637,11 @@ mod tests {
             let leaf = compute_leaves(&field, &array).unwrap().remove(0);
             writer.write(&leaf).unwrap();
             let mut group = file.next_row_group().unwrap();
-            writer.close().unwrap().append_to_row_group(&mut group).unwrap();
+            writer
+                .close()
+                .unwrap()
+                .append_to_row_group(&mut group)
+                .unwrap();
             group.close().unwrap();
             file.into_inner().unwrap()
         }

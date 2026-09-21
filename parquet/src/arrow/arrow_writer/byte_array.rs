@@ -17,10 +17,10 @@
 
 use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::{compare_greater_byte_array_decimals, is_decimal_descr};
 use crate::column::writer::encoder::{
     ColumnValueEncoder, DataPageValues, DictionaryPage, create_bloom_filter,
 };
+use crate::column::writer::{compare_greater_byte_array_decimals, is_decimal_descr};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;

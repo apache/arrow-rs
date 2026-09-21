@@ -1997,6 +1997,7 @@ fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Returns `true` if the column described by `basic_type_info` is a Decimal column
+#[inline]
 pub(crate) fn is_decimal_descr(basic_type_info: &BasicTypeInfo) -> bool {
     basic_type_info.converted_type() == ConvertedType::DECIMAL
         || matches!(
@@ -4580,8 +4581,7 @@ mod tests {
         // Truncate at 1 byte -- far shorter than either encoded value below.
         let builder = WriterProperties::builder().set_statistics_truncate_length(Some(1));
         let props = Arc::new(builder.build());
-        let mut writer =
-            get_test_decimals_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+        let mut writer = get_test_decimals_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
 
         // Two's-complement, big-endian encodings of 200 and -200 (2 bytes each).
         // Naive unsigned byte-wise truncation to 1 byte followed by an unsigned
