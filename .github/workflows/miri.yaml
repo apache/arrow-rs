@@ -28,6 +28,7 @@ on:
       - main
   pull_request:
     paths:
+      - .config/nextest.toml
       - Cargo.toml
       - Cargo.lock
       - .github/**
