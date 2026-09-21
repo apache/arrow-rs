@@ -247,7 +247,6 @@ pub(crate) fn decode_metadata(
 ///   Required, Optional, Skip).
 /// * `bytes` - [`PushBuffers`] that should have already been populated with the bytes containing
 ///   the page indexes.
-/// * `start_offset` - The offset where `bytes` begin in the file.
 pub(crate) fn parse_page_index(
     metadata: &mut ParquetMetaData,
     column_index_policy: PageIndexPolicy,
@@ -258,11 +257,12 @@ pub(crate) fn parse_page_index(
 ) -> crate::errors::Result<()> {
     let num_row_groups = metadata.num_row_groups();
     let num_columns = metadata.file_metadata().schema_descr().num_columns();
-    let mut builder = PageIndexBuilder::new_with_mask(
+    let mut builder = PageIndexBuilder::new_for_update(
+        metadata.page_index().map(|index| index.as_ref()),
         num_row_groups,
         num_columns,
-        column_index_mask.clone(),
-        offset_index_mask.clone(),
+        (column_index_policy != PageIndexPolicy::Skip).then_some(column_index_mask),
+        (offset_index_policy != PageIndexPolicy::Skip).then_some(offset_index_mask),
     );
     if column_index_policy != PageIndexPolicy::Skip {
         parse_column_index(

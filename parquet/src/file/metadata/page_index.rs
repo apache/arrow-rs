@@ -23,6 +23,7 @@ use crate::file::page_index::{
     column_index::ColumnIndexMetaData,
     offset_index::{OffsetIndexMetaData, PageLocation},
 };
+use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -372,25 +373,33 @@ impl RowGroupPageIndex {
 ///
 /// Position checking uses binary search for O(log n) lookup.
 ///
-/// Implementation note: we can downsize to `u32` here because thrift encodes vector
+/// Implementation note: we can downsize to `i32` here because thrift encodes vector
 /// sizes with an `i32`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Keep {
     /// Sorted, deduplicated indexes of set positions
     /// None means all positions in the span are set
-    kept: Option<Arc<[u32]>>,
+    kept: Option<Arc<[i32]>>,
     /// Total span of positions (0..span)
-    span: u32,
+    span: i32,
 }
 
-// FIXME(ets): since chunk mask is i32 keep should be as well
 impl Keep {
-    pub(crate) fn new(set: &BTreeSet<i32>, span: usize) -> Self {
-        // TODO: need to error if span > max(u32)
+    pub(crate) fn new<I>(set: I, span: usize) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Borrow<usize>,
+    {
+        assert!(
+            i32::try_from(span).is_ok(),
+            "Keep cannot have a span that exceeds the storage of an i32: got {span}"
+        );
+        // this should preserve the BTreeSet ordering
         let kept = set
-            .iter()
-            .filter(|&&idx| idx < span as i32)
-            .map(|&idx| idx as u32)
+            .into_iter()
+            .map(|idx| *idx.borrow())
+            .filter(|&idx| idx < span)
+            .map(|idx| idx as i32)
             .collect::<Vec<_>>();
         let kept = if kept.len() == span {
             None
@@ -400,25 +409,31 @@ impl Keep {
 
         Self {
             kept,
-            span: span as u32,
+            span: span as i32,
         }
     }
 
+    // shortened version for a full keep set
     pub(crate) fn new_full(span: usize) -> Self {
+        assert!(
+            i32::try_from(span).is_ok(),
+            "Keep cannot have a span that exceeds the storage of an i32: got {span}"
+        );
         Self {
             kept: None,
-            span: span as u32,
+            span: span as i32,
         }
     }
 
     /// Retrieve a position if set
     fn position(&self, idx: usize) -> Option<usize> {
+        let needle = i32::try_from(idx).ok()?;
         // below CUTOFF elements, use linear search
         const CUTOFF: usize = 32;
         match self.kept.as_ref() {
             None => (idx < self.span as usize).then_some(idx),
-            Some(k) if k.len() > CUTOFF => k.binary_search(&u32::try_from(idx).ok()?).ok(),
-            Some(k) => k.iter().position(|&i| i == idx as u32),
+            Some(k) if k.len() > CUTOFF => k.binary_search(&needle).ok(),
+            Some(k) => k.iter().position(|&i| i == needle),
         }
     }
 
@@ -431,12 +446,12 @@ impl Keep {
     }
 }
 
-impl HeapSize for Arc<[u32]> {
+impl HeapSize for Arc<[i32]> {
     fn heap_size(&self) -> usize {
         // Arc stores weak and strong counts on the heap alongside an instance of T
-        // T = [u32], so that should be the size of a pointer + the size of the allocation
+        // T = [i32], so that should be the size of a pointer + the size of the allocation
         2 * std::mem::size_of::<usize>()
-            + std::mem::size_of::<*mut u32>()
+            + std::mem::size_of::<*mut i32>()
             + std::mem::size_of_val(self.as_ref())
     }
 }
@@ -679,20 +694,87 @@ pub struct PageIndexBuilder {
 }
 
 impl PageIndexBuilder {
+    fn storage_for_update<T: Clone>(
+        num_row_groups: usize,
+        num_columns: usize,
+        mask: Option<&ColumnChunkMask>,
+        existing: Vec<(usize, usize, T)>,
+    ) -> Option<Grid<T>> {
+        if mask.is_none() && existing.is_empty() {
+            return None;
+        }
+
+        let rows = match mask.map(ColumnChunkMask::selected_row_groups) {
+            Some(None) => Keep::new_full(num_row_groups),
+            selected => {
+                let mut rows: BTreeSet<_> = existing.iter().map(|(row, _, _)| *row).collect();
+                if let Some(Some(selected)) = selected {
+                    rows.extend(selected.iter().map(|&row| row as usize));
+                }
+                Keep::new(rows, num_row_groups)
+            }
+        };
+        let cols = match mask.map(ColumnChunkMask::selected_columns) {
+            Some(None) => Keep::new_full(num_columns),
+            selected => {
+                let mut cols: BTreeSet<_> = existing.iter().map(|(_, col, _)| *col).collect();
+                if let Some(Some(selected)) = selected {
+                    cols.extend(selected.iter().map(|&col| col as usize));
+                }
+                Keep::new(cols, num_columns)
+            }
+        };
+        let mut grid = Grid::new(rows, cols);
+        for (row, col, value) in existing {
+            grid.insert(row, col, value);
+        }
+        Some(grid)
+    }
+
     fn storage_for_selection<T: Clone>(
         num_row_groups: usize,
         num_columns: usize,
         mask: &ColumnChunkMask,
     ) -> Option<Grid<T>> {
-        let keep_rows = mask.selected_row_groups().map_or_else(
-            || Keep::new_full(num_row_groups),
-            |rows| Keep::new(rows, num_row_groups),
-        );
-        let keep_cols = mask.selected_columns().map_or_else(
-            || Keep::new_full(num_columns),
-            |cols| Keep::new(cols, num_columns),
-        );
-        Some(Grid::<T>::new(keep_rows, keep_cols))
+        Self::storage_for_update(num_row_groups, num_columns, Some(mask), vec![])
+    }
+
+    pub(crate) fn new_for_update(
+        page_index: Option<&dyn PageIndexProvider>,
+        num_row_groups: usize,
+        num_columns: usize,
+        column_index_mask: Option<&ColumnChunkMask>,
+        offset_index_mask: Option<&ColumnChunkMask>,
+    ) -> Self {
+        let mut column_indexes = vec![];
+        let mut offset_indexes = vec![];
+        if let Some(page_index) = page_index {
+            for row in 0..num_row_groups {
+                for col in 0..num_columns {
+                    if let Some(index) = page_index.column_index(row, col) {
+                        column_indexes.push((row, col, index.clone()));
+                    }
+                    if let Some(index) = page_index.offset_index(row, col) {
+                        offset_indexes.push((row, col, index.clone()));
+                    }
+                }
+            }
+        }
+
+        Self {
+            column_indexes: Self::storage_for_update(
+                num_row_groups,
+                num_columns,
+                column_index_mask,
+                column_indexes,
+            ),
+            offset_indexes: Self::storage_for_update(
+                num_row_groups,
+                num_columns,
+                offset_index_mask,
+                offset_indexes,
+            ),
+        }
     }
 
     /// Creates a new [`PageIndexBuilder`] with space allocated for both column and offset indexes
@@ -897,10 +979,12 @@ mod tests {
         let keep = Keep::new(&BTreeSet::new(), 10);
         assert_eq!(keep.len(), 0);
         assert_eq!(keep.position(0), None);
+        assert_eq!(keep.position(9), None);
+        assert_eq!(keep.position(10), None);
     }
 
     #[test]
-    fn test_sparse_is_empty() {
+    fn test_grid_is_empty() {
         let ci = colidx_for_test();
 
         let keep_rows = Keep::new(&BTreeSet::from_iter([0, 3, 7]), 10);
