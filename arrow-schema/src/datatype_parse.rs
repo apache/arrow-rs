@@ -645,7 +645,6 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses `"name": non-null Type` for the run_ends field in verbose REE form.
-    /// Errors if the field is nullable, since run_ends must always be non-null.
     fn parse_ree_verbose_field(&mut self) -> ArrowResult<Field> {
         let name = self.parse_double_quoted_string("RunEndEncoded field")?;
         self.expect_token(Token::Colon)?;
