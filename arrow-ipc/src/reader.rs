@@ -923,9 +923,14 @@ fn get_dictionary_values(
             let value = value_type.as_ref().clone();
             let schema = Schema::new(vec![Field::new("", value, true)]);
             // Read a single column
+            let Some(data) = batch.data() else {
+                return Err(ArrowError::ParseError(
+                    "Dictionary batch is missing its data".to_string(),
+                ));
+            };
             let record_batch = RecordBatchDecoder::try_new(
                 buf,
-                batch.data().unwrap(),
+                data,
                 Arc::new(schema),
                 dictionaries_by_id,
                 metadata,
@@ -2045,8 +2050,16 @@ mod tests {
         let struct_data_type = DataType::Struct(struct_fields);
 
         let run_encoded_data_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int16, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int16,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
 
         // define schema
@@ -2194,6 +2207,50 @@ mod tests {
         assert_eq!(
             batch_err.unwrap().to_string(),
             "Parser error: Invalid metadata length: -1"
+        );
+    }
+
+    #[test]
+    fn test_invalid_dictionary_batch_without_data() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Schema::new(vec![Field::new(
+            "col",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            true,
+        )]);
+
+        // DictionaryBatch.data is optional in the flatbuffer grammar and
+        // required by the format
+        let mut fbb = FlatBufferBuilder::new();
+        let batch_offset = DictionaryBatch::create(
+            &mut fbb,
+            &DictionaryBatchArgs {
+                id: 0,
+                data: None,
+                isDelta: false,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<DictionaryBatch>(&batch_bytes).unwrap();
+
+        let data_buffer = Buffer::from(vec![0u8; 0]);
+        let mut dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+
+        let err = read_dictionary(
+            &data_buffer,
+            batch,
+            &schema,
+            &mut dictionaries,
+            &MetadataVersion::V5,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Parser error: Dictionary batch is missing its data"
         );
     }
 
@@ -3535,6 +3592,30 @@ mod tests {
         let roundtrip_batch = reader.next().unwrap().unwrap();
 
         assert_eq!(batch, roundtrip_batch);
+    }
+
+    #[test]
+    fn test_stream_reader_rejects_short_validity_buffer() {
+        // Reproduce #7124: serialize an Int32Array with too few validity bits.
+        let data = ArrayDataBuilder::new(DataType::Int32)
+            .len(8000)
+            .add_buffer(ScalarBuffer::<i32>::from_iter(0..8000).into())
+            .nulls(Some(NullBuffer::from(&[true, false, true, false])));
+        let array: ArrayRef = unsafe { Arc::new(Int32Array::from(data.build_unchecked())) };
+        let batch = RecordBatch::try_from_iter([("a", array)]).unwrap();
+
+        let mut stream = Vec::new();
+        let mut writer =
+            crate::writer::StreamWriter::try_new(&mut stream, &batch.schema()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+
+        let mut reader = StreamReader::try_new(Cursor::new(stream), None).unwrap();
+        let err = reader.next().unwrap().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: null_bit_buffer size too small. got 1 needed 1000"
+        );
     }
 
     #[test]

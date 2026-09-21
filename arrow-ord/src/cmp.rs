@@ -257,6 +257,15 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
         return Err(ArrowError::InvalidArgumentError(format!(
             "Nested comparison: {l_t} {op} {r_t} (hint: use make_comparator instead)"
         )));
+    } else if matches!(l_t, Dictionary(_, _) | RunEndEncoded(_, _))
+        || matches!(r_t, Dictionary(_, _) | RunEndEncoded(_, _))
+    {
+        // One dictionary/REE layer is unwrapped above. A leftover dictionary
+        // (nested dict) or REE is not nested according to `DataType::is_nested`,
+        // so without this check `downcast_primitive_array!` panics.
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Invalid comparison operation: {l_t} {op} {r_t}"
+        )));
     } else if l_t != r_t {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Invalid comparison operation: {l_t} {op} {r_t}"
@@ -1132,8 +1141,16 @@ mod tests {
 
         // REE, nested dictionary, and complex types are not supported.
         assert!(!supports_distinct(&RunEndEncoded(
-            Arc::new(Field::new("run_ends", Int32, false)),
-            Arc::new(Field::new("values", Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                Int32,
+                false
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                Int32,
+                true
+            )),
         )));
         assert!(!supports_distinct(&Dictionary(
             Box::new(Int16),
@@ -1178,6 +1195,20 @@ mod tests {
         let col = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
 
         neq(&col.slice(0, col.len() - 1), &col.slice(1, col.len() - 1)).unwrap();
+    }
+
+    #[test]
+    fn test_nested_dictionary_eq_returns_error() {
+        let inner = DictionaryArray::new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+        );
+        let outer = DictionaryArray::new(Int32Array::from(vec![0, 1]), Arc::new(inner));
+        let err = eq(&outer, &outer).expect_err("nested dictionary must not panic");
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
