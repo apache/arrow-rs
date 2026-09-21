@@ -43,6 +43,7 @@ mod list;
 mod map;
 mod run_array;
 mod string;
+mod structs;
 mod union;
 
 use crate::cast::decimal::*;
@@ -51,6 +52,7 @@ use crate::cast::list::*;
 use crate::cast::map::*;
 use crate::cast::run_array::*;
 use crate::cast::string::*;
+use crate::cast::structs::*;
 pub use crate::cast::union::*;
 
 use arrow_buffer::IntervalMonthDayNano;
@@ -321,13 +323,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (_, Duration(_)) if from_type.is_numeric() => true,
         (Duration(_), _) if to_type.is_numeric() => true,
         (Duration(_), Duration(_)) => true,
-        (Interval(from_type), Int64) => {
-            match from_type {
-                YearMonth => true,
-                DayTime => true,
-                MonthDayNano => false, // Native type is i128
-            }
-        }
+        // No `(Interval(_), Int64)` arm: `cast_with_options` implements no such cast.
         (Int32, Interval(to_type)) => match to_type {
             YearMonth => true,
             DayTime => false,
@@ -876,11 +872,14 @@ pub fn cast_with_options(
             }
             let array = array.as_fixed_size_list();
             let values = cast_with_options(array.values(), list_to.data_type(), cast_options)?;
-            Ok(Arc::new(FixedSizeListArray::try_new(
+            let nulls = array.nulls().cloned();
+            let len = array.len();
+            Ok(Arc::new(FixedSizeListArray::try_new_with_length(
                 list_to.clone(),
                 *size_from,
                 values,
-                array.nulls().cloned(),
+                nulls,
+                len,
             )?))
         }
         (ListView(_), ListView(to)) => cast_list_view_values::<i32>(array, to, cast_options),
@@ -2316,74 +2315,6 @@ pub fn cast_with_options(
             "Casting from {from_type} to {to_type} not supported",
         ))),
     }
-}
-
-fn cast_struct_to_struct(
-    array: &StructArray,
-    from_fields: Fields,
-    to_fields: Fields,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    // Fast path: if field names are in the same order, we can just zip and cast
-    let fields_match_order = from_fields.len() == to_fields.len()
-        && from_fields
-            .iter()
-            .zip(to_fields.iter())
-            .all(|(f1, f2)| f1.name() == f2.name());
-
-    let fields = if fields_match_order {
-        // Fast path: cast columns in order if their names match
-        cast_struct_fields_in_order(array, to_fields.clone(), cast_options)?
-    } else {
-        let all_fields_match_by_name = to_fields.iter().all(|to_field| {
-            from_fields
-                .iter()
-                .any(|from_field| from_field.name() == to_field.name())
-        });
-
-        if all_fields_match_by_name {
-            // Slow path: match fields by name and reorder
-            cast_struct_fields_by_name(array, from_fields.clone(), to_fields.clone(), cast_options)?
-        } else {
-            // Fallback: cast field by field in order
-            cast_struct_fields_in_order(array, to_fields.clone(), cast_options)?
-        }
-    };
-
-    let array = StructArray::try_new(to_fields.clone(), fields, array.nulls().cloned())?;
-    Ok(Arc::new(array) as ArrayRef)
-}
-
-fn cast_struct_fields_by_name(
-    array: &StructArray,
-    from_fields: Fields,
-    to_fields: Fields,
-    cast_options: &CastOptions,
-) -> Result<Vec<ArrayRef>, ArrowError> {
-    to_fields
-        .iter()
-        .map(|to_field| {
-            let from_field_idx = from_fields
-                .iter()
-                .position(|from_field| from_field.name() == to_field.name())
-                .unwrap(); // safe because we checked above
-            let column = array.column(from_field_idx);
-            cast_with_options(column, to_field.data_type(), cast_options)
-        })
-        .collect::<Result<Vec<ArrayRef>, ArrowError>>()
-}
-
-fn cast_struct_fields_in_order(
-    array: &StructArray,
-    to_fields: Fields,
-    cast_options: &CastOptions,
-) -> Result<Vec<ArrayRef>, ArrowError> {
-    array
-        .columns()
-        .iter()
-        .zip(to_fields.iter())
-        .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
-        .collect::<Result<Vec<ArrayRef>, ArrowError>>()
 }
 
 fn cast_from_decimal<D, F>(
@@ -9402,6 +9333,26 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_zero_width_fsl_to_fsl() {
+        // size=0 FSL with no nulls: length cannot be inferred from the child buffer
+        // (0 bytes / 0 = ambiguous), so the cast must preserve it explicitly.
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let input = FixedSizeListArray::try_new_with_length(
+            field,
+            0,
+            Arc::new(Int32Array::new_null(0)),
+            None,
+            3,
+        )
+        .unwrap();
+        let to_type =
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int64, true)), 0);
+        let result = cast(&(Arc::new(input) as ArrayRef), &to_type).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.data_type(), &to_type);
+    }
+
+    #[test]
     #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_can_cast_fsl_to_fsl() {
         let from_array = Arc::new(
@@ -9843,6 +9794,179 @@ mod tests {
         ));
         let fsl = cast(list.as_ref(), expected.data_type()).unwrap();
         assert_eq!(&expected, &fsl);
+
+        // Direct non-zero offsets must retain the row count and validity.
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let target = DataType::FixedSizeList(field.clone(), 0);
+        let strict = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        for nulls in [None, Some(NullBuffer::from(vec![true, false]))] {
+            let values = Arc::new(Int32Array::from(vec![1, 2, 3]));
+            let inputs: [ArrayRef; 2] = [
+                Arc::new(ListArray::new(
+                    field.clone(),
+                    OffsetBuffer::new(vec![3; 3].into()),
+                    values.clone(),
+                    nulls.clone(),
+                )),
+                Arc::new(LargeListArray::new(
+                    field.clone(),
+                    OffsetBuffer::new(vec![3; 3].into()),
+                    values,
+                    nulls.clone(),
+                )),
+            ];
+            for input in inputs {
+                let actual = cast_with_options(input.as_ref(), &target, &strict).unwrap();
+                assert_eq!(actual.len(), 2);
+                assert_eq!(actual.data_type(), &target);
+                assert_eq!(actual.nulls(), nulls.as_ref());
+                assert_eq!(actual.as_fixed_size_list().values().len(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_issue_10975_sliced_list_to_fsl() {
+        fn test<O: OffsetSizeTrait>() {
+            let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+                Some(vec![Some(1), Some(2)]),
+                Some(vec![Some(3), Some(4)]),
+                Some(vec![Some(5), Some(6)]),
+            ]);
+            let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                [Some([Some(3), Some(4)]), Some([Some(5), Some(6)])],
+                2,
+            );
+            for safe in [true, false] {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                let actual =
+                    cast_with_options(&input.slice(1, 2), expected.data_type(), &options).unwrap();
+                assert_eq!(actual.as_ref(), &expected as &dyn Array);
+            }
+        }
+        test::<i32>();
+        test::<i64>();
+    }
+
+    #[test]
+    fn test_issue_10975_sliced_list_to_fsl_subcast() {
+        fn test<O: OffsetSizeTrait>() {
+            // A differently sized prefix and invalid excluded children must not
+            // affect selection or the recursive child cast.
+            let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+                Some(vec![Some(i32::MAX); 3]),
+                Some(vec![Some(3), None]),
+                Some(vec![Some(5), Some(6)]),
+                Some(vec![Some(i32::MAX); 2]),
+            ]);
+            let selected = input.slice(1, 3).slice(0, 2);
+            let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                [Some([Some(3), None]), Some([Some(5), Some(6)])],
+                2,
+            );
+            for safe in [true, false] {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                for child_type in [DataType::Int32, DataType::Int64, DataType::Int16] {
+                    let target = DataType::FixedSizeList(
+                        Arc::new(Field::new_list_field(child_type, true)),
+                        2,
+                    );
+                    let actual = cast_with_options(&selected, &target, &options).unwrap();
+                    let expected = cast_with_options(&expected, &target, &options).unwrap();
+                    assert_eq!(actual.as_ref(), expected.as_ref());
+                    assert_eq!(actual.as_fixed_size_list().values().len(), 4);
+                }
+            }
+        }
+        test::<i32>();
+        test::<i64>();
+    }
+
+    #[test]
+    fn test_issue_10975_sliced_list_to_fsl_padding() {
+        fn test<O: OffsetSizeTrait>() {
+            let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+            let lengths = [3, 0, 0, 2, 1, 3, 2, 2, 0, 2];
+            let values = Int32Array::from_iter_values(0..16).slice(1, 15);
+            let input = GenericListArray::<O>::new(
+                field.clone(),
+                OffsetBuffer::from_lengths(lengths),
+                Arc::new(values),
+                Some(NullBuffer::from(vec![
+                    false, false, false, true, false, false, true, false, false, true,
+                ])),
+            );
+            let target = DataType::FixedSizeList(field, 2);
+            for safe in [true, false] {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                let full = cast_with_options(&input, &target, &options).unwrap();
+                for (start, len) in [
+                    (1, 8), // Leading/consecutive empty nulls, short/long and exact-width nulls.
+                    (1, 2), // Only consecutive empty nulls.
+                    (3, 4), // Short and long nulls between valid rows.
+                    (6, 2), // Valid row and exact-width null: no padding needed.
+                    (8, 1), // Only one empty null at a non-zero child offset.
+                ] {
+                    let selected = input.slice(start, len);
+                    let actual = cast_with_options(&selected, &target, &options).unwrap();
+                    assert_eq!(actual.as_ref(), full.slice(start, len).as_ref());
+                    assert_eq!(actual.as_fixed_size_list().values().len(), len * 2);
+                }
+            }
+        }
+        test::<i32>();
+        test::<i64>();
+    }
+
+    #[test]
+    fn test_issue_10975_sliced_list_to_fsl_safety() {
+        fn test<O: OffsetSizeTrait>() {
+            let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+                Some(vec![Some(99); 3]),
+                Some(vec![Some(1), Some(2)]),
+                Some(vec![]),
+                Some(vec![Some(3)]),
+                Some(vec![Some(4); 3]),
+                Some(vec![Some(5), Some(6)]),
+            ]);
+            let expected = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+                [
+                    Some([Some(1), Some(2)]),
+                    None,
+                    None,
+                    None,
+                    Some([Some(5), Some(6)]),
+                ],
+                2,
+            );
+            let actual = cast(&input.slice(1, 5), expected.data_type()).unwrap();
+            assert_eq!(actual.as_ref(), &expected as &dyn Array);
+            assert_eq!(actual.as_fixed_size_list().values().len(), 10);
+            let strict = CastOptions {
+                safe: false,
+                ..Default::default()
+            };
+            let error =
+                cast_with_options(&input.slice(1, 5), expected.data_type(), &strict).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Cast error: Cannot cast to FixedSizeList(2): value at index 1 has length 0"
+            );
+        }
+        test::<i32>();
+        test::<i64>();
     }
 
     #[test]
@@ -10187,29 +10311,26 @@ mod tests {
         let target_type = DataType::FixedSizeList(inner_field.clone(), 3);
         let expected = new_empty_array(&target_type);
 
-        // list
-        let array = new_empty_array(&DataType::List(inner_field.clone()));
-        assert!(can_cast_types(array.data_type(), &target_type));
-        let actual = cast(array.as_ref(), &target_type).unwrap();
-        assert_eq!(expected.as_ref(), actual.as_ref());
-
-        // largelist
-        let array = new_empty_array(&DataType::LargeList(inner_field.clone()));
-        assert!(can_cast_types(array.data_type(), &target_type));
-        let actual = cast(array.as_ref(), &target_type).unwrap();
-        assert_eq!(expected.as_ref(), actual.as_ref());
-
-        // listview
-        let array = new_empty_array(&DataType::ListView(inner_field.clone()));
-        assert!(can_cast_types(array.data_type(), &target_type));
-        let actual = cast(array.as_ref(), &target_type).unwrap();
-        assert_eq!(expected.as_ref(), actual.as_ref());
-
-        // largelistview
-        let array = new_empty_array(&DataType::LargeListView(inner_field.clone()));
-        assert!(can_cast_types(array.data_type(), &target_type));
-        let actual = cast(array.as_ref(), &target_type).unwrap();
-        assert_eq!(expected.as_ref(), actual.as_ref());
+        let cases = [
+            new_empty_array(&DataType::List(inner_field.clone())),
+            new_empty_array(&DataType::LargeList(inner_field.clone())),
+            new_empty_array(&DataType::ListView(inner_field.clone())),
+            new_empty_array(&DataType::LargeListView(inner_field.clone())),
+            // Empty slices with non-zero child offsets (issue #10975).
+            make_list_array().slice(2, 0),
+            make_large_list_array().slice(2, 0),
+        ];
+        for array in cases {
+            assert!(can_cast_types(array.data_type(), &target_type));
+            for safe in [true, false] {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                let actual = cast_with_options(array.as_ref(), &target_type, &options).unwrap();
+                assert_eq!(expected.as_ref(), actual.as_ref());
+            }
+        }
     }
 
     fn make_list_array() -> ArrayRef {
@@ -10272,229 +10393,6 @@ mod tests {
             Arc::new(Int64Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7])),
             None,
         ))
-    }
-
-    #[test]
-    fn test_cast_map_dont_allow_change_of_order() {
-        let string_builder = StringBuilder::new();
-        let value_builder = StringBuilder::new();
-        let mut builder = MapBuilder::new(None, string_builder, value_builder);
-
-        builder.keys().append_value("0");
-        builder.values().append_value("test_val_1");
-        builder.append(true).unwrap();
-        builder.keys().append_value("1");
-        builder.values().append_value("test_val_2");
-        builder.append(true).unwrap();
-
-        // map builder returns unsorted map by default
-        let array = builder.finish();
-
-        let new_ordered = true;
-        let new_type = DataType::Map(
-            Arc::new(Field::new(
-                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-                DataType::Struct(
-                    vec![
-                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                    ]
-                    .into(),
-                ),
-                false,
-            )),
-            new_ordered,
-        );
-
-        let new_array_result = cast(&array, &new_type.clone());
-        assert!(!can_cast_types(array.data_type(), &new_type));
-        let Err(ArrowError::CastError(t)) = new_array_result else {
-            panic!();
-        };
-        assert_eq!(
-            t,
-            r#"Casting from Map("entries": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted) to Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Utf8), sorted) not supported"#
-        );
-    }
-
-    #[test]
-    fn test_cast_map_dont_allow_when_container_cant_cast() {
-        let string_builder = StringBuilder::new();
-        let value_builder = IntervalDayTimeArray::builder(2);
-        let mut builder = MapBuilder::new(None, string_builder, value_builder);
-
-        builder.keys().append_value("0");
-        builder.values().append_value(IntervalDayTime::new(1, 1));
-        builder.append(true).unwrap();
-        builder.keys().append_value("1");
-        builder.values().append_value(IntervalDayTime::new(2, 2));
-        builder.append(true).unwrap();
-
-        // map builder returns unsorted map by default
-        let array = builder.finish();
-
-        let new_ordered = true;
-        let new_type = DataType::Map(
-            Arc::new(Field::new(
-                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-                DataType::Struct(
-                    vec![
-                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                        Field::new(
-                            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
-                            DataType::Duration(TimeUnit::Second),
-                            false,
-                        ),
-                    ]
-                    .into(),
-                ),
-                false,
-            )),
-            new_ordered,
-        );
-
-        let new_array_result = cast(&array, &new_type.clone());
-        assert!(!can_cast_types(array.data_type(), &new_type));
-        let Err(ArrowError::CastError(t)) = new_array_result else {
-            panic!();
-        };
-        assert_eq!(
-            t,
-            r#"Casting from Map("entries": non-null Struct("key": non-null Utf8, "value": Interval(DayTime)), unsorted) to Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Duration(s)), sorted) not supported"#
-        );
-    }
-
-    #[test]
-    fn test_cast_map_field_names() {
-        let string_builder = StringBuilder::new();
-        let value_builder = StringBuilder::new();
-        let mut builder = MapBuilder::new(
-            Some(MapFieldNames {
-                // Explicitly writing the name so it will be apparent from what names to what names are we converting to
-                entry: Field::MAP_ENTRIES_FIELD_DEFAULT_NAME.to_string(),
-                key: Field::MAP_KEY_FIELD_DEFAULT_NAME.to_string(),
-                value: Field::MAP_VALUE_FIELD_DEFAULT_NAME.to_string(),
-            }),
-            string_builder,
-            value_builder,
-        );
-
-        builder.keys().append_value("0");
-        builder.values().append_value("test_val_1");
-        builder.append(true).unwrap();
-        builder.keys().append_value("1");
-        builder.values().append_value("test_val_2");
-        builder.append(true).unwrap();
-        builder.append(false).unwrap();
-
-        let array = builder.finish();
-
-        let new_type = DataType::Map(
-            Arc::new(Field::new(
-                "entries_new",
-                DataType::Struct(
-                    vec![
-                        Field::new("key_new", DataType::Utf8, false),
-                        Field::new("value_values", DataType::Utf8, false),
-                    ]
-                    .into(),
-                ),
-                false,
-            )),
-            false,
-        );
-
-        assert_ne!(new_type, array.data_type().clone());
-
-        let new_array = cast(&array, &new_type.clone()).unwrap();
-        assert_eq!(new_type, new_array.data_type().clone());
-        let map_array = new_array.as_map();
-
-        assert_ne!(new_type, array.data_type().clone());
-        assert_eq!(new_type, map_array.data_type().clone());
-
-        let key_string = map_array
-            .keys()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&key_string, &vec!["0", "1"]);
-
-        let values_string_array = cast(map_array.values(), &DataType::Utf8).unwrap();
-        let values_string = values_string_array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&values_string, &vec!["test_val_1", "test_val_2"]);
-
-        assert_eq!(
-            map_array.nulls(),
-            Some(&NullBuffer::from(vec![true, true, false]))
-        );
-    }
-
-    #[test]
-    fn test_cast_map_contained_values() {
-        let string_builder = StringBuilder::new();
-        let value_builder = Int8Builder::new();
-        let mut builder = MapBuilder::new(None, string_builder, value_builder);
-
-        builder.keys().append_value("0");
-        builder.values().append_value(44);
-        builder.append(true).unwrap();
-        builder.keys().append_value("1");
-        builder.values().append_value(22);
-        builder.append(true).unwrap();
-
-        let array = builder.finish();
-
-        let new_type = DataType::Map(
-            Arc::new(Field::new(
-                Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-                DataType::Struct(
-                    vec![
-                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                    ]
-                    .into(),
-                ),
-                false,
-            )),
-            false,
-        );
-
-        let new_array = cast(&array, &new_type.clone()).unwrap();
-        assert_eq!(new_type, new_array.data_type().clone());
-        let map_array = new_array.as_map();
-
-        assert_ne!(new_type, array.data_type().clone());
-        assert_eq!(new_type, map_array.data_type().clone());
-
-        let key_string = map_array
-            .keys()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&key_string, &vec!["0", "1"]);
-
-        let values_string_array = cast(map_array.values(), &DataType::Utf8).unwrap();
-        let values_string = values_string_array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        assert_eq!(&values_string, &vec!["44", "22"]);
     }
 
     #[test]
@@ -12448,6 +12346,56 @@ mod tests {
             &DataType::Interval(IntervalUnit::MonthDayNano)
         );
         assert_eq!(casted_array.value(0), IntervalMonthDayNano::new(0, 123, 0));
+    }
+
+    #[test]
+    fn test_can_cast_interval_to_int64_matches_cast() {
+        // Assert the two agree for every interval unit, rather than hard coding the answer.
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(IntervalYearMonthArray::from(vec![12])),
+            Arc::new(IntervalDayTimeArray::from(vec![IntervalDayTime::new(1, 2)])),
+            Arc::new(IntervalMonthDayNanoArray::from(vec![
+                IntervalMonthDayNano::new(1, 2, 3),
+            ])),
+        ];
+        for array in arrays {
+            let from = array.data_type();
+            assert_eq!(
+                can_cast_types(from, &DataType::Int64),
+                cast(&array, &DataType::Int64).is_ok(),
+                "can_cast_types disagrees with cast for {from} -> Int64"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cast_union_to_int64_skips_uncastable_interval_child() {
+        // `resolve_child_array` picks the first child `can_cast_types` accepts, so an
+        // over-permissive answer made it pick the interval child instead of the `Utf8` one.
+        let fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("iv", DataType::Interval(IntervalUnit::YearMonth), true),
+                Field::new("s", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let union = UnionArray::try_new(
+            fields,
+            vec![0, 1, 0].into(),
+            None,
+            vec![
+                Arc::new(IntervalYearMonthArray::from(vec![Some(12), None, Some(24)])),
+                Arc::new(StringArray::from(vec![None, Some("77"), None])),
+            ],
+        )
+        .unwrap();
+
+        let casted = cast(&union, &DataType::Int64).unwrap();
+        let casted = casted.as_primitive::<Int64Type>();
+        assert!(casted.is_null(0));
+        assert_eq!(casted.value(1), 77);
+        assert!(casted.is_null(2));
     }
 
     #[test]
