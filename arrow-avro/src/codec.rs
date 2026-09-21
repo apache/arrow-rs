@@ -960,8 +960,16 @@ impl Codec {
                     _ => unreachable!(),
                 };
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", run_ends_dt, false)),
-                    Arc::new(Field::new("values", values.codec().data_type(), true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        run_ends_dt,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        values.codec().data_type(),
+                        true,
+                    )),
                 )
             }
             #[cfg(feature = "avro_custom_types")]

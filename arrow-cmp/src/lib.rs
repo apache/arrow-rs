@@ -28,6 +28,13 @@
 //! dependency (`arrow-ord` already depends on `arrow-select`) or force every
 //! downstream user of `arrow-array` to compile the comparator machinery whether
 //! they need it or not.
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
