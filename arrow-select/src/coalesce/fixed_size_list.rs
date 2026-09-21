@@ -110,50 +110,51 @@ impl InProgressArray for InProgressFixedSizeListArray {
 
         let list_size = self.list_size as usize;
 
-        // Build null buffer only if any null was seen.  BooleanBuffer::slice is
-        // O(1), so iterating value_slices here is cheap (no bit-counting until
-        // BooleanBufferBuilder::finish).
+        // Convert value_slices in-place from outer FSL slices to child slices,
+        // building the null buffer in the same pass.
+        //
+        // Arc::clone per slot keeps the inner FSL value alive while we overwrite
+        // the Vec slot with the child slice.  This lets us combine the null-build
+        // and child-extraction passes into one and eliminates the intermediate
+        // child_refs Vec that the two-pass approach required.
         let nulls = if self.has_nulls {
             self.has_nulls = false;
             let mut builder = BooleanBufferBuilder::new(rows);
             let mut null_count = 0usize;
-            for slice in &self.value_slices {
-                let fsl = slice.as_fixed_size_list();
+            for i in 0..self.value_slices.len() {
+                let outer = Arc::clone(&self.value_slices[i]);
+                let fsl = outer.as_fixed_size_list();
                 if let Some(src_nulls) = fsl.nulls() {
                     null_count += fsl.null_count();
                     builder.append_buffer(&src_nulls.inner().slice(fsl.offset(), fsl.len()));
                 } else {
                     builder.append_n(fsl.len(), true);
                 }
+                self.value_slices[i] =
+                    fsl.values().slice(fsl.offset() * list_size, fsl.len() * list_size);
             }
             // SAFETY: null_count was accumulated from exact per-source null counts
             // (fsl.null_count() is always exact for these slices).
             Some(unsafe { NullBuffer::new_unchecked(builder.finish(), null_count) })
         } else {
+            for i in 0..self.value_slices.len() {
+                let outer = Arc::clone(&self.value_slices[i]);
+                let fsl = outer.as_fixed_size_list();
+                self.value_slices[i] =
+                    fsl.values().slice(fsl.offset() * list_size, fsl.len() * list_size);
+            }
             None
         };
 
-        // Extract child values from each outer FSL slice and concatenate.
+        // value_slices now holds child slices.
         let values = if self.value_slices.len() == 1 {
-            let fsl = self.value_slices[0].as_fixed_size_list();
-            let child = fsl
-                .values()
-                .slice(fsl.offset() * list_size, fsl.len() * list_size);
-            self.value_slices.clear();
-            child
+            // pop() avoids an Arc::clone and leaves the Vec empty.
+            self.value_slices.pop().unwrap()
         } else {
-            let child_refs: Vec<ArrayRef> = self
-                .value_slices
-                .iter()
-                .map(|slice| {
-                    let fsl = slice.as_fixed_size_list();
-                    fsl.values()
-                        .slice(fsl.offset() * list_size, fsl.len() * list_size)
-                })
-                .collect();
+            let refs: Vec<&dyn Array> = self.value_slices.iter().map(|a| a.as_ref()).collect();
+            let result = concat(&refs)?;
             self.value_slices.clear();
-            let refs: Vec<&dyn Array> = child_refs.iter().map(|a| a.as_ref()).collect();
-            concat(&refs)?
+            result
         };
 
         Ok(Arc::new(FixedSizeListArray::new(
