@@ -39,21 +39,17 @@ use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::fs::File;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tempfile::NamedTempFile;
 
 #[test]
 fn test_read_with_custom_page_index_provider() {
     // Step 1: Write a parquet file with page indexes
-    let temp_file = create_test_file();
-    let file_bytes = Bytes::from(std::fs::read(temp_file.path()).unwrap());
+    let file_bytes = create_test_file();
 
     // Step 2: Load metadata WITHOUT page indexes initially
-    let file = File::open(temp_file.path()).unwrap();
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
-        file,
+        file_bytes.clone(),
         ArrowReaderOptions::default().with_page_index_policy(PageIndexPolicy::Skip),
     )
     .unwrap();
@@ -68,7 +64,7 @@ fn test_read_with_custom_page_index_provider() {
     // - We only populate indexes for row groups 0 and 2 (skipping row group 1)
     // - For row group 0: populate column 0 (id) and column 1 (value)
     // - For row group 2: populate column 0 (id) only
-    let mut provider = SelectivePageIndexProvider::new(file_bytes);
+    let mut provider = SelectivePageIndexProvider::new(file_bytes.clone());
 
     // Populate indexes for row group 0, columns 0 and 1
     provider.fetch_column_index(0, 0, metadata).unwrap();
@@ -105,8 +101,8 @@ fn test_read_with_custom_page_index_provider() {
     .unwrap();
 
     // Step 6: Read data with RowSelection that triggers page skipping
-    let file = File::open(temp_file.path()).unwrap();
-    let builder = ParquetRecordBatchReaderBuilder::new_with_metadata(file, arrow_metadata);
+    let builder =
+        ParquetRecordBatchReaderBuilder::new_with_metadata(file_bytes.clone(), arrow_metadata);
 
     // Create a RowSelection that:
     // - Selects rows 20-30 (in row group 0)
@@ -386,13 +382,7 @@ impl PageIndexProvider for SelectivePageIndexProvider {
 }
 
 /// Create a test parquet file with multiple row groups and multiple pages per column
-pub(super) fn create_test_file() -> NamedTempFile {
-    let temp_file = tempfile::Builder::new()
-        .prefix("custom_page_index_test")
-        .suffix(".parquet")
-        .tempfile()
-        .expect("tempfile creation");
-
+pub(super) fn create_test_file() -> Bytes {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
         Field::new("value", DataType::Int32, false),
@@ -408,8 +398,8 @@ pub(super) fn create_test_file() -> NamedTempFile {
         .set_max_row_group_row_count(Some(50)) // Small row groups
         .build();
 
-    let file = temp_file.reopen().unwrap();
-    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
+    let mut buffer = Vec::with_capacity(1024);
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
 
     // Write 3 row groups with 50 rows each (150 rows total)
     for row_group in 0..3 {
@@ -456,5 +446,5 @@ pub(super) fn create_test_file() -> NamedTempFile {
             );
         }
     }
-    temp_file
+    Bytes::from(buffer)
 }
