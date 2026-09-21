@@ -43,7 +43,11 @@ use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
 fn has_sparse_filter_copy(data_type: &DataType) -> bool {
-    data_type.is_primitive() || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
+    data_type.is_primitive()
+        || matches!(
+            data_type,
+            DataType::Utf8View | DataType::BinaryView | DataType::FixedSizeList(..)
+        )
 }
 
 /// Maximum selected row fraction for the fused sparse-filter copy path.

@@ -17,56 +17,46 @@
 
 use super::InProgressArray;
 use crate::concat::concat;
+use crate::filter::FilterPredicate;
 use arrow_array::cast::AsArray;
 use arrow_array::{new_empty_array, Array, ArrayRef, FixedSizeListArray};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBuffer};
+use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 use arrow_schema::{ArrowError, Field};
 use std::sync::Arc;
 
 /// Specialized [`InProgressArray`] for [`FixedSizeListArray`].
 ///
-/// Buffers Arc-cloned child value slices per `copy_rows` call and concatenates
-/// them once at `finish`, avoiding per-row child array reconstruction.
+/// Stores Arc-cloned outer FSL slices per `copy_rows` call and defers all
+/// child value extraction and null-buffer construction to `finish()`.
 ///
-/// Null handling uses a two-phase strategy:
-/// * When all sources so far have been null-free, only a `non_null_prefix`
-///   counter is kept (zero heap overhead).
-/// * On the first null-bearing `copy_rows` call, O(1) `BooleanBuffer` slices
-///   are stored in `null_slices`; a `BooleanBufferBuilder` is built once at
-///   `finish()` with exact capacity.  The running `null_count` is tracked
-///   incrementally so `finish()` can use `NullBuffer::new_unchecked`, avoiding
-///   a full `count_set_bits` scan over the assembled bitmap.
+/// This keeps `copy_rows` as cheap as `GenericInProgressArray::copy_rows`
+/// (one Arc clone + one Vec push) while still avoiding the 2× peak memory
+/// overhead from `GenericInProgressArray`'s use of `concat` over full arrays.
+///
+/// Null handling defers all bitmap work to `finish()`.  Only a single
+/// `has_nulls: bool` flag is kept hot, avoiding any heap allocation until
+/// a null-bearing batch is finalized.
 #[derive(Debug)]
 pub(crate) struct InProgressFixedSizeListArray {
-    source: Option<ArrayRef>,
-    list_size: i32,
-    field: Arc<Field>,
-    /// All-valid rows accumulated before the first null-bearing source.
-    /// When `null_slices` is empty this counter is the only null-tracking
-    /// state, keeping the no-null path allocation-free.
-    non_null_prefix: usize,
-    /// Null-bit slices collected once the first null-bearing source is seen.
-    /// `None` means all rows in that slice were valid.
-    /// Built on demand; empty when no nulls have been seen yet.
-    null_slices: Vec<(Option<BooleanBuffer>, usize)>,
-    /// Accumulated FSL-level null count across all `null_slices` entries.
-    /// Maintained incrementally so `finish()` avoids a `count_set_bits` scan.
-    null_count: usize,
-    value_slices: Vec<ArrayRef>,
-    rows: usize,
+    source: Option<ArrayRef>,    // 16B — Option<Arc<dyn Array>> via niche optimization
+    value_slices: Vec<ArrayRef>, // 24B — outer FSL slices; child values extracted at finish()
+    rows: usize,                 // 8B
+    list_size: i32,              // 4B
+    has_nulls: bool,             // 1B
+    // 3B padding
+    field: Arc<Field>,           // 8B
+    // Total: ~64B = 1 cache line
 }
 
 impl InProgressFixedSizeListArray {
     pub(crate) fn new(list_size: i32, field: Arc<Field>, _batch_size: usize) -> Self {
         Self {
             source: None,
-            list_size,
-            field,
-            non_null_prefix: 0,
-            null_slices: Vec::new(),
-            null_count: 0,
             value_slices: Vec::new(),
             rows: 0,
+            list_size,
+            has_nulls: false,
+            field,
         }
     }
 }
@@ -82,77 +72,89 @@ impl InProgressArray for InProgressFixedSizeListArray {
                 "Internal Error: InProgressFixedSizeListArray: source not set".to_string(),
             )
         })?;
-        let fsl = source.as_fixed_size_list();
-        let list_size = self.list_size as usize;
-
-        // Account for the FSL's own offset into the child values buffer.
-        let child_start = (fsl.offset() + offset) * list_size;
-        let child_slice = fsl.values().slice(child_start, len * list_size);
-        self.value_slices.push(child_slice);
-
-        if let Some(src_nulls) = fsl.nulls() {
-            // First null-bearing source: flush the all-valid prefix into
-            // null_slices so the BooleanBuffer accounting stays coherent.
-            if self.null_slices.is_empty() && self.non_null_prefix > 0 {
-                self.null_slices
-                    .push((None, std::mem::take(&mut self.non_null_prefix)));
-            }
-            // BooleanBuffer::slice is O(1) — no bit-counting.
-            let bool_buf = src_nulls.inner().slice(fsl.offset() + offset, len);
-            // Track null_count incrementally so finish() can skip count_set_bits.
-            // For full-source slices (offset 0, full length) we can reuse the
-            // already-computed null_count on the FSL.  For partial slices we
-            // pay one count_set_bits here rather than a full-bitmap scan later.
-            let nc = if fsl.offset() == 0 && offset == 0 && len == fsl.len() {
-                fsl.null_count()
-            } else {
-                len - bool_buf.count_set_bits()
-            };
-            self.null_count += nc;
-            self.null_slices.push((Some(bool_buf), len));
-        } else if self.null_slices.is_empty() {
-            // Still in the all-valid prefix phase; keep it as a single counter.
-            self.non_null_prefix += len;
-        } else {
-            // Already tracking nulls; record this all-valid slice.
-            self.null_slices.push((None, len));
+        if !self.has_nulls && source.as_fixed_size_list().null_count() > 0 {
+            self.has_nulls = true;
         }
         self.rows += len;
+        self.value_slices.push(source.slice(offset, len));
+        Ok(())
+    }
+
+    fn copy_rows_by_filter_from(
+        &mut self,
+        source: ArrayRef,
+        filter: &FilterPredicate,
+    ) -> Result<(), ArrowError> {
+        let filtered = filter.filter(source.as_ref())?;
+        if filtered.as_fixed_size_list().null_count() > 0 {
+            self.has_nulls = true;
+        }
+        self.rows += filtered.len();
+        self.value_slices.push(filtered);
         Ok(())
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         let rows = std::mem::take(&mut self.rows);
-        self.non_null_prefix = 0;
 
-        // Build the null buffer only if at least one source contributed nulls.
-        // `null_count` was accumulated incrementally in `copy_rows` so we can
-        // use `new_unchecked` and skip the `count_set_bits` scan over `rows` bits.
-        let nulls = if !self.null_slices.is_empty() {
-            let null_count = std::mem::take(&mut self.null_count);
+        if rows == 0 {
+            self.has_nulls = false;
+            self.value_slices.clear();
+            return Ok(Arc::new(FixedSizeListArray::new(
+                Arc::clone(&self.field),
+                self.list_size,
+                new_empty_array(self.field.data_type()),
+                None,
+            )));
+        }
+
+        let list_size = self.list_size as usize;
+
+        // Build null buffer only if any null was seen.  BooleanBuffer::slice is
+        // O(1), so iterating value_slices here is cheap (no bit-counting until
+        // BooleanBufferBuilder::finish).
+        let nulls = if self.has_nulls {
+            self.has_nulls = false;
             let mut builder = BooleanBufferBuilder::new(rows);
-            for (null_slice, len) in &self.null_slices {
-                match null_slice {
-                    Some(buf) => builder.append_buffer(buf),
-                    None => builder.append_n(*len, true),
+            let mut null_count = 0usize;
+            for slice in &self.value_slices {
+                let fsl = slice.as_fixed_size_list();
+                if let Some(src_nulls) = fsl.nulls() {
+                    null_count += fsl.null_count();
+                    builder.append_buffer(&src_nulls.inner().slice(fsl.offset(), fsl.len()));
+                } else {
+                    builder.append_n(fsl.len(), true);
                 }
             }
-            self.null_slices.clear();
-            // SAFETY: null_count was accumulated from per-source null counts,
-            // which are exact (fsl.null_count() for full slices, count_set_bits
-            // for partial slices).
+            // SAFETY: null_count was accumulated from exact per-source null counts
+            // (fsl.null_count() is always exact for these slices).
             Some(unsafe { NullBuffer::new_unchecked(builder.finish(), null_count) })
         } else {
             None
         };
 
-        let values = if rows == 0 {
-            new_empty_array(self.field.data_type())
+        // Extract child values from each outer FSL slice and concatenate.
+        let values = if self.value_slices.len() == 1 {
+            let fsl = self.value_slices[0].as_fixed_size_list();
+            let child = fsl
+                .values()
+                .slice(fsl.offset() * list_size, fsl.len() * list_size);
+            self.value_slices.clear();
+            child
         } else {
-            let refs: Vec<&dyn Array> = self.value_slices.iter().map(|s| s.as_ref()).collect();
+            let child_refs: Vec<ArrayRef> = self
+                .value_slices
+                .iter()
+                .map(|slice| {
+                    let fsl = slice.as_fixed_size_list();
+                    fsl.values()
+                        .slice(fsl.offset() * list_size, fsl.len() * list_size)
+                })
+                .collect();
+            self.value_slices.clear();
+            let refs: Vec<&dyn Array> = child_refs.iter().map(|a| a.as_ref()).collect();
             concat(&refs)?
         };
-        self.value_slices.clear();
 
         Ok(Arc::new(FixedSizeListArray::new(
             Arc::clone(&self.field),
@@ -163,14 +165,10 @@ impl InProgressArray for InProgressFixedSizeListArray {
     }
 
     fn size(&self) -> usize {
-        self.value_slices
-            .iter()
-            .map(|slice| slice.get_array_memory_size())
-            .sum::<usize>()
-            + self
-                .source
-                .as_ref()
-                .map_or(0, |source| source.get_array_memory_size())
+        self.source
+            .as_ref()
+            .map_or(0, |s| s.get_array_memory_size())
+            + self.value_slices.capacity() * std::mem::size_of::<ArrayRef>()
     }
 }
 
@@ -204,6 +202,18 @@ mod tests {
             .unwrap()
             .values()
             .to_vec()
+    }
+
+    #[test]
+    fn test_compact_struct_size() {
+        use super::super::generic::GenericInProgressArray;
+        let fsl_size = std::mem::size_of::<InProgressFixedSizeListArray>();
+        let generic_size = std::mem::size_of::<GenericInProgressArray>();
+        assert!(
+            fsl_size <= generic_size * 2,
+            "InProgressFixedSizeListArray ({fsl_size}B) is more than 2× GenericInProgressArray \
+             ({generic_size}B); hot-path state may have leaked into the base struct"
+        );
     }
 
     #[test]
@@ -302,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_mixed_null_nonnull_sources() {
-        // Verify the prefix flush path: non-null source, then null source, then non-null source.
+        // Verify null tracking across null-free → null-bearing → null-free sources.
         let field = Arc::new(Field::new("item", DataType::Int32, true));
         let no_null = make_fsl(2, &[1, 2, 3, 4]);
         let with_null: ArrayRef = Arc::new(FixedSizeListArray::new(
@@ -327,5 +337,24 @@ mod tests {
         assert!(out_fsl.is_valid(2)); // from with_null row 0
         assert!(out_fsl.is_null(3)); // from with_null row 1
         assert!(out_fsl.is_valid(4)); // from no_null2
+    }
+
+    #[test]
+    fn test_copy_rows_by_filter_from() {
+        use crate::filter::{FilterBuilder, FilterPredicate};
+        use arrow_array::BooleanArray;
+
+        let input = make_fsl(2, &[1, 2, 3, 4, 5, 6]);
+        // Keep rows 0 and 2 (filter = [true, false, true])
+        let filter = BooleanArray::from(vec![true, false, true]);
+        let predicate: FilterPredicate = FilterBuilder::new(&filter).build();
+
+        let mut coalescer = make_coalescer(2);
+        coalescer
+            .copy_rows_by_filter_from(Arc::clone(&input), &predicate)
+            .unwrap();
+        let output = coalescer.finish().unwrap();
+        assert_eq!(output.len(), 2);
+        assert_eq!(child_values(&output), [1, 2, 5, 6]);
     }
 }
