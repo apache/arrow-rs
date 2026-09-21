@@ -64,11 +64,13 @@ use std::{
 };
 
 use arrow_data::ffi::FFI_ArrowArray;
-use arrow_schema::{ArrowError, Schema, SchemaRef, ffi::FFI_ArrowSchema};
+use arrow_schema::{ArrowError, Field, FieldRef, Schema, SchemaRef, ffi::FFI_ArrowSchema};
 
 use crate::RecordBatchOptions;
 use crate::array::Array;
 use crate::array::StructArray;
+use crate::array::{ArrayRef, make_array};
+use crate::array_reader::ArrayReader;
 use crate::ffi::from_ffi_and_data_type;
 use crate::record_batch::{RecordBatch, RecordBatchReader};
 
@@ -546,6 +548,78 @@ impl RecordBatchReader for ArrowArrayStreamReader {
     }
 }
 
+/// An [`ArrayReader`] which imports arrays from an [`FFI_ArrowArrayStream`].
+///
+/// Unlike [`ArrowArrayStreamReader`], the stream's arrays may be of **any** data type. This
+/// supports reading a stream of generic arrays that may not represent record batches.
+#[derive(Debug)]
+pub struct ArrayStreamReader {
+    stream: FFI_ArrowArrayStream,
+    field: FieldRef,
+}
+
+impl ArrayStreamReader {
+    /// Creates a new [`ArrayStreamReader`] from an [`FFI_ArrowArrayStream`].
+    /// This is used to import from the C Stream Interface.
+    pub fn try_new(mut stream: FFI_ArrowArrayStream) -> Result<Self> {
+        if stream.release.is_none() {
+            return Err(ArrowError::CDataInterface(
+                "input stream is already released".to_string(),
+            ));
+        }
+
+        let field = get_stream_field(&raw mut stream)?;
+
+        Ok(Self { stream, field })
+    }
+
+    /// Creates a new [`ArrayStreamReader`] from a raw pointer of [`FFI_ArrowArrayStream`].
+    ///
+    /// # Safety
+    ///
+    /// See [`FFI_ArrowArrayStream::from_raw`]
+    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
+        Self::try_new(unsafe { FFI_ArrowArrayStream::from_raw(raw_stream) })
+    }
+}
+
+impl Iterator for ArrayStreamReader {
+    type Item = Result<ArrayRef>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut array = FFI_ArrowArray::empty();
+
+        let ret_code =
+            unsafe { self.stream.get_next.unwrap()(&raw mut self.stream, &raw mut array) };
+
+        if ret_code == 0 {
+            // The end of stream has been reached
+            if array.is_released() {
+                return None;
+            }
+
+            let result = unsafe { from_ffi_and_data_type(array, self.field.data_type().clone()) };
+            Some(result.map(make_array))
+        } else {
+            let message =
+                format!("Cannot get next array from input stream. Error code: {ret_code}");
+            // SAFETY: `self.stream` is valid and unreleased by construction, and the
+            // `get_next` call above returned a non-zero code.
+            let message = match unsafe { producer_error(&raw mut self.stream) } {
+                Some(producer_message) => format!("{message}. Producer error: {producer_message}"),
+                None => message,
+            };
+            Some(Err(ArrowError::CDataInterface(message)))
+        }
+    }
+}
+
+impl ArrayReader for ArrayStreamReader {
+    fn field(&self) -> FieldRef {
+        self.field.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,5 +1062,86 @@ mod tests {
         assert!(stream.get_last_error().is_none());
         assert!(stream.release().is_none());
         assert!(stream.private_data().is_null());
+    }
+    #[test]
+    fn test_import_array_stream() {
+        let field = Field::new("a", DataType::Int32, true);
+        let arrays = vec![
+            Int32Array::from(vec![1, 2, 3]),
+            Int32Array::from(vec![4, 5]),
+        ];
+        let reader = ArrayStreamReader::try_new(array_stream(field, arrays.clone())).unwrap();
+
+        let produced = reader
+            .map(|array| Int32Array::from(array.unwrap().to_data()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(produced, arrays);
+    }
+
+    #[test]
+    fn test_import_array_stream_reports_its_field() {
+        let field = Field::new("a", DataType::Int32, true)
+            .with_metadata(HashMap::from([("key".to_string(), "value".to_string())]));
+        let reader = ArrayStreamReader::try_new(array_stream(field.clone(), vec![])).unwrap();
+
+        assert_eq!(reader.field().as_ref(), &field);
+    }
+
+    #[test]
+    fn test_import_array_stream_rejects_released_stream() {
+        let err = ArrayStreamReader::try_new(FFI_ArrowArrayStream::empty()).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "C Data interface error: input stream is already released"
+        );
+    }
+
+    #[test]
+    fn test_import_array_schema_error_reports_producer_message() {
+        let err =
+            ArrayStreamReader::try_new(failing_stream(Some(producer_last_error))).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "C Data interface error: Cannot get schema from input stream. \
+                 Error code: {EIO}. Producer error: the producer failed"
+            )
+        );
+    }
+
+    #[test]
+    fn test_import_array_next_error_reports_producer_message() {
+        let mut stream = failing_stream(Some(producer_last_error));
+        stream.get_schema = Some(working_get_schema);
+
+        let err = ArrayStreamReader::try_new(stream)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "C Data interface error: Cannot get next array from input stream. \
+                 Error code: {EIO}. Producer error: the producer failed"
+            )
+        );
+    }
+    #[test]
+    fn test_import_record_batch_stream_rejects_non_struct_stream() {
+        // A stream of plain arrays cannot be read as record batches. Use
+        // `ArrayStreamReader` for that.
+        let field = Field::new("a", DataType::Int32, true);
+
+        let err = ArrowArrayStreamReader::try_new(array_stream(field, vec![])).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "C Data interface error: Unable to interpret C data struct as a Schema"
+        );
     }
 }
