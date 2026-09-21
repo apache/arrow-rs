@@ -1069,6 +1069,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_from_bitwise_binary_op() {
         // pick random boolean inputs
         let input_bools_left = (0..1024)

@@ -2699,6 +2699,7 @@ mod tests {
     /// Test round-trip of Dictionary<UInt32, Utf8View> and
     /// Dictionary<UInt32, BinaryView> typed columns.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn arrow_writer_string_view_dictionary() {
         let raw_string_values = vec!["a", "b", "large payload over 12 bytes"];
         let raw_binary_values = vec![
