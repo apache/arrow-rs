@@ -130,8 +130,9 @@ impl InProgressArray for InProgressFixedSizeListArray {
                 } else {
                     builder.append_n(fsl.len(), true);
                 }
-                self.value_slices[i] =
-                    fsl.values().slice(fsl.offset() * list_size, fsl.len() * list_size);
+                self.value_slices[i] = fsl
+                    .values()
+                    .slice(fsl.offset() * list_size, fsl.len() * list_size);
             }
             // SAFETY: null_count was accumulated from exact per-source null counts
             // (fsl.null_count() is always exact for these slices).
@@ -140,8 +141,9 @@ impl InProgressArray for InProgressFixedSizeListArray {
             for i in 0..self.value_slices.len() {
                 let outer = Arc::clone(&self.value_slices[i]);
                 let fsl = outer.as_fixed_size_list();
-                self.value_slices[i] =
-                    fsl.values().slice(fsl.offset() * list_size, fsl.len() * list_size);
+                self.value_slices[i] = fsl
+                    .values()
+                    .slice(fsl.offset() * list_size, fsl.len() * list_size);
             }
             None
         };
