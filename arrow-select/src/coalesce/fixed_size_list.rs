@@ -19,7 +19,7 @@ use super::InProgressArray;
 use crate::concat::concat;
 use crate::filter::FilterPredicate;
 use arrow_array::cast::AsArray;
-use arrow_array::{new_empty_array, Array, ArrayRef, FixedSizeListArray};
+use arrow_array::{Array, ArrayRef, FixedSizeListArray, new_empty_array};
 use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 use arrow_schema::{ArrowError, Field};
 use std::sync::Arc;
@@ -38,14 +38,14 @@ use std::sync::Arc;
 /// a null-bearing batch is finalized.
 #[derive(Debug)]
 pub(crate) struct InProgressFixedSizeListArray {
-    source: Option<ArrayRef>,    // 16B — Option<Arc<dyn Array>> via niche optimization
+    source: Option<ArrayRef>, // 16B — Option<Arc<dyn Array>> via niche optimization
     value_slices: Vec<ArrayRef>, // 24B — outer FSL slices; child values extracted at finish()
-    rows: usize,                 // 8B
-    list_size: i32,              // 4B
-    has_nulls: bool,             // 1B
+    rows: usize,              // 8B
+    list_size: i32,           // 4B
+    has_nulls: bool,          // 1B
     // 3B padding
-    field: Arc<Field>,           // 8B
-    // Total: ~64B = 1 cache line
+    field: Arc<Field>, // 8B
+                       // Total: ~64B = 1 cache line
 }
 
 impl InProgressFixedSizeListArray {
