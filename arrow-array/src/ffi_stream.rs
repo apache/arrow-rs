@@ -438,13 +438,26 @@ unsafe fn producer_error(stream_ptr: *mut FFI_ArrowArrayStream) -> Option<String
 /// Gets schema from a raw pointer of `FFI_ArrowArrayStream`. This is used when constructing
 /// `ArrowArrayStreamReader` to cache schema.
 fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef> {
+    let field = get_stream_field(stream_ptr)?;
+    match field.data_type() {
+        DataType::Struct(fields) => Ok(Arc::new(
+            Schema::new(fields.clone()).with_metadata(field.metadata().clone()),
+        )),
+        _ => Err(ArrowError::CDataInterface(
+            "Unable to interpret C data struct as a Schema".to_string(),
+        )),
+    }
+}
+
+/// Gets the field from a raw pointer of `FFI_ArrowArrayStream`. This is used when constructing
+/// `ArrayStreamReader` to cache the field.
+fn get_stream_field(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<FieldRef> {
     let mut schema = FFI_ArrowSchema::empty();
 
     let ret_code = unsafe { (*stream_ptr).get_schema.unwrap()(stream_ptr, &raw mut schema) };
 
     if ret_code == 0 {
-        let schema = Schema::try_from(&schema)?;
-        Ok(Arc::new(schema))
+        Ok(Arc::new(Field::try_from(&schema)?))
     } else {
         let message = format!("Cannot get schema from input stream. Error code: {ret_code}");
         // SAFETY: `stream_ptr` is valid and unreleased, and the `get_schema` call above
