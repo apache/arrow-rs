@@ -1127,9 +1127,20 @@ impl ArrowReaderMetadata {
             )));
         }
 
+        // `fields` is the supplied fields followed by the virtual columns, so the reported
+        // schema has to be built from it or the virtual columns go missing.
+        let schema = if virtual_columns.is_empty() {
+            supplied_schema
+        } else {
+            Arc::new(Schema::new_with_metadata(
+                fields,
+                supplied_schema.metadata().clone(),
+            ))
+        };
+
         Ok(Self {
             metadata,
-            schema: supplied_schema,
+            schema,
             fields: field_levels.levels.map(Arc::new),
         })
     }
