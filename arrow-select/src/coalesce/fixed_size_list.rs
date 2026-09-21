@@ -347,7 +347,7 @@ mod tests {
         let input = make_fsl(2, &[1, 2, 3, 4, 5, 6]);
         // Keep rows 0 and 2 (filter = [true, false, true])
         let filter = BooleanArray::from(vec![true, false, true]);
-        let predicate: FilterPredicate = FilterBuilder::new(&filter).build();
+        let predicate = FilterBuilder::new(&filter).build();
 
         let mut coalescer = make_coalescer(2);
         coalescer
