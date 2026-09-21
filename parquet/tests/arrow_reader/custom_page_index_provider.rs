@@ -408,7 +408,7 @@ fn create_test_file() -> NamedTempFile {
         .set_max_row_group_row_count(Some(50)) // Small row groups
         .build();
 
-    let file = temp_file.reopen().unwrap();
+    let file = File::create(temp_file.path()).unwrap();
     let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
 
     // Write 3 row groups with 50 rows each (150 rows total)
