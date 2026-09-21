@@ -576,10 +576,20 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the next Map (called after `Map` has been consumed)
-    /// E.g: Map("entries": Struct("key": Utf8, "value": non-null Int32), sorted)
+    /// E.g: Map("entries": Struct("key": non-null Utf8, "value": nullable Int32), sorted)
     fn parse_map(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_field()?;
+        if let DataType::Struct(fields) = field.data_type() {
+            if let Some(key) = fields
+                .iter()
+                .find(|f| f.name() == Field::MAP_KEY_FIELD_DEFAULT_NAME)
+            {
+                if key.is_nullable() {
+                    return Err(make_error(self.val, "Map key field cannot be nullable"));
+                }
+            }
+        }
         self.expect_token(Token::Comma)?;
         let sorted = self.parse_map_sorted()?;
         self.expect_token(Token::RParen)?;
@@ -613,8 +623,8 @@ impl<'a> Parser<'a> {
         let (run_ends, values) = if verbose {
             let run_ends = self.parse_ree_verbose_field()?;
             self.expect_token(Token::Comma)?;
-            let values = self.parse_ree_verbose_field()?;
-            (run_ends.with_nullable(false), values)
+            let values = self.parse_field()?;
+            (run_ends, values)
         } else {
             self.parse_opt_nullable(); // run_ends is always non-null; consume the token if present
             let re_type = self.parse_next_type()?;
@@ -634,13 +644,20 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    /// Parses `"name": [non-null] Type` used in the verbose REE form.
+    /// Parses `"name": non-null Type` for the run_ends field in verbose REE form.
+    /// Errors if the field is nullable, since run_ends must always be non-null.
     fn parse_ree_verbose_field(&mut self) -> ArrowResult<Field> {
         let name = self.parse_double_quoted_string("RunEndEncoded field")?;
         self.expect_token(Token::Colon)?;
         let nullable = self.parse_opt_nullable();
+        if nullable {
+            return Err(make_error(
+                self.val,
+                "RunEndEncoded run_ends field cannot be nullable",
+            ));
+        }
         let data_type = self.parse_next_type()?;
-        Ok(Field::new(name, data_type, nullable))
+        Ok(Field::new(name, data_type, false))
     }
 
     /// consume the next token and return `false` if the field is `nonnull`.
@@ -1697,6 +1714,24 @@ mod test {
             (
                 "Decimal256(0, 0)",
                 "Error Decimal256 precision must be in range [1, 76], got '0'",
+            ),
+            // REE run_ends cannot be nullable
+            (
+                r#"RunEndEncoded("re": nullable Int32, "v": non-null Utf8)"#,
+                "RunEndEncoded run_ends field cannot be nullable",
+            ),
+            (
+                r#"RunEndEncoded("re": Int32, "v": non-null Utf8)"#,
+                "RunEndEncoded run_ends field cannot be nullable",
+            ),
+            // Map key cannot be nullable
+            (
+                r#"Map("entries": Struct("key": nullable Utf8, "value": nullable Int32), unsorted)"#,
+                "Map key field cannot be nullable",
+            ),
+            (
+                r#"Map("entries": Struct("key": Utf8, "value": nullable Int32), unsorted)"#,
+                "Map key field cannot be nullable",
             ),
         ];
 
