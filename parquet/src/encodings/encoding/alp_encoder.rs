@@ -914,6 +914,7 @@ mod tests {
     /// Streaming pages (every page after the first) must be byte-for-byte
     /// identical to encoding the same values in one pass with the same preset.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_streaming_matches_buffered() {
         let page1: Vec<f64> = (0..3000).map(|i| (i as f64) * 0.01 + 1.23).collect();
         let page2: Vec<f64> = (0..3000).map(|i| (i as f64) * 0.03 - 7.0).collect();
@@ -1056,6 +1057,7 @@ mod tests {
     /// can encode, exercising the all-exception size estimate and the early
     /// exit of the per-vector candidate search.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_full_preset_with_all_exception_vector() {
         // Nine vectors are sampled at stride two, so the even-indexed ones
         // decide the preset: four distinct decimal scales, plus the all-NaN
@@ -1091,6 +1093,7 @@ mod tests {
     /// factor 0: `flush_buffer` caches the first page's preset for the whole
     /// chunk, so a degenerate one makes every later fractional value an exception.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_empty_first_page_does_not_poison_preset() {
         let values: Vec<f64> = (0..3000).map(|i| (i as f64) * 0.01).collect();
 

@@ -3996,6 +3996,7 @@ mod tests {
     /// While a column is dictionary encoded the bloom filter is populated from the dictionary
     /// when it is flushed, so a chunk that stays dictionary encoded must still contain every value.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn string_column_bloom_filter_populated_from_dictionary() {
         let values: Vec<String> = (0..2000).map(|i| format!("value-{}", i % 10)).collect();
         let array = Arc::new(StringArray::from_iter_values(&values));
@@ -4037,6 +4038,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn i64_column_bloom_filter_populated_from_dictionary() {
         let array = Arc::new(Int64Array::from_iter_values((0..2000).map(|i| i % 10)));
         let file = write_with_bloom_filter(array, 1024 * 1024);

@@ -1818,6 +1818,7 @@ mod tests_from_ffi {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_extend_imported_list_slice() {
         let mut data = vec![];
 
