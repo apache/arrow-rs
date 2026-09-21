@@ -26,7 +26,7 @@ use std::fs::File;
 use std::io::{Read as _, Seek, SeekFrom, Write as _};
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, BinaryArray, Float64Array, Int32Array, RecordBatch};
+use arrow::array::{ArrayRef, BinaryArray, Float64Array, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
 use parquet::arrow::arrow_writer::{
@@ -36,7 +36,7 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
 use parquet::basic::Encoding;
 use parquet::errors::Result;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{WriterProperties, WriterVersion};
 use parquet::file::writer::SerializedFileWriter;
 
 #[test]
@@ -566,4 +566,29 @@ fn page_store_spills_dictionary_pages() {
         "expected dict-column spilling peak ({dict_spill}) below {spill_ceiling} bytes \
          (a few dictionary pages), not the ~K × dict_page of the in-memory baseline"
     );
+}
+
+/// Regression test for <https://github.com/apache/arrow-rs/issues/11148>
+///
+/// Every byte array column eagerly builds its fallback encoder. With
+/// `DELTA_BYTE_ARRAY` that holds two `DeltaBitPackEncoder`s, which must not
+/// pre-allocate large buffers: here the columns dictionary encode, so the
+/// fallback is never used at all.
+#[test]
+fn unused_delta_fallback_does_not_preallocate() {
+    const COLUMNS: usize = 100;
+    let column: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "a"]));
+    let batch = RecordBatch::try_from_iter((0..COLUMNS).map(|i| (format!("c{i}"), column.clone())))
+        .unwrap();
+    let props = WriterProperties::builder()
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .set_encoding(Encoding::DELTA_BYTE_ARRAY)
+        .build();
+
+    let peak = peak_heap_bytes(|| {
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+    });
+
+    assert!(peak < COLUMNS * 64 * 1024, "peak: {peak}");
 }
