@@ -18,7 +18,6 @@
 //! Tests of selective page index population
 
 use parquet::file::metadata::{ColumnChunkMask, PageIndexPolicy, ParquetMetaDataReader};
-use std::fs::File;
 
 use crate::custom_page_index_provider::create_test_file;
 
@@ -26,7 +25,6 @@ use crate::custom_page_index_provider::create_test_file;
 fn test_parse_selected_columns() {
     // test populating PageIndex with a subset of columns
     let temp_file = create_test_file();
-    let file = File::open(temp_file.path()).unwrap();
 
     // populate column 0 for column index and columns 0 & 2 for the offset index
     let mut reader = ParquetMetaDataReader::new()
@@ -35,7 +33,7 @@ fn test_parse_selected_columns() {
         .with_offset_index_mask(ColumnChunkMask::columns([0, 2]));
 
     // parse metadata
-    reader.try_parse(&file).unwrap();
+    reader.try_parse(&temp_file).unwrap();
     let metadata = reader.finish().unwrap();
     let num_rg = metadata.num_row_groups();
 
@@ -61,7 +59,6 @@ fn test_parse_selected_columns() {
 fn test_parse_selected_columns_mixed() {
     // test populating PageIndex with a subset of columns
     let temp_file = create_test_file();
-    let file = File::open(temp_file.path()).unwrap();
 
     // populate column 0 for column index and all columns for offset index
     let mut reader = ParquetMetaDataReader::new()
@@ -70,7 +67,7 @@ fn test_parse_selected_columns_mixed() {
         .with_offset_index_mask(ColumnChunkMask::all());
 
     // parse metadata
-    reader.try_parse(&file).unwrap();
+    reader.try_parse(&temp_file).unwrap();
     let metadata = reader.finish().unwrap();
     let num_rg = metadata.num_row_groups();
 
@@ -96,7 +93,6 @@ fn test_parse_selected_columns_mixed() {
 fn test_parse_selected_row_groups() {
     // test populating PageIndex with a subset of row groups
     let temp_file = create_test_file();
-    let file = File::open(temp_file.path()).unwrap();
 
     // populate indexes for row groups 0 and 2
     let mut reader = ParquetMetaDataReader::new()
@@ -105,7 +101,7 @@ fn test_parse_selected_row_groups() {
         .with_offset_index_mask(ColumnChunkMask::row_groups([0, 2]));
 
     // parse metadata
-    reader.try_parse(&file).unwrap();
+    reader.try_parse(&temp_file).unwrap();
     let metadata = reader.finish().unwrap();
     let num_cols = metadata.file_metadata().schema_descr().num_columns();
     assert!(metadata.page_index().is_some());
@@ -128,7 +124,6 @@ fn test_parse_selected_row_groups() {
 fn test_parse_selected_row_groups_and_columns() {
     // test populating PageIndex by row group and column
     let temp_file = create_test_file();
-    let file = File::open(temp_file.path()).unwrap();
 
     // populate only row group 1, column index gets column 0, offset index gets
     // columns 0 and 2.
@@ -138,7 +133,7 @@ fn test_parse_selected_row_groups_and_columns() {
         .with_offset_index_mask(ColumnChunkMask::row_groups_and_columns([1], [0, 2]));
 
     // parse metadata
-    reader.try_parse(&file).unwrap();
+    reader.try_parse(&temp_file).unwrap();
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     let num_cols = metadata.file_metadata().schema_descr().num_columns();
@@ -168,13 +163,12 @@ fn test_parse_selected_row_groups_and_columns() {
 fn test_page_index_sizes() {
     // test populating PageIndex by row group and column
     let temp_file = create_test_file();
-    let file = File::open(temp_file.path()).unwrap();
 
     // no index
     let mut reader = ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Skip);
 
     // parse metadata
-    reader.try_parse(&file).unwrap();
+    reader.try_parse(&temp_file).unwrap();
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_none());
     #[cfg(not(feature = "encryption"))]
@@ -186,7 +180,7 @@ fn test_page_index_sizes() {
     let mut reader = ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
 
     // parse metadata
-    reader.try_parse(&file).unwrap();
+    reader.try_parse(&temp_file).unwrap();
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
@@ -201,7 +195,7 @@ fn test_page_index_sizes() {
         .with_offset_index_mask(ColumnChunkMask::all());
 
     // parse metadata
-    reader.try_parse(&file).unwrap();
+    reader.try_parse(&temp_file).unwrap();
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
@@ -216,7 +210,7 @@ fn test_page_index_sizes() {
         .with_offset_index_mask(ColumnChunkMask::columns([0, 2]));
 
     // parse metadata
-    reader.try_parse(&file).unwrap();
+    reader.try_parse(&temp_file).unwrap();
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
@@ -232,7 +226,7 @@ fn test_page_index_sizes() {
         .with_offset_index_mask(ColumnChunkMask::row_groups_and_columns([1], [0, 2]));
 
     // parse metadata
-    reader.try_parse(&file).unwrap();
+    reader.try_parse(&temp_file).unwrap();
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
