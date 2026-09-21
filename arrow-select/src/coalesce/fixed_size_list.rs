@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_copy_rows_by_filter_from() {
-        use crate::filter::{FilterBuilder, FilterPredicate};
+        use crate::filter::FilterBuilder;
         use arrow_array::BooleanArray;
 
         let input = make_fsl(2, &[1, 2, 3, 4, 5, 6]);
