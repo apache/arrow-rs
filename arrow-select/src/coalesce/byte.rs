@@ -27,6 +27,18 @@ use arrow_buffer::{
 use arrow_schema::ArrowError;
 use std::sync::Arc;
 
+/// Heap-allocated streaming state, present only when the sparse-filter path is active.
+///
+/// By boxing this, `InProgressByteArray` stays the same size as `GenericInProgressArray`
+/// in the common (take / high-selectivity) path, avoiding the cache-pressure regression
+/// that a larger flat struct would cause.
+struct ByteStreamingState<O> {
+    nulls: NullBufferBuilder,
+    /// Row-end offsets starting with an initial `0`; length == rows_written + 1.
+    offsets: Vec<O>,
+    values: Vec<u8>,
+}
+
 /// InProgressArray for [`StringArray`], [`BinaryArray`], [`LargeStringArray`],
 /// and [`LargeBinaryArray`].
 ///
@@ -34,20 +46,18 @@ use std::sync::Arc;
 /// insertion order:
 ///
 /// - **Sparse filter path** (`copy_rows_by_filter` when no buffered data yet):
-///   streams bytes directly into growing `offsets`/`values` buffers. This
-///   avoids calling the filter kernel and the 2× peak-memory cost of later
-///   concatenation. The key win is enabling the per-column sparse filter path
-///   for schemas that include Utf8/Binary columns.
+///   streams bytes directly into growing `offsets`/`values` buffers inside a
+///   lazily-allocated [`ByteStreamingState`]. This avoids calling the filter
+///   kernel and the 2× peak-memory cost of later concatenation.
 ///
 /// - **Materialized path** (`copy_rows`, or `copy_rows_by_filter` when buffered
 ///   data already exists): buffers `ArrayRef` slices and concatenates in
 ///   `finish()`. This matches [`GenericInProgressArray`] and avoids per-call
-///   overhead for large contiguous chunks (e.g., take workloads with many
-///   medium-sized batches).
+///   overhead for large contiguous chunks.
 ///
-/// When switching from streaming → materialized (e.g., after a batch split
-/// triggers `copy_rows`), the streaming data is flushed to `buffered_arrays`
-/// first, preserving chronological order.
+/// The streaming state is only heap-allocated when the streaming path is first
+/// used, so in the materialized-only path this struct has the same size as
+/// `GenericInProgressArray` (~56 bytes).
 ///
 /// [`StringArray`]: arrow_array::StringArray
 /// [`BinaryArray`]: arrow_array::BinaryArray
@@ -55,53 +65,81 @@ use std::sync::Arc;
 /// [`LargeBinaryArray`]: arrow_array::LargeBinaryArray
 /// [`GenericInProgressArray`]: super::generic::GenericInProgressArray
 pub(crate) struct InProgressByteArray<T: ByteArrayType> {
-    /// The current source array, if any
+    /// The current source array, if any.
     source: Option<ArrayRef>,
-    /// Target batch size — used for pre-allocation hints
+    /// Target batch size — used for pre-allocation hints.
     batch_size: usize,
-    /// Null tracking for the streaming path only (copy_rows_by_filter).
-    nulls: NullBufferBuilder,
-    /// Streaming path: accumulated row-end offsets.  Starts with a single `0`
-    /// once capacity is first allocated; length == rows_written + 1.
-    offsets: Vec<T::Offset>,
-    /// Streaming path: accumulated byte values for all written rows
-    values: Vec<u8>,
-    /// All buffered arrays, in insertion order.  Populated by:
-    ///   - copy_rows (slice of source),
-    ///   - flush_streaming (converts streaming data to an array),
-    ///   - copy_rows_by_filter when buffered data already exists (filter result).
+    /// Streaming state; `None` until the sparse-filter path is first used.
+    /// `Option<Box<_>>` is pointer-sized (8 bytes) due to niche optimisation.
+    streaming: Option<Box<ByteStreamingState<T::Offset>>>,
+    /// All buffered arrays, in insertion order. Populated by:
+    ///   - `copy_rows` (slice of source),
+    ///   - `flush_streaming` (converts streaming data to an array),
+    ///   - `copy_rows_by_filter` when buffered data already exists (filter result).
     buffered_arrays: Vec<ArrayRef>,
 }
 
 // ByteArrayType doesn't implement Debug, so implement manually.
 impl<T: ByteArrayType> std::fmt::Debug for InProgressByteArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (streamed_rows, streamed_bytes) = self.streaming.as_ref().map_or((0, 0), |s| {
+            (s.offsets.len().saturating_sub(1), s.values.len())
+        });
         f.debug_struct("InProgressByteArray")
             .field("batch_size", &self.batch_size)
-            .field("streamed_rows", &self.offsets.len().saturating_sub(1))
-            .field("streamed_bytes", &self.values.len())
+            .field("streamed_rows", &streamed_rows)
+            .field("streamed_bytes", &streamed_bytes)
             .field("buffered_arrays", &self.buffered_arrays.len())
             .finish()
     }
 }
 
-impl<T: ByteArrayType> InProgressByteArray<T> {
+impl<T: ByteArrayType> InProgressByteArray<T>
+where
+    T::Offset: OffsetSizeTrait,
+{
     pub(crate) fn new(batch_size: usize) -> Self {
         Self {
             source: None,
             batch_size,
-            nulls: NullBufferBuilder::new(batch_size),
-            offsets: Vec::new(),
-            values: Vec::new(),
+            streaming: None,
             buffered_arrays: Vec::new(),
         }
     }
 
-    fn ensure_capacity_bytes(&mut self, avg_bytes: usize) {
-        if self.offsets.is_empty() {
-            self.offsets.reserve(self.batch_size + 1);
-            self.values.reserve(self.batch_size * avg_bytes);
-            self.offsets.push(T::Offset::usize_as(0));
+    /// Allocate the streaming state with capacity hints derived from `avg_bytes`.
+    fn start_streaming(&mut self, avg_bytes: usize) {
+        debug_assert!(self.streaming.is_none());
+        let mut offsets = Vec::with_capacity(self.batch_size + 1);
+        offsets.push(T::Offset::usize_as(0));
+        self.streaming = Some(Box::new(ByteStreamingState {
+            nulls: NullBufferBuilder::new(self.batch_size),
+            offsets,
+            values: Vec::with_capacity(self.batch_size * avg_bytes),
+        }));
+    }
+
+    /// Materialise any accumulated streaming data into an `ArrayRef` and append
+    /// it to `buffered_arrays`, then reset the streaming state.
+    fn flush_streaming_to_buffered(&mut self) {
+        if let Some(state) = self.streaming.take() {
+            let ByteStreamingState {
+                nulls: mut nb,
+                offsets,
+                values,
+            } = *state;
+            // offsets always has at least the initial [0]; if that's all there
+            // is then nothing was written and we can skip the push.
+            if offsets.len() <= 1 {
+                return;
+            }
+            let nulls = nb.finish();
+            let array = GenericByteArray::<T>::new(
+                OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                Buffer::from_vec(values),
+                nulls,
+            );
+            self.buffered_arrays.push(Arc::new(array));
         }
     }
 
@@ -168,34 +206,11 @@ impl<T: ByteArrayType> InProgressByteArray<T> {
             Self::append_rows(offsets, values, source, start, end - start);
         });
     }
-
-    /// Materialise any accumulated streaming data into an `ArrayRef` and
-    /// append it to `buffered_arrays`, then reset the streaming state.
-    ///
-    /// Called by `copy_rows` to flush streaming data before adding a buffered
-    /// slice, ensuring chronological order is preserved.
-    fn flush_streaming_to_buffered(&mut self) {
-        if self.offsets.is_empty() {
-            return;
-        }
-        let offsets = std::mem::take(&mut self.offsets);
-        let values = std::mem::take(&mut self.values);
-        let nulls = self.nulls.finish();
-        self.nulls = NullBufferBuilder::new(self.batch_size);
-        // offsets always starts with [0] after ensure_capacity_bytes, so it's
-        // non-empty here — no need to seed.
-        let array = GenericByteArray::<T>::new(
-            OffsetBuffer::new(ScalarBuffer::from(offsets)),
-            Buffer::from_vec(values),
-            nulls,
-        );
-        self.buffered_arrays.push(Arc::new(array));
-    }
 }
 
 /// Extract source as `&GenericByteArray<T>`, taking `Option<&ArrayRef>` so
-/// the caller can borrow only `self.source` and keep `self.offsets`/
-/// `self.values` available for mutable borrows simultaneously.
+/// the caller can borrow only `self.source` and keep `self.streaming`/
+/// `self.buffered_arrays` available for mutable borrows simultaneously.
 fn byte_source<T: ByteArrayType>(
     source: Option<&ArrayRef>,
 ) -> Result<&GenericByteArray<T>, ArrowError> {
@@ -231,7 +246,7 @@ where
     /// If streaming data exists (from a prior `copy_rows_by_filter` call), it
     /// is first flushed to `buffered_arrays` to preserve insertion order.
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
-        if !self.offsets.is_empty() {
+        if self.streaming.is_some() {
             self.flush_streaming_to_buffered();
         }
         let source = self.source.as_ref().ok_or_else(|| {
@@ -245,10 +260,9 @@ where
 
     fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
         // If buffered data already exists (e.g., a residual slice from a prior
-        // push_batch split), we must not stream into offsets/values because
-        // the streaming data would represent rows that are chronologically
-        // newer than the buffered data. Instead fall back to applying the
-        // filter kernel and buffering the result.
+        // push_batch split), we must not stream into the streaming state because
+        // it would represent rows chronologically newer than the buffered data.
+        // Fall back to applying the filter kernel directly.
         if !self.buffered_arrays.is_empty() {
             let source = self.source.as_ref().ok_or_else(|| {
                 ArrowError::InvalidArgumentError(
@@ -260,32 +274,44 @@ where
             return Ok(());
         }
 
-        // Fast streaming path: no buffered data exists, so stream directly.
+        // Fast streaming path: no buffered data, stream directly into offsets/values.
         match filter.selection() {
             FilterSelection::Indices(indices) => {
-                if self.offsets.is_empty() {
+                if self.streaming.is_none() {
                     let avg = byte_source::<T>(self.source.as_ref())
                         .map(avg_bytes_per_row)
                         .unwrap_or(32);
-                    self.ensure_capacity_bytes(avg);
+                    self.start_streaming(avg);
                 }
                 let source = byte_source::<T>(self.source.as_ref())?;
-                self.offsets.reserve(filter.count());
-                Self::append_filtered_nulls(&mut self.nulls, source.nulls(), filter);
-                Self::append_rows_by_indices(&mut self.offsets, &mut self.values, source, indices);
+                let state = self.streaming.as_mut().unwrap();
+                state.offsets.reserve(filter.count());
+                Self::append_filtered_nulls(&mut state.nulls, source.nulls(), filter);
+                Self::append_rows_by_indices(
+                    &mut state.offsets,
+                    &mut state.values,
+                    source,
+                    indices,
+                );
                 Ok(())
             }
             FilterSelection::Slices(slices) => {
-                if self.offsets.is_empty() {
+                if self.streaming.is_none() {
                     let avg = byte_source::<T>(self.source.as_ref())
                         .map(avg_bytes_per_row)
                         .unwrap_or(32);
-                    self.ensure_capacity_bytes(avg);
+                    self.start_streaming(avg);
                 }
                 let source = byte_source::<T>(self.source.as_ref())?;
-                self.offsets.reserve(filter.count());
-                Self::append_filtered_nulls(&mut self.nulls, source.nulls(), filter);
-                Self::append_rows_by_slices(&mut self.offsets, &mut self.values, source, slices);
+                let state = self.streaming.as_mut().unwrap();
+                state.offsets.reserve(filter.count());
+                Self::append_filtered_nulls(&mut state.nulls, source.nulls(), filter);
+                Self::append_rows_by_slices(
+                    &mut state.offsets,
+                    &mut state.values,
+                    source,
+                    slices,
+                );
                 Ok(())
             }
             selection => self.copy_rows_by_selection(selection),
@@ -293,31 +319,11 @@ where
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
-        let nulls = self.nulls.finish();
-        self.nulls = NullBufferBuilder::new(self.batch_size);
-
-        // Flush any remaining streaming data (pure streaming case: buffered is
-        // empty and all data is in offsets/values).
-        if !self.offsets.is_empty() {
-            let mut offsets = std::mem::take(&mut self.offsets);
-            let values = std::mem::take(&mut self.values);
-            if offsets.is_empty() {
-                offsets.push(T::Offset::usize_as(0));
-            }
-            let array = GenericByteArray::<T>::new(
-                OffsetBuffer::new(ScalarBuffer::from(offsets)),
-                Buffer::from_vec(values),
-                nulls,
-            );
-            // In pure streaming mode, buffered is empty, so streaming data
-            // goes first (and last). In mixed mode this branch shouldn't be
-            // reached (streaming was flushed to buffered_arrays in copy_rows).
-            self.buffered_arrays.push(Arc::new(array) as ArrayRef);
-        }
+        // Flush any remaining streaming data (pure streaming case).
+        self.flush_streaming_to_buffered();
 
         let result = match self.buffered_arrays.len() {
             0 => {
-                // Nothing was written — return an empty array.
                 let array = GenericByteArray::<T>::new(
                     OffsetBuffer::new(ScalarBuffer::from(vec![T::Offset::usize_as(0)])),
                     Buffer::from_vec(vec![0u8; 0]),
@@ -344,9 +350,11 @@ where
         self.source
             .as_ref()
             .map_or(0, |s| s.get_array_memory_size())
-            + self.offsets.capacity() * std::mem::size_of::<T::Offset>()
-            + self.values.capacity()
-            + self.nulls.allocated_size()
+            + self.streaming.as_ref().map_or(0, |s| {
+                s.offsets.capacity() * std::mem::size_of::<T::Offset>()
+                    + s.values.capacity()
+                    + s.nulls.allocated_size()
+            })
             // Count Vec overhead but not element sizes (slices share buffers
             // with self.source, so we don't double-count).
             + self.buffered_arrays.capacity() * std::mem::size_of::<ArrayRef>()
@@ -499,5 +507,21 @@ mod tests {
         ip.copy_rows(0, 2).unwrap();
         // Source still held; slices share its buffer — no double-counting.
         assert!(ip.size() >= source_size);
+    }
+
+    #[test]
+    fn test_compact_struct_size() {
+        // InProgressByteArray should be no larger than GenericInProgressArray
+        // (~56 bytes). A regression here indicates streaming state leaked into
+        // the base struct, which would hurt cache performance in the
+        // materialized (take / high-selectivity) path.
+        use super::super::generic::GenericInProgressArray;
+        let byte_size = std::mem::size_of::<InProgressByteArray<GenericStringType<i32>>>();
+        let generic_size = std::mem::size_of::<GenericInProgressArray>();
+        assert!(
+            byte_size <= generic_size * 2,
+            "InProgressByteArray ({byte_size}B) is more than 2× GenericInProgressArray \
+             ({generic_size}B); streaming state may have leaked into the base struct"
+        );
     }
 }
