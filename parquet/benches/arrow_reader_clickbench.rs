@@ -56,6 +56,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 fn async_reader(c: &mut Criterion) {
+    if skip_without_hits_1() {
+        return;
+    }
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -73,6 +76,9 @@ fn async_reader(c: &mut Criterion) {
 }
 
 fn async_reader_object_store(c: &mut Criterion) {
+    if skip_without_hits_1() {
+        return;
+    }
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -90,6 +96,9 @@ fn async_reader_object_store(c: &mut Criterion) {
 }
 
 fn sync_reader(c: &mut Criterion) {
+    if skip_without_hits_1() {
+        return;
+    }
     let mut sync_group = c.benchmark_group("arrow_reader_clickbench/sync");
     for query in all_queries() {
         let query_name = query.to_string();
@@ -667,6 +676,18 @@ impl Display for Query {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
     }
+}
+
+/// Skip the ClickBench benchmarks in test mode (`cargo test --benches`) when hits_1.parquet is absent.
+fn skip_without_hits_1() -> bool {
+    let has_flag = |flag: &str| std::env::args().any(|arg| arg == flag);
+    let test_mode = !has_flag("--bench") || has_flag("--test");
+    let current_dir = std::env::current_dir().expect("Failed to get current directory");
+    let skip = test_mode && find_file_if_exists(current_dir, "hits_1.parquet").is_none();
+    if skip {
+        println!("hits_1.parquet not found; skipping ClickBench benchmarks under cargo test");
+    }
+    skip
 }
 
 /// FULL path to the ClickBench hits_1.parquet file
