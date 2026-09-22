@@ -46,17 +46,18 @@ use tonic::{Request, Response, Status, Streaming};
 
 const QUERY: &str = "SELECT * FROM table;";
 
+/// Reserved location URI meaning "redeem this ticket on the connection that returned the
+/// `FlightInfo`". Mirrors `REUSE_CONNECTION_URI` in `src/bin/flight_sql_client.rs`.
+const REUSE_CONNECTION_URI: &str = "arrow-flight-reuse-connection://?";
+
 /// Return a Command instance for running the `flight_sql_client` CLI
 fn flight_sql_client_cmd() -> Command {
     Command::new(assert_cmd::cargo::cargo_bin!("flight_sql_client"))
 }
 
-#[tokio::test]
-async fn test_simple() {
-    let test_server = FlightSqlServiceImpl::default();
-    let fixture = TestFixture::new(test_server.service()).await;
-    let addr = fixture.addr;
-
+/// Run `statement-query` against the server at `addr` and assert it printed the fake result
+/// table shared by [`FlightSqlServiceImpl::fake_result`].
+async fn run_query_and_assert_table(addr: std::net::SocketAddr) {
     let stdout = tokio::task::spawn_blocking(move || {
         flight_sql_client_cmd()
             .env_clear()
@@ -77,8 +78,6 @@ async fn test_simple() {
     .await
     .unwrap();
 
-    fixture.shutdown_and_wait().await;
-
     assert_eq!(
         std::str::from_utf8(&stdout).unwrap().trim(),
         "+--------------+-----------+---------------------------+-----------------------------+\
@@ -89,6 +88,50 @@ async fn test_simple() {
         \n| FlightSQL!   | 1337      | 2024-10-30T11:36:57       | 2024-10-30T12:36:57+01:00   |\
         \n+--------------+-----------+---------------------------+-----------------------------+",
     );
+}
+
+#[tokio::test]
+async fn test_simple() {
+    let test_server = FlightSqlServiceImpl::default();
+    let fixture = TestFixture::new(test_server.service()).await;
+
+    run_query_and_assert_table(fixture.addr).await;
+
+    fixture.shutdown_and_wait().await;
+}
+
+/// The server that answers `GetFlightInfo` points `DoGet` at a second server via
+/// [`FlightEndpoint::location`], and refuses `DoGet` itself.
+#[tokio::test]
+async fn test_do_get_endpoint_location() {
+    let data_fixture = TestFixture::new(FlightSqlServiceImpl::default().service()).await;
+    let metadata_server = FlightSqlServiceImpl {
+        do_get_location: Some(format!("http://{}", data_fixture.addr)),
+        ..Default::default()
+    };
+    let metadata_fixture = TestFixture::new(metadata_server.service()).await;
+
+    run_query_and_assert_table(metadata_fixture.addr).await;
+
+    metadata_fixture.shutdown_and_wait().await;
+    data_fixture.shutdown_and_wait().await;
+}
+
+/// The server advertises the reserved "reuse connection" location ([`REUSE_CONNECTION_URI`])
+/// or an empty one, and serves `DoGet` itself.
+#[tokio::test]
+async fn test_do_get_reuse_connection_location() {
+    for location in [REUSE_CONNECTION_URI, ""] {
+        let test_server = FlightSqlServiceImpl {
+            do_get_location: Some(location.to_owned()),
+            ..Default::default()
+        };
+        let fixture = TestFixture::new(test_server.service()).await;
+
+        run_query_and_assert_table(fixture.addr).await;
+
+        fixture.shutdown_and_wait().await;
+    }
 }
 
 #[tokio::test]
@@ -333,6 +376,7 @@ async fn test_do_put_prepared_statement(test_server: FlightSqlServiceImpl) {
 pub async fn test_do_put_prepared_statement_stateless() {
     test_do_put_prepared_statement(FlightSqlServiceImpl {
         stateless_prepared_statements: true,
+        ..Default::default()
     })
     .await
 }
@@ -341,6 +385,7 @@ pub async fn test_do_put_prepared_statement_stateless() {
 pub async fn test_do_put_prepared_statement_stateful() {
     test_do_put_prepared_statement(FlightSqlServiceImpl {
         stateless_prepared_statements: false,
+        ..Default::default()
     })
     .await
 }
@@ -351,12 +396,17 @@ pub struct FlightSqlServiceImpl {
     /// prepared statements. stateful servers will not return an updated
     /// handle after executing `DoPut(CommandPreparedStatementQuery)`
     stateless_prepared_statements: bool,
+
+    /// If set, the returned endpoints advertise this location and this server
+    /// refuses `DoGet` itself, emulating a server that serves data elsewhere.
+    do_get_location: Option<String>,
 }
 
 impl Default for FlightSqlServiceImpl {
     fn default() -> Self {
         Self {
             stateless_prepared_statements: true,
+            do_get_location: None,
         }
     }
 }
@@ -422,30 +472,28 @@ impl FlightSqlServiceImpl {
         })
     }
 
+    fn fake_endpoint(&self, handle: &str) -> FlightEndpoint {
+        let endpoint = FlightEndpoint::new().with_ticket(Ticket::new(
+            FetchResults {
+                handle: handle.to_owned(),
+            }
+            .as_any()
+            .encode_to_vec(),
+        ));
+        match &self.do_get_location {
+            Some(location) => endpoint.with_location(location),
+            None => endpoint,
+        }
+    }
+
     fn fake_flight_info(&self) -> Result<FlightInfo, ArrowError> {
         let batch = Self::fake_result()?;
 
         Ok(FlightInfo::new()
             .try_with_schema(batch.schema_ref())
             .expect("encoding schema")
-            .with_endpoint(
-                FlightEndpoint::new().with_ticket(Ticket::new(
-                    FetchResults {
-                        handle: String::from("part_1"),
-                    }
-                    .as_any()
-                    .encode_to_vec(),
-                )),
-            )
-            .with_endpoint(
-                FlightEndpoint::new().with_ticket(Ticket::new(
-                    FetchResults {
-                        handle: String::from("part_2"),
-                    }
-                    .as_any()
-                    .encode_to_vec(),
-                )),
-            )
+            .with_endpoint(self.fake_endpoint("part_1"))
+            .with_endpoint(self.fake_endpoint("part_2"))
             .with_total_records(batch.num_rows() as i64)
             .with_total_bytes(batch.get_array_memory_size() as i64)
             .with_ordered(false))
@@ -475,6 +523,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _request: Request<Ticket>,
         message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        if matches!(&self.do_get_location, Some(loc) if !loc.is_empty() && loc != REUSE_CONNECTION_URI)
+        {
+            return Err(Status::unimplemented("DoGet is served by another server"));
+        }
         let part = message.unpack::<FetchResults>().unwrap().unwrap().handle;
         let batch = Self::fake_result().unwrap();
         let batch = match part.as_str() {
