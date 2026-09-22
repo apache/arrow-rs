@@ -442,8 +442,7 @@ fn record_batch_from_pyarrow_bound_impl(
     // method, so prefer it over _export_to_c.
     // See https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
     if let Some((schema_capsule, array_capsule)) = call_arrow_c_array_method_if_exists(value)? {
-        let schema_ptr =
-            extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
+        let schema_ptr = extract_capsule(&schema_capsule, c"arrow_schema", "__arrow_c_array__")?;
         let array_ptr = extract_capsule(&array_capsule, c"arrow_array", "__arrow_c_array__")?;
         let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
         let array_data =
@@ -458,8 +457,7 @@ fn record_batch_from_pyarrow_bound_impl(
         let array = StructArray::from(array_data);
         // StructArray does not embed metadata from schema. We need to override
         // the output schema with the schema from the capsule.
-        let schema =
-            unsafe { Arc::new(Schema::try_from(schema_ptr.as_ref()).map_err(to_py_err)?) };
+        let schema = unsafe { Arc::new(Schema::try_from(schema_ptr.as_ref()).map_err(to_py_err)?) };
         let (_fields, columns, nulls) = array.into_parts();
         if nulls.map(|n| n.null_count()).unwrap_or_default() != 0 {
             return Err(PyValueError::new_err(
