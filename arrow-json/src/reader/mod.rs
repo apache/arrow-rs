@@ -3995,8 +3995,16 @@ mod tests {
         "#;
 
         let ree_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
         let batches = do_read(buf, 1024, false, false, schema);
@@ -4026,8 +4034,16 @@ mod tests {
         "#;
 
         let ree_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
         let batches = do_read(buf, 1024, false, false, schema);
@@ -4052,8 +4068,16 @@ mod tests {
         for field_nullable in [false, true] {
             for values_nullable in [false, true] {
                 let ree_type = DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                    Arc::new(Field::new("values", DataType::Utf8, values_nullable)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        DataType::Utf8,
+                        values_nullable,
+                    )),
                 );
                 let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, field_nullable)]));
 
@@ -4095,8 +4119,16 @@ mod tests {
         "#;
 
         let ree_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
         let batches = do_read(buf, 1024, false, false, schema);
@@ -4119,8 +4151,16 @@ mod tests {
         "#;
 
         let ree_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int16, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int16,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
         let batches = do_read(buf, 1024, false, false, schema);
@@ -4144,12 +4184,28 @@ mod tests {
         // The outer REE compresses whole rows, while the inner REE compresses the
         // repeated string values produced by decoding those rows.
         let inner_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int64, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int64,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         let outer_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int64, false)),
-            Arc::new(Field::new("values", inner_type, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int64,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                inner_type,
+                true,
+            )),
         );
         let schema = Arc::new(Schema::new(vec![Field::new("a", outer_type, true)]));
         let batches = do_read(buf, 1024, false, false, schema);

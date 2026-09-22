@@ -157,8 +157,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
         DataType::List(_)
         | DataType::LargeList(_)
         | DataType::ListView(_)
-        | DataType::LargeListView(_)
-        | DataType::FixedSizeList(..) => {
+        | DataType::LargeListView(_) => {
             let typed_value_builder = VariantToShreddedArrayVariantRowBuilder::try_new(
                 data_type,
                 cast_options,
@@ -330,7 +329,6 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
                 self.nulls.append_non_null();
                 self.value_builder.append_null();
 
-                // NOTE: A `FixedSizeList` with incorrect size will hard fail during shredding.
                 self.typed_value_builder
                     .append_value(&Variant::List(list))?;
                 Ok(true)
@@ -540,8 +538,9 @@ impl IntoShreddingField for (DataType, bool) {
 /// should be shredded and with what types. Fields are nullable by default; pass
 /// a `(data_type, nullable)` pair or a `FieldRef` to control nullability.
 ///
-/// Note: this builder currently only supports struct fields. List support
-/// will be added in the future.
+/// `[*]` represents the shared element schema of a list, so `items[*].id` and
+/// `items[*].name` describe fields on the same list element struct. Numeric
+/// indexes refer to concrete list elements and are rejected by this builder.
 ///
 /// # Example
 ///
@@ -568,6 +567,8 @@ impl IntoShreddingField for (DataType, bool) {
 ///         VariantPath::from_iter([VariantPathElement::from("metrics.cpu")]),
 ///         &DataType::Float64,
 ///     )?
+///     // [*] describes the shared schema for every element of a list
+///     .with_path("items[*].id", &DataType::Int64)?
 ///     .build();
 ///    Ok(())
 /// }
@@ -596,6 +597,8 @@ impl ShreddedSchemaBuilder {
     /// * `path` - Anything convertible to [`VariantPath`] (e.g., a `&str`)
     /// * `field` - Anything convertible via [`IntoShreddingField`] (e.g. `FieldRef`,
     ///   `&DataType`, or `(&DataType, bool)` to control nullability)
+    ///
+    /// List schema paths must use `[*]`; numeric indexes return an error.
     pub fn with_path<'a, P, F>(mut self, path: P, field: F) -> Result<Self>
     where
         P: TryInto<VariantPath<'a>>,
@@ -605,7 +608,7 @@ impl ShreddedSchemaBuilder {
         let path: VariantPath<'a> = path
             .try_into()
             .map_err(|e| ArrowError::InvalidArgumentError(format!("{e:?}")))?;
-        self.root.insert_path(&path, field.into_shredding_field());
+        self.root.insert_path(&path, field.into_shredding_field())?;
         Ok(self)
     }
 
@@ -626,6 +629,8 @@ enum VariantSchemaNode {
     Leaf(ShreddingField),
     /// An inner struct node with nested fields
     Struct(BTreeMap<String, VariantSchemaNode>),
+    /// An inner list node with a shared element schema
+    List(Box<VariantSchemaNode>),
 }
 
 impl Default for VariantSchemaNode {
@@ -636,14 +641,18 @@ impl Default for VariantSchemaNode {
 
 impl VariantSchemaNode {
     /// Insert a path into this node with the given data type.
-    fn insert_path(&mut self, path: &VariantPath<'_>, field: ShreddingField) {
-        self.insert_path_elements(path, field);
+    fn insert_path(&mut self, path: &VariantPath<'_>, field: ShreddingField) -> Result<()> {
+        self.insert_path_elements(path, field)
     }
 
-    fn insert_path_elements(&mut self, segments: &[VariantPathElement<'_>], field: ShreddingField) {
+    fn insert_path_elements(
+        &mut self,
+        segments: &[VariantPathElement<'_>],
+        field: ShreddingField,
+    ) -> Result<()> {
         let Some((head, tail)) = segments.split_first() else {
             *self = Self::Leaf(field);
-            return;
+            return Ok(());
         };
 
         match head {
@@ -651,11 +660,11 @@ impl VariantSchemaNode {
                 // Ensure this node is a Struct node
                 let children = match self {
                     Self::Struct(children) => children,
-                    Self::Leaf(_) => {
+                    Self::Leaf(_) | Self::List(_) => {
                         *self = Self::Struct(BTreeMap::new());
                         match self {
                             Self::Struct(children) => children,
-                            Self::Leaf(_) => unreachable!(),
+                            Self::Leaf(_) | Self::List(_) => unreachable!(),
                         }
                     }
                 };
@@ -663,12 +672,25 @@ impl VariantSchemaNode {
                 children
                     .entry(name.to_string())
                     .or_default()
-                    .insert_path_elements(tail, field);
+                    .insert_path_elements(tail, field)
             }
-            VariantPathElement::Index { .. } => {
-                // List support to be added later; reject for now
-                unreachable!("List paths are not supported yet");
+            VariantPathElement::ListElement => {
+                let element = match self {
+                    Self::List(element) => element,
+                    _ => {
+                        *self = Self::List(Box::default());
+                        match self {
+                            Self::List(element) => element,
+                            _ => unreachable!(),
+                        }
+                    }
+                };
+
+                element.insert_path_elements(tail, field)
             }
+            VariantPathElement::Index { index } => Err(ArrowError::InvalidArgumentError(format!(
+                "List indexes are not supported in schema paths; use [*], got [{index}]"
+            ))),
         }
     }
 
@@ -689,6 +711,7 @@ impl VariantSchemaNode {
                     Some(DataType::Struct(Fields::from(child_fields)))
                 }
             }
+            Self::List(element) => element.to_shredding_field("item").map(DataType::List),
         }
     }
 
@@ -699,7 +722,7 @@ impl VariantSchemaNode {
                 field.data_type.clone(),
                 field.nullable,
             ))),
-            Self::Struct(_) => self
+            Self::Struct(_) | Self::List(_) => self
                 .to_shredding_type()
                 .map(|data_type| Arc::new(Field::new(name, data_type, true))),
         }
@@ -713,9 +736,9 @@ mod tests {
     use crate::variant_array::{all_null_value_column, binary_array_value, variant_from_arrays_at};
     use arrow::array::{
         Array, BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array,
-        FixedSizeBinaryArray, FixedSizeListArray, Float64Array, GenericListArray,
-        GenericListViewArray, Int64Array, LargeBinaryArray, LargeStringArray, ListArray,
-        ListLikeArray, OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
+        FixedSizeBinaryArray, Float64Array, GenericListArray, GenericListViewArray, Int64Array,
+        LargeBinaryArray, LargeStringArray, ListArray, ListLikeArray, OffsetSizeTrait,
+        PrimitiveArray, StringArray, StructArray,
     };
     use arrow::datatypes::{
         ArrowPrimitiveType, DataType, Field, Fields, Int64Type, TimeUnit, UnionFields, UnionMode,
@@ -1485,6 +1508,7 @@ mod tests {
             DataType::Time32(TimeUnit::Second),
             DataType::Time64(TimeUnit::Nanosecond),
             DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2),
             DataType::FixedSizeBinary(17),
             DataType::Union(
                 UnionFields::from_fields(vec![
@@ -1506,8 +1530,16 @@ mod tests {
             ),
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             ),
         ];
 
@@ -1662,85 +1694,6 @@ mod tests {
     }
 
     #[test]
-    fn test_array_shredding_as_fixed_size_list() {
-        let input = build_variant_array(vec![
-            VariantRow::List(vec![VariantValue::from(1i64), VariantValue::from(2i64)]),
-            VariantRow::Value(VariantValue::from("This should not be shredded")),
-            VariantRow::List(vec![VariantValue::from(3i64), VariantValue::from(4i64)]),
-        ]);
-
-        let list_schema =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
-        let result = shred_variant(&input, &list_schema).unwrap();
-        assert_eq!(result.len(), 3);
-
-        // The first row should be shredded, so the `value` field should be null and the
-        // `typed_value` field should contain the list
-        assert!(result.is_valid(0));
-        assert!(result.value_column().is_null(0));
-        assert!(result.typed_value_column().unwrap().is_valid(0));
-
-        // The second row should not be shredded because the provided schema for shredding did not
-        // match. Hence, the `value` field should contain the raw value and the `typed_value` field
-        // should be null.
-        assert!(result.is_valid(1));
-        assert!(result.value_column().is_valid(1));
-        assert!(result.typed_value_column().unwrap().is_null(1));
-
-        // The third row should be shredded, so the `value` field should be null and the
-        // `typed_value` field should contain the list
-        assert!(result.is_valid(2));
-        assert!(result.value_column().is_null(2));
-        assert!(result.typed_value_column().unwrap().is_valid(2));
-
-        let typed_value = result.typed_value_column().unwrap();
-        let fixed_size_list = typed_value
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .expect("Expected FixedSizeListArray");
-
-        // Verify that typed value is `FixedSizeList`.
-        assert_eq!(fixed_size_list.len(), 3);
-        assert_eq!(fixed_size_list.value_length(), 2);
-
-        // Verify that the first entry in the `FixedSizeList` contains the expected value.
-        let val0 = fixed_size_list.value(0);
-        let val0_struct = val0.as_any().downcast_ref::<StructArray>().unwrap();
-        let val0_typed = val0_struct.column_by_name("typed_value").unwrap();
-        let val0_ints = val0_typed.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(val0_ints.values(), &[1i64, 2i64]);
-
-        // Verify that second entry in the `FixedSizeList` cannot be shredded hence the value is
-        // invalid.
-        assert!(fixed_size_list.is_null(1));
-
-        // Verify that the third entry in the `FixedSizeList` contains the expected value.
-        let val2 = fixed_size_list.value(2);
-        let val2_struct = val2.as_any().downcast_ref::<StructArray>().unwrap();
-        let val2_typed = val2_struct.column_by_name("typed_value").unwrap();
-        let val2_ints = val2_typed.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(val2_ints.values(), &[3i64, 4i64]);
-    }
-
-    #[test]
-    fn test_array_shredding_as_fixed_size_list_wrong_size() {
-        let input = build_variant_array(vec![VariantRow::List(vec![
-            VariantValue::from(1i64),
-            VariantValue::from(2i64),
-            VariantValue::from(3i64),
-        ])]);
-        let list_schema =
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
-
-        let err = shred_variant(&input, &list_schema).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Expected fixed size list of size 2, got size 3"),
-            "got: {err}",
-        );
-    }
-
-    #[test]
     fn test_array_shredding_with_array_elements() {
         let input = build_variant_array(vec![
             // Row 0: [[1, 2], [3, 4], []] - clean nested lists
@@ -1857,15 +1810,12 @@ mod tests {
         ]);
 
         // Target schema is List<Struct<id:int64,name:utf8>>
-        let object_fields = Fields::from(vec![
-            Field::new("id", DataType::Int64, true),
-            Field::new("name", DataType::Utf8, true),
-        ]);
-        let list_schema = DataType::List(Arc::new(Field::new(
-            "item",
-            DataType::Struct(object_fields),
-            true,
-        )));
+        let list_schema = ShreddedSchemaBuilder::default()
+            .with_path("[*].id", &DataType::Int64)
+            .unwrap()
+            .with_path("[*].name", &DataType::Utf8)
+            .unwrap()
+            .build();
         let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 3);
 
@@ -2905,6 +2855,67 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_variant_schema_builder_list() -> Result<()> {
+        let shredding_type = ShreddedSchemaBuilder::default()
+            .with_path("items[*].id", &DataType::Int64)?
+            .with_path("items[*].name", &DataType::Utf8)?
+            .build();
+
+        assert_eq!(
+            shredding_type,
+            DataType::Struct(Fields::from(vec![Field::new(
+                "items",
+                DataType::new_list(
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("id", DataType::Int64, true),
+                        Field::new("name", DataType::Utf8, true),
+                    ])),
+                    true,
+                ),
+                true,
+            )]))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_schema_builder_nested_lists() -> Result<()> {
+        let shredding_type = ShreddedSchemaBuilder::default()
+            .with_path("matrix[*][*]", (&DataType::Float64, false))?
+            .build();
+
+        assert_eq!(
+            shredding_type,
+            DataType::Struct(Fields::from(vec![Field::new(
+                "matrix",
+                DataType::new_list(DataType::new_list(DataType::Float64, false), true),
+                true,
+            )]))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_variant_schema_builder_rejects_list_indexes() {
+        for (path, index) in [("items[0].id", 0), ("items[42].name", 42)] {
+            let error = ShreddedSchemaBuilder::default()
+                .with_path(path, &DataType::Int64)
+                .err()
+                .unwrap();
+
+            let ArrowError::InvalidArgumentError(message) = error else {
+                panic!("expected InvalidArgumentError, got {error:?}");
+            };
+            assert_eq!(
+                message,
+                format!("List indexes are not supported in schema paths; use [*], got [{index}]")
+            );
+        }
     }
 
     #[test]

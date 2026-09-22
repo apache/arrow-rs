@@ -21,9 +21,8 @@ use crate::variant_array::{binary_array_value, validate_binary_array};
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     Array, ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray,
-    FixedSizeBinaryArray, FixedSizeListArray, GenericListArray, GenericListViewArray,
-    LargeBinaryArray, LargeStringArray, ListLikeArray, PrimitiveArray, StringArray,
-    StringViewArray, StructArray,
+    FixedSizeBinaryArray, GenericListArray, GenericListViewArray, LargeBinaryArray,
+    LargeStringArray, ListLikeArray, PrimitiveArray, StringArray, StringViewArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
@@ -185,7 +184,6 @@ enum UnshredVariantRowBuilder<'a> {
     LargeList(ListUnshredVariantBuilder<'a, GenericListArray<i64>>),
     ListView(ListUnshredVariantBuilder<'a, GenericListViewArray<i32>>),
     LargeListView(ListUnshredVariantBuilder<'a, GenericListViewArray<i64>>),
-    FixedSizeList(ListUnshredVariantBuilder<'a, FixedSizeListArray>),
     Struct(StructUnshredVariantBuilder<'a>),
     ValueOnly(ValueOnlyUnshredVariantBuilder<'a>),
     Null(NullUnshredVariantBuilder),
@@ -230,7 +228,6 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             Self::LargeList(b) => b.append_row(builder, metadata, index),
             Self::ListView(b) => b.append_row(builder, metadata, index),
             Self::LargeListView(b) => b.append_row(builder, metadata, index),
-            Self::FixedSizeList(b) => b.append_row(builder, metadata, index),
             Self::Struct(b) => b.append_row(builder, metadata, index),
             Self::ValueOnly(b) => b.append_row(builder, metadata, index),
             Self::Null(b) => b.append_row(builder, metadata, index),
@@ -342,9 +339,6 @@ impl<'a> UnshredVariantRowBuilder<'a> {
                 value,
                 typed_value.as_list_view(),
             )?),
-            DataType::FixedSizeList(_, _) => Self::FixedSizeList(
-                ListUnshredVariantBuilder::try_new(value, typed_value.as_fixed_size_list())?,
-            ),
             _ => {
                 return Err(ArrowError::NotYetImplemented(format!(
                     "Unshredding not yet supported for type: {}",

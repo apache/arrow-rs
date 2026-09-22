@@ -15,9 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Reader data-type handling when reading back ArrowWriter output.
+//! Round-trip tests for Arrow data written to Parquet.
 
-use super::*;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use arrow_array::cast::AsArray;
+use arrow_array::types::{
+    Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
+    DecimalType, Float16Type, Time32MillisecondType, Time64MicrosecondType,
+};
+use arrow_array::{
+    Array, ArrayRef, Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray,
+    Float16Array, Int32Array, ListArray, PrimitiveArray, RecordBatch, RecordBatchReader,
+    StringArray, StructArray, Time32MillisecondArray, Time64MicrosecondArray, UInt8Array,
+    UInt8DictionaryArray, UInt32Array, UInt64Array,
+};
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, i256};
+use arrow_data::ArrayDataBuilder;
+use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema, TimeUnit};
+use bytes::Bytes;
+use half::f16;
+use num_traits::PrimInt;
+use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+use parquet::basic::Type as PhysicalType;
+use parquet::errors::Result;
+use parquet::file::properties::WriterProperties;
 
 #[test]
 fn test_unsigned_roundtrip() {

@@ -269,8 +269,16 @@ mod tests {
     use std::sync::Arc;
 
     fn create_run_array_data(run_ends: Vec<i32>, values: ArrayData) -> ArrayData {
-        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
-        let values_field = Arc::new(Field::new("values", values.data_type().clone(), true));
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            values.data_type().clone(),
+            true,
+        ));
         let data_type = DataType::RunEndEncoded(run_ends_field, values_field);
 
         let last_run_end = if run_ends.is_empty() {
@@ -295,8 +303,16 @@ mod tests {
     }
 
     fn create_run_array_data_int16(run_ends: Vec<i16>, values: ArrayData) -> ArrayData {
-        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int16, false));
-        let values_field = Arc::new(Field::new("values", values.data_type().clone(), true));
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int16,
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            values.data_type().clone(),
+            true,
+        ));
         let data_type = DataType::RunEndEncoded(run_ends_field, values_field);
 
         let last_run_end = if run_ends.is_empty() {
@@ -321,8 +337,16 @@ mod tests {
     }
 
     fn create_run_array_data_int64(run_ends: Vec<i64>, values: ArrayData) -> ArrayData {
-        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int64, false));
-        let values_field = Arc::new(Field::new("values", values.data_type().clone(), true));
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            values.data_type().clone(),
+            true,
+        ));
         let data_type = DataType::RunEndEncoded(run_ends_field, values_field);
 
         let last_run_end = if run_ends.is_empty() {
