@@ -56,7 +56,6 @@ pub mod reader;
 pub mod writer;
 
 mod compression;
-pub use compression::read_uncompressed_size;
 
 #[cfg(test)]
 mod tests;
