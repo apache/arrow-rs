@@ -118,7 +118,7 @@ The proposed release tarball and signatures are hosted at [2].
 
 The changelog is located at [3].
 
-The release tracking issue is: [4]
+The release tracking issue is: [5]
 
 Please download, verify checksums and signatures, run the unit tests,
 and vote on the release. There is a script [4] that automates some of

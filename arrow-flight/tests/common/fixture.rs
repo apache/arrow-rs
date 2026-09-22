@@ -41,6 +41,7 @@ pub struct TestFixture {
 
 impl TestFixture {
     /// create a new test fixture from the server
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub async fn new<T: FlightService>(test_server: FlightServiceServer<T>) -> Self {
         // let OS choose a free port
@@ -78,6 +79,7 @@ impl TestFixture {
     }
 
     /// Return a [`Channel`] connected to the TestServer
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub async fn channel(&self) -> Channel {
         let url = format!("http://{}", self.addr);
@@ -90,6 +92,7 @@ impl TestFixture {
     }
 
     /// Stops the test server and waits for the server to shutdown
+    #[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
     #[allow(dead_code)]
     pub async fn shutdown_and_wait(mut self) {
         if let Some(shutdown) = self.shutdown.take() {

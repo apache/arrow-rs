@@ -19,7 +19,7 @@ use arrow_array::types::Int32Type;
 use arrow_array::{DictionaryArray, Int32Array};
 use arrow_buffer::NullBuffer;
 use criterion::*;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use std::{hint, sync::Arc};
 
 fn gen_dict(

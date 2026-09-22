@@ -24,10 +24,13 @@
 
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{ArrowError, SchemaRef};
-use comfy_table::{Cell, Table};
+use comfy_table::{Cell, LineStyle, Table, TableStyle, presets::ASCII_FULL_CONDENSED};
 use std::fmt::Display;
 
 use crate::display::{ArrayFormatter, FormatOptions, make_array_formatter};
+
+const TABLE_STYLE: TableStyle =
+    ASCII_FULL_CONDENSED.header_separator(LineStyle::new('+', '-', '+', '+'));
 
 /// Create a visual representation of [`RecordBatch`]es
 ///
@@ -175,7 +178,7 @@ fn create_table(
     options: &FormatOptions,
 ) -> Result<Table, ArrowError> {
     let mut table = Table::new();
-    table.load_preset("||--+-++|    ++++++");
+    table.load_style(TABLE_STYLE);
 
     let schema_opt = schema_opt.or_else(|| {
         if results.is_empty() {
@@ -206,7 +209,7 @@ fn create_table(
     }
 
     for batch in results {
-        let schema = schema_opt.as_ref().unwrap_or(batch.schema_ref());
+        let schema = schema_opt.as_ref().unwrap_or_else(|| batch.schema_ref());
 
         // Could be a custom schema that was provided.
         if batch.columns().len() != schema.fields().len() {
@@ -242,7 +245,7 @@ fn create_column(
     options: &FormatOptions,
 ) -> Result<Table, ArrowError> {
     let mut table = Table::new();
-    table.load_preset("||--+-++|    ++++++");
+    table.load_style(TABLE_STYLE);
 
     if columns.is_empty() {
         return Ok(table);
@@ -1028,6 +1031,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_float16_display() {
         let values = vec![
             Some(f16::from_f32(f32::NAN)),
@@ -1290,7 +1294,7 @@ mod tests {
         options: FormatOptions<'a>,
     }
 
-    impl<'a> DisplayIndex for MyMoneyFormatter<'a> {
+    impl DisplayIndex for MyMoneyFormatter<'_> {
         fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
             match self.array.is_valid(idx) {
                 true => write!(f, "{} €", self.array.value(idx))?,
@@ -1307,7 +1311,7 @@ mod tests {
         options: FormatOptions<'a>,
     }
 
-    impl<'a> DisplayIndex for MyInt32Formatter<'a> {
+    impl DisplayIndex for MyInt32Formatter<'_> {
         fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
             match self.array.is_valid(idx) {
                 true => write!(f, "{} (32-Bit)", self.array.value(idx))?,
@@ -1486,7 +1490,7 @@ mod tests {
             Int32Builder::new(),
         )
         .with_values_field(
-            Field::new("values", DataType::Int32, true).with_metadata(money_metadata.clone()),
+            Field::new("my_values", DataType::Int32, true).with_metadata(money_metadata.clone()),
         );
         array
             .keys()

@@ -20,7 +20,7 @@ use std::hint;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use parquet::bloom_filter::Sbbf;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 /// Build a bloom filter sized for `initial_ndv` at `fpp`, insert `num_values` distinct values,
 /// and return it ready for folding.

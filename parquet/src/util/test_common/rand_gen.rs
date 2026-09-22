@@ -19,7 +19,7 @@ use crate::basic::Encoding;
 use crate::column::page::Page;
 use bytes::Bytes;
 use rand::{
-    Rng,
+    RngExt,
     distr::{Distribution, StandardUniform, uniform::SampleUniform},
     rng,
 };
@@ -135,7 +135,7 @@ where
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn make_pages<T: DataType>(
     desc: ColumnDescPtr,
     encoding: Encoding,

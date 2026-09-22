@@ -163,7 +163,7 @@ where
     #[inline]
     pub fn append_null(&mut self) {
         self.offsets_builder.push(self.current_offset);
-        self.sizes_builder.push(OffsetSize::from_usize(0).unwrap());
+        self.sizes_builder.push(OffsetSize::zero());
         self.null_buffer_builder.append_null();
     }
 
@@ -183,6 +183,11 @@ where
     }
 
     /// Builds the [`GenericListViewArray`] and reset this builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the field set with [`Self::with_field`] does not match the data type
+    /// of the values builder
     pub fn finish(&mut self) -> GenericListViewArray<OffsetSize> {
         let values = self.values_builder.finish();
         let nulls = self.null_buffer_builder.finish();
@@ -201,6 +206,11 @@ where
     }
 
     /// Builds the [`GenericListViewArray`] without resetting the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the field set with [`Self::with_field`] does not match the data type
+    /// of the values builder
     pub fn finish_cloned(&self) -> GenericListViewArray<OffsetSize> {
         let values = self.values_builder.finish_cloned();
         let nulls = self.null_buffer_builder.finish_cloned();

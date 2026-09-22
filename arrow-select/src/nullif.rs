@@ -121,7 +121,7 @@ mod tests {
     use arrow_data::ArrayData;
     use arrow_schema::{Field, Fields};
     use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     #[test]
     fn test_nullif_int_array() {
@@ -524,6 +524,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn nullif_fuzz() {
         let mut rng = StdRng::seed_from_u64(7337);
 

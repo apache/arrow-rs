@@ -20,15 +20,20 @@
 //! See the module level documentation for the
 //! [`reader`] and [`writer`] for usage examples.
 //!
-//! # Binary Data uses `Base16` Encoding
+//! # Binary Data Encoding
 //!
 //! As per [RFC7159] JSON cannot encode arbitrary binary data. This crate works around that
 //! limitation by encoding/decoding binary data as a [hexadecimal] string (i.e.
 //! [`Base16` encoding]).
 //!
 //! Note that `Base16` only has 50% space efficiency (i.e., the encoded data is twice as large
-//! as the original). If that is an issue, we recommend to convert binary data to/from a different
-//! encoding format such as `Base64` instead. See the following example for details.
+//! as the original). If that is an issue, there are two alternatives:
+//!
+//! 1. Provide a custom encoder. See the [Customizing the encoder] section of the writer documentation.
+//! 2. Convert binary data to/from a different encoding format such as `Base64` before
+//!    writing / after reading, as shown in the following example.
+//!
+//! [Customizing the encoder]: writer#customizing-the-encoder
 //!
 //! ## `Base64` Encoding Example
 //!
@@ -74,6 +79,13 @@
 //! [hexadecimal]: https://en.wikipedia.org/wiki/Hexadecimal
 //! [`Base16` encoding]: https://en.wikipedia.org/wiki/Base16#Base16
 //! [`Base64`]: https://en.wikipedia.org/wiki/Base64
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -86,7 +98,9 @@
 pub mod reader;
 pub mod writer;
 
-pub use self::reader::{Reader, ReaderBuilder};
+pub use self::reader::{
+    ArrayDecoder, DecoderContext, DecoderFactory, Reader, ReaderBuilder, Tape, TapeElement,
+};
 pub use self::writer::{
     ArrayWriter, Encoder, EncoderFactory, EncoderOptions, LineDelimitedWriter, Writer,
     WriterBuilder,
@@ -101,7 +115,7 @@ use serde_json::{Number, Value};
 /// Writer will produce. For example, if the RecordBatch Schema is
 /// `[("a", Int32), ("r", Struct("b": Boolean, "c" Utf8))]`
 /// then a Reader with [`StructMode::ObjectOnly`] would read rows of the form
-/// `{"a": 1, "r": {"b": true, "c": "cat"}}` while with ['StructMode::ListOnly']
+/// `{"a": 1, "r": {"b": true, "c": "cat"}}` while with [`StructMode::ListOnly`]
 /// would read rows of the form `[1, [true, "cat"]]`. A Writer would produce
 /// rows formatted similarly.
 ///
@@ -276,13 +290,13 @@ mod tests {
     }
 
     #[test]
-    #[allow(invalid_from_utf8)]
+    #[expect(invalid_from_utf8)]
     fn test_json_roundtrip_binary() {
         let not_utf8: &[u8] = b"Not UTF8 \xa0\xa1!";
         assert!(str::from_utf8(not_utf8).is_err());
 
         let values: &[Option<&[u8]>] = &[
-            Some(b"Ned Flanders" as &[u8]),
+            Some(b"Bob Thompson" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
             Some(not_utf8),

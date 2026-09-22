@@ -93,26 +93,48 @@ impl PushBuffers {
     }
 
     /// Push all the ranges and buffers
-    pub fn push_ranges(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
-        assert_eq!(
-            ranges.len(),
-            buffers.len(),
-            "Number of ranges must match number of buffers"
-        );
-        for (range, buffer) in ranges.into_iter().zip(buffers) {
-            self.push_range(range, buffer);
+    ///
+    /// # Errors
+    /// Returns an error if the number of ranges does not match the number of
+    /// buffers, or if any buffer's length does not match its range (see
+    /// [`Self::push_range`]).
+    pub fn push_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+        buffers: Vec<Bytes>,
+    ) -> Result<(), ParquetError> {
+        if ranges.len() != buffers.len() {
+            return Err(general_err!(
+                "Number of ranges ({}) must match number of buffers ({})",
+                ranges.len(),
+                buffers.len()
+            ));
         }
+        for (range, buffer) in ranges.into_iter().zip(buffers) {
+            self.push_range(range, buffer)?;
+        }
+        Ok(())
     }
 
     /// Push a new range and its associated buffer
-    pub fn push_range(&mut self, range: Range<u64>, buffer: Bytes) {
-        assert_eq!(
-            (range.end - range.start) as usize,
-            buffer.len(),
-            "Range length must match buffer length"
-        );
+    ///
+    /// # Errors
+    /// Returns an error if the buffer's length does not match the range's
+    /// length, e.g. when a truncated (short) read is pushed.
+    pub fn push_range(&mut self, range: Range<u64>, buffer: Bytes) -> Result<(), ParquetError> {
+        let expected = range.end.saturating_sub(range.start);
+        if expected != buffer.len() as u64 {
+            return Err(general_err!(
+                "Buffer length ({}) does not match length ({}) of range {}..{}",
+                buffer.len(),
+                expected,
+                range.start,
+                range.end
+            ));
+        }
         self.ranges.push(range);
         self.buffers.push(buffer);
+        Ok(())
     }
 
     /// Returns true if the Buffers contains data for the given range
@@ -224,5 +246,44 @@ impl ChunkReader for PushBuffers {
         // Signal that we need more data
         let requested_end = start + length as u64;
         Err(ParquetError::NeedMoreDataRange(start..requested_end))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_range_accepts_matching_length() {
+        let mut buffers = PushBuffers::new(100);
+        buffers
+            .push_range(10..14, Bytes::from_static(b"abcd"))
+            .unwrap();
+        assert!(buffers.has_range(&(10..14)));
+    }
+
+    #[test]
+    fn push_range_rejects_short_buffer() {
+        let mut buffers = PushBuffers::new(100);
+        let err = buffers
+            .push_range(10..20, Bytes::from_static(b"abcd"))
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Buffer length (4) does not match length (10) of range 10..20"
+        );
+        assert!(!buffers.has_range(&(10..20)));
+    }
+
+    #[test]
+    fn push_ranges_rejects_mismatched_counts() {
+        let mut buffers = PushBuffers::new(100);
+        let err = buffers
+            .push_ranges(vec![0..4, 4..8], vec![Bytes::from_static(b"abcd")])
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Number of ranges (2) must match number of buffers (1)"
+        );
     }
 }

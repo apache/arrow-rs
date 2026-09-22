@@ -29,7 +29,6 @@ pub struct MapArrayReader {
 }
 
 impl MapArrayReader {
-    #[allow(rustdoc::private_intra_doc_links)]
     /// Creates a new [`MapArrayReader`] with a `def_level`, `rep_level` and `nullable`
     /// as defined on [`ParquetField`][crate::arrow::schema::ParquetField]
     pub fn new(
@@ -158,10 +157,10 @@ mod tests {
             "map",
             ArrowType::Map(
                 Arc::new(Field::new(
-                    "entries",
+                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
                     ArrowType::Struct(Fields::from(vec![
-                        Field::new("keys", ArrowType::Utf8, false),
-                        Field::new("values", ArrowType::Int32, true),
+                        Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, ArrowType::Utf8, false),
+                        Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, ArrowType::Int32, true),
                     ])),
                     false,
                 )),

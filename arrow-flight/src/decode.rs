@@ -136,7 +136,7 @@ impl FlightRecordBatchStream {
     /// Note that this will return `None` until the entire stream is consumed.
     /// Only after calling `next()` returns `None`, might any available trailers be returned.
     pub fn trailers(&self) -> Option<MetadataMap> {
-        self.trailers.as_ref().and_then(|trailers| trailers.get())
+        self.trailers.as_ref()?.get()
     }
 
     /// Return schema for the stream, if it has been received
@@ -198,7 +198,7 @@ impl futures::Stream for FlightRecordBatchStream {
 ///
 /// # Protocol Details
 ///
-/// The client handles flight messages as followes:
+/// The client handles flight messages as follows:
 ///
 /// - **None:** This message has no effect. This is useful to
 ///   transmit metadata without any actual payload.
@@ -293,9 +293,7 @@ impl FlightDataDecoder {
                 Ok(Some(DecodedFlightData::new_schema(data, schema)))
             }
             MessageHeader::DictionaryBatch => {
-                let state = if let Some(state) = self.state.as_mut() {
-                    state
-                } else {
+                let Some(state) = self.state.as_mut() else {
                     return Err(FlightError::protocol(
                         "Received DictionaryBatch prior to Schema",
                     ));
@@ -308,12 +306,14 @@ impl FlightDataDecoder {
                     )
                 })?;
 
-                arrow_ipc::reader::read_dictionary(
+                arrow_ipc::reader::read_dictionary_impl(
                     &buffer,
                     dictionary_batch,
                     &state.schema,
                     &mut state.dictionaries_by_field,
                     &message.version(),
+                    false,
+                    self.skip_validation.clone(),
                 )
                 .map_err(|e| {
                     FlightError::DecodeError(format!("Error decoding ipc dictionary: {e}"))
@@ -323,9 +323,7 @@ impl FlightDataDecoder {
                 Ok(None)
             }
             MessageHeader::RecordBatch => {
-                let state = if let Some(state) = self.state.as_ref() {
-                    state
-                } else {
+                let Some(state) = self.state.as_ref() else {
                     return Err(FlightError::protocol(
                         "Received RecordBatch prior to Schema",
                     ));
@@ -336,8 +334,18 @@ impl FlightDataDecoder {
                         "Unable to convert flight data header to a record batch".to_string(),
                     )
                 })?;
+                let buffer = {
+                    // see https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding
+                    // reuse the allocation if already aligned, otherwise copy into a fresh aligned buffer.
+                    let ptr_value = data.data_body.as_ptr() as usize;
+                    if ptr_value.is_multiple_of(64) {
+                        &Buffer::from(data.data_body.clone())
+                    } else {
+                        &Buffer::from(data.data_body.as_ref())
+                    }
+                };
                 let batch = arrow_ipc::reader::RecordBatchDecoder::try_new(
-                    &Buffer::from(data.data_body.as_ref()),
+                    buffer,
                     record_batch,
                     Arc::clone(&state.schema),
                     &state.dictionaries_by_field,

@@ -123,12 +123,12 @@ impl TreeBuilder {
                 curr_def_level += 1;
                 curr_rep_level += 1;
             }
-            _ => {}
+            Repetition::REQUIRED => {}
         }
 
         path.push(String::from(field.name()));
         let reader = if field.is_primitive() {
-            let col_path = ColumnPath::new(path.to_vec());
+            let col_path = ColumnPath::new(path.clone());
             let orig_index = *paths
                 .get(&col_path)
                 .ok_or(general_err!("Path {:?} not found", col_path))?;
@@ -785,10 +785,7 @@ impl Iterator for RowIter<'_> {
     type Item = Result<Row>;
 
     fn next(&mut self) -> Option<Result<Row>> {
-        let mut row = None;
-        if let Some(ref mut iter) = self.row_iter {
-            row = iter.next();
-        }
+        let mut row = self.row_iter.as_mut().and_then(|iter| iter.next());
 
         while row.is_none() && self.current_row_group < self.num_row_groups {
             // We do not expect any failures when accessing a row group, and file reader
@@ -935,6 +932,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_file_reader_rows_nonnullable() {
         let rows = test_file_reader_rows("nonnullable.impala.parquet", None).unwrap();
         let expected_rows = vec![row![
@@ -980,6 +978,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_file_reader_rows_nullable() {
         let rows = test_file_reader_rows("nullable.impala.parquet", None).unwrap();
         let expected_rows = vec![
@@ -1942,13 +1941,12 @@ mod tests {
         let rows: Vec<Result<Row>> = iter.collect();
         assert_eq!(rows.len(), actual_rows + 1);
         for row in &rows[..actual_rows] {
-            assert!(row.is_ok(), "Expected Ok row, got: {:?}", row);
+            assert!(row.is_ok(), "Expected Ok row, got: {row:?}");
         }
         let err = rows[actual_rows].as_ref().unwrap_err();
         assert!(
             err.to_string().contains("Unexpected end of column data"),
-            "Unexpected error message: {}",
-            err
+            "Unexpected error message: {err}"
         );
     }
 

@@ -37,7 +37,7 @@ where
     let mut buffer = MutableBuffer::new(len);
 
     let dst_null = null.as_mut_ptr();
-    let mut dst = buffer.as_mut_ptr() as *mut T;
+    let mut dst = buffer.as_mut_ptr().cast::<T>();
     for (i, item) in iterator.enumerate() {
         let item = item.borrow();
         if let Some(item) = item {
@@ -49,7 +49,7 @@ where
         dst = unsafe { dst.add(1) };
     }
     assert_eq!(
-        unsafe { dst.offset_from(buffer.as_ptr() as *mut T) as usize },
+        unsafe { dst.offset_from(buffer.as_ptr().cast::<T>()) as usize },
         upper,
         "Trusted iterator length was not accurately reported"
     );

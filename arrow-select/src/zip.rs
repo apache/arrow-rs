@@ -25,8 +25,8 @@ use arrow_array::types::{
 };
 use arrow_array::*;
 use arrow_buffer::{
-    BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, OffsetBufferBuilder,
-    ScalarBuffer, ToByteSlice,
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+    ToByteSlice,
 };
 use arrow_data::transform::MutableArrayData;
 use arrow_data::{ArrayData, ByteView};
@@ -145,6 +145,41 @@ pub fn zip(
     zip_impl(mask, &truthy, truthy_is_scalar, &falsy, falsy_is_scalar)
 }
 
+fn count_true_runs(mask: &BooleanBuffer) -> usize {
+    let mut slices = 0;
+    let mut previous = 0;
+    for chunk in mask.bit_chunks().iter_padded() {
+        let starts = chunk & !((chunk << 1) | previous);
+        slices += starts.count_ones() as usize;
+        previous = chunk >> 63;
+    }
+    slices
+}
+
+fn should_use_interleave(mask: &BooleanBuffer) -> bool {
+    const MIN_LEN: usize = 1024;
+
+    // Interleave's fixed dispatch and index construction costs are not competitive
+    // for small arrays. For larger arrays, use the run count that determines the
+    // amount of work performed by the MutableArrayData implementation.
+    mask.len() >= MIN_LEN && count_true_runs(mask) > mask.len() / 8
+}
+
+fn interleave_arrays(
+    mask: &BooleanBuffer,
+    truthy: &ArrayData,
+    falsy: &ArrayData,
+) -> Result<ArrayRef, ArrowError> {
+    let truthy = make_array(truthy.clone());
+    let falsy = make_array(falsy.clone());
+    let indices: Vec<_> = mask
+        .iter()
+        .enumerate()
+        .map(|(idx, selected)| (usize::from(!selected), idx))
+        .collect();
+    crate::interleave::interleave(&[truthy.as_ref(), falsy.as_ref()], &indices)
+}
+
 fn zip_impl(
     mask: &BooleanArray,
     truthy: &ArrayData,
@@ -152,6 +187,11 @@ fn zip_impl(
     falsy: &ArrayData,
     falsy_is_scalar: bool,
 ) -> Result<ArrayRef, ArrowError> {
+    let mask_buffer = maybe_prep_null_mask_filter(mask);
+    if !truthy_is_scalar && !falsy_is_scalar && should_use_interleave(&mask_buffer) {
+        return interleave_arrays(&mask_buffer, truthy, falsy);
+    }
+
     let mut mutable = MutableArrayData::new(vec![truthy, falsy], false, truthy.len());
 
     // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
@@ -160,7 +200,6 @@ fn zip_impl(
     // keep track of how much is filled
     let mut filled = 0;
 
-    let mask_buffer = maybe_prep_null_mask_filter(mask);
     for (start, end) in SlicesIterator::from(&mask_buffer) {
         // the gap needs to be filled with falsy values
         if start > filled {
@@ -473,10 +512,11 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
     /// return an output array that has
     /// `value` in all locations where predicate is true
     /// `null` otherwise
+    #[expect(clippy::type_complexity)]
     fn get_scalar_and_null_buffer_for_single_non_nullable(
         predicate: BooleanBuffer,
         value: &[u8],
-    ) -> (Buffer, OffsetBuffer<T::Offset>, Option<NullBuffer>) {
+    ) -> Result<(Buffer, OffsetBuffer<T::Offset>, Option<NullBuffer>), ArrowError> {
         let value_length = value.len();
 
         let number_of_true = predicate.count_set_bits();
@@ -486,13 +526,13 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
             // All values are null
             let nulls = NullBuffer::new_null(predicate.len());
 
-            return (
+            return Ok((
                 // Empty bytes
                 Buffer::from(&[]),
                 // All nulls so all lengths are 0
                 OffsetBuffer::<T::Offset>::new_zeroed(predicate.len()),
                 Some(nulls),
-            );
+            ));
         }
 
         let offsets = OffsetBuffer::<T::Offset>::from_lengths(
@@ -500,7 +540,9 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         );
 
         let mut bytes = MutableBuffer::with_capacity(0);
-        bytes.repeat_slice_n_times(value, number_of_true);
+        bytes
+            .try_repeat_slice_n_times(value, number_of_true)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
         let bytes = Buffer::from(bytes);
 
@@ -508,7 +550,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         // If a value is false we need the FALSY and the null buffer will have 0 (meaning null)
         let nulls = NullBuffer::new(predicate);
 
-        (bytes, offsets, Some(nulls))
+        Ok((bytes, offsets, Some(nulls)))
     }
 
     /// Create a [`Buffer`] where `value` slice is repeated `number_of_values` times
@@ -516,41 +558,36 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
     fn get_bytes_and_offset_for_all_same_value(
         number_of_values: usize,
         value: &[u8],
-    ) -> (Buffer, OffsetBuffer<T::Offset>) {
+    ) -> Result<(Buffer, OffsetBuffer<T::Offset>), ArrowError> {
         let value_length = value.len();
 
         let offsets =
             OffsetBuffer::<T::Offset>::from_repeated_length(value_length, number_of_values);
 
         let mut bytes = MutableBuffer::with_capacity(0);
-        bytes.repeat_slice_n_times(value, number_of_values);
+        bytes
+            .try_repeat_slice_n_times(value, number_of_values)
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         let bytes = Buffer::from(bytes);
 
-        (bytes, offsets)
+        Ok((bytes, offsets))
     }
 
     fn create_output_on_non_nulls(
         predicate: &BooleanBuffer,
         truthy_val: &[u8],
         falsy_val: &[u8],
-    ) -> (Buffer, OffsetBuffer<<T as ByteArrayType>::Offset>) {
+    ) -> Result<(Buffer, OffsetBuffer<<T as ByteArrayType>::Offset>), ArrowError> {
         let true_count = predicate.count_set_bits();
 
         match true_count {
             0 => {
                 // All values are falsy
-
-                let (bytes, offsets) =
-                    Self::get_bytes_and_offset_for_all_same_value(predicate.len(), falsy_val);
-
-                return (bytes, offsets);
+                return Self::get_bytes_and_offset_for_all_same_value(predicate.len(), falsy_val);
             }
             n if n == predicate.len() => {
                 // All values are truthy
-                let (bytes, offsets) =
-                    Self::get_bytes_and_offset_for_all_same_value(predicate.len(), truthy_val);
-
-                return (bytes, offsets);
+                return Self::get_bytes_and_offset_for_all_same_value(predicate.len(), truthy_val);
             }
 
             _ => {
@@ -558,10 +595,19 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
             }
         }
 
-        let total_number_of_bytes =
-            true_count * truthy_val.len() + (predicate.len() - true_count) * falsy_val.len();
+        let total_number_of_bytes = true_count
+            .checked_mul(truthy_val.len())
+            .and_then(|truthy_bytes| {
+                let falsy_bytes = (predicate.len() - true_count).checked_mul(falsy_val.len())?;
+                truthy_bytes.checked_add(falsy_bytes)
+            })
+            .ok_or_else(|| ArrowError::MemoryError("zip output size overflow".to_string()))?;
+        T::Offset::from_usize(total_number_of_bytes)
+            .ok_or(ArrowError::OffsetOverflowError(total_number_of_bytes))?;
         let mut mutable = MutableBuffer::with_capacity(total_number_of_bytes);
-        let mut offset_buffer_builder = OffsetBufferBuilder::<T::Offset>::new(predicate.len());
+        let mut offsets = Vec::<T::Offset>::with_capacity(predicate.len() + 1);
+        offsets.push(T::Offset::usize_as(0));
+        let mut current_offset: usize = 0;
 
         // keep track of how much is filled
         let mut filled = 0;
@@ -569,39 +615,59 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         let truthy_len = truthy_val.len();
         let falsy_len = falsy_val.len();
 
-        SlicesIterator::from(predicate).for_each(|(start, end)| {
+        // Each run's offsets are bounded by the checked total output size.
+        SlicesIterator::from(predicate).try_for_each(|(start, end)| -> Result<(), ArrowError> {
             // the gap needs to be filled with falsy values
             if start > filled {
                 let false_repeat_count = start - filled;
                 // Push false value `repeat_count` times
-                mutable.repeat_slice_n_times(falsy_val, false_repeat_count);
+                mutable
+                    .try_repeat_slice_n_times(falsy_val, false_repeat_count)
+                    .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-                for _ in 0..false_repeat_count {
-                    offset_buffer_builder.push_length(falsy_len)
-                }
+                let start_offset = current_offset;
+                current_offset += falsy_len * false_repeat_count;
+                offsets.extend(
+                    (1..=false_repeat_count)
+                        .map(|index| T::Offset::usize_as(start_offset + index * falsy_len)),
+                );
             }
 
             let true_repeat_count = end - start;
             // fill with truthy values
-            mutable.repeat_slice_n_times(truthy_val, true_repeat_count);
+            mutable
+                .try_repeat_slice_n_times(truthy_val, true_repeat_count)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-            for _ in 0..true_repeat_count {
-                offset_buffer_builder.push_length(truthy_len)
-            }
+            let start_offset = current_offset;
+            current_offset += truthy_len * true_repeat_count;
+            offsets.extend(
+                (1..=true_repeat_count)
+                    .map(|index| T::Offset::usize_as(start_offset + index * truthy_len)),
+            );
             filled = end;
-        });
+            Ok(())
+        })?;
         // the remaining part is falsy
         if filled < predicate.len() {
             let false_repeat_count = predicate.len() - filled;
             // Copy the first item from the 'falsy' array into the output buffer.
-            mutable.repeat_slice_n_times(falsy_val, false_repeat_count);
+            mutable
+                .try_repeat_slice_n_times(falsy_val, false_repeat_count)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-            for _ in 0..false_repeat_count {
-                offset_buffer_builder.push_length(falsy_len)
-            }
+            let start_offset = current_offset;
+            current_offset += falsy_len * false_repeat_count;
+            offsets.extend(
+                (1..=false_repeat_count)
+                    .map(|index| T::Offset::usize_as(start_offset + index * falsy_len)),
+            );
         }
 
-        (mutable.into(), offset_buffer_builder.finish())
+        debug_assert_eq!(current_offset, total_number_of_bytes);
+        // SAFETY: offsets start at zero, are monotonically increasing, and fit in T::Offset.
+        let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+        Ok((mutable.into(), offsets))
     }
 }
 
@@ -615,12 +681,12 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
             match (self.truthy.as_deref(), self.falsy.as_deref()) {
                 (Some(truthy_val), Some(falsy_val)) => {
                     let (bytes, offsets) =
-                        Self::create_output_on_non_nulls(&predicate, truthy_val, falsy_val);
+                        Self::create_output_on_non_nulls(&predicate, truthy_val, falsy_val)?;
 
                     (bytes, offsets, None)
                 }
                 (Some(truthy_val), None) => {
-                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, truthy_val)
+                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, truthy_val)?
                 }
                 (None, Some(falsy_val)) => {
                     // Flipping the boolean buffer as we want the opposite of the TRUE case
@@ -628,7 +694,7 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
                     // if the condition is true we want null so we need to NOT the value so we get 0 (meaning null)
                     // if the condition is false we want the FALSE value so we need to NOT the value so we get 1 (meaning not null)
                     let predicate = predicate.not();
-                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, falsy_val)
+                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, falsy_val)?
                 }
                 (None, None) => {
                     // All values are null
@@ -725,6 +791,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         (bytes.into(), buffers, Some(nulls))
     }
 
+    #[expect(clippy::type_complexity)]
     fn get_views_for_non_nullable(
         predicate: BooleanBuffer,
         result_len: usize,
@@ -732,16 +799,16 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         truthy_buffers: Arc<[Buffer]>,
         falsy_view: u128,
         falsy_buffers: Arc<[Buffer]>,
-    ) -> (ScalarBuffer<u128>, Arc<[Buffer]>, Option<NullBuffer>) {
+    ) -> Result<(ScalarBuffer<u128>, Arc<[Buffer]>, Option<NullBuffer>), ArrowError> {
         let true_count = predicate.count_set_bits();
         match true_count {
             0 => {
                 // all values are falsy
-                (vec![falsy_view; result_len].into(), falsy_buffers, None)
+                Ok((vec![falsy_view; result_len].into(), falsy_buffers, None))
             }
             n if n == predicate.len() => {
                 // all values are truthy
-                (vec![truthy_view; result_len].into(), truthy_buffers, None)
+                Ok((vec![truthy_view; result_len].into(), truthy_buffers, None))
             }
             _ => {
                 let true_count = predicate.count_set_bits();
@@ -766,24 +833,38 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                 let mut mutable = MutableBuffer::new(total_number_of_bytes);
                 let mut filled = 0;
 
-                SlicesIterator::from(&predicate).for_each(|(start, end)| {
-                    if start > filled {
-                        let false_repeat_count = start - filled;
+                SlicesIterator::from(&predicate).try_for_each(
+                    |(start, end)| -> Result<(), ArrowError> {
+                        if start > filled {
+                            let false_repeat_count = start - filled;
+                            mutable
+                                .try_repeat_slice_n_times(
+                                    view_falsy.to_byte_slice(),
+                                    false_repeat_count,
+                                )
+                                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                        }
+                        let true_repeat_count = end - start;
                         mutable
-                            .repeat_slice_n_times(view_falsy.to_byte_slice(), false_repeat_count);
-                    }
-                    let true_repeat_count = end - start;
-                    mutable.repeat_slice_n_times(truthy_view.to_byte_slice(), true_repeat_count);
-                    filled = end;
-                });
+                            .try_repeat_slice_n_times(
+                                truthy_view.to_byte_slice(),
+                                true_repeat_count,
+                            )
+                            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+                        filled = end;
+                        Ok(())
+                    },
+                )?;
 
                 if filled < predicate.len() {
                     let false_repeat_count = predicate.len() - filled;
-                    mutable.repeat_slice_n_times(view_falsy.to_byte_slice(), false_repeat_count);
+                    mutable
+                        .try_repeat_slice_n_times(view_falsy.to_byte_slice(), false_repeat_count)
+                        .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
                 }
 
                 let bytes = Buffer::from(mutable);
-                (bytes.into(), buffers.into(), None)
+                Ok((bytes.into(), buffers.into(), None))
             }
         }
     }
@@ -812,7 +893,7 @@ impl<T: ByteViewType> ZipImpl for ByteViewScalarImpl<T> {
                 Arc::clone(&self.truthy_buffers),
                 falsy,
                 Arc::clone(&self.falsy_buffers),
-            ),
+            )?,
             (Some(truthy), None) => Self::get_views_for_single_non_nullable(
                 predicate,
                 truthy,
@@ -845,6 +926,96 @@ impl<T: ByteViewType> ZipImpl for ByteViewScalarImpl<T> {
 mod test {
     use super::*;
     use arrow_array::types::Int32Type;
+
+    #[test]
+    fn test_count_true_runs() {
+        let assert_runs = |values: &[bool], expected| {
+            let mask: BooleanBuffer = values.iter().copied().collect();
+            assert_eq!(count_true_runs(&mask), expected, "mask: {values:?}");
+        };
+
+        assert_runs(&[], 0);
+        assert_runs(&[false, false, false], 0);
+        assert_runs(&[true, true, true], 1);
+        assert_runs(&[true, false, true, true, false, true], 3);
+
+        // Exercise runs crossing 64-bit chunk boundaries and trailing padding.
+        let mut values = vec![false; 130];
+        values[0] = true;
+        values[63..66].fill(true);
+        values[128..].fill(true);
+        assert_runs(&values, 3);
+
+        // Exercise a non-zero bit offset, as masks may be sliced.
+        let mut offset_values = vec![false; 135];
+        offset_values[3..133].copy_from_slice(&values);
+        let offset_mask: BooleanBuffer = offset_values.into_iter().collect();
+        assert_eq!(count_true_runs(&offset_mask.slice(3, 130)), 3);
+    }
+
+    #[test]
+    fn test_should_use_interleave() {
+        let short: BooleanBuffer = (0..64).map(|i| i % 2 == 0).collect();
+        assert!(!should_use_interleave(&short));
+
+        let fragmented: BooleanBuffer = (0..8192).map(|i| i % 2 == 0).collect();
+        assert!(should_use_interleave(&fragmented));
+
+        let long_runs: BooleanBuffer = (0..8192).map(|i| i < 4096).collect();
+        assert!(!should_use_interleave(&long_runs));
+
+        let sparse: BooleanBuffer = (0..8192).map(|i| i % 10 == 0).collect();
+        assert!(!should_use_interleave(&sparse));
+
+        let dense: BooleanBuffer = (0..8192).map(|i| i % 10 != 0).collect();
+        assert!(!should_use_interleave(&dense));
+
+        let fragmented_head: BooleanBuffer = (0..8192).map(|i| i < 256 && i % 2 == 0).collect();
+        assert!(!should_use_interleave(&fragmented_head));
+
+        let fragmented_edges: BooleanBuffer = (0..8192)
+            .map(|i| !(256..7936).contains(&i) && i % 2 == 0)
+            .collect();
+        assert!(!should_use_interleave(&fragmented_edges));
+
+        // Exercise arbitrary bit offsets as masks may be sliced
+        let offset: BooleanBuffer = (0..8195).map(|i| i >= 3 && i % 2 == 1).collect();
+        assert!(should_use_interleave(&offset.slice(3, 8192)));
+    }
+
+    #[test]
+    fn test_interleave_arrays() {
+        let mask = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+        let mask = maybe_prep_null_mask_filter(&mask);
+        let truthy = Int32Array::from(vec![Some(1), None, Some(3), Some(4)]).to_data();
+        let falsy = Int32Array::from(vec![Some(10), Some(20), None, Some(40)]).to_data();
+        let expected = Int32Array::from(vec![Some(1), Some(20), Some(3), Some(40)]);
+
+        let actual = interleave_arrays(&mask, &truthy, &falsy).unwrap();
+        assert_eq!(actual.as_primitive::<Int32Type>(), &expected);
+    }
+
+    #[test]
+    fn test_zip_fragmented_array_mask() {
+        let mask: BooleanArray = (0..8192)
+            .map(|i| match i % 3 {
+                0 => Some(true),
+                1 => Some(false),
+                _ => None,
+            })
+            .collect();
+        let truthy: Int32Array = (0..8192).map(|i| (i % 7 != 0).then_some(i)).collect();
+        let falsy: Int32Array = (0..8192).map(|i| (i % 11 != 0).then_some(-i)).collect();
+        let expected: Int32Array = (0..8192)
+            .map(|i| {
+                let array = if i % 3 == 0 { &truthy } else { &falsy };
+                array.is_valid(i).then(|| array.value(i))
+            })
+            .collect();
+
+        let actual = zip(&mask, &truthy, &falsy).unwrap();
+        assert_eq!(actual.as_primitive::<Int32Type>(), &expected);
+    }
 
     #[test]
     fn test_zip_kernel_one() {
@@ -1141,6 +1312,23 @@ mod test {
             Some("something else"),
         ]);
         assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_scalar_bytes_offset_overflow() {
+        // Repeating a 64 KiB scalar 32,768 times exceeds i32::MAX.
+        // The size must be rejected before allocating the output buffer.
+        let value = vec![0_u8; 65_536];
+        let large = Scalar::new(BinaryArray::from_iter_values([value.as_slice()]));
+        let empty = Scalar::new(BinaryArray::from_iter_values([b"".as_slice()]));
+        let mask = BooleanArray::from_iter((0..65_536).map(|i| Some(i % 2 == 0)));
+
+        for (truthy, falsy) in [(&large, &empty), (&empty, &large)] {
+            assert!(matches!(
+                zip(&mask, truthy, falsy),
+                Err(ArrowError::OffsetOverflowError(2_147_483_648))
+            ));
+        }
     }
 
     #[test]

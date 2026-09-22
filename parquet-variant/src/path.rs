@@ -85,6 +85,7 @@ use std::{borrow::Cow, ops::Deref};
 ///     VariantPathElement::index(2),
 ///     VariantPathElement::field("3")]);
 /// assert_eq!(path, expected)
+/// ```
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct VariantPath<'a>(Vec<VariantPathElement<'a>>);
 
@@ -132,7 +133,7 @@ impl<'a> TryFrom<&'a str> for VariantPath<'a> {
 }
 
 /// Create from usize
-impl<'a> From<usize> for VariantPath<'a> {
+impl From<usize> for VariantPath<'_> {
     fn from(index: usize) -> Self {
         VariantPath::new(vec![VariantPathElement::index(index)])
     }
@@ -159,7 +160,7 @@ impl<'a> Deref for VariantPath<'a> {
     }
 }
 
-/// Element of a [`VariantPath`] that can be a field name or an index.
+/// Element of a [`VariantPath`] that can be a field name, an index, or a list element wildcard.
 ///
 /// See [`VariantPath`] for more details and examples.
 #[derive(Debug, Clone, PartialEq)]
@@ -168,6 +169,8 @@ pub enum VariantPathElement<'a> {
     Field { name: Cow<'a, str> },
     /// Access the list element at `index`
     Index { index: usize },
+    /// Match the shared element schema of a list (`[*]`)
+    ListElement,
 }
 
 impl<'a> VariantPathElement<'a> {
@@ -178,6 +181,10 @@ impl<'a> VariantPathElement<'a> {
 
     pub fn index(index: usize) -> VariantPathElement<'a> {
         VariantPathElement::Index { index }
+    }
+
+    pub fn list_element() -> VariantPathElement<'a> {
+        VariantPathElement::ListElement
     }
 }
 
@@ -194,7 +201,7 @@ impl<'a> From<&'a str> for VariantPathElement<'a> {
     }
 }
 
-impl<'a> From<String> for VariantPathElement<'a> {
+impl From<String> for VariantPathElement<'_> {
     fn from(name: String) -> Self {
         VariantPathElement::field(Cow::Owned(name))
     }
@@ -206,7 +213,7 @@ impl<'a> From<&'a String> for VariantPathElement<'a> {
     }
 }
 
-impl<'a> From<usize> for VariantPathElement<'a> {
+impl From<usize> for VariantPathElement<'_> {
     fn from(index: usize) -> Self {
         VariantPathElement::index(index)
     }
@@ -287,6 +294,15 @@ mod tests {
         ]);
         assert_eq!(path, expected);
 
+        // list wildcard is distinct from a quoted field named "*"
+        let path = VariantPath::try_from("foo[*]['*']").unwrap();
+        let expected = VariantPath::from_iter([
+            VariantPathElement::field("foo"),
+            VariantPathElement::list_element(),
+            VariantPathElement::field("*"),
+        ]);
+        assert_eq!(path, expected);
+
         // invalid index will be treated as field
         let path = VariantPath::try_from("foo.bar['abc'][\"def\"]").unwrap();
         let expected = VariantPath::from_iter([
@@ -338,13 +354,13 @@ mod tests {
         let err = VariantPath::try_from("foo.bar[123abc]").unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parser error: Invalid token in bracket request: `123abc`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+            "Parser error: Invalid token in bracket request: `123abc`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
         );
 
         let err = VariantPath::try_from("foo.bar[abc]").unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parser error: Invalid token in bracket request: `abc`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+            "Parser error: Invalid token in bracket request: `abc`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
         );
 
         // Out-of-range integer indexes are invalid path tokens.

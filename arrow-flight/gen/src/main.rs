@@ -15,11 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    fs::OpenOptions,
-    io::{Read, Write},
-    path::Path,
-};
+//! Generates the Rust bindings for the Arrow Flight protobuf definitions.
+
+use std::{fs::OpenOptions, io::Write, path::Path};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_dir = Path::new("../format");
@@ -31,12 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .out_dir("src")
         .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
-    // read file contents to string
-    let mut file = OpenOptions::new()
-        .read(true)
-        .open("src/arrow.flight.protocol.rs")?;
-    let mut buffer = String::new();
-    file.read_to_string(&mut buffer)?;
+    let buffer = std::fs::read_to_string("src/arrow.flight.protocol.rs")?;
     // append warning that file was auto-generated
     let mut file = OpenOptions::new()
         .write(true)
@@ -54,12 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .out_dir("src/sql")
         .compile_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
-    // read file contents to string
-    let mut file = OpenOptions::new()
-        .read(true)
-        .open("src/sql/arrow.flight.protocol.sql.rs")?;
-    let mut buffer = String::new();
-    file.read_to_string(&mut buffer)?;
+    let buffer = std::fs::read_to_string("src/sql/arrow.flight.protocol.sql.rs")?;
     // append warning that file was auto-generate
     let mut file = OpenOptions::new()
         .write(true)

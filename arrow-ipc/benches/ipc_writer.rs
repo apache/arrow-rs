@@ -21,9 +21,12 @@ use arrow_array::builder::{
 };
 use arrow_array::types::UInt32Type;
 use arrow_ipc::CompressionType;
-use arrow_ipc::writer::{DictionaryHandling, FileWriter, IpcWriteOptions, StreamWriter};
+use arrow_ipc::writer::{
+    DictionaryHandling, FileWriter, IpcWriteOptions, StreamEncoder, StreamWriter,
+};
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -60,6 +63,32 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("StreamEncoder/encode_10", |b| {
+        let batch = create_batch(8192, true);
+        b.iter(move || {
+            let mut encoder = StreamEncoder::try_new(batch.schema().as_ref()).unwrap();
+            for _ in 0..10 {
+                black_box(encoder.encode(&batch).unwrap());
+            }
+            black_box(encoder.finish().unwrap());
+        })
+    });
+
+    group.bench_function("StreamEncoder/encode_10/zstd", |b| {
+        let batch = create_batch(8192, true);
+        b.iter(move || {
+            let options = IpcWriteOptions::default()
+                .try_with_compression(Some(CompressionType::ZSTD))
+                .unwrap();
+            let mut encoder =
+                StreamEncoder::try_new_with_options(batch.schema().as_ref(), options).unwrap();
+            for _ in 0..10 {
+                black_box(encoder.encode(&batch).unwrap());
+            }
+            black_box(encoder.finish().unwrap());
+        })
+    });
+
     group.bench_function("FileWriter/write_10", |b| {
         let batch = create_batch(8192, true);
         let mut buffer = Vec::with_capacity(2 * 1024 * 1024);
@@ -87,6 +116,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("StreamEncoder/encode_10/dict", |b| {
+        let batches = create_unique_dict_batches(10, 8192);
+        let schema = batches[0].schema();
+        b.iter(move || {
+            let mut encoder = StreamEncoder::try_new(schema.as_ref()).unwrap();
+            for batch in &batches {
+                black_box(encoder.encode(batch).unwrap());
+            }
+            black_box(encoder.finish().unwrap());
+        })
+    });
+
     group.bench_function("StreamWriter/write_10/dict/delta", |b| {
         let batches = create_delta_dict_batches(10, 8192);
         let schema = batches[0].schema();
@@ -106,6 +147,22 @@ fn criterion_benchmark(c: &mut Criterion) {
             }
 
             writer.finish().unwrap();
+        })
+    });
+
+    group.bench_function("StreamEncoder/encode_10/dict/delta", |b| {
+        let batches = create_delta_dict_batches(10, 8192);
+        let schema = batches[0].schema();
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+
+        b.iter(move || {
+            let mut encoder =
+                StreamEncoder::try_new_with_options(schema.as_ref(), options.clone()).unwrap();
+            for batch in &batches {
+                black_box(encoder.encode(batch).unwrap());
+            }
+            black_box(encoder.finish().unwrap());
         })
     });
 
@@ -152,7 +209,7 @@ fn create_delta_dict_batches(n: usize, num_rows: usize) -> Vec<RecordBatch> {
         // introduce values unique to this batch which extends the dictionary.
         for r in 0..num_rows {
             if r < num_rows / 4 {
-                builder.append_value(format!("batch {i} value {}", r));
+                builder.append_value(format!("batch {i} value {r}"));
             } else {
                 builder.append_value(format!("shared {r}"));
             }

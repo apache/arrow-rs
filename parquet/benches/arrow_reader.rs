@@ -15,21 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::Array;
-use arrow::datatypes::DataType;
+use arrow::array::{Array, StringArray};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use arrow_schema::Field;
+use bytes::Bytes;
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
 use half::f16;
 use num_bigint::BigInt;
 use num_traits::FromPrimitive;
+use parquet::arrow::ArrowWriter;
 use parquet::arrow::array_reader::{
     ListArrayReader, make_byte_array_reader, make_byte_view_array_reader,
     make_fixed_len_byte_array_reader,
 };
-use parquet::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
-use parquet::basic::Type;
+use parquet::arrow::arrow_reader::{
+    ArrowReaderOptions, DEFAULT_BATCH_SIZE, ParquetRecordBatchReaderBuilder,
+};
+use parquet::basic::{Compression, Type};
 use parquet::data_type::{ByteArray, FixedLenByteArrayType};
+use parquet::file::properties::WriterProperties;
 use parquet::util::{DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator};
 use parquet::{
     arrow::array_reader::ArrayReader,
@@ -39,7 +45,7 @@ use parquet::{
     schema::types::{ColumnDescPtr, SchemaDescPtr},
 };
 use rand::distr::uniform::SampleUniform;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use std::{collections::VecDeque, sync::Arc};
 
 fn build_test_schema() -> SchemaDescPtr {
@@ -121,6 +127,18 @@ const VALUES_PER_PAGE: usize = 10_000;
 const BATCH_SIZE: usize = 8192;
 const MAX_LIST_LEN: usize = 10;
 const EXPECTED_VALUE_COUNT: usize = NUM_ROW_GROUPS * PAGES_PER_GROUP * VALUES_PER_PAGE;
+
+// Params for the large dictionary value benchmark. Binary columns holding large
+// payloads are commonly dictionary encoded in practice, because a writer's
+// dictionary size limit is checked lazily and so is never reached before the
+// column ends. Values there are distinct, which means the dictionary page holds
+// the whole column and each entry is referenced exactly once: the gather reads
+// from a source far too large to stay cached, unlike the small-value cases above
+// whose dictionary is a few KiB. Values are correspondingly larger and fewer per
+// page, keeping one iteration to 64 MiB of output over a 32 MiB dictionary.
+const LARGE_VALUE_LEN: usize = 64 * 1024;
+const LARGE_VALUES_PER_PAGE: usize = 128;
+const EXPECTED_LARGE_VALUE_COUNT: usize = NUM_ROW_GROUPS * PAGES_PER_GROUP * LARGE_VALUES_PER_PAGE;
 
 pub fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
@@ -635,6 +653,67 @@ fn build_dictionary_encoded_string_page_iterator(
                 }
                 def_levels.push(def_level);
             }
+            let mut page_builder =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            page_builder.add_rep_levels(max_rep_level, &rep_levels);
+            page_builder.add_def_levels(max_def_level, &def_levels);
+            let _ = dict_encoder.put(&values);
+            let indices = dict_encoder
+                .write_indices()
+                .expect("write_indices() should be OK");
+            page_builder.add_indices(indices);
+            column_chunk_pages.push_back(page_builder.consume());
+        }
+        // add dictionary page
+        let dict = dict_encoder
+            .write_dict()
+            .expect("write_dict() should be OK");
+        let dict_page = parquet::column::page::Page::DictionaryPage {
+            buf: dict,
+            num_values: dict_encoder.num_entries() as u32,
+            encoding: Encoding::RLE_DICTIONARY,
+            is_sorted: false,
+        };
+        column_chunk_pages.push_front(dict_page);
+        pages.push(column_chunk_pages.into());
+    }
+
+    InMemoryPageIterator::new(pages)
+}
+
+/// Builds pages of dictionary encoded values that are individually large and all
+/// distinct, to cover the cost of gathering the dictionary values into the output
+/// buffer. The small-value generator above is dominated by per-key overhead
+/// instead, and its dictionary is small enough to stay cached throughout.
+fn build_dictionary_encoded_large_value_page_iterator(
+    column_desc: ColumnDescPtr,
+) -> impl PageIterator + Clone {
+    use parquet::encoding::{DictEncoder, Encoder};
+    let max_def_level = column_desc.max_def_level();
+    let max_rep_level = column_desc.max_rep_level();
+    let rep_levels = vec![0; LARGE_VALUES_PER_PAGE];
+    let def_levels = vec![max_def_level; LARGE_VALUES_PER_PAGE];
+    // Every value is distinct, so the dictionary holds one entry per row and each
+    // entry is referenced exactly once, as it is for a column of large unique
+    // payloads. The leading bytes make each value unique; the rest is filler.
+    let make_value = |index: usize| {
+        let mut value = vec![(index % 251) as u8; LARGE_VALUE_LEN];
+        value[..8].copy_from_slice(&(index as u64).to_le_bytes());
+        value
+    };
+    let mut next_value = 0;
+    let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
+    for _i in 0..NUM_ROW_GROUPS {
+        let mut column_chunk_pages = VecDeque::new();
+        let mut dict_encoder = DictEncoder::<ByteArrayType>::new(column_desc.clone());
+        // add data pages
+        for _j in 0..PAGES_PER_GROUP {
+            let values = (0..LARGE_VALUES_PER_PAGE)
+                .map(|_| {
+                    next_value += 1;
+                    parquet::data_type::ByteArray::from(make_value(next_value - 1))
+                })
+                .collect::<Vec<_>>();
             let mut page_builder =
                 DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
             page_builder.add_rep_levels(max_rep_level, &rep_levels);
@@ -2271,6 +2350,23 @@ fn add_benches(c: &mut Criterion) {
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
 
+    // byte array, dictionary encoded, large values, no NULLs
+    let dictionary_large_value_data =
+        build_dictionary_encoded_large_value_page_iterator(mandatory_binary_column_desc.clone());
+    group.bench_function(
+        "dictionary encoded, mandatory, no NULLs, large values",
+        |b| {
+            b.iter(|| {
+                let array_reader = create_byte_array_reader(
+                    dictionary_large_value_data.clone(),
+                    mandatory_binary_column_desc.clone(),
+                );
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_LARGE_VALUE_COUNT);
+        },
+    );
+
     group.finish();
 
     // binary view benchmarks
@@ -2614,5 +2710,72 @@ fn add_benches(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, add_benches, decimal_benches, float16_benches,);
+fn bench_plain_string_to_dict(c: &mut Criterion) {
+    fn make_parquet(num_rows: usize, cardinality: usize) -> Bytes {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let values: StringArray = (0..num_rows)
+            .map(|i| Some(format!("{:032}", i % cardinality)))
+            .collect();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values) as _]).unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        Bytes::from(buf)
+    }
+
+    let num_rows = 8192 * 8;
+    let dict_schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+        "s",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        false,
+    )]));
+
+    let high_card = make_parquet(num_rows, num_rows); // every value unique
+    let med_card_1 = make_parquet(num_rows, 1_000); // 1 000 distinct values
+    let med_card_2 = make_parquet(num_rows, 100); //  100 distinct values
+    let low_card = make_parquet(num_rows, 10); // 10 distinct values
+
+    let mut group = c.benchmark_group("arrow_array_reader/PlainStringToDictionary");
+
+    for (name, data) in [
+        ("high cardinality", high_card),
+        ("medium cardinality 1", med_card_1),
+        ("medium cardinality 2", med_card_2),
+        ("low cardinality", low_card),
+    ] {
+        let schema = Arc::clone(&dict_schema);
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let opts = ArrowReaderOptions::new().with_schema(Arc::clone(&schema));
+                let reader =
+                    ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), opts)
+                        .unwrap()
+                        .build()
+                        .unwrap();
+                let mut count = 0usize;
+
+                for batch in reader {
+                    count += batch.unwrap().num_rows();
+                }
+                assert_eq!(count, num_rows);
+            });
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    add_benches,
+    decimal_benches,
+    float16_benches,
+    bench_plain_string_to_dict,
+);
 criterion_main!(benches);

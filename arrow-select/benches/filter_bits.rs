@@ -30,7 +30,7 @@ use arrow_array::BooleanArray;
 use arrow_select::filter::{FilterBuilder, FilterPredicate};
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::hint;
 
 fn create_boolean_array(size: usize, true_density: f64, rng: &mut StdRng) -> BooleanArray {
