@@ -747,32 +747,50 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
     let mask_chunks = predicate.filter.values().bit_chunks();
     let value_chunks = BitChunks::new(buffer.values(), buffer.offset(), predicate.filter.len());
 
-    let mut out = MutableBuffer::new(bit_util::ceil(predicate.count, 8));
-    // Bits extracted from each chunk are packed into `current` until it
-    // contains a complete word, which is then flushed to `out`
+    // The loop below stores a word on every iteration, whether or not it is
+    // complete, so allocate one word of slack beyond the output length
+    let words = bit_util::ceil(predicate.count, 64) + 1;
+    let mut out: Vec<u64> = Vec::with_capacity(words);
+    let ptr = out.as_mut_ptr();
+    let mut idx = 0_usize;
+
+    // Bits extracted from each chunk are packed into the low `filled` bits of
+    // `current`. The word is stored on every iteration; once it is complete
+    // it is committed by advancing `idx` past it and `current` restarts from
+    // the bits that did not fit. The flush is done with selects rather than a
+    // branch: at the densities routed here its pattern is irregular enough
+    // to mispredict
     let mut current = 0_u64;
     let mut filled = 0_u32;
-
-    let chunks = value_chunks.iter_padded().zip(mask_chunks.iter_padded());
-
-    for (values, mask) in chunks {
+    let mut push = |values: u64, mask: u64| {
         let bits = bit_util::compress(values, mask);
-        let count = mask.count_ones();
         current |= bits << filled;
-        if filled + count >= 64 {
-            out.extend_from_slice(&current.to_le_bytes());
-            filled = filled + count - 64;
-            // The bits of `bits` that did not fit in `current`, if any
-            // (`checked_shr` yields 0 when the carry is a full word)
-            current = bits.checked_shr(count - filled).unwrap_or(0);
-        } else {
-            filled += count;
-        }
-    }
+        // SAFETY: `idx` counts committed words. At most `ceil(count, 64)`
+        // words are ever committed, so `idx < words` here
+        unsafe { ptr.add(idx).write(current) };
+        let total = filled + mask.count_ones();
+        let flush = total >= 64;
+        // The bits of `bits` that did not fit: `bits >> (64 - filled)`,
+        // written so that `filled == 0` shifts everything out
+        let carry = (bits >> 1) >> (63 - filled);
+        current = if flush { carry } else { current };
+        filled = if flush { total - 64 } else { total };
+        idx += flush as usize;
+    };
 
-    if filled > 0 {
-        out.extend_from_slice(&current.to_le_bytes()[..bit_util::ceil(filled as usize, 8)]);
+    for (values, mask) in value_chunks.iter().zip(mask_chunks.iter()) {
+        push(values, mask);
     }
+    push(value_chunks.remainder_bits(), mask_chunks.remainder_bits());
+
+    // The last (partial) word, or zero. Bits above `filled` are zero
+    // SAFETY: as above, `idx < words`
+    unsafe { ptr.add(idx).write(current) };
+
+    // SAFETY: every word below `idx + 1 <= words` was written above
+    unsafe { out.set_len(idx + 1) };
+    let mut out = MutableBuffer::from(out);
+    out.truncate(bit_util::ceil(predicate.count, 8));
     out.into()
 }
 
