@@ -2646,6 +2646,7 @@ dependencies = [
  "arrow-schema",
  "base64 0.23.1",
  "chrono",
+ "criterion",
  "parquet-variant",
  "serde_json",
  "uuid",
