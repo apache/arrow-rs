@@ -33,7 +33,7 @@ fn bench_from_json(c: &mut Criterion) {
         ),
         (
             "decimals",
-            r#"{"small":1.23,"medium":999999999.0,"large":0.9999999999999999999}"#,
+            r#"{"small":1.23,"scale10":0.0000000001,"scale19":0.0000000000000000001,"decimal4_max":99999999.9,"decimal8_max":99999999999999999.9,"large":0.9999999999999999999}"#,
         ),
         (
             "strings",

@@ -167,21 +167,32 @@ fn decimal_from_json_number(value: &str) -> Option<Variant<'static, 'static>> {
         coefficient
     };
 
-    i32::try_from(coefficient)
-        .ok()
-        .and_then(|coefficient| VariantDecimal4::try_new(coefficient, scale).ok())
-        .map(Variant::from)
-        .or_else(|| {
-            i64::try_from(coefficient)
-                .ok()
-                .and_then(|coefficient| VariantDecimal8::try_new(coefficient, scale).ok())
-                .map(Variant::from)
-        })
-        .or_else(|| {
-            VariantDecimal16::try_new(coefficient, scale)
-                .ok()
-                .map(Variant::from)
-        })
+    const DECIMAL4_MAX: i128 = 10_i128.pow(VariantDecimal4::MAX_PRECISION as u32) - 1;
+    const DECIMAL8_MAX: i128 = 10_i128.pow(VariantDecimal8::MAX_PRECISION as u32) - 1;
+    const DECIMAL16_MAX: i128 = 10_i128.pow(VariantDecimal16::MAX_PRECISION as u32) - 1;
+
+    if scale <= VariantDecimal4::MAX_PRECISION
+        && (-DECIMAL4_MAX..=DECIMAL4_MAX).contains(&coefficient)
+    {
+        return VariantDecimal4::try_new(i32::try_from(coefficient).ok()?, scale)
+            .ok()
+            .map(Variant::from);
+    }
+    if scale <= VariantDecimal8::MAX_PRECISION
+        && (-DECIMAL8_MAX..=DECIMAL8_MAX).contains(&coefficient)
+    {
+        return VariantDecimal8::try_new(i64::try_from(coefficient).ok()?, scale)
+            .ok()
+            .map(Variant::from);
+    }
+    if scale <= VariantDecimal16::MAX_PRECISION
+        && (-DECIMAL16_MAX..=DECIMAL16_MAX).contains(&coefficient)
+    {
+        return VariantDecimal16::try_new(coefficient, scale)
+            .ok()
+            .map(Variant::from);
+    }
+    None
 }
 
 struct JsonParser<'a> {
@@ -211,12 +222,12 @@ impl<'a> JsonParser<'a> {
         builder: &mut impl VariantBuilderExt,
         depth: usize,
     ) -> Result<(), ArrowError> {
-        if depth > MAX_JSON_DEPTH {
+        self.skip_whitespace();
+        let next = self.peek();
+        if depth >= MAX_JSON_DEPTH && matches!(next, Some(b'[' | b'{')) {
             return self.error("recursion limit exceeded");
         }
-
-        self.skip_whitespace();
-        match self.peek() {
+        match next {
             Some(b'n') => {
                 self.parse_literal(b"null")?;
                 self.ensure_root_end(depth)?;
@@ -1118,6 +1129,28 @@ mod test {
         let mut builder = VariantBuilder::new();
         let error = builder.append_json(&rejected).unwrap_err().to_string();
         assert!(error.contains("recursion limit"), "{error}");
+
+        for (open, close) in [("[", "]"), ("{\"a\":", "}")] {
+            let accepted_empty = format!(
+                "{}[]{}",
+                open.repeat(MAX_JSON_DEPTH - 1),
+                close.repeat(MAX_JSON_DEPTH - 1)
+            );
+            let mut builder = VariantBuilder::new();
+            builder.append_json(&accepted_empty).unwrap();
+
+            let rejected_empty = format!(
+                "{}[]{}",
+                open.repeat(MAX_JSON_DEPTH),
+                close.repeat(MAX_JSON_DEPTH)
+            );
+            let mut builder = VariantBuilder::new();
+            let error = builder
+                .append_json(&rejected_empty)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("recursion limit"), "{error}");
+        }
     }
 
     #[test]
