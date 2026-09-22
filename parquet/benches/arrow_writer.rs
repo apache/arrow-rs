@@ -32,7 +32,7 @@ use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
 use arrow_array::builder::{FixedSizeBinaryBuilder, ListBuilder, StringBuilder};
-use arrow_array::{Int32Array, LargeBinaryArray, RecordBatchOptions, StringArray};
+use arrow_array::{Int32Array, LargeBinaryArray, RecordBatchOptions, StringArray, StringViewArray};
 use parquet::errors::Result;
 use parquet::file::properties::{CdcOptions, WriterProperties, WriterVersion};
 
@@ -1018,24 +1018,40 @@ fn ndv_random_batches(schema: Arc<Schema>) -> Vec<RecordBatch> {
 
 // Low-cardinality helpers: cycle through NDV_LOW_CARDINALITY distinct values.
 fn make_int32_batches_low() -> Vec<RecordBatch> {
-    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Int32, false)]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
     (0..NDV_NUM_BATCHES)
         .map(|batch_idx| {
             let values: Vec<i32> = (0..NDV_BATCH_SIZE)
                 .map(|row| ((batch_idx * NDV_BATCH_SIZE + row) % NDV_LOW_CARDINALITY) as i32)
                 .collect();
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(values)) as _])
-                .unwrap()
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int32Array::from(values)) as _],
+            )
+            .unwrap()
         })
         .collect()
 }
 
 fn make_utf8_batches_low() -> Vec<RecordBatch> {
-    let schema = Arc::new(Schema::new(vec![Field::new("label", DataType::Utf8, false)]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "label",
+        DataType::Utf8,
+        false,
+    )]));
     (0..NDV_NUM_BATCHES)
         .map(|batch_idx| {
             let values: Vec<String> = (0..NDV_BATCH_SIZE)
-                .map(|row| format!("label_{}", (batch_idx * NDV_BATCH_SIZE + row) % NDV_LOW_CARDINALITY))
+                .map(|row| {
+                    format!(
+                        "label_{}",
+                        (batch_idx * NDV_BATCH_SIZE + row) % NDV_LOW_CARDINALITY
+                    )
+                })
                 .collect();
             let array = StringArray::from(values.iter().map(|s| s.as_str()).collect::<Vec<_>>());
             RecordBatch::try_new(schema.clone(), vec![Arc::new(array) as _]).unwrap()
@@ -1044,15 +1060,52 @@ fn make_utf8_batches_low() -> Vec<RecordBatch> {
 }
 
 fn make_large_binary_batches_low() -> Vec<RecordBatch> {
-    let schema = Arc::new(Schema::new(vec![Field::new("payload", DataType::LargeBinary, false)]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "payload",
+        DataType::LargeBinary,
+        false,
+    )]));
     (0..NDV_NUM_BATCHES)
         .map(|batch_idx| {
             let payloads: Vec<Vec<u8>> = (0..NDV_BATCH_SIZE)
-                .map(|row| format!("payload_{}", (batch_idx * NDV_BATCH_SIZE + row) % NDV_LOW_CARDINALITY).into_bytes())
+                .map(|row| {
+                    format!(
+                        "payload_{}",
+                        (batch_idx * NDV_BATCH_SIZE + row) % NDV_LOW_CARDINALITY
+                    )
+                    .into_bytes()
+                })
                 .collect();
             let refs: Vec<&[u8]> = payloads.iter().map(|p| p.as_slice()).collect();
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(LargeBinaryArray::from(refs)) as _])
-                .unwrap()
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(LargeBinaryArray::from(refs)) as _],
+            )
+            .unwrap()
+        })
+        .collect()
+}
+
+// Utf8View is not yet tracked by NDV (skipped in update_distinct_values_seen), so these
+// benchmarks measure base write cost only — useful as a no-overhead baseline.
+fn make_utf8_view_batches_low() -> Vec<RecordBatch> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "label",
+        DataType::Utf8View,
+        false,
+    )]));
+    (0..NDV_NUM_BATCHES)
+        .map(|batch_idx| {
+            let values: Vec<String> = (0..NDV_BATCH_SIZE)
+                .map(|row| {
+                    format!(
+                        "label_{}",
+                        (batch_idx * NDV_BATCH_SIZE + row) % NDV_LOW_CARDINALITY
+                    )
+                })
+                .collect();
+            let array = StringViewArray::from_iter_values(values.iter().map(|s| s.as_str()));
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(array) as _]).unwrap()
         })
         .collect()
 }
@@ -1071,7 +1124,8 @@ fn make_fsb_batches_low(byte_width: i32) -> Vec<RecordBatch> {
                 let distinct_id = (batch_idx * NDV_BATCH_SIZE + row) % NDV_LOW_CARDINALITY;
                 let mut buf = vec![0u8; width];
                 let encoded = distinct_id.to_le_bytes();
-                buf[..encoded.len().min(width)].copy_from_slice(&encoded[..encoded.len().min(width)]);
+                buf[..encoded.len().min(width)]
+                    .copy_from_slice(&encoded[..encoded.len().min(width)]);
                 builder.append_value(&buf).unwrap();
             }
             RecordBatch::try_new(schema.clone(), vec![Arc::new(builder.finish()) as _]).unwrap()
@@ -1096,11 +1150,36 @@ fn write_ndv_batches(b: &mut criterion::Bencher, batches: &[RecordBatch]) {
 }
 
 fn bench_ndv(c: &mut Criterion) {
-    let int32_schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Int32, false)]));
-    let bool_schema = Arc::new(Schema::new(vec![Field::new("flag", DataType::Boolean, false)]));
-    let utf8_schema = Arc::new(Schema::new(vec![Field::new("label", DataType::Utf8, false)]));
-    let large_binary_schema = Arc::new(Schema::new(vec![Field::new("payload", DataType::LargeBinary, false)]));
-    let fsb16_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::FixedSizeBinary(16), false)]));
+    let int32_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+    let bool_schema = Arc::new(Schema::new(vec![Field::new(
+        "flag",
+        DataType::Boolean,
+        false,
+    )]));
+    let utf8_schema = Arc::new(Schema::new(vec![Field::new(
+        "label",
+        DataType::Utf8,
+        false,
+    )]));
+    let large_binary_schema = Arc::new(Schema::new(vec![Field::new(
+        "payload",
+        DataType::LargeBinary,
+        false,
+    )]));
+    let fsb16_schema = Arc::new(Schema::new(vec![Field::new(
+        "id",
+        DataType::FixedSizeBinary(16),
+        false,
+    )]));
+    let utf8_view_schema = Arc::new(Schema::new(vec![Field::new(
+        "label",
+        DataType::Utf8View,
+        false,
+    )]));
 
     let cases: Vec<(&str, Vec<RecordBatch>)> = vec![
         ("int32_low_cardinality", make_int32_batches_low()),
@@ -1108,10 +1187,21 @@ fn bench_ndv(c: &mut Criterion) {
         ("bool", ndv_random_batches(bool_schema)),
         ("utf8_low_cardinality", make_utf8_batches_low()),
         ("utf8_high_cardinality", ndv_random_batches(utf8_schema)),
-        ("large_binary_low_cardinality", make_large_binary_batches_low()),
-        ("large_binary_high_cardinality", ndv_random_batches(large_binary_schema)),
+        (
+            "large_binary_low_cardinality",
+            make_large_binary_batches_low(),
+        ),
+        (
+            "large_binary_high_cardinality",
+            ndv_random_batches(large_binary_schema),
+        ),
         ("fsb16_low_cardinality", make_fsb_batches_low(16)),
         ("fsb16_high_cardinality", ndv_random_batches(fsb16_schema)),
+        ("utf8_view_low_cardinality", make_utf8_view_batches_low()),
+        (
+            "utf8_view_high_cardinality",
+            ndv_random_batches(utf8_view_schema),
+        ),
     ];
 
     for (name, batches) in cases {
