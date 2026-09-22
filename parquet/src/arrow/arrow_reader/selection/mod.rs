@@ -951,6 +951,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn auto_construction_edge_row_counts() {
         for rows in [0, 1, 7, 8, 31, 32, 33, MAX_RANDOM_ROWS] {
             let masks = [
@@ -976,6 +977,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn auto_construction_randomized_equivalence() {
         let mut rng = StdRng::seed_from_u64(0x1077_6000_5eed);
         let mut case_idx = 0usize;
