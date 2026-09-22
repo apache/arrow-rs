@@ -4381,4 +4381,68 @@ mod tests {
         let err = read(false);
         assert!(err.contains("returned 0 values for 1 rows"), "{err}");
     }
+
+    #[test]
+    fn test_scalar_promoted_to_list() {
+        let buf = r#"{"a": 1}
+{"a": [1, 2]}
+{"a": null}
+"#;
+        let (schema, _) = infer_json_schema(Cursor::new(buf), None).unwrap();
+        assert_eq!(
+            schema.field_with_name("a").unwrap().data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true)))
+        );
+
+        let batches = ReaderBuilder::new(Arc::new(schema))
+            .build(Cursor::new(buf))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        let list = batches[0].column(0).as_list::<i32>();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list.value(0).as_primitive::<Int64Type>().values(), &[1]);
+        assert_eq!(list.value(1).as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert!(list.is_null(2));
+    }
+
+    #[test]
+    fn test_scalar_promoted_to_nested_list() {
+        let buf = r#"{"a": [1]}
+{"a": [[2, 3]]}
+"#;
+        let (schema, _) = infer_json_schema(Cursor::new(buf), None).unwrap();
+        let inner = DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true)));
+        assert_eq!(
+            schema.field_with_name("a").unwrap().data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(inner, true)))
+        );
+
+        let batches = ReaderBuilder::new(Arc::new(schema))
+            .build(Cursor::new(buf))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        let list = batches[0].column(0).as_list::<i32>();
+        let first = list.value(0);
+        assert_eq!(
+            first
+                .as_list::<i32>()
+                .value(0)
+                .as_primitive::<Int64Type>()
+                .values(),
+            &[1]
+        );
+        let second = list.value(1);
+        assert_eq!(
+            second
+                .as_list::<i32>()
+                .value(0)
+                .as_primitive::<Int64Type>()
+                .values(),
+            &[2, 3]
+        );
+    }
 }
