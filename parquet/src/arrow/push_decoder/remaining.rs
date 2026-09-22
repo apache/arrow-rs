@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::RowGroupRangePreview;
 use crate::DecodeResult;
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, RowGroupPlan, RowGroupSelection, RowSelection,
@@ -444,6 +445,36 @@ impl RemainingRowGroups {
             return Ok(None);
         }
         self.frontier.peek_next_row_group()
+    }
+
+    /// Preview only at a filter-free boundary; the cloned frontier preserves
+    /// selection and offset/limit accounting without advancing ordered demand.
+    pub fn preview_row_group_ranges(
+        &self,
+        max_row_groups: usize,
+    ) -> Result<Option<Vec<RowGroupRangePreview>>, ParquetError> {
+        if self.row_group_reader_builder.has_active_row_group() || self.frontier.has_predicates {
+            return Ok(None);
+        }
+        let mut frontier = self.frontier.clone();
+        let mut previews = Vec::with_capacity(max_row_groups);
+        while previews.len() < max_row_groups {
+            let Some(next) = frontier.next_readable_row_group()? else {
+                break;
+            };
+            let (ranges, budget) = self.row_group_reader_builder.preview_ranges(
+                next.row_group_idx,
+                next.row_count,
+                next.selection,
+                next.budget,
+            );
+            frontier.update_budget_after_row_group(budget);
+            previews.push(RowGroupRangePreview {
+                row_group_index: next.row_group_idx,
+                ranges,
+            });
+        }
+        Ok(Some(previews))
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
