@@ -43,6 +43,8 @@ on:
       - arrow-json/**
       - arrow-avro/**
       - parquet/**
+      - parquet_derive/**
+      - parquet_derive_test/**
       - parquet-variant/**
       - parquet-variant-compute/**
       - parquet-variant-json/**
@@ -73,6 +75,10 @@ jobs:
           # Test parquet examples
           cargo run -p parquet --example read_parquet
           cargo run -p parquet --example read_with_rowgroup --features="async"
+      - name: Test (parquet_derive)
+        run: |
+          cargo test -p parquet_derive
+          cargo test -p parquet_derive_test
 
   # test compilation
   linux-features:
@@ -200,3 +206,5 @@ jobs:
         run: rustup component add clippy
       - name: Run clippy
         run: cargo clippy -p parquet --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet_derive)
+        run: cargo clippy -p parquet_derive --all-features -- -D warnings
