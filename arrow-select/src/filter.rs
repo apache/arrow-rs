@@ -822,31 +822,29 @@ where
         }
     }
 
-    /// Returns the byte offset at `idx`
     #[inline]
     fn get_value_offset(&self, idx: usize) -> usize {
         self.src_offsets[idx].as_usize()
     }
 
-    /// Returns the start and end of the value at index `idx` along with its length
-    #[inline]
-    fn get_value_range(&self, idx: usize) -> (usize, usize, OffsetSize) {
-        // These can only fail if `array` contains invalid data
-        let start = self.get_value_offset(idx);
-        let end = self.get_value_offset(idx + 1);
-        let len = OffsetSize::from_usize(end - start).expect("illegal offset range");
-        (start, end, len)
-    }
-
     fn extend_offsets_idx(&mut self, iter: impl Iterator<Item = usize>) {
+        let src_offsets = self.src_offsets;
+        let base = self.dst_offsets.len();
+        // Push lengths first — only reads from src_offsets, no serial dependency
+        // on cur_offset, which lets LLVM consider vectorising the gather loads.
         self.dst_offsets.extend(iter.map(|idx| {
-            let start = self.src_offsets[idx].as_usize();
-            let end = self.src_offsets[idx + 1].as_usize();
-            let len = OffsetSize::from_usize(end - start).expect("illegal offset range");
-            self.cur_offset += len;
-
-            self.cur_offset
+            OffsetSize::from_usize(
+                src_offsets[idx + 1].as_usize() - src_offsets[idx].as_usize(),
+            )
+            .expect("illegal offset range")
         }));
+        // Convert lengths to absolute offsets via prefix sum.
+        let mut running = self.cur_offset;
+        for off in &mut self.dst_offsets[base..] {
+            running += *off;
+            *off = running;
+        }
+        self.cur_offset = running;
     }
 
     /// Extends the in-progress array by the indexes in the provided iterator
@@ -863,13 +861,22 @@ where
 
     fn extend_offsets_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>, count: usize) {
         self.dst_offsets.reserve_exact(count);
+        // Borrow src_offsets as a local to allow simultaneous mutable borrow of dst_offsets.
+        let src_offsets = self.src_offsets;
         for (start, end) in iter {
-            // These can only fail if `array` contains invalid data
-            for idx in start..end {
-                let (_, _, len) = self.get_value_range(idx);
-                self.cur_offset += len;
-                self.dst_offsets.push(self.cur_offset);
+            let src_base = src_offsets[start];
+            let out_base = self.cur_offset;
+            let prev_len = self.dst_offsets.len();
+            // Bulk-copy the raw source offsets, then shift them in-place.
+            // The shift is a uniform `x - src_base + out_base`, which LLVM
+            // auto-vectorises. This avoids the serial dependency of the
+            // previous per-row running-sum loop.
+            self.dst_offsets
+                .extend_from_slice(&src_offsets[start + 1..=end]);
+            for off in &mut self.dst_offsets[prev_len..] {
+                *off = *off - src_base + out_base;
             }
+            self.cur_offset = *self.dst_offsets.last().unwrap();
         }
     }
 
