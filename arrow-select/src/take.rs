@@ -1467,7 +1467,7 @@ where
                 .value(i)
                 .to_usize()
                 .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-            let start = u32::try_from(index * list.value_length() as usize).map_err(|_| {
+            let start = u32::try_from(list.value_offset_at(index)).map_err(|_| {
                 ArrowError::ComputeError("FixedSizeList offset overflows u32".to_string())
             })?;
 

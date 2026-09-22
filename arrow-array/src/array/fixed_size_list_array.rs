@@ -671,6 +671,7 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
+        assert_eq!(6, list_array.value_offset_at(2));
         assert_eq!(3, list_array.value_length());
         assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         for i in 0..3 {
@@ -692,6 +693,7 @@ mod tests {
         assert_eq!(2, list_array.len());
         assert_eq!(0, list_array.null_count());
         assert_eq!(3, list_array.value(0).as_primitive::<Int32Type>().value(0));
+        assert_eq!(3, list_array.value_offset_at(1));
         assert_eq!(3, list_array.value_length());
     }
 
@@ -752,6 +754,7 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(5, list_array.len());
         assert_eq!(2, list_array.null_count());
+        assert_eq!(6, list_array.value_offset_at(3));
         assert_eq!(2, list_array.value_length());
 
         let sliced_array = list_array.slice(1, 4);
@@ -766,26 +769,14 @@ mod tests {
             }
         }
 
-        // Check where each non-null value starts, and its length.
+        // Check offset and length for each non-null value.
         let sliced_list_array = sliced_array
             .as_any()
             .downcast_ref::<FixedSizeListArray>()
             .unwrap();
         assert_eq!(2, sliced_list_array.value_length());
-        assert_eq!(
-            6,
-            sliced_list_array
-                .value(2)
-                .as_primitive::<Int32Type>()
-                .value(0)
-        );
-        assert_eq!(
-            8,
-            sliced_list_array
-                .value(3)
-                .as_primitive::<Int32Type>()
-                .value(0)
-        );
+        assert_eq!(4, sliced_list_array.value_offset_at(2));
+        assert_eq!(6, sliced_list_array.value_offset_at(3));
     }
 
     #[test]
