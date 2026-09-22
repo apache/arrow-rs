@@ -404,6 +404,22 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// column index information
     fn skip_next_page(&mut self) -> Result<()>;
 
+    /// Decodes and returns a dictionary page this reader has previously
+    /// skipped past, if any.
+    ///
+    /// [`Self::skip_next_page`] may skip a dictionary page without decoding
+    /// it, since skipping rows never needs dictionary contents. If decoding
+    /// later reaches a dictionary-encoded data page, the reader is asked for
+    /// the dictionary through this method, which pays the deferred
+    /// decompression exactly once. A chunk skipped end to end never pays it.
+    ///
+    /// The default implementation returns `Ok(None)`, meaning the reader
+    /// never defers: every dictionary page it consumes is returned through
+    /// [`Self::get_next_page`] as before.
+    fn take_deferred_dictionary(&mut self) -> Result<Option<Page>> {
+        Ok(None)
+    }
+
     /// Returns `true` if the next page can be assumed to contain the start of a new record
     ///
     /// Prior to parquet V2 the specification was ambiguous as to whether a single record
