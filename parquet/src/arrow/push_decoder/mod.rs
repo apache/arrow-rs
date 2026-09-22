@@ -2286,7 +2286,7 @@ mod test {
         let range = &preview[0].ranges[0];
         let middle = range.start + (range.end - range.start) / 2;
         assert!(middle > range.start);
-        push_ranges_to_decoder(&mut decoder, vec![range.start..middle]);
+        push_ranges_to_decoder(&mut decoder, std::iter::once(range.start..middle).collect());
         // Demand requires one buffer covering the whole planned range, rather
         // than subtracting the bytes already available in a smaller buffer.
         assert_eq!(
