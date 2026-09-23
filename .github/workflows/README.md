@@ -24,6 +24,7 @@ publishes the single required status check, **Required Checks**. This follows
 the [DataFusion Comet CI structure](https://github.com/apache/datafusion-comet/pull/5842).
 The test workflows use `workflow_call`; event routing and cancellation belong
 to `ci.yml` so that called workflows cannot cancel one another.
+`parquet.yml` covers both `parquet` and the three `parquet-variant*` crates.
 
 | Event                       | Suites                                                                 |
 | --------------------------- | ---------------------------------------------------------------------- |

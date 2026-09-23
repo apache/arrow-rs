@@ -93,7 +93,7 @@ class RoutingTests(unittest.TestCase):
         self.always = {"dev", "rust", "docs"}
         self.all_suites = self.always | {
             "arrow", "arrow-flight", "parquet", "parquet-derive",
-            "parquet-variant", "parquet-geospatial", "integration", "audit",
+            "parquet-geospatial", "integration", "audit",
         }
 
     def select(self, event, paths):
@@ -113,18 +113,25 @@ class RoutingTests(unittest.TestCase):
             ([], set()),
             (["README.md"], set()),
             (["arrow-buffer/src/lib.rs"], {"arrow", "arrow-flight", "parquet", "integration"}),
-            (["arrow-avro/src/lib.rs"], {"arrow", "parquet"}),
+            (["arrow-avro/src/lib.rs"], {"arrow"}),
             (["arrow-flight/src/lib.rs"], {"arrow-flight", "integration"}),
             (["arrow-pyarrow/src/lib.rs"], {"integration"}),
             (["parquet/src/lib.rs"], {"parquet", "parquet-derive"}),
             (["parquet_derive/src/lib.rs"], {"parquet-derive"}),
-            (["parquet-variant-json/src/lib.rs"], {"parquet", "parquet-variant"}),
-            (["parquet-geospatial/src/lib.rs"], {"parquet-geospatial"}),
-            (["arrow-row/Cargo.toml"], {"arrow", "integration", "audit"}),
+            (["parquet-variant-json/src/lib.rs"], {"parquet"}),
+            (["parquet-geospatial/src/lib.rs"], {"parquet", "parquet-geospatial"}),
+            (["arrow-row/Cargo.toml"], {"arrow", "parquet", "integration", "audit"}),
             (["some/nested/Cargo.lock"], {"audit"}),
+            (["testing"], {"parquet"}),
+            (["parquet-testing"], {"parquet"}),
+            (["parquet-variant/src/lib.rs"], {"parquet"}),
+            (["parquet-variant-compute/src/lib.rs"], {"parquet"}),
+            (["arrow-arith/src/lib.rs"], {"arrow", "parquet", "integration"}),
+            (["arrow-ord/src/lib.rs"], {"arrow", "parquet", "integration"}),
+            (["arrow-string/src/lib.rs"], {"arrow", "parquet", "integration"}),
             # A move or deletion must still select the affected suites.
-            (["arrow-cmp/old.rs", "parquet-geospatial/new.rs"], {"arrow", "integration", "parquet-geospatial"}),
-            (["arrow-cmp/file\nwith-newline.rs"], {"arrow", "integration"}),
+            (["arrow-cmp/old.rs", "parquet-geospatial/new.rs"], {"arrow", "parquet", "integration", "parquet-geospatial"}),
+            (["arrow-cmp/file\nwith-newline.rs"], {"arrow", "parquet", "integration"}),
         ]
         for paths, expected in cases:
             with self.subTest(paths=paths):

@@ -52,18 +52,25 @@ suites:
     - arrow-schema/**
     - arrow-select/**
   parquet:
+    - testing
+    - parquet-testing
     - arrow/**
+    - arrow-arith/**
     - arrow-array/**
     - arrow-buffer/**
     - arrow-cast/**
+    - arrow-cmp/**
+    - arrow-csv/**
     - arrow-data/**
+    - arrow-ipc/**
+    - arrow-json/**
+    - arrow-ord/**
+    - arrow-row/**
     - arrow-schema/**
     - arrow-select/**
-    - arrow-ipc/**
-    - arrow-csv/**
-    - arrow-json/**
-    - arrow-avro/**
+    - arrow-string/**
     - parquet/**
+    - parquet-geospatial/**
     - parquet-variant/**
     - parquet-variant-compute/**
     - parquet-variant-json/**
@@ -71,10 +78,6 @@ suites:
     - parquet/**
     - parquet_derive/**
     - parquet_derive_test/**
-  parquet-variant:
-    - parquet-variant/**
-    - parquet-variant-json/**
-    - parquet-variant-compute/**
   parquet-geospatial:
     - parquet-geospatial/**
   integration:
