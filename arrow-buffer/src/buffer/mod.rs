@@ -33,3 +33,5 @@ mod null;
 pub use null::*;
 mod run;
 pub use run::*;
+mod aligned_vec;
+pub use aligned_vec::*;
