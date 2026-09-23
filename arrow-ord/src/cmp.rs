@@ -1141,8 +1141,16 @@ mod tests {
 
         // REE, nested dictionary, and complex types are not supported.
         assert!(!supports_distinct(&RunEndEncoded(
-            Arc::new(Field::new("run_ends", Int32, false)),
-            Arc::new(Field::new("values", Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                Int32,
+                false
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                Int32,
+                true
+            )),
         )));
         assert!(!supports_distinct(&Dictionary(
             Box::new(Int16),

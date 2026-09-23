@@ -224,7 +224,11 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             Some(s) if s == "runendencoded" => {
                 // return a run end encoded with placeholder types as children aren't defined in the map
                 Ok(DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        false,
+                    )),
                     default_field,
                 ))
             }
