@@ -1106,9 +1106,11 @@ mod test {
 
     #[test]
     fn test_json_to_variant_rejects_non_finite_double() {
-        let mut builder = VariantBuilder::new();
-        let error = builder.append_json("1e400").unwrap_err().to_string();
-        assert!(error.contains("finite number"), "{error}");
+        for json in ["1e400", r#"{"a":1e400,"a":1}"#] {
+            let mut builder = VariantBuilder::new();
+            let error = builder.append_json(json).unwrap_err().to_string();
+            assert!(error.contains("finite number"), "{json}: {error}");
+        }
     }
 
     #[test]
@@ -1170,13 +1172,17 @@ mod test {
 
     #[test]
     fn test_json_to_variant_duplicate_keys_respect_validation() -> Result<(), ArrowError> {
-        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
-        let error = builder
-            .append_json(r#"{"a":1,"a":2}"#)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("Duplicate field name: a"), "{error}");
+        for json in [
+            r#"{"a":1,"a":2}"#,
+            r#"{"a":1,"\u0061":2}"#,
+            r#"{"outer":{"a":1,"a":2}}"#,
+        ] {
+            let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
+            let error = builder.append_json(json).unwrap_err().to_string();
+            assert!(error.contains("Duplicate field name: a"), "{json}: {error}");
+        }
 
+        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
         builder.append_json(r#"{"a":3}"#)?;
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;

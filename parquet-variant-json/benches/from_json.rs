@@ -47,6 +47,14 @@ fn bench_from_json(c: &mut Criterion) {
             "nested",
             r#"{"outer":[{"id":1,"values":[1.25,2.50]},{"id":2,"values":[3.75,4.00]}]}"#,
         ),
+        (
+            "descending_keys",
+            r#"{"z":1,"y":2,"x":3,"w":4,"v":5,"u":6,"t":7,"s":8,"r":9,"q":10,"p":11,"o":12}"#,
+        ),
+        (
+            "duplicate_keys",
+            r#"{"value":{"discarded":[1,2,3,4,5]},"other":1,"value":{"kept":1.25}}"#,
+        ),
     ];
 
     let mut group = c.benchmark_group("variant_from_json");
