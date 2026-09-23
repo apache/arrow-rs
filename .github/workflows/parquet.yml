@@ -91,10 +91,12 @@ jobs:
           # Test parquet examples
           cargo run -p parquet --example read_parquet
           cargo run -p parquet --example read_with_rowgroup --features="async"
-      - name: Test (parquet_derive)
+      - name: Test parquet_derive
         run: |
           cargo test -p parquet_derive
           cargo test -p parquet_derive_test
+      - name: Test parquet-geospatial
+        run: cargo test -p parquet-geospatial
 
   # test compilation
   linux-features:
@@ -155,6 +157,8 @@ jobs:
         run: cargo check -p parquet-variant-json
       - name: Check compilation (parquet-variant-compute)
         run: cargo check -p parquet-variant-compute
+      - name: Check compilation (parquet-geospatial)
+        run: cargo check -p parquet-geospatial
 
 
   # test the parquet crate builds against wasm32 in stable rust
@@ -236,3 +240,5 @@ jobs:
         run: cargo clippy -p parquet-variant-json --all-targets --all-features -- -D warnings
       - name: Run clippy (parquet-variant-compute)
         run: cargo clippy -p parquet-variant-compute --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-geospatial)
+        run: cargo clippy -p parquet-geospatial --all-targets --all-features -- -D warnings
