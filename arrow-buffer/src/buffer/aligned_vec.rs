@@ -100,7 +100,7 @@ impl AlignedVec {
     // Returns the entire initialized region as bytes (includes unwritten tail).
     // Used internally to write into positions past filled_len.
     fn allocated_bytes_mut(&mut self) -> &mut [u8] {
-        let ptr = self.raw_vector.as_mut_ptr() as *mut u8;
+        let ptr = self.raw_vector.as_mut_ptr().cast::<u8>();
         let len = self.raw_vector.len() * Self::CHUNK;
         unsafe { std::slice::from_raw_parts_mut(ptr, len) }
     }
@@ -108,14 +108,14 @@ impl AlignedVec {
     /// Returns the written bytes as a slice.
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
-        let ptr = self.raw_vector.as_ptr() as *const u8;
+        let ptr = self.raw_vector.as_ptr().cast::<u8>();
         unsafe { std::slice::from_raw_parts(ptr, self.filled_len) }
     }
 
     /// Returns the written bytes as a mutable slice.
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
-        let ptr = self.raw_vector.as_mut_ptr() as *mut u8;
+        let ptr = self.raw_vector.as_mut_ptr().cast::<u8>();
         unsafe { std::slice::from_raw_parts_mut(ptr, self.filled_len) }
     }
 
@@ -159,12 +159,12 @@ impl Default for AlignedVec {
 }
 
 impl From<AlignedVec> for Buffer {
-    fn from(vec: AlignedVec) -> Self {
+    fn from(mut vec: AlignedVec) -> Self {
         let filled_len = vec.filled_len;
         if filled_len == 0 {
             return Buffer::from(&[] as &[u8]);
         }
-        let ptr = NonNull::new(vec.raw_vector.as_ptr() as *mut u8)
+        let ptr = NonNull::new(vec.raw_vector.as_mut_ptr().cast::<u8>())
             .expect("Vec<Aligned64> heap pointer is never null when len > 0");
         // Safety: ptr is valid for filled_len bytes; Arc<AlignedVec> keeps the allocation alive.
         unsafe { Buffer::from_custom_allocation(ptr, filled_len, Arc::new(vec)) }
