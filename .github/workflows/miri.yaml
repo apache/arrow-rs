@@ -28,6 +28,7 @@ on:
       - main
   pull_request:
     paths:
+      - .config/nextest.toml
       - Cargo.toml
       - Cargo.lock
       - .github/**
@@ -71,7 +72,7 @@ jobs:
           rustup override set nightly
           cargo miri setup
       - name: Set up nextest
-        uses: taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833  # v2.87.1
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
           tool: nextest
       - name: Run Miri Checks

@@ -207,8 +207,16 @@ mod tests {
                 Field::new(
                     OFFSET_FIELD_NAME,
                     DataType::RunEndEncoded(
-                        Arc::new(Field::new("run_ends", run_ends_type, false)),
-                        Arc::new(Field::new("values", DataType::Int16, false)),
+                        Arc::new(Field::new(
+                            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                            run_ends_type,
+                            false,
+                        )),
+                        Arc::new(Field::new(
+                            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                            DataType::Int16,
+                            false,
+                        )),
                     ),
                     false,
                 ),
@@ -411,8 +419,16 @@ mod tests {
             Field::new(
                 OFFSET_FIELD_NAME,
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Boolean, false)),
-                    Arc::new(Field::new("values", DataType::Int16, false)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Boolean,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        DataType::Int16,
+                        false,
+                    )),
                 ),
                 false,
             ),
@@ -434,8 +450,16 @@ mod tests {
             Field::new(
                 OFFSET_FIELD_NAME,
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::UInt16, false)),
-                    Arc::new(Field::new("values", DataType::Int32, false)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::UInt16,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        false,
+                    )),
                 ),
                 false,
             ),

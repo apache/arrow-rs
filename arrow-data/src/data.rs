@@ -333,21 +333,6 @@ impl ArrayData {
         buffers: Vec<Buffer>,
         child_data: Vec<ArrayData>,
     ) -> Result<Self, ArrowError> {
-        // we must check the length of `null_bit_buffer` first
-        // because we use this buffer to calculate `null_count`
-        // in `ArrayDataBuilder::build`.
-        if let Some(null_bit_buffer) = null_bit_buffer.as_ref() {
-            let len_plus_offset = checked_len_plus_offset(&data_type, len, offset)?;
-            let needed_len = bit_util::ceil(len_plus_offset, 8);
-            if null_bit_buffer.len() < needed_len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "null_bit_buffer size too small. got {} needed {}",
-                    null_bit_buffer.len(),
-                    needed_len
-                )));
-            }
-        }
-
         let builder = Self::inner_new_builder(
             data_type,
             len,
@@ -1494,7 +1479,7 @@ impl ArrayData {
     ///
     /// Does not (yet) check
     /// 1. Union type_ids are valid see [#85](https://github.com/apache/arrow-rs/issues/85)
-    /// 2. the the null count is correct and that any
+    /// 2. the null count is correct and that any
     /// 3. nullability requirements of its children are correct
     ///
     /// [#85]: https://github.com/apache/arrow-rs/issues/85
@@ -2331,6 +2316,21 @@ impl ArrayDataBuilder {
             skip_validation,
         } = self;
 
+        // SAFETY: `skip_validation` is only set to true using `unsafe` APIs.
+        let validate = !skip_validation.get() || cfg!(feature = "force_validate");
+        if validate && let Some(buffer) = null_bit_buffer.as_ref() {
+            // Check before constructing the BooleanBuffer, which would otherwise panic.
+            let len_plus_offset = checked_len_plus_offset(&data_type, len, offset)?;
+            let needed_len = bit_util::ceil(len_plus_offset, 8);
+            if buffer.len() < needed_len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "null_bit_buffer size too small. got {} needed {}",
+                    buffer.len(),
+                    needed_len
+                )));
+            }
+        }
+
         let nulls = nulls
             .or_else(|| {
                 let buffer = null_bit_buffer?;
@@ -2358,8 +2358,7 @@ impl ArrayDataBuilder {
             data.align_buffers();
         }
 
-        // SAFETY: `skip_validation` is only set to true using `unsafe` APIs
-        if !skip_validation.get() || cfg!(feature = "force_validate") {
+        if validate {
             data.validate_data()?;
         }
         Ok(data)
@@ -2955,6 +2954,59 @@ mod tests {
     }
 
     #[test]
+    fn test_builder_rejects_short_null_bit_buffer() {
+        for (len, offset) in [(8000, 0), (8, 1)] {
+            let err = ArrayData::builder(DataType::Int32)
+                .len(len)
+                .offset(offset)
+                .add_buffer(make_i32_buffer(len + offset))
+                .null_bit_buffer(Some(Buffer::from([0_u8])))
+                .build()
+                .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Invalid argument error: null_bit_buffer size too small. got 1 needed {}",
+                    bit_util::ceil(len + offset, 8)
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn test_builder_null_bit_buffer_length_overflow() {
+        let err = ArrayData::builder(DataType::Int32)
+            .len(usize::MAX)
+            .offset(1)
+            .null_bit_buffer(Some(Buffer::default()))
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Invalid argument error: Length {} with offset 1 overflows usize for Int32",
+                usize::MAX
+            )
+        );
+    }
+
+    #[test]
+    fn test_builder_accepts_valid_null_bit_buffer() {
+        for (len, offset) in [(8, 0), (7, 1)] {
+            let data = ArrayData::builder(DataType::Int32)
+                .len(len)
+                .offset(offset)
+                .add_buffer(make_i32_buffer(len + offset))
+                .null_bit_buffer(Some(Buffer::from([0_u8])))
+                .build()
+                .unwrap();
+            assert_eq!(data.len(), len);
+            assert_eq!(data.offset(), offset);
+            assert_eq!(data.null_count(), len);
+        }
+    }
+
+    #[test]
     fn test_count_nulls() {
         let buffer = Buffer::from([0b00010110, 0b10011111]);
         let buffer = NullBuffer::new(BooleanBuffer::new(buffer, 0, 16));
@@ -3124,8 +3176,16 @@ mod tests {
     #[cfg(not(feature = "force_validate"))]
     fn test_validate_values_rejects_a_non_integer_run_end() {
         let data_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         let run_end_encoded = unsafe {
             ArrayData::builder(data_type)
