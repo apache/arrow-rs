@@ -52,7 +52,9 @@ fn test_read_with_custom_page_index_provider_sync() {
 
 // this will fail until https://github.com/apache/arrow-rs/pull/11182 is merged
 #[test]
-#[should_panic]
+#[should_panic(
+    expected = r#"called `Result::unwrap()` on an `Err` value: General("Invalid column index 2, column was not fetched")"#
+)]
 fn test_read_with_custom_page_index_provider_push() {
     run_test(Reader::Push);
 }
@@ -60,7 +62,9 @@ fn test_read_with_custom_page_index_provider_push() {
 // this will fail until https://github.com/apache/arrow-rs/pull/11182 is merged
 #[cfg(feature = "async")]
 #[test]
-#[should_panic]
+#[should_panic(
+    expected = r#"called `Result::unwrap()` on an `Err` value: General("Invalid column index 2, column was not fetched")"#
+)]
 fn test_read_with_custom_page_index_provider_async() {
     run_test(Reader::Async);
 }
@@ -423,7 +427,7 @@ fn create_test_file() -> Bytes {
         .build();
 
     // Write 3 row groups with 50 rows each (150 rows total)
-    let batch = make_batch(&(0..150).collect::<Vec<i32>>().as_slice());
+    let batch = make_batch((0..150).collect::<Vec<i32>>().as_slice());
     let mut buffer = Vec::with_capacity(1024);
     let mut writer =
         ArrowWriter::try_new(&mut buffer, batch.schema().clone(), Some(props)).unwrap();
