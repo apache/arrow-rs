@@ -15,11 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Select CI suites from the event and changed PR paths.
-
-Use a local path filter, as in datafusion-comet: dorny/paths-filter is not
-on the ASF Actions allowlist.
-"""
+"""Select CI suites from the event and changed PR paths."""
 
 import fnmatch
 import json
