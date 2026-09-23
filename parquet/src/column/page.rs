@@ -413,6 +413,23 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// the dictionary through this method, which pays the deferred
     /// decompression exactly once. A chunk skipped end to end never pays it.
     ///
+    /// Returns `true` if [`Self::skip_next_page`] retains a dictionary page it
+    /// skips past, so that [`Self::take_deferred_dictionary`] can recover it.
+    ///
+    /// Readers that return `false` — the default, and therefore every existing
+    /// implementation — keep the behaviour they had before deferral existed:
+    /// the column reader reads and installs the dictionary eagerly rather than
+    /// skipping past it. This matters because a skipped dictionary that cannot
+    /// be recovered is simply lost, and the first dictionary-encoded data page
+    /// decoded afterwards would have no dictionary to decode against.
+    ///
+    /// An implementation that returns `true` must ensure every dictionary page
+    /// passed to [`Self::skip_next_page`] is recoverable, for as long as the
+    /// column chunk is being read.
+    fn supports_deferred_dictionary(&self) -> bool {
+        false
+    }
+
     /// The default implementation returns `Ok(None)`, meaning the reader
     /// never defers: every dictionary page it consumes is returned through
     /// [`Self::get_next_page`] as before.

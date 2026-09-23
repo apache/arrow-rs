@@ -1224,6 +1224,26 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
         Ok(())
     }
 
+    fn supports_deferred_dictionary(&self) -> bool {
+        match &self.state {
+            // Page headers are read as the chunk is walked, so a dictionary is
+            // recognised by its header type whether or not the column metadata
+            // recorded a `dictionary_page_offset` for it.
+            SerializedPageReaderState::Values { .. } => true,
+            // The offset-index state can only represent a dictionary the
+            // metadata gave an offset for: `dictionary_page` is synthesised
+            // from the gap between `byte_range().0` and the first page
+            // location, and when `dictionary_page_offset` is absent those are
+            // the same address. A dictionary inlined ahead of the first data
+            // page is then indistinguishable from a data page location, so
+            // skipping it would drop it. Decline to defer in that case and let
+            // the column reader install it eagerly instead.
+            SerializedPageReaderState::Pages {
+                dictionary_page, ..
+            } => dictionary_page.is_some(),
+        }
+    }
+
     fn take_deferred_dictionary(&mut self) -> Result<Option<Page>> {
         let Some(deferred) = self.deferred_dictionary.take() else {
             return Ok(None);
@@ -3180,5 +3200,171 @@ mod tests {
         let (records, _, read) = reader.read_records(5, None, None, &mut values).unwrap();
         assert_eq!((records, read), (5, 5));
         assert_eq!(values, vec![1, 2, 3, 4, 5]);
+    }
+
+    /// A [`PageReader`] that implements only what existed before deferral: it
+    /// forwards the required trait methods and takes the defaults for
+    /// `supports_deferred_dictionary` (`false`) and `take_deferred_dictionary`
+    /// (`Ok(None)`). This stands in for every third-party implementation, none
+    /// of which can retain a dictionary that `skip_next_page` skips past.
+    struct NonDeferringPageReader(SerializedPageReader<Bytes>);
+
+    impl Iterator for NonDeferringPageReader {
+        type Item = Result<Page>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.get_next_page().transpose()
+        }
+    }
+
+    impl PageReader for NonDeferringPageReader {
+        fn get_next_page(&mut self) -> Result<Option<Page>> {
+            self.0.get_next_page()
+        }
+
+        fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
+            self.0.peek_next_page()
+        }
+
+        fn skip_next_page(&mut self) -> Result<()> {
+            self.0.skip_next_page()
+        }
+    }
+
+    fn non_deferring_int32_reader(
+        bytes: Bytes,
+    ) -> crate::column::reader::ColumnReaderImpl<Int32Type> {
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let descr = meta.file_metadata().schema_descr().column(0);
+        let col_meta = meta.row_group(0).column(0).clone();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &col_meta, total_rows, None).unwrap();
+        crate::column::reader::ColumnReaderImpl::<Int32Type>::new(
+            descr,
+            Box::new(NonDeferringPageReader(pages)),
+        )
+    }
+
+    /// A page reader that cannot give a skipped dictionary back must still get
+    /// the eager path. Skipping past its dictionary would drop it, and the
+    /// first dictionary-encoded data page decoded afterwards would have no
+    /// dictionary to decode against — a panic in `set_data`, not an error.
+    ///
+    /// Removing the `supports_deferred_dictionary` gate in
+    /// `GenericColumnReader::skip_records` turns this test red.
+    #[test]
+    fn a_reader_that_cannot_defer_still_gets_its_dictionary() {
+        let (bytes, _) = dict_column_file();
+        let mut reader = non_deferring_int32_reader(bytes);
+
+        assert_eq!(reader.skip_records(2).unwrap(), 2);
+
+        let mut values = Vec::new();
+        let (records, _, read) = reader.read_records(3, None, None, &mut values).unwrap();
+        assert_eq!(records, 3);
+        assert_eq!(read, 3);
+        assert_eq!(values, vec![3, 4, 5]);
+    }
+
+    /// The same reader must also survive a whole-chunk skip. Nothing is
+    /// decoded, so nothing needs the dictionary, but the eager read still has
+    /// to leave the page cursor in a consistent place.
+    #[test]
+    fn a_reader_that_cannot_defer_survives_a_whole_chunk_skip() {
+        let (bytes, _) = dict_column_file();
+        let mut reader = non_deferring_int32_reader(bytes);
+
+        assert_eq!(reader.skip_records(5).unwrap(), 5);
+
+        let mut values = Vec::new();
+        let (records, _, _) = reader.read_records(1, None, None, &mut values).unwrap();
+        assert_eq!(records, 0, "chunk is exhausted");
+        assert!(values.is_empty());
+    }
+
+    /// The probe has to describe what the reader can actually do. Without page
+    /// locations the reader walks page headers, so it recognises a dictionary
+    /// by its header type and can always defer.
+    #[test]
+    fn values_state_supports_deferral() {
+        let (bytes, _) = dict_column_file();
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let col_meta = meta.row_group(0).column(0).clone();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &col_meta, total_rows, None).unwrap();
+
+        assert!(pages.supports_deferred_dictionary());
+    }
+
+    /// With page locations, a dictionary is only representable when the
+    /// metadata recorded an offset for it. `dict_column_file` writes one, so
+    /// the synthesised `dictionary_page` is present and deferral is safe.
+    #[test]
+    fn offset_index_state_with_a_dictionary_offset_supports_deferral() {
+        let (bytes, _) = dict_column_file();
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let col_meta = meta.row_group(0).column(0).clone();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+        let (dict_offset, data_offset) = (
+            col_meta.dictionary_page_offset().unwrap(),
+            col_meta.data_page_offset(),
+        );
+        assert_ne!(
+            dict_offset, data_offset,
+            "fixture must record a dictionary offset"
+        );
+
+        let locations = vec![PageLocation {
+            offset: data_offset,
+            compressed_page_size: 0,
+            first_row_index: 0,
+        }];
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &col_meta, total_rows, Some(locations))
+                .unwrap();
+
+        assert!(pages.supports_deferred_dictionary());
+    }
+
+    /// When the metadata records no dictionary offset, `byte_range()` starts
+    /// at the first data page, so the synthesised `dictionary_page` is `None`
+    /// and a dictionary inlined ahead of that page is indistinguishable from a
+    /// data page location. Skipping it would drop it, so the probe must say
+    /// so and let the column reader read it eagerly instead.
+    #[test]
+    fn offset_index_state_without_a_dictionary_offset_declines_deferral() {
+        let (bytes, _) = dict_column_file();
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+
+        // Drop the dictionary offset, reproducing the older parquet-mr writers
+        // that inline a dictionary without recording where it is.
+        let col_meta = meta.row_group(0).column(0).clone();
+        let stripped = col_meta
+            .clone()
+            .into_builder()
+            .set_dictionary_page_offset(None)
+            .build()
+            .unwrap();
+
+        let locations = vec![PageLocation {
+            offset: stripped.data_page_offset(),
+            compressed_page_size: 0,
+            first_row_index: 0,
+        }];
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &stripped, total_rows, Some(locations))
+                .unwrap();
+
+        assert!(
+            !pages.supports_deferred_dictionary(),
+            "an offset-less dictionary cannot be recovered from the offset-index state"
+        );
     }
 }

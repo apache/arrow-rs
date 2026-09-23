@@ -317,15 +317,24 @@ where
                     return Ok(num_records - remaining_records);
                 };
 
-                // If dictionary, skip it without decoding: skipping rows
-                // never needs dictionary contents (value skips only advance
-                // the index cursor, whole-page skips touch nothing). The page
-                // reader keeps the page's location, so a later data page that
-                // does need the dictionary still gets it, paying the deferred
-                // decompression exactly once. A chunk skipped end to end
-                // never pays it. See `PageReader::take_deferred_dictionary`.
+                // If dictionary, skip it without decoding *when the page
+                // reader can give it back later*: skipping rows never needs
+                // dictionary contents (value skips only advance the index
+                // cursor, whole-page skips touch nothing), so a chunk skipped
+                // end to end never pays the decompression, and a later data
+                // page that does need the dictionary pays it exactly once.
+                //
+                // A reader that does not retain skipped dictionaries must
+                // still be given the eager path: skipping past a dictionary it
+                // cannot return would drop it, and the next dictionary-encoded
+                // data page would have nothing to decode against. See
+                // `PageReader::supports_deferred_dictionary`.
                 if metadata.is_dict {
-                    self.page_reader.skip_next_page()?;
+                    if self.page_reader.supports_deferred_dictionary() {
+                        self.page_reader.skip_next_page()?;
+                    } else {
+                        self.read_dictionary_page()?;
+                    }
                     continue;
                 }
 
@@ -407,6 +416,28 @@ where
             }
         }
         Ok(num_records - remaining_records)
+    }
+
+    /// Reads the next page as a dictionary page and installs it.
+    ///
+    /// Used on the skip path for readers that do not retain skipped
+    /// dictionaries, and so must consume the page through `get_next_page`
+    /// while it is still available. Returns an error if the next page is not
+    /// a dictionary page.
+    fn read_dictionary_page(&mut self) -> Result<()> {
+        match self.page_reader.get_next_page()? {
+            Some(Page::DictionaryPage {
+                buf,
+                num_values,
+                encoding,
+                is_sorted,
+            }) => self
+                .values_decoder
+                .set_dict(buf, num_values, encoding, is_sorted),
+            _ => Err(ParquetError::General(
+                "Invalid page. Expecting dictionary page".to_string(),
+            )),
+        }
     }
 
     /// Installs a dictionary page the page reader skipped past, if this
