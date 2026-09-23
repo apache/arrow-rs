@@ -90,6 +90,7 @@ fn test_read_with_custom_page_index_provider() {
     assert!(provider.column_index(0, 2).is_none()); // Not populated
     assert!(provider.column_index(2, 0).is_some());
     assert!(provider.column_index(2, 1).is_none()); // Not populated
+    assert!(provider.column_index(2, 2).is_some());
 
     // Reset statistics so validation checks don't affect the final counts
     provider.reset_stats();
