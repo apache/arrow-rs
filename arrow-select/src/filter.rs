@@ -797,9 +797,8 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
     };
 
     for (index, mask) in mask_chunks.iter().enumerate() {
-        // Skipping words with no kept bits before touching the values makes
-        // sparse filters cost a load and a test per word; at moderate
-        // densities the branch is never taken
+        // Words with no kept bits are skipped before the corresponding values
+        // are read, so only the mask is touched for them
         if mask == 0 {
             continue;
         }

@@ -535,6 +535,61 @@ mod tests {
     }
 
     #[test]
+    fn test_chunk_aligned() {
+        let input: Vec<u8> = (0..24).collect();
+        let buffer = Buffer::from(input);
+
+        let bitchunks = buffer.bit_chunks(0, 24 * 8);
+        assert_eq!(3, bitchunks.chunk_len());
+        assert_eq!(0x0706050403020100, bitchunks.chunk(0));
+        assert_eq!(0x0f0e0d0c0b0a0908, bitchunks.chunk(1));
+        assert_eq!(0x1716151413121110, bitchunks.chunk(2));
+    }
+
+    #[test]
+    fn test_chunk_matches_iter() {
+        // 26 bytes cover three complete chunks at every offset below, with
+        // the last one needing the byte after its eight when the bit offset
+        // is not zero
+        let input: Vec<u8> = (0..26_u8).map(|i| i.wrapping_mul(13)).collect();
+        let buffer = Buffer::from(input);
+
+        // Bit offsets within a byte and across one, lengths ending on and
+        // off a word boundary
+        for offset in (0..8).chain([8, 13]) {
+            for len in [64, 65, 128, 130, 191, 192] {
+                let bitchunks = buffer.bit_chunks(offset, len);
+                assert_eq!(len / 64, bitchunks.chunk_len());
+                for index in 0..bitchunks.chunk_len() {
+                    assert_eq!(
+                        bitchunks.iter().nth(index),
+                        Some(bitchunks.chunk(index)),
+                        "offset {offset} len {len} chunk {index}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "chunk index out of bounds")]
+    fn test_chunk_out_of_bounds() {
+        let buffer = Buffer::from(vec![0xFF_u8; 16]);
+        let bitchunks = buffer.bit_chunks(0, 128);
+        assert_eq!(2, bitchunks.chunk_len());
+        bitchunks.chunk(2);
+    }
+
+    #[test]
+    #[should_panic(expected = "chunk index out of bounds")]
+    fn test_chunk_out_of_bounds_no_complete_chunk() {
+        let buffer = Buffer::from(vec![0xFF_u8; 8]);
+        let bitchunks = buffer.bit_chunks(1, 63);
+        assert_eq!(0, bitchunks.chunk_len());
+        bitchunks.chunk(0);
+    }
+
+    #[test]
     fn test_iter_remainder_out_of_bounds() {
         // allocating a full page should trigger a fault when reading out of bounds
         const ALLOC_SIZE: usize = 4 * 1024;
