@@ -26,7 +26,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, NullBufferBuilder,
+    AlignedVec, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, NullBufferBuilder,
     OffsetBuffer, RunEndBuffer, ScalarBuffer, bit_util,
 };
 use arrow_cmp::make_comparator;
@@ -933,7 +933,7 @@ where
             .len()
             .checked_div(values.len().max(1))
             .unwrap_or(0);
-        let mut dst_buf: Vec<u8> = Vec::with_capacity(
+        let mut dst_buf = AlignedVec::with_capacity(
             avg_row_len
                 .saturating_mul(indices.len())
                 .saturating_mul(bytes_per_value),

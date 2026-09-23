@@ -99,14 +99,6 @@ impl AlignedVec {
         }
     }
 
-    // Returns the entire initialized region as bytes (includes unwritten tail).
-    // Used internally to write into positions past filled_len.
-    fn allocated_bytes_mut(&mut self) -> &mut [u8] {
-        let ptr = self.raw_vector.as_mut_ptr().cast::<u8>();
-        let len = self.raw_vector.len() * Self::CHUNK;
-        unsafe { std::slice::from_raw_parts_mut(ptr, len) }
-    }
-
     /// Returns the written bytes as a slice.
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
@@ -124,18 +116,23 @@ impl AlignedVec {
     /// Appends `data` to the buffer, reallocating if necessary.
     ///
     /// Empty slices are a no-op.
+    #[inline]
     pub fn extend_from_slice(&mut self, data: &[u8]) {
-        if data.is_empty() {
-            return;
-        }
         let offset = self.filled_len;
-        let end = offset + data.len();
-        // Fast path: enough initialized chunks already exist; skip div_ceil + set_len.
-        if end > self.raw_vector.len() * Self::CHUNK {
-            self.ensure_capacity(end);
+        let new_len = offset + data.len();
+        if new_len > self.raw_vector.len() * Self::CHUNK {
+            self.ensure_capacity(new_len);
         }
-        self.allocated_bytes_mut()[offset..end].copy_from_slice(data);
-        self.filled_len = end;
+        // SAFETY: ensure_capacity guarantees the allocation covers [0, new_len).
+        // offset + data.len() == new_len <= allocated bytes. No overlap with src.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                self.raw_vector.as_mut_ptr().cast::<u8>().add(offset),
+                data.len(),
+            );
+        }
+        self.filled_len = new_len;
     }
 
     /// Reduces the written length to `len` bytes. No-op if `len` is not less than the
