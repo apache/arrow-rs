@@ -19,7 +19,7 @@ use crate::array::PrimitiveArray;
 use crate::null_sentinel;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
-    AlignedVec, BooleanBuffer, IntervalDayTime, IntervalMonthDayNano, NullBuffer, bit_util, i256,
+    BooleanBuffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer, NullBuffer, bit_util, i256,
 };
 use arrow_schema::{DataType, SortOptions};
 use half::f16;
@@ -364,14 +364,14 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
 
     let len = rows.len();
 
-    let mut nulls = AlignedVec::with_capacity(bit_util::ceil(len, 64) * 8);
-    let mut values = AlignedVec::with_capacity(bit_util::ceil(len, 64) * 8);
+    let mut nulls = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
+    let mut values = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
 
     let chunks = len / 64;
     let remainder = len % 64;
     for chunk in 0..chunks {
-        let mut null_packed = 0u64;
-        let mut values_packed = 0u64;
+        let mut null_packed = 0;
+        let mut values_packed = 0;
 
         for bit_idx in 0..64 {
             let i = split_off(&mut rows[bit_idx + chunk * 64], 2);
@@ -380,13 +380,13 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
             values_packed |= (value as u64) << bit_idx;
         }
 
-        nulls.extend_from_slice(&null_packed.to_le_bytes());
-        values.extend_from_slice(&values_packed.to_le_bytes());
+        nulls.push(null_packed);
+        values.push(values_packed);
     }
 
     if remainder != 0 {
-        let mut null_packed = 0u64;
-        let mut values_packed = 0u64;
+        let mut null_packed = 0;
+        let mut values_packed = 0;
 
         for bit_idx in 0..remainder {
             let i = split_off(&mut rows[bit_idx + chunks * 64], 2);
@@ -395,8 +395,8 @@ pub fn decode_bool(rows: &mut [&[u8]], options: SortOptions) -> BooleanArray {
             values_packed |= (value as u64) << bit_idx;
         }
 
-        nulls.extend_from_slice(&null_packed.to_le_bytes());
-        values.extend_from_slice(&values_packed.to_le_bytes());
+        nulls.push(null_packed);
+        values.push(values_packed);
     }
 
     let nulls = NullBuffer::new(BooleanBuffer::new(nulls.into(), 0, len));
@@ -454,7 +454,7 @@ pub fn decode_fixed_size_binary(
         panic!("cannot decode FixedSizeBinary({size})");
     }
     let num_rows = rows.len();
-    let mut values = AlignedVec::with_capacity(size as usize * num_rows);
+    let mut values = MutableBuffer::new(size as usize * num_rows);
     let nulls = decode_nulls(rows);
 
     let encoded_len = size as usize + 1;
@@ -465,7 +465,7 @@ pub fn decode_fixed_size_binary(
     }
 
     if options.descending {
-        for v in values.as_mut_slice() {
+        for v in values.as_slice_mut() {
             *v = !*v;
         }
     }

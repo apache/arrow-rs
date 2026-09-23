@@ -24,7 +24,7 @@ use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{AlignedVec, ArrowNativeType, MutableBuffer, NullBuffer, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
 use num_traits::{CheckedAdd, Zero};
 use std::cmp::Ordering;
@@ -453,15 +453,17 @@ fn fixed_size_binary_substring(
     let capacity = num_of_elements
         .checked_mul(new_len)
         .expect("capacity overflow");
-    let mut new_values = AlignedVec::with_capacity(capacity);
+    let mut new_values = MutableBuffer::new(capacity);
     (0..num_of_elements)
         .map(|idx| {
             let offset = idx * array.value_size();
             (offset + new_start, offset + new_start + new_len)
         })
-        .for_each(|(start, end)| {
-            new_values.extend_from_slice(&data[start..end]);
-        });
+        .try_for_each(|(start, end)| {
+            new_values
+                .try_extend_from_slice(&data[start..end])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))
+        })?;
 
     let mut nulls = array
         .nulls()
