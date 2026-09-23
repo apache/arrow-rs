@@ -2100,7 +2100,6 @@ impl<'a, O: OffsetSizeTrait> ListViewEncoder<'a, O> {
 
 /// FixedSizeList encoder.
 struct FixedSizeListEncoder<'a> {
-    list: &'a FixedSizeListArray,
     values: FieldEncoder<'a>,
     values_offset: usize,
     elem_len: usize,
@@ -2113,7 +2112,6 @@ impl<'a> FixedSizeListEncoder<'a> {
         item_plan: &FieldPlan,
     ) -> Result<Self, AvroError> {
         Ok(Self {
-            list,
             values: FieldEncoder::make_encoder(
                 list.values().as_ref(),
                 item_plan,
@@ -2126,7 +2124,7 @@ impl<'a> FixedSizeListEncoder<'a> {
 
     fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), AvroError> {
         // Starting index is relative to values() start
-        let rel = self.list.value_offset(idx) as usize;
+        let rel = idx * self.elem_len;
         let start = self.values_offset + rel;
         let end = start + self.elem_len;
         encode_blocked_range(out, start, end, |out, row| {
@@ -2551,6 +2549,34 @@ mod tests {
         expected.extend(avro_long_bytes(1));
         expected.extend(avro_long_bytes(3));
         expected.extend(avro_long_bytes(0));
+
+        let plan = FieldPlan::List {
+            items_nullability: None,
+            item_plan: Box::new(FieldPlan::Scalar),
+        };
+        let got = encode_all(&list, &plan, None);
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    fn fixed_size_list_encoder_int32_sliced() {
+        // [[1, 2], [3, 4], [5, 6]] sliced to [[3, 4], [5, 6]]
+        let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        let list = FixedSizeListArray::new(
+            Field::new("item", DataType::Int32, true).into(),
+            2,
+            Arc::new(values) as ArrayRef,
+            None,
+        )
+        .slice(1, 2);
+        let mut expected = Vec::new();
+        for row in [[3, 4], [5, 6]] {
+            expected.extend(avro_long_bytes(2));
+            for value in row {
+                expected.extend(avro_long_bytes(value));
+            }
+            expected.extend(avro_long_bytes(0));
+        }
 
         let plan = FieldPlan::List {
             items_nullability: None,
