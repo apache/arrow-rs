@@ -127,6 +127,15 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
+      - name: Enable all instruction set extensions of the runner CPU
+        # Compile for the CPU of the runner so that code gated on
+        # `cfg(target_feature = ...)` (for example the AVX / AVX2 paths in
+        # arrow-arith and arrow-array, or BMI2 `pext` based bit manipulation)
+        # is built and tested rather than the portable fallback. The default
+        # x86_64 target only enables SSE2.
+        #
+        # This appends to the RUSTFLAGS exported by setup-builder.
+        run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-cpu=native" >> $GITHUB_ENV
       # Note only run the low level crates in release mode
       # which are the most likely to have overflow tests
       - name: Test arrow-buffer
