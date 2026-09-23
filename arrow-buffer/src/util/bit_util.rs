@@ -27,6 +27,29 @@ use crate::bit_chunk_iterator::BitChunks;
 /// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
 /// this lowers to the hardware `pext` instruction; otherwise it falls back
 /// to a portable scalar loop.
+///
+/// # Functional Example
+///
+/// Using 8 bits for brevity (the function operates on all 64). Each
+/// set bit in `mask` selects the bit at the same position in `value`; the
+/// selected bits are then shifted down so they are contiguous in the low
+/// bits of the result, in their original order:
+///
+/// ```text
+/// bit:     7 6 5 4 3 2 1 0
+/// value:   a b c d e f g h
+/// mask:    0 1 1 0 1 1 0 1      set bits select b, c, e, f and h
+///            | |   | |   |
+///            v v   v v   v      copy the relevant bits into result
+/// result:  0 0 0 b c e f h
+/// ```
+///
+/// # Code Example
+///
+/// ```
+/// # use arrow_buffer::bit_util::compress;
+/// assert_eq!(compress(0b1011_0100, 0b0110_1101), 0b0000_1010);
+/// ```
 //
 // Replace with `value.compress(mask)` when `uint_gather_scatter_bits` is
 // stabilised: <https://github.com/rust-lang/rust/issues/149069>
