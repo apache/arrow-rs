@@ -70,9 +70,6 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// `ColumnChunk::offset_index_length` to reflect the position and length
     /// of the serialized offset indexes.
     fn write_offset_indexes(&mut self, page_index: &dyn PageIndexProvider) -> Result<()> {
-        // we've already checked before calling that the offset indexes are populated
-        assert!(page_index.has_offset_indexes());
-
         // iter row group
         // iter each column
         // write offset index to the file
