@@ -134,8 +134,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     fn clear_page_indexes(&mut self) {
-        for row_group in self.row_groups.iter_mut() {
-            for column_metadata in row_group.columns.iter_mut() {
+        for row_group in &mut self.row_groups {
+            for column_metadata in &mut row_group.columns {
                 column_metadata.column_index_offset = None;
                 column_metadata.column_index_length = None;
                 column_metadata.offset_index_offset = None;
