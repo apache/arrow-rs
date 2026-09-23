@@ -302,9 +302,13 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// metadata writer. Then set the corresponding `bloom_filter_offset` and
 /// `bloom_filter_length` on [`ColumnChunkMetaData`] passed to this writer.
 ///
-/// The writer serializes the page index of any [`PageIndexProvider`]. If the
-/// provider has no index for a column chunk, the writer clears the offset and
-/// length of that index in the [`ColumnChunkMetaData`].
+/// The writer serializes the page index of any [`PageIndexProvider`] attached
+/// to the input [`ParquetMetaData`]. By default, if the provider has no index
+/// for a column chunk, the offset and length of that index in the [`ColumnChunkMetaData`]
+/// are preserved in the output metadata. This is done so one can store the footer
+/// metadata externally but keep the page indexes in the original file. If this
+/// behavior is not desired, then [`Self::with_preserve_page_index_locations`] should
+/// be set to `false`.
 ///
 /// # Output Format
 ///
