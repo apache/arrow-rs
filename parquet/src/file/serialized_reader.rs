@@ -536,11 +536,15 @@ pub(crate) fn decode_page(
 /// need it.
 ///
 /// ```text
-///            skip hits the dictionary page          first data page that
+///            skip, and the reader can defer         first data page that
 ///            (record location, zero decompress)     needs the dictionary
 ///   NotSeen ─────────────────────────────▶ Deferred ─────────────────────▶ Decoded
 ///      │                                                                      ▲
-///      └── read hits the dictionary page (eager path, unchanged) ─────────────┘
+///      ├── read hits the dictionary page (eager path, unchanged) ─────────────┤
+///      │                                                                      │
+///      └── skip, but the reader cannot defer ─────────────────────────────────┘
+///          (`supports_deferred_dictionary()` is false: read it eagerly,
+///           because a skipped page this reader cannot hand back is lost)
 /// ```
 ///
 /// A chunk skipped end to end stays `Deferred`: its dictionary is never
