@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_array::builder::BooleanBufferBuilder;
+use arrow_buffer::Buffer;
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
+use arrow_buffer::bit_util::compress;
+use bytes::Bytes;
+
 use crate::arrow::buffer::bit_util::count_set_bits;
 use crate::basic::Encoding;
 use crate::column::reader::decoder::{
@@ -22,11 +28,6 @@ use crate::column::reader::decoder::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow_array::builder::BooleanBufferBuilder;
-use arrow_buffer::Buffer;
-use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
-use arrow_buffer::bit_util::compress;
-use bytes::Bytes;
 
 enum BufferInner {
     /// Compute levels and null mask

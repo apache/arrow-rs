@@ -324,6 +324,20 @@ impl<'a> BitChunks<'a> {
         ceil(self.chunk_len * 64 + self.remainder_len, 8)
     }
 
+    /// Returns the `index`th complete chunk of 64 bits, the value
+    /// [`Self::iter`] yields at that position
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= self.chunk_len()`
+    #[inline]
+    pub fn chunk(&self, index: usize) -> u64 {
+        assert!(index < self.chunk_len, "chunk index out of bounds");
+        // Safety: `index < chunk_len`, and the constructor checked the buffer
+        // covers every complete chunk plus the remainder byte
+        unsafe { read_chunk(self.buffer, self.bit_offset, index) }
+    }
+
     /// Returns an iterator over chunks of 64 bits represented as an `u64`
     #[inline]
     pub const fn iter(&self) -> BitChunkIterator<'a> {
@@ -360,6 +374,38 @@ impl<'a> IntoIterator for &BitChunks<'a> {
     }
 }
 
+/// Reads the `index`th complete 64-bit chunk of `buffer`, whose bits start
+/// at `bit_offset` (in `0..8`)
+///
+/// # Safety
+///
+/// `index` must be less than the number of complete chunks, so that the
+/// buffer holds at least `index * 8 + 8` bytes, plus one more byte when
+/// `bit_offset != 0` (the remainder byte the constructor guarantees)
+#[inline]
+unsafe fn read_chunk(buffer: &[u8], bit_offset: usize, index: usize) -> u64 {
+    // cast to *const u64 should be fine since we are using read_unaligned below
+    #[expect(clippy::cast_ptr_alignment)]
+    let raw_data = buffer.as_ptr().cast::<u64>();
+
+    // bit-packed buffers are stored starting with the least-significant byte first
+    // so when reading as u64 on a big-endian machine, the bytes need to be swapped
+    // Safety: the caller guarantees `raw_data.add(index)` is in bounds;
+    // `read_unaligned` handles any pointer alignment.
+    let current = unsafe { std::ptr::read_unaligned(raw_data.add(index)).to_le() };
+
+    if bit_offset == 0 {
+        current
+    } else {
+        // the constructor ensures that bit_offset is in 0..8
+        // that means we need to read at most one additional byte to fill in the high bits
+        // Safety: the caller guarantees the byte at `index + 1` is in bounds
+        let next = unsafe { std::ptr::read_unaligned(raw_data.add(index + 1).cast::<u8>()) as u64 };
+
+        (current >> bit_offset) | (next << (64 - bit_offset))
+    }
+}
+
 impl Iterator for BitChunkIterator<'_> {
     type Item = u64;
 
@@ -370,31 +416,9 @@ impl Iterator for BitChunkIterator<'_> {
             return None;
         }
 
-        // cast to *const u64 should be fine since we are using read_unaligned below
-        #[expect(clippy::cast_ptr_alignment)]
-        let raw_data = self.buffer.as_ptr().cast::<u64>();
-
-        // bit-packed buffers are stored starting with the least-significant byte first
-        // so when reading as u64 on a big-endian machine, the bytes need to be swapped
-        // Safety: `index < self.chunk_len` and the buffer is at least `chunk_len * 8` bytes long,
-        // so `raw_data.add(index)` is a valid in-bounds pointer; `read_unaligned` handles
-        // any pointer alignment.
-        let current = unsafe { std::ptr::read_unaligned(raw_data.add(index)).to_le() };
-
-        let bit_offset = self.bit_offset;
-
-        let combined = if bit_offset == 0 {
-            current
-        } else {
-            // the constructor ensures that bit_offset is in 0..8
-            // that means we need to read at most one additional byte to fill in the high bits
-            // Safety: the buffer has at least one byte past the last chunk (the remainder byte
-            // needed for `bit_offset > 0`), so `index + 1` is within bounds.
-            let next =
-                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1).cast::<u8>()) as u64 };
-
-            (current >> bit_offset) | (next << (64 - bit_offset))
-        };
+        // Safety: `index < self.chunk_len`, and the constructor checked the
+        // buffer covers every complete chunk plus the remainder byte
+        let combined = unsafe { read_chunk(self.buffer, self.bit_offset, index) };
 
         self.index = index + 1;
 

@@ -27,9 +27,9 @@ use crate::bit_chunk_iterator::BitChunks;
 /// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
 /// this lowers to the hardware `pext` instruction; otherwise it falls back
 /// to a portable scalar loop.
-///
-/// Replace with `value.compress(mask)` when `uint_gather_scatter_bits`
-/// is stabilised: <https://github.com/rust-lang/rust/issues/149069>
+//
+// Replace with `value.compress(mask)` when `uint_gather_scatter_bits` is
+// stabilised: <https://github.com/rust-lang/rust/issues/149069>
 #[inline]
 pub fn compress(value: u64, mask: u64) -> u64 {
     #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
@@ -42,24 +42,20 @@ pub fn compress(value: u64, mask: u64) -> u64 {
     #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
     {
         let mut mask = mask;
-        let mut result: u64 = 0;
-        let mut dest_bit: u64 = 1;
+        let mut result = 0_u64;
+        let mut dest_bit = 1_u64;
         while mask != 0 {
-            let lowest = mask & mask.wrapping_neg();
-            if value & lowest != 0 {
-                result |= dest_bit;
-            }
+            // Clear the lowest set bit; the loop-carried dependency is only
+            // this two-operation chain, everything else hangs off it
+            let rest = mask & (mask - 1);
+            let lowest = mask ^ rest;
+            let keep = ((value & lowest) != 0) as u64;
+            result |= dest_bit & keep.wrapping_neg();
             dest_bit <<= 1;
-            mask ^= lowest;
+            mask = rest;
         }
         result
     }
-}
-
-/// Returns true if [`compress`] lowers to the hardware `pext` instruction
-#[inline]
-pub fn compress_available() -> bool {
-    cfg!(all(target_arch = "x86_64", target_feature = "bmi2"))
 }
 
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
@@ -922,35 +918,21 @@ mod tests {
     use super::*;
     use crate::bit_iterator::BitIterator;
     use crate::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer};
-    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::StdRng;
-    use rand::{RngExt, SeedableRng, rng};
-
-    fn random_numbers<T>(n: usize) -> Vec<T>
-    where
-        StandardUniform: Distribution<T>,
-    {
-        let mut rng = rng();
-        StandardUniform.sample_iter(&mut rng).take(n).collect()
-    }
+    use rand::{RngExt, SeedableRng};
 
     #[test]
     fn test_compress() {
         // Reference: gather the `mask`-selected bits of `value` into
-        // contiguous low bits, least-significant first.
-        fn reference(value: u64, mut mask: u64) -> u64 {
-            let mut result = 0u64;
-            let mut dest = 0u32;
-            while mask != 0 {
-                let lowest = mask & mask.wrapping_neg();
-                result |= (((value & lowest) != 0) as u64) << dest;
-                dest += 1;
-                mask ^= lowest;
-            }
-            result
+        // contiguous low bits, least-significant first
+        fn reference(value: u64, mask: u64) -> u64 {
+            (0..64)
+                .filter(|&i| (mask >> i) & 1 == 1)
+                .enumerate()
+                .map(|(dest, i)| ((value >> i) & 1) << dest)
+                .sum()
         }
 
-        // Hand-picked edge cases.
         assert_eq!(compress(0b1010, 0b1111), 0b1010);
         assert_eq!(compress(0b1010, 0b1010), 0b11);
         assert_eq!(compress(0b1010, 0b0101), 0);
@@ -958,12 +940,11 @@ mod tests {
         assert_eq!(compress(0, u64::MAX), 0);
         assert_eq!(compress(u64::MAX, u64::MAX), u64::MAX);
 
-        // Randomized cross-check against the reference. On a `bmi2` build
-        // this validates the hardware `pext` path; otherwise it exercises
-        // the portable fallback.
-        let values = random_numbers::<u64>(1024);
-        let masks = random_numbers::<u64>(1024);
-        for (&value, &mask) in values.iter().zip(masks.iter()) {
+        // On a `bmi2` build this validates the hardware `pext` path,
+        // otherwise the portable fallback
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..1024 {
+            let (value, mask): (u64, u64) = rng.random();
             assert_eq!(
                 compress(value, mask),
                 reference(value, mask),

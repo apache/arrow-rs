@@ -61,6 +61,8 @@ fn add_benchmark(c: &mut Criterion) {
         ("slices, kept 9/10", 0.9),
         ("indices, kept 1/2", 0.5),
         ("indices, kept 1/10", 0.1),
+        ("indices, kept 1/64", 1.0 / 64.0),
+        ("indices, kept 1/256", 1.0 / 256.0),
         ("indices, kept 1/1024", 1.0 / 1024.0),
     ];
 
