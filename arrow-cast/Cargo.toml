@@ -85,6 +85,10 @@ harness = false
 name = "format_temporal"
 harness = false
 
+[[bench]]
+name = "cast_timestamp"
+harness = false
+
 [lints]
 workspace = true
 
