@@ -16,7 +16,7 @@
 # under the License.
 
 ---
-# tests for parquet crate
+# tests for parquet and parquet-variant crates
 name: "parquet"
 
 concurrency:
@@ -30,19 +30,29 @@ on:
       - main
   pull_request:
     paths:
+      - Cargo.toml
+      - Cargo.lock
       - rust-toolchain.toml
+      - .gitmodules
+      - testing
+      - parquet-testing
       - arrow/**
+      - arrow-arith/**
       - arrow-array/**
       - arrow-buffer/**
       - arrow-cast/**
+      - arrow-cmp/**
+      - arrow-csv/**
       - arrow-data/**
+      - arrow-ipc/**
+      - arrow-json/**
+      - arrow-ord/**
+      - arrow-row/**
       - arrow-schema/**
       - arrow-select/**
-      - arrow-ipc/**
-      - arrow-csv/**
-      - arrow-json/**
-      - arrow-avro/**
+      - arrow-string/**
       - parquet/**
+      - parquet-geospatial/**
       - parquet-variant/**
       - parquet-variant-compute/**
       - parquet-variant-json/**
@@ -68,6 +78,12 @@ jobs:
         run: cargo test -p parquet
       - name: Test --all-features
         run: cargo test -p parquet --all-features
+      - name: Test parquet-variant
+        run: cargo test -p parquet-variant
+      - name: Test parquet-variant-json
+        run: cargo test -p parquet-variant-json
+      - name: Test parquet-variant-compute
+        run: cargo test -p parquet-variant-compute
       - name: Run examples
         run: |
           # Test parquet examples
@@ -127,6 +143,12 @@ jobs:
         run: cargo check -p parquet --no-default-features --features flate2 --features flate2-zlib-rs
       - name: Check compilation --no-default-features --features variant_experimental
         run: cargo check -p parquet --no-default-features --features variant_experimental
+      - name: Check compilation (parquet-variant)
+        run: cargo check -p parquet-variant
+      - name: Check compilation (parquet-variant-json)
+        run: cargo check -p parquet-variant-json
+      - name: Check compilation (parquet-variant-compute)
+        run: cargo check -p parquet-variant-compute
 
 
   # test the parquet crate builds against wasm32 in stable rust
@@ -200,3 +222,9 @@ jobs:
         run: rustup component add clippy
       - name: Run clippy
         run: cargo clippy -p parquet --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-variant)
+        run: cargo clippy -p parquet-variant --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-variant-json)
+        run: cargo clippy -p parquet-variant-json --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-variant-compute)
+        run: cargo clippy -p parquet-variant-compute --all-targets --all-features -- -D warnings

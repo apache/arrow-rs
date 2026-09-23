@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::file::metadata::page_index::{PageIndexBuilder, PageIndexProvider};
+use crate::file::metadata::page_index::PageIndexProvider;
 use crate::file::metadata::thrift::FileMeta;
-use crate::file::metadata::{ColumnChunkMetaData, PageIndex, RowGroupMetaData};
+use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor};
 use crate::{
     basic::ColumnOrder,
@@ -61,6 +61,7 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     object_writer: MetadataObjectWriter,
     writer_version: i32,
     write_path_in_schema: bool,
+    preserve_page_index_locations: bool,
 }
 
 impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
@@ -69,17 +70,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// Note: also updates the `ColumnChunk::offset_index_offset` and
     /// `ColumnChunk::offset_index_length` to reflect the position and length
     /// of the serialized offset indexes.
-    fn write_offset_indexes(
-        &mut self,
-        page_index: &Arc<dyn PageIndexProvider>,
-    ) -> Result<Option<Vec<Vec<Option<OffsetIndexMetaData>>>>> {
-        let mut offset_indexes =
-            PageIndexBuilder::empty_index(self.row_groups.len(), self.schema_descr.num_columns());
-        let offidx_vec = offset_indexes.as_mut().unwrap();
-
-        // we've already checked before calling that the offset indexes are populated
-        assert!(page_index.has_offset_indexes());
-
+    fn write_offset_indexes(&mut self, page_index: &dyn PageIndexProvider) -> Result<()> {
         // iter row group
         // iter each column
         // write offset index to the file
@@ -98,11 +89,13 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                     // set offset and index for offset index
                     column_metadata.offset_index_offset = Some(start_offset as i64);
                     column_metadata.offset_index_length = Some((end_offset - start_offset) as i32);
-                    offidx_vec[row_group_idx][column_idx] = Some(offset_index.clone());
+                } else if !self.preserve_page_index_locations {
+                    column_metadata.offset_index_offset = None;
+                    column_metadata.offset_index_length = None;
                 }
             }
         }
-        Ok(offset_indexes)
+        Ok(())
     }
 
     /// Serialize all the column indexes to the `self.buf`
@@ -110,17 +103,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// Note: also updates the `ColumnChunk::column_index_offset` and
     /// `ColumnChunk::column_index_length` to reflect the position and length
     /// of the serialized column indexes.
-    fn write_column_indexes(
-        &mut self,
-        page_index: &Arc<dyn PageIndexProvider>,
-    ) -> Result<Option<Vec<Vec<Option<ColumnIndexMetaData>>>>> {
-        let mut column_indexes =
-            PageIndexBuilder::empty_index(self.row_groups.len(), self.schema_descr.num_columns());
-        let colidx_vec = column_indexes.as_mut().unwrap();
-
-        // we've already checked before calling that the column indexes are populated
-        assert!(page_index.has_column_indexes());
-
+    fn write_column_indexes(&mut self, page_index: &dyn PageIndexProvider) -> Result<()> {
         // iter row group
         // iter each column
         // write column index to the file
@@ -142,64 +125,23 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                         column_metadata.column_index_length =
                             Some((end_offset - start_offset) as i32);
                     }
-                    colidx_vec[row_group_idx][column_idx] = Some(column_index.clone());
+                } else if !self.preserve_page_index_locations {
+                    column_metadata.column_index_offset = None;
+                    column_metadata.column_index_length = None;
                 }
             }
         }
-        Ok(column_indexes)
+        Ok(())
     }
 
-    /// Serialize the column indexes and transform to `Option<Vec<Vec<Option<ColumnIndexMetaData>>>>`
-    fn finalize_column_indexes(
-        &mut self,
-        page_index: Option<&Arc<dyn PageIndexProvider>>,
-    ) -> Result<Option<Vec<Vec<Option<ColumnIndexMetaData>>>>> {
-        if page_index
-            .as_ref()
-            .is_none_or(|pi| !pi.has_column_indexes())
-        {
-            return Ok(None);
-        }
-
-        // Write column indexes to file while assembling a column index
-        let column_indexes = self.write_column_indexes(page_index.as_ref().unwrap())?;
-
-        // check to see if the index is `None` for every row group and column chunk
-        let all_none = column_indexes
-            .as_ref()
-            .is_some_and(|ci| ci.iter().all(|cii| cii.iter().all(|idx| idx.is_none())));
-
-        if all_none {
-            Ok(None)
-        } else {
-            Ok(column_indexes)
-        }
-    }
-
-    /// Serialize the offset indexes and transform to `Option<ParquetOffsetIndex>`
-    fn finalize_offset_indexes(
-        &mut self,
-        page_index: Option<&Arc<dyn PageIndexProvider>>,
-    ) -> Result<Option<Vec<Vec<Option<OffsetIndexMetaData>>>>> {
-        if page_index
-            .as_ref()
-            .is_none_or(|pi| !pi.has_offset_indexes())
-        {
-            return Ok(None);
-        }
-
-        // Write offset indexes to file
-        let offset_indexes = self.write_offset_indexes(page_index.as_ref().unwrap())?;
-
-        // check to see if the index is `None` for every row group and column chunk
-        let all_none = offset_indexes
-            .as_ref()
-            .is_some_and(|oi| oi.iter().all(|oii| oii.iter().all(|idx| idx.is_none())));
-
-        if all_none {
-            Ok(None)
-        } else {
-            Ok(offset_indexes)
+    fn clear_page_indexes(&mut self) {
+        for row_group in &mut self.row_groups {
+            for column_metadata in &mut row_group.columns {
+                column_metadata.column_index_offset = None;
+                column_metadata.column_index_length = None;
+                column_metadata.offset_index_offset = None;
+                column_metadata.offset_index_length = None;
+            }
         }
     }
 
@@ -207,10 +149,15 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     pub fn finish(mut self) -> Result<ParquetMetaData> {
         let num_rows = self.row_groups.iter().map(|x| x.num_rows).sum();
 
-        // serialize page indexes and transform to the proper form for use in ParquetMetaData
+        // serialize page indexes and update index locations
         let page_index = self.page_index.take();
-        let column_indexes = self.finalize_column_indexes(page_index.as_ref())?;
-        let offset_indexes = self.finalize_offset_indexes(page_index.as_ref())?;
+        if let Some(pi) = page_index.as_deref() {
+            self.write_column_indexes(pi)?;
+            self.write_offset_indexes(pi)?;
+        } else if !self.preserve_page_index_locations {
+            // no page indexes at all, then clear index locations
+            self.clear_page_indexes();
+        }
 
         // We only include ColumnOrder for leaf nodes.
         let column_orders = self
@@ -278,14 +225,17 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         self.buf.write_all(&metadata_len.to_le_bytes())?;
         self.buf.write_all(self.object_writer.get_file_magic())?;
 
+        // Note: we simply pass the original reference counted page index provider to the
+        // builder. Either it came from ParquetMetaDataWriter where it was cloned, and this
+        // reference will go away when ParquetMetaDataWriter::finish drops the newly created
+        // metadata, or it was passed an owned version from SerializedFileWriter which then
+        // takes it back via the returned metadata.
+        let builder = ParquetMetaDataBuilder::new(file_metadata).set_page_index(page_index);
+
         // If row group metadata was encrypted, we replace the encrypted row groups with
         // unencrypted metadata before it is returned to users. This allows the metadata
         // to be usable for retrieving the row group statistics for example, without users
         // needing to decrypt the metadata.
-        let builder = ParquetMetaDataBuilder::new(file_metadata).set_page_index(Some(Arc::new(
-            PageIndex::new(column_indexes, offset_indexes),
-        )));
-
         Ok(match unencrypted_row_groups {
             Some(rg) => builder.set_row_groups(rg).build(),
             None => builder.set_row_groups(row_groups).build(),
@@ -299,6 +249,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         created_by: Option<String>,
         writer_version: i32,
         write_path_in_schema: bool,
+        preserve_page_index_locations: bool,
     ) -> Self {
         Self {
             buf,
@@ -310,6 +261,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             object_writer: Default::default(),
             writer_version,
             write_path_in_schema,
+            preserve_page_index_locations,
         }
     }
 
@@ -349,6 +301,14 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// BloomFilters, write the bloom filters into the buffer before creating the
 /// metadata writer. Then set the corresponding `bloom_filter_offset` and
 /// `bloom_filter_length` on [`ColumnChunkMetaData`] passed to this writer.
+///
+/// The writer serializes the page index of any [`PageIndexProvider`] attached
+/// to the input [`ParquetMetaData`]. By default, if the provider has no index
+/// for a column chunk, the offset and length of that index in the [`ColumnChunkMetaData`]
+/// are preserved in the output metadata. This is done so one can store the footer
+/// metadata externally but keep the page indexes in the original file. If this
+/// behavior is not desired, then [`Self::with_preserve_page_index_locations`] should
+/// be set to `false`.
 ///
 /// # Output Format
 ///
@@ -412,6 +372,7 @@ pub struct ParquetMetaDataWriter<'a, W: Write> {
     buf: TrackedWrite<W>,
     metadata: &'a ParquetMetaData,
     write_path_in_schema: bool,
+    preserve_page_index_locations: bool,
 }
 
 impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
@@ -437,6 +398,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             buf,
             metadata,
             write_path_in_schema: true,
+            preserve_page_index_locations: true,
         }
     }
 
@@ -445,6 +407,23 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     pub fn with_write_path_in_schema(self, val: bool) -> Self {
         Self {
             write_path_in_schema: val,
+            ..self
+        }
+    }
+
+    /// Set whether or not to preserve the page index location metadata in the Thrift
+    /// `ColumnMetaData`.
+    ///
+    /// Because this struct is often used to externalize the footer metadata, it is
+    /// usually desirable to preserve this location information, even when the
+    /// page indexes are not duplicated (for instance if the provided `ParquetMetaData`
+    /// returns no `PageIndexProvider`). As such, this defaults to `true`.
+    ///
+    /// Set this to `false` to reset the location metadata if no page indexes are
+    /// present.
+    pub fn with_preserve_page_index_locations(self, val: bool) -> Self {
+        Self {
+            preserve_page_index_locations: val,
             ..self
         }
     }
@@ -468,12 +447,11 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             created_by,
             file_metadata.version(),
             self.write_path_in_schema,
+            self.preserve_page_index_locations,
         );
 
-        if let Some(page_index_arc) = self.metadata.page_index.as_ref()
-            && (page_index_arc.has_column_indexes() || page_index_arc.has_offset_indexes())
-        {
-            encoder = encoder.with_page_index(page_index_arc.clone());
+        if let Some(page_index_arc) = self.metadata.page_index.clone() {
+            encoder = encoder.with_page_index(page_index_arc);
         }
 
         if let Some(key_value_metadata) = key_value_metadata {
