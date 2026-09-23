@@ -43,8 +43,9 @@ pub(crate) struct InMemoryRowGroup<'a> {
 pub(crate) struct FetchRanges {
     /// The byte ranges to fetch
     pub(crate) ranges: Vec<Range<u64>>,
-    /// If `Some`, the start offsets of each page for each column chunk
-    pub(crate) page_start_offsets: Option<Vec<Vec<u64>>>,
+    /// If `Some`, the start offsets of each page for each column chunk, or
+    /// `None` for a column chunk without an offset index (fetched in full)
+    pub(crate) page_start_offsets: Option<Vec<Option<Vec<u64>>>>,
 }
 
 impl InMemoryRowGroup<'_> {
@@ -70,7 +71,7 @@ impl InMemoryRowGroup<'_> {
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch
             // pages required for the `RowSelection`
             // Consider preallocating outer vec: https://github.com/apache/arrow-rs/issues/8667
-            let mut page_start_offsets: Vec<Vec<u64>> = vec![];
+            let mut page_start_offsets: Vec<Option<Vec<u64>>> = vec![];
 
             let ranges = self
                 .column_chunks
@@ -88,6 +89,7 @@ impl InMemoryRowGroup<'_> {
                     let Some(offset_idx) = page_index.offset_index(idx) else {
                         // No offset index for this column, fetch the entire column
                         ranges.push(start..start + len);
+                        page_start_offsets.push(None);
                         return ranges;
                     };
 
@@ -106,7 +108,7 @@ impl InMemoryRowGroup<'_> {
                     } else {
                         ranges.extend(selection.scan_ranges(offset_idx.page_locations()));
                     }
-                    page_start_offsets.push(ranges.iter().map(|range| range.start).collect());
+                    page_start_offsets.push(Some(ranges.iter().map(|range| range.start).collect()));
 
                     ranges
                 })
@@ -141,7 +143,7 @@ impl InMemoryRowGroup<'_> {
     pub(crate) fn fill_column_chunks<I>(
         &mut self,
         projection: &ProjectionMask,
-        page_start_offsets: Option<Vec<Vec<u64>>>,
+        page_start_offsets: Option<Vec<Option<Vec<u64>>>>,
         chunk_data: I,
     ) where
         I: IntoIterator<Item = Bytes>,
@@ -158,20 +160,32 @@ impl InMemoryRowGroup<'_> {
                     continue;
                 }
 
-                if let Some(offsets) = page_start_offsets.next() {
-                    let mut chunks = Vec::with_capacity(offsets.len());
-                    for _ in 0..offsets.len() {
-                        chunks.push(chunk_data.next().unwrap());
+                match page_start_offsets.next() {
+                    // No offset index: `fetch_ranges` requested the whole chunk
+                    Some(None) => {
+                        if let Some(data) = chunk_data.next() {
+                            *chunk = Some(Arc::new(ColumnChunkData::Dense {
+                                offset: metadata.column(idx).byte_range().0 as usize,
+                                data,
+                            }));
+                        }
                     }
+                    Some(Some(offsets)) => {
+                        let mut chunks = Vec::with_capacity(offsets.len());
+                        for _ in 0..offsets.len() {
+                            chunks.push(chunk_data.next().unwrap());
+                        }
 
-                    *chunk = Some(Arc::new(ColumnChunkData::Sparse {
-                        length: metadata.column(idx).byte_range().1 as usize,
-                        data: offsets
-                            .into_iter()
-                            .map(|x| x as usize)
-                            .zip(chunks)
-                            .collect(),
-                    }))
+                        *chunk = Some(Arc::new(ColumnChunkData::Sparse {
+                            length: metadata.column(idx).byte_range().1 as usize,
+                            data: offsets
+                                .into_iter()
+                                .map(|x| x as usize)
+                                .zip(chunks)
+                                .collect(),
+                        }))
+                    }
+                    None => {}
                 }
             }
         } else {

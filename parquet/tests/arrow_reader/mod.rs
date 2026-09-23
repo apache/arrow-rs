@@ -49,6 +49,7 @@ mod io;
 mod large_string_overflow;
 mod page_index;
 mod parquet_testing;
+mod partial_offset_index;
 #[cfg(feature = "async")]
 mod predicate_cache;
 mod row_filter;
