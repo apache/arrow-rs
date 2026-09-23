@@ -67,7 +67,7 @@ fn test_read_with_custom_page_index_provider() {
     // Simulate a scenario where:
     // - We only populate indexes for row groups 0 and 2 (skipping row group 1)
     // - For row group 0: populate column 0 (id) and column 1 (value)
-    // - For row group 2: populate column 0 (id) only
+    // - For row group 2: populate columns 0 (id) and 2 (name), so column 1 is a gap
     let mut provider = SelectivePageIndexProvider::new(file_bytes);
 
     // Populate indexes for row group 0, columns 0 and 1
@@ -76,9 +76,11 @@ fn test_read_with_custom_page_index_provider() {
     provider.fetch_column_index(0, 1, metadata).unwrap();
     provider.fetch_offset_index(0, 1, metadata).unwrap();
 
-    // Populate indexes for row group 2, column 0 only
+    // Populate indexes for row group 2, columns 0 and 2 (column 1 has no index)
     provider.fetch_column_index(2, 0, metadata).unwrap();
     provider.fetch_offset_index(2, 0, metadata).unwrap();
+    provider.fetch_column_index(2, 2, metadata).unwrap();
+    provider.fetch_offset_index(2, 2, metadata).unwrap();
 
     // Verify the provider has the expected indexes
     assert!(provider.column_index(0, 0).is_some());
