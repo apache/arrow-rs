@@ -89,7 +89,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                     // set offset and index for offset index
                     column_metadata.offset_index_offset = Some(start_offset as i64);
                     column_metadata.offset_index_length = Some((end_offset - start_offset) as i32);
-                } else {
+                } else if !self.preserve_page_index_locations {
                     column_metadata.offset_index_offset = None;
                     column_metadata.offset_index_length = None;
                 }
@@ -125,7 +125,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                         column_metadata.column_index_length =
                             Some((end_offset - start_offset) as i32);
                     }
-                } else {
+                } else if !self.preserve_page_index_locations {
                     column_metadata.column_index_offset = None;
                     column_metadata.column_index_length = None;
                 }
