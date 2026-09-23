@@ -19,8 +19,7 @@ use crate::array::PrimitiveArray;
 use crate::null_sentinel;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
-    AlignedVec, BooleanBuffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer, NullBuffer,
-    bit_util, i256,
+    AlignedVec, BooleanBuffer, IntervalDayTime, IntervalMonthDayNano, NullBuffer, bit_util, i256,
 };
 use arrow_schema::{DataType, SortOptions};
 use half::f16;
@@ -466,7 +465,7 @@ pub fn decode_fixed_size_binary(
     }
 
     if options.descending {
-        for v in values.as_slice_mut() {
+        for v in values.as_mut_slice() {
             *v = !*v;
         }
     }
