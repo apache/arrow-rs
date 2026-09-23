@@ -1145,7 +1145,8 @@ impl ArrowColumnWriter {
             let non_null = levels.non_null_indices();
             match array.as_any_dictionary_opt() {
                 Some(dict) => {
-                    // Hash values, not key indices: the same key index can map to different values across batches, causing undercounting.
+                    // Hash values, not key indices: the same key index can map to different
+                    // values across batches, causing undercounting.
                     let values = dict.values();
                     let non_null_value_indices: Vec<usize> =
                         (0..values.len()).filter(|&i| values.is_valid(i)).collect();
