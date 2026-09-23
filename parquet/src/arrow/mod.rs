@@ -596,7 +596,6 @@ mod test {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_metadata_read_write_roundtrip_missing_page_index() {
         let parquet_bytes = create_parquet_file();
 
@@ -608,9 +607,9 @@ mod test {
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
-        // metadata_to_bytes should zero out the page index locations. if they aren't
+        // metadata_to_bytes_no_page_idx should zero out the page index locations. if they aren't
         // then reading metadata_bytes will fail with EOF
-        let metadata_bytes = metadata_to_bytes(&original_metadata);
+        let metadata_bytes = metadata_to_bytes_no_page_idx(&original_metadata);
         let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
         let roundtrip_metadata = ParquetMetaDataReader::new()
             .with_metadata_options(Some(options))
@@ -749,6 +748,16 @@ mod test {
     fn metadata_to_bytes(metadata: &ParquetMetaData) -> Bytes {
         let mut buf = vec![];
         ParquetMetaDataWriter::new(&mut buf, metadata)
+            .finish()
+            .unwrap();
+        Bytes::from(buf)
+    }
+
+    // like metadata_to_bytes, but do not preserve page index location info
+    fn metadata_to_bytes_no_page_idx(metadata: &ParquetMetaData) -> Bytes {
+        let mut buf = vec![];
+        ParquetMetaDataWriter::new(&mut buf, metadata)
+            .with_preserve_page_index_locations(false)
             .finish()
             .unwrap();
         Bytes::from(buf)

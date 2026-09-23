@@ -61,6 +61,7 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     object_writer: MetadataObjectWriter,
     writer_version: i32,
     write_path_in_schema: bool,
+    preserve_page_index_locations: bool,
 }
 
 impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
@@ -153,7 +154,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         if let Some(pi) = page_index.as_deref() {
             self.write_column_indexes(pi)?;
             self.write_offset_indexes(pi)?;
-        } else {
+        } else if !self.preserve_page_index_locations {
             // no page indexes at all, then clear index locations
             self.clear_page_indexes();
         }
@@ -248,6 +249,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         created_by: Option<String>,
         writer_version: i32,
         write_path_in_schema: bool,
+        preserve_page_index_locations: bool,
     ) -> Self {
         Self {
             buf,
@@ -259,6 +261,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             object_writer: Default::default(),
             writer_version,
             write_path_in_schema,
+            preserve_page_index_locations,
         }
     }
 
@@ -365,6 +368,7 @@ pub struct ParquetMetaDataWriter<'a, W: Write> {
     buf: TrackedWrite<W>,
     metadata: &'a ParquetMetaData,
     write_path_in_schema: bool,
+    preserve_page_index_locations: bool,
 }
 
 impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
@@ -390,6 +394,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             buf,
             metadata,
             write_path_in_schema: true,
+            preserve_page_index_locations: true,
         }
     }
 
@@ -398,6 +403,23 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     pub fn with_write_path_in_schema(self, val: bool) -> Self {
         Self {
             write_path_in_schema: val,
+            ..self
+        }
+    }
+
+    /// Set whether or not to preserve the page index location metadata in the Thrift
+    /// `ColumnMetaData`.
+    ///
+    /// Because this struct is often used to externalize the footer metadata, it is
+    /// usually desirable to preserve this location information, even when the
+    /// page indexes are not duplicated (for instance if the provided `ParquetMetaData`
+    /// returns no `PageIndexProvider`). As such, this defaults to `true`.
+    ///
+    /// Set this to `false` to reset the location metadata if no page indexes are
+    /// present.
+    pub fn with_preserve_page_index_locations(self, val: bool) -> Self {
+        Self {
+            preserve_page_index_locations: val,
             ..self
         }
     }
@@ -421,6 +443,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             created_by,
             file_metadata.version(),
             self.write_path_in_schema,
+            self.preserve_page_index_locations,
         );
 
         if let Some(page_index_arc) = self.metadata.page_index.clone() {

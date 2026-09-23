@@ -367,6 +367,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
             write_path_in_schema,
+            false,
         );
 
         #[cfg(feature = "encryption")]
