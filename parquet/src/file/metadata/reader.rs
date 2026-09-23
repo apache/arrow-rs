@@ -109,7 +109,8 @@ impl From<bool> for PageIndexPolicy {
 
 /// Struct to specify column chunks for which metadata is required.
 ///
-/// Column chunks are identified by row group index and column index. This struct
+/// Column chunks are identified by row group index and leaf column index (the index of the
+/// column in [`SchemaDescriptor::columns`], not the index of a root or Arrow field). This struct
 /// allows for specifying vertical slices of column chunk data (via [`Self::columns`]),
 /// horizontal slices (via [`Self::row_groups`]), or the intersection of the two
 /// (via [`Self::row_groups_and_columns`]).
