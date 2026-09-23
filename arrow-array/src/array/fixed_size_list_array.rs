@@ -371,6 +371,11 @@ impl FixedSizeListArray {
     /// Returns the offset for value at index `i`.
     ///
     /// Note this doesn't do any bound checking, for performance reason.
+    ///
+    /// Past `i32::MAX` child elements the offset does not fit the return type
+    /// and wraps negative. Use [`Self::value_offset_at`], which stays in
+    /// `usize`.
+    #[deprecated(since = "60.0.0", note = "Use value_offset_at instead")]
     #[inline]
     pub fn value_offset(&self, i: usize) -> i32 {
         self.value_offset_at(i) as i32
@@ -384,8 +389,12 @@ impl FixedSizeListArray {
         self.value_length
     }
 
+    /// Returns the offset in the child array of the value at index `i`, in
+    /// elements.
+    ///
+    /// Note this doesn't do any bound checking, for performance reason.
     #[inline]
-    const fn value_offset_at(&self, i: usize) -> usize {
+    pub const fn value_offset_at(&self, i: usize) -> usize {
         i * self.value_length as usize
     }
 
@@ -609,8 +618,8 @@ impl ArrayAccessor for FixedSizeListArray {
 impl std::fmt::Debug for FixedSizeListArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "FixedSizeListArray<{}>\n[\n", self.value_length())?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }
@@ -662,7 +671,7 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(2));
+        assert_eq!(6, list_array.value_offset_at(2));
         assert_eq!(3, list_array.value_length());
         assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         for i in 0..3 {
@@ -684,7 +693,7 @@ mod tests {
         assert_eq!(2, list_array.len());
         assert_eq!(0, list_array.null_count());
         assert_eq!(3, list_array.value(0).as_primitive::<Int32Type>().value(0));
-        assert_eq!(3, list_array.value_offset(1));
+        assert_eq!(3, list_array.value_offset_at(1));
         assert_eq!(3, list_array.value_length());
     }
 
@@ -745,7 +754,7 @@ mod tests {
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(5, list_array.len());
         assert_eq!(2, list_array.null_count());
-        assert_eq!(6, list_array.value_offset(3));
+        assert_eq!(6, list_array.value_offset_at(3));
         assert_eq!(2, list_array.value_length());
 
         let sliced_array = list_array.slice(1, 4);
@@ -766,8 +775,8 @@ mod tests {
             .downcast_ref::<FixedSizeListArray>()
             .unwrap();
         assert_eq!(2, sliced_list_array.value_length());
-        assert_eq!(4, sliced_list_array.value_offset(2));
-        assert_eq!(6, sliced_list_array.value_offset(3));
+        assert_eq!(4, sliced_list_array.value_offset_at(2));
+        assert_eq!(6, sliced_list_array.value_offset_at(3));
     }
 
     #[test]

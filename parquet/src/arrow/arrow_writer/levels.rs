@@ -418,7 +418,7 @@ impl LevelInfoBuilder {
             // mapping between child elements and rep_level entries, the position
             // of each slot's first element is directly computable from offsets.
             child.visit_leaves(|leaf| {
-                debug_assert!(leaf.max_rep_level == ctx.rep_level);
+                debug_assert_eq!(leaf.max_rep_level, ctx.rep_level);
                 let rep_levels = leaf.rep_levels.materialize_mut().unwrap();
                 let batch_len = values_end - values_start;
                 let batch_base = rep_levels.len() - batch_len;

@@ -28,6 +28,13 @@
 //! dependency (`arrow-ord` already depends on `arrow-select`) or force every
 //! downstream user of `arrow-array` to compile the comparator machinery whether
 //! they need it or not.
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
@@ -459,12 +466,32 @@ fn compare_union(
 /// If `nulls_first` is true, null values are considered less than any non-null
 /// value; otherwise they are considered greater. This is primarily shared by
 /// crates that need repeated slot comparisons without constructing sliced arrays.
+///
+/// Returns an error for arrays whose types are not comparable.
 pub fn make_comparator(
     left: &dyn Array,
     right: &dyn Array,
     opts: SortOptions,
 ) -> Result<DynComparator, ArrowError> {
     use arrow_schema::DataType::*;
+
+    // Decimal arrays of the same width are compared as raw unscaled values
+    // below; that is only correct when the scales match.
+    match (left.data_type(), right.data_type()) {
+        (Decimal32(_, s1), Decimal32(_, s2))
+        | (Decimal64(_, s1), Decimal64(_, s2))
+        | (Decimal128(_, s1), Decimal128(_, s2))
+        | (Decimal256(_, s1), Decimal256(_, s2))
+            if s1 != s2 =>
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Can't compare decimal arrays with different scales: {:?}, {:?}",
+                left.data_type(),
+                right.data_type()
+            )));
+        }
+        _ => {}
+    }
 
     macro_rules! primitive_helper {
         ($t:ty, $left:expr, $right:expr, $nulls_first:expr) => {
@@ -916,6 +943,63 @@ mod tests {
         assert_eq!(Ordering::Equal, cmp(3, 3));
         assert_eq!(Ordering::Greater, cmp(3, 1));
         assert_eq!(Ordering::Greater, cmp(3, 2));
+    }
+
+    #[test]
+    fn test_decimal_different_scale_errors() {
+        // https://github.com/apache/arrow-rs/issues/10863
+        let a = Decimal128Array::from(vec![100])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let b = Decimal128Array::from(vec![500])
+            .with_precision_and_scale(10, 3)
+            .unwrap();
+        let err = make_comparator(&a, &b, SortOptions::default())
+            .err()
+            .unwrap();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Can't compare decimal arrays with different scales: \
+             Decimal128(10, 2), Decimal128(10, 3)"
+        );
+
+        // the same check applies behind nested types
+        let keys = Int8Array::from_iter_values([0]);
+        let dict_a = DictionaryArray::new(keys.clone(), Arc::new(a.clone()));
+        let dict_b = DictionaryArray::new(keys, Arc::new(b));
+        assert!(make_comparator(&dict_a, &dict_b, SortOptions::default()).is_err());
+
+        // precision does not affect the ordering, so it need not match
+        let c = Decimal128Array::from(vec![100])
+            .with_precision_and_scale(12, 2)
+            .unwrap();
+        let cmp = make_comparator(&a, &c, SortOptions::default()).unwrap();
+        assert_eq!(Ordering::Equal, cmp(0, 0));
+
+        // every decimal width is checked
+        let a = Decimal32Array::from(vec![1])
+            .with_precision_and_scale(5, 1)
+            .unwrap();
+        let b = Decimal32Array::from(vec![1])
+            .with_precision_and_scale(5, 2)
+            .unwrap();
+        assert!(make_comparator(&a, &b, SortOptions::default()).is_err());
+
+        let a = Decimal64Array::from(vec![1])
+            .with_precision_and_scale(10, 1)
+            .unwrap();
+        let b = Decimal64Array::from(vec![1])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        assert!(make_comparator(&a, &b, SortOptions::default()).is_err());
+
+        let a = Decimal256Array::from(vec![i256::from_i128(1)])
+            .with_precision_and_scale(40, 1)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(1)])
+            .with_precision_and_scale(40, 2)
+            .unwrap();
+        assert!(make_comparator(&a, &b, SortOptions::default()).is_err());
     }
 
     fn test_bytes_impl<T: ByteArrayType>() {

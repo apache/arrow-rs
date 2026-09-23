@@ -967,6 +967,58 @@ fn date_op<T: DateOp>(
     }
 }
 
+/// Divides `l * 10^mul_pow` by `r` a digit at a time, without forming the scaled numerator.
+/// Used when scaling `l` would overflow `T::Native`, which it does well before the quotient
+/// does.
+///
+/// Runs on magnitudes and restores the sign last, so it truncates toward zero.
+fn scaled_div<T: DecimalType>(
+    l: T::Native,
+    r: T::Native,
+    mul_pow: i8,
+) -> Result<T::Native, ArrowError> {
+    let zero = T::Native::ZERO;
+    let negative = l.is_lt(zero) != r.is_lt(zero);
+    let dividend = abs_checked::<T>(l)?;
+    let divisor = abs_checked::<T>(r)?;
+
+    let mut quotient = dividend.div_checked(divisor)?;
+    let mut remainder = dividend.mod_checked(divisor)?;
+    for _ in 0..mul_pow {
+        // `remainder * 10` overflows for divisors near `T::Native::MAX`, so add the remainder
+        // ten times and take the divisor off whenever the running sum reaches it.
+        let mut carried = zero;
+        let mut digit = zero;
+        for _ in 0..10 {
+            let headroom = divisor.sub_wrapping(remainder);
+            if carried.is_lt(headroom) {
+                carried = carried.add_wrapping(remainder);
+            } else {
+                carried = carried.sub_wrapping(headroom);
+                digit = digit.add_wrapping(T::Native::ONE);
+            }
+        }
+        quotient = quotient
+            .mul_checked(T::Native::usize_as(10))?
+            .add_checked(digit)?;
+        remainder = carried;
+    }
+
+    if negative {
+        quotient.neg_checked()
+    } else {
+        Ok(quotient)
+    }
+}
+
+fn abs_checked<T: DecimalType>(value: T::Native) -> Result<T::Native, ArrowError> {
+    if value.is_lt(T::Native::ZERO) {
+        value.neg_checked()
+    } else {
+        Ok(value)
+    }
+}
+
 /// Perform arithmetic operation on decimal arrays
 fn decimal_op<T: DecimalType>(
     op: Op,
@@ -1076,7 +1128,10 @@ fn decimal_op<T: DecimalType>(
                 l_s,
                 r,
                 r_s,
-                l.mul_checked(l_mul)?.div_checked(r.mul_checked(r_mul)?)
+                match l.mul_checked(l_mul) {
+                    Ok(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
+                    Err(_) => scaled_div::<T>(l, r, mul_pow),
+                }
             )
             .with_precision_and_scale(result_precision, result_scale)?
         }
@@ -1477,6 +1532,116 @@ mod tests {
         assert_eq!(err, "Divide by zero error");
         let err = rem(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
+    }
+
+    #[test]
+    fn test_decimal256_div_wide_intermediate() {
+        // Dividing two scale-37 values needs l * 10^41, which is 79 digits and does not
+        // fit in an i256, even though the 41-digit quotient does.
+        let a = Decimal256Array::from(vec![i256::from_i128(
+            60096743305738933273387748827369321010i128,
+        )])
+        .with_precision_and_scale(38, 37)
+        .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(
+            60096763826458053191384497987259478584i128,
+        )])
+        .with_precision_and_scale(38, 37)
+        .unwrap();
+
+        let result = div(&a, &b).unwrap();
+        assert_eq!(result.data_type(), &DataType::Decimal256(76, 41));
+        assert_eq!(
+            result.as_primitive::<Decimal256Type>().value(0),
+            i256::from_string("99999965853869970143724273117679321341339").unwrap()
+        );
+
+        // Truncation stays toward zero on either side of the fallback.
+        let neg_a = neg(&a).unwrap();
+        let result = div(neg_a.as_primitive::<Decimal256Type>(), &b).unwrap();
+        assert_eq!(
+            result.as_primitive::<Decimal256Type>().value(0),
+            i256::from_string("-99999965853869970143724273117679321341339").unwrap()
+        );
+
+        let neg_b = neg(&b).unwrap();
+        let result = div(&a, neg_b.as_primitive::<Decimal256Type>()).unwrap();
+        assert_eq!(
+            result.as_primitive::<Decimal256Type>().value(0),
+            i256::from_string("-99999965853869970143724273117679321341339").unwrap()
+        );
+
+        let zero = Decimal256Array::from(vec![i256::ZERO])
+            .with_precision_and_scale(38, 37)
+            .unwrap();
+        let err = div(&a, &zero).unwrap_err().to_string();
+        assert_eq!(err, "Divide by zero error");
+    }
+
+    #[test]
+    fn test_decimal256_div_divisor_near_max() {
+        // A divisor past i256::MAX / 10 leaves no room to scale the running remainder either.
+        let a = Decimal256Array::from(vec![
+            i256::from_string(
+                "5900000000000000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .unwrap(),
+        ])
+        .with_precision_and_scale(76, 37)
+        .unwrap();
+        let b = Decimal256Array::from(vec![
+            i256::from_string(
+                "6000000000000000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .unwrap(),
+        ])
+        .with_precision_and_scale(76, 37)
+        .unwrap();
+
+        let result = div(&a, &b).unwrap();
+        assert_eq!(
+            result.as_primitive::<Decimal256Type>().value(0),
+            i256::from_string("98333333333333333333333333333333333333333").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_decimal128_div_wide_intermediate() {
+        // Same overflow one type down: 3.0 / 6.0 at scale 37 needs l * 10^38, 76 digits in i128.
+        let a = Decimal128Array::from(vec![30000000000000000000000000000000000000i128])
+            .with_precision_and_scale(38, 37)
+            .unwrap();
+        let b = Decimal128Array::from(vec![60000000000000000000000000000000000000i128])
+            .with_precision_and_scale(38, 37)
+            .unwrap();
+
+        let result = div(&a, &b).unwrap();
+        assert_eq!(result.data_type(), &DataType::Decimal128(38, 38));
+        assert_eq!(
+            result.as_primitive::<Decimal128Type>().value(0),
+            50000000000000000000000000000000000000i128
+        );
+    }
+
+    #[test]
+    fn test_scaled_div_agrees_with_direct_division() {
+        for (l, r, mul_pow) in [
+            (7i128, 3i128, 4i8),
+            (-7, 3, 4),
+            (7, -3, 4),
+            (-7, -3, 4),
+            (1, 999_999_999, 9),
+            (i128::MAX / 10, 7, 1),
+            (i128::MAX / 10, -i128::MAX / 11, 1),
+            (0, 5, 6),
+        ] {
+            let scaled = l * 10i128.pow(mul_pow as u32);
+            assert_eq!(
+                scaled_div::<Decimal128Type>(l, r, mul_pow).unwrap(),
+                scaled / r,
+                "{l} * 10^{mul_pow} / {r}"
+            );
+        }
     }
 
     #[test]

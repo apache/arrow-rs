@@ -136,9 +136,8 @@ pub(super) fn limit_selectors(
                 selection.row_count = limit;
                 selectors.truncate(idx + 1);
                 break;
-            } else {
-                limit -= selection.row_count;
             }
+            limit -= selection.row_count;
         }
     }
     selectors

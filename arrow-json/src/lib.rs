@@ -79,6 +79,13 @@
 //! [hexadecimal]: https://en.wikipedia.org/wiki/Hexadecimal
 //! [`Base16` encoding]: https://en.wikipedia.org/wiki/Base16#Base16
 //! [`Base64`]: https://en.wikipedia.org/wiki/Base64
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -91,7 +98,9 @@
 pub mod reader;
 pub mod writer;
 
-pub use self::reader::{Reader, ReaderBuilder};
+pub use self::reader::{
+    ArrayDecoder, DecoderContext, DecoderFactory, Reader, ReaderBuilder, Tape, TapeElement,
+};
 pub use self::writer::{
     ArrayWriter, Encoder, EncoderFactory, EncoderOptions, LineDelimitedWriter, Writer,
     WriterBuilder,
@@ -287,7 +296,7 @@ mod tests {
         assert!(str::from_utf8(not_utf8).is_err());
 
         let values: &[Option<&[u8]>] = &[
-            Some(b"Ned Flanders" as &[u8]),
+            Some(b"Bob Thompson" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
             Some(not_utf8),

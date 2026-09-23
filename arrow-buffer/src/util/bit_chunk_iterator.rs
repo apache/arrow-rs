@@ -38,7 +38,7 @@ pub struct UnalignedBitChunk<'a> {
 }
 
 impl<'a> UnalignedBitChunk<'a> {
-    /// Create a from a byte array, and and an offset and length in bits
+    /// Create from a byte array, offset and length in bits
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         if len == 0 {
             return Self {
@@ -730,7 +730,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn fuzz_unaligned_bit_chunk_iterator() {
         let mut rng = rng();
 

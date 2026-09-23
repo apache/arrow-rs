@@ -203,10 +203,11 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
     let end_offset = block_count * (SIZE + 1);
     let to_write = &mut out[..end_offset];
 
-    let chunks = val.chunks_exact(SIZE);
-    let remainder = chunks.remainder();
-    for (input, output) in chunks.clone().zip(to_write.chunks_exact_mut(SIZE + 1)) {
-        let input: &[u8; SIZE] = input.try_into().unwrap();
+    let (chunks, remainder) = val.as_chunks::<SIZE>();
+    #[expect(clippy::chunks_exact_to_as_chunks)]
+    // Requires using generic parameters in const operations: generic_const_exprs
+    let to_write_chunks = to_write.chunks_exact_mut(SIZE + 1);
+    for (input, output) in chunks.iter().zip(to_write_chunks) {
         let out_block: &mut [u8; SIZE] = (&mut output[..SIZE]).try_into().unwrap();
 
         *out_block = *input;

@@ -24,6 +24,7 @@ use parquet::{
 };
 
 #[test]
+#[cfg_attr(miri, ignore)] // Takes too long
 fn test_get_row_group_column_bloom_filter_with_length() {
     // convert to new parquet file with bloom_filter_length
     let testdata = arrow::util::test_util::parquet_test_data();

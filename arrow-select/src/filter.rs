@@ -943,6 +943,37 @@ fn filter_byte_view<T: ByteViewType>(
     unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) }
 }
 
+/// Copies fixed-size binary elements at `indices` from `values` into a new `MutableBuffer`.
+/// Uses raw pointer writes and `with_capacity` to avoid zero-initialization and per-call overhead.
+#[inline(always)]
+fn copy_fsb_indices(
+    values: &[u8],
+    value_length: usize,
+    indices: impl Iterator<Item = usize>,
+    count: usize,
+) -> MutableBuffer {
+    let total = count * value_length;
+    let mut buffer = MutableBuffer::with_capacity(total);
+    let dst_base = buffer.as_mut_ptr();
+    let mut write_offset = 0usize;
+    for idx in indices {
+        let src_start = idx * value_length;
+        // SAFETY: `idx` is derived from the filter predicate so it is a valid array index;
+        // we allocated `count * value_length` bytes and advance by `value_length` per step.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                values.as_ptr().add(src_start),
+                dst_base.add(write_offset),
+                value_length,
+            );
+        }
+        write_offset += value_length;
+    }
+    // SAFETY: we wrote exactly `count * value_length` bytes into the buffer.
+    unsafe { buffer.set_len(total) };
+    buffer
+}
+
 fn filter_fixed_size_binary(
     array: &FixedSizeBinaryArray,
     predicate: &FilterPredicate,
@@ -969,30 +1000,30 @@ fn filter_fixed_size_binary(
             }
             buffer
         }
-        IterationStrategy::IndexIterator => {
-            let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| {
-                &values[calculate_offset_from_index(x)..calculate_offset_from_index(x + 1)]
-            });
-
-            let mut buffer = MutableBuffer::new(predicate.count * value_length);
-            iter.for_each(|item| buffer.extend_from_slice(item));
-            buffer
-        }
-        IterationStrategy::Indices(indices) => {
-            let iter = indices.iter().map(|x| {
-                &values[calculate_offset_from_index(*x)..calculate_offset_from_index(*x + 1)]
-            });
-
-            let mut buffer = MutableBuffer::new(predicate.count * value_length);
-            iter.for_each(|item| buffer.extend_from_slice(item));
-            buffer
-        }
+        IterationStrategy::IndexIterator => copy_fsb_indices(
+            values,
+            value_length,
+            IndexIterator::new(&predicate.filter, predicate.count),
+            predicate.count,
+        ),
+        IterationStrategy::Indices(indices) => copy_fsb_indices(
+            values,
+            value_length,
+            indices.iter().copied(),
+            predicate.count,
+        ),
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
 
     let nulls = predicate.filter_nulls(array.nulls());
 
-    FixedSizeBinaryArray::new(array.value_length(), buffer.into(), nulls)
+    FixedSizeBinaryArray::try_new_with_len(
+        array.value_length(),
+        buffer.into(),
+        nulls,
+        predicate.count,
+    )
+    .unwrap()
 }
 
 /// `filter` implementation for dictionaries
@@ -1817,7 +1848,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_test_slices_iterator() {
         let mut rng = rng();
 
@@ -1889,7 +1920,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_filter() {
         let mut rng = rng();
 
@@ -2079,6 +2110,22 @@ mod tests {
             &[6, 7],
             list.as_any().downcast_ref::<Int32Array>().unwrap().values()
         );
+    }
+
+    #[test]
+    fn test_filter_zero_width_fixed_size_binary() {
+        // value_length=0 with no nulls: row count cannot be inferred from the empty
+        // buffer, so filter must preserve it explicitly.
+        let array = FixedSizeBinaryArray::try_new_with_len(
+            0,
+            Buffer::from_slice_ref(&[] as &[u8]),
+            None,
+            3,
+        )
+        .unwrap();
+        let filter_array = BooleanArray::from(vec![true, false, true]);
+        let result = filter(&array, &filter_array).unwrap();
+        assert_eq!(result.len(), 2);
     }
 
     fn test_filter_union_array(array: UnionArray) {
