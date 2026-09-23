@@ -933,7 +933,7 @@ where
             .len()
             .checked_div(values.len().max(1))
             .unwrap_or(0);
-        let mut dst_buf: Vec<u8> = Vec::new(
+        let mut dst_buf: Vec<u8> = Vec::with_capacity(
             avg_row_len
                 .saturating_mul(indices.len())
                 .saturating_mul(bytes_per_value),
