@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::alloc::Layout;
 use std::ptr::NonNull;
-use std::sync::Arc;
 
 use super::immutable::Buffer;
+use crate::alloc::Deallocation;
+use crate::bytes::Bytes;
 
 #[repr(align(64))]
 #[derive(Clone, Copy)]
@@ -159,15 +161,26 @@ impl Default for AlignedVec {
 }
 
 impl From<AlignedVec> for Buffer {
-    fn from(mut vec: AlignedVec) -> Self {
+    fn from(vec: AlignedVec) -> Self {
         let filled_len = vec.filled_len;
         if filled_len == 0 {
             return Buffer::from(&[] as &[u8]);
         }
-        let ptr = NonNull::new(vec.raw_vector.as_mut_ptr().cast::<u8>())
-            .expect("Vec<Aligned64> heap pointer is never null when len > 0");
-        // Safety: ptr is valid for filled_len bytes; Arc<AlignedVec> keeps the allocation alive.
-        unsafe { Buffer::from_custom_allocation(ptr, filled_len, Arc::new(vec)) }
+        // Move raw_vector out so we can call into_raw_parts without going through Arc.
+        // AlignedVec has no Drop impl so the partial move is safe.
+        let mut raw = vec.raw_vector;
+        let capacity = raw.capacity();
+        let ptr = NonNull::new(raw.as_mut_ptr().cast::<u8>())
+            .expect("Vec<Aligned64> heap pointer is never null when capacity > 0");
+        // Layout of the Vec<Aligned64> heap allocation.
+        let layout = Layout::array::<Aligned64>(capacity).expect("valid layout");
+        // Prevent Vec from running its drop and freeing the memory — Buffer owns it now.
+        std::mem::forget(raw);
+        // Safety: ptr is the Vec<Aligned64> allocation (64-byte aligned), valid for
+        // at least filled_len bytes. Deallocation::Standard will call
+        // dealloc(ptr, layout) which matches the original allocation exactly.
+        let bytes = unsafe { Bytes::new(ptr, filled_len, Deallocation::Standard(layout)) };
+        Buffer::from(bytes)
     }
 }
 
