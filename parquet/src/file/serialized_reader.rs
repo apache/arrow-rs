@@ -3366,5 +3366,88 @@ mod tests {
             !pages.supports_deferred_dictionary(),
             "an offset-less dictionary cannot be recovered from the offset-index state"
         );
+        // Note this combination is unlikely to occur in practice: a writer old
+        // enough to omit `dictionary_page_offset` predates the offset index,
+        // so it would not emit page locations either. The probe answers
+        // defensively rather than relying on that.
+    }
+
+    /// Alternating skip and read is the shape a `RowSelection` produces, and
+    /// it exercises the deferral more than once per chunk: the first skip
+    /// defers, the first read installs, and every later skip has to cope with
+    /// a dictionary that is already installed.
+    #[test]
+    fn alternating_skip_and_read_decodes_correct_values() {
+        let (bytes, _) = dict_column_file();
+        let mut reader = int32_reader(bytes);
+
+        assert_eq!(reader.skip_records(1).unwrap(), 1);
+        let mut first = Vec::new();
+        let (records, _, _) = reader.read_records(2, None, None, &mut first).unwrap();
+        assert_eq!(records, 2);
+        assert_eq!(first, vec![2, 3]);
+
+        assert_eq!(reader.skip_records(1).unwrap(), 1);
+        let mut second = Vec::new();
+        let (records, _, _) = reader.read_records(1, None, None, &mut second).unwrap();
+        assert_eq!(records, 1);
+        assert_eq!(second, vec![5]);
+    }
+
+    /// A wrapper that forwards `take_deferred_dictionary` but not
+    /// `supports_deferred_dictionary`, which is the easy mistake to make when
+    /// adding the new methods to an existing wrapper.
+    struct HalfForwardingPageReader(SerializedPageReader<Bytes>);
+
+    impl Iterator for HalfForwardingPageReader {
+        type Item = Result<Page>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.get_next_page().transpose()
+        }
+    }
+
+    impl PageReader for HalfForwardingPageReader {
+        fn get_next_page(&mut self) -> Result<Option<Page>> {
+            self.0.get_next_page()
+        }
+
+        fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
+            self.0.peek_next_page()
+        }
+
+        fn skip_next_page(&mut self) -> Result<()> {
+            self.0.skip_next_page()
+        }
+
+        fn take_deferred_dictionary(&mut self) -> Result<Option<Page>> {
+            self.0.take_deferred_dictionary()
+        }
+    }
+
+    /// Forwarding only half the pair must stay correct: the probe still
+    /// reports `false`, so the skip path reads the dictionary eagerly and the
+    /// forwarded `take_deferred_dictionary` simply never has anything to
+    /// return. Slower than forwarding both, never wrong.
+    #[test]
+    fn forwarding_only_take_deferred_dictionary_is_still_correct() {
+        let (bytes, _) = dict_column_file();
+        let reader = SerializedFileReader::new(bytes.clone()).unwrap();
+        let meta = reader.metadata();
+        let descr = meta.file_metadata().schema_descr().column(0);
+        let col_meta = meta.row_group(0).column(0).clone();
+        let total_rows = meta.row_group(0).num_rows() as usize;
+        let pages =
+            SerializedPageReader::new(Arc::new(bytes), &col_meta, total_rows, None).unwrap();
+        let mut reader = crate::column::reader::ColumnReaderImpl::<Int32Type>::new(
+            descr,
+            Box::new(HalfForwardingPageReader(pages)),
+        );
+
+        assert_eq!(reader.skip_records(2).unwrap(), 2);
+        let mut values = Vec::new();
+        let (records, _, _) = reader.read_records(3, None, None, &mut values).unwrap();
+        assert_eq!(records, 3);
+        assert_eq!(values, vec![3, 4, 5]);
     }
 }
