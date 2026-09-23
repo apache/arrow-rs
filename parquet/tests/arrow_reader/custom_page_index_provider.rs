@@ -23,14 +23,17 @@
 //! - Columns without page indexes fall back to whole-column-chunk fetching
 //! - Correct results are returned in both cases
 
-use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
+use arrow::compute::concat_batches;
+use arrow_array::{Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
+use parquet::DecodeResult;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
     RowSelectionPolicy,
 };
+use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
 use parquet::file::metadata::page_index::PageIndexProvider;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
 use parquet::file::page_index::column_index::ColumnIndexMetaData;
@@ -38,12 +41,94 @@ use parquet::file::page_index::index_reader::{decode_column_index, decode_offset
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
-fn test_read_with_custom_page_index_provider() {
+fn test_read_with_custom_page_index_provider_sync() {
+    run_test(Reader::Sync);
+}
+
+#[test]
+fn test_read_with_custom_page_index_provider_push() {
+    run_test(Reader::Push);
+}
+
+#[cfg(feature = "async")]
+#[test]
+fn test_read_with_custom_page_index_provider_async() {
+    run_test(Reader::Async);
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Reader {
+    Sync,
+    Push,
+    #[cfg(feature = "async")]
+    Async,
+}
+
+/// Read `file` with `reader`, using `metadata` and `selection`
+fn read(
+    reader: Reader,
+    file: Bytes,
+    metadata: ArrowReaderMetadata,
+    selection: RowSelection,
+    requested: &mut Vec<Range<u64>>,
+) -> Vec<RecordBatch> {
+    match reader {
+        Reader::Sync => ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata)
+            .with_row_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Selectors)
+            .build()
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap(),
+        Reader::Push => {
+            let mut decoder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
+                .with_row_selection(selection)
+                .with_row_selection_policy(RowSelectionPolicy::Selectors)
+                .build()
+                .unwrap();
+            let mut batches = vec![];
+            loop {
+                match decoder.try_decode().unwrap() {
+                    DecodeResult::NeedsData(ranges) => {
+                        requested.extend(ranges.iter().cloned());
+                        let data = ranges
+                            .iter()
+                            .map(|r| file.slice(r.start as usize..r.end as usize))
+                            .collect();
+                        decoder.push_ranges(ranges, data).unwrap();
+                    }
+                    DecodeResult::Data(batch) => batches.push(batch),
+                    DecodeResult::Finished => return batches,
+                }
+            }
+        }
+        #[cfg(feature = "async")]
+        Reader::Async => {
+            use futures::TryStreamExt;
+            let input = std::io::Cursor::new(file.to_vec());
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                parquet::arrow::ParquetRecordBatchStreamBuilder::new_with_metadata(input, metadata)
+                    .with_row_selection(selection)
+                    .with_row_selection_policy(RowSelectionPolicy::Selectors)
+                    .build()
+                    .unwrap()
+                    .try_collect()
+                    .await
+                    .unwrap()
+            })
+        }
+    }
+}
+
+fn run_test(reader: Reader) {
     // Step 1: Write a parquet file with page indexes
     let file_bytes = create_test_file();
 
@@ -63,30 +148,12 @@ fn test_read_with_custom_page_index_provider() {
     // Simulate a scenario where:
     // - We only populate indexes for row groups 0 and 2 (skipping row group 1)
     // - For row group 0: populate column 0 (id) and column 1 (value)
-    // - For row group 2: populate column 0 (id) only
-    let mut provider = SelectivePageIndexProvider::new(file_bytes.clone());
-
-    // Populate indexes for row group 0, columns 0 and 1
-    provider.fetch_column_index(0, 0, metadata).unwrap();
-    provider.fetch_offset_index(0, 0, metadata).unwrap();
-    provider.fetch_column_index(0, 1, metadata).unwrap();
-    provider.fetch_offset_index(0, 1, metadata).unwrap();
-
-    // Populate indexes for row group 2, column 0 only
-    provider.fetch_column_index(2, 0, metadata).unwrap();
-    provider.fetch_offset_index(2, 0, metadata).unwrap();
-
-    // Verify the provider has the expected indexes
-    assert!(provider.column_index(0, 0).is_some());
-    assert!(provider.offset_index(0, 0).is_some());
-    assert!(provider.column_index(0, 1).is_some());
-    assert!(provider.offset_index(0, 1).is_some());
-    assert!(provider.column_index(0, 2).is_none()); // Not populated
-    assert!(provider.column_index(2, 0).is_some());
-    assert!(provider.column_index(2, 1).is_none()); // Not populated
-
-    // Reset statistics so validation checks don't affect the final counts
-    provider.reset_stats();
+    // - For row group 2: populate columns 0 (id) and 2 (name), so column 1 is a gap
+    let provider = SelectivePageIndexProvider::new(
+        file_bytes.clone(),
+        metadata,
+        &[(0, 0), (0, 1), (2, 0), (2, 2)],
+    );
 
     // Step 4: Install the custom provider into metadata
     let mut metadata_builder = metadata.clone().into_builder();
@@ -101,8 +168,6 @@ fn test_read_with_custom_page_index_provider() {
     .unwrap();
 
     // Step 6: Read data with RowSelection that triggers page skipping
-    let builder =
-        ParquetRecordBatchReaderBuilder::new_with_metadata(file_bytes.clone(), arrow_metadata);
 
     // Create a RowSelection that:
     // - Selects rows 20-30 (in row group 0)
@@ -123,17 +188,33 @@ fn test_read_with_custom_page_index_provider() {
         parquet::arrow::arrow_reader::RowSelector::select(10),
     ]);
 
-    let reader = builder
-        .with_row_selection(selection)
-        // make sure we're actually using the page index and not using a mask
-        .with_row_selection_policy(RowSelectionPolicy::Selectors)
-        .build()
-        .unwrap();
-
     // Collect all batches
-    let batches: Vec<RecordBatch> = reader.collect::<Result<Vec<_>, _>>().unwrap();
+    let mut requested = Vec::<Range<u64>>::new();
+    let batches = read(
+        reader,
+        file_bytes.clone(),
+        arrow_metadata,
+        selection,
+        &mut requested,
+    );
 
     // Step 7: Check statistics
+
+    // only the push test will populate requested
+    if matches!(reader, Reader::Push) {
+        let fetched = |rg: usize, col: usize| -> u64 {
+            let (start, len) = metadata.row_group(rg).column(col).byte_range();
+            requested
+                .iter()
+                .filter(|r| r.start >= start && r.end <= start + len)
+                .map(|r| r.end - r.start)
+                .sum()
+        };
+        let chunk_len = |rg: usize, col: usize| metadata.row_group(rg).column(col).byte_range().1;
+        assert!(fetched(0, 0) < chunk_len(0, 0)); // offset index: selected pages only
+        assert_eq!(fetched(0, 2), chunk_len(0, 2)); // no offset index: whole chunk
+    }
+
     // Note: We need to get the provider reference from the metadata to check stats
     let provider_ref = metadata_with_custom_index
         .page_index()
@@ -161,61 +242,15 @@ fn test_read_with_custom_page_index_provider() {
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 30);
 
-    // Verify the actual data values
-    let mut all_ids = Vec::new();
-    let mut all_values = Vec::new();
-    let mut all_names = Vec::new();
-    let mut all_scores = Vec::new();
-
-    for batch in batches {
-        let ids = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        let values = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        let names = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        let scores = batch
-            .column(3)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-
-        all_ids.extend(ids.iter().flatten());
-        all_values.extend(values.iter().flatten());
-        all_names.extend(names.iter().flatten().map(|s| s.to_owned()));
-        all_scores.extend(scores.iter().flatten());
-    }
-
     // Expected values for the selected rows:
     // rows 20-30: id=20..30, value=40..60, score=60..90
     // rows 60-70: id=60..70, value=120..140, score=180..210
     // rows 120-130: id=120..130, value=240..260, score=360..390
-    let expected_ids: Vec<i32> = (20..30).chain(60..70).chain(120..130).collect();
-    let expected_values: Vec<i32> = expected_ids.iter().map(|x| x * 2).collect();
-    let expected_scores: Vec<i32> = expected_ids.iter().map(|x| x * 3).collect();
-    let expected_names: Vec<String> = expected_ids.iter().map(|x| format!("name{x}")).collect();
-
-    assert_eq!(all_ids, expected_ids, "IDs don't match expected values");
+    let ids: Vec<i32> = (20..30).chain(60..70).chain(120..130).collect();
+    let expected = make_batch(&ids);
     assert_eq!(
-        all_values, expected_values,
-        "Values don't match expected values"
-    );
-    assert_eq!(
-        all_scores, expected_scores,
-        "Scores don't match expected values"
-    );
-    assert_eq!(
-        all_names, expected_names,
-        "Names don't match expected values"
+        concat_batches(&expected.schema(), &batches).unwrap(),
+        expected
     );
 }
 
@@ -225,32 +260,46 @@ fn test_read_with_custom_page_index_provider() {
 /// page indexes selectively based on query predicates and projections.
 #[derive(Debug)]
 struct SelectivePageIndexProvider {
-    file_bytes: Bytes,
     // indexes are accessed first by row_group index and then by column index
-    column_indexes: Option<HashMap<usize, HashMap<usize, ColumnIndexMetaData>>>,
-    offset_indexes: Option<HashMap<usize, HashMap<usize, OffsetIndexMetaData>>>,
+    column_indexes: Option<HashMap<(usize, usize), ColumnIndexMetaData>>,
+    offset_indexes: Option<HashMap<(usize, usize), OffsetIndexMetaData>>,
     // Usage statistics
-    column_index_hits: Arc<AtomicUsize>,
-    column_index_misses: Arc<AtomicUsize>,
-    offset_index_hits: Arc<AtomicUsize>,
-    offset_index_misses: Arc<AtomicUsize>,
+    column_index_hits: AtomicUsize,
+    column_index_misses: AtomicUsize,
+    offset_index_hits: AtomicUsize,
+    offset_index_misses: AtomicUsize,
 }
 
 impl SelectivePageIndexProvider {
-    fn new(file_bytes: Bytes) -> Self {
+    fn new(file_bytes: Bytes, metadata: &ParquetMetaData, chunks: &[(usize, usize)]) -> Self {
+        let mut column_indexes = HashMap::new();
+        let mut offset_indexes = HashMap::new();
+        for &(rg, col) in chunks {
+            column_indexes.insert(
+                (rg, col),
+                Self::fetch_column_index(rg, col, metadata, &file_bytes)
+                    .unwrap()
+                    .unwrap(),
+            );
+            offset_indexes.insert(
+                (rg, col),
+                Self::fetch_offset_index(rg, col, metadata, &file_bytes)
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
         Self {
-            file_bytes,
-            column_indexes: None,
-            offset_indexes: None,
-            column_index_hits: Arc::new(AtomicUsize::new(0)),
-            column_index_misses: Arc::new(AtomicUsize::new(0)),
-            offset_index_hits: Arc::new(AtomicUsize::new(0)),
-            offset_index_misses: Arc::new(AtomicUsize::new(0)),
+            column_indexes: Some(column_indexes),
+            offset_indexes: Some(offset_indexes),
+            column_index_hits: AtomicUsize::new(0),
+            column_index_misses: AtomicUsize::new(0),
+            offset_index_hits: AtomicUsize::new(0),
+            offset_index_misses: AtomicUsize::new(0),
         }
     }
 
     /// Get statistics about column index usage
-    pub fn column_index_stats(&self) -> (usize, usize) {
+    fn column_index_stats(&self) -> (usize, usize) {
         (
             self.column_index_hits.load(Ordering::Relaxed),
             self.column_index_misses.load(Ordering::Relaxed),
@@ -258,7 +307,7 @@ impl SelectivePageIndexProvider {
     }
 
     /// Get statistics about offset index usage
-    pub fn offset_index_stats(&self) -> (usize, usize) {
+    fn offset_index_stats(&self) -> (usize, usize) {
         (
             self.offset_index_hits.load(Ordering::Relaxed),
             self.offset_index_misses.load(Ordering::Relaxed),
@@ -266,64 +315,44 @@ impl SelectivePageIndexProvider {
     }
 
     /// Get combined statistics as (hits, misses) for both index types
-    pub fn stats(&self) -> (usize, usize) {
+    fn stats(&self) -> (usize, usize) {
         let (col_hits, col_misses) = self.column_index_stats();
         let (off_hits, off_misses) = self.offset_index_stats();
         (col_hits + off_hits, col_misses + off_misses)
     }
 
-    /// Reset all statistics counters to zero
-    pub fn reset_stats(&self) {
-        self.column_index_hits.store(0, Ordering::Relaxed);
-        self.column_index_misses.store(0, Ordering::Relaxed);
-        self.offset_index_hits.store(0, Ordering::Relaxed);
-        self.offset_index_misses.store(0, Ordering::Relaxed);
-    }
-
     /// Fetch and parse the column index for the given row group and column
     fn fetch_column_index(
-        &mut self,
         row_group_idx: usize,
         column_idx: usize,
         metadata: &ParquetMetaData,
-    ) -> parquet::errors::Result<()> {
-        let map = self.column_indexes.get_or_insert_with(HashMap::new);
-        let rg = map.entry(row_group_idx).or_default();
-        if let Entry::Vacant(e) = rg.entry(column_idx) {
-            let column = metadata.row_group(row_group_idx).column(column_idx);
-            let range = column.column_index_range();
-            if let Some(range) = range {
-                let idx_bytes = self
-                    .file_bytes
-                    .slice(range.start as usize..range.end as usize);
-                let idx = decode_column_index(&idx_bytes, column.column_type())?;
-                e.insert(idx);
-            }
+        file_bytes: &Bytes,
+    ) -> parquet::errors::Result<Option<ColumnIndexMetaData>> {
+        let column = metadata.row_group(row_group_idx).column(column_idx);
+        let range = column.column_index_range();
+        if let Some(range) = range {
+            let idx_bytes = file_bytes.slice(range.start as usize..range.end as usize);
+            Ok(Some(decode_column_index(&idx_bytes, column.column_type())?))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
     /// Fetch and parse the offset index for the given row group and column
     fn fetch_offset_index(
-        &mut self,
         row_group_idx: usize,
         column_idx: usize,
         metadata: &ParquetMetaData,
-    ) -> parquet::errors::Result<()> {
-        let map = self.offset_indexes.get_or_insert_with(HashMap::new);
-        let rg = map.entry(row_group_idx).or_default();
-        if let Entry::Vacant(e) = rg.entry(column_idx) {
-            let column = metadata.row_group(row_group_idx).column(column_idx);
-            let range = column.offset_index_range();
-            if let Some(range) = range {
-                let idx_bytes = self
-                    .file_bytes
-                    .slice(range.start as usize..range.end as usize);
-                let idx = decode_offset_index(&idx_bytes)?;
-                e.insert(idx);
-            }
+        file_bytes: &Bytes,
+    ) -> parquet::errors::Result<Option<OffsetIndexMetaData>> {
+        let column = metadata.row_group(row_group_idx).column(column_idx);
+        let range = column.offset_index_range();
+        if let Some(range) = range {
+            let idx_bytes = file_bytes.slice(range.start as usize..range.end as usize);
+            Ok(Some(decode_offset_index(&idx_bytes)?))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 }
 
@@ -344,8 +373,7 @@ impl PageIndexProvider for SelectivePageIndexProvider {
         let result = self
             .column_indexes
             .as_ref()?
-            .get(&row_group_idx)?
-            .get(&column_idx);
+            .get(&(row_group_idx, column_idx));
 
         if result.is_some() {
             self.column_index_hits.fetch_add(1, Ordering::Relaxed);
@@ -364,8 +392,7 @@ impl PageIndexProvider for SelectivePageIndexProvider {
         let result = self
             .offset_indexes
             .as_ref()?
-            .get(&row_group_idx)?
-            .get(&column_idx);
+            .get(&(row_group_idx, column_idx));
 
         if result.is_some() {
             self.offset_index_hits.fetch_add(1, Ordering::Relaxed);
@@ -383,13 +410,6 @@ impl PageIndexProvider for SelectivePageIndexProvider {
 
 /// Create a test parquet file with multiple row groups and multiple pages per column
 pub(super) fn create_test_file() -> Bytes {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("value", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, false),
-        Field::new("score", DataType::Int32, false),
-    ]));
-
     // Create small pages and small row groups for testing
     let props = WriterProperties::builder()
         .set_statistics_enabled(EnabledStatistics::Page)
@@ -398,37 +418,12 @@ pub(super) fn create_test_file() -> Bytes {
         .set_max_row_group_row_count(Some(50)) // Small row groups
         .build();
 
-    let mut buffer = Vec::with_capacity(1024);
-    let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
-
     // Write 3 row groups with 50 rows each (150 rows total)
-    for row_group in 0..3 {
-        for batch_num in 0..5 {
-            let offset = (row_group * 50) + (batch_num * 10);
-            let batch = RecordBatch::try_new(
-                schema.clone(),
-                vec![
-                    Arc::new(Int32Array::from(
-                        (offset..offset + 10).collect::<Vec<i32>>(),
-                    )),
-                    Arc::new(Int32Array::from(
-                        (offset..offset + 10).map(|x| x * 2).collect::<Vec<i32>>(),
-                    )),
-                    Arc::new(StringArray::from(
-                        (offset..offset + 10)
-                            .map(|x| format!("name{x}"))
-                            .collect::<Vec<String>>(),
-                    )),
-                    Arc::new(Int32Array::from(
-                        (offset..offset + 10).map(|x| x * 3).collect::<Vec<i32>>(),
-                    )),
-                ],
-            )
-            .unwrap();
-            writer.write(&batch).unwrap();
-        }
-        writer.flush().unwrap();
-    }
+    let batch = make_batch((0..150).collect::<Vec<i32>>().as_slice());
+    let mut buffer = Vec::with_capacity(1024);
+    let mut writer =
+        ArrowWriter::try_new(&mut buffer, batch.schema().clone(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
 
     // check that file has properties we wanted (3 row groups, 5 pages per chunk)
     let metadata = writer.close().unwrap();
@@ -447,4 +442,32 @@ pub(super) fn create_test_file() -> Bytes {
         }
     }
     Bytes::from(buffer)
+}
+
+fn make_batch(ids: &[i32]) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("value", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("score", DataType::Int32, false),
+    ]));
+    // Write 3 row groups with 50 rows each (150 rows total)
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from(ids.to_vec())),
+            Arc::new(Int32Array::from(
+                ids.iter().map(|x| x * 2).collect::<Vec<i32>>(),
+            )),
+            Arc::new(StringArray::from(
+                ids.iter()
+                    .map(|x| format!("name{x}"))
+                    .collect::<Vec<String>>(),
+            )),
+            Arc::new(Int32Array::from(
+                ids.iter().map(|x| x * 3).collect::<Vec<i32>>(),
+            )),
+        ],
+    )
+    .unwrap()
 }
