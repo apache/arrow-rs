@@ -50,21 +50,13 @@ fn test_read_with_custom_page_index_provider_sync() {
     run_test(Reader::Sync);
 }
 
-// this will fail until https://github.com/apache/arrow-rs/pull/11182 is merged
 #[test]
-#[should_panic(
-    expected = r#"called `Result::unwrap()` on an `Err` value: General("Invalid column index 2, column was not fetched")"#
-)]
 fn test_read_with_custom_page_index_provider_push() {
     run_test(Reader::Push);
 }
 
-// this will fail until https://github.com/apache/arrow-rs/pull/11182 is merged
 #[cfg(feature = "async")]
 #[test]
-#[should_panic(
-    expected = r#"called `Result::unwrap()` on an `Err` value: General("Invalid column index 2, column was not fetched")"#
-)]
 fn test_read_with_custom_page_index_provider_async() {
     run_test(Reader::Async);
 }
