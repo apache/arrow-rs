@@ -21,6 +21,7 @@ use crate::arrow::arrow_reader::{
 };
 use crate::arrow::push_decoder::reader_builder::{
     RowBudget, RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
+    ScanPlanConfig,
 };
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
@@ -41,13 +42,13 @@ enum QueuedRowGroupDecision {
 
 /// Work item handed from [`RowGroupFrontier`] to [`RowGroupReaderBuilder`].
 #[derive(Debug)]
-struct NextRowGroup {
-    row_group_idx: usize,
-    row_count: usize,
+pub(super) struct NextRowGroup {
+    pub(super) row_group_idx: usize,
+    pub(super) row_count: usize,
     /// This row group's selection, or `None` when all rows are selected.
-    selection: Option<RowSelection>,
+    pub(super) selection: Option<RowSelection>,
     /// Budget snapshot to apply while decoding this row group.
-    budget: RowBudget,
+    pub(super) budget: RowBudget,
 }
 
 /// Row groups and selections that have not yet been handed to the row-group
@@ -178,16 +179,16 @@ impl QueuedRowGroups {
 }
 
 #[derive(Debug, Clone)]
-struct RowGroupFrontier {
+pub(super) struct RowGroupFrontier {
     /// Metadata used to resolve row counts for queued row groups.
-    parquet_metadata: Arc<ParquetMetaData>,
+    pub(super) parquet_metadata: Arc<ParquetMetaData>,
     /// Row groups not yet handed to the builder.
     queued: QueuedRowGroups,
     /// Offset/limit budget before the next readable row group is planned.
-    budget: RowBudget,
+    pub(super) budget: RowBudget,
     /// If predicates are present, row groups with selected rows must be read so
     /// the predicate can decide whether they are actually needed.
-    has_predicates: bool,
+    pub(super) has_predicates: bool,
 }
 
 impl RowGroupFrontier {
@@ -207,7 +208,7 @@ impl RowGroupFrontier {
         })
     }
 
-    fn update_budget_after_row_group(&mut self, budget: RowBudget) {
+    pub(super) fn update_budget_after_row_group(&mut self, budget: RowBudget) {
         self.budget = budget;
     }
 
@@ -257,7 +258,7 @@ impl RowGroupFrontier {
     }
 
     /// Advance queued row groups until one should be handed to the builder.
-    fn next_readable_row_group(&mut self) -> Result<Option<NextRowGroup>, ParquetError> {
+    pub(super) fn next_readable_row_group(&mut self) -> Result<Option<NextRowGroup>, ParquetError> {
         loop {
             let Some(row_group_idx) = self.queued.front() else {
                 return Ok(None);
@@ -392,6 +393,17 @@ impl RemainingRowGroups {
             limit: budget.limit(),
             reader_builder: row_group_reader_builder.into_parts(),
         }
+    }
+
+    /// A copy of the row-group frontier, used to plan the scan without
+    /// advancing decoding. See [`super::ScanPlan`].
+    pub(super) fn frontier_snapshot(&self) -> RowGroupFrontier {
+        self.frontier.clone()
+    }
+
+    /// See [`RowGroupReaderBuilder::scan_plan_config`].
+    pub(super) fn scan_plan_config(&self) -> ScanPlanConfig {
+        self.row_group_reader_builder.scan_plan_config()
     }
 
     /// Push new data buffers that can be used to satisfy pending requests
