@@ -331,7 +331,8 @@ impl VariantArray {
     ///    binary_view
     ///
     /// 3. An optional field named `typed_value` which can be any primitive type
-    ///    or be a list, large_list, list_view or struct
+    ///    or be a list, large_list, fixed_size_list, list_view or struct. Fixed-size lists are
+    ///    normalized to variable-length lists on read.
     ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
         // Canonicalize shredded typed_value fields (e.g. decimal narrowing)
@@ -1064,7 +1065,7 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Result<Varian
             let value = boolean_array.value(index);
             Ok(Variant::from(value))
         }
-        // 16-byte FixedSizeBinary alway corresponds to a UUID; all other sizes are illegal.
+        // 16-byte FixedSizeBinary always corresponds to a UUID; all other sizes are illegal.
         DataType::FixedSizeBinary(16) => {
             let array = typed_value.as_fixed_size_binary();
             let value = array.value(index);
@@ -1297,7 +1298,15 @@ fn canonicalize_and_verify_data_type_impl(
 
         // UUID maps to 16-byte fixed-size binary; no other width is allowed
         FixedSizeBinary(16) => borrow!(),
-        FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
+        FixedSizeBinary(_) => fail!(),
+
+        // FixedSizeList is an Arrow-specific distinction. Normalize it to List on read so
+        // Variant data written by older arrow-rs versions remains readable without treating
+        // FixedSizeList as a supported shredding target.
+        FixedSizeList(field, _) => match canonicalize_and_verify_field(field)? {
+            Cow::Borrowed(_) => Cow::Owned(DataType::List(field.clone())),
+            Cow::Owned(new_field) => Cow::Owned(DataType::List(new_field)),
+        },
 
         // List-like containers and struct are allowed, maps and unions are not
         List(field) => match canonicalize_and_verify_field(field)? {
@@ -1398,9 +1407,9 @@ mod test {
     use super::*;
     use arrow::array::{
         BinaryArray, BinaryDictionaryBuilder, BinaryRunBuilder, BinaryViewArray, Decimal32Array,
-        Decimal64Array, Decimal128Array, FixedSizeBinaryArray, Int8Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray,
-        StringArray, Time64MicrosecondArray,
+        Decimal64Array, Decimal128Array, FixedSizeBinaryArray, FixedSizeListArray, Int8Array,
+        Int32Array, Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray,
+        ListViewArray, StringArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
@@ -1719,6 +1728,33 @@ mod test {
     }
 
     #[test]
+    fn variant_array_try_new_normalizes_fixed_size_list_typed_value() {
+        let element_values: ArrayRef =
+            ShreddedVariantFieldArray::perfectly_shredded(Arc::new(Int64Array::from(vec![
+                1, 2, 3, 4,
+            ])))
+            .into();
+        let item_field = Arc::new(Field::new("item", element_values.data_type().clone(), true));
+        let typed_value: ArrayRef = Arc::new(FixedSizeListArray::new(
+            item_field.clone(),
+            2,
+            element_values,
+            None,
+        ));
+        let input = make_variant_struct_with_typed_value(typed_value);
+
+        let variant_array = VariantArray::try_new(&input).unwrap();
+        assert_eq!(
+            variant_array.typed_value_column().unwrap().data_type(),
+            &DataType::List(item_field),
+        );
+
+        let unshredded = crate::unshred_variant(&variant_array).unwrap();
+        assert!(unshredded.typed_value_column().is_none());
+        assert_eq!(unshredded.len(), 2);
+    }
+
+    #[test]
     fn test_try_value_out_of_bounds() {
         let mut b = VariantArrayBuilder::new(2);
         b.append_variant(Variant::from(1_i8));
@@ -1937,7 +1973,7 @@ mod test {
     }
 
     invalid_variant_array_test!(
-        test_variant_array_invalide_time,
+        test_variant_array_invalid_time,
         Time64MicrosecondArray::from(vec![Some(86401000000)]),
         "Cast error: Cast failed at index 0 (array type: Time64(µs)): Invalid microsecond from midnight: 86401000000"
     );

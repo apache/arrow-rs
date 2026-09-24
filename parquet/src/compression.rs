@@ -347,7 +347,7 @@ pub use gzip_codec::*;
 /// - `zlib` supports levels from 0 to 9.
 /// - `miniz_oxide` supports levels from 0 to 10.
 ///
-/// `arrow` uses `flate` with `rust_backend` feature,
+/// `arrow` uses `flate2` with `rust_backend` feature,
 /// which provides `miniz_oxide` as the backend.
 /// Therefore 0-10 levels are supported.
 ///

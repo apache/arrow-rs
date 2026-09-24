@@ -17,7 +17,9 @@
 
 //! Tests that reading invalid parquet files returns an error
 
+use arrow::compute::concat_batches;
 use arrow::util::test_util::parquet_test_data;
+use arrow_array::RecordBatchReader;
 use bytes::Bytes;
 use parquet::arrow::arrow_reader::ArrowReaderBuilder;
 use parquet::errors::ParquetError;
@@ -171,23 +173,26 @@ fn non_standard_delta_blocks() {
     let selectors = vec![RowSelector::skip(1000), RowSelector::select(5)];
 
     let selection: RowSelection = selectors.into();
-    let reader = ArrowReaderBuilder::try_new(file)
+    let reader = ArrowReaderBuilder::try_new(file.clone())
         .unwrap()
         .with_row_selection(selection)
         .build()
         .unwrap();
 
-    if let Some(maybe_batch) = reader.into_iter().next() {
-        // TODO: uncomment if we ever allow skipping miniblocks > 64 elements
-        //let batch = maybe_batch.expect("skip should succeed");
-        //assert_eq!(batch.num_rows(), 5);
-        assert!(
-            maybe_batch
-                .unwrap_err()
-                .to_string()
-                .contains("cannot skip miniblock of size 128")
-        );
-    }
+    let selected = concat_batches(
+        &reader.schema(),
+        &reader.collect::<Result<Vec<_>, _>>().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(selected.num_rows(), 5);
+
+    let reader = ArrowReaderBuilder::try_new(file).unwrap().build().unwrap();
+    let all = concat_batches(
+        &reader.schema(),
+        &reader.collect::<Result<Vec<_>, _>>().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(selected, all.slice(1000, 5));
 }
 
 #[test]

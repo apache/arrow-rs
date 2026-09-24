@@ -152,6 +152,13 @@
 //! [compared]: PartialOrd
 //! [compare]: PartialOrd
 //! [the issue]: https://github.com/apache/arrow-rs/issues/4811
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -1051,12 +1058,12 @@ impl RowConverter {
                 columns.len()
             )));
         }
-        for colum in columns.iter().skip(1) {
-            if colum.len() != columns[0].len() {
+        for column in columns.iter().skip(1) {
+            if column.len() != columns[0].len() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "RowConverter columns must all have the same length, expected {} got {}",
                     columns[0].len(),
-                    colum.len()
+                    column.len()
                 )));
             }
         }
@@ -2434,7 +2441,6 @@ unsafe fn decode_column(
 mod tests {
     use arrow_array::builder::*;
     use arrow_array::types::*;
-    use arrow_array::*;
     use arrow_buffer::{Buffer, OffsetBuffer};
     use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};

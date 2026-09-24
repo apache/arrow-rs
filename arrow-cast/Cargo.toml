@@ -37,7 +37,6 @@ all-features = true
 
 [features]
 prettyprint = ["comfy-table"]
-force_validate = []
 
 [dependencies]
 arrow-array = { workspace = true }
@@ -62,6 +61,10 @@ insta = { workspace = true }
 num-bigint = { version = "0.5", default-features = false, features = ["std"] }
 rand = "0.10"
 
+[[test]]
+name = "cast"
+path = "./tests/cast/mod.rs"
+
 [[bench]]
 name = "parse_timestamp"
 harness = false
@@ -84,3 +87,7 @@ harness = false
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "format_decimal"
+harness = false

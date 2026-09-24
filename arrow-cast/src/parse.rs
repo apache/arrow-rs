@@ -740,11 +740,11 @@ fn parse_date_to_days(string: &str) -> Option<i32> {
         let y = year as i64;
         let era = y.div_euclid(400);
         let yoe = y.rem_euclid(400) as i32;
-        let nd = NaiveDate::from_ymd_opt(yoe, month, day)?;
-        let in_era = (nd.num_days_from_ce() - EPOCH_DAYS_FROM_CE) as i64;
+        let naive_date = NaiveDate::from_ymd_opt(yoe, month, day)?;
+        let in_era = (naive_date.num_days_from_ce() - EPOCH_DAYS_FROM_CE) as i64;
         return i32::try_from(era * 146_097 + in_era).ok();
     }
-    parse_date(string).map(|nd| nd.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+    parse_date(string).map(|naive_date| naive_date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
 }
 
 impl Parser for Date32Type {
@@ -861,8 +861,12 @@ pub(crate) fn parse_decimal_checked<T: DecimalType>(
     precision: u8,
     scale: i8,
 ) -> Result<T::Native, DecimalParseError> {
-    let value = parse_decimal_native::<T>(s, scale)?;
-    if T::is_valid_decimal_precision(value, precision) {
+    let (value, digits) = parse_decimal_native::<T>(s, scale)?;
+    // A value of at most `precision` digits is within the precision without
+    // inspecting it. A precision beyond the type's maximum is invalid.
+    let fits = precision <= T::MAX_PRECISION
+        && (digits <= precision as usize || T::is_valid_decimal_precision(value, precision));
+    if fits {
         Ok(value)
     } else {
         Err(DecimalParseError::Overflow)
@@ -870,20 +874,22 @@ pub(crate) fn parse_decimal_checked<T: DecimalType>(
 }
 
 /// Parses `s` as a decimal with the given `scale` into the native type of `T`,
-/// checking only that the result fits the native type (not the precision).
+/// checking only that the result fits the native type (not the precision),
+/// and returns it with an upper bound on its number of decimal digits.
 ///
 /// See [`parse_decimal`] for the accepted syntax and rounding behaviour.
+#[inline]
 fn parse_decimal_native<T: DecimalType>(
     s: &str,
     scale: i8,
-) -> Result<T::Native, DecimalParseError> {
+) -> Result<(T::Native, usize), DecimalParseError> {
     let bytes = s.as_bytes().trim_ascii();
     let (negative, mut mantissa) = split_sign(bytes);
 
     let mut scale = scale as i64;
     loop {
         let exponent_at = match parse_decimal_mantissa::<T>(mantissa, negative, scale) {
-            Ok(value) => return Ok(value),
+            Ok(result) => return Ok(result),
             Err(MantissaError::InvalidFormat) => return Err(DecimalParseError::InvalidFormat),
             Err(MantissaError::Exponent(index)) => index,
             // The digits before an exponent marker need not fit on their own
@@ -934,13 +940,15 @@ const MAX_CHUNK_DIGITS: usize = 18;
 /// Scans `mantissa` (digits with at most one decimal point; the sign has
 /// already been removed) and folds the digits that are significant at
 /// `scale` into a native value, rounding half away from zero on the first
-/// digit that is not.
+/// digit that is not. Also returns an upper bound on the number of decimal
+/// digits of the value: the digits kept, the zeros appended to reach the
+/// scale, and the digit that rounding up can add.
 #[inline]
 fn parse_decimal_mantissa<T: DecimalType>(
     mantissa: &[u8],
     negative: bool,
     scale: i64,
-) -> Result<T::Native, MantissaError> {
+) -> Result<(T::Native, usize), MantissaError> {
     // The number of integer and fractional digits that contribute to the
     // result. For a non-negative scale that is every integer digit and the
     // first `scale` fractional digits. For a negative scale the last `-scale`
@@ -962,53 +970,59 @@ fn parse_decimal_mantissa<T: DecimalType>(
         }
     };
 
-    let mut value = T::Native::ZERO;
-    let mut chunk = 0_u64;
-    let mut chunk_len = 0_usize;
-    let mut saw_point = false;
+    let mut acc = DecimalAccumulator::<T> {
+        value: T::Native::ZERO,
+        chunk: 0,
+        chunk_len: 0,
+        negative,
+    };
     let mut int_kept = 0_usize;
     let mut frac_kept = 0_usize;
     let mut first_discarded_digit = None;
 
+    // Digits before the decimal point
     let mut index = 0;
     while let Some(&b) = mantissa.get(index) {
-        match b {
-            b'0'..=b'9' => {
-                let digit = b - b'0';
-                let (kept, keep) = if saw_point {
-                    (&mut frac_kept, frac_keep)
-                } else {
-                    (&mut int_kept, int_keep)
-                };
-                if *kept < keep {
-                    *kept += 1;
-                    // Cannot overflow: the chunk is folded into `value` before it
-                    // exceeds MAX_CHUNK_DIGITS digits, all of which fit in a u64
-                    chunk = chunk * 10 + digit as u64;
-                    chunk_len += 1;
-                    if chunk_len == MAX_CHUNK_DIGITS {
-                        value = fold_decimal_chunk::<T>(value, chunk, chunk_len, negative)?;
-                        chunk = 0;
-                        chunk_len = 0;
-                    }
-                } else {
-                    first_discarded_digit.get_or_insert(digit);
-                }
-            }
-            b'.' if !saw_point => saw_point = true,
-            b'e' | b'E' => return Err(MantissaError::Exponent(index)),
-            _ => return Err(MantissaError::InvalidFormat),
+        if !b.is_ascii_digit() {
+            break;
+        }
+        if int_kept < int_keep {
+            int_kept += 1;
+            acc.push(b - b'0')?;
+        } else {
+            first_discarded_digit.get_or_insert(b - b'0');
         }
         index += 1;
     }
 
-    if chunk_len > 0 {
-        value = fold_decimal_chunk::<T>(value, chunk, chunk_len, negative)?;
+    // Digits after the decimal point
+    if mantissa.get(index) == Some(&b'.') {
+        index += 1;
+        while let Some(&b) = mantissa.get(index) {
+            if !b.is_ascii_digit() {
+                break;
+            }
+            if frac_kept < frac_keep {
+                frac_kept += 1;
+                acc.push(b - b'0')?;
+            } else {
+                first_discarded_digit.get_or_insert(b - b'0');
+            }
+            index += 1;
+        }
+    }
+
+    match mantissa.get(index) {
+        None => {}
+        Some(b'e' | b'E') => return Err(MantissaError::Exponent(index)),
+        Some(_) => return Err(MantissaError::InvalidFormat),
     }
 
     if int_kept == 0 && frac_kept == 0 && first_discarded_digit.is_none() {
         return Err(MantissaError::InvalidFormat);
     }
+
+    let mut value = acc.finish()?;
 
     // Scale the value up to the target scale. Skipped for zero, where computing
     // 10^missing could overflow the native type even though the result (zero)
@@ -1030,7 +1044,10 @@ fn parse_decimal_mantissa<T: DecimalType>(
         .map_err(|_| MantissaError::Overflow)?;
     }
 
-    Ok(value)
+    let digits = usize::try_from(missing.max(0))
+        .unwrap_or(usize::MAX)
+        .saturating_add(int_kept + frac_kept + round as usize);
+    Ok((value, digits))
 }
 
 /// Parses the digits of an exponent (`[+|-] digits`), saturating at the bounds
@@ -1062,10 +1079,45 @@ fn split_sign(bytes: &[u8]) -> (bool, &[u8]) {
     }
 }
 
+/// Accumulates decimal digits into `chunk`, folding it into `value` whenever
+/// it reaches [`MAX_CHUNK_DIGITS`] digits
+struct DecimalAccumulator<T: DecimalType> {
+    value: T::Native,
+    chunk: u64,
+    chunk_len: usize,
+    negative: bool,
+}
+
+impl<T: DecimalType> DecimalAccumulator<T> {
+    #[inline(always)]
+    fn push(&mut self, digit: u8) -> Result<(), DecimalParseError> {
+        // Cannot overflow: the chunk is folded into `value` before it exceeds
+        // MAX_CHUNK_DIGITS digits, all of which fit in a u64
+        self.chunk = self.chunk * 10 + digit as u64;
+        self.chunk_len += 1;
+        if self.chunk_len == MAX_CHUNK_DIGITS {
+            self.value =
+                fold_decimal_chunk::<T>(self.value, self.chunk, self.chunk_len, self.negative)?;
+            self.chunk = 0;
+            self.chunk_len = 0;
+        }
+        Ok(())
+    }
+
+    /// Folds the digits still in `chunk` into the value
+    #[inline]
+    fn finish(self) -> Result<T::Native, DecimalParseError> {
+        if self.chunk_len == 0 {
+            return Ok(self.value);
+        }
+        fold_decimal_chunk::<T>(self.value, self.chunk, self.chunk_len, self.negative)
+    }
+}
+
 /// Folds a chunk of up to [`MAX_CHUNK_DIGITS`] digits into `value`, producing
 /// `value * 10^chunk_len + chunk` (`chunk` is negated first when parsing a
 /// negative number).
-#[inline]
+#[inline(always)]
 fn fold_decimal_chunk<T: DecimalType>(
     value: T::Native,
     chunk: u64,
@@ -1663,6 +1715,11 @@ mod tests {
     use super::*;
     use arrow_array::temporal_conversions::date32_to_datetime;
     use arrow_buffer::i256;
+
+    /// Parses `s` without a precision check, for probing the native range
+    fn parse_native<T: DecimalType>(s: &str, scale: i8) -> Result<T::Native, DecimalParseError> {
+        parse_decimal_native::<T>(s, scale).map(|(value, _)| value)
+    }
 
     #[test]
     fn test_parse_nanos() {
@@ -3065,29 +3122,71 @@ mod tests {
 
         // ... or past the native type itself
         assert_eq!(
-            parse_decimal_native::<Decimal32Type>("2147483647.5", 0),
+            parse_native::<Decimal32Type>("2147483647.5", 0),
             Err(DecimalParseError::Overflow)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal32Type>("-2147483648.5", 0),
+            parse_native::<Decimal32Type>("-2147483648.5", 0),
             Err(DecimalParseError::Overflow)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal128Type>(&format!("{}.5", i128::MAX), 0),
+            parse_native::<Decimal128Type>(&format!("{}.5", i128::MAX), 0),
             Err(DecimalParseError::Overflow)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal128Type>(&format!("{}.5", i128::MIN), 0),
+            parse_native::<Decimal128Type>(&format!("{}.5", i128::MIN), 0),
             Err(DecimalParseError::Overflow)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal256Type>(&format!("{}.5", i256::MAX), 0),
+            parse_native::<Decimal256Type>(&format!("{}.5", i256::MAX), 0),
             Err(DecimalParseError::Overflow)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal256Type>(&format!("{}.5", i256::MIN), 0),
+            parse_native::<Decimal256Type>(&format!("{}.5", i256::MIN), 0),
             Err(DecimalParseError::Overflow)
         );
+    }
+
+    #[test]
+    fn test_parse_decimal_precision_by_digit_count() {
+        // Rounding up can add a digit
+        assert_eq!(
+            parse_decimal::<Decimal128Type>("99999.4", 5, 0).unwrap(),
+            99999
+        );
+        assert!(parse_decimal::<Decimal128Type>("99999.5", 5, 0).is_err());
+        assert!(parse_decimal::<Decimal128Type>("-99999.5", 5, 0).is_err());
+        assert_eq!(
+            parse_decimal::<Decimal128Type>("99999.5", 6, 0).unwrap(),
+            100000
+        );
+        // Leading zeros count as digits only for the shortcut; the value is
+        // then checked by its range
+        assert_eq!(
+            parse_decimal::<Decimal128Type>("000000000000000000000001", 1, 0).unwrap(),
+            1
+        );
+        assert_eq!(
+            parse_decimal::<Decimal128Type>("0.000000000000000000001", 1, 21).unwrap(),
+            1
+        );
+        assert!(parse_decimal::<Decimal128Type>("0.0000000000000000000012", 1, 22).is_err());
+        // The zeros appended to reach the scale count as digits
+        assert_eq!(parse_decimal::<Decimal128Type>("1", 3, 2).unwrap(), 100);
+        assert!(parse_decimal::<Decimal128Type>("1", 2, 2).is_err());
+        assert!(parse_decimal::<Decimal128Type>("1e2", 2, 0).is_err());
+        assert_eq!(parse_decimal::<Decimal32Type>("1e2", 3, 0).unwrap(), 100);
+        // Scaling down leaves fewer digits
+        assert_eq!(
+            parse_decimal::<Decimal128Type>("123456", 2, -4).unwrap(),
+            12
+        );
+        assert!(parse_decimal::<Decimal128Type>("123456", 1, -4).is_err());
+        // A precision beyond the type's maximum is invalid
+        assert!(parse_decimal::<Decimal32Type>("1", 10, 0).is_err());
+        assert!(parse_decimal::<Decimal32Type>("00000000001", 10, 0).is_err());
+        assert!(parse_decimal::<Decimal128Type>("1", 39, 0).is_err());
+        assert!(parse_decimal::<Decimal256Type>("1", 77, 0).is_err());
     }
 
     #[test]
@@ -3095,35 +3194,35 @@ mod tests {
         // The native range exceeds the largest precision; the precision check
         // is the caller's responsibility
         assert_eq!(
-            parse_decimal_native::<Decimal32Type>("-2147483648", 0),
+            parse_native::<Decimal32Type>("-2147483648", 0),
             Ok(i32::MIN)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal32Type>("2147483648", 0),
+            parse_native::<Decimal32Type>("2147483648", 0),
             Err(DecimalParseError::Overflow)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal64Type>("-9223372036854775808", 0),
+            parse_native::<Decimal64Type>("-9223372036854775808", 0),
             Ok(i64::MIN)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal64Type>("9223372036854775808", 0),
+            parse_native::<Decimal64Type>("9223372036854775808", 0),
             Err(DecimalParseError::Overflow)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal128Type>(&i128::MAX.to_string(), 0),
+            parse_native::<Decimal128Type>(&i128::MAX.to_string(), 0),
             Ok(i128::MAX)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal128Type>(&i128::MIN.to_string(), 0),
+            parse_native::<Decimal128Type>(&i128::MIN.to_string(), 0),
             Ok(i128::MIN)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal256Type>(&i256::MAX.to_string(), 0),
+            parse_native::<Decimal256Type>(&i256::MAX.to_string(), 0),
             Ok(i256::MAX)
         );
         assert_eq!(
-            parse_decimal_native::<Decimal256Type>(&i256::MIN.to_string(), 0),
+            parse_native::<Decimal256Type>(&i256::MIN.to_string(), 0),
             Ok(i256::MIN)
         );
         // The unscaled value (integer digits scaled by 10^21) far exceeds the
@@ -3131,7 +3230,7 @@ mod tests {
         // arbitrary (possibly in-range) value
         let input = format!("{}.12345678901234567890123", "7".repeat(71));
         assert_eq!(
-            parse_decimal_native::<Decimal256Type>(&input, 21),
+            parse_native::<Decimal256Type>(&input, 21),
             Err(DecimalParseError::Overflow)
         );
 

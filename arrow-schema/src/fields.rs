@@ -695,8 +695,16 @@ mod tests {
             Field::new(
                 "i",
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                    Arc::new(Field::new("values", DataType::Struct(floats.clone()), true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        DataType::Struct(floats.clone()),
+                        true,
+                    )),
                 ),
                 false,
             ),
@@ -726,8 +734,16 @@ mod tests {
             &Field::new(
                 "i",
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                    Arc::new(Field::new("values", floats_a.clone(), true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        false
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        floats_a.clone(),
+                        true
+                    )),
                 ),
                 false,
             )

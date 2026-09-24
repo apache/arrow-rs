@@ -23,7 +23,6 @@ use arrow_array::*;
 use arrow_buffer::NullBuffer;
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_schema::*;
-use std::borrow::BorrowMut;
 use std::cmp::{self, Ordering};
 use std::ops::{BitAnd, BitOr, BitXor};
 use types::ByteViewType;
@@ -237,12 +236,11 @@ fn aggregate_nonnull_lanes<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, const
     // aggregating into multiple independent accumulators allows the compiler to use vector registers
     // with a single accumulator the compiler would not be allowed to reorder floating point addition
     let mut acc = [A::default(); LANES];
-    let mut chunks = values.chunks_exact(LANES);
-    chunks.borrow_mut().for_each(|chunk| {
-        aggregate_nonnull_chunk(&mut acc, chunk[..LANES].try_into().unwrap());
+    let (chunks, remainder) = values.as_chunks::<LANES>();
+    chunks.iter().for_each(|chunk| {
+        aggregate_nonnull_chunk(&mut acc, chunk);
     });
 
-    let remainder = chunks.remainder();
     for i in 0..remainder.len() {
         acc[i].accumulate(remainder[i]);
     }
@@ -261,31 +259,29 @@ fn aggregate_nullable_lanes<T: ArrowNativeTypeOp, A: NumericAccumulator<T>, cons
     // aggregating into multiple independent accumulators allows the compiler to use vector registers
     let mut acc = [A::default(); LANES];
     // we process 64 bits of validity at a time
-    let mut values_chunks = values.chunks_exact(64);
+    let (values_chunks, remainder) = values.as_chunks::<64>();
     let validity_chunks = validity.inner().bit_chunks();
     let mut validity_chunks_iter = validity_chunks.iter();
 
-    values_chunks.borrow_mut().for_each(|chunk| {
+    values_chunks.iter().for_each(|chunk| {
         // Safety: we asserted that values and validity have the same length and trust the iterator impl
         let mut validity = unsafe { validity_chunks_iter.next().unwrap_unchecked() };
         // chunk further based on the number of vector lanes
-        chunk.chunks_exact(LANES).for_each(|chunk| {
-            aggregate_nullable_chunk(&mut acc, chunk[..LANES].try_into().unwrap(), validity);
+        chunk.as_chunks::<LANES>().0.iter().for_each(|chunk| {
+            aggregate_nullable_chunk(&mut acc, chunk, validity);
             validity >>= LANES;
         });
     });
 
-    let remainder = values_chunks.remainder();
     if !remainder.is_empty() {
         let mut validity = validity_chunks.remainder_bits();
 
-        let mut remainder_chunks = remainder.chunks_exact(LANES);
-        remainder_chunks.borrow_mut().for_each(|chunk| {
-            aggregate_nullable_chunk(&mut acc, chunk[..LANES].try_into().unwrap(), validity);
+        let (remainder_chunks, remainder) = remainder.as_chunks::<LANES>();
+        remainder_chunks.iter().for_each(|chunk| {
+            aggregate_nullable_chunk(&mut acc, chunk, validity);
             validity >>= LANES;
         });
 
-        let remainder = remainder_chunks.remainder();
         if !remainder.is_empty() {
             let mut bit = 1;
             for i in 0..remainder.len() {

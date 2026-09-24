@@ -384,7 +384,7 @@ impl FFI_ArrowSchema {
     ///
     /// Panics if `index` is greater than or equal to the number of children.
     ///
-    /// This is to make sure that the unsafe acces to raw pointer is sound.
+    /// This is to make sure that the unsafe access to raw pointer is sound.
     pub fn child(&self, index: usize) -> &Self {
         assert!(index < self.n_children as usize);
         unsafe { self.children.add(index).as_ref().unwrap().as_ref().unwrap() }
@@ -1003,8 +1003,16 @@ mod tests {
             true,
         )])));
         round_trip_type(DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Binary, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Binary,
+                true,
+            )),
         ));
     }
 

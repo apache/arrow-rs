@@ -2107,9 +2107,12 @@ mod tests {
         assert_eq!(out.num_rows(), 8);
         match out.schema().field(0).data_type() {
             DataType::RunEndEncoded(run_ends_field, values_field) => {
-                assert_eq!(run_ends_field.name(), "run_ends");
+                assert_eq!(
+                    run_ends_field.name(),
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME
+                );
                 assert_eq!(run_ends_field.data_type(), &DataType::Int32);
-                assert_eq!(values_field.name(), "values");
+                assert_eq!(values_field.name(), Field::REE_VALUES_FIELD_DEFAULT_NAME);
                 assert_eq!(values_field.data_type(), &DataType::Int32);
                 assert!(values_field.is_nullable());
                 let got_ree = out

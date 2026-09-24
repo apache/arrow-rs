@@ -159,7 +159,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
     use arrow_array::{Array, Int64Array, PrimitiveArray, RunArray, StringArray};
-    use arrow_schema::{DataType, SortOptions};
+    use arrow_schema::{DataType, Field, SortOptions};
     use std::sync::Arc;
 
     fn assert_roundtrip<R: RunEndIndexType>(
@@ -171,15 +171,31 @@ mod tests {
         let sort_field = if let Some(options) = sort_options {
             SortField::new_with_options(
                 DataType::RunEndEncoded(
-                    Arc::new(arrow_schema::Field::new("run_ends", run_end_type, false)),
-                    Arc::new(arrow_schema::Field::new("values", values_type, true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        run_end_type,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        values_type,
+                        true,
+                    )),
                 ),
                 options,
             )
         } else {
             SortField::new(DataType::RunEndEncoded(
-                Arc::new(arrow_schema::Field::new("run_ends", run_end_type, false)),
-                Arc::new(arrow_schema::Field::new("values", values_type, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    run_end_type,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    values_type,
+                    true,
+                )),
             ))
         };
 
@@ -199,8 +215,16 @@ mod tests {
     fn test_run_end_encoded_supports_datatype() {
         // Test that the RowConverter correctly supports run-end encoded arrays
         assert!(RowConverter::supports_datatype(&DataType::RunEndEncoded(
-            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true
+            )),
         )));
     }
 
@@ -336,8 +360,16 @@ mod tests {
 
         let converter_nulls_first = RowConverter::new(vec![SortField::new_with_options(
             DataType::RunEndEncoded(
-                Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             ),
             SortOptions {
                 descending: false,
@@ -348,8 +380,16 @@ mod tests {
 
         let converter_nulls_last = RowConverter::new(vec![SortField::new_with_options(
             DataType::RunEndEncoded(
-                Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             ),
             SortOptions {
                 descending: false,
@@ -396,8 +436,16 @@ mod tests {
 
         let multi_converter = RowConverter::new(vec![
             SortField::new(DataType::RunEndEncoded(
-                Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             )),
             SortField::new(DataType::Utf8),
         ])
@@ -435,8 +483,16 @@ mod tests {
 
         // Test ascending sort
         let converter_asc = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
-            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         ))])
         .unwrap();
 
@@ -468,8 +524,16 @@ mod tests {
         // Test descending sort
         let converter_desc = RowConverter::new(vec![SortField::new_with_options(
             DataType::RunEndEncoded(
-                Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             ),
             arrow_schema::SortOptions {
                 descending: true,
@@ -514,8 +578,16 @@ mod tests {
         // Test nulls_first = true
         let converter_nulls_first = RowConverter::new(vec![SortField::new_with_options(
             DataType::RunEndEncoded(
-                Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             ),
             arrow_schema::SortOptions {
                 descending: false,
@@ -540,8 +612,16 @@ mod tests {
         // Test nulls_first = false
         let converter_nulls_last = RowConverter::new(vec![SortField::new_with_options(
             DataType::RunEndEncoded(
-                Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             ),
             arrow_schema::SortOptions {
                 descending: false,
@@ -575,8 +655,16 @@ mod tests {
 
         let converter = RowConverter::new(vec![SortField::new_with_options(
             DataType::RunEndEncoded(
-                Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-                Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             ),
             arrow_schema::SortOptions {
                 descending: false,
@@ -618,8 +706,16 @@ mod tests {
         let array: RunArray<Int32Type> = values.into_iter().collect();
 
         let converter = RowConverter::new(vec![SortField::new(DataType::RunEndEncoded(
-            Arc::new(arrow_schema::Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(arrow_schema::Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         ))])
         .unwrap();
 

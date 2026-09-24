@@ -49,11 +49,11 @@
 //!
 //! # Async Usage
 //!
-//! The lower-level [`Decoder`] can be integrated with various forms of async data streams,
-//! and is designed to be agnostic to the various different kinds of async IO primitives found
+//! The lower-level [`Decoder`] can be integrated with various forms of async
+//! data streams, and can be used with any of the async IO primitives found
 //! within the Rust ecosystem.
 //!
-//! For example, see below for how it can be used with an arbitrary `Stream` of `Bytes`
+//! For example, it can be used with an arbitrary `Stream` of `Bytes` as shown below
 //!
 //! ```
 //! # use std::task::{Poll, ready};
@@ -132,8 +132,15 @@
 //! }
 //! ```
 //!
+//! # Customizing the decoder
+//!
+//! The decoding of each data type can be customized using
+//! [`ReaderBuilder::with_decoder_factory`]. For example, you can override the
+//! default decoding of binary data from hex strings to decode from an array of
+//! integers instead, or provide decoders for types with no built-in decoding.
+//! See the example on [`DecoderFactory`].
+//!
 
-use std::borrow::Cow;
 use std::io::BufRead;
 use std::sync::Arc;
 
@@ -141,7 +148,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchReader, downcast_integer};
-use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
 use chrono::Utc;
 use serde_core::Serialize;
 
@@ -161,10 +168,13 @@ use crate::reader::run_end_array::RunEndEncodedArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
-use crate::reader::tape::{Tape, TapeDecoder, TapeDecoderOptions};
+use crate::reader::tape::{TapeDecoder, TapeDecoderOptions};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
 pub use schema::*;
+// `mod tape` is private by design: exposing only these two types means downstream can read a
+// `Tape` but not construct one, keeping `TapeDecoder` an implementation detail.
+pub use tape::{Tape, TapeElement};
 pub use value_iter::ValueIter;
 
 mod binary_array;
@@ -194,7 +204,7 @@ pub struct ReaderBuilder {
     is_field: bool,
     struct_mode: StructMode,
     flatten_top_level_arrays: bool,
-
+    decoder_factory: Option<Arc<dyn DecoderFactory>>,
     schema: SchemaRef,
 }
 
@@ -216,6 +226,7 @@ impl ReaderBuilder {
             is_field: false,
             struct_mode: Default::default(),
             flatten_top_level_arrays: false,
+            decoder_factory: None,
             schema,
         }
     }
@@ -259,6 +270,7 @@ impl ReaderBuilder {
             is_field: true,
             struct_mode: Default::default(),
             flatten_top_level_arrays: false,
+            decoder_factory: None,
             schema: Arc::new(Schema::new([field.into()])),
         }
     }
@@ -341,6 +353,14 @@ impl ReaderBuilder {
         }
     }
 
+    /// Set a hook for customizing decoding behavior. See [`DecoderFactory`].
+    pub fn with_decoder_factory(self, decoder_factory: Arc<dyn DecoderFactory>) -> Self {
+        Self {
+            decoder_factory: Some(decoder_factory),
+            ..self
+        }
+    }
+
     /// Create a [`Reader`] with the provided [`BufRead`]
     pub fn build<R: BufRead>(self, reader: R) -> Result<Reader<R>, ArrowError> {
         Ok(Reader {
@@ -351,13 +371,14 @@ impl ReaderBuilder {
 
     /// Create a [`Decoder`]
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
-        let (data_type, nullable) = if self.is_field {
-            let field = &self.schema.fields[0];
-            let data_type = Cow::Borrowed(field.data_type());
-            (data_type, field.is_nullable())
+        let (field, nullable) = if self.is_field {
+            let field = self.schema.fields[0].clone();
+            let nullable = field.is_nullable();
+            (field, nullable)
         } else {
-            let data_type = Cow::Owned(DataType::Struct(self.schema.fields.clone()));
-            (data_type, false)
+            // The root has no field of its own; synthesize a nameless one
+            let data_type = DataType::Struct(self.schema.fields.clone());
+            (Arc::new(Field::new("", data_type, false)), false)
         };
 
         let ctx = DecoderContext {
@@ -365,8 +386,9 @@ impl ReaderBuilder {
             strict_mode: self.strict_mode,
             struct_mode: self.struct_mode,
             ignore_type_conflicts: self.ignore_type_conflicts,
+            decoder_factory: self.decoder_factory,
         };
-        let decoder = ctx.make_decoder(data_type.as_ref(), nullable)?;
+        let decoder = ctx.make_decoder(&field, nullable)?;
 
         let num_fields = self.schema.flattened_fields().len();
 
@@ -735,9 +757,256 @@ impl Decoder {
     }
 }
 
-trait ArrayDecoder: Send {
+/// Decodes a column of JSON values from a [`Tape`] into an [`ArrayRef`]
+///
+/// Implement alongside [`DecoderFactory`] to override or add support for a type.
+pub trait ArrayDecoder: Send {
     /// Decode elements from `tape` starting at the indexes contained in `pos`
+    ///
+    /// `pos` contains one tape index per output row, so the returned array must have
+    /// exactly `pos.len()` elements and the field's data type. A row's value may be
+    /// [`TapeElement::Null`].
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError>;
+}
+
+/// A trait to create custom decoders for specific data types.
+///
+/// Overrides the reader's decoder for a data type, or adds support for one it does not
+/// handle. The reader-side counterpart of [`EncoderFactory`]; register an
+/// implementation with [`ReaderBuilder::with_decoder_factory`].
+///
+/// # Example: Decode `Binary` from a JSON array of integers
+///
+/// This example shows how to decode a `Binary` column from a JSON array of
+/// integers, e.g. `[104, 105]` for the bytes `b"hi"`, as created by the
+/// example in [`EncoderFactory`].
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{Array, ArrayRef, BinaryArray};
+/// # use arrow_array::types::Float64Type;
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape, TapeElement};
+/// # use arrow_json::ReaderBuilder;
+/// # use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema};
+///
+/// /// Decodes `[104, 105]` into the bytes `b"hi"`
+/// struct IntArrayBinaryDecoder;
+///
+/// impl ArrayDecoder for IntArrayBinaryDecoder {
+///     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+///         let mut values: Vec<Option<Vec<u8>>> = Vec::with_capacity(pos.len());
+///         for p in pos {
+///             match tape.get(*p) {
+///                 TapeElement::Null => values.push(None),
+///                 TapeElement::StartList(end) => {
+///                     let mut bytes = Vec::new();
+///                     let mut cur = p + 1;
+///                     while cur < end {
+///                         match tape.get(cur) {
+///                             // JSON text yields `Number`; serde yields `I32`
+///                             TapeElement::Number(idx) => {
+///                                 let s = tape.get_string(idx);
+///                                 bytes.push(s.parse::<u8>().map_err(|e| {
+///                                     ArrowError::JsonError(format!("invalid byte {s}: {e}"))
+///                                 })?);
+///                             }
+///                             TapeElement::I32(v) => bytes.push(v as u8),
+///                             _ => return Err(tape.error(cur, "byte")),
+///                         }
+///                         cur = tape.next(cur, "byte")?;
+///                     }
+///                     values.push(Some(bytes));
+///                 }
+///                 _ => return Err(tape.error(*p, "list of bytes")),
+///             }
+///         }
+///         Ok(Arc::new(BinaryArray::from_iter(values.iter().map(|v| v.as_deref()))))
+///     }
+/// }
+///
+/// /// A factory that overrides the reader's default decoder for `Binary` to decode from an array of integers
+/// #[derive(Debug)]
+/// struct IntArrayBinaryDecoderFactory;
+///
+/// impl DecoderFactory for IntArrayBinaryDecoderFactory {
+///     fn make_default_decoder(
+///         &self,
+///         ctx: &DecoderContext,
+///         field: &FieldRef,
+///         is_nullable: bool,
+///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+///         match field.data_type() {
+///             DataType::Binary => Ok(Some(Box::new(IntArrayBinaryDecoder))),
+///             // Returning `None` uses the reader's default decoder
+///             _ => Ok(None),
+///         }
+///     }
+/// }
+///
+/// let nested = Fields::from(vec![Field::new("inner", DataType::Binary, true)]);
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("bytes", DataType::Binary, true),
+///     Field::new("float", DataType::Float64, true),
+///     Field::new("nested", DataType::Struct(nested), true),
+/// ]));
+///
+/// let json = r#"{"bytes": [104, 105], "float": 1.0, "nested": {"inner": [104, 105]}}
+/// {"float": 2.3}
+/// {"bytes": [98], "nested": {"inner": [98]}}
+/// "#;
+///
+/// let batch = ReaderBuilder::new(schema)
+///     .with_decoder_factory(Arc::new(IntArrayBinaryDecoderFactory))
+///     .build(json.as_bytes())
+///     .unwrap()
+///     .next()
+///     .unwrap()
+///     .unwrap();
+///
+/// let bytes = batch.column(0).as_binary::<i32>();
+/// assert_eq!(bytes.value(0), b"hi");
+/// assert!(bytes.is_null(1));
+/// assert_eq!(bytes.value(2), b"b");
+///
+/// // The override applies wherever `Binary` appears, including nested, while types
+/// // the factory declines are decoded as usual
+/// let inner = batch.column(2).as_struct().column(0).as_binary::<i32>();
+/// assert_eq!(inner.value(0), b"hi");
+/// assert_eq!(batch.column(1).as_primitive::<Float64Type>().value(0), 1.0);
+/// ```
+///
+/// # Example: Decode an [extension type] from a JSON string
+///
+/// The choice of decoder can also depend on field metadata rather than just
+/// the data type, for example to recognize an [extension type]. The reader's
+/// own decoder for the field can be invoked with
+/// [`DecoderContext::make_builtin_decoder`].
+///
+/// This example upper-cases the strings produced by the builtin `Utf8` decoder
+/// for a fictional extension type `apache.shout`.
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, StringArray};
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape};
+/// # use arrow_json::ReaderBuilder;
+/// # use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema};
+/// # use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
+///
+/// /// Upper-cases whatever the reader's own decoder produced
+/// struct ShoutDecoder(Box<dyn ArrayDecoder>);
+///
+/// impl ArrayDecoder for ShoutDecoder {
+///     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+///         let inner = self.0.decode(tape, pos)?;
+///         let values = inner.as_string::<i32>();
+///         Ok(Arc::new(StringArray::from_iter(
+///             values.iter().map(|v| v.map(str::to_uppercase)),
+///         )))
+///     }
+/// }
+///
+/// /// A factory that recognizes the `apache.shout` extension type and upper-cases its strings
+/// #[derive(Debug)]
+/// struct ShoutDecoderFactory;
+///
+/// impl DecoderFactory for ShoutDecoderFactory {
+///     fn make_default_decoder(
+///         &self,
+///         ctx: &DecoderContext,
+///         field: &FieldRef,
+///         is_nullable: bool,
+///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+///         if field.metadata().get(EXTENSION_TYPE_NAME_KEY).map(String::as_str)
+///             == Some("apache.shout")
+///         {
+///             let inner = ctx.make_builtin_decoder(field, is_nullable)?;
+///             return Ok(Some(Box::new(ShoutDecoder(inner))));
+///         }
+///         Ok(None)
+///     }
+/// }
+///
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("shout", DataType::Utf8, true)
+///         .with_metadata([(EXTENSION_TYPE_NAME_KEY, "apache.shout")]),
+///     Field::new("plain", DataType::Utf8, true),
+/// ]));
+///
+/// let json = r#"{"shout": "hi", "plain": "hi"}"#;
+///
+/// let batch = ReaderBuilder::new(schema)
+///     .with_decoder_factory(Arc::new(ShoutDecoderFactory))
+///     .build(json.as_bytes())
+///     .unwrap()
+///     .next()
+///     .unwrap()
+///     .unwrap();
+///
+/// // Dispatched on metadata, and decoded by the reader's own `Utf8` decoder
+/// assert_eq!(batch.column(0).as_string::<i32>().value(0), "HI");
+/// // The factory declines fields without the extension type, so they are decoded as usual
+/// assert_eq!(batch.column(1).as_string::<i32>().value(0), "hi");
+/// ```
+///
+/// [`EncoderFactory`]: crate::EncoderFactory
+/// [extension type]: https://arrow.apache.org/docs/format/Columnar.html#extension-types
+pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
+    /// Make a decoder for `field`, or `Ok(None)` to use the reader's default.
+    ///
+    /// Receives the [`FieldRef`] rather than just its [`DataType`] so decoder
+    /// selection can consider the field's metadata, e.g. to identify [extension
+    /// types]. The root of a [`ReaderBuilder::new`] schema is presented as a
+    /// synthesized nameless `Struct` field.
+    ///
+    /// Use [`DecoderContext::make_decoder`] on `ctx` to build child decoders, and
+    /// [`DecoderContext::make_builtin_decoder`] to build on the reader's own decoder
+    /// for this field. Calling `make_decoder` with the field this was invoked with
+    /// recurses back here and loops.
+    ///
+    /// `is_nullable` folds in ancestor nullability, so it may differ from
+    /// `field.is_nullable()` in either direction: a nullable struct widens its
+    /// children, while a run-end encoded array narrows its values.
+    ///
+    /// [extension types]: https://arrow.apache.org/docs/format/Columnar.html#extension-types
+    fn make_default_decoder(
+        &self,
+        _ctx: &DecoderContext,
+        _field: &FieldRef,
+        _is_nullable: bool,
+    ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+        Ok(None)
+    }
+}
+
+/// Validates the output of a [`DecoderFactory`] decoder before it reaches the arrays
+/// built from it, some of which are constructed without further checks.
+struct CheckedDecoder {
+    inner: Box<dyn ArrayDecoder>,
+    data_type: DataType,
+}
+
+impl ArrayDecoder for CheckedDecoder {
+    fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+        let array = self.inner.decode(tape, pos)?;
+        if array.data_type() != &self.data_type {
+            return Err(ArrowError::JsonError(format!(
+                "custom decoder returned {} for a field of type {}",
+                array.data_type(),
+                self.data_type
+            )));
+        }
+        if array.len() != pos.len() {
+            return Err(ArrowError::JsonError(format!(
+                "custom decoder returned {} values for {} rows",
+                array.len(),
+                pos.len()
+            )));
+        }
+        Ok(array)
+    }
 }
 
 /// Context for decoder creation, containing configuration.
@@ -753,6 +1022,8 @@ pub struct DecoderContext {
     struct_mode: StructMode,
     /// Whether to treat columns with incompatible types as missing (i.e. NULL)
     ignore_type_conflicts: bool,
+    /// An optional hook for customizing decoding behavior
+    decoder_factory: Option<Arc<dyn DecoderFactory>>,
 }
 
 impl DecoderContext {
@@ -776,24 +1047,61 @@ impl DecoderContext {
         self.ignore_type_conflicts
     }
 
+    /// Returns the optional hook for customizing decoding behavior
+    pub fn decoder_factory(&self) -> Option<&Arc<dyn DecoderFactory>> {
+        self.decoder_factory.as_ref()
+    }
+
     /// Create a decoder for a type.
     ///
     /// This is the standard way to create child decoders from within a decoder
     /// implementation.
-    fn make_decoder(
+    pub fn make_decoder(
         &self,
-        data_type: &DataType,
+        field: &FieldRef,
         is_nullable: bool,
     ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
-        make_decoder(self, data_type, is_nullable)
+        make_decoder(self, field, is_nullable)
+    }
+
+    /// Create the decoder the reader would use for `field`, ignoring any
+    /// [`DecoderFactory`].
+    ///
+    /// Lets a factory build on the reader's own decoder, including for the field it was
+    /// asked about — which [`Self::make_decoder`] cannot do without looping.
+    pub fn make_builtin_decoder(
+        &self,
+        field: &FieldRef,
+        is_nullable: bool,
+    ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+        make_builtin_decoder(self, field, is_nullable)
     }
 }
 
 fn make_decoder(
     ctx: &DecoderContext,
-    data_type: &DataType,
+    field: &FieldRef,
     is_nullable: bool,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+    if let Some(factory) = ctx.decoder_factory()
+        && let Some(decoder) = factory.make_default_decoder(ctx, field, is_nullable)?
+    {
+        return Ok(Box::new(CheckedDecoder {
+            inner: decoder,
+            data_type: field.data_type().clone(),
+        }));
+    }
+
+    make_builtin_decoder(ctx, field, is_nullable)
+}
+
+fn make_builtin_decoder(
+    ctx: &DecoderContext,
+    field: &FieldRef,
+    is_nullable: bool,
+) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+    let data_type = field.data_type();
+
     macro_rules! primitive_decoder {
         ($t:ty, $data_type:expr) => {
             Ok(Box::new(PrimitiveArrayDecoder::<$t>::new(ctx, $data_type)))
@@ -898,6 +1206,7 @@ mod tests {
     use serde_json::json;
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
+    use std::sync::Mutex;
 
     use super::*;
 
@@ -3745,8 +4054,16 @@ mod tests {
         "#;
 
         let ree_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
         let batches = do_read(buf, 1024, false, false, schema);
@@ -3776,8 +4093,16 @@ mod tests {
         "#;
 
         let ree_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
         let batches = do_read(buf, 1024, false, false, schema);
@@ -3802,8 +4127,16 @@ mod tests {
         for field_nullable in [false, true] {
             for values_nullable in [false, true] {
                 let ree_type = DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                    Arc::new(Field::new("values", DataType::Utf8, values_nullable)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        DataType::Utf8,
+                        values_nullable,
+                    )),
                 );
                 let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, field_nullable)]));
 
@@ -3845,8 +4178,16 @@ mod tests {
         "#;
 
         let ree_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
         let batches = do_read(buf, 1024, false, false, schema);
@@ -3869,8 +4210,16 @@ mod tests {
         "#;
 
         let ree_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int16, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int16,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         let schema = Arc::new(Schema::new(vec![Field::new("a", ree_type, true)]));
         let batches = do_read(buf, 1024, false, false, schema);
@@ -3894,12 +4243,28 @@ mod tests {
         // The outer REE compresses whole rows, while the inner REE compresses the
         // repeated string values produced by decoding those rows.
         let inner_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int64, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int64,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         let outer_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int64, false)),
-            Arc::new(Field::new("values", inner_type, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int64,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                inner_type,
+                true,
+            )),
         );
         let schema = Arc::new(Schema::new(vec![Field::new("a", outer_type, true)]));
         let batches = do_read(buf, 1024, false, false, schema);
@@ -3943,5 +4308,136 @@ mod tests {
         for i in 0..6 {
             assert_eq!(col.value(i), (i as i32) + 1);
         }
+    }
+
+    /// Declining everything must be indistinguishable from no factory at all.
+    #[test]
+    fn test_decoder_factory_declining_everything_is_transparent() {
+        #[derive(Debug, Default)]
+        struct DeclineAll {
+            seen: Mutex<Vec<FieldRef>>,
+        }
+
+        impl DecoderFactory for DeclineAll {
+            fn make_default_decoder(
+                &self,
+                _ctx: &DecoderContext,
+                field: &FieldRef,
+                _is_nullable: bool,
+            ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+                self.seen.lock().unwrap().push(field.clone());
+                Ok(None)
+            }
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new_list("c", Field::new("item", DataType::Float64, true), true),
+        ]));
+        let buf = r#"{"a": 1, "b": "x", "c": [1.5, 2.5]}
+        {"a": null, "c": []}
+        "#;
+
+        let read = |factory: Option<Arc<dyn DecoderFactory>>| {
+            let mut builder = ReaderBuilder::new(schema.clone());
+            if let Some(factory) = factory {
+                builder = builder.with_decoder_factory(factory);
+            }
+            builder
+                .build(Cursor::new(buf.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+        };
+
+        let factory = Arc::new(DeclineAll::default());
+        assert_eq!(read(None), read(Some(factory.clone())));
+
+        // Consulted for the root struct and every leaf, with names attached; the
+        // root is the documented synthesized nameless struct
+        let seen = factory.seen.lock().unwrap();
+        assert!(
+            matches!(seen[0].data_type(), DataType::Struct(_)),
+            "{seen:?}"
+        );
+        assert_eq!(seen[0].name(), "", "root field should be nameless");
+
+        let by_name: Vec<(&str, &DataType)> = seen
+            .iter()
+            .map(|f| (f.name().as_str(), f.data_type()))
+            .collect();
+        for expected in [
+            ("a", &DataType::Int32),
+            ("b", &DataType::Utf8),
+            ("item", &DataType::Float64),
+        ] {
+            assert!(
+                by_name.contains(&expected),
+                "{expected:?} missing from {by_name:?}"
+            );
+        }
+    }
+
+    /// A custom decoder's output is not trusted: the arrays built from it are
+    /// constructed without further validation, so a mismatch must be caught here.
+    #[test]
+    fn test_decoder_factory_output_is_validated() {
+        /// Returns either the wrong data type or the wrong number of rows
+        struct Bad {
+            wrong_type: bool,
+        }
+
+        impl ArrayDecoder for Bad {
+            fn decode(&mut self, _tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+                Ok(match self.wrong_type {
+                    true => Arc::new(StringViewArray::from(vec!["x"; pos.len()])) as ArrayRef,
+                    false => Arc::new(StringArray::from(Vec::<&str>::new())),
+                })
+            }
+        }
+
+        #[derive(Debug)]
+        struct BadFactory {
+            wrong_type: bool,
+        }
+
+        impl DecoderFactory for BadFactory {
+            fn make_default_decoder(
+                &self,
+                _ctx: &DecoderContext,
+                field: &FieldRef,
+                _is_nullable: bool,
+            ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+                match field.data_type() {
+                    DataType::Utf8 => Ok(Some(Box::new(Bad {
+                        wrong_type: self.wrong_type,
+                    }))),
+                    _ => Ok(None),
+                }
+            }
+        }
+
+        let read = |wrong_type: bool| {
+            let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
+            ReaderBuilder::new(schema)
+                .with_decoder_factory(Arc::new(BadFactory { wrong_type }))
+                .build(Cursor::new(br#"{"s": "hello"}"#.as_slice()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+        };
+
+        let err = read(true);
+        assert!(
+            err.contains("returned Utf8View for a field of type Utf8"),
+            "{err}"
+        );
+
+        let err = read(false);
+        assert!(err.contains("returned 0 values for 1 rows"), "{err}");
     }
 }

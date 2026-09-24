@@ -25,8 +25,9 @@ use crate::compression::{Codec, create_codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::thrift::PageHeader;
-use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
+use crate::file::page_index::offset_index::PageLocation;
 use crate::file::statistics;
 use crate::file::{
     metadata::*,
@@ -309,13 +310,11 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
         // Row groups should be processed sequentially.
         let props = Arc::clone(&self.props);
         let f = Arc::clone(&self.chunk_reader);
+        let page_index = self.metadata.page_index_for_row_group(i);
         Ok(Box::new(SerializedRowGroupReader::new(
             f,
             row_group_metadata,
-            self.metadata
-                .page_index()
-                .map(|pi| pi.offset_indexes_for_rowgroup(i))
-                .unwrap_or(None),
+            page_index,
             props,
         )?))
     }
@@ -329,7 +328,7 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
 pub struct SerializedRowGroupReader<'a, R: ChunkReader> {
     chunk_reader: Arc<R>,
     metadata: &'a RowGroupMetaData,
-    offset_index: Option<&'a [Option<OffsetIndexMetaData>]>,
+    page_index: RowGroupPageIndex,
     props: ReaderPropertiesPtr,
     bloom_filters: Vec<Option<Sbbf>>,
 }
@@ -339,7 +338,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
     pub fn new(
         chunk_reader: Arc<R>,
         metadata: &'a RowGroupMetaData,
-        offset_index: Option<&'a [Option<OffsetIndexMetaData>]>,
+        page_index: RowGroupPageIndex,
         props: ReaderPropertiesPtr,
     ) -> Result<Self> {
         let bloom_filters = if props.read_bloom_filter() {
@@ -354,7 +353,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
         Ok(Self {
             chunk_reader,
             metadata,
-            offset_index,
+            page_index,
             props,
             bloom_filters,
         })
@@ -374,11 +373,8 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
     fn get_column_page_reader(&self, i: usize) -> Result<Box<dyn PageReader>> {
         let col = self.metadata.column(i);
 
-        let page_locations = if let Some(offset_index) = self.offset_index {
-            offset_index[i].as_ref().map(|oi| oi.page_locations.clone())
-        } else {
-            None
-        };
+        // TODO(ets): push page index into page reader so we don't have to clone here
+        let page_locations = self.page_index.page_locations(i).cloned();
 
         let props = Arc::clone(&self.props);
         Ok(Box::new(SerializedPageReader::new_with_properties(
@@ -1744,34 +1740,24 @@ mod tests {
 
     fn get_serialized_page_reader<R: ChunkReader>(
         file_reader: &SerializedFileReader<R>,
-        row_group: usize,
+        row_group_idx: usize,
         column: usize,
     ) -> Result<SerializedPageReader<R>> {
         let row_group = {
-            let row_group_metadata = file_reader.metadata.row_group(row_group);
+            let row_group_metadata = file_reader.metadata.row_group(row_group_idx);
             let props = Arc::clone(&file_reader.props);
             let f = Arc::clone(&file_reader.chunk_reader);
-            SerializedRowGroupReader::new(
-                f,
-                row_group_metadata,
-                file_reader
-                    .metadata
-                    .page_index()
-                    .map(|pi| pi.offset_indexes_for_rowgroup(row_group))
-                    .unwrap_or(None),
-                props,
-            )?
+            let page_index = file_reader.metadata.page_index_for_row_group(row_group_idx);
+            SerializedRowGroupReader::new(f, row_group_metadata, page_index, props)?
         };
 
         let col = row_group.metadata.column(column);
-
-        let page_locations = if let Some(offset_index) = row_group.offset_index {
-            offset_index[column]
-                .as_ref()
-                .map(|oi| oi.page_locations.clone())
-        } else {
-            None
-        };
+        let page_locations = file_reader
+            .metadata
+            .page_index()
+            .map(|pi| pi.page_locations(row_group_idx, column))
+            .unwrap_or(None)
+            .cloned();
 
         let props = Arc::clone(&row_group.props);
         SerializedPageReader::new_with_properties(
@@ -2201,7 +2187,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 1);
 
         let page_index = metadata.page_index().unwrap();
-        let row_group_offset_indexes = page_index.offset_indexes_for_rowgroup(0).unwrap();
+        let row_group_offset_indexes = metadata.page_index_for_row_group(0);
 
         // only one row group
         let row_group_metadata = metadata.row_group(0);
@@ -2221,11 +2207,7 @@ mod tests {
                 BoundaryOrder::UNORDERED,
             );
             assert_eq!(
-                row_group_offset_indexes[0]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(0).unwrap().len(),
                 325
             );
         } else {
@@ -2237,11 +2219,7 @@ mod tests {
         if let ColumnIndexMetaData::BOOLEAN(index) = ci {
             assert_eq!(index.num_pages(), 82);
             assert_eq!(
-                row_group_offset_indexes[1]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(1).unwrap().len(),
                 82
             );
         } else {
@@ -2258,11 +2236,7 @@ mod tests {
                 BoundaryOrder::ASCENDING,
             );
             assert_eq!(
-                row_group_offset_indexes[2]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(2).unwrap().len(),
                 325
             );
         } else {
@@ -2279,11 +2253,7 @@ mod tests {
                 BoundaryOrder::ASCENDING,
             );
             assert_eq!(
-                row_group_offset_indexes[3]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(3).unwrap().len(),
                 325
             );
         } else {
@@ -2300,11 +2270,7 @@ mod tests {
                 BoundaryOrder::ASCENDING,
             );
             assert_eq!(
-                row_group_offset_indexes[4]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(4).unwrap().len(),
                 325
             );
         } else {
@@ -2321,11 +2287,7 @@ mod tests {
                 BoundaryOrder::UNORDERED,
             );
             assert_eq!(
-                row_group_offset_indexes[5]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(5).unwrap().len(),
                 528
             );
         } else {
@@ -2342,11 +2304,7 @@ mod tests {
                 BoundaryOrder::ASCENDING,
             );
             assert_eq!(
-                row_group_offset_indexes[6]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(6).unwrap().len(),
                 325
             );
         } else {
@@ -2363,11 +2321,7 @@ mod tests {
                 BoundaryOrder::UNORDERED,
             );
             assert_eq!(
-                row_group_offset_indexes[7]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(7).unwrap().len(),
                 528
             );
         } else {
@@ -2384,11 +2338,7 @@ mod tests {
                 BoundaryOrder::UNORDERED,
             );
             assert_eq!(
-                row_group_offset_indexes[8]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(8).unwrap().len(),
                 974
             );
         } else {
@@ -2405,11 +2355,7 @@ mod tests {
                 BoundaryOrder::ASCENDING,
             );
             assert_eq!(
-                row_group_offset_indexes[9]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(9).unwrap().len(),
                 352
             );
         } else {
@@ -2429,11 +2375,7 @@ mod tests {
                 BoundaryOrder::ASCENDING,
             );
             assert_eq!(
-                row_group_offset_indexes[11]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(11).unwrap().len(),
                 325
             );
         } else {
@@ -2450,11 +2392,7 @@ mod tests {
                 BoundaryOrder::UNORDERED,
             );
             assert_eq!(
-                row_group_offset_indexes[12]
-                    .as_ref()
-                    .unwrap()
-                    .page_locations
-                    .len(),
+                row_group_offset_indexes.page_locations(12).unwrap().len(),
                 325
             );
         } else {
@@ -2849,7 +2787,7 @@ mod tests {
         assert_eq!(metadata.row_group(0).ordinal(), Some(2));
 
         // check we only got the relevant page indexes
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
         let page_index = metadata.page_index().unwrap();
 
         let col_stats = metadata.row_group(0).column(0).statistics().unwrap();
@@ -2889,7 +2827,7 @@ mod tests {
         assert_eq!(metadata.row_group(1).ordinal(), Some(3));
 
         // check we only got the relevant page indexes
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
 
         let page_index = metadata.page_index().unwrap();
 

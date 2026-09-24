@@ -1145,21 +1145,16 @@ impl ArrowColumnWriter {
             let non_null = levels.non_null_indices();
             match array.as_any_dictionary_opt() {
                 Some(dict) => {
-                    // For dictionary arrays, hash the integer keys rather than the actual values.
-                    // Key cardinality equals value cardinality, so distinct-value counting stays
-                    // correct while avoiding the cost of hashing arbitrary-length values.
-                    let keys = dict.keys();
-                    let key_data = keys.to_data();
-                    let offset = key_data.offset();
-                    let width = arrow_key_byte_width(keys.data_type());
-                    if width > 0 {
-                        let buffer = key_data.buffers()[0].as_slice();
-                        // Only visit non-null rows to avoid counting nulls as a distinct value.
-                        for &row in non_null {
-                            let pos = (offset + row) * width;
-                            seen.insert(hash_bytes(&buffer[pos..pos + width]));
-                        }
-                    }
+                    // Hash referenced values, not key indices: keys can map to different
+                    // values across batches, and unreferenced values must not count toward NDV.
+                    let values = dict.values();
+                    let keys = dict.normalized_keys();
+                    let referenced_value_indices: Vec<usize> = non_null
+                        .iter()
+                        .map(|&pos| keys[pos])
+                        .filter(|&val_idx| values.is_valid(val_idx))
+                        .collect();
+                    update_distinct_values_seen(values.as_ref(), &referenced_value_indices, seen);
                 }
                 // For plain arrays, hash the actual values directly.
                 None => update_distinct_values_seen(array.as_ref(), non_null, seen),
@@ -1982,17 +1977,6 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
     twox_hash::XxHash64::oneshot(0, bytes)
 }
 
-/// Returns the byte width of an Arrow dictionary key type, or 0 if unsupported.
-fn arrow_key_byte_width(dt: &ArrowDataType) -> usize {
-    match dt {
-        ArrowDataType::Int8 | ArrowDataType::UInt8 => 1,
-        ArrowDataType::Int16 | ArrowDataType::UInt16 => 2,
-        ArrowDataType::Int32 | ArrowDataType::UInt32 => 4,
-        ArrowDataType::Int64 | ArrowDataType::UInt64 => 8,
-        _ => 0,
-    }
-}
-
 /// Returns the fixed byte width for primitive Arrow types, or `None` for variable-length types.
 fn fixed_byte_width(dt: &ArrowDataType) -> Option<usize> {
     use ArrowDataType::*;
@@ -2066,6 +2050,18 @@ fn update_distinct_values_seen(
                 seen.insert(hash_bytes(&buffer[start..start + byte_width]));
             }
         }
+        ArrowDataType::Utf8View => {
+            let string_view_array = array.as_string_view();
+            for &row in non_null_indices {
+                seen.insert(hash_bytes(string_view_array.value(row).as_bytes()));
+            }
+        }
+        ArrowDataType::BinaryView => {
+            let binary_view_array = array.as_binary_view();
+            for &row in non_null_indices {
+                seen.insert(hash_bytes(binary_view_array.value(row)));
+            }
+        }
         data_type => {
             if let Some(width) = fixed_byte_width(data_type) {
                 let buffer = data.buffers()[0].as_slice();
@@ -2074,7 +2070,7 @@ fn update_distinct_values_seen(
                     seen.insert(hash_bytes(&buffer[pos..pos + width]));
                 }
             }
-            // Utf8View, BinaryView, nested types: skip
+            // nested types (List, LargeList, etc.) are Parquet groups, not leaf columns: skip
         }
     }
 }
@@ -2107,7 +2103,7 @@ mod tests {
     use num_traits::{FromPrimitive, ToPrimitive};
     use tempfile::tempfile;
 
-    use crate::basic::Encoding;
+    use crate::basic::{Encoding, EncodingMask};
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::properties::{
@@ -3406,7 +3402,7 @@ mod tests {
                     Encoding::BYTE_STREAM_SPLIT,
                 ],
                 DataType::Float32 | DataType::Float64 => {
-                    vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT]
+                    vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT, Encoding::ALP]
                 }
                 _ => vec![Encoding::PLAIN],
             };
@@ -3961,6 +3957,109 @@ mod tests {
             "col".to_string(),
             (0..SMALL_SIZE as i32).collect(),
             (SMALL_SIZE as i32 + 1..SMALL_SIZE as i32 + 10).collect(),
+        );
+    }
+
+    fn write_with_bloom_filter(array: ArrayRef, dictionary_page_size_limit: usize) -> Bytes {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            array.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .set_dictionary_page_size_limit(dictionary_page_size_limit)
+            .set_write_batch_size(256)
+            .set_bloom_filter_enabled(true)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        Bytes::from(buf)
+    }
+
+    fn data_page_encoding_mask(file: &Bytes) -> EncodingMask {
+        let metadata = ParquetMetaDataReader::new().parse_and_finish(file).unwrap();
+        *metadata
+            .row_group(0)
+            .column(0)
+            .page_encoding_stats_mask()
+            .unwrap()
+    }
+
+    /// While a column is dictionary encoded the bloom filter is populated from the dictionary
+    /// when it is flushed, so a chunk that stays dictionary encoded must still contain every value.
+    #[test]
+    fn string_column_bloom_filter_populated_from_dictionary() {
+        let values: Vec<String> = (0..2000).map(|i| format!("value-{}", i % 10)).collect();
+        let array = Arc::new(StringArray::from_iter_values(&values));
+        let file = write_with_bloom_filter(array, 1024 * 1024);
+        assert!(data_page_encoding_mask(&file).is_only(Encoding::RLE_DICTIONARY));
+
+        check_bloom_filter(
+            vec![file],
+            "col".to_string(),
+            (0..10).map(|i| format!("value-{i}").into_bytes()).collect(),
+            (10..20)
+                .map(|i| format!("value-{i}").into_bytes())
+                .collect(),
+        );
+    }
+
+    /// After falling back from dictionary encoding the filter holds the dictionary's values
+    /// and every value written plain afterwards.
+    #[test]
+    fn string_column_bloom_filter_across_dictionary_fallback() {
+        let values: Vec<String> = (0..2000).map(|i| format!("value-{i}")).collect();
+        let array = Arc::new(StringArray::from_iter_values(&values));
+        let file = write_with_bloom_filter(array, 1024);
+        let encodings = data_page_encoding_mask(&file);
+        assert!(
+            encodings.is_set(Encoding::RLE_DICTIONARY) && encodings.is_set(Encoding::PLAIN),
+            "expected dictionary and plain data pages, got {encodings:?}"
+        );
+
+        check_bloom_filter(
+            vec![file],
+            "col".to_string(),
+            values.into_iter().map(String::into_bytes).collect(),
+            (2000..2010)
+                .map(|i| format!("value-{i}").into_bytes())
+                .collect(),
+        );
+    }
+
+    #[test]
+    fn i64_column_bloom_filter_populated_from_dictionary() {
+        let array = Arc::new(Int64Array::from_iter_values((0..2000).map(|i| i % 10)));
+        let file = write_with_bloom_filter(array, 1024 * 1024);
+        assert!(data_page_encoding_mask(&file).is_only(Encoding::RLE_DICTIONARY));
+
+        check_bloom_filter(
+            vec![file],
+            "col".to_string(),
+            (0..10i64).collect(),
+            (10..20i64).collect(),
+        );
+    }
+
+    #[test]
+    fn i64_column_bloom_filter_across_dictionary_fallback() {
+        let array = Arc::new(Int64Array::from_iter_values(0..2000i64));
+        let file = write_with_bloom_filter(array, 1024);
+        let encodings = data_page_encoding_mask(&file);
+        assert!(
+            encodings.is_set(Encoding::RLE_DICTIONARY) && encodings.is_set(Encoding::PLAIN),
+            "expected dictionary and plain data pages, got {encodings:?}"
+        );
+
+        check_bloom_filter(
+            vec![file],
+            "col".to_string(),
+            (0..2000i64).collect(),
+            (2000..2010i64).collect(),
         );
     }
 
@@ -6393,6 +6492,46 @@ mod tests {
     }
 
     #[test]
+    fn test_number_distinct_values_view_types() {
+        // 5 distinct values repeated across 30 rows, with every 4th row null.
+        // Verifies Utf8View is counted correctly (BinaryView shares the same code path).
+        let cardinality = 5u32;
+        let distinct_strings = ["alpha", "beta", "gamma", "delta", "epsilon"];
+
+        let string_view_col: ArrayRef = Arc::new(StringViewArray::from_iter((0..30u32).map(|i| {
+            if i % 4 == 0 {
+                None
+            } else {
+                Some(distinct_strings[(i % cardinality) as usize])
+            }
+        })));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "string_view_col",
+            DataType::Utf8View,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![string_view_col]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_row_group_number_distinct_values(true)
+            .build();
+        let mut parquet_bytes = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut parquet_bytes, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let distinct_count = metadata
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .and_then(|s| s.distinct_count_opt())
+            .expect("distinct_count should be set for Utf8View column");
+        assert_eq!(distinct_count, cardinality as u64);
+    }
+
+    #[test]
     fn test_number_distinct_values_not_written_by_default() {
         let array: ArrayRef = Arc::new(Int32Array::from_iter_values(0..100));
         let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
@@ -6409,6 +6548,116 @@ mod tests {
             .statistics()
             .and_then(|s| s.distinct_count_opt());
         assert!(count.is_none());
+    }
+
+    #[test]
+    fn test_dictionary_ndv_single_batch() {
+        // Dictionary array with 3 distinct string values repeated many times.
+        // NDV must equal the number of distinct values in the dictionary (3),
+        // not the number of rows.
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 1, 2, 0, 1, 2]);
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["cat", "dog", "bird"]));
+        let dict: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap());
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![dict]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_row_group_number_distinct_values(true)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let count = metadata
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .and_then(|s| s.distinct_count_opt())
+            .expect("distinct_count should be set");
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_dictionary_ndv_excludes_unreferenced_values() {
+        // Keys only reference indices 0 and 1; value at index 2 ("unreferenced") should not
+        // count toward NDV even though it appears in the dictionary's values array.
+        let keys = Int32Array::from(vec![0, 1, 0, 1]);
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["cat", "dog", "unreferenced"]));
+        let dict: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap());
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![dict]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_row_group_number_distinct_values(true)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let count = metadata
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .and_then(|s| s.distinct_count_opt())
+            .expect("distinct_count should be set");
+        assert_eq!(
+            count, 2,
+            "unreferenced dictionary values must not count toward NDV"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_ndv_across_batches_regression() {
+        // Regression test for https://github.com/apache/arrow-rs/issues/11172.
+        let make_dict_batch = |a: &str, b: &str| -> RecordBatch {
+            let keys = Int32Array::from(vec![0, 1, 0, 1]);
+            let values: ArrayRef = Arc::new(StringArray::from(vec![a, b]));
+            let dict: ArrayRef =
+                Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap());
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "x",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            )]));
+            RecordBatch::try_new(schema, vec![dict]).unwrap()
+        };
+
+        // batch1: dict = ["cat", "dog"], batch2: dict = ["fish", "cat"]
+        // Distinct values across both batches: "cat", "dog", "fish" NDV = 3
+        let batch1 = make_dict_batch("cat", "dog");
+        let batch2 = make_dict_batch("fish", "cat");
+
+        let props = WriterProperties::builder()
+            .set_write_row_group_number_distinct_values(true)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch1.schema(), Some(props)).unwrap();
+        writer.write(&batch1).unwrap();
+        writer.write(&batch2).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let count = metadata
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .and_then(|s| s.distinct_count_opt())
+            .expect("distinct_count should be set");
+        assert_eq!(
+            count, 3,
+            "NDV should count distinct values, not distinct key indices"
+        );
     }
 
     #[test]

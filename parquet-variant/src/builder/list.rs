@@ -679,8 +679,8 @@ mod tests {
                 }
 
                 {
-                    // the seconde object builder here wants to cover the logic for
-                    // list builder resue the parent buffer.
+                    // the second object builder here wants to cover the logic for
+                    // list builder reuse the parent buffer.
                     let mut inner_object_builder = inner_list_builder.new_object();
                     inner_object_builder.insert("c", "d");
                     inner_object_builder.insert("d", "e");

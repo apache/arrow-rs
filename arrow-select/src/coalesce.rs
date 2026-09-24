@@ -31,10 +31,12 @@ use std::sync::Arc;
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
 mod byte_view;
+mod fixed_size_binary;
 mod generic;
 mod primitive;
 
 use byte_view::InProgressByteViewArray;
+use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
@@ -248,7 +250,7 @@ impl BatchCoalescer {
     /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
     /// coalescer.push_batch_with_filter(batch1, &filter);
     /// coalescer.push_batch_with_filter(batch2, &filter);
-    /// // finsh and retrieve the created batch
+    /// // finish and retrieve the created batch
     /// coalescer.finish_buffered_batch().unwrap();
     /// let completed_batch = coalescer.next_completed_batch().unwrap();
     /// // filtered out 2 and 5:
@@ -280,7 +282,7 @@ impl BatchCoalescer {
     /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
     /// coalescer.push_batch(batch1);
     /// coalescer.push_batch_with_indices(batch2, &indices);
-    /// // finsh and retrieve the created batch
+    /// // finish and retrieve the created batch
     /// coalescer.finish_buffered_batch().unwrap();
     /// let completed_batch = coalescer.next_completed_batch().unwrap();
     /// let expected_batch = record_batch!(("a", Int32, [0, 0, 0, 1, 1, 1, 4, 4, 5])).unwrap();
@@ -316,7 +318,7 @@ impl BatchCoalescer {
     /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
     /// coalescer.push_batch(batch1);
     /// coalescer.push_batch(batch2);
-    /// // finsh and retrieve the created batch
+    /// // finish and retrieve the created batch
     /// coalescer.finish_buffered_batch().unwrap();
     /// let completed_batch = coalescer.next_completed_batch().unwrap();
     /// let expected_batch = record_batch!(("a", Int32, [1, 2, 3, 4, 5, 6])).unwrap();
@@ -698,6 +700,9 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::Utf8View => Box::new(InProgressByteViewArray::<StringViewType>::new(batch_size)),
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
+        }
+        DataType::FixedSizeBinary(size) => {
+            Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
         }
         _ => Box::new(GenericInProgressArray::new()),
     }
@@ -2024,7 +2029,7 @@ mod tests {
         RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
     }
 
-    /// Return a RecordBatch with a StringArrary with values `value0`, `value1`, ...
+    /// Return a RecordBatch with a StringArray with values `value0`, `value1`, ...
     /// and every third value is `None`.
     fn utf8_batch(range: Range<u32>) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Utf8, true)]));
