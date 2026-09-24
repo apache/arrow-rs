@@ -459,42 +459,6 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
 
-    // Array/array LIKE: low-cardinality pattern reuse vs unique patterns.
-    const LIKE_ARRAY_SIZE: usize = 1024;
-    let like_haystack = StringArray::from(vec!["xxxxxxxx"; LIKE_ARRAY_SIZE]);
-    let like_complex_consecutive = StringArray::from(vec!["%x_x%x"; LIKE_ARRAY_SIZE]);
-    let like_complex_alternating = StringArray::from(
-        (0..LIKE_ARRAY_SIZE)
-            .map(|i| if i % 2 == 0 { "%x_x%x" } else { "x%_x%" })
-            .collect::<Vec<_>>(),
-    );
-    let like_simple_alternating = StringArray::from(
-        (0..LIKE_ARRAY_SIZE)
-            .map(|i| if i % 2 == 0 { "x%" } else { "%x" })
-            .collect::<Vec<_>>(),
-    );
-    let like_complex_unique = StringArray::from(
-        (0..LIKE_ARRAY_SIZE)
-            .map(|i| format!("%x_{i}x%"))
-            .collect::<Vec<_>>(),
-    );
-
-    c.bench_function("like_utf8 array complex consecutive", |b| {
-        b.iter(|| like(&like_haystack, &like_complex_consecutive).unwrap())
-    });
-    c.bench_function("like_utf8 array complex alternating", |b| {
-        b.iter(|| like(&like_haystack, &like_complex_alternating).unwrap())
-    });
-    c.bench_function("ilike_utf8 array complex alternating", |b| {
-        b.iter(|| ilike(&like_haystack, &like_complex_alternating).unwrap())
-    });
-    c.bench_function("like_utf8 array simple alternating", |b| {
-        b.iter(|| like(&like_haystack, &like_simple_alternating).unwrap())
-    });
-    c.bench_function("like_utf8 array complex unique", |b| {
-        b.iter(|| like(&like_haystack, &like_complex_unique).unwrap())
-    });
-
     // StringArray: regexp_matches_utf8 scalar benchmarks
     let mut group =
         c.benchmark_group("StringArray: regexp_matches_utf8 scalar benchmarks".to_string());
