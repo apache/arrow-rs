@@ -82,21 +82,12 @@ impl AlignedVec {
         self.raw_vector.capacity() * Self::CHUNK
     }
 
+    #[cold]
     fn ensure_capacity(&mut self, total_bytes: usize) {
         let needed_chunks = total_bytes.div_ceil(Self::CHUNK);
-
-        if needed_chunks > self.raw_vector.capacity() {
-            let current_chunk_cap = self.raw_vector.capacity();
-            let new_chunk_cap = needed_chunks.max(current_chunk_cap * 2).max(1);
-            let additional = new_chunk_cap - self.raw_vector.capacity();
-            self.raw_vector.reserve(additional);
-        }
-
-        if needed_chunks > self.raw_vector.len() {
-            unsafe {
-                self.raw_vector.set_len(needed_chunks);
-            }
-        }
+        let current_cap = self.raw_vector.capacity();
+        let new_chunk_cap = needed_chunks.max(current_cap * 2).max(1);
+        self.raw_vector.reserve(new_chunk_cap);
     }
 
     /// Returns the written bytes as a slice.
@@ -120,11 +111,11 @@ impl AlignedVec {
     pub fn extend_from_slice(&mut self, data: &[u8]) {
         let offset = self.filled_len;
         let new_len = offset + data.len();
-        if new_len > self.raw_vector.len() * Self::CHUNK {
+        if new_len > self.raw_vector.capacity() * Self::CHUNK {
             self.ensure_capacity(new_len);
         }
-        // SAFETY: ensure_capacity guarantees the allocation covers [0, new_len).
-        // offset + data.len() == new_len <= allocated bytes. No overlap with src.
+        // SAFETY: ensure_capacity (or with_capacity) guarantees the allocation covers
+        // [0, capacity * CHUNK) which includes [0, new_len). No overlap with src.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 data.as_ptr(),

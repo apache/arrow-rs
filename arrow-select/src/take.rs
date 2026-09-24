@@ -26,8 +26,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{
-    AlignedVec, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, NullBufferBuilder,
-    OffsetBuffer, RunEndBuffer, ScalarBuffer, bit_util,
+    AlignedVec, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer,
+    NullBufferBuilder, OffsetBuffer, RunEndBuffer, ScalarBuffer, bit_util,
 };
 use arrow_cmp::make_comparator;
 use arrow_data::{ArrayData, transform::MutableArrayData};
