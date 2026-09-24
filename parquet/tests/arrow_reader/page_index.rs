@@ -87,8 +87,7 @@ fn test_parse_with_page_index_mask() {
     );
 }
 
-/*#[test]
-// C11 coverage
+#[test]
 fn test_repeated_page_index_reads_merge_cells() {
     let file = create_test_file();
     let metadata = ParquetMetaDataReader::new()
@@ -107,7 +106,24 @@ fn test_repeated_page_index_reads_merge_cells() {
         |rg, col| (rg == 0 && col == 0) || (rg == 1 && col == 1),
         |rg, col| (rg == 0 && col == 0) || (rg == 1 && col == 1),
     );
-}*/
+}
+
+#[test]
+fn test_repeated_page_index_reads_preserve_skipped_index() {
+    let file = create_test_file();
+    let metadata = ParquetMetaDataReader::new()
+        .with_column_index_policy(PageIndexPolicy::Required)
+        .with_offset_index_policy(PageIndexPolicy::Skip)
+        .parse_and_finish(&file)
+        .unwrap();
+
+    let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+        .with_column_index_policy(PageIndexPolicy::Skip)
+        .with_offset_index_policy(PageIndexPolicy::Required);
+    reader.read_page_indexes(&file).unwrap();
+    let metadata = reader.finish().unwrap();
+    assert_page_index_cells(&metadata, |_, _| true, |_, _| true);
+}
 
 #[test]
 fn test_partial_page_statistics_remain_aligned() {
