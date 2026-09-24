@@ -272,7 +272,8 @@ impl ParquetMetaDataPushDecoder {
     /// Create a decoder with the given `ParquetMetaData` already known.
     ///
     /// This can be used to parse and populate the page index structures
-    /// after the metadata has already been decoded.
+    /// after the metadata has already been decoded. Newly decoded page indexes
+    /// are merged with any page indexes already present in `metadata`.
     pub fn try_new_with_metadata(file_len: u64, metadata: ParquetMetaData) -> Result<Self> {
         let mut new_self = Self::try_new(file_len)?;
         new_self.state = DecodeState::ReadingPageIndex(Box::new(metadata));

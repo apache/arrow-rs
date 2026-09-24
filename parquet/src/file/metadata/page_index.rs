@@ -513,6 +513,36 @@ pub struct PageIndexBuilder {
 }
 
 impl PageIndexBuilder {
+    /// Creates a new [`PageIndexBuilder`] populated from an existing provider.
+    pub(crate) fn new_from_provider(
+        page_index: &dyn PageIndexProvider,
+        num_row_groups: usize,
+        num_columns: usize,
+    ) -> Self {
+        let mut builder = Self::default();
+        if page_index.has_column_indexes() {
+            builder.allocate_column_indexes(num_row_groups, num_columns);
+        }
+        if page_index.has_offset_indexes() {
+            builder.allocate_offset_indexes(num_row_groups, num_columns);
+        }
+        for row_group in 0..num_row_groups {
+            for column in 0..num_columns {
+                if builder.column_indexes.is_some()
+                    && let Some(index) = page_index.column_index(row_group, column)
+                {
+                    builder.put_column_index(index.clone(), row_group, column);
+                }
+                if builder.offset_indexes.is_some()
+                    && let Some(index) = page_index.offset_index(row_group, column)
+                {
+                    builder.put_offset_index(index.clone(), row_group, column);
+                }
+            }
+        }
+        builder
+    }
+
     /// Creates an empty index structure with space for the specified number of row groups and columns
     ///
     /// Returns `Some` containing a nested vector structure where all entries are initialized to `None`.
@@ -570,6 +600,12 @@ impl PageIndexBuilder {
         self.column_indexes = Self::empty_index(num_row_groups, num_columns);
     }
 
+    pub(crate) fn ensure_column_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
+        if self.column_indexes.is_none() {
+            self.allocate_column_indexes(num_row_groups, num_columns);
+        }
+    }
+
     /// Allocates space for offset indexes
     ///
     /// This allocates an empty index structure for the specified number of row groups and columns.
@@ -580,6 +616,12 @@ impl PageIndexBuilder {
     /// (either a `Default` builder, or one created from a [`PageIndex`] without offset indexes).
     pub fn allocate_offset_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
         self.offset_indexes = Self::empty_index(num_row_groups, num_columns);
+    }
+
+    pub(crate) fn ensure_offset_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
+        if self.offset_indexes.is_none() {
+            self.allocate_offset_indexes(num_row_groups, num_columns);
+        }
     }
 
     /// Sets the column index for a specific row group and column
