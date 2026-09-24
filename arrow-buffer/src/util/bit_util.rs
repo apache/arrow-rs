@@ -18,7 +18,7 @@
 //! Utils for working with bits
 
 use crate::bit_chunk_iterator::BitChunks;
-use std::ops::{Bound, RangeBounds};
+use std::ops::{Bound, Range, RangeBounds};
 
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
 ///
@@ -902,45 +902,55 @@ pub fn copy_bits_within<R: RangeBounds<usize>>(
     src: R,
     dest: usize,
 ) {
-    let start_bound = match src.start_bound() {
-        Bound::Included(n) => *n,
-        Bound::Excluded(n) => n + 1,
-        Bound::Unbounded => 0,
-    };
-    let end_bound = match src.end_bound() {
-        Bound::Included(n) => n + 1,
-        Bound::Excluded(n) => *n,
-        Bound::Unbounded => buffer_len_in_bits,
-    };
     assert!(
         buffer_len_in_bits <= data.len() * 8,
         "buffer length {buffer_len_in_bits} exceeds data of {} bytes",
         data.len()
     );
-    assert!(
-        start_bound <= end_bound,
-        "start bound {start_bound} > end bound {end_bound}"
-    );
-    assert!(
-        end_bound <= buffer_len_in_bits,
-        "end bound {end_bound} is out of bounds 0..{buffer_len_in_bits}"
-    );
-    let len = end_bound - start_bound;
+    let normalized_range = normalize_range(src, buffer_len_in_bits);
+    let len = normalized_range.end - normalized_range.start;
     assert!(
         dest <= buffer_len_in_bits - len,
         "dest {dest} is out of bounds for range of length {len}"
     );
 
-    if len == 0 || dest == start_bound {
+    if len == 0 || dest == normalized_range.start {
         return;
     }
 
     // If we can copy the bits directly and avoid shifting each byte
-    if start_bound % 8 == dest % 8 {
-        copy_within_same_phase(data, start_bound, dest, len);
+    if normalized_range.start % 8 == dest % 8 {
+        copy_within_same_phase(data, normalized_range.start, dest, len);
     } else {
-        fallback_copy_within(data, start_bound, dest, len);
+        fallback_copy_within(data, normalized_range.start, dest, len);
     }
+}
+
+/// Similar to [`std::slice::range`] which is unstable
+pub(crate) fn normalize_range(range: impl RangeBounds<usize>, len: usize) -> Range<usize> {
+    let end = match range.end_bound().cloned() {
+        Bound::Included(end) if end >= len => panic!("end {end} is out of bounds 0..{len}"),
+        // Cannot overflow because `end < len` implies `end < usize::MAX`.
+        Bound::Included(end) => end + 1,
+
+        Bound::Excluded(end) if end > len => panic!("end {end} is out of bounds 0..{len}"),
+        Bound::Excluded(end) => end,
+
+        Bound::Unbounded => len,
+    };
+
+    let start = match range.start_bound().cloned() {
+        Bound::Excluded(start) if start >= end => panic!("start {start} is gte than end {end}"),
+        // Cannot overflow because `start < end` implies `start < usize::MAX`.
+        Bound::Excluded(start) => start + 1,
+
+        Bound::Included(start) if start > end => panic!("start {start} is gt than end {end}"),
+        Bound::Included(start) => start,
+
+        Bound::Unbounded => 0,
+    };
+
+    start..end
 }
 
 /// Copies `len` bits between two non overlapping slices, preserving the bits of `dst` outside the range
