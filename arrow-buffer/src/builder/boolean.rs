@@ -321,9 +321,8 @@ impl BooleanBufferBuilder {
     /// # Example
     /// ```
     /// # use arrow_buffer::BooleanBufferBuilder;
-    /// let mut buffer = BooleanBufferBuilder::new(0);
+    /// let mut builder = BooleanBufferBuilder::new(0);
     /// builder.append_slice(&[true, false, false, false, false, true]);
-    /// buffer.extend_from_slice(&[0b0101_1001_u8, 0b1100_1000_u8, 0b0010_0110_u8]);
     /// // Copy values 4.. to position 1
     /// builder.copy_within(4.., 1);
     ///

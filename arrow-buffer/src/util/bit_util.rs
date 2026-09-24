@@ -890,7 +890,7 @@ fn handle_mutable_buffer_remainder_unary<F>(
 /// let buffer_len_in_bits = buffer.len() * 8;
 /// // Copy bits 14..22 to position 2
 /// copy_bits_within(buffer.as_slice_mut(), buffer_len_in_bits, 14..22, 2);
-/// assert_eq!(buffer.as_slice(), &[0b0100_0010_u8, 0b0100_1000_u8, 0b0010_0110_u8]);
+/// assert_eq!(buffer.as_slice(), &[0b0110_1101_u8, 0b1100_1010_u8, 0b0010_0110_u8]);
 /// ```
 ///
 /// # Panics
