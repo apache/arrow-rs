@@ -1799,7 +1799,8 @@ mod tests {
     }
 
     fn pattern(len: usize) -> Vec<bool> {
-        (0..len).map(|i| (i * 7 + i / 3) % 5 < 2).collect()
+        let mut rng = seedable_rng();
+        (0..len).map(|_| rng.random_bool(0.321)).collect()
     }
 
     #[test]
