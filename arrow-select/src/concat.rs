@@ -390,13 +390,12 @@ fn concat_structs(arrays: &[&dyn Array], fields: &Fields) -> Result<ArrayRef, Ar
         NullBuffer::new(b.finish())
     });
 
+    let mut col_refs: Vec<&dyn Array> = Vec::with_capacity(structs.len());
     let column_concat_result = (0..fields.len())
         .map(|i| {
-            let extracted_cols = structs
-                .iter()
-                .map(|s| s.column(i).as_ref())
-                .collect::<Vec<_>>();
-            concat(&extracted_cols)
+            col_refs.clear();
+            col_refs.extend(structs.iter().map(|s| s.column(i).as_ref()));
+            concat(&col_refs)
         })
         .collect::<Result<Vec<_>, ArrowError>>()?;
 
@@ -628,14 +627,11 @@ pub fn concat_batches<'a>(
     }
     let field_num = schema.fields().len();
     let mut arrays = Vec::with_capacity(field_num);
+    let mut col_refs: Vec<&dyn Array> = Vec::with_capacity(batches.len());
     for i in 0..field_num {
-        let array = concat(
-            &batches
-                .iter()
-                .map(|batch| batch.column(i).as_ref())
-                .collect::<Vec<_>>(),
-        )?;
-        arrays.push(array);
+        col_refs.clear();
+        col_refs.extend(batches.iter().map(|batch| batch.column(i).as_ref()));
+        arrays.push(concat(&col_refs)?);
     }
     RecordBatch::try_new(schema.clone(), arrays)
 }
