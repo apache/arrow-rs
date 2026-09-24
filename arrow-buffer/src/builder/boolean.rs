@@ -312,7 +312,6 @@ impl BooleanBufferBuilder {
         self.append_packed_range(range, buffer.values())
     }
 
-
     /// Copies bits `src` of `data` to position `dest`
     ///
     /// # Arguments
@@ -332,12 +331,7 @@ impl BooleanBufferBuilder {
     /// assert_eq!(output, vec![true, false, true, false, false, true]);
     /// ```
     pub fn copy_within<R: RangeBounds<usize>>(&mut self, src: R, dest: usize) {
-        copy_bits_within(
-            self.buffer.as_slice_mut(),
-            self.len,
-            src,
-            dest,
-        );
+        copy_bits_within(self.buffer.as_slice_mut(), self.len, src, dest);
     }
 
     /// Returns the packed bits
@@ -412,10 +406,9 @@ impl From<BooleanBufferBuilder> for NullBuffer {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::Bound;
+    use super::*;
     use rand::prelude::StdRng;
     use rand::{RngExt, SeedableRng};
-    use super::*;
 
     #[test]
     fn test_boolean_buffer_builder_write_bytes() {

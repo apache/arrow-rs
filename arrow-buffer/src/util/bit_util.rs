@@ -17,8 +17,8 @@
 
 //! Utils for working with bits
 
-use std::ops::{Bound, RangeBounds};
 use crate::bit_chunk_iterator::BitChunks;
+use std::ops::{Bound, RangeBounds};
 
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
 ///
