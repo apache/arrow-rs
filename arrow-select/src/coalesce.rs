@@ -21,8 +21,8 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
-use crate::interleave::interleave_record_batch;
-use crate::take::take_record_batch;
+use crate::interleave::{interleave, interleave_record_batch};
+use crate::take::{take, take_record_batch};
 use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
@@ -807,6 +807,46 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
             }
             FilterSelection::Indices(indices) => indices.try_for_each(|idx| self.copy_rows(idx, 1)),
         }
+    }
+
+    /// Copy rows from `source` at positions given by `indices`.
+    ///
+    /// Defaults to [`take`] + copy; specialised impls can write directly to avoid the allocation.
+    #[allow(clippy::allow_attributes)] // expect(dead_code) is unfulfilled when compiled with tests
+    #[allow(dead_code)]
+    fn push_batch_with_indices(
+        &mut self,
+        source: ArrayRef,
+        indices: &dyn Array,
+    ) -> Result<(), ArrowError> {
+        let taken = take(source.as_ref(), indices, None)?;
+        let len = taken.len();
+        self.set_source(Some(taken));
+        let result = self.copy_rows(0, len);
+        self.set_source(None);
+        result
+    }
+
+    /// Copy rows from `sources` at positions given by `(batch_index, row_index)` pairs in `indices`.
+    ///
+    /// Defaults to [`interleave`] + copy; specialised impls can write directly to avoid the allocation.
+    #[allow(clippy::allow_attributes)] // expect(dead_code) is unfulfilled when compiled with tests
+    #[allow(dead_code)]
+    fn push_batch_interleaved(
+        &mut self,
+        sources: &[ArrayRef],
+        indices: &[(usize, usize)],
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        let source_refs: Vec<&dyn Array> = sources.iter().map(|a| a.as_ref()).collect();
+        let interleaved = interleave(&source_refs, indices)?;
+        let len = interleaved.len();
+        self.set_source(Some(interleaved));
+        let result = self.copy_rows(0, len);
+        self.set_source(None);
+        result
     }
 
     /// Finish the currently in-progress array and return it as an `ArrayRef`
