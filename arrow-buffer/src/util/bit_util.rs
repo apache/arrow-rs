@@ -887,9 +887,10 @@ fn handle_mutable_buffer_remainder_unary<F>(
 /// # use arrow_buffer::bit_util::copy_bits_within;
 /// let mut buffer = MutableBuffer::new(3);
 /// buffer.extend_from_slice(&[0b0101_1001_u8, 0b1100_1000_u8, 0b0010_0110_u8]);
+/// let buffer_len_in_bits = buffer.len() * 8;
 /// // Copy bits 14..22 to position 2
-/// copy_bits_within(buffer.as_slice_mut(), buffer.len() * 8, 14..22, 2);
-/// assert_eq!(buffer.as_slice(), &[0b0100_0010_u8, 0b0100_1000_u8  0b0010_0110_u8]);
+/// copy_bits_within(buffer.as_slice_mut(), buffer_len_in_bits, 14..22, 2);
+/// assert_eq!(buffer.as_slice(), &[0b0100_0010_u8, 0b0100_1000_u8, 0b0010_0110_u8]);
 /// ```
 ///
 /// # Panics
