@@ -1471,7 +1471,7 @@ impl<'a, B: StringLikeArrayBuilder> VariantToStringGetArrowBuilder<'a, B> {
     }
 
     fn finish(mut self) -> Result<ArrayRef> {
-        Ok(Arc::from(self.builder.finish()))
+        Ok(self.builder.finish())
     }
 }
 
