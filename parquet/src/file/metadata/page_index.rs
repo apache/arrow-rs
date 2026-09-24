@@ -23,7 +23,6 @@ use crate::file::page_index::{
     column_index::ColumnIndexMetaData,
     offset_index::{OffsetIndexMetaData, PageLocation},
 };
-use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -372,66 +371,51 @@ impl RowGroupPageIndex {
 /// `[None, None, Some(...), Some(...), None, Some(...)]` becomes `[2, 3, 5]`
 ///
 /// Position checking uses binary search for O(log n) lookup.
-///
-/// Implementation note: we can downsize to `i32` here because thrift encodes vector
-/// sizes with an `i32`.
+/// Stores indexes as `u32` because Parquet/Thrift collections cannot contain more than
+/// `i32::MAX` entries.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Keep {
     /// Sorted, deduplicated indexes of set positions
     /// None means all positions in the span are set
-    kept: Option<Arc<[i32]>>,
+    kept: Option<Arc<[u32]>>,
     /// Total span of positions (0..span)
-    span: i32,
+    span: u32,
 }
 
 impl Keep {
-    pub(crate) fn new<I>(set: I, span: usize) -> Self
-    where
-        I: IntoIterator,
-        I::Item: Borrow<usize>,
-    {
-        assert!(
-            i32::try_from(span).is_ok(),
-            "Keep cannot have a span that exceeds the storage of an i32: got {span}"
-        );
-        // this should preserve the BTreeSet ordering
-        let kept = set
+    pub(crate) fn new(set: impl IntoIterator<Item = usize>, span: usize) -> Self {
+        let span = u32::try_from(span).expect("Keep span exceeds u32::MAX");
+        let mut kept = set
             .into_iter()
-            .map(|idx| *idx.borrow())
+            .filter_map(|idx| u32::try_from(idx).ok())
             .filter(|&idx| idx < span)
-            .map(|idx| idx as i32)
             .collect::<Vec<_>>();
-        let kept = if kept.len() == span {
+        kept.sort_unstable();
+        kept.dedup();
+        let kept = if kept.len() == span as usize {
             None
         } else {
             Some(Arc::from(kept))
         };
 
-        Self {
-            kept,
-            span: span as i32,
-        }
+        Self { kept, span }
     }
 
     // shortened version for a full keep set
     pub(crate) fn new_full(span: usize) -> Self {
-        assert!(
-            i32::try_from(span).is_ok(),
-            "Keep cannot have a span that exceeds the storage of an i32: got {span}"
-        );
         Self {
             kept: None,
-            span: span as i32,
+            span: u32::try_from(span).expect("Keep span exceeds u32::MAX"),
         }
     }
 
     /// Retrieve a position if set
     fn position(&self, idx: usize) -> Option<usize> {
-        let needle = i32::try_from(idx).ok()?;
+        let needle = u32::try_from(idx).ok()?;
         // below CUTOFF elements, use linear search
         const CUTOFF: usize = 32;
         match self.kept.as_ref() {
-            None => (idx < self.span as usize).then_some(idx),
+            None => (needle < self.span).then_some(idx),
             Some(k) if k.len() > CUTOFF => k.binary_search(&needle).ok(),
             Some(k) => k.iter().position(|&i| i == needle),
         }
@@ -446,12 +430,12 @@ impl Keep {
     }
 }
 
-impl HeapSize for Arc<[i32]> {
+impl HeapSize for Arc<[u32]> {
     fn heap_size(&self) -> usize {
         // Arc stores weak and strong counts on the heap alongside an instance of T
-        // T = [i32], so that should be the size of a pointer + the size of the allocation
+        // T = [u32], so that should be the size of a pointer + the size of the allocation
         2 * std::mem::size_of::<usize>()
-            + std::mem::size_of::<*mut i32>()
+            + std::mem::size_of::<*mut u32>()
             + std::mem::size_of_val(self.as_ref())
     }
 }
@@ -923,8 +907,6 @@ impl From<PageIndex> for PageIndexBuilder {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use super::{Grid, Keep};
     use crate::{
         basic::BoundaryOrder,
@@ -950,8 +932,8 @@ mod tests {
     fn test_sparse_get_put() {
         let ci = colidx_for_test();
 
-        let keep_rows = Keep::new(&BTreeSet::from_iter([0, 3, 7]), 10);
-        let keep_cols = Keep::new(&BTreeSet::from_iter([5, 10, 99]), 100);
+        let keep_rows = Keep::new([7, 0, 3, 7], 10);
+        let keep_cols = Keep::new([5, 10, 99], 100);
         let mut storage = Grid::new(keep_rows, keep_cols);
 
         // Test insertion and retrieval
@@ -976,7 +958,7 @@ mod tests {
 
     #[test]
     fn test_empty_keep_selects_nothing() {
-        let keep = Keep::new(&BTreeSet::new(), 10);
+        let keep = Keep::new([], 10);
         assert_eq!(keep.len(), 0);
         assert_eq!(keep.position(0), None);
         assert_eq!(keep.position(9), None);
@@ -987,8 +969,8 @@ mod tests {
     fn test_grid_is_empty() {
         let ci = colidx_for_test();
 
-        let keep_rows = Keep::new(&BTreeSet::from_iter([0, 3, 7]), 10);
-        let keep_cols = Keep::new(&BTreeSet::from_iter([5, 10, 99]), 100);
+        let keep_rows = Keep::new([0, 3, 7], 10);
+        let keep_cols = Keep::new([5, 10, 99], 100);
         let mut storage = Grid::new(keep_rows, keep_cols);
         assert!(storage.is_empty());
 
