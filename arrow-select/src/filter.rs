@@ -809,6 +809,7 @@ fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> 
     // The trailing partial word; its bits above `filled` are zero
     // SAFETY: `idx <= count / 64`, so this and every word below it is
     // within the buffer and written
+    debug_assert!(packer.idx < out.capacity());
     unsafe {
         packer.ptr.add(packer.idx).write(packer.current);
         out.set_len(packer.idx + 1);

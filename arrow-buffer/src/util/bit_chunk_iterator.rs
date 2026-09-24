@@ -384,6 +384,8 @@ impl<'a> IntoIterator for &BitChunks<'a> {
 /// `bit_offset != 0` (the remainder byte the constructor guarantees)
 #[inline]
 unsafe fn read_chunk(buffer: &[u8], bit_offset: usize, index: usize) -> u64 {
+    debug_assert!(bit_offset < 8);
+    debug_assert!(buffer.len() >= index * 8 + 8 + usize::from(bit_offset != 0));
     // cast to *const u64 should be fine since we are using read_unaligned below
     #[expect(clippy::cast_ptr_alignment)]
     let raw_data = buffer.as_ptr().cast::<u64>();
