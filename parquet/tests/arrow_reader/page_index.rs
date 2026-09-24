@@ -21,6 +21,129 @@ use parquet::file::metadata::{ColumnChunkMask, PageIndexPolicy, ParquetMetaDataR
 
 use crate::custom_page_index_provider::create_test_file;
 
+fn assert_page_index_cells(
+    metadata: &parquet::file::metadata::ParquetMetaData,
+    expect_ci: impl Fn(usize, usize) -> bool,
+    expect_oi: impl Fn(usize, usize) -> bool,
+) {
+    let page_index = metadata.page_index().expect("page index should be loaded");
+    let num_cols = metadata.file_metadata().schema_descr().num_columns();
+    for rg in 0..metadata.num_row_groups() {
+        for col in 0..num_cols {
+            assert_eq!(
+                page_index.column_index(rg, col).is_some(),
+                expect_ci(rg, col),
+                "column index rg={rg} col={col}"
+            );
+            assert_eq!(
+                page_index.offset_index(rg, col).is_some(),
+                expect_oi(rg, col),
+                "offset index rg={rg} col={col}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_arrow_reader_options_page_index_masks() {
+    use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+
+    let file = create_test_file();
+    let column_mask = ColumnChunkMask::row_groups_and_columns([1], [0]);
+    let offset_mask = ColumnChunkMask::columns([2]);
+    let options = ArrowReaderOptions::new()
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .with_column_index_mask(column_mask.clone())
+        .with_offset_index_mask(offset_mask.clone());
+    assert_eq!(options.column_index_mask(), &column_mask);
+    assert_eq!(options.offset_index_mask(), &offset_mask);
+
+    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+    assert_page_index_cells(
+        metadata.metadata(),
+        |rg, col| rg == 1 && col == 0,
+        |_, col| col == 2,
+    );
+
+    let metadata = ParquetMetaDataReader::new()
+        .with_arrow_reader_options(Some(&options))
+        .parse_and_finish(&file)
+        .unwrap();
+    assert_page_index_cells(&metadata, |rg, col| rg == 1 && col == 0, |_, col| col == 2);
+}
+
+#[test]
+fn test_parse_with_page_index_mask() {
+    let file = create_test_file();
+    let metadata = ParquetMetaDataReader::new()
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .with_page_index_mask(ColumnChunkMask::row_groups_and_columns([2], [1, 3]))
+        .parse_and_finish(&file)
+        .unwrap();
+    assert_page_index_cells(
+        &metadata,
+        |rg, col| rg == 2 && (col == 1 || col == 3),
+        |rg, col| rg == 2 && (col == 1 || col == 3),
+    );
+}
+
+/*#[test]
+// C11 coverage
+fn test_repeated_page_index_reads_merge_cells() {
+    let file = create_test_file();
+    let metadata = ParquetMetaDataReader::new()
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .with_page_index_mask(ColumnChunkMask::row_groups_and_columns([0], [0]))
+        .parse_and_finish(&file)
+        .unwrap();
+
+    let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .with_page_index_mask(ColumnChunkMask::row_groups_and_columns([1], [1]));
+    reader.read_page_indexes(&file).unwrap();
+    let metadata = reader.finish().unwrap();
+    assert_page_index_cells(
+        &metadata,
+        |rg, col| (rg == 0 && col == 0) || (rg == 1 && col == 1),
+        |rg, col| (rg == 0 && col == 0) || (rg == 1 && col == 1),
+    );
+}
+
+#[test]
+// C3 coverage
+fn test_partial_page_statistics_remain_aligned() {
+    use arrow_array::Array;
+    use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+    use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+
+    let file = create_test_file();
+    let options = ArrowReaderOptions::new()
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .with_column_index_mask(ColumnChunkMask::columns([0]))
+        .with_offset_index_mask(ColumnChunkMask::columns([1]));
+    let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
+    let parquet_metadata = metadata.metadata();
+    let page_index = parquet_metadata.page_index().unwrap().as_ref();
+    let row_groups = parquet_metadata.row_groups();
+    let row_group_indices = [0, 1, 2];
+    let converter = StatisticsConverter::try_new(
+        "id",
+        metadata.schema(),
+        parquet_metadata.file_metadata().schema_descr(),
+    )
+    .unwrap();
+
+    let mins = converter
+        .data_page_mins(page_index, row_group_indices.iter())
+        .unwrap();
+    let row_counts = converter
+        .data_page_row_counts(page_index, row_groups, row_group_indices.iter())
+        .unwrap()
+        .unwrap();
+    assert_eq!(mins.len(), row_counts.len());
+    assert_eq!(row_counts.null_count(), row_counts.len());
+}*/
+
 #[test]
 fn test_parse_selected_columns() {
     // test populating PageIndex with a subset of columns

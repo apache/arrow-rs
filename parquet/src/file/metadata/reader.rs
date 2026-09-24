@@ -91,10 +91,12 @@ pub enum PageIndexPolicy {
     Skip,
     /// Read the page index if it exists, otherwise do not error.
     Optional,
-    /// Require the page index to exist, and error if it does not.
+    /// Require offset indexes for every selected column chunk when any selected
+    /// page index ranges exist.
     ///
-    /// Only enforced for the offset index; this is the same as [`Self::Optional`]
-    /// for the column index.
+    /// For compatibility, a file with no page index ranges is accepted. This is only
+    /// enforced for the offset index; this is the same as [`Self::Optional`] for the
+    /// column index.
     Required,
 }
 
@@ -138,11 +140,12 @@ impl From<bool> for PageIndexPolicy {
 /// ```
 ///
 /// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct ColumnChunkMask {
-    // using i32 because that's how thrift vectors are sized
-    row_groups: Option<Arc<BTreeSet<i32>>>,
-    columns: Option<Arc<BTreeSet<i32>>>,
+    // `None` means all, while `Some(empty)` means none. Store u32 because
+    // Parquet/Thrift collections cannot contain more than i32::MAX entries.
+    row_groups: Option<Arc<[u32]>>,
+    columns: Option<Arc<[u32]>>,
 }
 
 impl ColumnChunkMask {
@@ -151,11 +154,18 @@ impl ColumnChunkMask {
         Self::default()
     }
 
+    /// Select no row groups or columns.
+    pub fn none() -> Self {
+        Self {
+            row_groups: Some(Arc::from([])),
+            columns: Some(Arc::from([])),
+        }
+    }
+
     /// Select only the listed columns.
     ///
-    /// Any indices in `columns` that are less than zero will be ignored. Passing an empty
-    /// set is treated the same as selecting all columns.
-    pub fn columns(columns: impl IntoIterator<Item = i32>) -> Self {
+    /// Passing an empty iterator selects no columns.
+    pub fn columns(columns: impl IntoIterator<Item = usize>) -> Self {
         Self {
             row_groups: None,
             columns: Self::iter_to_set(columns),
@@ -164,9 +174,8 @@ impl ColumnChunkMask {
 
     /// Select only the listed row groups.
     ///
-    /// Any indices in `row_groups` that are less than zero will be ignored. Passing an empty
-    /// set is treated the same as selecting all row groups.
-    pub fn row_groups(row_groups: impl IntoIterator<Item = i32>) -> Self {
+    /// Passing an empty iterator selects no row groups.
+    pub fn row_groups(row_groups: impl IntoIterator<Item = usize>) -> Self {
         Self {
             row_groups: Self::iter_to_set(row_groups),
             columns: None,
@@ -175,12 +184,10 @@ impl ColumnChunkMask {
 
     /// Select only the listed row groups and columns.
     ///
-    /// Any indices in `row_groups` or `columns` that are less than zero will be ignored.
-    /// Passing an empty set for `row_groups` is treated as selecting all row groups, and
-    /// an empty set for `columns` as selectiong all columns.
+    /// An empty iterator for either dimension selects no column chunks.
     pub fn row_groups_and_columns(
-        row_groups: impl IntoIterator<Item = i32>,
-        columns: impl IntoIterator<Item = i32>,
+        row_groups: impl IntoIterator<Item = usize>,
+        columns: impl IntoIterator<Item = usize>,
     ) -> Self {
         Self {
             row_groups: Self::iter_to_set(row_groups),
@@ -189,30 +196,79 @@ impl ColumnChunkMask {
     }
 
     /// Test if `idx` is in the row group set.
-    ///
-    /// Returns `false` if `idx > `[`i32::MAX`].
     pub fn includes_row_group(&self, idx: usize) -> bool {
-        let Ok(idx) = i32::try_from(idx) else {
-            return false;
-        };
-        self.row_groups
-            .as_ref()
-            .is_none_or(|keep| keep.contains(&idx))
+        Self::includes_index(self.row_groups.as_ref(), idx)
     }
 
     /// Test if `idx` is in the column set.
-    ///
-    /// Returns `false` if `idx > `[`i32::MAX`].
     pub fn includes_column(&self, idx: usize) -> bool {
-        let Ok(idx) = i32::try_from(idx) else {
-            return false;
-        };
-        self.columns.as_ref().is_none_or(|keep| keep.contains(&idx))
+        Self::includes_index(self.columns.as_ref(), idx)
     }
 
-    fn iter_to_set(indices: impl IntoIterator<Item = i32>) -> Option<Arc<BTreeSet<i32>>> {
-        let set: BTreeSet<i32> = indices.into_iter().filter(|&i| i >= 0).collect();
-        (!set.is_empty()).then_some(Arc::new(set))
+    fn includes_index(keep: Option<&Arc<[u32]>>, idx: usize) -> bool {
+        // return false for out-of-bounds index
+        let Ok(idx) = u32::try_from(idx) else {
+            return false;
+        };
+        keep.is_none_or(|keep| keep.binary_search(&idx).is_ok())
+    }
+
+    /// Returns `true` when this mask selects every column chunk.
+    pub fn is_all(&self) -> bool {
+        self.row_groups.is_none() && self.columns.is_none()
+    }
+
+    /// Returns selected row groups, or `None` when all row groups are selected.
+    pub fn selected_row_groups(&self) -> Option<&[u32]> {
+        self.row_groups.as_deref()
+    }
+
+    /// Returns selected leaf columns, or `None` when all columns are selected.
+    pub fn selected_columns(&self) -> Option<&[u32]> {
+        self.columns.as_deref()
+    }
+
+    /// Creates a mask selecting the leaf columns in an Arrow projection.
+    #[cfg(feature = "arrow")]
+    pub fn from_projection(
+        projection: &crate::arrow::ProjectionMask,
+        schema: &SchemaDescriptor,
+    ) -> Self {
+        Self::columns((0..schema.num_columns()).filter(|&i| projection.leaf_included(i)))
+    }
+
+    /// Returns an iterator over the row group indices selected by this mask
+    pub fn row_group_indices(&self, num_row_groups: usize) -> Box<dyn Iterator<Item = usize> + '_> {
+        Self::axis_indices(self.row_groups.as_deref(), num_row_groups)
+    }
+
+    /// Returns an iterator over the column indices selected by this mask
+    pub fn column_indices(&self, num_columns: usize) -> Box<dyn Iterator<Item = usize> + '_> {
+        Self::axis_indices(self.columns.as_deref(), num_columns)
+    }
+
+    fn axis_indices(axis: Option<&[u32]>, len: usize) -> Box<dyn Iterator<Item = usize> + '_> {
+        match axis {
+            None => Box::new(0..len),
+            Some(indices) => Box::new(
+                indices
+                    .iter()
+                    .map(|&i| i as usize)
+                    .take_while(move |&i| i < len),
+            ),
+        }
+    }
+
+    fn iter_to_set(indices: impl IntoIterator<Item = usize>) -> Option<Arc<[u32]>> {
+        Some(
+            indices
+                .into_iter()
+                .filter_map(|i| u32::try_from(i).ok())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into(),
+        )
     }
 }
 
@@ -249,19 +305,29 @@ impl ParquetMetaDataReader {
         self
     }
 
-    /// Selects the row groups and columns for which both page index structures are read.
+    /// Selects the row groups and leaf columns for which both page index structures are read.
+    ///
+    /// The mask applies only to index structures whose policy is not [`PageIndexPolicy::Skip`].
+    /// This reader fetches one byte range covering the selected indexes, so a sparse mask
+    /// primarily reduces decoding and memory rather than necessarily reducing I/O.
     pub fn with_page_index_mask(self, mask: ColumnChunkMask) -> Self {
         self.with_column_index_mask(mask.clone())
             .with_offset_index_mask(mask)
     }
 
-    /// Selects the row groups and columns for which column indexes are read.
+    /// Selects the row groups and leaf columns for which column indexes are read.
+    ///
+    /// The mask applies only when the column index policy is not [`PageIndexPolicy::Skip`].
+    /// [`PageIndexPolicy::Required`] validates only selected column chunks.
     pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.column_index_mask = mask;
         self
     }
 
-    /// Selects the row groups and columns for which offset indexes are read.
+    /// Selects the row groups and leaf columns for which offset indexes are read.
+    ///
+    /// The mask applies only when the offset index policy is not [`PageIndexPolicy::Skip`].
+    /// [`PageIndexPolicy::Required`] validates only selected column chunks.
     pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.offset_index_mask = mask;
         self
@@ -1120,6 +1186,23 @@ mod tests {
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
     }
+
+    #[test]
+    fn test_chunk_mask() {
+        let mask = ColumnChunkMask::row_groups_and_columns([0], [1]);
+        assert!(mask.includes_row_group(0));
+        assert!(!mask.includes_row_group(1));
+        assert!(!mask.includes_column(0));
+        assert!(mask.includes_column(1));
+
+        let mask = ColumnChunkMask::columns([]);
+        assert!(!mask.includes_column(0));
+        assert_eq!(mask.selected_columns(), Some([].as_slice()));
+
+        let all = ColumnChunkMask::all();
+        assert!(all.is_all());
+        assert!(all.includes_column(u32::MAX as usize));
+    }
 }
 
 #[cfg(all(feature = "async", feature = "arrow", test))]
@@ -1554,33 +1637,5 @@ mod async_tests {
         ));
         read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
         read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
-    }
-
-    #[test]
-    fn test_chunk_mask() {
-        // basic test
-        let mask = ColumnChunkMask::row_groups_and_columns([0], [1]);
-        assert!(mask.includes_row_group(0));
-        assert!(!mask.includes_row_group(1));
-        assert!(!mask.includes_column(0));
-        assert!(mask.includes_column(1));
-
-        // test that negative numbers are ignored
-        let mask = ColumnChunkMask::columns([-1, 0, 1]);
-        assert!(mask.columns.as_ref().is_some_and(|c| c.len() == 2));
-        assert!(mask.includes_column(0));
-        assert!(mask.includes_column(1));
-        assert!(!mask.includes_column(2));
-
-        // empty set should behave as "all"
-        let mask = ColumnChunkMask::columns([]);
-        assert!(mask.includes_column(0));
-        assert!(mask.includes_column(1));
-        assert!(mask.includes_column(2));
-
-        // indexing beyond i32::MAX should return false
-        let mask = ColumnChunkMask::all();
-        assert!(mask.includes_column(i32::MAX as usize));
-        assert!(!mask.includes_column(u32::MAX as usize));
     }
 }
