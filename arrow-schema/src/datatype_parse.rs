@@ -636,22 +636,23 @@ impl<'a> Parser<'a> {
         );
 
         let (run_ends, values) = if verbose {
-            let name = self.parse_double_quoted_string("RunEndEncoded run_ends field")?;
-            self.expect_token(Token::Colon)?;
-            let nullable = self.parse_opt_nullable();
-            if nullable {
+            let run_ends = self.parse_field()?;
+            if run_ends.is_nullable() {
                 return Err(make_error(
                     self.val,
                     "RunEndEncoded run_ends field cannot be nullable",
                 ));
             }
-            let re_type = self.parse_next_type()?;
-            let run_ends = Field::new(name, re_type, false);
             self.expect_token(Token::Comma)?;
             let values = self.parse_field()?;
             (run_ends, values)
         } else {
-            self.parse_opt_nullable(); // run_ends is always non-null; consume the token if present
+            if self.parse_opt_nullable() {
+                return Err(make_error(
+                    self.val,
+                    "RunEndEncoded run_ends field cannot be nullable",
+                ));
+            }
             let re_type = self.parse_next_type()?;
             self.expect_token(Token::Comma)?;
             let v_nullable = self.parse_opt_nullable();
@@ -1718,6 +1719,10 @@ mod test {
             ),
             (
                 r#"RunEndEncoded("re": Int32, "v": non-null Utf8)"#,
+                "RunEndEncoded run_ends field cannot be nullable",
+            ),
+            (
+                "RunEndEncoded(nullable Int32, non-null Utf8)",
                 "RunEndEncoded run_ends field cannot be nullable",
             ),
             // Map entries field cannot be nullable
