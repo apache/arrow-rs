@@ -438,6 +438,8 @@ impl ParquetMetaDataPushDecoder {
                         &metadata,
                         self.column_index_policy,
                         self.offset_index_policy,
+                        &self.column_index_mask,
+                        &self.offset_index_mask,
                     );
 
                     let Some(page_index_range) = range else {
@@ -507,28 +509,38 @@ enum DecodeState {
 }
 
 /// Returns the byte range needed to read the offset/page indexes, based on the
-/// specified policies
+/// specified policies and masks
 ///
 /// Returns None if no page indexes are needed
-pub fn range_for_page_index(
+pub(crate) fn range_for_page_index(
     metadata: &ParquetMetaData,
     column_index_policy: PageIndexPolicy,
     offset_index_policy: PageIndexPolicy,
+    column_index_mask: &ColumnChunkMask,
+    offset_index_mask: &ColumnChunkMask,
 ) -> Option<Range<u64>> {
-    fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<Range<u64>> {
-        match (a, b) {
-            (Some(a), Some(b)) => Some(a.start.min(b.start)..a.end.max(b.end)),
-            (None, x) | (x, None) => x,
-        }
-    }
-
-    let mut range = None;
-    for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
-        if column_index_policy != PageIndexPolicy::Skip {
-            range = acc_range(range, c.column_index_range());
-        }
-        if offset_index_policy != PageIndexPolicy::Skip {
-            range = acc_range(range, c.offset_index_range());
+    let mut range: Option<Range<u64>> = None;
+    for (policy, mask, column_index) in [
+        (column_index_policy, column_index_mask, true),
+        (offset_index_policy, offset_index_mask, false),
+    ] {
+        if policy != PageIndexPolicy::Skip {
+            for row_group in mask.row_group_indices(metadata.num_row_groups()) {
+                for column in mask.column_indices(metadata.row_group(row_group).num_columns()) {
+                    let column = metadata.row_group(row_group).column(column);
+                    let index = if column_index {
+                        column.column_index_range()
+                    } else {
+                        column.offset_index_range()
+                    };
+                    if let Some(index) = index {
+                        range = Some(match range {
+                            Some(range) => range.start.min(index.start)..range.end.max(index.end),
+                            None => index,
+                        });
+                    }
+                }
+            }
         }
     }
     range
@@ -562,6 +574,33 @@ mod tests {
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
         assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
+    }
+
+    #[test]
+    fn test_range_for_page_index_respects_column_mask() {
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(test_file_len()).unwrap();
+        push_ranges_to_metadata_decoder(&mut decoder, vec![test_file_range()]);
+        let metadata = expect_data(decoder.try_decode());
+
+        let all = range_for_page_index(
+            &metadata,
+            PageIndexPolicy::Required,
+            PageIndexPolicy::Skip,
+            &ColumnChunkMask::all(),
+            &ColumnChunkMask::all(),
+        )
+        .unwrap();
+        let masked = range_for_page_index(
+            &metadata,
+            PageIndexPolicy::Required,
+            PageIndexPolicy::Skip,
+            &ColumnChunkMask::columns([0]),
+            &ColumnChunkMask::all(),
+        )
+        .unwrap();
+
+        assert!(all.start <= masked.start && masked.end <= all.end);
+        assert!(masked.end - masked.start < all.end - all.start);
     }
 
     /// It is possible to feed some, but not all, of the footer into the metadata decoder
