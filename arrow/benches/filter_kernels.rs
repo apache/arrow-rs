@@ -225,21 +225,21 @@ fn add_benchmark(c: &mut Criterion) {
 
         c.bench_function(
             format!("filter context fsb with value length {value_length} (kept 1/2)").as_str(),
-            |b| b.iter(|| bench_built_filter(&filter, &filter_array)),
+            |b| b.iter(|| bench_built_filter(&filter, &data_array)),
         );
         c.bench_function(
             format!(
                 "filter context fsb with value length {value_length} high selectivity (kept 1023/1024)"
             )
             .as_str(),
-            |b| b.iter(|| bench_built_filter(&filter, &dense_filter_array)),
+            |b| b.iter(|| bench_built_filter(&dense_filter, &data_array)),
         );
         c.bench_function(
             format!(
                 "filter context fsb with value length {value_length} low selectivity (kept 1/1024)"
             )
             .as_str(),
-            |b| b.iter(|| bench_built_filter(&filter, &sparse_filter_array)),
+            |b| b.iter(|| bench_built_filter(&sparse_filter, &data_array)),
         );
     };
 
