@@ -776,12 +776,23 @@ impl ArrowReaderOptions {
         self
     }
 
+    /// Sets the same [`ColumnChunkMask`] for both page-index structures.
+    pub fn with_page_index_mask(self, mask: ColumnChunkMask) -> Self {
+        self.with_column_index_mask(mask.clone())
+            .with_offset_index_mask(mask)
+    }
+
     /// Sets the [`ColumnChunkMask`] for the Parquet [ColumnIndex] structure.
     ///
     /// The column index can be costly to decode and store, especially when it is needed
     /// only for a subset of row groups or columns (such as when filtering by a predicate
     /// on a single column). Providing a [`ColumnChunkMask`] can greatly decrease
     /// the time needed to decode this metadata.
+    ///
+    /// The mask applies only if the column-index policy is not [`PageIndexPolicy::Skip`]
+    /// (the default), or an underlying reader is configured to preload the index. It is
+    /// honored by loading APIs such as [`ArrowReaderMetadata::load`];
+    /// [`ArrowReaderMetadata::try_new`] does not load or filter page indexes.
     ///
     /// [ColumnIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
@@ -795,6 +806,10 @@ impl ArrowReaderOptions {
     /// only for a subset of row groups or columns (such as when projecting a small subset
     /// of columns). Providing a [`ColumnChunkMask`] can greatly decrease
     /// the time needed to decode this metadata.
+    ///
+    /// Page pruning also needs the offset index for predicate columns, so callers should
+    /// include those columns in addition to projected columns. The same loading and policy
+    /// qualifications as [`Self::with_column_index_mask`] apply.
     ///
     /// [OffsetIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
@@ -1012,9 +1027,16 @@ impl ParquetMetaDataReader {
         {
             self = self
                 .with_column_index_policy(options.column_index_policy())
-                .with_offset_index_policy(options.offset_index_policy())
-                .with_column_index_mask(options.column_index_mask().clone())
-                .with_offset_index_mask(options.offset_index_mask().clone());
+                .with_offset_index_policy(options.offset_index_policy());
+        }
+
+        // Preload settings on the underlying reader may enable an index even when the
+        // corresponding options policy is `Skip`, so apply non-default masks independently.
+        if !options.column_index_mask().is_all() {
+            self = self.with_column_index_mask(options.column_index_mask().clone());
+        }
+        if !options.offset_index_mask().is_all() {
+            self = self.with_offset_index_mask(options.offset_index_mask().clone());
         }
 
         self

@@ -30,7 +30,7 @@ use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::column::writer::ColumnCloseResult;
 use parquet::errors::Result;
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
+use parquet::file::metadata::{ColumnChunkMask, PageIndexPolicy, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use std::sync::Arc;
@@ -144,15 +144,23 @@ fn configure<T>(builder: ArrowReaderBuilder<T>, trigger: Trigger) -> ArrowReader
     }
 }
 
-fn read_sync(file: &Bytes, trigger: Trigger) -> Result<Vec<RecordBatch>> {
-    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file.clone(), options())?;
+fn read_sync(
+    file: &Bytes,
+    trigger: Trigger,
+    options: ArrowReaderOptions,
+) -> Result<Vec<RecordBatch>> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file.clone(), options)?;
     Ok(configure(builder, trigger)
         .build()?
         .collect::<Result<_, _>>()?)
 }
 
 #[cfg(feature = "async")]
-fn read_async(file: &Bytes, trigger: Trigger) -> Result<Vec<RecordBatch>> {
+fn read_async(
+    file: &Bytes,
+    trigger: Trigger,
+    options: ArrowReaderOptions,
+) -> Result<Vec<RecordBatch>> {
     use futures::TryStreamExt;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
 
@@ -161,13 +169,17 @@ fn read_async(file: &Bytes, trigger: Trigger) -> Result<Vec<RecordBatch>> {
         .unwrap();
     runtime.block_on(async {
         let input = std::io::Cursor::new(file.clone());
-        let builder = ParquetRecordBatchStreamBuilder::new_with_options(input, options()).await?;
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(input, options).await?;
         configure(builder, trigger).build()?.try_collect().await
     })
 }
 
-fn read_push_decoder(file: &Bytes, trigger: Trigger) -> Result<Vec<RecordBatch>> {
-    let metadata = ArrowReaderMetadata::load(file, options())?;
+fn read_push_decoder(
+    file: &Bytes,
+    trigger: Trigger,
+    options: ArrowReaderOptions,
+) -> Result<Vec<RecordBatch>> {
+    let metadata = ArrowReaderMetadata::load(file, options)?;
     let builder = ParquetPushDecoderBuilder::new_with_metadata(metadata);
     let mut decoder = configure(builder, trigger).build()?;
     let mut batches = vec![];
@@ -202,10 +214,45 @@ fn check(has_index: impl Fn(usize, usize) -> bool) {
     let expected = test_batch().slice(150, 100);
     for trigger in [Trigger::RowSelection, Trigger::RowFilter] {
         let results = [
-            ("sync", read_sync(&file, trigger)),
-            ("push decoder", read_push_decoder(&file, trigger)),
+            ("sync", read_sync(&file, trigger, options())),
+            ("push decoder", read_push_decoder(&file, trigger, options())),
             #[cfg(feature = "async")]
-            ("async", read_async(&file, trigger)),
+            ("async", read_async(&file, trigger, options())),
+        ];
+        for (reader, result) in results {
+            let batches = result.unwrap_or_else(|e| panic!("{reader} reader, {trigger:?}: {e}"));
+            let actual = concat_batches(&expected.schema(), &batches).unwrap();
+            assert_eq!(actual, expected, "{reader} reader, {trigger:?}");
+        }
+    }
+}
+
+#[test]
+fn test_read_with_offset_index_mask() {
+    let file = test_file(|_, _| true);
+    let masked_options =
+        || options().with_offset_index_mask(ColumnChunkMask::row_groups_and_columns([1], [0]));
+    let metadata = ArrowReaderMetadata::load(&file, masked_options()).unwrap();
+    let page_index = metadata.metadata().page_index().unwrap();
+    for row_group in 0..2 {
+        for column in 0..3 {
+            assert_eq!(
+                page_index.offset_index(row_group, column).is_some(),
+                row_group == 1 && column == 0
+            );
+        }
+    }
+
+    let expected = test_batch().slice(150, 100);
+    for trigger in [Trigger::RowSelection, Trigger::RowFilter] {
+        let results = [
+            ("sync", read_sync(&file, trigger, masked_options())),
+            (
+                "push decoder",
+                read_push_decoder(&file, trigger, masked_options()),
+            ),
+            #[cfg(feature = "async")]
+            ("async", read_async(&file, trigger, masked_options())),
         ];
         for (reader, result) in results {
             let batches = result.unwrap_or_else(|e| panic!("{reader} reader, {trigger:?}: {e}"));
