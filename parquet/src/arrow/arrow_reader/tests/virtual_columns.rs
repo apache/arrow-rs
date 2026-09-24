@@ -18,6 +18,7 @@
 //! Generated row numbers and row-group indices, including ordering and filtering.
 
 use super::*;
+use std::collections::HashMap;
 
 #[test]
 fn test_read_row_numbers() {
@@ -66,6 +67,51 @@ fn test_read_row_numbers() {
             .collect::<Vec<_>>(),
         vec![Some(0), Some(1), Some(2)]
     );
+}
+
+#[test]
+fn test_supplied_schema_keeps_virtual_columns() {
+    let file = write_parquet_from_iter(vec![(
+        "value",
+        Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+    )]);
+    let supplied_fields = Fields::from(vec![Field::new("value", ArrowDataType::Int64, false)]);
+    let row_number_field = Arc::new(
+        Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+    );
+    let row_group_index_field = Arc::new(
+        Field::new("row_group_index", ArrowDataType::Int64, false)
+            .with_extension_type(RowGroupIndex),
+    );
+    let supplied_metadata = HashMap::from([("k".to_string(), "v".to_string())]);
+
+    let options = ArrowReaderOptions::new()
+        .with_schema(Arc::new(Schema::new_with_metadata(
+            supplied_fields,
+            supplied_metadata.clone(),
+        )))
+        .with_virtual_columns(vec![
+            row_number_field.clone(),
+            row_group_index_field.clone(),
+        ])
+        .unwrap();
+    let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
+
+    let expected = Fields::from(vec![
+        Arc::new(Field::new("value", ArrowDataType::Int64, false)),
+        row_number_field,
+        row_group_index_field,
+    ]);
+    assert_eq!(metadata.schema().fields(), &expected);
+    assert_eq!(metadata.schema().metadata(), &supplied_metadata);
+
+    let batch = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata.clone())
+        .build()
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    assert_eq!(batch.schema().fields(), metadata.schema().fields());
 }
 
 #[test]

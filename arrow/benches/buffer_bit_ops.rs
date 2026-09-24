@@ -28,7 +28,9 @@ fn create_buffer(size: usize) -> Buffer {
     let mut result = MutableBuffer::new(size).with_bitset(size, false);
 
     for i in 0..size {
-        result.as_slice_mut()[i] = 0b01010101 << i << (i % 4);
+        result.as_slice_mut()[i] = 0b01010101u8
+            .wrapping_shl(i as u32)
+            .wrapping_shl((i % 4) as u32);
     }
 
     result.into()
