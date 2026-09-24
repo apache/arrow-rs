@@ -929,22 +929,22 @@ pub fn copy_bits_within<R: RangeBounds<usize>>(
 /// Similar to [`std::slice::range`] which is unstable
 pub(crate) fn normalize_range(range: impl RangeBounds<usize>, len: usize) -> Range<usize> {
     let end = match range.end_bound().cloned() {
-        Bound::Included(end) if end >= len => panic!("end {end} is out of bounds 0..{len}"),
+        Bound::Included(end) if end >= len => panic!("end bound {end} is out of bounds"),
         // Cannot overflow because `end < len` implies `end < usize::MAX`.
         Bound::Included(end) => end + 1,
 
-        Bound::Excluded(end) if end > len => panic!("end {end} is out of bounds 0..{len}"),
+        Bound::Excluded(end) if end > len => panic!("end bound {end} is out of bounds"),
         Bound::Excluded(end) => end,
 
         Bound::Unbounded => len,
     };
 
     let start = match range.start_bound().cloned() {
-        Bound::Excluded(start) if start >= end => panic!("start {start} is gte than end {end}"),
+        Bound::Excluded(start) if start >= end => panic!("start bound {start} >= end bound {end}"),
         // Cannot overflow because `start < end` implies `start < usize::MAX`.
         Bound::Excluded(start) => start + 1,
 
-        Bound::Included(start) if start > end => panic!("start {start} is gt than end {end}"),
+        Bound::Included(start) if start > end => panic!("start bound {start} > end bound {end}"),
         Bound::Included(start) => start,
 
         Bound::Unbounded => 0,
