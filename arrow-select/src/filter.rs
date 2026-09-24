@@ -199,7 +199,38 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// assert_eq!(c, &Int32Array::from(vec![5, 8]));
 /// ```
 pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
-    let mut filter_builder = FilterBuilder::new(predicate);
+    // SAFETY: the count is computed from `predicate` itself.
+    unsafe { filter_with_count(values, predicate, predicate.true_count()) }
+}
+
+/// [`filter`] for a `predicate` whose number of selected rows is already known.
+///
+/// For callers who already know the total number of selected rows, this is
+/// slightly more efficient than calling `filter` directly.
+///
+/// # Safety
+///
+/// `count` must equal [`BooleanArray::true_count`] of `predicate`; see
+/// [`FilterBuilder::new_with_count`].
+///
+/// # Example
+/// ```rust
+/// # use arrow_array::{Int32Array, BooleanArray};
+/// # use arrow_select::filter::filter_with_count;
+/// let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
+/// let filter_array = BooleanArray::from(vec![true, false, false, true, false]);
+/// // SAFETY: the count matches the mask.
+/// let c = unsafe { filter_with_count(&array, &filter_array, 2) }.unwrap();
+/// let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+/// assert_eq!(c, &Int32Array::from(vec![5, 8]));
+/// ```
+pub unsafe fn filter_with_count(
+    values: &dyn Array,
+    predicate: &BooleanArray,
+    count: usize,
+) -> Result<ArrayRef, ArrowError> {
+    // SAFETY: the caller guarantees `count` matches `predicate`.
+    let mut filter_builder = unsafe { FilterBuilder::new_with_count(predicate, count) };
 
     if FilterBuilder::is_optimize_beneficial(values.data_type()) {
         // Only optimize if filtering more than one array
@@ -226,7 +257,27 @@ pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
 ) -> Result<RecordBatch, ArrowError> {
-    let mut filter_builder = FilterBuilder::new(predicate);
+    // SAFETY: the count is computed from `predicate` itself.
+    unsafe { filter_record_batch_with_count(record_batch, predicate, predicate.true_count()) }
+}
+
+/// [`filter_record_batch`] for a `predicate` whose number of selected rows is
+/// already known.
+///
+/// For callers that know the number of selected rows, this is more efficient
+/// than calling `filter_record_batch` directly.
+///
+/// # Safety
+///
+/// `count` must equal [`BooleanArray::true_count`] of `predicate`; see
+/// [`FilterBuilder::new_with_count`].
+pub unsafe fn filter_record_batch_with_count(
+    record_batch: &RecordBatch,
+    predicate: &BooleanArray,
+    count: usize,
+) -> Result<RecordBatch, ArrowError> {
+    // SAFETY: the caller guarantees `count` matches `predicate`.
+    let mut filter_builder = unsafe { FilterBuilder::new_with_count(predicate, count) };
     let num_cols = record_batch.num_columns();
     if num_cols > 1
         || (num_cols > 0
@@ -254,10 +305,42 @@ pub struct FilterBuilder {
 impl FilterBuilder {
     /// Create a new [`FilterBuilder`] that can be used to construct a [`FilterPredicate`]
     pub fn new(filter: &BooleanArray) -> Self {
-        Self::new_with_count(filter, filter.true_count())
+        // SAFETY: the count is computed from `filter` itself.
+        unsafe { Self::new_with_count(filter, filter.true_count()) }
     }
 
-    pub(crate) fn new_with_count(filter: &BooleanArray, count: usize) -> Self {
+    /// Create a new [`FilterBuilder`] from a mask whose number of selected rows
+    /// is already known, skipping the count that [`Self::new`] performs.
+    ///
+    /// Callers that build a mask row by row, or derive it from a validity
+    /// buffer with a cached null count, often already hold this number.
+    ///
+    /// # Safety
+    ///
+    /// `count` must equal [`BooleanArray::true_count`] of `filter`: the number
+    /// of `true` values that are not null. The kernels size their output
+    /// buffers from `count` and read exactly that many selected rows, so an
+    /// incorrect value can access memory out of bounds.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{BooleanArray, Int32Array};
+    /// # use arrow_select::filter::FilterBuilder;
+    /// let values = Int32Array::from(vec![1, 2, 3, 4]);
+    /// let mask = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+    /// // The null is not selected, so the mask selects two rows.
+    /// // SAFETY: the count matches the mask.
+    /// let predicate = unsafe { FilterBuilder::new_with_count(&mask, 2) }.build();
+    /// assert_eq!(predicate.count(), 2);
+    /// let filtered = predicate.filter(&values).unwrap();
+    /// assert_eq!(filtered.as_ref(), &Int32Array::from(vec![1, 3]));
+    /// ```
+    pub unsafe fn new_with_count(filter: &BooleanArray, count: usize) -> Self {
+        debug_assert_eq!(
+            count,
+            filter.true_count(),
+            "count must match the number of rows the filter selects"
+        );
         let filter = match filter.null_count() {
             0 => filter.clone(),
             _ => prep_null_mask_filter(filter),
@@ -1112,6 +1195,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::*;
     use arrow_array::cast::as_run_array;
+    use arrow_array::record_batch;
     use arrow_array::types::*;
     use rand::distr::uniform::{UniformSampler, UniformUsize};
     use rand::distr::{Alphanumeric, StandardUniform};
@@ -2438,5 +2522,39 @@ mod tests {
         let predicate = BooleanArray::from(vec![false; 9]);
         let filter = FilterBuilder::new(&predicate).build();
         filter_native(&values, &filter);
+    }
+
+    #[test]
+    fn test_filter_with_count() {
+        let values = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let predicate =
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true), Some(true)]);
+        let expected = filter(&values, &predicate).unwrap();
+        // SAFETY: the null is not selected, so the predicate selects three rows.
+        let actual = unsafe { filter_with_count(&values, &predicate, 3) }.unwrap();
+        assert_eq!(actual.as_ref(), expected.as_ref());
+    }
+
+    #[test]
+    fn test_filter_record_batch_with_count() {
+        let batch = record_batch!(
+            ("a", Int32, [1, 2, 3, 4]),
+            ("b", Utf8, ["w", "x", "y", "z"])
+        )
+        .unwrap();
+        let predicate = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
+        let expected = filter_record_batch(&batch, &predicate).unwrap();
+        // SAFETY: the null is not selected, so the predicate selects two rows.
+        let actual = unsafe { filter_record_batch_with_count(&batch, &predicate, 2) }.unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "count must match the number of rows the filter selects")]
+    fn test_filter_builder_rejects_wrong_count() {
+        let predicate = BooleanArray::from(vec![true, false, true]);
+        // SAFETY: the debug assertion rejects the count before any buffer is sized.
+        let _ = unsafe { FilterBuilder::new_with_count(&predicate, 1) };
     }
 }
