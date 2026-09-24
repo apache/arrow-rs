@@ -36,6 +36,7 @@ use lexical_core::FormattedSize;
 use num_traits::NumCast;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 use ryu::Float;
+use std::borrow::Cow;
 use std::fmt::Write;
 
 /// Extension trait for Arrow primitive types that can extract their native value from a Variant
@@ -716,19 +717,20 @@ fn write_float_to_string<F: Float>(f: F, out: &mut String) {
 }
 
 // convert a variant to an owned string.
-pub(crate) fn variant_to_string(
-    variant: &Variant<'_, '_>,
+pub(crate) fn variant_to_string<'v>(
+    variant: &Variant<'_, 'v>,
     formats: &TemporalFormats<'_>,
-) -> Option<String> {
-    if matches!(variant, Variant::Null) {
-        return None;
+) -> Option<Cow<'v, str>> {
+    match variant {
+        Variant::Null => None,
+        Variant::Object(_) => None,
+        Variant::String(s) => Some(Cow::Borrowed(s)),
+        Variant::ShortString(s) => Some(Cow::Borrowed(s.as_str())),
+        _ => {
+            let mut s = String::new();
+            write_variant_to_string(variant, formats, &mut s).then_some(Cow::Owned(s))
+        }
     }
-
-    if matches!(variant, Variant::Object(_)) {
-        return None;
-    }
-    let mut s = String::new();
-    write_variant_to_string(variant, formats, &mut s).then_some(s)
 }
 
 fn write_lexical_to_string<N: lexical_core::ToLexical>(out: &mut String, n: N) {
@@ -820,43 +822,39 @@ fn write_variant_to_string(
         }
         Variant::Date(d) => {
             // The writing is always success
-            let _ = write_temporal_display(out, d, formats.date());
-            true
+            write_temporal_display(out, d, formats.date()).is_ok()
         }
         Variant::Time(t) => {
             // The writing is always success
-            let _ = write_temporal_display(out, t, formats.time());
-            true
+            write_temporal_display(out, t, formats.time()).is_ok()
         }
         Variant::TimestampMicros(t) => {
             // The writing is always success
-            let _ = write_timestamp(
+            write_timestamp(
                 out,
                 t.naive_utc(),
                 "+00:00".parse().ok(),
                 formats.timestamp_tz(),
-            );
-            true
+            )
+            .is_ok()
         }
         Variant::TimestampNtzMicros(t) => {
             // The writing is always success
-            let _ = write_timestamp(out, *t, None, formats.timestamp());
-            true
+            write_timestamp(out, *t, None, formats.timestamp()).is_ok()
         }
         Variant::TimestampNanos(t) => {
             // The writing is always success
-            let _ = write_timestamp(
+            write_timestamp(
                 out,
                 t.naive_utc(),
                 "+00:00".parse().ok(),
                 formats.timestamp_tz(),
-            );
-            true
+            )
+            .is_ok()
         }
         Variant::TimestampNtzNanos(t) => {
             // The writing is always success
-            let _ = write_timestamp(out, *t, None, formats.timestamp());
-            true
+            write_timestamp(out, *t, None, formats.timestamp()).is_ok()
         }
         Variant::Uuid(u) => write!(out, "{u}").is_ok(),
         Variant::Binary(v) => match std::str::from_utf8(v) {
@@ -1007,6 +1005,7 @@ mod tests {
     use arrow_schema::DataType;
     use chrono::{DateTime, NaiveDate, NaiveTime};
     use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt};
+    use std::borrow::Cow;
     use std::iter::zip;
 
     #[test]
@@ -1035,7 +1034,7 @@ mod tests {
         let float_variant_as_string_array = float_variant_array
             .iter()
             .map(|v| variant_to_string(v, &TemporalFormats::default()))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
         for (a, b) in zip(float_utf8_array, float_variant_as_string_array) {
             assert_eq!(a.unwrap(), b.unwrap());
         }
@@ -1052,7 +1051,7 @@ mod tests {
         let float64_variant_as_string_array = float64_variant_array
             .iter()
             .map(|v| variant_to_string(v, &TemporalFormats::default()))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
         for (a, b) in zip(float64_utf8_array, float64_variant_as_string_array) {
             assert_eq!(a.unwrap(), b.unwrap());
         }
@@ -1077,7 +1076,7 @@ mod tests {
         let variant_as_string_array = date_array
             .iter()
             .map(|v| variant_to_string(v, &TemporalFormats::default()))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
 
         let date32_array = Date32Array::from_iter_values(epoch_days);
         let date32_cast_array = cast(&date32_array, &DataType::Utf8).unwrap();
@@ -1089,7 +1088,7 @@ mod tests {
         let custom_variant_date_as_string_array = date_array
             .iter()
             .map(|v| variant_to_string(v, &custom_temporal_formats))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
         let custom_date32_cast_array =
             cast_with_options(&date32_array, &DataType::Utf8, &custom_cast_option).unwrap();
         let custom_date32_utf8_array = custom_date32_cast_array.as_string::<i32>();
@@ -1113,7 +1112,7 @@ mod tests {
         let time_variant_as_string_array = time_array
             .iter()
             .map(|v| variant_to_string(v, &TemporalFormats::default()))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
 
         let time_micro_array = Time64MicrosecondArray::from_iter(
             time_tuples
@@ -1132,7 +1131,7 @@ mod tests {
         let custom_time_variant_as_string_array = time_array
             .iter()
             .map(|v| variant_to_string(v, &custom_temporal_formats))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
         let custom_time_micro_cast_array =
             cast_with_options(&time_micro_array, &DataType::Utf8, &custom_cast_option).unwrap();
         let custom_time_micro_utf8_array = custom_time_micro_cast_array.as_string::<i32>();
@@ -1152,7 +1151,7 @@ mod tests {
         let timestamp_micro_as_string_array = timestamp_micro_array
             .iter()
             .map(|v| variant_to_string(v, &TemporalFormats::default()))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
 
         let timestamp_micro_arrow_array =
             TimestampMicrosecondArray::from_iter_values(micros).with_timezone("+00:00");
@@ -1167,7 +1166,7 @@ mod tests {
         let custom_timestamp_micro_as_string_array = timestamp_micro_array
             .iter()
             .map(|v| variant_to_string(v, &custom_temporal_formats))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
         let custom_timestamp_micro_arrow_cast_array = cast_with_options(
             &timestamp_micro_arrow_array,
             &DataType::Utf8,
@@ -1196,7 +1195,7 @@ mod tests {
         let timestamp_micro_ntz_variant_as_string_array = timestamp_micro_ntz_variant_array
             .iter()
             .map(|v| variant_to_string(v, &TemporalFormats::default()))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
 
         let timestamp_micro_ntz_arrow_array =
             TimestampMicrosecondArray::from_iter_values(micros_ntz);
@@ -1216,7 +1215,7 @@ mod tests {
         let custom_timestamp_micro_ntz_variant_as_string_array = timestamp_micro_ntz_variant_array
             .iter()
             .map(|v| variant_to_string(v, &custom_temporal_formats))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
         let custom_timestamp_micro_ntz_arrow_cast_array = cast_with_options(
             &timestamp_micro_ntz_arrow_array,
             &DataType::Utf8,
@@ -1241,7 +1240,7 @@ mod tests {
         let timestamp_nano_as_string_array = timestamp_nano_variant_array
             .iter()
             .map(|v| variant_to_string(v, &TemporalFormats::default()))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
 
         let timestamp_nano_arrow_array =
             TimestampNanosecondArray::from_iter_values(nanos).with_timezone("+00:00");
@@ -1259,7 +1258,7 @@ mod tests {
         let custom_timestamp_nano_as_string_array = timestamp_nano_variant_array
             .iter()
             .map(|v| variant_to_string(v, &custom_temporal_formats))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
         let custom_timestamp_nano_arrow_cast_array = cast_with_options(
             &timestamp_nano_arrow_array,
             &DataType::Utf8,
@@ -1285,7 +1284,7 @@ mod tests {
         let timestamp_nano_ntz_variant_as_string_array = timestamp_nano_ntz_variant_array
             .iter()
             .map(|v| variant_to_string(v, &TemporalFormats::default()))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
 
         let timestamp_nano_ntz_arrow_array = TimestampNanosecondArray::from_iter_values(nanos_ntz);
 
@@ -1302,7 +1301,7 @@ mod tests {
         let custom_timestamp_nano_ntz_variant_as_string_array = timestamp_nano_ntz_variant_array
             .iter()
             .map(|v| variant_to_string(v, &custom_temporal_formats))
-            .collect::<Vec<Option<String>>>();
+            .collect::<Vec<Option<Cow<'_, str>>>>();
         let custom_timestamp_nano_ntz_arrow_cast_array = cast_with_options(
             &timestamp_nano_ntz_arrow_array,
             &DataType::Utf8,
