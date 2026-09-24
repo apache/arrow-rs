@@ -146,7 +146,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     /// Assembles and writes the final metadata to self.buf
-    pub fn finish(mut self) -> Result<ParquetMetaData> {
+    pub(crate) fn finish(mut self) -> Result<ParquetMetaData> {
         let num_rows = self.row_groups.iter().map(|x| x.num_rows).sum();
 
         // serialize page indexes and update index locations
@@ -242,7 +242,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         })
     }
 
-    pub fn new(
+    pub(crate) fn new(
         buf: &'a mut TrackedWrite<W>,
         schema_descr: &'a SchemaDescPtr,
         row_groups: Vec<RowGroupMetaData>,
@@ -265,18 +265,21 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         }
     }
 
-    pub fn with_page_index(mut self, page_index: Arc<dyn PageIndexProvider>) -> Self {
+    pub(crate) fn with_page_index(mut self, page_index: Arc<dyn PageIndexProvider>) -> Self {
         self.page_index = Some(page_index);
         self
     }
 
-    pub fn with_key_value_metadata(mut self, key_value_metadata: Vec<KeyValue>) -> Self {
+    pub(crate) fn with_key_value_metadata(mut self, key_value_metadata: Vec<KeyValue>) -> Self {
         self.key_value_metadata = Some(key_value_metadata);
         self
     }
 
     #[cfg(feature = "encryption")]
-    pub fn with_file_encryptor(mut self, file_encryptor: Option<Arc<FileEncryptor>>) -> Self {
+    pub(crate) fn with_file_encryptor(
+        mut self,
+        file_encryptor: Option<Arc<FileEncryptor>>,
+    ) -> Self {
         self.object_writer = self.object_writer.with_file_encryptor(file_encryptor);
         self
     }
@@ -412,7 +415,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     }
 
     /// Set whether or not to preserve the page index location metadata in the Thrift
-    /// `ColumnMetaData`.
+    /// `ColumnMetaData` (defaults to `true`).
     ///
     /// Because this struct is often used to externalize the footer metadata, it is
     /// usually desirable to preserve this location information, even when the
@@ -420,7 +423,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     /// returns no `PageIndexProvider`). As such, this defaults to `true`.
     ///
     /// Set this to `false` to reset the location metadata if no page indexes are
-    /// present.
+    /// present in the provided [`ParquetMetaData`].
     pub fn with_preserve_page_index_locations(self, val: bool) -> Self {
         Self {
             preserve_page_index_locations: val,
