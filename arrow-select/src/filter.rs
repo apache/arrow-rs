@@ -205,8 +205,8 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
 
 /// [`filter`] for a `predicate` whose number of selected rows is already known.
 ///
-/// For callers who already know the total number of selected rows, this is
-/// slightly more efficient than calling `filter` directly.
+/// For callers that already know the total number of selected rows, this is
+/// more efficient than calling `filter` directly.
 ///
 /// # Safety
 ///
@@ -318,9 +318,7 @@ impl FilterBuilder {
     /// # Safety
     ///
     /// `count` must equal [`BooleanArray::true_count`] of `filter`: the number
-    /// of `true` values that are not null. The kernels size their output
-    /// buffers from `count` and read exactly that many selected rows, so an
-    /// incorrect value can access memory out of bounds.
+    /// of `true` values that are not null.
     ///
     /// # Example
     /// ```
