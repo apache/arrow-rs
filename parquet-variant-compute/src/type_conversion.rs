@@ -716,7 +716,7 @@ fn write_float_to_string<F: Float>(f: F, out: &mut String) {
     out.push_str(buffer.format(f));
 }
 
-// convert a variant to an owned string.
+// Convert a variant to a borrowed string when possible, otherwise an owned formatted string.
 pub(crate) fn variant_to_string<'v>(
     variant: &Variant<'_, 'v>,
     formats: &TemporalFormats<'_>,

@@ -1351,20 +1351,6 @@ macro_rules! define_variant_to_primitive_builder {
     |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
     |$value: ident $(, $shred: ident)? $(; temporal_formats: $formats:ident)?| $value_transform:expr,
     type_name: $type_name:expr) => {
-        define_variant_to_primitive_builder!(
-            struct $name<$lifetime $(, $generic: $bound )?>
-            |$array_param $(, $field: $field_type)?| -> $builder_name $(< $array_type >)? { $init_expr },
-            |$value $(,$shred)? $(; temporal_formats: $formats)?| $value_transform,
-            type_name: $type_name,
-            append_value: |builder, v| builder.append_value(v)
-        );
-    };
-
-    (struct $name:ident<$lifetime:lifetime $(, $generic:ident: $bound:path )?>
-    |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
-    |$value: ident $(, $shred: ident)? $(; temporal_formats: $formats:ident)?| $value_transform:expr,
-    type_name: $type_name:expr,
-    append_value: |$builder:ident, $append_value:ident| $append_expr:expr) => {
         pub(crate) struct $name<$lifetime $(, $generic : $bound )?>
         {
             builder: $builder_name $(<$array_type>)?,
@@ -1404,9 +1390,7 @@ macro_rules! define_variant_to_primitive_builder {
                     |$value| $value_transform,
                 ) {
                     Ok(Some(v)) => {
-                        let $builder = &mut self.builder;
-                        let $append_value = v;
-                        $append_expr;
+                        self.builder.append_value(v);
                         Ok(true)
                     }
                     Ok(None) => {
@@ -1435,13 +1419,61 @@ macro_rules! define_variant_to_primitive_builder {
     }
 }
 
-define_variant_to_primitive_builder!(
-    struct VariantToStringGetArrowBuilder<'a, B: StringLikeArrayBuilder>
-    |capacity| -> B { B::with_capacity(capacity) },
-    |value; temporal_formats: formats| variant_to_string(value, formats),
-    type_name: B::type_name(),
-    append_value: |builder, v| builder.append_value(&v)
-);
+pub(crate) struct VariantToStringGetArrowBuilder<'a, B: StringLikeArrayBuilder> {
+    builder: B,
+    cast_options: &'a CastOptions<'a>,
+    formats: TemporalFormats<'a>,
+}
+
+impl<'a, B: StringLikeArrayBuilder> VariantToStringGetArrowBuilder<'a, B> {
+    fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
+        Self {
+            builder: B::with_capacity(capacity),
+            cast_options,
+            formats: TemporalFormats::new(cast_options),
+        }
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        let value = match value {
+            // short-circuit the common case of string-like variants to avoid the overhead of casting
+            Variant::String(value) => value,
+            Variant::ShortString(value) => value.as_str(),
+            _ => return self.append_cast_value(value),
+        };
+
+        self.builder.append_value(value);
+        Ok(true)
+    }
+
+    fn append_cast_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        match variant_cast_with_options(value, self.cast_options, |value| {
+            variant_to_string(value, &self.formats)
+        }) {
+            Ok(Some(value)) => {
+                self.builder.append_value(&value);
+                Ok(true)
+            }
+            Ok(None) => {
+                self.builder.append_null();
+                Ok(false)
+            }
+            Err(_) => Err(ArrowError::CastError(format!(
+                "Failed to extract primitive of type {} from variant {value:?} at path VariantPath([])",
+                B::type_name()
+            ))),
+        }
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        Ok(Arc::from(self.builder.finish()))
+    }
+}
 
 define_variant_to_primitive_builder!(
     struct VariantToStringShredArrowBuilder<'a, B: StringLikeArrayBuilder>
