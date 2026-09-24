@@ -31,7 +31,7 @@ use parquet::DecodeResult;
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
-    RowSelectionPolicy,
+    RowSelectionPolicy, RowSelector,
 };
 use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
 use parquet::file::metadata::page_index::PageIndexProvider;
@@ -149,15 +149,18 @@ fn run_test(reader: Reader) {
     // - We only populate indexes for row groups 0 and 2 (skipping row group 1)
     // - For row group 0: populate column 0 (id) and column 1 (value)
     // - For row group 2: populate columns 0 (id) and 2 (name), so column 1 is a gap
-    let provider = SelectivePageIndexProvider::new(
+    let provider = Arc::new(SelectivePageIndexProvider::new(
         file_bytes.clone(),
         metadata,
+        // values are (row_group index, column index)
         &[(0, 0), (0, 1), (2, 0), (2, 2)],
-    );
+    ));
 
     // Step 4: Install the custom provider into metadata
-    let mut metadata_builder = metadata.clone().into_builder();
-    metadata_builder = metadata_builder.set_page_index(Some(Arc::new(provider)));
+    let metadata_builder = metadata
+        .clone()
+        .into_builder()
+        .set_page_index(Some(provider.clone()));
     let metadata_with_custom_index = Arc::new(metadata_builder.build());
 
     // Step 5: Create ArrowReaderMetadata with the custom page index
@@ -175,17 +178,17 @@ fn run_test(reader: Reader) {
     // - Selects rows 120-130 (in row group 2)
     let selection = RowSelection::from(vec![
         // Skip first 20 rows
-        parquet::arrow::arrow_reader::RowSelector::skip(20),
+        RowSelector::skip(20),
         // Select rows 20-30
-        parquet::arrow::arrow_reader::RowSelector::select(10),
+        RowSelector::select(10),
         // Skip rows 30-60
-        parquet::arrow::arrow_reader::RowSelector::skip(30),
+        RowSelector::skip(30),
         // Select rows 60-70
-        parquet::arrow::arrow_reader::RowSelector::select(10),
+        RowSelector::select(10),
         // Skip rows 70-120
-        parquet::arrow::arrow_reader::RowSelector::skip(50),
+        RowSelector::skip(50),
         // Select rows 120-130
-        parquet::arrow::arrow_reader::RowSelector::select(10),
+        RowSelector::select(10),
     ]);
 
     // Collect all batches
@@ -215,25 +218,17 @@ fn run_test(reader: Reader) {
         assert_eq!(fetched(0, 2), chunk_len(0, 2)); // no offset index: whole chunk
     }
 
-    // Note: We need to get the provider reference from the metadata to check stats
-    let provider_ref = metadata_with_custom_index
-        .page_index()
-        .unwrap()
-        .as_any()
-        .downcast_ref::<SelectivePageIndexProvider>()
-        .expect("Expected SelectivePageIndexProvider");
-
     // Check that the custom provider was used
-    let (hits, misses) = provider_ref.stats();
+    let (hits, misses) = provider.stats();
     assert!(hits > 0, "provider should have hits");
     assert!(misses > 0, "provider should have misses");
 
     // Since we didn't use predicates, the column index should be untouched
-    let (col_hits, col_misses) = provider_ref.column_index_stats();
+    let (col_hits, col_misses) = provider.column_index_stats();
     assert_eq!(col_hits, 0, "column index should not be used");
     assert_eq!(col_misses, 0, "column index should not be used");
 
-    let (off_hits, off_misses) = provider_ref.offset_index_stats();
+    let (off_hits, off_misses) = provider.offset_index_stats();
     assert!(off_hits > 0, "offset index should have hits");
     assert!(off_misses > 0, "offset index should have misses");
 
