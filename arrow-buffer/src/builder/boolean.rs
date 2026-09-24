@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::bit_util::apply_bitwise_binary_op;
+use crate::bit_util::{apply_bitwise_binary_op, copy_bits_within};
 use crate::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
-use std::ops::Range;
+use std::ops::{Range, RangeBounds};
 
 /// Builder for [`BooleanBuffer`]
 ///
@@ -312,6 +312,34 @@ impl BooleanBufferBuilder {
         self.append_packed_range(range, buffer.values())
     }
 
+
+    /// Copies bits `src` of `data` to position `dest`
+    ///
+    /// # Arguments
+    /// * `src` - The source range of bits to copy
+    /// * `dest` - The destination bit index to copy to
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::BooleanBufferBuilder;
+    /// let mut buffer = BooleanBufferBuilder::new(0);
+    /// builder.append_slice(&[true, false, false, false, false, true]);
+    /// buffer.extend_from_slice(&[0b0101_1001_u8, 0b1100_1000_u8, 0b0010_0110_u8]);
+    /// // Copy values 4.. to position 1
+    /// builder.copy_within(4.., 1);
+    ///
+    /// let output = builder.build().iter().collect::<Vec<_>>();
+    /// assert_eq!(output, vec![true, false, true, false, false, true]);
+    /// ```
+    pub fn copy_within<R: RangeBounds<usize>>(&mut self, src: R, dest: usize) {
+        copy_bits_within(
+            self.buffer.as_slice_mut(),
+            self.len,
+            src,
+            dest,
+        );
+    }
+
     /// Returns the packed bits
     pub fn as_slice(&self) -> &[u8] {
         self.buffer.as_slice()
@@ -384,6 +412,9 @@ impl From<BooleanBufferBuilder> for NullBuffer {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::Bound;
+    use rand::prelude::StdRng;
+    use rand::{RngExt, SeedableRng};
     use super::*;
 
     #[test]
@@ -789,5 +820,25 @@ mod tests {
                 assert_eq!(finished.value(i), v, "at index {i} for len {len}");
             }
         }
+    }
+
+    #[test]
+    fn copy_within() {
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let input = (0..100).map(|_| rng.random_bool(0.3)).collect::<Vec<_>>();
+
+        let mut builder = BooleanBufferBuilder::new(0);
+        builder.append_slice(&input);
+        builder.copy_within(10..20, 30);
+
+        let expected = {
+            let mut expected = input.clone();
+            expected.copy_within(10..20, 30);
+            let mut builder = BooleanBufferBuilder::new(0);
+            builder.append_slice(&expected);
+            builder
+        };
+        assert_eq!(builder.build(), expected.build());
     }
 }

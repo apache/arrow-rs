@@ -17,6 +17,7 @@
 
 //! Utils for working with bits
 
+use std::ops::{Bound, RangeBounds};
 use crate::bit_chunk_iterator::BitChunks;
 
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
@@ -872,6 +873,127 @@ fn handle_mutable_buffer_remainder_unary<F>(
     set_remainder_bits(start_remainder_mut, rem, remainder_len);
 }
 
+/// Copies bits `src` of `data` to position `dest`
+///
+/// # Arguments
+/// * `data` - The buffer to copy bits within
+/// * `buffer_len_in_bits` - The length of the buffer in bits. must be `<= data.len() * 8`.
+/// * `src` - The source range of bits to copy
+/// * `dest` - The destination bit index to copy to
+///
+/// # Example
+/// ```
+/// # use arrow_buffer::MutableBuffer;
+/// # use arrow_buffer::bit_util::copy_bits_within;
+/// let mut buffer = MutableBuffer::new(3);
+/// buffer.extend_from_slice(&[0b0101_1001_u8, 0b1100_1000_u8, 0b0010_0110_u8]);
+/// // Copy bits 14..22 to position 2
+/// copy_bits_within(buffer.as_slice_mut(), buffer.len() * 8, 14..22, 2);
+/// assert_eq!(buffer.as_slice(), &[0b0100_0010_u8, 0b0100_1000_u8  0b0010_0110_u8]);
+/// ```
+///
+/// # Panics
+///
+/// If the source range or the destination range are out of bounds of `buffer_len_in_bits`
+pub fn copy_bits_within<R: RangeBounds<usize>>(
+    data: &mut [u8],
+    buffer_len_in_bits: usize,
+    src: R,
+    dest: usize,
+) {
+    let start_bound = match src.start_bound() {
+        Bound::Included(n) => *n,
+        Bound::Excluded(n) => n + 1,
+        Bound::Unbounded => 0,
+    };
+    let end_bound = match src.end_bound() {
+        Bound::Included(n) => n + 1,
+        Bound::Excluded(n) => *n,
+        Bound::Unbounded => buffer_len_in_bits,
+    };
+    assert!(
+        buffer_len_in_bits <= data.len() * 8,
+        "buffer length {buffer_len_in_bits} exceeds data of {} bytes",
+        data.len()
+    );
+    assert!(
+        start_bound <= end_bound,
+        "start bound {start_bound} > end bound {end_bound}"
+    );
+    assert!(
+        end_bound <= buffer_len_in_bits,
+        "end bound {end_bound} is out of bounds 0..{buffer_len_in_bits}"
+    );
+    let len = end_bound - start_bound;
+    assert!(
+        dest <= buffer_len_in_bits - len,
+        "dest {dest} is out of bounds for range of length {len}"
+    );
+
+    if len == 0 || dest == start_bound {
+        return;
+    }
+
+    // If we can copy the bits directly and avoid shifting each byte
+    if start_bound % 8 == dest % 8 {
+        copy_within_same_phase(data, start_bound, dest, len);
+    } else {
+        fallback_copy_within(data, start_bound, dest, len);
+    }
+}
+
+/// Copies `len` bits between two non overlapping slices, preserving the bits of `dst` outside the range
+#[inline]
+fn copy_bits(dst: &mut [u8], dst_offset: usize, src: &[u8], src_offset: usize, len: usize) {
+    apply_bitwise_binary_op(dst, dst_offset, src, src_offset, len, |_, src| src);
+}
+
+/// Source and destination share the same bit phase, so the whole bytes in between are memmoved
+fn copy_within_same_phase(data: &mut [u8], src: usize, dest: usize, len: usize) {
+    let head = ((8 - src % 8) % 8).min(len);
+    let middle_bytes = (len - head) / 8;
+    let tail = (len - head) % 8;
+    let tail_offset = head + middle_bytes * 8;
+
+    // Save the partial edges first so the memmove cannot clobber them
+    let mut head_bits = [0u8; 1];
+    let mut tail_bits = [0u8; 1];
+    copy_bits(&mut head_bits, 0, data, src, head);
+    copy_bits(&mut tail_bits, 0, data, src + tail_offset, tail);
+
+    let src_byte = (src + head) / 8;
+    let dest_byte = (dest + head) / 8;
+    data.copy_within(src_byte..src_byte + middle_bytes, dest_byte);
+
+    copy_bits(data, dest, &head_bits, 0, head);
+    copy_bits(data, dest + tail_offset, &tail_bits, 0, tail);
+}
+
+/// Fallback copy within when we have to do some shifting of the bits
+fn fallback_copy_within(data: &mut [u8], src: usize, dest: usize, len: usize) {
+    const BUFFER_SIZE_BYTES: usize = 256;
+    const BUFFER_SIZE_BITS: usize = BUFFER_SIZE_BYTES * 8;
+
+    let mut buffer = [0u8; BUFFER_SIZE_BYTES];
+    let mut copy_block = |data: &mut [u8], done: usize| {
+        let n = (len - done).min(BUFFER_SIZE_BITS);
+        // Copy to temp buffer
+        copy_bits(&mut buffer, 0, data, src + done, n);
+        // Copy back to destination
+        copy_bits(data, dest + done, &buffer, 0, n);
+    };
+
+    if dest < src {
+        for done in (0..len).step_by(BUFFER_SIZE_BITS) {
+            copy_block(data, done);
+        }
+    } else {
+        for done in (0..len).step_by(BUFFER_SIZE_BITS).rev() {
+            copy_block(data, done);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -1656,5 +1778,131 @@ mod tests {
             |a| !a,
         );
         assert_eq!(buffer.as_slice(), &input);
+    }
+
+    fn assert_copy_bits_within(bits: Vec<bool>, src: impl RangeBounds<usize> + Clone, dest: usize) {
+        let expected_bytes = {
+            let mut expected = bits.clone();
+            // copy_within using the standard library to get the expected result
+            expected.copy_within(src.clone(), dest);
+
+            let expected = BooleanBuffer::from(expected);
+            expected.into_inner().as_slice().to_vec()
+        };
+        let bits_len = bits.len();
+
+        let mut input_bite_packed = BooleanBuffer::from(bits).into_inner().as_slice().to_vec();
+
+        copy_bits_within(&mut input_bite_packed, bits_len, src, dest);
+
+        assert_eq!(input_bite_packed, expected_bytes);
+    }
+
+    fn pattern(len: usize) -> Vec<bool> {
+        (0..len).map(|i| (i * 7 + i / 3) % 5 < 2).collect()
+    }
+
+    #[test]
+    fn test_copy_bits_within_noop() {
+        assert_copy_bits_within(pattern(20), 5..5, 0);
+        assert_copy_bits_within(pattern(20), 3..15, 3);
+        assert_copy_bits_within(pattern(20), .., 0);
+        assert_copy_bits_within(vec![], .., 0);
+    }
+
+    #[test]
+    fn test_copy_bits_within_range_bounds() {
+        assert_copy_bits_within(pattern(40), 3..=17, 20);
+        assert_copy_bits_within(pattern(40), ..10, 25);
+        assert_copy_bits_within(pattern(40), 30.., 1);
+        assert_copy_bits_within(pattern(40), (Bound::Excluded(2), Bound::Included(12)), 27);
+    }
+
+    #[test]
+    fn test_copy_bits_within_dest_and_src_share_same_bit_offset() {
+        // Whole bytes only
+        assert_copy_bits_within(pattern(128), 0..64, 64);
+        assert_copy_bits_within(pattern(128), 64..128, 0);
+        // Head only, tail only, head and tail
+        assert_copy_bits_within(pattern(128), 3..64, 67);
+        assert_copy_bits_within(pattern(128), 8..45, 72);
+        assert_copy_bits_within(pattern(128), 3..45, 75);
+        // Inside a single byte
+        assert_copy_bits_within(pattern(32), 9..12, 25);
+        // Overlapping in both directions
+        assert_copy_bits_within(pattern(200), 13..190, 5);
+        assert_copy_bits_within(pattern(200), 5..182, 13);
+        // Range ending at the last bit of a partial byte
+        assert_copy_bits_within(pattern(100), 50..100, 2);
+    }
+
+    #[test]
+    fn test_copy_bits_within_different_phase() {
+        assert_copy_bits_within(pattern(32), 1..4, 20);
+        assert_copy_bits_within(pattern(32), 3..11, 14);
+        assert_copy_bits_within(pattern(200), 0..64, 65);
+        assert_copy_bits_within(pattern(200), 7..72, 100);
+        // Overlapping by all but one bit
+        assert_copy_bits_within(pattern(200), 1..200, 0);
+        assert_copy_bits_within(pattern(200), 0..199, 1);
+        // Range ending at the last bit of a partial byte
+        assert_copy_bits_within(pattern(99), 40..99, 3);
+
+        // Large input, overlapping in same byte in both directions
+        assert_copy_bits_within(pattern(5000), 3..4500, 0);
+        assert_copy_bits_within(pattern(5000), 0..4500, 3);
+        assert_copy_bits_within(pattern(5000), 5..2053, 2054);
+        // Non overlapping and far apart
+        assert_copy_bits_within(pattern(5000), 4000..4990, 1);
+        assert_copy_bits_within(pattern(5000), 1..990, 4003);
+    }
+
+    #[test]
+    fn test_copy_bits_within_exhaustive_small() {
+        for len in 1..=24 {
+            for start in 0..=len {
+                for end in start..=len {
+                    for dest in 0..=len - (end - start) {
+                        assert_copy_bits_within(pattern(len), start..end, dest);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_copy_bits_within_preserves_bits_past_buffer_len() {
+        let mut data = vec![0xFFu8; 3];
+        copy_bits_within(&mut data, 20, 0..4, 16);
+        assert_eq!(data, vec![0xFF; 3]);
+
+        let mut data = vec![0b1111_0000u8, 0xFF];
+        copy_bits_within(&mut data, 12, 0..4, 8);
+        assert_eq!(data, vec![0b1111_0000, 0b1111_0000]);
+    }
+
+    #[test]
+    #[should_panic(expected = "start bound 5 > end bound 3")]
+    fn test_copy_bits_within_start_after_end() {
+        #[expect(clippy::reversed_empty_ranges)]
+        copy_bits_within(&mut [0u8; 2], 16, 5..3, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "end bound 17 is out of bounds")]
+    fn test_copy_bits_within_end_out_of_bounds() {
+        copy_bits_within(&mut [0u8; 2], 16, 0..17, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "dest 7 is out of bounds")]
+    fn test_copy_bits_within_dest_out_of_bounds() {
+        copy_bits_within(&mut [0u8; 2], 16, 0..10, 7);
+    }
+
+    #[test]
+    #[should_panic(expected = "buffer length 17 exceeds data")]
+    fn test_copy_bits_within_buffer_len_exceeds_data() {
+        copy_bits_within(&mut [0u8; 2], 17, 0..1, 0);
     }
 }
