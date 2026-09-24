@@ -21,6 +21,7 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
+use crate::interleave::interleave_record_batch;
 use crate::take::take_record_batch;
 use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
@@ -296,6 +297,43 @@ impl BatchCoalescer {
         // todo: optimize this to avoid materializing (copying the results of take indices to a new batch)
         let taken_batch = take_record_batch(&batch, indices)?;
         self.push_batch(taken_batch)
+    }
+
+    /// Push rows gathered from multiple [`RecordBatch`]es into the Coalescer.
+    ///
+    /// This is semantically equivalent to calling [`interleave_record_batch`]
+    /// followed by [`Self::push_batch`], but avoids allocating an intermediate
+    /// [`RecordBatch`].
+    ///
+    /// Each element of `indices` is a `(batch_index, row_index)` pair that
+    /// identifies a row in `batches`.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::record_batch;
+    /// # use arrow_select::coalesce::BatchCoalescer;
+    /// let batch1 = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+    /// let batch2 = record_batch!(("a", Int32, [4, 5, 6])).unwrap();
+    /// let indices = vec![(0, 2), (1, 0), (0, 0), (1, 2)]; // rows: 3, 4, 1, 6
+    /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
+    /// coalescer
+    ///     .push_batch_interleaved(&[&batch1, &batch2], &indices)
+    ///     .unwrap();
+    /// coalescer.finish_buffered_batch().unwrap();
+    /// let out = coalescer.next_completed_batch().unwrap();
+    /// let expected = record_batch!(("a", Int32, [3, 4, 1, 6])).unwrap();
+    /// assert_eq!(out, expected);
+    /// ```
+    pub fn push_batch_interleaved(
+        &mut self,
+        batches: &[&RecordBatch],
+        indices: &[(usize, usize)],
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        let interleaved = interleave_record_batch(batches, indices)?;
+        self.push_batch(interleaved)
     }
 
     /// Push all the rows from `batch` into the Coalescer
@@ -785,6 +823,7 @@ mod tests {
     use crate::filter::filter_record_batch;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
+    use arrow_array::record_batch;
     use arrow_array::types::Int32Type;
     use arrow_array::{
         BinaryViewArray, Int32Array, Int64Array, RecordBatchOptions, StringArray, StringViewArray,
@@ -827,6 +866,56 @@ mod tests {
             .with_batch_size(21)
             .with_expected_output_sizes(vec![])
             .run();
+    }
+
+    #[test]
+    fn test_push_batch_interleaved_basic() {
+        let left = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let right = record_batch!(("a", Int32, [4, 5, 6])).unwrap();
+        // pick: left[2]=3, right[0]=4, left[0]=1, right[2]=6
+        let indices = vec![(0, 2), (1, 0), (0, 0), (1, 2)];
+        let mut coalescer = BatchCoalescer::new(left.schema(), 1000);
+        coalescer
+            .push_batch_interleaved(&[&left, &right], &indices)
+            .unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+        let result = coalescer.next_completed_batch().unwrap();
+        let expected = record_batch!(("a", Int32, [3, 4, 1, 6])).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_push_batch_interleaved_empty_indices() {
+        let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 1000);
+        coalescer.push_batch_interleaved(&[&batch], &[]).unwrap();
+        assert!(coalescer.is_empty());
+    }
+
+    #[test]
+    fn test_push_batch_interleaved_crosses_target() {
+        let left = record_batch!(("a", Int32, [1, 2, 3, 4, 5])).unwrap();
+        let right = record_batch!(("a", Int32, [6, 7, 8, 9, 10])).unwrap();
+        // 8 indices with target_batch_size=5: first 5 complete a batch, last 3 stay buffered
+        let indices: Vec<(usize, usize)> = vec![
+            (0, 0),
+            (1, 0),
+            (0, 1),
+            (1, 1),
+            (0, 2),
+            (1, 2),
+            (0, 3),
+            (1, 3),
+        ];
+        let mut coalescer = BatchCoalescer::new(left.schema(), 5);
+        coalescer
+            .push_batch_interleaved(&[&left, &right], &indices)
+            .unwrap();
+        let first_batch = coalescer.next_completed_batch().unwrap();
+        assert_eq!(first_batch.num_rows(), 5);
+        coalescer.finish_buffered_batch().unwrap();
+        let tail_batch = coalescer.next_completed_batch().unwrap();
+        assert_eq!(tail_batch.num_rows(), 3);
     }
 
     #[test]
