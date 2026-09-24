@@ -107,10 +107,9 @@ fn test_repeated_page_index_reads_merge_cells() {
         |rg, col| (rg == 0 && col == 0) || (rg == 1 && col == 1),
         |rg, col| (rg == 0 && col == 0) || (rg == 1 && col == 1),
     );
-}
+}*/
 
 #[test]
-// C3 coverage
 fn test_partial_page_statistics_remain_aligned() {
     use arrow_array::Array;
     use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -142,7 +141,7 @@ fn test_partial_page_statistics_remain_aligned() {
         .unwrap();
     assert_eq!(mins.len(), row_counts.len());
     assert_eq!(row_counts.null_count(), row_counts.len());
-}*/
+}
 
 #[test]
 fn test_parse_selected_columns() {
