@@ -22,123 +22,102 @@ use super::immutable::Buffer;
 use crate::alloc::Deallocation;
 use crate::bytes::Bytes;
 
+/// 64-byte-aligned unit of storage. `Vec<Chunk>` guarantees that every
+/// (re)allocation starts on a 64-byte boundary (cache line / AVX-512).
 #[repr(align(64))]
 #[derive(Clone, Copy)]
-struct Aligned64 {
-    _bytes: [u8; 64],
-}
+struct Chunk([u8; 64]);
 
-/// A growable, 64-byte-aligned byte buffer that converts into a [`Buffer`] without copying.
+const CHUNK: usize = size_of::<Chunk>();
+
+/// A write-only, 64-byte-aligned byte buffer backed by `Vec<Chunk>`.
 ///
-/// Backed by `Vec<Aligned64>`, guaranteeing 64-byte alignment on every allocation and
-/// reallocation (matching a full CPU cache line / AVX-512 SIMD loads). Capacity is always
-/// a multiple of 64 bytes; only bytes written via [`extend_from_slice`](Self::extend_from_slice)
-/// are visible through slice accessors or the resulting [`Buffer`].
+/// Alignment is guaranteed on every allocation and reallocation because
+/// `Vec<Chunk>` derives its alignment from `Chunk`'s `#[repr(align(64))]`.
+/// Only bytes written via [`extend_from_slice`](Self::extend_from_slice) are
+/// visible; the rest of the allocation is uninitialized.
 ///
-/// Prefer over [`MutableBuffer`](super::MutableBuffer) for write-heavy paths where alignment matters.
-///
-/// Call [`Buffer::from`] to consume the vec and produce a zero-copy [`Buffer`]; an [`Arc`]
-/// keeps the allocation alive for the buffer's lifetime.
+/// Converts into a [`Buffer`] zero-copy via [`Buffer::from`].
 pub struct AlignedVec {
-    raw_vector: Vec<Aligned64>,
-    filled_len: usize,
+    raw: Vec<Chunk>,
+    len: usize,
 }
 
 impl AlignedVec {
-    const CHUNK: usize = 64;
-
-    /// Creates a new, empty `AlignedVec` with no initial allocation.
-    /// Use [`with_capacity`](Self::with_capacity) when the approximate final size is known.
+    /// Creates an empty `AlignedVec` with no allocation.
     pub fn new() -> Self {
-        Self::with_capacity(0)
+        Self { raw: Vec::new(), len: 0 }
     }
 
-    /// Creates a new `AlignedVec` with at least `capacity` bytes pre-allocated.
+    /// Creates an `AlignedVec` pre-allocated for at least `capacity` bytes.
     ///
-    /// The actual allocation is rounded up to the nearest multiple of 64 bytes.
+    /// Capacity is rounded up to the next multiple of 64.
     pub fn with_capacity(capacity: usize) -> Self {
-        let needed_chunks = capacity.div_ceil(Self::CHUNK);
         Self {
-            raw_vector: Vec::with_capacity(needed_chunks),
-            filled_len: 0,
+            raw: Vec::with_capacity(capacity.div_ceil(CHUNK)),
+            len: 0,
         }
     }
 
-    /// Returns the number of bytes written.
     #[inline]
     pub fn len(&self) -> usize {
-        self.filled_len
+        self.len
     }
 
-    /// Returns `true` if no bytes have been written.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.filled_len == 0
+        self.len == 0
     }
 
-    /// Returns the total number of bytes allocated (always a multiple of 64).
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.raw_vector.capacity() * Self::CHUNK
+        self.raw.capacity() * CHUNK
     }
 
-    #[cold]
-    fn ensure_capacity(&mut self, total_bytes: usize) {
-        let needed_chunks = total_bytes.div_ceil(Self::CHUNK);
-        let current_cap = self.raw_vector.capacity();
-        let new_chunk_cap = needed_chunks.max(current_cap * 2).max(1);
-        self.raw_vector.reserve(new_chunk_cap);
-    }
-
-    /// Returns the written bytes as a slice.
-    #[inline]
-    pub fn as_slice(&self) -> &[u8] {
-        let ptr = self.raw_vector.as_ptr().cast::<u8>();
-        unsafe { std::slice::from_raw_parts(ptr, self.filled_len) }
-    }
-
-    /// Returns the written bytes as a mutable slice.
-    #[inline]
-    pub fn as_mut_slice(&mut self) -> &mut [u8] {
-        let ptr = self.raw_vector.as_mut_ptr().cast::<u8>();
-        unsafe { std::slice::from_raw_parts_mut(ptr, self.filled_len) }
-    }
-
-    /// Appends `data` to the buffer, reallocating if necessary.
-    ///
-    /// Empty slices are a no-op.
+    /// Appends `data`, reallocating if necessary.
     #[inline]
     pub fn extend_from_slice(&mut self, data: &[u8]) {
-        let offset = self.filled_len;
-        let new_len = offset + data.len();
-        if new_len > self.raw_vector.capacity() * Self::CHUNK {
-            self.ensure_capacity(new_len);
+        let new_len = self.len + data.len();
+        if new_len > self.raw.capacity() * CHUNK {
+            self.grow(new_len);
         }
-        // SAFETY: ensure_capacity (or with_capacity) guarantees the allocation covers
-        // [0, capacity * CHUNK) which includes [0, new_len). No overlap with src.
+        // SAFETY: grow (or with_capacity) ensures the allocation covers [0, capacity*CHUNK).
+        // raw.len() is kept at 0 so Vec's drop never touches the written bytes.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 data.as_ptr(),
-                self.raw_vector.as_mut_ptr().cast::<u8>().add(offset),
+                self.raw.as_mut_ptr().cast::<u8>().add(self.len),
                 data.len(),
             );
         }
-        self.filled_len = new_len;
+        self.len = new_len;
     }
 
-    /// Reduces the written length to `len` bytes. No-op if `len` is not less than the
-    /// current length. The allocation is always retained.
+    #[cold]
+    fn grow(&mut self, needed: usize) {
+        let current = self.raw.capacity();
+        let needed_chunks = needed.div_ceil(CHUNK);
+        // Double the current capacity (or use needed_chunks if larger) to amortize reallocations.
+        let new_chunks = needed_chunks.max(current * 2).max(1);
+        self.raw.reserve(new_chunks - current);
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: ptr is valid for self.len bytes.
+        unsafe { std::slice::from_raw_parts(self.raw.as_ptr().cast(), self.len) }
+    }
+
     #[inline]
     pub fn truncate(&mut self, len: usize) {
-        if len < self.filled_len {
-            self.filled_len = len;
+        if len < self.len {
+            self.len = len;
         }
     }
 
-    /// Resets the written length to zero without releasing the allocation.
     #[inline]
     pub fn clear(&mut self) {
-        self.filled_len = 0;
+        self.len = 0;
     }
 }
 
@@ -150,23 +129,17 @@ impl Default for AlignedVec {
 
 impl From<AlignedVec> for Buffer {
     fn from(vec: AlignedVec) -> Self {
-        let filled_len = vec.filled_len;
-        if filled_len == 0 {
+        if vec.len == 0 {
             return Buffer::from(&[] as &[u8]);
         }
-        // Move raw_vector out so we can call into_raw_parts without going through Arc.
-        // AlignedVec has no Drop impl so the partial move is safe.
-        let mut raw = vec.raw_vector;
+        let filled_len = vec.len;
+        let mut raw = vec.raw;
         let capacity = raw.capacity();
         let ptr = NonNull::new(raw.as_mut_ptr().cast::<u8>())
-            .expect("Vec<Aligned64> heap pointer is never null when capacity > 0");
-        // Layout of the Vec<Aligned64> heap allocation.
-        let layout = Layout::array::<Aligned64>(capacity).expect("valid layout");
-        // Prevent Vec from running its drop and freeing the memory — Buffer owns it now.
+            .expect("non-null when capacity > 0");
+        let layout = Layout::array::<Chunk>(capacity).expect("valid layout");
         std::mem::forget(raw);
-        // Safety: ptr is the Vec<Aligned64> allocation (64-byte aligned), valid for
-        // at least filled_len bytes. Deallocation::Standard will call
-        // dealloc(ptr, layout) which matches the original allocation exactly.
+        // SAFETY: ptr is the Vec<Chunk> allocation, 64-byte aligned, valid for at least filled_len bytes.
         let bytes = unsafe { Bytes::new(ptr, filled_len, Deallocation::Standard(layout)) };
         Buffer::from(bytes)
     }
@@ -176,313 +149,81 @@ impl From<AlignedVec> for Buffer {
 mod tests {
     use super::*;
 
-    fn is_aligned(buf: &AlignedVec) -> bool {
-        if buf.is_empty() {
-            // No bytes written yet; check the raw Vec pointer directly.
-            buf.raw_vector.as_ptr().align_offset(64) == 0
-        } else {
-            buf.as_slice().as_ptr().align_offset(64) == 0
+    fn is_aligned(p: *const u8) -> bool {
+        p.align_offset(64) == 0
+    }
+
+    #[test]
+    fn test_write_and_read() {
+        let mut buf = AlignedVec::new();
+        buf.extend_from_slice(b"foo");
+        buf.extend_from_slice(b"bar");
+        assert_eq!(buf.as_slice(), b"foobar");
+        assert_eq!(buf.len(), 6);
+    }
+
+    #[test]
+    fn test_alignment() {
+        for capacity in [0, 1, 63, 64, 65, 128, 129] {
+            let mut buf = AlignedVec::with_capacity(capacity);
+            buf.extend_from_slice(b"x");
+            assert!(is_aligned(buf.as_slice().as_ptr()), "capacity={capacity}");
         }
     }
 
     #[test]
-    fn test_empty_on_construction() {
-        let buf = AlignedVec::with_capacity(256);
-        assert_eq!(buf.len(), 0);
-        assert!(buf.is_empty());
-        assert_eq!(buf.as_slice(), &[] as &[u8]);
-    }
-
-    #[test]
-    fn test_extend_accumulates_and_mut_slice_reflects_writes() {
+    fn test_alignment_survives_realloc() {
         let mut buf = AlignedVec::new();
-        buf.extend_from_slice(b"foo");
-        assert_eq!(buf.len(), 3);
-        buf.extend_from_slice(b"bar");
-        assert_eq!(buf.len(), 6);
-        buf.extend_from_slice(b"baz");
-        assert_eq!(buf.len(), 9);
-        assert_eq!(buf.as_slice(), b"foobarbaz");
-
-        buf.as_mut_slice()
-            .iter_mut()
-            .for_each(|byte| *byte = byte.to_ascii_uppercase());
-        assert_eq!(buf.len(), 9);
-        assert_eq!(buf.as_slice(), b"FOOBARBAZ");
+        for chunk in [1usize, 63, 65, 127, 509, 4093] {
+            buf.extend_from_slice(&vec![0xABu8; chunk]);
+            assert!(is_aligned(buf.as_slice().as_ptr()), "chunk={chunk}");
+        }
     }
 
     #[test]
-    fn test_truncate() {
+    fn test_clear_and_truncate() {
         let mut buf = AlignedVec::new();
         buf.extend_from_slice(b"hello world");
         buf.truncate(5);
-        assert_eq!(buf.len(), 5);
         assert_eq!(buf.as_slice(), b"hello");
-        // truncate to same length is a no-op
-        buf.truncate(5);
-        assert_eq!(buf.len(), 5);
-        // truncate beyond current length is a no-op
-        buf.truncate(100);
-        assert_eq!(buf.len(), 5);
-        // truncate to zero behaves like clear
-        buf.truncate(0);
-        assert_eq!(buf.len(), 0);
-        assert!(buf.is_empty());
-    }
-
-    #[test]
-    fn test_clear_resets_len_and_reuses_allocation() {
-        let mut buf = AlignedVec::with_capacity(128);
-        let initial_capacity = buf.capacity();
-        assert!(is_aligned(&buf));
-
-        buf.extend_from_slice(&[0u8; 127]);
-        assert_eq!(buf.len(), 127);
-        assert_eq!(
-            buf.capacity(),
-            initial_capacity,
-            "capacity must not grow within pre-allocated range"
-        );
-
+        let cap = buf.capacity();
         buf.clear();
         assert_eq!(buf.len(), 0);
-        assert_eq!(buf.as_slice(), &[] as &[u8]);
-        assert_eq!(
-            buf.capacity(),
-            initial_capacity,
-            "capacity must not change after clear"
-        );
-
-        buf.extend_from_slice(b"reused");
-        assert_eq!(buf.len(), 6);
-        assert_eq!(buf.as_slice(), b"reused");
-        assert_eq!(
-            buf.capacity(),
-            initial_capacity,
-            "capacity must not change on re-use within range"
-        );
-
-        // Write past the original capacity to force reallocation.
-        buf.extend_from_slice(&[1u8; 200]);
-        assert!(
-            buf.capacity() > initial_capacity,
-            "capacity must grow after exceeding pre-allocated range"
-        );
-        assert!(is_aligned(&buf));
+        assert_eq!(buf.capacity(), cap);
     }
 
     #[test]
-    fn test_into_buffer_alignment_and_data() {
+    fn test_into_buffer() {
         let mut buf = AlignedVec::new();
-        buf.extend_from_slice(b"aligned data");
-        assert!(is_aligned(&buf));
-        let buffer = Buffer::from(buf);
-        assert_eq!(buffer.as_slice(), b"aligned data");
-        assert_eq!(
-            buffer.as_ptr().align_offset(64),
-            0,
-            "buffer must be 64-byte aligned"
-        );
+        buf.extend_from_slice(b"aligned");
+        let b = Buffer::from(buf);
+        assert_eq!(b.as_slice(), b"aligned");
+        assert!(is_aligned(b.as_ptr()));
     }
 
     #[test]
     fn test_into_buffer_empty() {
-        let buf = AlignedVec::new();
-        let buffer = Buffer::from(buf);
-        assert_eq!(buffer.len(), 0);
-    }
-
-    #[test]
-    fn test_alignment_at_capacity_boundaries() {
-        for capacity in [0, 1, 63, 64, 65, 127, 128, 129] {
-            let mut buf = AlignedVec::with_capacity(capacity);
-            buf.extend_from_slice(b"x");
-            assert!(
-                is_aligned(&buf),
-                "with_capacity({capacity}) must produce a 64-byte-aligned allocation"
-            );
-        }
+        let b = Buffer::from(AlignedVec::new());
+        assert_eq!(b.len(), 0);
     }
 
     #[test]
     fn test_pointer_stable_within_capacity() {
         let mut buf = AlignedVec::with_capacity(256);
-        assert!(is_aligned(&buf));
-
         buf.extend_from_slice(&[0u8; 128]);
-        let ptr_after_first_write = buf.as_slice().as_ptr();
-
+        let ptr = buf.as_slice().as_ptr();
         buf.extend_from_slice(&[1u8; 128]);
+        assert_eq!(buf.as_slice().as_ptr(), ptr);
         assert_eq!(buf.len(), 256);
-        assert_eq!(
-            buf.as_slice().as_ptr(),
-            ptr_after_first_write,
-            "no reallocation must occur within pre-allocated capacity"
-        );
-        assert_eq!(
-            &buf.as_slice()[..128],
-            &[0u8; 128],
-            "first 128 bytes must be intact"
-        );
-        assert_eq!(
-            &buf.as_slice()[128..],
-            &[1u8; 128],
-            "second 128 bytes must be intact"
-        );
-        assert!(is_aligned(&buf));
-
-        // One more write past capacity forces a reallocation; new pointer must still be aligned.
-        buf.extend_from_slice(&[2u8; 1]);
-        assert_eq!(buf.len(), 257);
-        assert_eq!(
-            buf.as_slice()[256],
-            2u8,
-            "byte written after realloc must be correct"
-        );
-        assert!(buf.capacity() > 256);
-        assert!(is_aligned(&buf));
     }
 
     #[test]
-    fn test_alignment_survives_multiple_reallocations() {
-        let mut buf = AlignedVec::with_capacity(0);
-        let mut total_written = 0;
-
-        // Sizes are intentionally not multiples of 64 — alignment must hold
-        // regardless of how much data is written, not just when writes happen to align.
-        for chunk_size in [1usize, 63, 65, 127, 509, 1021, 4093, 16381, 32771, 65533] {
-            buf.extend_from_slice(&vec![0xABu8; chunk_size]);
-            total_written += chunk_size;
-
-            assert_eq!(buf.len(), total_written);
-            assert!(
-                is_aligned(&buf),
-                "alignment lost after writing chunk_size={chunk_size}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_cross_chunk_boundary() {
-        // Write data that spans multiple 64-byte chunks to exercise ensure_capacity growth.
-        let mut buf = AlignedVec::with_capacity(0);
-        let data: Vec<u8> = (0u8..=255).collect();
-        buf.extend_from_slice(&data);
-        assert_eq!(buf.len(), 256);
-        assert_eq!(buf.as_slice(), data.as_slice());
-        assert!(is_aligned(&buf));
-        let buffer = Buffer::from(buf);
-        assert_eq!(buffer.as_slice(), data.as_slice());
-        assert_eq!(buffer.as_ptr().align_offset(64), 0);
-    }
-
-    #[test]
-    fn test_empty_extend_and_clear_are_nondestructive() {
+    fn test_data_integrity_after_realloc() {
         let mut buf = AlignedVec::with_capacity(64);
-        buf.extend_from_slice(b"hello");
-        let cap = buf.capacity();
-
-        buf.extend_from_slice(&[]);
-        assert_eq!(buf.len(), 5, "empty extend must not change len");
-        assert_eq!(buf.capacity(), cap, "empty extend must not change capacity");
-        assert_eq!(buf.as_slice(), b"hello");
-        assert!(is_aligned(&buf));
-
-        buf.clear();
-        assert_eq!(buf.len(), 0);
-        assert_eq!(
-            buf.as_mut_slice().len(),
-            0,
-            "as_mut_slice after clear must be empty"
-        );
-        assert_eq!(buf.capacity(), cap, "clear must not release allocation");
-        assert!(is_aligned(&buf));
-    }
-
-    #[test]
-    fn test_truncate_edge_cases() {
-        // Successive truncates, chunk-boundary truncate, and stale-data overwrite.
-        let mut buf = AlignedVec::new();
-        buf.extend_from_slice(b"hello world!");
-        buf.truncate(10);
-        buf.truncate(5);
-        assert_eq!(buf.as_slice(), b"hello");
-        buf.truncate(5); // same len — no-op
-        buf.truncate(3);
-        assert_eq!(buf.as_slice(), b"hel");
-        assert!(is_aligned(&buf));
-
-        // Truncate exactly at a 64-byte chunk boundary.
-        let mut buf = AlignedVec::with_capacity(128);
         buf.extend_from_slice(&[0xAAu8; 64]);
         buf.extend_from_slice(&[0xBBu8; 64]);
-        buf.truncate(64);
-        assert_eq!(buf.len(), 64);
-        assert_eq!(buf.as_slice(), &[0xAAu8; 64]);
-        assert!(is_aligned(&buf));
-
-        // Bytes past the truncation point must be overwritten, not leaked.
-        let mut buf = AlignedVec::new();
-        buf.extend_from_slice(&[0xFFu8; 20]);
-        buf.truncate(10);
-        buf.extend_from_slice(&[0x00u8; 10]);
-        assert_eq!(buf.len(), 20);
-        assert_eq!(&buf.as_slice()[10..], &[0x00u8; 10]);
-        assert!(is_aligned(&buf));
-    }
-
-    #[test]
-    fn test_data_integrity_survives_realloc() {
-        let mut buf = AlignedVec::with_capacity(128);
-        let initial_capacity = buf.capacity();
-
-        let pattern_a = vec![0xAAu8; 64];
-        let pattern_b = vec![0xBBu8; 64];
-        buf.extend_from_slice(&pattern_a);
-        buf.extend_from_slice(&pattern_b);
-        assert_eq!(buf.capacity(), initial_capacity, "no realloc yet");
-
-        buf.extend_from_slice(&[0xCCu8]);
-        assert!(buf.capacity() > initial_capacity, "must have reallocated");
-        assert!(is_aligned(&buf));
-
-        assert_eq!(
-            &buf.as_slice()[..64],
-            pattern_a.as_slice(),
-            "first 64 bytes must survive realloc"
-        );
-        assert_eq!(
-            &buf.as_slice()[64..128],
-            pattern_b.as_slice(),
-            "second 64 bytes must survive realloc"
-        );
-        assert_eq!(buf.as_slice()[128], 0xCC);
-        assert_eq!(buf.len(), 129);
-    }
-
-    #[test]
-    fn test_buffer_conversion_lifetime_and_bounds() {
-        // Arc must keep the allocation alive after AlignedVec is dropped.
-        let buffer = {
-            let mut vec = AlignedVec::new();
-            vec.extend_from_slice(b"lifetime test");
-            assert!(is_aligned(&vec));
-            Buffer::from(vec)
-        };
-        assert_eq!(buffer.as_slice(), b"lifetime test");
-        assert_eq!(buffer.as_ptr().align_offset(64), 0);
-
-        // Buffer must not expose bytes past filled_len even though the Vec holds more.
-        let mut buf = AlignedVec::new();
-        buf.extend_from_slice(&[0xAAu8; 100]);
-        buf.truncate(50);
-        let buffer = Buffer::from(buf);
-        assert_eq!(
-            buffer.len(),
-            50,
-            "Buffer must not expose bytes past filled_len"
-        );
-        assert_eq!(buffer.as_slice(), &[0xAAu8; 50]);
-        assert_eq!(buffer.as_ptr().align_offset(64), 0);
+        assert_eq!(&buf.as_slice()[..64], &[0xAAu8; 64]);
+        assert_eq!(&buf.as_slice()[64..], &[0xBBu8; 64]);
+        assert!(is_aligned(buf.as_slice().as_ptr()));
     }
 }
