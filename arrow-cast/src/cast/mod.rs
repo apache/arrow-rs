@@ -749,15 +749,16 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
         }
         None => {
             // Date32 stores days since the epoch. Round down so that a timestamp
-            // just before the epoch belongs to the preceding day. The unit is a
-            // constant, so the divisor folds at compile time.
-            let days = |x: i64| x.div_euclid(SECONDS_IN_DAY * time_unit_multiple(&T::UNIT));
+            // just before the epoch belongs to the preceding day. The divisor is
+            // evaluated inside the closure so that it folds to a compile-time
+            // constant; a captured local would compile to a division per value.
+            let days = |x: i64| x.div_euclid(units_per_day::<T>());
             let all_in_range = match T::UNIT {
                 // Every microsecond or nanosecond timestamp lies within the Date32 range.
                 TimeUnit::Microsecond | TimeUnit::Nanosecond => true,
                 // A branch-free scan lets the common case skip the per-value check.
                 _ => {
-                    let day = SECONDS_IN_DAY * time_unit_multiple(&T::UNIT);
+                    let day = units_per_day::<T>();
                     let (lo, hi) = (i32::MIN as i64 * day, (i32::MAX as i64 + 1) * day);
                     array
                         .values()
@@ -2431,6 +2432,11 @@ where
             "Casting from {from_type} to {to_type} not supported"
         ))),
     }
+}
+
+/// Number of `T` units in one day
+const fn units_per_day<T: ArrowTimestampType>() -> i64 {
+    SECONDS_IN_DAY * time_unit_multiple(&T::UNIT)
 }
 
 /// Get the time unit as a multiple of a second
