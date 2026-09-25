@@ -414,9 +414,23 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     }
 
     if should_use_dense_mask(mask.len(), selected_count, other_true_count) {
-        return and_then_dense_masks(mask, other);
+        and_then_dense_masks(mask, other)
+    } else {
+        and_then_sparse_masks(mask, other)
     }
+}
 
+/// Checks the length and selectivity thresholds for dense expansion.
+#[inline]
+fn should_use_dense_mask(mask_len: usize, selected_count: usize, other_true_count: usize) -> bool {
+    mask_len >= AND_THEN_DENSE_MASK_MIN_LEN
+        && mask_len - selected_count <= mask_len.div_ceil(AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION)
+        && other_true_count >= selected_count / AND_THEN_DENSE_MASK_MIN_INNER_FRACTION
+}
+
+/// Maps each set bit in `other` to the corresponding set bit in `mask`.
+/// Requires `other.len() == mask.count_set_bits()`.
+fn and_then_sparse_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
     let mut builder = BooleanBufferBuilder::new(mask.len());
     let mut outer_set_indices = mask.set_indices();
     let mut next_selected_ordinal = 0usize;
@@ -440,14 +454,6 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     }
 
     builder.finish()
-}
-
-/// Checks the length and selectivity thresholds for dense expansion.
-#[inline]
-fn should_use_dense_mask(mask_len: usize, selected_count: usize, other_true_count: usize) -> bool {
-    mask_len >= AND_THEN_DENSE_MASK_MIN_LEN
-        && mask_len - selected_count <= mask_len.div_ceil(AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION)
-        && other_true_count >= selected_count / AND_THEN_DENSE_MASK_MIN_INNER_FRACTION
 }
 
 /// Scatters the next `mask_word.count_ones()` bits of `other` into each mask word.
@@ -477,7 +483,7 @@ fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanB
         }
 
         let values = pending as u64;
-        output.extend_from_slice(&deposit_u64(values, mask_word).to_le_bytes());
+        output.extend_from_slice(&bit_util::expand(values, mask_word).to_le_bytes());
         pending >>= selected;
         pending_len -= selected;
     }
@@ -486,35 +492,6 @@ fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanB
     debug_assert_eq!(pending_len, 0);
     output.truncate(mask.len().div_ceil(8));
     BooleanBuffer::new(output.into(), 0, mask.len())
-}
-
-/// Software `pdep`: scatters the lowest `mask.count_ones()` bits of `values`
-/// into `mask`'s set positions. Visits whichever is fewer: unset or set bits.
-#[inline]
-fn deposit_u64(mut values: u64, mask: u64) -> u64 {
-    if values == 0 {
-        return 0;
-    }
-
-    let mut zeros = !mask;
-    if zeros.count_ones() <= 32 {
-        // Insert zeros from low to high; excess input bits shift out.
-        while zeros != 0 {
-            let lower = (1_u64 << zeros.trailing_zeros()) - 1;
-            values = (values & lower) | ((values & !lower) << 1);
-            zeros &= zeros - 1;
-        }
-        values
-    } else {
-        let mut output = 0;
-        let mut ones = mask;
-        while ones != 0 {
-            output |= (values & 1) << ones.trailing_zeros();
-            values >>= 1;
-            ones &= ones - 1;
-        }
-        output
-    }
 }
 
 #[cfg(test)]
@@ -903,51 +880,6 @@ mod tests {
         assert!(!should_use_dense_mask(len, selected - 1, min_inner));
         assert!(!should_use_dense_mask(len, selected, min_inner - 1));
         assert!(should_use_dense_mask(len, selected, min_inner));
-    }
-
-    #[test]
-    fn test_deposit_u64() {
-        fn reference(values: u64, mask: u64) -> u64 {
-            let mut expected = 0;
-            let mut input_idx = 0;
-            for output_idx in 0..64 {
-                if mask & (1 << output_idx) != 0 {
-                    expected |= ((values >> input_idx) & 1) << output_idx;
-                    input_idx += 1;
-                }
-            }
-            expected
-        }
-
-        let mut rng = StdRng::seed_from_u64(0x2b7e_1516_28ae_d2a6);
-
-        // Masks with at most one unset bit or at most one set bit
-        for bit in 0..64 {
-            for mask in [u64::MAX, !(1 << bit), 1 << bit, 0] {
-                for _ in 0..16 {
-                    let values = rng.random::<u64>();
-                    assert_eq!(
-                        deposit_u64(values, mask),
-                        reference(values, mask),
-                        "{mask:#x}"
-                    );
-                }
-            }
-        }
-
-        // Masks across the full density range, exercising both loops
-        for _ in 0..20_000 {
-            let density = rng.random_range(0.0..=1.0);
-            let mask = (0..64).fold(0_u64, |mask, bit| {
-                mask | ((rng.random_bool(density) as u64) << bit)
-            });
-            let values = rng.random::<u64>();
-            assert_eq!(
-                deposit_u64(values, mask),
-                reference(values, mask),
-                "{mask:#x}"
-            );
-        }
     }
 
     #[test]
