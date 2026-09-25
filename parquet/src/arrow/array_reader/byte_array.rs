@@ -753,4 +753,18 @@ mod tests {
             assert_eq!(decoder.skip_values(1024).unwrap(), 0);
         }
     }
+
+    #[test]
+    fn test_plain_decoder_reports_values_actually_read() {
+        // The page claims to contain two values, but its buffer contains only
+        // one complete PLAIN-encoded BYTE_ARRAY value.
+        let buffer = Bytes::from_static(&[3, 0, 0, 0, b'f', b'o', b'o']);
+        let mut decoder = ByteArrayDecoderPlain::new(buffer, 2, Some(2), false);
+        let mut output = OffsetBuffer::<i32>::with_capacity(2);
+
+        assert_eq!(decoder.read(&mut output, 2).unwrap(), 1);
+        assert_eq!(output.values.as_slice(), b"foo");
+        assert_eq!(output.offsets.as_slice(), &[0, 3]);
+        assert_eq!(decoder.max_remaining_values, 1);
+    }
 }
