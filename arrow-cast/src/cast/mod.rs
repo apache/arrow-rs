@@ -749,9 +749,7 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
         }
         None => {
             // Date32 stores days since the epoch. Round down so that a timestamp
-            // just before the epoch belongs to the preceding day. The divisor is
-            // evaluated inside the closure so that it folds to a compile-time
-            // constant; a captured local would compile to a division per value.
+            // just before the epoch belongs to the preceding day.
             let days = |x: i64| x.div_euclid(units_per_day::<T>());
             let all_in_range = match T::UNIT {
                 // Every microsecond or nanosecond timestamp lies within the Date32 range.
