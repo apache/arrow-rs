@@ -1072,15 +1072,22 @@ where
                     if prev < vidx {
                         dst_offsets.extend(std::iter::repeat_n(child_len, vidx - prev));
                     }
-                    let row = if VALIDATE_INDICES {
-                        indices.value(vidx).as_usize()
+                    // SAFETY: vidx < indices.len(), guaranteed by valid_indices().
+                    let row = unsafe { indices.value_unchecked(vidx) }.as_usize();
+                    let (start, end) = if VALIDATE_INDICES {
+                        (
+                            child_buf_offset + src_offsets[row].as_usize() * bytes_per_value,
+                            child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value,
+                        )
                     } else {
-                        // SAFETY: !VALIDATE_INDICES means the caller guarantees all indices are valid;
-                        // `vidx` is further bounded by the validity bitmap of `indices`.
-                        unsafe { indices.value_unchecked(vidx) }.as_usize()
+                        // SAFETY: caller guarantees row < values.len(), so row+1 is also in bounds.
+                        unsafe {
+                            (
+                                child_buf_offset + src_offsets.get_unchecked(row).as_usize() * bytes_per_value,
+                                child_buf_offset + src_offsets.get_unchecked(row + 1).as_usize() * bytes_per_value,
+                            )
+                        }
                     };
-                    let start = child_buf_offset + src_offsets[row].as_usize() * bytes_per_value;
-                    let end = child_buf_offset + src_offsets[row + 1].as_usize() * bytes_per_value;
                     dst_buf.extend_from_slice(&values_buf[start..end]);
                     child_len = child_len
                         .checked_add(&(src_offsets[row + 1] - src_offsets[row]))
@@ -1142,18 +1149,20 @@ where
                 if last < i {
                     dst_offsets.extend(std::iter::repeat_n(current, i - last));
                 }
-                let row = if VALIDATE_INDICES {
-                    indices.value(i).as_usize()
+                // SAFETY: i < indices.len(), guaranteed by valid_indices().
+                let row = unsafe { indices.value_unchecked(i) }.as_usize();
+                let (start, end) = if VALIDATE_INDICES {
+                    (src_offsets[row].as_usize(), src_offsets[row + 1].as_usize())
                 } else {
-                    // SAFETY: !VALIDATE_INDICES means the caller guarantees all indices are valid;
-                    // `i` is further bounded by the validity bitmap of `indices`.
-                    unsafe { indices.value_unchecked(i) }.as_usize()
+                    // SAFETY: caller guarantees row < values.len(), so row+1 is also in bounds.
+                    unsafe {
+                        (
+                            src_offsets.get_unchecked(row).as_usize(),
+                            src_offsets.get_unchecked(row + 1).as_usize(),
+                        )
+                    }
                 };
-                mutable.try_extend(
-                    0,
-                    src_offsets[row].as_usize(),
-                    src_offsets[row + 1].as_usize(),
-                )?;
+                mutable.try_extend(0, start, end)?;
                 dst_offsets.push(
                     OffsetType::Native::from_usize(mutable.len())
                         .ok_or_else(|| ArrowError::OffsetOverflowError(mutable.len()))?,
