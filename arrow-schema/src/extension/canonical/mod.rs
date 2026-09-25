@@ -27,6 +27,8 @@
 
 mod bool8;
 pub use bool8::Bool8;
+mod fixed_closedness_range;
+pub use fixed_closedness_range::{FixedClosednessRange, FixedClosednessRangeMetadata, RangeClosed};
 mod fixed_shape_tensor;
 pub use fixed_shape_tensor::{FixedShapeTensor, FixedShapeTensorMetadata};
 mod json;
@@ -75,6 +77,11 @@ pub enum CanonicalExtensionType {
     /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#opaque>
     Opaque(Opaque),
 
+    /// The extension type for `FixedClosednessRange`.
+    ///
+    /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#fixed-closedness-range>
+    FixedClosednessRange(FixedClosednessRange),
+
     /// The extension type for `Bool8`.
     ///
     /// <https://arrow.apache.org/docs/format/CanonicalExtensions.html#bit-boolean>
@@ -103,6 +110,9 @@ impl TryFrom<&Field> for CanonicalExtensionType {
                 Json::NAME => value.try_extension_type::<Json>().map(Into::into),
                 Uuid::NAME => value.try_extension_type::<Uuid>().map(Into::into),
                 Opaque::NAME => value.try_extension_type::<Opaque>().map(Into::into),
+                FixedClosednessRange::NAME => value
+                    .try_extension_type::<FixedClosednessRange>()
+                    .map(Into::into),
                 Bool8::NAME => value.try_extension_type::<Bool8>().map(Into::into),
                 TimestampWithOffset::NAME => value
                     .try_extension_type::<TimestampWithOffset>()
@@ -150,6 +160,12 @@ impl From<Uuid> for CanonicalExtensionType {
 impl From<Opaque> for CanonicalExtensionType {
     fn from(value: Opaque) -> Self {
         CanonicalExtensionType::Opaque(value)
+    }
+}
+
+impl From<FixedClosednessRange> for CanonicalExtensionType {
+    fn from(value: FixedClosednessRange) -> Self {
+        CanonicalExtensionType::FixedClosednessRange(value)
     }
 }
 
