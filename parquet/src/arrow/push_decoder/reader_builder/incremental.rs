@@ -55,15 +55,19 @@
 //!
 //! [`FetchGranularity::Batch`]: crate::arrow::push_decoder::FetchGranularity::Batch
 
-use super::{BudgetedReadPlan, RowBudget, prepare_selection_for_page_skipping};
+use super::{
+    BudgetedReadPlan, RowBudget, loaded_row_ranges_for_projection,
+    prepare_selection_for_page_skipping,
+};
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{
     ArrayReader, ArrayReaderBuilder, CacheOptionsBuilder, RowGroupCache,
 };
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionStrategy};
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
-    RowSelector,
+    ParquetRecordBatchReader, ReadPlan, ReadPlanBuilder, RowFilter, RowSelection,
+    RowSelectionPolicy, RowSelector,
 };
 use crate::arrow::in_memory_row_group::{ColumnChunkData, InMemoryRowGroup};
 use crate::arrow::push_decoder::page_spans::{PageSpan, SelectedRows, SpanKind, column_page_spans};
@@ -794,13 +798,13 @@ impl IncrementalRowGroup {
         let pos = state.pred_pos[idx];
         let relative = ranges_to_selection(&cand, pos);
         let consumed = relative.total_row_count();
+        let plan = self.window_plan(&projection, &cand, pos);
+        let Mode::Filtered(state) = &mut self.mode else {
+            unreachable!("filtered mode")
+        };
         let array_reader = state.pred_readers[idx]
             .take()
             .ok_or_else(|| general_err!("Internal Error: predicate reader missing"))?;
-        let plan = ReadPlanBuilder::new(self.config.batch_size)
-            .with_selection(Some(relative.clone()))
-            .with_row_selection_policy(RowSelectionPolicy::Selectors)
-            .build();
         let mut reader = ParquetRecordBatchReader::new(array_reader, plan);
         let predicate = state.filter.predicates[idx].as_mut();
         let mut filters = vec![];
@@ -890,16 +894,15 @@ impl IncrementalRowGroup {
             unreachable!("filtered mode")
         };
         let pos = state.out_pos;
-        let relative = ranges_to_selection(&out, pos);
-        let consumed = relative.total_row_count();
+        let consumed = ranges_to_selection(&out, pos).total_row_count();
+        let plan = self.window_plan(&self.config.projection, &out, pos);
+        let Mode::Filtered(state) = &mut self.mode else {
+            unreachable!("filtered mode")
+        };
         let array_reader = state
             .out_reader
             .take()
             .ok_or_else(|| general_err!("Internal Error: output reader missing"))?;
-        let plan = ReadPlanBuilder::new(self.config.batch_size)
-            .with_selection(Some(relative))
-            .with_row_selection_policy(RowSelectionPolicy::Selectors)
-            .build();
         // `out` has at most `batch_size` rows, so the plan yields one batch:
         // the batch the row-group mode produces at this point.
         let mut reader = ParquetRecordBatchReader::new(array_reader, plan);
@@ -922,6 +925,58 @@ impl IncrementalRowGroup {
                 "Internal Error: incremental output plan produced no batch"
             )),
         }
+    }
+
+    /// The read plan for the rows `rows` of `projection`, for a reader that
+    /// has consumed the rows before `pos`.
+    ///
+    /// Uses the configured [`RowSelectionPolicy`], as the row-group mode does.
+    /// A mask read decodes every row of a chunk, so it is limited to rows
+    /// whose pages are loaded, as in [`prepare_selection_for_page_skipping`].
+    fn window_plan(
+        &self,
+        projection: &ProjectionMask,
+        rows: &[Range<usize>],
+        pos: usize,
+    ) -> ReadPlan {
+        let builder = ReadPlanBuilder::new(self.config.batch_size)
+            .with_selection(Some(ranges_to_selection(rows, pos)))
+            .with_row_selection_policy(self.config.row_selection_policy);
+        let builder = match builder.resolve_selection_strategy() {
+            RowSelectionStrategy::Selectors => {
+                builder.with_row_selection_policy(RowSelectionPolicy::Selectors)
+            }
+            RowSelectionStrategy::Mask => {
+                let num_columns = self
+                    .config
+                    .metadata
+                    .file_metadata()
+                    .schema_descr()
+                    .num_columns();
+                let loaded = loaded_row_ranges_for_projection(
+                    Some(&ranges_to_selection(rows, 0)),
+                    projection,
+                    row_group_page_index(&self.config.metadata, self.row_group_idx),
+                    num_columns,
+                    self.row_count,
+                )
+                .map(|loaded| {
+                    // Rows relative to `pos`.
+                    let ranges = loaded.ranges().iter().filter_map(|range| {
+                        let start = range.start.max(pos);
+                        (start < range.end).then(|| start - pos..range.end - pos)
+                    });
+                    LoadedRowRanges::from_selection(RowSelection::from_consecutive_ranges(
+                        ranges,
+                        self.row_count - pos,
+                    ))
+                });
+                builder
+                    .with_row_selection_policy(RowSelectionPolicy::Mask)
+                    .with_loaded_row_ranges(loaded)
+            }
+        };
+        builder.build()
     }
 
     /// Release the data pages of each column that no reader reads again.

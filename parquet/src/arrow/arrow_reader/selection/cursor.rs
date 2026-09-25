@@ -367,7 +367,7 @@ impl LoadedRowRanges {
             .map(|range| range.end)
     }
 
-    #[cfg(test)]
+    /// The loaded row ranges, in order.
     pub(crate) fn ranges(&self) -> &[Range<usize>] {
         &self.0
     }
