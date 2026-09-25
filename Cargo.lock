@@ -530,6 +530,7 @@ dependencies = [
  "arrow-cmp",
  "arrow-data",
  "arrow-schema",
+ "criterion",
  "num-traits",
  "rand 0.10.2",
 ]
