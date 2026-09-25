@@ -2538,7 +2538,7 @@ where
             <TO::Native as NumericNative>::KIND,
         )
     } {
-        // This cast cannot fail, so the fastest form, `unary`, can be used.
+        // This cast cannot fail, so the fastest kernel, `unary`, can be used.
         from.unary(|v| num_cast(v).expect("numeric cast is infallible"))
     } else if cast_options.safe {
         // If the value can't be cast to the `TO::Native`, return null
@@ -2597,6 +2597,10 @@ numeric_native! {
 /// Returns true if [`num_cast`] succeeds for every value of `from` when casting
 /// to `to`: every cast to a float, and integer casts whose target holds every
 /// source value.
+///
+/// This must hold for every bit pattern of the source type, not only for the
+/// valid values of a particular array, because [`PrimitiveArray::unary`] applies
+/// the conversion to null slots as well, and their contents are arbitrary.
 const fn is_infallible_numeric_cast(from: NumericKind, to: NumericKind) -> bool {
     if to.float {
         true
