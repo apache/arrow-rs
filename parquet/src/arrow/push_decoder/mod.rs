@@ -1144,18 +1144,11 @@ mod test {
         expect_finished(decoder.try_decode());
     }
 
-    /// Push only the pages needed for the *first* batch of a row group and
-    /// check whether the decoder can produce that batch before the rest of the
-    /// row group's pages have been pushed.
-    ///
-    /// This documents the current behavior discussed in
-    /// <https://github.com/apache/arrow-rs/issues/6946>: when the decoder
-    /// starts a row group it requests the pages for all projected columns up
-    /// front, and does not produce any output until every requested range is
-    /// present, even when the data already pushed is sufficient to decode the
-    /// next batch.
+    /// Push only the pages needed for each batch of a row group rather than
+    /// the entire row group, and check whether the decoder can produce that
+    /// batch before the rest of the row group's pages have been pushed.
     #[test]
-    fn test_decoder_first_page_only_does_not_decode() {
+    fn test_decoder_first_pages_only() {
         let metadata = test_file_parquet_metadata_with_offset_index();
         let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(Arc::clone(&metadata))
             .unwrap()
@@ -1195,7 +1188,10 @@ mod test {
         // needed to decode the first batch of 100 rows.
         push_ranges_to_decoder(&mut decoder, first_page_ranges);
 
-        // However, the decoder still reports it needs the (complete) ranges
+        // Note will likely change as part of
+        // <https://github.com/apache/arrow-rs/issues/6946>
+
+        // decoder still reports it needs the (complete) ranges
         // it originally asked for, and does not produce a batch.
         let ranges = expect_needs_data(decoder.try_decode());
         assert_eq!(ranges, vec![4..1860, 1860..3716, 3716..11062]);
