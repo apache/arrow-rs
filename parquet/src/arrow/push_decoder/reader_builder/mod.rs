@@ -427,6 +427,22 @@ impl RowGroupReaderBuilder {
         self.fetch_granularity
     }
 
+    /// Every leaf column that the output or a predicate reads.
+    pub(crate) fn read_columns(&self) -> ProjectionMask {
+        let mut columns = self.projection.clone();
+        if let Some(filter) = &self.filter {
+            for predicate in &filter.predicates {
+                columns.union(predicate.projection());
+            }
+        }
+        columns
+    }
+
+    /// Release the buffered bytes outside `keep`.
+    pub(crate) fn retain_buffered_ranges(&mut self, keep: &[Range<u64>]) {
+        self.buffers.retain_ranges(keep);
+    }
+
     /// Returns true if `try_decode` is decoding the active row group a batch
     /// at a time.
     pub(crate) fn is_incremental(&self) -> bool {

@@ -138,6 +138,17 @@ impl QueuedRowGroups {
         }
     }
 
+    /// The queued row group indexes, in order.
+    fn row_groups(&self) -> Vec<usize> {
+        match self {
+            Self::Global { row_groups, .. } => row_groups.iter().copied().collect(),
+            Self::PerRowGroup(row_groups) => row_groups
+                .iter()
+                .map(|row_group| row_group.row_group_index)
+                .collect(),
+        }
+    }
+
     fn len(&self) -> usize {
         match self {
             Self::Global { row_groups, .. } => row_groups.len(),
@@ -460,6 +471,36 @@ impl RemainingRowGroups {
             return Ok(None);
         }
         self.frontier.peek_next_row_group()
+    }
+
+    /// Release the buffered bytes that no queued row group reads. Used for
+    /// [`FetchGranularity::Batch`] when a decoder is built, so that bytes
+    /// pushed for row groups that a rebuilt decoder no longer reads do not
+    /// stay resident.
+    pub fn release_unplanned_bytes(&mut self) {
+        let read_columns = self.row_group_reader_builder.read_columns();
+        let metadata = &self.frontier.parquet_metadata;
+        let keep: Vec<Range<u64>> = self
+            .frontier
+            .queued
+            .row_groups()
+            .into_iter()
+            .filter(|&idx| idx < metadata.num_row_groups())
+            .flat_map(|idx| {
+                metadata
+                    .row_group(idx)
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .filter(|(column, _)| read_columns.leaf_included(*column))
+                    .map(|(_, chunk)| {
+                        let (start, len) = chunk.byte_range();
+                        start..start + len
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        self.row_group_reader_builder.retain_buffered_ranges(&keep);
     }
 
     /// How [`Self::try_next_batch_incremental`] fetches and decodes.

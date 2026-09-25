@@ -752,6 +752,57 @@ fn into_builder_at_a_boundary() {
     assert_eq!(rows, expected);
 }
 
+/// A rebuilt decoder releases the bytes of row groups it no longer reads.
+#[test]
+fn rebuild_releases_bytes_of_skipped_row_groups() {
+    let mut decoder = Scan {
+        batch_size: Some(600),
+        ..Default::default()
+    }
+    .batch_decoder();
+    for row_group in 0..3 {
+        for column in 0..metadata(true).metadata().row_group(row_group).num_columns() {
+            let ranges = page_ranges(row_group, column);
+            let data = ranges.iter().map(fetch).collect();
+            decoder.push_ranges(ranges, data).unwrap();
+        }
+    }
+    let DecodeResult::Data(batch) = decoder.try_decode().unwrap() else {
+        panic!("expected a batch");
+    };
+    assert_eq!(batch.num_rows(), 600);
+    assert!(decoder.is_at_row_group_boundary());
+    assert_eq!(
+        decoder.buffered_bytes(),
+        row_group_bytes(1) + row_group_bytes(2)
+    );
+    // Skip row group 1.
+    let mut decoder = decoder
+        .into_builder()
+        .unwrap()
+        .with_row_groups(vec![2])
+        .build()
+        .unwrap();
+    assert_eq!(decoder.buffered_bytes(), row_group_bytes(2));
+    let DecodeResult::Data(batch) = decoder.try_decode().unwrap() else {
+        panic!("expected a batch");
+    };
+    assert_eq!(batch.column(0).as_primitive::<Int64Type>().value(0), 1200);
+
+    // The default granularity keeps the bytes, as documented on
+    // `into_builder`.
+    let mut decoder = Scan::default().row_group_decoder();
+    let file = 0..TEST_FILE.data.len() as u64;
+    decoder.push_range(file.clone(), fetch(&file)).unwrap();
+    let decoder = decoder
+        .into_builder()
+        .unwrap()
+        .with_row_groups(vec![2])
+        .build()
+        .unwrap();
+    assert_eq!(decoder.buffered_bytes(), file.end);
+}
+
 #[test]
 fn try_next_reader_at_boundaries_and_not_in_a_row_group() {
     let mut decoder = Scan {

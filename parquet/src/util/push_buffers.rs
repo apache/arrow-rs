@@ -224,6 +224,40 @@ impl PushBuffers {
         self.buffers = new_buffers;
     }
 
+    /// Release every buffered byte outside `keep`, whatever shape the bytes
+    /// were pushed in. The parts of a buffer inside `keep` are kept as
+    /// zero-copy slices.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn retain_ranges(&mut self, keep: &[Range<u64>]) {
+        let mut keep: Vec<Range<u64>> = keep.iter().filter(|r| !r.is_empty()).cloned().collect();
+        keep.sort_by_key(|r| r.start);
+        let mut merged: Vec<Range<u64>> = Vec::with_capacity(keep.len());
+        for range in keep {
+            match merged.last_mut() {
+                Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                _ => merged.push(range),
+            }
+        }
+        let mut new_ranges = Vec::with_capacity(self.ranges.len());
+        let mut new_buffers = Vec::with_capacity(self.buffers.len());
+        for (r, buffer) in self.ranges.drain(..).zip(self.buffers.drain(..)) {
+            let first = merged.partition_point(|k| k.end <= r.start);
+            for k in merged[first..].iter().take_while(|k| k.start < r.end) {
+                let start = k.start.max(r.start);
+                let end = k.end.min(r.end);
+                if start == r.start && end == r.end {
+                    new_buffers.push(buffer.clone());
+                } else {
+                    let offset = (start - r.start) as usize;
+                    new_buffers.push(buffer.slice(offset..offset + (end - start) as usize));
+                }
+                new_ranges.push(start..end);
+            }
+        }
+        self.ranges = new_ranges;
+        self.buffers = new_buffers;
+    }
+
     /// Clear all buffered ranges and their corresponding data
     pub(crate) fn clear_all_ranges(&mut self) {
         self.ranges.clear();
@@ -349,6 +383,30 @@ mod tests {
         assert_eq!(buffers.buffered_bytes(), 8);
 
         buffers.release_range(&(0..100));
+        assert_eq!(buffers.buffered_bytes(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn retain_ranges_keeps_only_the_given_bytes() {
+        let mut buffers = PushBuffers::new(100);
+        buffers
+            .push_range(0..10, Bytes::from_static(b"0123456789"))
+            .unwrap();
+        buffers
+            .push_range(20..24, Bytes::from_static(b"abcd"))
+            .unwrap();
+        buffers
+            .push_range(30..32, Bytes::from_static(b"xy"))
+            .unwrap();
+        buffers.retain_ranges(&[22..40, 2..4, 3..5, 8..9]);
+        assert_eq!(buffers.buffered_bytes(), 3 + 1 + 2 + 2);
+        assert_eq!(buffers.get_bytes(2, 3).unwrap(), Bytes::from_static(b"234"));
+        assert_eq!(buffers.get_bytes(8, 1).unwrap(), Bytes::from_static(b"8"));
+        assert!(!buffers.has_range(&(5..6)));
+        assert_eq!(buffers.get_bytes(22, 2).unwrap(), Bytes::from_static(b"cd"));
+        assert_eq!(buffers.get_bytes(30, 2).unwrap(), Bytes::from_static(b"xy"));
+        buffers.retain_ranges(&[]);
         assert_eq!(buffers.buffered_bytes(), 0);
     }
 
