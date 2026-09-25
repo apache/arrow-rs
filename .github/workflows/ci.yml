@@ -37,6 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       suites: ${{ steps.select.outputs.suites }}
+      cache-refresh-only: ${{ steps.select.outputs.cache-refresh-only }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -47,7 +48,12 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install CI configuration dependency
-        run: python3 -m pip install PyYAML==6.0.3
+        run: |
+          for attempt in 1 2 3; do
+            python3 -m pip install PyYAML==6.0.3 && break
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 5
+          done
       - name: Validate CI configuration and routing
         run: python3 .github/ci/scripts/check-ci-config.py
       - name: Select suites
@@ -71,11 +77,15 @@ jobs:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'parquet')
     uses: ./.github/workflows/parquet.yml
+    with:
+      cache-refresh-only: ${{ needs.changes.outputs.cache-refresh-only == 'true' }}
 
   integration:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'integration')
     uses: ./.github/workflows/integration.yml
+    with:
+      cache-refresh-only: ${{ needs.changes.outputs.cache-refresh-only == 'true' }}
 
   audit:
     needs: changes

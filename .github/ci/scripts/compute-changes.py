@@ -38,7 +38,9 @@ def select_suites(event, paths, filters):
     if event == "merge_group":
         return sorted(suites | {"miri"})
     if event == "push":
-        return sorted(suites)
+        # The queue already tested the merge result. Publish docs and populate
+        # main's caches through the reusable workflows' cache-refresh-only mode.
+        return ["docs", "integration", "parquet"]
     if event != "pull_request":
         raise ValueError(f"Unsupported CI event: {event}")
 
@@ -66,6 +68,7 @@ def main():
     suites = select_suites(event, paths, load_yaml(ROOT / ".github/ci/paths.yaml"))
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write(f"suites={json.dumps(suites)}\n")
+        output.write(f"cache-refresh-only={json.dumps(event == 'push')}\n")
     print(f"Selected suites: {', '.join(suites)}")
 
 

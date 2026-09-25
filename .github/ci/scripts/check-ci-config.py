@@ -24,9 +24,15 @@ Run from the repository root:
 import contextlib
 import importlib.util
 import io
+import json
+import os
 from pathlib import Path
+import re
 import shutil
+import subprocess
+import sys
 import tempfile
+import tomllib
 import unittest
 
 spec = importlib.util.spec_from_file_location(
@@ -38,6 +44,54 @@ spec.loader.exec_module(changes)
 ROOT = changes.ROOT
 ALWAYS = changes.ALWAYS
 load_yaml = changes.load_yaml
+
+# Only these jobs and shell steps should run when warming main's caches.
+CACHE_REFRESH_STEPS = {
+    "integration": {
+        "pyarrow-integration-test": {
+            "Setup Rust toolchain", "Upgrade pip and setuptools",
+            "Create virtualenv and install dependencies", "Build Python extension",
+        },
+    },
+    "parquet": {"pyspark-integration-test": {"Install Python dependencies"}},
+}
+FULL_RUN = "${{ !inputs.cache-refresh-only }}"
+
+
+def validate_cache_refresh(ci, suite, workflow):
+    expected = "${{ needs.changes.outputs.cache-refresh-only == 'true' }}"
+    assert ci["jobs"][suite].get("with", {}).get("cache-refresh-only") == expected, f"{suite}: missing cache mode input"
+    cache_jobs = CACHE_REFRESH_STEPS[suite]
+    assert cache_jobs.keys() <= workflow["jobs"].keys(), f"{suite}: missing cache writer"
+    for name, job in workflow["jobs"].items():
+        if name not in cache_jobs:
+            assert job.get("if") == FULL_RUN, f"{suite}/{name}: runs during cache refresh"
+            continue
+        assert "if" not in job, f"{suite}/{name}: cache writer must run in both modes"
+        run_steps = {step["name"]: step for step in job["steps"] if "run" in step}
+        assert cache_jobs[name] <= run_steps.keys(), f"{suite}/{name}: missing cache setup step"
+        for step in job["steps"]:
+            if "run" not in step or step["name"] in cache_jobs[name]:
+                assert "if" not in step, f"{suite}/{name}: cache setup must run in both modes"
+            else:
+                assert step.get("if") == FULL_RUN, f"{suite}/{name}/{step['name']}: runs during cache refresh"
+
+
+def validate_package_paths(root, suite, workflow, filters):
+    """Check literal Cargo package arguments, without interpreting shell scripts."""
+    packages = {}
+    for manifest in root.glob("*/Cargo.toml"):
+        package = tomllib.loads(manifest.read_text()).get("package")
+        if package:
+            packages[package["name"]] = manifest.parent.relative_to(root).as_posix()
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            for command in re.findall(r"\bcargo\b[^\n]*", step.get("run", "")):
+                for name in re.findall(r"(?:^|\s)(?:-p|--package)(?:\s+|=)[\"']?([\w-]+)", command):
+                    assert name in packages, f"{suite}: unknown local package {name}"
+                    path = f"{packages[name]}/src/lib.rs"
+                    selected = changes.select_suites("pull_request", [path], filters)
+                    assert suite in selected, f"{suite}: changes to {name} do not select its tests"
 
 
 def validate_config(root=ROOT):
@@ -51,6 +105,7 @@ def validate_config(root=ROOT):
     assert set(jobs) == suites | {"changes", "required-checks"}, "CI suites and jobs differ"
     # PyYAML's YAML 1.1 loader treats the key 'on' as the boolean True.
     events = ci[True]
+    assert jobs["changes"]["outputs"].get("cache-refresh-only") == "${{ steps.select.outputs.cache-refresh-only }}", "Missing cache mode output"
     assert set(events) == {"pull_request", "push", "merge_group"}, "Unexpected CI triggers"
     assert events["pull_request"] is None, "Required CI must run on every PR"
     assert events["merge_group"] == {"types": ["checks_requested"]}, "Missing queue trigger"
@@ -72,8 +127,17 @@ def validate_config(root=ROOT):
         assert job["if"] == condition, f"{suite}: unexpected routing condition"
         path = root / job["uses"]
         workflow = load_yaml(path)
-        assert workflow[True] == {"workflow_call": None}, f"{suite}: duplicate or missing triggers"
+        call = None
+        if suite in CACHE_REFRESH_STEPS:
+            call = {"inputs": {"cache-refresh-only": {
+                "description": "Populate caches without running tests or linters",
+                "type": "boolean", "default": False,
+            }}}
+            validate_cache_refresh(ci, suite, workflow)
+        assert workflow[True] == {"workflow_call": call}, f"{suite}: duplicate or missing triggers/inputs"
         assert "concurrency" not in workflow, f"{suite}: concurrency is owned by ci.yml"
+        if suite in filters["suites"]:
+            validate_package_paths(root, suite, workflow, filters)
         called.add(path.resolve())
     reusable = {
         path.resolve()
@@ -102,10 +166,24 @@ class RoutingTests(unittest.TestCase):
         for paths in [[], ["README.md"], ["arrow-buffer/src/lib.rs"]]:
             with self.subTest(paths=paths):
                 self.assertEqual(self.select("merge_group", paths), self.all_suites | {"miri"})
-                self.assertEqual(self.select("push", paths), self.all_suites)
+                self.assertEqual(self.select("push", paths), {"docs", "integration", "parquet"})
                 self.assertNotIn("miri", self.select("pull_request", paths))
         with self.assertRaises(ValueError):
             self.select("pull_request_target", [])
+
+    def test_selector_outputs(self):
+        for event, expected in [("push", {"docs", "integration", "parquet"}),
+                                ("merge_group", self.all_suites | {"miri"}),
+                                ("pull_request", self.always)]:
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "output"
+                env = dict(os.environ, GITHUB_EVENT_NAME=event, GITHUB_OUTPUT=str(output),
+                           PR_BASE_SHA="HEAD", PR_HEAD_SHA="HEAD")
+                subprocess.run([sys.executable, str(ROOT / ".github/ci/scripts/compute-changes.py")],
+                               env=env, check=True, capture_output=True)
+                values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                self.assertEqual(set(json.loads(values["suites"])), expected)
+                self.assertEqual(json.loads(values["cache-refresh-only"]), event == "push")
 
     def test_pr_path_routing(self):
         cases = [
@@ -115,6 +193,8 @@ class RoutingTests(unittest.TestCase):
             (["arrow-avro/src/lib.rs"], {"arrow"}),
             (["arrow-flight/src/lib.rs"], {"arrow-flight", "integration"}),
             (["arrow-pyarrow/src/lib.rs"], {"integration"}),
+            (["arrow-integration-testing/src/lib.rs"], {"arrow", "integration"}),
+            (["arrow-pyarrow-testing/src/lib.rs"], {"integration"}),
             (["parquet/src/lib.rs"], {"parquet"}),
             (["parquet_derive/src/lib.rs"], {"parquet"}),
             (["parquet_derive_test/src/lib.rs"], {"parquet"}),
@@ -122,8 +202,6 @@ class RoutingTests(unittest.TestCase):
             (["parquet-geospatial/src/lib.rs"], {"parquet"}),
             (["arrow-row/Cargo.toml"], {"arrow", "parquet", "integration", "audit"}),
             (["some/nested/Cargo.lock"], {"audit"}),
-            (["testing"], {"parquet"}),
-            (["parquet-testing"], {"parquet"}),
             (["parquet-variant/src/lib.rs"], {"parquet"}),
             (["parquet-variant-compute/src/lib.rs"], {"parquet"}),
             (["arrow-arith/src/lib.rs"], {"arrow", "parquet", "integration"}),
@@ -142,6 +220,8 @@ class RoutingTests(unittest.TestCase):
             ".asf.yaml", ".github/workflows/ci.yml", ".github/ci/paths.yaml",
             ".github/actions/setup-builder/action.yaml", ".gitmodules",
             "Cargo.toml", "Cargo.lock", "rust-toolchain.toml",
+            "testing", "parquet-testing", "format/Flight.proto", "format/FlightSql.proto",
+            ".config/nextest.toml",
         ]:
             with self.subTest(path=path):
                 self.assertEqual(self.select("pull_request", [path]), self.all_suites)
@@ -160,12 +240,24 @@ class ConfigurationTests(unittest.TestCase):
             (".github/workflows/ci.yml", "    if: always()", "    if: success()"),
             (".github/workflows/miri.yaml", "    name: MIRI\n", "    name: MIRI\n    if: github.event_name == 'merge_group'\n"),
             (".github/workflows/arrow.yml", "  workflow_call:", "  workflow_call:\n  pull_request:"),
+            (".github/ci/paths.yaml", "    - arrow-integration-testing/**\n", ""),
+            (".github/workflows/ci.yml", "      cache-refresh-only: ${{ steps.select.outputs.cache-refresh-only }}\n", ""),
+            (".github/workflows/ci.yml", "    with:\n      cache-refresh-only: ${{ needs.changes.outputs.cache-refresh-only == 'true' }}\n", ""),
+            (".github/workflows/parquet.yml", "\n    if: ${{ !inputs.cache-refresh-only }}\n", "\n"),
+            (".github/workflows/integration.yml", "\n    if: ${{ !inputs.cache-refresh-only }}\n", "\n"),
+            (".github/workflows/parquet.yml", "        if: ${{ !inputs.cache-refresh-only }}\n", ""),
+            (".github/workflows/integration.yml", "        if: ${{ !inputs.cache-refresh-only }}\n", ""),
+            (".github/workflows/integration.yml", "      - name: Build Python extension\n", "      - name: Build Python extension\n        if: ${{ !inputs.cache-refresh-only }}\n"),
         ]
         for filename, before, after in cases:
             with self.subTest(filename=filename, before=before), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 shutil.copytree(changes.ROOT / ".github", root / ".github")
                 shutil.copy(changes.ROOT / ".asf.yaml", root / ".asf.yaml")
+                for manifest in changes.ROOT.glob("*/Cargo.toml"):
+                    target = root / manifest.relative_to(changes.ROOT)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy(manifest, target)
                 path = root / filename
                 original = path.read_text()
                 self.assertIn(before, original)

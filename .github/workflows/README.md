@@ -31,7 +31,7 @@ to `ci.yml` so that called workflows cannot cancel one another.
 | --------------------------- | ---------------------------------------------------------------------- |
 | Pull request                | Dev, Rust and rustdoc checks, plus suites selected by changed paths    |
 | Merge queue (`merge_group`) | All suites, including all 12 Miri partitions                           |
-| Push to `main`              | All suites except Miri; refreshes shared caches and publishes rustdocs |
+| Push to `main`              | Build/publish rustdocs and populate caches; no test suites            |
 
 Miri runs only in the merge queue, after approval and before merging. It does
 not run on PR updates or again after the merge. Queue builds test the proposed
@@ -46,9 +46,25 @@ merge base, including both paths of a renamed file. Queue builds run every
 suite regardless of changed paths.
 
 `compute-changes.py` owns suite selection for all three events: it applies path
-filters on PRs, selects all suites for queue builds, and excludes Miri on pushes
-to `main`. Every suite call in `ci.yml` uses the same `contains(...)` condition
+filters on PRs, selects all suites for queue builds, and selects docs, integration
+and Parquet on pushes to `main`. Every suite call in `ci.yml` uses the same `contains(...)` condition
 to check the selected list. The Miri workflow does not repeat the event check.
+
+Like [Comet's cache refresh mode](https://github.com/apache/datafusion-comet/pull/5930),
+the selector also sets `cache-refresh-only` for pushes. `ci.yml` passes it to
+integration and Parquet, which reuse their existing setup and cache steps:
+
+- Docs builds and publishes rustdocs, populating the shared Cargo cache.
+- Integration installs dependencies and builds the Python extension with Maturin
+  using one PyArrow version, populating its Cargo and compilation caches.
+- Parquet installs Python dependencies, populating its pip cache.
+
+Archery, Rust/Python tests, Clippy, Black, and Parquet binary builds are skipped
+in this mode. PR and queue runs retain their full selected workflows, including
+all three PyArrow versions. Cache keys and paths are shared between modes;
+Maturin cache keys include the manifests and toolchain file hash so dependency
+changes can create new entries, with older entries available as fallbacks.
+Pushes also run suite selection/validation and report the aggregate status.
 
 The required workflow has no path filter: otherwise a docs-only PR could wait
 forever for a check that never starts. **Required Checks** runs even after a
@@ -58,7 +74,13 @@ cancelled suite, or unsuccessful suite selection, blocks merging.
 When adding a suite, register it in `ci.yml`, the aggregator's `needs`, and the
 path filters (or the always-run set in `compute-changes.py`).
 `check-ci-config.py` validates routing policy and checks that every reusable
-workflow is covered and that `.asf.yaml` names the actual aggregator job.
+workflow is covered and that `.asf.yaml` names the actual aggregator job. It also
+checks that source changes to packages named literally with `cargo -p` or
+`--package` in workflow steps select that workflow. This is not a shell parser:
+indirect inputs, scripts and commands using `cd` need explicit routing tests.
+The validator also checks that cache mode reaches the reusable workflows and
+that only their cache setup steps run in that mode. Update `CACHE_REFRESH_STEPS`
+when adding a setup step that must run on push.
 To check changes locally:
 
 ```sh

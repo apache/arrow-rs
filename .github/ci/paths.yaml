@@ -20,9 +20,13 @@ common:
   - .asf.yaml
   - .github/**
   - .gitmodules
+  - .config/**
   - Cargo.toml
   - Cargo.lock
   - rust-toolchain.toml
+  - testing
+  - parquet-testing
+  - format/**
 suites:
   arrow:
     - arrow-arith/**
@@ -33,6 +37,7 @@ suites:
     - arrow-csv/**
     - arrow-data/**
     - arrow-integration-test/**
+    - arrow-integration-testing/**
     - arrow-ipc/**
     - arrow-json/**
     - arrow-avro/**
@@ -52,8 +57,6 @@ suites:
     - arrow-schema/**
     - arrow-select/**
   parquet:
-    - testing
-    - parquet-testing
     - arrow/**
     - arrow-arith/**
     - arrow-array/**
@@ -91,6 +94,7 @@ suites:
     - arrow-json/**
     - arrow-ord/**
     - arrow-pyarrow-integration-testing/**
+    - arrow-pyarrow-testing/**
     - arrow-pyarrow/**
     - arrow-row/**
     - arrow-schema/**
