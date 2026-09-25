@@ -447,14 +447,19 @@ impl ParquetMetaDataPushDecoder {
                         &self.offset_index_mask,
                     );
 
-                    // Even if there is no range to read (for example, both policies are Skip,
-                    // the masks select nothing, or the file has no indexes), parse the result to
-                    // replace any existing indexes.
-                    if let Some(page_index_range) = range {
-                        if !self.buffers.has_range(&page_index_range) {
-                            self.state = DecodeState::ReadingPageIndex(metadata);
-                            return Ok(needs_range(page_index_range));
-                        }
+                    let Some(page_index_range) = range else {
+                        // There is nothing to decode because both policies are Skip, the masks
+                        // select nothing, or the file has no index ranges. Clear any previously
+                        // loaded indexes while preserving the compatibility behavior that
+                        // PageIndexPolicy::Required accepts files with no page indexes at all.
+                        metadata.set_page_index(None);
+                        self.state = DecodeState::Finished;
+                        return Ok(DecodeResult::Data(*metadata));
+                    };
+
+                    if !self.buffers.has_range(&page_index_range) {
+                        self.state = DecodeState::ReadingPageIndex(metadata);
+                        return Ok(needs_range(page_index_range));
                     }
 
                     parse_page_index(
