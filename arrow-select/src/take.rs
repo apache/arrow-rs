@@ -1083,8 +1083,11 @@ where
                         // SAFETY: caller guarantees row < values.len(), so row+1 is also in bounds.
                         unsafe {
                             (
-                                child_buf_offset + src_offsets.get_unchecked(row).as_usize() * bytes_per_value,
-                                child_buf_offset + src_offsets.get_unchecked(row + 1).as_usize() * bytes_per_value,
+                                child_buf_offset
+                                    + src_offsets.get_unchecked(row).as_usize() * bytes_per_value,
+                                child_buf_offset
+                                    + src_offsets.get_unchecked(row + 1).as_usize()
+                                        * bytes_per_value,
                             )
                         }
                     };
