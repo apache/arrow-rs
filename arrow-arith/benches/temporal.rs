@@ -70,6 +70,13 @@ fn benchmark<T: ArrowTimestampType>(c: &mut Criterion, unit: &str, units_per_sec
     group.bench_function("Year/control", |b| {
         b.iter(|| black_box(date_part(black_box(&array), DatePart::Year).unwrap()))
     });
+    // Timestamps with a timezone always take the calendar conversion path.
+    let with_timezone = array.with_timezone("+05:45");
+    for part in [DatePart::Minute, DatePart::Nanosecond] {
+        group.bench_function(format!("{part}/timezone_control"), |b| {
+            b.iter(|| black_box(date_part(black_box(&with_timezone), part).unwrap()))
+        });
+    }
     group.finish();
 }
 
