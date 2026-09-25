@@ -482,6 +482,10 @@ impl ParquetMetaDataReader {
     /// its physical type is not `BYTE_ARRAY` (the only physical type
     /// currently supported).
     ///
+    /// The returned array contains raw `Binary` values, even for columns
+    /// annotated as strings. Callers can compare byte slices directly or
+    /// convert values to UTF-8 explicitly.
+    ///
     /// This can be used to inspect dictionary values when selecting or pruning
     /// row groups before reading their data pages.
     ///

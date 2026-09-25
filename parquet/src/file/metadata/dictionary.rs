@@ -26,7 +26,7 @@
 //! [`ArrayReader`]: crate::arrow::array_reader::ArrayReader
 
 use crate::arrow::{ByteArrayDecoderPlain, OffsetBuffer};
-use crate::basic::{ConvertedType, LogicalType, PageType, Type as PhysicalType};
+use crate::basic::{Encoding, PageType, Type as PhysicalType};
 use crate::column::page::Page;
 use crate::compression::{CodecOptions, create_codec};
 #[cfg(feature = "encryption")]
@@ -38,7 +38,6 @@ use crate::file::metadata::ParquetMetaData;
 use crate::file::serialized_reader::{
     SerializedPageReaderContext, decode_page, read_page_header_len_from_bytes, verify_page_size,
 };
-use crate::schema::types::ColumnDescriptor;
 use arrow_array::ArrayRef;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
@@ -54,6 +53,7 @@ use std::sync::Arc;
 /// return an error. The returned array never contains nulls: dictionary
 /// pages only store the distinct non-null values, with nulls represented via
 /// definition levels in the data pages.
+/// The returned array has `Binary` values, regardless of the column's logical type.
 ///
 /// Note this only decodes whatever dictionary page is present -- it does
 /// **not** verify that the entire column chunk is dictionary-encoded (i.e.
@@ -124,7 +124,10 @@ pub(crate) fn decode_dictionary_page(
         decompressor.as_mut(),
     )?;
     let Page::DictionaryPage {
-        buf, num_values, ..
+        buf,
+        num_values,
+        encoding,
+        ..
     } = page
     else {
         return Err(ParquetError::General(
@@ -136,17 +139,22 @@ pub(crate) fn decode_dictionary_page(
     // The dictionary page is always PLAIN-encoded, regardless of what the
     // data pages' encoding is (RLE_DICTIONARY/PLAIN_DICTIONARY only describe
     // how *data* pages reference the dictionary by index).
-    let is_utf8 = is_utf8(column_descriptor);
-    let mut decoder = ByteArrayDecoderPlain::new(buf, num_values, Some(num_values), is_utf8);
+    if encoding != Encoding::PLAIN {
+        return Err(ParquetError::General(format!(
+            "Dictionary page encoding must be PLAIN, got {encoding:?}"
+        )));
+    }
+    let mut decoder = ByteArrayDecoderPlain::new(buf, num_values, Some(num_values), false);
     let mut offsets = OffsetBuffer::<i32>::with_capacity(num_values);
     decoder.read(&mut offsets, usize::MAX)?;
+    if offsets.len() != num_values {
+        return Err(ParquetError::General(format!(
+            "Expected {num_values} dictionary values, decoded {}",
+            offsets.len()
+        )));
+    }
 
-    let arrow_type = if is_utf8 {
-        ArrowType::Utf8
-    } else {
-        ArrowType::Binary
-    };
-    Ok(offsets.into_array(None, arrow_type))
+    Ok(offsets.into_array(None, ArrowType::Binary))
 }
 
 /// Builds the crypto context needed to decrypt the dictionary page of
@@ -164,31 +172,31 @@ fn dictionary_page_crypto_context(
     let Some(crypto_metadata) = column_metadata.crypto_metadata() else {
         return Ok(None);
     };
+    let ordinal = parquet_meta_data
+        .row_group(row_group_idx)
+        .ordinal()
+        .ok_or_else(|| {
+            ParquetError::General("Encrypted row group is missing its file ordinal".to_string())
+        })?;
+    let ordinal = usize::try_from(ordinal).map_err(|_| {
+        ParquetError::General("Encrypted row group has an invalid file ordinal".to_string())
+    })?;
     let crypto_context =
-        CryptoContext::for_column(file_decryptor, crypto_metadata, row_group_idx, column_idx)?
+        CryptoContext::for_column(file_decryptor, crypto_metadata, ordinal, column_idx)?
             .for_dictionary_page();
     Ok(Some(Arc::new(crypto_context)))
-}
-
-/// Whether `column_descriptor` should be decoded as UTF-8 text (`Utf8`)
-/// rather than raw `Binary`.
-fn is_utf8(column_descriptor: &ColumnDescriptor) -> bool {
-    matches!(
-        column_descriptor.logical_type_ref(),
-        Some(LogicalType::String | LogicalType::Json)
-    ) || matches!(
-        column_descriptor.converted_type(),
-        ConvertedType::UTF8 | ConvertedType::JSON
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
+    use crate::basic::Encoding;
+    use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
-    use arrow_array::{Array, RecordBatch, StringArray};
+    use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
+    use arrow_array::{Array, BinaryArray, RecordBatch, StringArray};
     use arrow_schema::{Field, Schema};
     use std::sync::Arc;
 
@@ -231,9 +239,9 @@ mod tests {
         let buffer = data.get_bytes(start, (end - start) as usize).unwrap();
 
         let array = decode_dictionary_page(buffer, metadata, 0, 0).unwrap();
-        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
-        let decoded: Vec<&str> = array.iter().map(|v| v.unwrap()).collect();
-        assert_eq!(decoded, distinct_values);
+        let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+        let decoded: Vec<&[u8]> = array.iter().map(|v| v.unwrap()).collect();
+        assert_eq!(decoded, distinct_values.map(str::as_bytes));
     }
 
     #[test]
@@ -262,6 +270,52 @@ mod tests {
         );
     }
 
+    fn dictionary_page_with_header_change(
+        data: &Bytes,
+        change: impl FnOnce(&mut crate::file::metadata::thrift::PageHeader),
+    ) -> (Bytes, ParquetMetaData) {
+        let reader = SerializedFileReader::new(data.clone()).unwrap();
+        let metadata = reader.metadata().clone();
+        let column = metadata.row_group(0).column(0);
+        let start = column.dictionary_page_offset().unwrap() as u64;
+        let end = column.data_page_offset() as u64;
+        let buffer = data.get_bytes(start, (end - start) as usize).unwrap();
+        let context = SerializedPageReaderContext {
+            read_stats: true,
+            #[cfg(feature = "encryption")]
+            crypto_context: None,
+        };
+        let (header_len, mut header) =
+            read_page_header_len_from_bytes(&context, &buffer, 0, true).unwrap();
+        change(&mut header);
+        let mut changed = Vec::new();
+        header
+            .write_thrift(&mut ThriftCompactOutputProtocol::new(&mut changed))
+            .unwrap();
+        changed.extend_from_slice(&buffer[header_len..]);
+        (Bytes::from(changed), metadata)
+    }
+
+    #[test]
+    fn decode_dictionary_page_rejects_missing_values() {
+        let data = write_dictionary_encoded_strings(&["alpha", "beta", "alpha"]);
+        let (buffer, metadata) = dictionary_page_with_header_change(&data, |header| {
+            header.dictionary_page_header.as_mut().unwrap().num_values += 1;
+        });
+        let err = decode_dictionary_page(buffer, &metadata, 0, 0).unwrap_err();
+        assert!(err.to_string().contains("dictionary values"), "{err}");
+    }
+
+    #[test]
+    fn decode_dictionary_page_rejects_non_plain_encoding() {
+        let data = write_dictionary_encoded_strings(&["alpha", "beta", "alpha"]);
+        let (buffer, metadata) = dictionary_page_with_header_change(&data, |header| {
+            header.dictionary_page_header.as_mut().unwrap().encoding = Encoding::RLE_DICTIONARY;
+        });
+        let err = decode_dictionary_page(buffer, &metadata, 0, 0).unwrap_err();
+        assert!(err.to_string().contains("PLAIN"), "{err}");
+    }
+
     #[test]
     fn decode_dictionary_page_rejects_non_byte_array() {
         let schema = Arc::new(Schema::new(vec![Field::new("i", ArrowType::Int32, false)]));
@@ -284,8 +338,6 @@ mod tests {
 
     #[test]
     fn read_column_dictionary_round_trips_via_metadata_reader() {
-        use crate::file::metadata::ParquetMetaDataReader;
-
         let distinct_values = ["alpha", "beta", "gamma"];
         let values: Vec<&str> = distinct_values.iter().copied().cycle().take(30).collect();
         let data = write_dictionary_encoded_strings(&values);
@@ -296,9 +348,9 @@ mod tests {
         let array = ParquetMetaDataReader::read_column_dictionary(&data, metadata, 0, 0)
             .unwrap()
             .unwrap();
-        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
-        let decoded: Vec<&str> = array.iter().map(|v| v.unwrap()).collect();
-        assert_eq!(decoded, distinct_values);
+        let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+        let decoded: Vec<&[u8]> = array.iter().map(|v| v.unwrap()).collect();
+        assert_eq!(decoded, distinct_values.map(str::as_bytes));
     }
 
     #[cfg(feature = "encryption")]
@@ -306,8 +358,6 @@ mod tests {
     fn read_column_dictionary_round_trips_with_encryption() {
         use crate::encryption::decrypt::FileDecryptionProperties;
         use crate::encryption::encrypt::FileEncryptionProperties;
-        use crate::file::metadata::ParquetMetaDataReader;
-
         const FOOTER_KEY: &[u8] = b"0123456789012345";
 
         let distinct_values = ["alpha", "beta", "gamma"];
@@ -343,9 +393,74 @@ mod tests {
         let array = ParquetMetaDataReader::read_column_dictionary(&data, &metadata, 0, 0)
             .unwrap()
             .unwrap();
-        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
-        let decoded: Vec<&str> = array.iter().map(|v| v.unwrap()).collect();
-        assert_eq!(decoded, distinct_values);
+        let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+        let decoded: Vec<&[u8]> = array.iter().map(|v| v.unwrap()).collect();
+        assert_eq!(decoded, distinct_values.map(str::as_bytes));
+    }
+
+    #[cfg(feature = "encryption")]
+    #[test]
+    fn read_column_dictionary_uses_file_ordinal_after_filtering() {
+        use crate::encryption::decrypt::FileDecryptionProperties;
+        use crate::encryption::encrypt::FileEncryptionProperties;
+        use crate::file::metadata::ParquetMetaDataBuilder;
+
+        const FOOTER_KEY: &[u8] = b"0123456789012345";
+        let schema = Arc::new(Schema::new(vec![Field::new("s", ArrowType::Utf8, false)]));
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .with_file_encryption_properties(
+                FileEncryptionProperties::builder(FOOTER_KEY.to_vec())
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        let mut buf = Vec::new();
+        {
+            let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), Some(props)).unwrap();
+            for value in ["first", "second"] {
+                let array = Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+                    value, 30,
+                )));
+                let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+                writer.write(&batch).unwrap();
+                writer.flush().unwrap();
+            }
+            writer.close().unwrap();
+        }
+        let data = Bytes::from(buf);
+        let metadata = ParquetMetaDataReader::new()
+            .with_decryption_properties(Some(
+                FileDecryptionProperties::builder(FOOTER_KEY.to_vec())
+                    .build()
+                    .unwrap(),
+            ))
+            .parse_and_finish(&data)
+            .unwrap();
+        assert_eq!(metadata.row_group(1).ordinal(), Some(1));
+        let second = metadata.row_group(1).clone();
+        let filtered = ParquetMetaDataBuilder::new_from_metadata(metadata)
+            .set_row_groups(vec![second])
+            .build();
+        let array = ParquetMetaDataReader::read_column_dictionary(&data, &filtered, 0, 0)
+            .unwrap()
+            .unwrap();
+        let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(array.value(0), b"second");
+
+        let invalid = filtered
+            .row_group(0)
+            .clone()
+            .into_builder()
+            .set_ordinal(-1)
+            .build()
+            .unwrap();
+        let invalid_metadata = ParquetMetaDataBuilder::new_from_metadata(filtered)
+            .set_row_groups(vec![invalid])
+            .build();
+        let err = ParquetMetaDataReader::read_column_dictionary(&data, &invalid_metadata, 0, 0)
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid file ordinal"), "{err}");
     }
 
     #[test]

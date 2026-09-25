@@ -681,6 +681,10 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// its physical type is not `BYTE_ARRAY` (the only physical type
     /// currently supported).
     ///
+    /// The returned array contains raw `Binary` values, even for columns
+    /// annotated as strings. Callers can compare byte slices directly or
+    /// convert values to UTF-8 explicitly.
+    ///
     /// This can be used to inspect dictionary values when selecting or pruning
     /// row groups before passing the selected indices to
     /// [`ParquetRecordBatchStreamBuilder::with_row_groups`].
@@ -1012,8 +1016,8 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Int32Array, RecordBatchReader, Scalar, StringArray,
-        StructArray, UInt64Array,
+        Array, ArrayRef, BinaryArray, BooleanArray, Int32Array, RecordBatchReader, Scalar,
+        StringArray, StructArray, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
@@ -1179,6 +1183,22 @@ mod tests {
         }
         let data = Bytes::from(buf);
 
+        let direct_metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&data)
+            .unwrap();
+        let mut direct_reader = TestReader::new(data.clone());
+        let direct = ParquetMetaDataReader::read_column_dictionary_async(
+            &mut direct_reader,
+            &direct_metadata,
+            0,
+            0,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let direct = direct.as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(direct.value(0), b"alpha");
+
         let async_reader = TestReader::new(data);
         let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
             .await
@@ -1189,9 +1209,12 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let dictionary = dictionary.as_any().downcast_ref::<StringArray>().unwrap();
-        let dictionary_values: Vec<&str> = dictionary.iter().map(|v| v.unwrap()).collect();
-        assert_eq!(dictionary_values, vec!["alpha", "beta", "gamma"]);
+        let dictionary = dictionary.as_any().downcast_ref::<BinaryArray>().unwrap();
+        let dictionary_values: Vec<&[u8]> = dictionary.iter().map(|v| v.unwrap()).collect();
+        assert_eq!(
+            dictionary_values,
+            vec![b"alpha".as_slice(), b"beta", b"gamma"]
+        );
     }
 
     // This test demonstrates row group pruning using dictionary pages,
@@ -1249,8 +1272,11 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            let dictionary = dictionary.as_string::<i32>();
-            if dictionary.iter().any(|value| value == Some("target")) {
+            let dictionary = dictionary.as_binary::<i32>();
+            if dictionary
+                .iter()
+                .any(|value| value == Some(b"target".as_slice()))
+            {
                 selected_row_groups.push(row_group_idx);
             }
         }
