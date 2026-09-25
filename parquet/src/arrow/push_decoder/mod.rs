@@ -2785,8 +2785,7 @@ mod test {
     }
 
     /// return the metadata for the test file, including the offset index
-    fn test_file_parquet_metadata_with_offset_index() -> Arc<ParquetMetaData>
-    {
+    fn test_file_parquet_metadata_with_offset_index() -> Arc<ParquetMetaData> {
         let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(test_file_len())
             .unwrap()
             .with_offset_index_policy(PageIndexPolicy::Required);
