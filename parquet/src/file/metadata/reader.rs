@@ -655,7 +655,7 @@ impl ParquetMetaDataReader {
         &mut self,
         mut fetch: F,
     ) -> Result<()> {
-        let (metadata, remainder) = self.load_metadata_via_suffix(&mut fetch).await?;
+        let metadata = self.load_metadata_via_suffix(&mut fetch).await?;
 
         self.metadata = Some(metadata);
 
@@ -665,7 +665,7 @@ impl ParquetMetaDataReader {
             return Ok(());
         }
 
-        self.load_page_index_with_remainder(fetch, remainder).await
+        self.load_page_index_with_remainder(fetch, None).await
     }
 
     /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
@@ -849,10 +849,13 @@ impl ParquetMetaDataReader {
     }
 
     #[cfg(all(feature = "async", feature = "arrow"))]
+    // Unlike load_metadata, the file size is not known so it is not safe
+    // to use any leftover bytes that may have been pre-fetched. Thus this
+    // returns only the metadata.
     async fn load_metadata_via_suffix<F: MetadataSuffixFetch>(
         &self,
         fetch: &mut F,
-    ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
+    ) -> Result<ParquetMetaData> {
         let prefetch = self.get_prefetch_size();
 
         let suffix = fetch.fetch_suffix(prefetch).await?;
@@ -890,14 +893,11 @@ impl ParquetMetaDataReader {
 
             // need to slice off the footer or decryption fails
             let meta = meta.slice(0..length);
-            Ok((self.decode_footer_metadata(meta, file_size, footer)?, None))
+            Ok(self.decode_footer_metadata(meta, file_size, footer)?)
         } else {
             let metadata_start = suffix_len - metadata_offset;
             let slice = suffix.slice(metadata_start..suffix_len - FOOTER_SIZE);
-            Ok((
-                self.decode_footer_metadata(slice, file_size, footer)?,
-                Some((0, suffix.slice(..metadata_start))),
-            ))
+            Ok(self.decode_footer_metadata(slice, file_size, footer)?)
         }
     }
 
@@ -1566,6 +1566,36 @@ mod async_tests {
             .load_and_finish(f, len)
             .await
             .unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
+    }
+
+    #[tokio::test]
+    async fn test_page_index_via_suffix_with_prefetch() {
+        let mut file = get_test_file("alltypes_tiny_pages.parquet");
+        let mut suffix_file = file.try_clone().unwrap();
+        let len = file.len();
+        let fetch_count = AtomicUsize::new(0);
+        let suffix_fetch_count = AtomicUsize::new(0);
+
+        let mut fetch = |range| {
+            fetch_count.fetch_add(1, Ordering::SeqCst);
+            futures::future::ready(read_range(&mut file, range))
+        };
+        let mut suffix_fetch = |suffix| {
+            suffix_fetch_count.fetch_add(1, Ordering::SeqCst);
+            futures::future::ready(read_suffix(&mut suffix_file, suffix))
+        };
+
+        let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Required)
+            .with_prefetch_hint(Some((len - 1000) as usize))
+            .load_via_suffix_and_finish(input)
+            .await
+            .unwrap();
+
+        assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 1);
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }
