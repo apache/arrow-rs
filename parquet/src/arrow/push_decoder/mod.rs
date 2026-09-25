@@ -18,6 +18,8 @@
 //! [`ParquetPushDecoder`]: decodes Parquet data with data provided by the
 //! caller (rather than from an underlying reader).
 
+#[cfg(test)]
+mod incremental_tests;
 mod page_spans;
 pub(crate) mod page_store;
 mod reader_builder;
@@ -1395,6 +1397,96 @@ mod test {
         assert_eq!(batch, TEST_BATCH.slice(0, 100));
         let batch = expect_data(decoder.try_decode());
         assert_eq!(batch, TEST_BATCH.slice(100, 100));
+    }
+
+    /// The same scenario as [`test_decoder_first_pages_only`]
+    /// with [`FetchGranularity::Batch`]: the decoder asks only for the pages
+    /// of the first batch, and returns the batch as soon as they are pushed.
+    #[test]
+    fn test_decoder_first_pages_only_batch_granularity() {
+        let metadata = test_file_parquet_metadata_with_offset_index();
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(Arc::clone(&metadata))
+            .unwrap()
+            .with_batch_size(100)
+            .with_fetch_granularity(FetchGranularity::Batch)
+            .build()
+            .unwrap();
+
+        let (first_page_ranges, second_page_ranges) = first_and_second_page_ranges(&metadata);
+
+        // Row group 0: the decoder asks for the dictionary page and the first
+        // data page of each column: the bytes of the first batch.
+        let ranges = expect_needs_data(decoder.try_decode());
+        let dictionary_and_first_pages: Vec<_> = first_page_ranges
+            .iter()
+            .zip(metadata.row_group(0).columns())
+            .enumerate()
+            .flat_map(|(idx, (range, column))| {
+                let first_page = metadata
+                    .page_index_for_row_group(0)
+                    .page_locations(idx)
+                    .unwrap()[0]
+                    .offset as u64;
+                let (start, _) = column.byte_range();
+                [start..first_page, first_page..range.end]
+            })
+            .filter(|range| !range.is_empty())
+            .collect();
+        assert_eq!(ranges, dictionary_and_first_pages);
+
+        // Push only the first page of each column (with the dictionary page,
+        // as one range). This is all the data needed for the first batch, and
+        // the decoder returns it.
+        push_ranges_to_decoder(&mut decoder, first_page_ranges);
+        let batch = expect_data(decoder.try_decode());
+        assert_eq!(batch, TEST_BATCH.slice(0, 100));
+
+        // The first data pages were released. The dictionary pages are kept
+        // until the row group is done.
+        let dictionary_bytes: u64 = dictionary_and_first_pages
+            .iter()
+            .step_by(2)
+            .map(|range| range.end - range.start)
+            .sum();
+        assert_eq!(decoder.buffered_bytes(), dictionary_bytes);
+
+        // The second batch needs the second page of each column.
+        let ranges = expect_needs_data(decoder.try_decode());
+        assert_eq!(ranges, second_page_ranges);
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let batch = expect_data(decoder.try_decode());
+        assert_eq!(batch, TEST_BATCH.slice(100, 100));
+
+        // The row group is done, and its bytes are released.
+        assert!(decoder.is_at_row_group_boundary());
+        assert_eq!(decoder.buffered_bytes(), 0);
+    }
+
+    /// For each column of row group 0 of the test file: the range from the
+    /// column chunk start to the second data page (the dictionary page and
+    /// the first data page), and the range of the second data page.
+    fn first_and_second_page_ranges(
+        metadata: &ParquetMetaData,
+    ) -> (Vec<Range<u64>>, Vec<Range<u64>>) {
+        let page_index = metadata.page_index_for_row_group(0);
+        let row_group = metadata.row_group(0);
+        let mut first_page_ranges = vec![];
+        let mut second_page_ranges = vec![];
+        for (idx, column) in row_group.columns().iter().enumerate() {
+            let (start, len) = column.byte_range();
+            let locations = page_index.page_locations(idx).unwrap();
+            assert_eq!(locations.len(), 2, "expected 2 data pages per column chunk");
+            let second_page_start = locations[1].offset as u64;
+            first_page_ranges.push(start..second_page_start);
+            second_page_ranges.push(second_page_start..start + len);
+        }
+        // Note the first range for each column includes the dictionary page
+        assert_eq!(first_page_ranges, vec![4..1734, 1860..3590, 3716..10936]);
+        assert_eq!(
+            second_page_ranges,
+            vec![1734..1860, 3590..3716, 10936..11062]
+        );
+        (first_page_ranges, second_page_ranges)
     }
 
     /// Decode multiple columns "a" and "b", expect that the decoder requests
