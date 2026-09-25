@@ -550,10 +550,7 @@ impl PageIndexBuilder {
     ///
     /// # Type Parameters
     /// * `T` - The type of index this is to be, either `ColumnIndexMetaData` or `OffsetIndexMetaData`
-    pub(crate) fn empty_index<T>(
-        num_row_groups: usize,
-        num_columns: usize,
-    ) -> Option<Vec<Vec<Option<T>>>> {
+    fn empty_index<T>(num_row_groups: usize, num_columns: usize) -> Option<Vec<Vec<Option<T>>>> {
         Some(
             (0..num_row_groups)
                 .map(|_| {
