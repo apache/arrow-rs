@@ -92,8 +92,7 @@ class RoutingTests(unittest.TestCase):
         self.filters = changes.load_yaml(changes.ROOT / ".github/ci/paths.yaml")
         self.always = {"dev", "rust", "docs"}
         self.all_suites = self.always | {
-            "arrow", "arrow-flight", "parquet", "parquet-derive",
-            "parquet-geospatial", "integration", "audit",
+            "arrow", "arrow-flight", "parquet", "integration", "audit",
         }
 
     def select(self, event, paths):
@@ -116,10 +115,11 @@ class RoutingTests(unittest.TestCase):
             (["arrow-avro/src/lib.rs"], {"arrow"}),
             (["arrow-flight/src/lib.rs"], {"arrow-flight", "integration"}),
             (["arrow-pyarrow/src/lib.rs"], {"integration"}),
-            (["parquet/src/lib.rs"], {"parquet", "parquet-derive"}),
-            (["parquet_derive/src/lib.rs"], {"parquet-derive"}),
+            (["parquet/src/lib.rs"], {"parquet"}),
+            (["parquet_derive/src/lib.rs"], {"parquet"}),
+            (["parquet_derive_test/src/lib.rs"], {"parquet"}),
             (["parquet-variant-json/src/lib.rs"], {"parquet"}),
-            (["parquet-geospatial/src/lib.rs"], {"parquet", "parquet-geospatial"}),
+            (["parquet-geospatial/src/lib.rs"], {"parquet"}),
             (["arrow-row/Cargo.toml"], {"arrow", "parquet", "integration", "audit"}),
             (["some/nested/Cargo.lock"], {"audit"}),
             (["testing"], {"parquet"}),
@@ -130,7 +130,7 @@ class RoutingTests(unittest.TestCase):
             (["arrow-ord/src/lib.rs"], {"arrow", "parquet", "integration"}),
             (["arrow-string/src/lib.rs"], {"arrow", "parquet", "integration"}),
             # A move or deletion must still select the affected suites.
-            (["arrow-cmp/old.rs", "parquet-geospatial/new.rs"], {"arrow", "parquet", "integration", "parquet-geospatial"}),
+            (["arrow-cmp/old.rs", "parquet-geospatial/new.rs"], {"arrow", "parquet", "integration"}),
             (["arrow-cmp/file\nwith-newline.rs"], {"arrow", "parquet", "integration"}),
         ]
         for paths, expected in cases:

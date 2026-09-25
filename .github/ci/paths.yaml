@@ -70,16 +70,12 @@ suites:
     - arrow-select/**
     - arrow-string/**
     - parquet/**
+    - parquet_derive/**
+    - parquet_derive_test/**
     - parquet-geospatial/**
     - parquet-variant/**
     - parquet-variant-compute/**
     - parquet-variant-json/**
-  parquet-derive:
-    - parquet/**
-    - parquet_derive/**
-    - parquet_derive_test/**
-  parquet-geospatial:
-    - parquet-geospatial/**
   integration:
     - arrow-arith/**
     - arrow-array/**

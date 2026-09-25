@@ -1145,21 +1145,16 @@ impl ArrowColumnWriter {
             let non_null = levels.non_null_indices();
             match array.as_any_dictionary_opt() {
                 Some(dict) => {
-                    // For dictionary arrays, hash the integer keys rather than the actual values.
-                    // Key cardinality equals value cardinality, so distinct-value counting stays
-                    // correct while avoiding the cost of hashing arbitrary-length values.
-                    let keys = dict.keys();
-                    let key_data = keys.to_data();
-                    let offset = key_data.offset();
-                    let width = arrow_key_byte_width(keys.data_type());
-                    if width > 0 {
-                        let buffer = key_data.buffers()[0].as_slice();
-                        // Only visit non-null rows to avoid counting nulls as a distinct value.
-                        for &row in non_null {
-                            let pos = (offset + row) * width;
-                            seen.insert(hash_bytes(&buffer[pos..pos + width]));
-                        }
-                    }
+                    // Hash referenced values, not key indices: keys can map to different
+                    // values across batches, and unreferenced values must not count toward NDV.
+                    let values = dict.values();
+                    let keys = dict.normalized_keys();
+                    let referenced_value_indices: Vec<usize> = non_null
+                        .iter()
+                        .map(|&pos| keys[pos])
+                        .filter(|&val_idx| values.is_valid(val_idx))
+                        .collect();
+                    update_distinct_values_seen(values.as_ref(), &referenced_value_indices, seen);
                 }
                 // For plain arrays, hash the actual values directly.
                 None => update_distinct_values_seen(array.as_ref(), non_null, seen),
@@ -1982,17 +1977,6 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
     twox_hash::XxHash64::oneshot(0, bytes)
 }
 
-/// Returns the byte width of an Arrow dictionary key type, or 0 if unsupported.
-fn arrow_key_byte_width(dt: &ArrowDataType) -> usize {
-    match dt {
-        ArrowDataType::Int8 | ArrowDataType::UInt8 => 1,
-        ArrowDataType::Int16 | ArrowDataType::UInt16 => 2,
-        ArrowDataType::Int32 | ArrowDataType::UInt32 => 4,
-        ArrowDataType::Int64 | ArrowDataType::UInt64 => 8,
-        _ => 0,
-    }
-}
-
 /// Returns the fixed byte width for primitive Arrow types, or `None` for variable-length types.
 fn fixed_byte_width(dt: &ArrowDataType) -> Option<usize> {
     use ArrowDataType::*;
@@ -2091,8 +2075,20 @@ fn update_distinct_values_seen(
     }
 }
 
+// Allow the helpers to use the same imports in unit and integration tests.
+#[cfg(test)]
+use crate as parquet_crate;
+
+#[cfg(test)]
+#[path = "../../../tests/arrow_writer/roundtrip_helpers.rs"]
+mod roundtrip_helpers;
+
 #[cfg(test)]
 mod tests {
+    use super::roundtrip_helpers::{
+        RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip, roundtrip_opts,
+        roundtrip_opts_with_array_validation,
+    };
     use super::*;
     use std::cmp::Ordering;
     use std::collections::HashMap;
@@ -3253,239 +3249,7 @@ mod tests {
         roundtrip(batch, None);
     }
 
-    const SMALL_SIZE: usize = 7;
     const MEDIUM_SIZE: usize = 63;
-
-    // Write the batch to parquet and read it back out, ensuring
-    // that what comes out is the same as what was written in
-    fn roundtrip(expected_batch: RecordBatch, max_row_group_size: Option<usize>) -> Vec<Bytes> {
-        let mut files = vec![];
-        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
-            let mut props = WriterProperties::builder().set_writer_version(version);
-
-            if let Some(size) = max_row_group_size {
-                props = props.set_max_row_group_row_count(Some(size))
-            }
-
-            let props = props.build();
-            files.push(roundtrip_opts(&expected_batch, props))
-        }
-        files
-    }
-
-    // Round trip the specified record batch with the specified writer properties,
-    // to an in-memory file, and validate the arrays using the specified function.
-    // Returns the in-memory file.
-    fn roundtrip_opts_with_array_validation<F>(
-        expected_batch: &RecordBatch,
-        props: WriterProperties,
-        validate: F,
-    ) -> Bytes
-    where
-        F: Fn(&ArrayData, &ArrayData),
-    {
-        let mut file = vec![];
-
-        let mut writer = ArrowWriter::try_new(&mut file, expected_batch.schema(), Some(props))
-            .expect("Unable to write file");
-        writer.write(expected_batch).unwrap();
-        writer.close().unwrap();
-
-        let file = Bytes::from(file);
-        let mut record_batch_reader =
-            ParquetRecordBatchReader::try_new(file.clone(), 1024).unwrap();
-
-        let actual_batch = record_batch_reader
-            .next()
-            .expect("No batch found")
-            .expect("Unable to get batch");
-
-        assert_eq!(expected_batch.schema(), actual_batch.schema());
-        assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
-        assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
-        for i in 0..expected_batch.num_columns() {
-            let expected_data = expected_batch.column(i).to_data();
-            let actual_data = actual_batch.column(i).to_data();
-            validate(&expected_data, &actual_data);
-        }
-
-        file
-    }
-
-    fn roundtrip_opts(expected_batch: &RecordBatch, props: WriterProperties) -> Bytes {
-        roundtrip_opts_with_array_validation(expected_batch, props, |a, b| {
-            a.validate_full().expect("valid expected data");
-            b.validate_full().expect("valid actual data");
-            assert_eq!(a, b)
-        })
-    }
-
-    /// Round trip testing fixture:
-    ///
-    /// Tests based on this fixture write data to parquet and then read it back.
-    struct RoundTripTest {
-        values: ArrayRef,
-        /// Optionally supplied schema
-        schema: Option<SchemaRef>,
-        /// If the created schema should be nullable. Defaults to true. Ignored
-        /// if schema is set to Some.
-        nullable: bool,
-        bloom_filter: bool,
-        bloom_filter_ndv: Option<u64>,
-        bloom_filter_position: BloomFilterPosition,
-    }
-
-    impl RoundTripTest {
-        /// Create a test for round tripping values with a nullable schema
-        fn new(values: ArrayRef) -> Self {
-            Self {
-                values,
-                schema: None,
-                nullable: true,
-                bloom_filter: false,
-                bloom_filter_ndv: None,
-                bloom_filter_position: BloomFilterPosition::AfterRowGroup,
-            }
-        }
-
-        /// Set the schema
-        fn with_schema(mut self, schema: SchemaRef) -> Self {
-            self.schema = Some(schema);
-            self
-        }
-
-        /// Set the nullable flag
-        fn with_nullable(mut self, nullable: bool) -> Self {
-            self.nullable = nullable;
-            self
-        }
-
-        /// Set bloom filter
-        fn with_bloom_filter(mut self, bloom_filter: bool) -> Self {
-            self.bloom_filter = bloom_filter;
-            self
-        }
-
-        /// Set bloom filter max ndv
-        fn with_bloom_filter_ndv(mut self, bloom_filter_ndv: u64) -> Self {
-            self.bloom_filter_ndv = Some(bloom_filter_ndv);
-            self
-        }
-
-        /// Set bloom filter position
-        fn with_bloom_filter_position(
-            mut self,
-            bloom_filter_position: BloomFilterPosition,
-        ) -> Self {
-            self.bloom_filter_position = bloom_filter_position;
-            self
-        }
-
-        /// Run the test specified by the options, returning the encoded Parquet bytes
-        fn run(self) -> Vec<Bytes> {
-            let RoundTripTest {
-                values,
-                schema,
-                nullable,
-                bloom_filter,
-                bloom_filter_ndv,
-                bloom_filter_position,
-            } = self;
-
-            let schema = schema.unwrap_or_else(|| {
-                let data_type = values.data_type().clone();
-                Arc::new(Schema::new(vec![Field::new("col", data_type, nullable)]))
-            });
-
-            let encodings = match values.data_type() {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
-                    vec![
-                        Encoding::PLAIN,
-                        Encoding::DELTA_BYTE_ARRAY,
-                        Encoding::DELTA_LENGTH_BYTE_ARRAY,
-                    ]
-                }
-                DataType::Int64
-                | DataType::Int32
-                | DataType::Int16
-                | DataType::Int8
-                | DataType::UInt64
-                | DataType::UInt32
-                | DataType::UInt16
-                | DataType::UInt8 => vec![
-                    Encoding::PLAIN,
-                    Encoding::DELTA_BINARY_PACKED,
-                    Encoding::BYTE_STREAM_SPLIT,
-                ],
-                DataType::Float32 | DataType::Float64 => {
-                    vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT, Encoding::ALP]
-                }
-                _ => vec![Encoding::PLAIN],
-            };
-
-            let expected_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
-
-            let row_group_sizes = [1024, SMALL_SIZE, SMALL_SIZE / 2, SMALL_SIZE / 2 + 1, 10];
-
-            let mut files = vec![];
-            for dictionary_size in [0, 1, 1024] {
-                for encoding in &encodings {
-                    for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
-                        for row_group_size in row_group_sizes {
-                            let mut builder = WriterProperties::builder()
-                                .set_writer_version(version)
-                                .set_max_row_group_row_count(Some(row_group_size))
-                                .set_dictionary_enabled(dictionary_size != 0)
-                                .set_dictionary_page_size_limit(dictionary_size.max(1))
-                                .set_encoding(*encoding)
-                                .set_bloom_filter_enabled(bloom_filter)
-                                .set_bloom_filter_position(bloom_filter_position);
-                            if let Some(ndv) = bloom_filter_ndv {
-                                builder = builder.set_bloom_filter_max_ndv(ndv);
-                            }
-                            let props = builder.build();
-
-                            files.push(roundtrip_opts(&expected_batch, props))
-                        }
-                    }
-                }
-            }
-            files
-        }
-    }
-
-    fn values_required<A, I>(iter: I) -> Vec<Bytes>
-    where
-        A: From<Vec<I::Item>> + Array + 'static,
-        I: IntoIterator,
-    {
-        let raw_values: Vec<_> = iter.into_iter().collect();
-        let values = Arc::new(A::from(raw_values));
-        RoundTripTest::new(values).with_nullable(false).run()
-    }
-
-    fn values_optional<A, I>(iter: I) -> Vec<Bytes>
-    where
-        A: From<Vec<Option<I::Item>>> + Array + 'static,
-        I: IntoIterator,
-    {
-        let optional_raw_values: Vec<_> = iter
-            .into_iter()
-            .enumerate()
-            .map(|(i, v)| if i % 2 == 0 { None } else { Some(v) })
-            .collect();
-        let optional_values = Arc::new(A::from(optional_raw_values));
-        RoundTripTest::new(optional_values).run()
-    }
-
-    fn required_and_optional<A, I>(iter: I)
-    where
-        A: From<Vec<I::Item>> + From<Vec<Option<I::Item>>> + Array + 'static,
-        I: IntoIterator + Clone,
-    {
-        values_required::<A, I>(iter.clone());
-        values_optional::<A, I>(iter);
-    }
 
     fn check_bloom_filter<T: AsBytes>(
         files: Vec<Bytes>,
@@ -3728,169 +3492,6 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
-    fn i8_single_column() {
-        required_and_optional::<Int8Array, _>(0..SMALL_SIZE as i8);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn i16_single_column() {
-        required_and_optional::<Int16Array, _>(0..SMALL_SIZE as i16);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn i32_single_column() {
-        required_and_optional::<Int32Array, _>(0..SMALL_SIZE as i32);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn i64_single_column() {
-        required_and_optional::<Int64Array, _>(0..SMALL_SIZE as i64);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn u8_single_column() {
-        required_and_optional::<UInt8Array, _>(0..SMALL_SIZE as u8);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn u16_single_column() {
-        required_and_optional::<UInt16Array, _>(0..SMALL_SIZE as u16);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn u32_single_column() {
-        required_and_optional::<UInt32Array, _>(0..SMALL_SIZE as u32);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn u64_single_column() {
-        required_and_optional::<UInt64Array, _>(0..SMALL_SIZE as u64);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn f32_single_column() {
-        required_and_optional::<Float32Array, _>((0..SMALL_SIZE).map(|i| i as f32));
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn f64_single_column() {
-        required_and_optional::<Float64Array, _>((0..SMALL_SIZE).map(|i| i as f64));
-    }
-
-    // The timestamp array types don't implement From<Vec<T>> because they need the timezone
-    // argument, and they also doesn't support building from a Vec<Option<T>>, so call
-    // RoundTripTest manually instead of calling required_and_optional for these tests.
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn timestamp_second_single_column() {
-        let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampSecondArray::from(raw_values));
-
-        RoundTripTest::new(values).with_nullable(false).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn timestamp_millisecond_single_column() {
-        let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampMillisecondArray::from(raw_values));
-
-        RoundTripTest::new(values).with_nullable(false).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn timestamp_microsecond_single_column() {
-        let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampMicrosecondArray::from(raw_values));
-
-        RoundTripTest::new(values).with_nullable(false).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn timestamp_nanosecond_single_column() {
-        let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
-        let values = Arc::new(TimestampNanosecondArray::from(raw_values));
-
-        RoundTripTest::new(values).with_nullable(false).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn date32_single_column() {
-        required_and_optional::<Date32Array, _>(0..SMALL_SIZE as i32);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn date64_single_column() {
-        // Date64 must be a multiple of 86400000, see ARROW-10925
-        required_and_optional::<Date64Array, _>(
-            (0..(SMALL_SIZE as i64 * 86400000)).step_by(86400000),
-        );
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn time32_second_single_column() {
-        required_and_optional::<Time32SecondArray, _>(0..SMALL_SIZE as i32);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn time32_millisecond_single_column() {
-        required_and_optional::<Time32MillisecondArray, _>(0..SMALL_SIZE as i32);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn time64_microsecond_single_column() {
-        required_and_optional::<Time64MicrosecondArray, _>(0..SMALL_SIZE as i64);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn time64_nanosecond_single_column() {
-        required_and_optional::<Time64NanosecondArray, _>(0..SMALL_SIZE as i64);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn duration_second_single_column() {
-        required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn duration_millisecond_single_column() {
-        required_and_optional::<DurationMillisecondArray, _>(0..SMALL_SIZE as i64);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn duration_microsecond_single_column() {
-        required_and_optional::<DurationMicrosecondArray, _>(0..SMALL_SIZE as i64);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn duration_nanosecond_single_column() {
-        required_and_optional::<DurationNanosecondArray, _>(0..SMALL_SIZE as i64);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
     fn interval_year_month_single_column() {
         required_and_optional::<IntervalYearMonthArray, _>(0..SMALL_SIZE as i32);
     }
@@ -3917,28 +3518,6 @@ mod tests {
             IntervalMonthDayNano::new(3, -2, -5),
             IntervalMonthDayNano::new(-200, 4, -1),
         ]);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn binary_single_column() {
-        let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
-        let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
-
-        // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
-        values_required::<BinaryArray, _>(many_vecs_iter);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn binary_view_single_column() {
-        let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
-        let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
-
-        // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
-        values_required::<BinaryViewArray, _>(many_vecs_iter);
     }
 
     #[test]
@@ -4157,57 +3736,6 @@ mod tests {
             .collect();
         // For null slots, empty string should not be in bloom filter.
         check_bloom_filter(files, "col".to_string(), optional_raw_values, vec![""]);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn large_binary_single_column() {
-        let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
-        let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
-
-        // LargeBinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
-        values_required::<LargeBinaryArray, _>(many_vecs_iter);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn fixed_size_binary_single_column() {
-        let mut builder = FixedSizeBinaryBuilder::new(4);
-        builder.append_value(b"0123").unwrap();
-        builder.append_null();
-        builder.append_value(b"8910").unwrap();
-        builder.append_value(b"1112").unwrap();
-        let array = Arc::new(builder.finish());
-
-        RoundTripTest::new(array).run();
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn string_single_column() {
-        let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
-        let raw_strs = raw_values.iter().map(|s| s.as_str());
-
-        required_and_optional::<StringArray, _>(raw_strs);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn large_string_single_column() {
-        let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
-        let raw_strs = raw_values.iter().map(|s| s.as_str());
-
-        required_and_optional::<LargeStringArray, _>(raw_strs);
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)] // Takes too long
-    fn string_view_single_column() {
-        let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
-        let raw_strs = raw_values.iter().map(|s| s.as_str());
-
-        required_and_optional::<StringViewArray, _>(raw_strs);
     }
 
     #[test]
@@ -6564,6 +6092,116 @@ mod tests {
             .statistics()
             .and_then(|s| s.distinct_count_opt());
         assert!(count.is_none());
+    }
+
+    #[test]
+    fn test_dictionary_ndv_single_batch() {
+        // Dictionary array with 3 distinct string values repeated many times.
+        // NDV must equal the number of distinct values in the dictionary (3),
+        // not the number of rows.
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 1, 2, 0, 1, 2]);
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["cat", "dog", "bird"]));
+        let dict: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap());
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![dict]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_row_group_number_distinct_values(true)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let count = metadata
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .and_then(|s| s.distinct_count_opt())
+            .expect("distinct_count should be set");
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_dictionary_ndv_excludes_unreferenced_values() {
+        // Keys only reference indices 0 and 1; value at index 2 ("unreferenced") should not
+        // count toward NDV even though it appears in the dictionary's values array.
+        let keys = Int32Array::from(vec![0, 1, 0, 1]);
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["cat", "dog", "unreferenced"]));
+        let dict: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap());
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![dict]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_row_group_number_distinct_values(true)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let count = metadata
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .and_then(|s| s.distinct_count_opt())
+            .expect("distinct_count should be set");
+        assert_eq!(
+            count, 2,
+            "unreferenced dictionary values must not count toward NDV"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_ndv_across_batches_regression() {
+        // Regression test for https://github.com/apache/arrow-rs/issues/11172.
+        let make_dict_batch = |a: &str, b: &str| -> RecordBatch {
+            let keys = Int32Array::from(vec![0, 1, 0, 1]);
+            let values: ArrayRef = Arc::new(StringArray::from(vec![a, b]));
+            let dict: ArrayRef =
+                Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap());
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "x",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            )]));
+            RecordBatch::try_new(schema, vec![dict]).unwrap()
+        };
+
+        // batch1: dict = ["cat", "dog"], batch2: dict = ["fish", "cat"]
+        // Distinct values across both batches: "cat", "dog", "fish" NDV = 3
+        let batch1 = make_dict_batch("cat", "dog");
+        let batch2 = make_dict_batch("fish", "cat");
+
+        let props = WriterProperties::builder()
+            .set_write_row_group_number_distinct_values(true)
+            .build();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch1.schema(), Some(props)).unwrap();
+        writer.write(&batch1).unwrap();
+        writer.write(&batch2).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let count = metadata
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .and_then(|s| s.distinct_count_opt())
+            .expect("distinct_count should be set");
+        assert_eq!(
+            count, 3,
+            "NDV should count distinct values, not distinct key indices"
+        );
     }
 
     #[test]

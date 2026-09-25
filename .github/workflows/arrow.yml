@@ -100,6 +100,16 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
+      - name: Enable all instruction set extensions of the runner CPU
+        # Compile for the CPU of the runner so that code gated on
+        # `cfg(target_feature = ...)`  is built and tested rather than the
+        # portable fallback. The portable fallbacks are tested in debug builds
+        run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-cpu=native" >> $GITHUB_ENV
+      - name: Display runner CPU features
+        # `rustc --print cfg` does not read RUSTFLAGS, so pass
+        # `-C target-cpu=native` explicitly to show the features that
+        # the tests below are actually compiled with
+        run: rustc --print cfg -C target-cpu=native | grep target_feature
       # Note only run the low level crates in release mode
       # which are the most likely to have overflow tests
       - name: Test arrow-buffer

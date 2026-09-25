@@ -18,6 +18,7 @@
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::Buffer;
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
+use arrow_buffer::bit_util::compress;
 use bytes::Bytes;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
@@ -202,8 +203,6 @@ pub(crate) fn build_filtered_validity_bitmap(
 
     item_count
 }
-
-use crate::util::bit_util::compress;
 
 enum MaybePacked {
     Packed(PackedDecoder),

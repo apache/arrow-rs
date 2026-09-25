@@ -595,6 +595,112 @@ mod test {
         assert_eq!(original_metadata, roundtrip_metadata);
     }
 
+    #[test]
+    fn test_metadata_read_write_roundtrip_missing_page_index() {
+        let parquet_bytes = create_parquet_file();
+
+        // read the metadata from the file but skip the page indexes
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
+        let original_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
+            .with_page_index_policy(PageIndexPolicy::Skip)
+            .parse_and_finish(&parquet_bytes)
+            .unwrap();
+
+        // metadata_to_bytes_no_page_idx should zero out the page index locations. if they aren't
+        // then reading metadata_bytes will fail with EOF
+        let metadata_bytes = metadata_to_bytes_no_page_idx(&original_metadata);
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
+        let roundtrip_metadata = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options))
+            .with_page_index_policy(PageIndexPolicy::Optional)
+            .parse_and_finish(&metadata_bytes)
+            .expect("page index locations should have been cleared");
+
+        assert!(roundtrip_metadata.page_index().is_none());
+    }
+
+    #[test]
+    fn test_metadata_read_write_roundtrip_offset_index_only() {
+        // `Chunk` statistics: the file has an offset index, but no column index
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let batch = RecordBatch::try_from_iter(vec![("id", array)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build();
+        let mut buf = vec![];
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let read = |bytes: &Bytes| {
+            let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
+            ParquetMetaDataReader::new()
+                .with_metadata_options(Some(options))
+                .with_page_index_policy(PageIndexPolicy::Optional)
+                .parse_and_finish(bytes)
+                .unwrap()
+        };
+        let original = read(&Bytes::from(buf));
+        let page_index = original.page_index().unwrap();
+        assert!(!page_index.has_column_indexes() && page_index.has_offset_indexes());
+        let roundtrip = read(&metadata_to_bytes(&original));
+        assert_eq!(
+            normalize_locations(original),
+            normalize_locations(roundtrip)
+        );
+    }
+
+    #[test]
+    fn test_metadata_read_write_roundtrip_custom_page_index() {
+        use crate::file::metadata::page_index::PageIndexProvider;
+        use crate::file::page_index::{
+            column_index::ColumnIndexMetaData, offset_index::OffsetIndexMetaData,
+        };
+
+        /// A custom provider that forwards to another provider
+        #[derive(Debug)]
+        struct Forward(Arc<dyn PageIndexProvider>);
+        impl PageIndexProvider for Forward {
+            fn has_offset_indexes(&self) -> bool {
+                self.0.has_offset_indexes()
+            }
+            fn has_column_indexes(&self) -> bool {
+                self.0.has_column_indexes()
+            }
+            fn column_index(&self, rg: usize, col: usize) -> Option<&ColumnIndexMetaData> {
+                self.0.column_index(rg, col)
+            }
+            fn offset_index(&self, rg: usize, col: usize) -> Option<&OffsetIndexMetaData> {
+                self.0.offset_index(rg, col)
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+
+        let read = |bytes: &Bytes| {
+            let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
+            ParquetMetaDataReader::new()
+                .with_metadata_options(Some(options))
+                .with_page_index_policy(PageIndexPolicy::Required)
+                .parse_and_finish(bytes)
+                .unwrap()
+        };
+        let original = read(&create_parquet_file());
+        let provider = Forward(original.page_index().unwrap().clone());
+        let custom = original
+            .clone()
+            .into_builder()
+            .set_page_index(Some(Arc::new(provider)))
+            .build();
+        let roundtrip = read(&metadata_to_bytes(&custom));
+        assert_eq!(
+            normalize_locations(original),
+            normalize_locations(roundtrip)
+        );
+    }
+
     /// Sets the page index offset locations in the metadata to `None`
     ///
     /// This is because the offsets are used to find the relative location of the index
@@ -642,6 +748,16 @@ mod test {
     fn metadata_to_bytes(metadata: &ParquetMetaData) -> Bytes {
         let mut buf = vec![];
         ParquetMetaDataWriter::new(&mut buf, metadata)
+            .finish()
+            .unwrap();
+        Bytes::from(buf)
+    }
+
+    // like metadata_to_bytes, but do not preserve page index location info
+    fn metadata_to_bytes_no_page_idx(metadata: &ParquetMetaData) -> Bytes {
+        let mut buf = vec![];
+        ParquetMetaDataWriter::new(&mut buf, metadata)
+            .with_preserve_page_index_locations(false)
             .finish()
             .unwrap();
         Bytes::from(buf)

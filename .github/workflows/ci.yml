@@ -72,16 +72,6 @@ jobs:
     if: contains(fromJSON(needs.changes.outputs.suites), 'parquet')
     uses: ./.github/workflows/parquet.yml
 
-  parquet-derive:
-    needs: changes
-    if: contains(fromJSON(needs.changes.outputs.suites), 'parquet-derive')
-    uses: ./.github/workflows/parquet_derive.yml
-
-  parquet-geospatial:
-    needs: changes
-    if: contains(fromJSON(needs.changes.outputs.suites), 'parquet-geospatial')
-    uses: ./.github/workflows/parquet-geospatial.yml
-
   integration:
     needs: changes
     if: contains(fromJSON(needs.changes.outputs.suites), 'integration')
@@ -126,8 +116,6 @@ jobs:
       - arrow
       - arrow-flight
       - parquet
-      - parquet-derive
-      - parquet-geospatial
       - integration
       - audit
       - dev
