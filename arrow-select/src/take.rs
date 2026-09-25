@@ -1716,19 +1716,14 @@ pub fn take_record_batch(
     downcast_integer_array!(
         indices => {
             let indices = indices.to_indices();
-            let columns = record_batch
-                .columns()
-                .iter()
-                .enumerate()
-                .map(|(i, column)| {
-                    if i == 0 {
-                        std::hint::cold_path();
-                        take_impl::<_, true>(column.as_ref(), &indices)
-                    } else {
-                        take_impl::<_, false>(column.as_ref(), &indices)
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+            let cols = record_batch.columns();
+            let mut columns = Vec::with_capacity(cols.len());
+            if let Some(first) = cols.first() {
+                columns.push(take_impl::<_, true>(first.as_ref(), &indices)?);
+                for col in &cols[1..] {
+                    columns.push(take_impl::<_, false>(col.as_ref(), &indices)?);
+                }
+            }
             // Safety: indices were validated by the first take_impl call
             Ok(unsafe { RecordBatch::new_unchecked(record_batch.schema(), columns, indices.len()) })
         },
