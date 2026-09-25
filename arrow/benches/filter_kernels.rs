@@ -204,48 +204,53 @@ fn add_benchmark(c: &mut Criterion) {
         |b| b.iter(|| bench_built_filter(&data_array, &sparse_filter)),
     );
 
-    let mut add_benchmark_for_fsb_with_length = |value_length: usize| {
-        let data_array = create_fsb_array(size, 0.0, value_length);
+    let mut add_benchmark_for_fsb_with_length = |value_length: usize, null_density: f32| {
+        let data_array = create_fsb_array(size, null_density, value_length);
+        let nulls = if null_density > 0.0 { " w NULLs" } else { "" };
         c.bench_function(
-            format!("filter fsb with value length {value_length} (kept 1/2)").as_str(),
+            format!("filter fsb with value length {value_length}{nulls} (kept 1/2)").as_str(),
             |b| b.iter(|| bench_filter(&data_array, &filter_array)),
         );
         c.bench_function(
             format!(
-                "filter fsb with value length {value_length} high selectivity (kept 1023/1024)"
+                "filter fsb with value length {value_length}{nulls} high selectivity (kept 1023/1024)"
             )
             .as_str(),
             |b| b.iter(|| bench_filter(&data_array, &dense_filter_array)),
         );
         c.bench_function(
-            format!("filter fsb with value length {value_length} low selectivity (kept 1/1024)")
-                .as_str(),
+            format!(
+                "filter fsb with value length {value_length}{nulls} low selectivity (kept 1/1024)"
+            )
+            .as_str(),
             |b| b.iter(|| bench_filter(&data_array, &sparse_filter_array)),
         );
 
         c.bench_function(
-            format!("filter context fsb with value length {value_length} (kept 1/2)").as_str(),
+            format!("filter context fsb with value length {value_length}{nulls} (kept 1/2)")
+                .as_str(),
             |b| b.iter(|| bench_built_filter(&data_array, &filter)),
         );
         c.bench_function(
             format!(
-                "filter context fsb with value length {value_length} high selectivity (kept 1023/1024)"
+                "filter context fsb with value length {value_length}{nulls} high selectivity (kept 1023/1024)"
             )
             .as_str(),
             |b| b.iter(|| bench_built_filter(&data_array, &dense_filter)),
         );
         c.bench_function(
             format!(
-                "filter context fsb with value length {value_length} low selectivity (kept 1/1024)"
+                "filter context fsb with value length {value_length}{nulls} low selectivity (kept 1/1024)"
             )
             .as_str(),
             |b| b.iter(|| bench_built_filter(&data_array, &sparse_filter)),
         );
     };
 
-    add_benchmark_for_fsb_with_length(5);
-    add_benchmark_for_fsb_with_length(20);
-    add_benchmark_for_fsb_with_length(50);
+    for value_length in [5, 20, 50] {
+        add_benchmark_for_fsb_with_length(value_length, 0.0);
+        add_benchmark_for_fsb_with_length(value_length, 0.5);
+    }
 
     let data_array = create_primitive_array::<Float32Type>(size, 0.0);
 

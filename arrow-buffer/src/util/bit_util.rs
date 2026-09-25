@@ -19,6 +19,68 @@
 
 use crate::bit_chunk_iterator::BitChunks;
 
+/// Parallel bit extract: for each set bit in `mask`, extract the
+/// corresponding bit from `value` and pack them contiguously into the low
+/// bits of the return value.
+///
+/// Equivalent to the x86 BMI2 `PEXT` instruction. When compiled with the
+/// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
+/// this lowers to the hardware `pext` instruction; otherwise it falls back
+/// to a portable scalar loop.
+///
+/// # Functional Example
+///
+/// Using 8 bits for brevity (the function operates on all 64). Each
+/// set bit in `mask` selects the bit at the same position in `value`; the
+/// selected bits are then shifted down so they are contiguous in the low
+/// bits of the result, in their original order:
+///
+/// ```text
+/// bit:     7 6 5 4 3 2 1 0
+/// value:   a b c d e f g h
+/// mask:    0 1 1 0 1 1 0 1      set bits select b, c, e, f and h
+///            | |   | |   |
+///            v v   v v   v      copy the relevant bits into result
+/// result:  0 0 0 b c e f h
+/// ```
+///
+/// # Code Example
+///
+/// ```
+/// # use arrow_buffer::bit_util::compress;
+/// assert_eq!(compress(0b1011_0100, 0b0110_1101), 0b0000_1010);
+/// ```
+//
+// Replace with `value.compress(mask)` when `uint_gather_scatter_bits` is
+// stabilised: <https://github.com/rust-lang/rust/issues/149069>
+#[inline]
+pub fn compress(value: u64, mask: u64) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    {
+        // SAFETY: the `bmi2` target feature is statically enabled for this
+        // build, so the `pext` instruction is guaranteed to be available.
+        unsafe { std::arch::x86_64::_pext_u64(value, mask) }
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        let mut mask = mask;
+        let mut result = 0_u64;
+        let mut dest_bit = 1_u64;
+        while mask != 0 {
+            // Clear the lowest set bit; the loop-carried dependency is only
+            // this two-operation chain, everything else hangs off it
+            let rest = mask & (mask - 1);
+            let lowest = mask ^ rest;
+            let keep = ((value & lowest) != 0) as u64;
+            result |= dest_bit & keep.wrapping_neg();
+            dest_bit <<= 1;
+            mask = rest;
+        }
+        result
+    }
+}
+
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
 ///
 /// # Panics
@@ -881,6 +943,38 @@ mod tests {
     use crate::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer};
     use rand::rngs::StdRng;
     use rand::{RngExt, SeedableRng};
+
+    #[test]
+    fn test_compress() {
+        // Reference: gather the `mask`-selected bits of `value` into
+        // contiguous low bits, least-significant first
+        fn reference(value: u64, mask: u64) -> u64 {
+            (0..64)
+                .filter(|&i| (mask >> i) & 1 == 1)
+                .enumerate()
+                .map(|(dest, i)| ((value >> i) & 1) << dest)
+                .sum()
+        }
+
+        assert_eq!(compress(0b1010, 0b1111), 0b1010);
+        assert_eq!(compress(0b1010, 0b1010), 0b11);
+        assert_eq!(compress(0b1010, 0b0101), 0);
+        assert_eq!(compress(u64::MAX, 0), 0);
+        assert_eq!(compress(0, u64::MAX), 0);
+        assert_eq!(compress(u64::MAX, u64::MAX), u64::MAX);
+
+        // On a `bmi2` build this validates the hardware `pext` path,
+        // otherwise the portable fallback
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..1024 {
+            let (value, mask): (u64, u64) = rng.random();
+            assert_eq!(
+                compress(value, mask),
+                reference(value, mask),
+                "value={value:#x} mask={mask:#x}"
+            );
+        }
+    }
 
     #[test]
     fn test_round_upto_multiple_of_64() {
