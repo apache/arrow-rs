@@ -88,8 +88,8 @@ fn test_parse_with_page_index_mask() {
 }
 
 #[test]
-// C11 coverage: verify that repeated calls to read_page_indexes replace existing indexes
 fn test_repeated_page_index_reads_replace() {
+    // verify that repeated calls to read_page_indexes replace existing indexes
     let file = create_test_file();
     // First read: load indexes for row group 0, column 0
     let metadata = ParquetMetaDataReader::new()
@@ -116,8 +116,8 @@ fn test_repeated_page_index_reads_replace() {
 }
 
 #[test]
-// C11 coverage: verify that Skip policy clears the corresponding index type
 fn test_page_index_skip_policy_clears_index() {
+    // verify that Skip policy clears the corresponding index type
     let file = create_test_file();
     // First read: load both column and offset indexes
     let metadata = ParquetMetaDataReader::new()
