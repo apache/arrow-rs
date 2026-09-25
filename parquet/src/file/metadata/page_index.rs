@@ -24,7 +24,6 @@ use crate::file::page_index::{
     column_index::ColumnIndexMetaData,
     offset_index::{OffsetIndexMetaData, PageLocation},
 };
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 /// Trait for accessing Parquet [Page Index] data for efficient page-level skipping
@@ -686,77 +685,42 @@ pub struct PageIndexBuilder {
 }
 
 impl PageIndexBuilder {
-    fn storage_for_update<T: Clone>(
+    fn storage_for_selection<T: Clone>(
         num_row_groups: usize,
         num_columns: usize,
         mask: Option<&ColumnChunkMask>,
-        existing: Vec<(usize, usize, T)>,
     ) -> Result<Option<Grid<T>>> {
-        if mask.is_none() && existing.is_empty() {
+        let Some(mask) = mask else {
             return Ok(None);
-        }
+        };
 
-        let rows = match mask.map(ColumnChunkMask::selected_row_groups) {
-            Some(None) => Keep::new_full(num_row_groups)?,
-            selected => {
-                let mut rows: BTreeSet<_> = existing.iter().map(|(row, _, _)| *row).collect();
-                if let Some(Some(selected)) = selected {
-                    rows.extend(selected.iter().map(|&row| row as usize));
-                }
-                Keep::new(rows, num_row_groups)?
-            }
+        let rows = match mask.selected_row_groups() {
+            None => Keep::new_full(num_row_groups)?,
+            Some(selected) => Keep::new(selected.iter().map(|&row| row as usize), num_row_groups)?,
         };
-        let cols = match mask.map(ColumnChunkMask::selected_columns) {
-            Some(None) => Keep::new_full(num_columns)?,
-            selected => {
-                let mut cols: BTreeSet<_> = existing.iter().map(|(_, col, _)| *col).collect();
-                if let Some(Some(selected)) = selected {
-                    cols.extend(selected.iter().map(|&col| col as usize));
-                }
-                Keep::new(cols, num_columns)?
-            }
+        let cols = match mask.selected_columns() {
+            None => Keep::new_full(num_columns)?,
+            Some(selected) => Keep::new(selected.iter().map(|&col| col as usize), num_columns)?,
         };
-        let mut grid = Grid::new(rows, cols);
-        for (row, col, value) in existing {
-            grid.insert(row, col, value);
-        }
-        Ok(Some(grid))
+        Ok(Some(Grid::new(rows, cols)))
     }
 
-    pub(crate) fn new_for_update(
-        page_index: Option<&dyn PageIndexProvider>,
+    pub(crate) fn new_for_read(
         num_row_groups: usize,
         num_columns: usize,
         column_index_mask: Option<&ColumnChunkMask>,
         offset_index_mask: Option<&ColumnChunkMask>,
     ) -> Result<Self> {
-        let mut column_indexes = vec![];
-        let mut offset_indexes = vec![];
-        if let Some(page_index) = page_index {
-            for row in 0..num_row_groups {
-                for col in 0..num_columns {
-                    if let Some(index) = page_index.column_index(row, col) {
-                        column_indexes.push((row, col, index.clone()));
-                    }
-                    if let Some(index) = page_index.offset_index(row, col) {
-                        offset_indexes.push((row, col, index.clone()));
-                    }
-                }
-            }
-        }
-
         Ok(Self {
-            column_indexes: Self::storage_for_update(
+            column_indexes: Self::storage_for_selection(
                 num_row_groups,
                 num_columns,
                 column_index_mask,
-                column_indexes,
             )?,
-            offset_indexes: Self::storage_for_update(
+            offset_indexes: Self::storage_for_selection(
                 num_row_groups,
                 num_columns,
                 offset_index_mask,
-                offset_indexes,
             )?,
         })
     }
