@@ -21,8 +21,9 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
 use crate::file::metadata::parser::{MetadataParser, parse_page_index};
-use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions};
-use crate::file::page_index::index_reader::acc_range;
+use crate::file::metadata::{
+    ColumnChunkMask, FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
+};
 use crate::file::reader::ChunkReader;
 use bytes::Bytes;
 use std::ops::Range;
@@ -226,6 +227,10 @@ pub struct ParquetMetaDataPushDecoder {
     column_index_policy: PageIndexPolicy,
     /// policy for loading OffsetIndex (part of the PageIndex)
     offset_index_policy: PageIndexPolicy,
+    /// which rows and columns of the column index should be read
+    column_index_mask: ColumnChunkMask,
+    /// which rows and columns of the offset index should be read
+    offset_index_mask: ColumnChunkMask,
     /// Underlying buffers
     buffers: crate::util::push_buffers::PushBuffers,
     /// Encryption API
@@ -250,6 +255,8 @@ impl ParquetMetaDataPushDecoder {
             state: DecodeState::ReadingFooter,
             column_index_policy: PageIndexPolicy::Optional,
             offset_index_policy: PageIndexPolicy::Optional,
+            column_index_mask: ColumnChunkMask::all(),
+            offset_index_mask: ColumnChunkMask::all(),
             buffers: crate::util::push_buffers::PushBuffers::new(file_len),
             metadata_parser: MetadataParser::new(),
         })
@@ -266,6 +273,11 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// This can be used to parse and populate the page index structures
     /// after the metadata has already been decoded.
+    ///
+    /// When decoding page indexes, any existing page indexes in `metadata` will be
+    /// replaced based on the configured policies. See
+    /// [`crate::file::metadata::ParquetMetaDataReader::read_page_indexes`] for details
+    /// on the replacement behavior.
     pub fn try_new_with_metadata(file_len: u64, metadata: ParquetMetaData) -> Result<Self> {
         let mut new_self = Self::try_new(file_len)?;
         new_self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
@@ -297,6 +309,25 @@ impl ParquetMetaDataPushDecoder {
     /// Set the policy for reading the OffsetIndex (part of the PageIndex)
     pub fn with_offset_index_policy(mut self, offset_index_policy: PageIndexPolicy) -> Self {
         self.offset_index_policy = offset_index_policy;
+        self
+    }
+
+    /// Select the row groups and columns for which both page index structures are read.
+    pub fn with_page_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.column_index_mask = mask.clone();
+        self.offset_index_mask = mask;
+        self
+    }
+
+    /// Select the row groups and columns for which column indexes are read.
+    pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.column_index_mask = mask;
+        self
+    }
+
+    /// Select the row groups and columns for which offset indexes are read.
+    pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.offset_index_mask = mask;
         self
     }
 
@@ -412,9 +443,16 @@ impl ParquetMetaDataPushDecoder {
                         &metadata,
                         self.column_index_policy,
                         self.offset_index_policy,
+                        &self.column_index_mask,
+                        &self.offset_index_mask,
                     );
 
                     let Some(page_index_range) = range else {
+                        // There is nothing to decode because both policies are Skip, the masks
+                        // select nothing, or the file has no index ranges. Clear any previously
+                        // loaded indexes while preserving the compatibility behavior that
+                        // PageIndexPolicy::Required accepts files with no page indexes at all.
+                        metadata.set_page_index(None);
                         self.state = DecodeState::Finished;
                         return Ok(DecodeResult::Data(*metadata));
                     };
@@ -424,14 +462,13 @@ impl ParquetMetaDataPushDecoder {
                         return Ok(needs_range(page_index_range));
                     }
 
-                    let buffer = self.get_bytes(&page_index_range)?;
-                    let offset = page_index_range.start;
                     parse_page_index(
                         &mut metadata,
                         self.column_index_policy,
                         self.offset_index_policy,
-                        &buffer,
-                        offset,
+                        &self.column_index_mask,
+                        &self.offset_index_mask,
+                        &self.buffers,
                     )?;
                     self.state = DecodeState::Finished;
                     return Ok(DecodeResult::Data(*metadata));
@@ -482,21 +519,38 @@ enum DecodeState {
 }
 
 /// Returns the byte range needed to read the offset/page indexes, based on the
-/// specified policies
+/// specified policies and masks
 ///
 /// Returns None if no page indexes are needed
-pub fn range_for_page_index(
+pub(crate) fn range_for_page_index(
     metadata: &ParquetMetaData,
     column_index_policy: PageIndexPolicy,
     offset_index_policy: PageIndexPolicy,
+    column_index_mask: &ColumnChunkMask,
+    offset_index_mask: &ColumnChunkMask,
 ) -> Option<Range<u64>> {
-    let mut range = None;
-    for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
-        if column_index_policy != PageIndexPolicy::Skip {
-            range = acc_range(range, c.column_index_range());
-        }
-        if offset_index_policy != PageIndexPolicy::Skip {
-            range = acc_range(range, c.offset_index_range());
+    let mut range: Option<Range<u64>> = None;
+    for (policy, mask, column_index) in [
+        (column_index_policy, column_index_mask, true),
+        (offset_index_policy, offset_index_mask, false),
+    ] {
+        if policy != PageIndexPolicy::Skip {
+            for row_group in mask.row_group_indices(metadata.num_row_groups()) {
+                for column in mask.column_indices(metadata.row_group(row_group).num_columns()) {
+                    let column = metadata.row_group(row_group).column(column);
+                    let index = if column_index {
+                        column.column_index_range()
+                    } else {
+                        column.offset_index_range()
+                    };
+                    if let Some(index) = index {
+                        range = Some(match range {
+                            Some(range) => range.start.min(index.start)..range.end.max(index.end),
+                            None => index,
+                        });
+                    }
+                }
+            }
         }
     }
     range
@@ -530,6 +584,33 @@ mod tests {
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
         assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
+    }
+
+    #[test]
+    fn test_range_for_page_index_respects_column_mask() {
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(test_file_len()).unwrap();
+        push_ranges_to_metadata_decoder(&mut decoder, vec![test_file_range()]);
+        let metadata = expect_data(decoder.try_decode());
+
+        let all = range_for_page_index(
+            &metadata,
+            PageIndexPolicy::Required,
+            PageIndexPolicy::Skip,
+            &ColumnChunkMask::all(),
+            &ColumnChunkMask::all(),
+        )
+        .unwrap();
+        let masked = range_for_page_index(
+            &metadata,
+            PageIndexPolicy::Required,
+            PageIndexPolicy::Skip,
+            &ColumnChunkMask::columns([0]),
+            &ColumnChunkMask::all(),
+        )
+        .unwrap();
+
+        assert!(all.start <= masked.start && masked.end <= all.end);
+        assert!(masked.end - masked.start < all.end - all.start);
     }
 
     /// It is possible to feed some, but not all, of the footer into the metadata decoder
@@ -612,6 +693,8 @@ mod tests {
 
         // expect the second request to read the offset indexes
         let ranges = expect_needs_data(metadata_decoder.try_decode());
+        // since we're reading all indexes, there should be a single range needed
+        assert_eq!(ranges.len(), 1);
         push_ranges_to_metadata_decoder(&mut metadata_decoder, ranges);
 
         // expect the third request to read the actual data
