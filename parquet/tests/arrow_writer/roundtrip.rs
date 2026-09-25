@@ -17,19 +17,27 @@
 
 //! Round-trip tests for Arrow data written to Parquet.
 
+use super::roundtrip_helpers::{RoundTripTest, SMALL_SIZE, required_and_optional, values_required};
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_array::builder::FixedSizeBinaryBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
     DecimalType, Float16Type, Time32MillisecondType, Time64MicrosecondType,
 };
 use arrow_array::{
-    Array, ArrayRef, Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray,
-    Float16Array, Int32Array, ListArray, PrimitiveArray, RecordBatch, RecordBatchReader,
-    StringArray, StructArray, Time32MillisecondArray, Time64MicrosecondArray, UInt8Array,
-    UInt8DictionaryArray, UInt32Array, UInt64Array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, Date32Array, Date64Array, Decimal128Array,
+    Decimal256Array, DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
+    DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array,
+    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray,
+    LargeStringArray, ListArray, PrimitiveArray, RecordBatch, RecordBatchReader, StringArray,
+    StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
+    UInt8DictionaryArray, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, i256};
 use arrow_data::ArrayDataBuilder;
@@ -42,6 +50,240 @@ use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchR
 use parquet::basic::Type as PhysicalType;
 use parquet::errors::Result;
 use parquet::file::properties::WriterProperties;
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn i8_single_column() {
+    required_and_optional::<Int8Array, _>(0..SMALL_SIZE as i8);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn i16_single_column() {
+    required_and_optional::<Int16Array, _>(0..SMALL_SIZE as i16);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn i32_single_column() {
+    required_and_optional::<Int32Array, _>(0..SMALL_SIZE as i32);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn i64_single_column() {
+    required_and_optional::<Int64Array, _>(0..SMALL_SIZE as i64);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn u8_single_column() {
+    required_and_optional::<UInt8Array, _>(0..SMALL_SIZE as u8);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn u16_single_column() {
+    required_and_optional::<UInt16Array, _>(0..SMALL_SIZE as u16);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn u32_single_column() {
+    required_and_optional::<UInt32Array, _>(0..SMALL_SIZE as u32);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn u64_single_column() {
+    required_and_optional::<UInt64Array, _>(0..SMALL_SIZE as u64);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn f32_single_column() {
+    required_and_optional::<Float32Array, _>((0..SMALL_SIZE).map(|i| i as f32));
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn f64_single_column() {
+    required_and_optional::<Float64Array, _>((0..SMALL_SIZE).map(|i| i as f64));
+}
+
+// The timestamp array types don't implement From<Vec<T>> because they need the timezone
+// argument, and they also doesn't support building from a Vec<Option<T>>, so call
+// RoundTripTest manually instead of calling required_and_optional for these tests.
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn timestamp_second_single_column() {
+    let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
+    let values = Arc::new(TimestampSecondArray::from(raw_values));
+
+    RoundTripTest::new(values).with_nullable(false).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn timestamp_millisecond_single_column() {
+    let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
+    let values = Arc::new(TimestampMillisecondArray::from(raw_values));
+
+    RoundTripTest::new(values).with_nullable(false).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn timestamp_microsecond_single_column() {
+    let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
+    let values = Arc::new(TimestampMicrosecondArray::from(raw_values));
+
+    RoundTripTest::new(values).with_nullable(false).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn timestamp_nanosecond_single_column() {
+    let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
+    let values = Arc::new(TimestampNanosecondArray::from(raw_values));
+
+    RoundTripTest::new(values).with_nullable(false).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn date32_single_column() {
+    required_and_optional::<Date32Array, _>(0..SMALL_SIZE as i32);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn date64_single_column() {
+    // Date64 must be a multiple of 86400000, see ARROW-10925
+    required_and_optional::<Date64Array, _>((0..(SMALL_SIZE as i64 * 86400000)).step_by(86400000));
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn time32_second_single_column() {
+    required_and_optional::<Time32SecondArray, _>(0..SMALL_SIZE as i32);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn time32_millisecond_single_column() {
+    required_and_optional::<Time32MillisecondArray, _>(0..SMALL_SIZE as i32);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn time64_microsecond_single_column() {
+    required_and_optional::<Time64MicrosecondArray, _>(0..SMALL_SIZE as i64);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn time64_nanosecond_single_column() {
+    required_and_optional::<Time64NanosecondArray, _>(0..SMALL_SIZE as i64);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn duration_second_single_column() {
+    required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn duration_millisecond_single_column() {
+    required_and_optional::<DurationMillisecondArray, _>(0..SMALL_SIZE as i64);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn duration_microsecond_single_column() {
+    required_and_optional::<DurationMicrosecondArray, _>(0..SMALL_SIZE as i64);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn duration_nanosecond_single_column() {
+    required_and_optional::<DurationNanosecondArray, _>(0..SMALL_SIZE as i64);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn binary_single_column() {
+    let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
+    let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
+    let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
+
+    // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
+    values_required::<BinaryArray, _>(many_vecs_iter);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn binary_view_single_column() {
+    let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
+    let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
+    let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
+
+    // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
+    values_required::<BinaryViewArray, _>(many_vecs_iter);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn large_binary_single_column() {
+    let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
+    let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
+    let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
+
+    // LargeBinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
+    values_required::<LargeBinaryArray, _>(many_vecs_iter);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn fixed_size_binary_single_column() {
+    let mut builder = FixedSizeBinaryBuilder::new(4);
+    builder.append_value(b"0123").unwrap();
+    builder.append_null();
+    builder.append_value(b"8910").unwrap();
+    builder.append_value(b"1112").unwrap();
+    let array = Arc::new(builder.finish());
+
+    RoundTripTest::new(array).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn string_single_column() {
+    let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
+    let raw_strs = raw_values.iter().map(|s| s.as_str());
+
+    required_and_optional::<StringArray, _>(raw_strs);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn large_string_single_column() {
+    let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
+    let raw_strs = raw_values.iter().map(|s| s.as_str());
+
+    required_and_optional::<LargeStringArray, _>(raw_strs);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn string_view_single_column() {
+    let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
+    let raw_strs = raw_values.iter().map(|s| s.as_str());
+
+    required_and_optional::<StringViewArray, _>(raw_strs);
+}
 
 #[test]
 fn test_unsigned_roundtrip() {
