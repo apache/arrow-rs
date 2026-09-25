@@ -18,6 +18,7 @@
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::RowGroups;
 use crate::arrow::arrow_reader::RowSelection;
+use crate::arrow::push_decoder::page_store::PageStore;
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::ParquetError;
 use crate::file::metadata::page_index::RowGroupPageIndex;
@@ -272,6 +273,16 @@ pub(crate) enum ColumnChunkData {
     },
     /// Full column chunk and the offset within the original file
     Dense { offset: usize, data: Bytes },
+    /// Pages served from a [`PageStore`] that the push decoder shares with
+    /// the reader. Pages can be added and removed while a reader built over
+    /// this chunk is alive. See [`PageStore`] for the access patterns it
+    /// supports.
+    Shared {
+        /// Length of the full column chunk
+        length: usize,
+        /// Shared page store, keyed by file offset
+        store: Arc<PageStore>,
+    },
 }
 
 impl ColumnChunkData {
@@ -292,6 +303,12 @@ impl ColumnChunkData {
                 let start = start as usize - *offset;
                 Ok(data.slice(start..))
             }
+            ColumnChunkData::Shared { store, .. } => store.get(start).ok_or_else(|| {
+                ParquetError::General(format!(
+                    "Internal Error: no page at offset {start} in shared column chunk data. \
+                     The push decoder did not add the page before the reader needed it."
+                ))
+            }),
         }
     }
 }
@@ -302,6 +319,7 @@ impl Length for ColumnChunkData {
         match &self {
             ColumnChunkData::Sparse { length, .. } => *length as u64,
             ColumnChunkData::Dense { data, .. } => data.len() as u64,
+            ColumnChunkData::Shared { length, .. } => *length as u64,
         }
     }
 }
@@ -314,7 +332,14 @@ impl ChunkReader for ColumnChunkData {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> crate::errors::Result<Bytes> {
-        Ok(self.get(start)?.slice(..length))
+        let data = self.get(start)?;
+        if data.len() < length {
+            return Err(ParquetError::General(format!(
+                "Internal Error: column chunk data at offset {start} has {} bytes, expected {length}",
+                data.len()
+            )));
+        }
+        Ok(data.slice(..length))
     }
 }
 
