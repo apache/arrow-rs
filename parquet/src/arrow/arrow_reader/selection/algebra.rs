@@ -30,6 +30,8 @@ use std::iter::Peekable;
 // Use word-at-a-time expansion for masks with at least 8192 rows, roughly
 // 75% outer selectivity and 5% inner selectivity. Smaller or sparser inputs
 // use set indices to avoid scanning every output word.
+// In `outer.and_then(inner)`, outer selects from the original rows, and inner
+// selects from those selected rows: inner.len() == outer.count_set_bits().
 // The selectivity constants are divisors: at most 1/4 dropped, at least 1/20 kept.
 const AND_THEN_DENSE_MASK_MIN_LEN: usize = 8192;
 const AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION: usize = 4;
@@ -431,6 +433,8 @@ fn should_use_dense_mask(mask_len: usize, selected_count: usize, other_true_coun
 /// Maps each set bit in `other` to the corresponding set bit in `mask`.
 /// Requires `other.len() == mask.count_set_bits()`.
 fn and_then_sparse_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
+    debug_assert_eq!(other.len(), mask.count_set_bits());
+
     let mut builder = BooleanBufferBuilder::new(mask.len());
     let mut outer_set_indices = mask.set_indices();
     let mut next_selected_ordinal = 0usize;
@@ -460,6 +464,8 @@ fn and_then_sparse_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> Boolean
 /// Requires `other.len() == mask.count_set_bits()`.
 #[inline(never)]
 fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
+    debug_assert_eq!(other.len(), mask.count_set_bits());
+
     let mut other_chunks = other.bit_chunks().iter_padded();
     let mut other_remaining = other.len();
     let mut pending = 0_u128;
@@ -792,6 +798,46 @@ mod tests {
         );
     }
 
+    struct AndThenTest {
+        outer: BooleanBuffer,
+        inner: BooleanBuffer,
+        dense_mask_expected: bool,
+    }
+
+    impl AndThenTest {
+        fn run(self) {
+            let Self {
+                outer,
+                inner,
+                dense_mask_expected,
+            } = self;
+            assert_eq!(inner.len(), outer.count_set_bits());
+            assert_eq!(
+                should_use_dense_mask(outer.len(), inner.len(), inner.count_set_bits()),
+                dense_mask_expected
+            );
+
+            let mut inner_idx = 0;
+            let expected = BooleanBuffer::from_iter((0..outer.len()).map(|i| {
+                if !outer.value(i) {
+                    return false;
+                }
+                let value = inner.value(inner_idx);
+                inner_idx += 1;
+                value
+            }));
+
+            if dense_mask_expected {
+                assert_eq!(and_then_dense_masks(&outer, &inner), expected);
+            }
+
+            let outer = RowSelection::from_boolean_buffer(outer);
+            let inner = RowSelection::from_boolean_buffer(inner);
+            let actual = outer.and_then(&inner);
+            assert_eq!(actual.as_mask().unwrap(), &expected);
+        }
+    }
+
     #[test]
     fn test_dense_mask_and_then_mask_with_offsets() {
         for len in [8192, 8193, 10_000] {
@@ -809,26 +855,12 @@ mod tests {
                 )
                 .slice(inner_offset, inner_len);
 
-                assert!(should_use_dense_mask(
-                    outer.len(),
-                    inner.len(),
-                    inner.count_set_bits()
-                ));
-
-                let mut inner_idx = 0;
-                let expected = BooleanBuffer::from_iter((0..len).map(|i| {
-                    if !outer.value(i) {
-                        return false;
-                    }
-                    let value = inner.value(inner_idx);
-                    inner_idx += 1;
-                    value
-                }));
-
-                let outer = RowSelection::from_boolean_buffer(outer);
-                let inner = RowSelection::from_boolean_buffer(inner);
-                let actual = outer.and_then(&inner);
-                assert_eq!(actual.as_mask().unwrap(), &expected);
+                AndThenTest {
+                    outer,
+                    inner,
+                    dense_mask_expected: true,
+                }
+                .run();
             }
         }
     }
@@ -847,26 +879,12 @@ mod tests {
             )
             .slice(inner_offset, inner_len);
 
-            assert!(should_use_dense_mask(
-                outer.len(),
-                inner.len(),
-                inner.count_set_bits()
-            ));
-
-            let mut inner_idx = 0;
-            let expected = BooleanBuffer::from_iter((0..len).map(|i| {
-                if !outer.value(i) {
-                    return false;
-                }
-                let value = inner.value(inner_idx);
-                inner_idx += 1;
-                value
-            }));
-
-            let outer = RowSelection::from_boolean_buffer(outer);
-            let inner = RowSelection::from_boolean_buffer(inner);
-            let actual = outer.and_then(&inner);
-            assert_eq!(actual.as_mask().unwrap(), &expected);
+            AndThenTest {
+                outer,
+                inner,
+                dense_mask_expected: true,
+            }
+            .run();
         }
     }
 
@@ -1170,12 +1188,12 @@ mod tests {
                                         || select_last && j == len - 1
                                 }))
                                 .slice(inner_offset, len);
-                            let mut values = inner.iter();
-                            let expected = BooleanBuffer::from_iter(
-                                mask.iter().map(|v| v && values.next().unwrap()),
-                            );
-                            assert_eq!(and_then_masks(&mask, &inner), expected);
-                            assert_eq!(and_then_dense_masks(&mask, &inner), expected);
+                            AndThenTest {
+                                outer: mask.clone(),
+                                inner,
+                                dense_mask_expected: true,
+                            }
+                            .run();
                         }
                     }
                 }

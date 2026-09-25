@@ -88,8 +88,11 @@ pub fn compress(value: u64, mask: u64) -> u64 {
 /// This is the inverse of [`compress`] on the selected bits:
 /// `expand(compress(value, mask), mask) == value & mask`.
 ///
-/// Equivalent to the x86 BMI2 `PDEP` instruction, implemented with a portable
-/// scalar loop that visits whichever is fewer: unset or set bits in `mask`.
+/// Equivalent to the x86 BMI2 `PDEP` instruction. When compiled with the
+/// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
+/// this lowers to the hardware `pdep` instruction; otherwise it falls back
+/// to a portable scalar loop that visits whichever is fewer: unset or set
+/// bits in `mask`.
 ///
 /// # Functional Example
 ///
@@ -113,29 +116,40 @@ pub fn compress(value: u64, mask: u64) -> u64 {
 /// assert_eq!(expand(compress(value, mask), mask), value & mask);
 /// ```
 #[inline]
-pub fn expand(mut value: u64, mask: u64) -> u64 {
-    if value == 0 {
-        return 0;
+pub fn expand(value: u64, mask: u64) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    {
+        // SAFETY: the `bmi2` target feature is statically enabled for this
+        // build, so the `pdep` instruction is guaranteed to be available.
+        unsafe { std::arch::x86_64::_pdep_u64(value, mask) }
     }
 
-    let mut zeros = !mask;
-    if zeros.count_ones() <= 32 {
-        // Insert zeros from low to high; excess input bits shift out.
-        while zeros != 0 {
-            let lower = (1_u64 << zeros.trailing_zeros()) - 1;
-            value = (value & lower) | ((value & !lower) << 1);
-            zeros &= zeros - 1;
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        let mut value = value;
+        if value == 0 {
+            return 0;
         }
-        value
-    } else {
-        let mut output = 0;
-        let mut ones = mask;
-        while ones != 0 {
-            output |= (value & 1) << ones.trailing_zeros();
-            value >>= 1;
-            ones &= ones - 1;
+
+        let mut zeros = !mask;
+        if zeros.count_ones() <= 32 {
+            // Insert zeros from low to high; excess input bits shift out.
+            while zeros != 0 {
+                let lower = (1_u64 << zeros.trailing_zeros()) - 1;
+                value = (value & lower) | ((value & !lower) << 1);
+                zeros &= zeros - 1;
+            }
+            value
+        } else {
+            let mut output = 0;
+            let mut ones = mask;
+            while ones != 0 {
+                output |= (value & 1) << ones.trailing_zeros();
+                value >>= 1;
+                ones &= ones - 1;
+            }
+            output
         }
-        output
     }
 }
 
@@ -1067,7 +1081,8 @@ mod tests {
             }
         }
 
-        // Masks across the full density range, exercising both loops
+        // Masks across the full density range, exercising the hardware `pdep`
+        // path on a `bmi2` build or both portable loops otherwise.
         for _ in 0..20_000 {
             let density = rng.random_range(0.0..=1.0);
             let mask = (0..64).fold(0_u64, |mask, bit| {
