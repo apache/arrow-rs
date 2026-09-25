@@ -27,7 +27,6 @@ permissions:
 jobs:
   miri-checks:
     name: MIRI
-    if: github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

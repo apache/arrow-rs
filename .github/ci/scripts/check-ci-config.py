@@ -83,7 +83,7 @@ def validate_config(root=ROOT):
     }
     assert called == reusable, "A reusable workflow is missing from Required Checks"
     miri = load_yaml(workflows / "miri.yaml")["jobs"]["miri-checks"]
-    assert miri["if"] == "github.event_name == 'merge_group'", "Miri must only run in the queue"
+    assert "if" not in miri, "Miri event routing belongs in compute-changes.py"
     print("CI configuration is valid")
 
 
@@ -158,7 +158,7 @@ class ConfigurationTests(unittest.TestCase):
             (".github/workflows/ci.yml", "      - miri\n", ""),
             (".github/workflows/ci.yml", "  pull_request:\n", "  pull_request:\n    paths: ['arrow/**']\n"),
             (".github/workflows/ci.yml", "    if: always()", "    if: success()"),
-            (".github/workflows/miri.yaml", "'merge_group'", "'pull_request'"),
+            (".github/workflows/miri.yaml", "    name: MIRI\n", "    name: MIRI\n    if: github.event_name == 'merge_group'\n"),
             (".github/workflows/arrow.yml", "  workflow_call:", "  workflow_call:\n  pull_request:"),
         ]
         for filename, before, after in cases:

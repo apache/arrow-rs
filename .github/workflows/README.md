@@ -45,6 +45,11 @@ PR suite. `.github/ci/scripts/compute-changes.py` compares the PR head with its
 merge base, including both paths of a renamed file. Queue builds run every
 suite regardless of changed paths.
 
+`compute-changes.py` owns suite selection for all three events: it applies path
+filters on PRs, selects all suites for queue builds, and excludes Miri on pushes
+to `main`. Every suite call in `ci.yml` uses the same `contains(...)` condition
+to check the selected list. The Miri workflow does not repeat the event check.
+
 The required workflow has no path filter: otherwise a docs-only PR could wait
 forever for a check that never starts. **Required Checks** runs even after a
 dependency fails. Intentionally skipped suites are allowed; a failed or
