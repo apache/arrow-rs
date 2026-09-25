@@ -2774,7 +2774,7 @@ mod test {
     }
 
     /// return the metadata for the test file
-    pub fn test_file_parquet_metadata() -> Arc<crate::file::metadata::ParquetMetaData> {
+    pub fn test_file_parquet_metadata() -> Arc<ParquetMetaData> {
         let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(test_file_len()).unwrap();
         push_ranges_to_metadata_decoder(&mut metadata_decoder, vec![test_file_range()]);
         let metadata = metadata_decoder.try_decode().unwrap();
@@ -2785,7 +2785,7 @@ mod test {
     }
 
     /// return the metadata for the test file, including the offset index
-    fn test_file_parquet_metadata_with_offset_index() -> Arc<crate::file::metadata::ParquetMetaData>
+    fn test_file_parquet_metadata_with_offset_index() -> Arc<ParquetMetaData>
     {
         let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(test_file_len())
             .unwrap()
