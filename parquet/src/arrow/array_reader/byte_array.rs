@@ -414,12 +414,12 @@ impl ByteArrayDecoderPlain {
             self.offset = end_offset;
             read += 1;
         }
-        self.max_remaining_values -= to_read;
+        self.max_remaining_values -= read;
 
         if self.validate_utf8 {
             output.check_valid_utf8(initial_values_length)?;
         }
-        Ok(to_read)
+        Ok(read)
     }
 
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
