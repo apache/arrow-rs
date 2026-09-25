@@ -502,20 +502,18 @@ impl<T: Clone> Grid<T> {
         self.cells.get(index)?.as_ref()
     }
 
-    /// Sets a value at the specified row and column
-    pub(crate) fn insert(&mut self, row: usize, col: usize, value: T) {
-        let row_offset = self.rows.position(row);
-        let col_offset = self.cols.position(col);
-        if let Some(row_offset) = row_offset
-            && let Some(col_offset) = col_offset
-        {
-            // update the existing cell
-            let index = row_offset * self.cols.len() + col_offset;
+    /// Sets a value at the specified row and column.
+    ///
+    /// Returns `false`, and drops `value`, if the grid has no storage for the position.
+    pub(crate) fn insert(&mut self, row: usize, col: usize, value: T) -> bool {
+        let (Some(row_offset), Some(col_offset)) =
+            (self.rows.position(row), self.cols.position(col))
+        else {
+            return false;
+        };
 
-            if index < self.cells.len() {
-                self.cells[index] = Some(value);
-            }
-        }
+        self.cells[row_offset * self.cols.len() + col_offset] = Some(value);
+        true
     }
 
     /// Returns true if the grid has no values
@@ -623,7 +621,11 @@ impl PageIndex {
         }
     }
 
-    /// Convert this `PageIndex` into a [`PageIndexBuilder`]
+    /// Convert this `PageIndex` into a [`PageIndexBuilder`].
+    ///
+    /// The builder retains the storage shape of this index. Consequently, its `put_*`
+    /// methods return `false` for positions outside that shape. The `allocate_*` methods
+    /// can replace it with dense storage, but discard existing entries for that index type.
     pub fn into_builder(self) -> PageIndexBuilder {
         self.into()
     }
@@ -715,14 +717,6 @@ impl PageIndexBuilder {
         Some(grid)
     }
 
-    fn storage_for_selection<T: Clone>(
-        num_row_groups: usize,
-        num_columns: usize,
-        mask: &ColumnChunkMask,
-    ) -> Option<Grid<T>> {
-        Self::storage_for_update(num_row_groups, num_columns, Some(mask), vec![])
-    }
-
     pub(crate) fn new_for_update(
         page_index: Option<&dyn PageIndexProvider>,
         num_row_groups: usize,
@@ -775,29 +769,6 @@ impl PageIndexBuilder {
         }
     }
 
-    /// Creates a new [`PageIndexBuilder`] where storage is defined by the policy
-    ///
-    /// For sparse indexes, this can save a great deal of memory
-    pub fn new_with_mask(
-        num_row_groups: usize,
-        num_columns: usize,
-        column_index_mask: ColumnChunkMask,
-        offset_index_mask: ColumnChunkMask,
-    ) -> Self {
-        Self {
-            column_indexes: Self::storage_for_selection(
-                num_row_groups,
-                num_columns,
-                &column_index_mask,
-            ),
-            offset_indexes: Self::storage_for_selection(
-                num_row_groups,
-                num_columns,
-                &offset_index_mask,
-            ),
-        }
-    }
-
     /// Creates a new [`PageIndexBuilder`] from an existing [`PageIndex`]
     ///
     /// This takes ownership of the index structures from the provided [`PageIndex`],
@@ -817,6 +788,7 @@ impl PageIndexBuilder {
     ///
     /// This can be used to add column index storage to a builder that lacks one
     /// (either a `Default` builder, or one created from a [`PageIndex`] without column indexes).
+    /// This replaces any existing column index storage and discards its entries.
     pub fn allocate_column_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
         let keep_cols = Keep::new_full(num_columns);
         let keep_rows = Keep::new_full(num_row_groups);
@@ -831,6 +803,7 @@ impl PageIndexBuilder {
     ///
     /// This can be used to add offset index storage to a builder that lacks one
     /// (either a `Default` builder, or one created from a [`PageIndex`] without offset indexes).
+    /// This replaces any existing offset index storage and discards its entries.
     pub fn allocate_offset_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
         let keep_cols = Keep::new_full(num_columns);
         let keep_rows = Keep::new_full(num_row_groups);
@@ -839,32 +812,32 @@ impl PageIndexBuilder {
 
     /// Sets the column index for a specific row group and column
     ///
-    /// If column indexes were not allocated (see [`Self::allocate_column_indexes`]),
-    /// or the row group or column index is out of bounds, this method does nothing.
+    /// Returns `false`, and drops `column_index`, if column indexes were not allocated
+    /// (see [`Self::allocate_column_indexes`]) or the grid has no storage for the position.
     pub fn put_column_index(
         &mut self,
         column_index: ColumnIndexMetaData,
         row_group_idx: usize,
         column_idx: usize,
-    ) {
-        if let Some(ref mut indexes) = self.column_indexes {
-            indexes.insert(row_group_idx, column_idx, column_index);
-        }
+    ) -> bool {
+        self.column_indexes
+            .as_mut()
+            .is_some_and(|indexes| indexes.insert(row_group_idx, column_idx, column_index))
     }
 
     /// Sets the offset index for a specific row group and column
     ///
-    /// If offset indexes were not allocated (see [`Self::allocate_offset_indexes`]),
-    /// or the row group or column index is out of bounds, this method does nothing.
+    /// Returns `false`, and drops `offset_index`, if offset indexes were not allocated
+    /// (see [`Self::allocate_offset_indexes`]) or the grid has no storage for the position.
     pub fn put_offset_index(
         &mut self,
         offset_index: OffsetIndexMetaData,
         row_group_idx: usize,
         column_idx: usize,
-    ) {
-        if let Some(ref mut indexes) = self.offset_indexes {
-            indexes.insert(row_group_idx, column_idx, offset_index);
-        }
+    ) -> bool {
+        self.offset_indexes
+            .as_mut()
+            .is_some_and(|indexes| indexes.insert(row_group_idx, column_idx, offset_index))
     }
 
     /// Checks if an index structure is entirely empty (all entries are None)
@@ -907,7 +880,7 @@ impl From<PageIndex> for PageIndexBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{Grid, Keep};
+    use super::{Grid, Keep, PageIndex};
     use crate::{
         basic::BoundaryOrder,
         file::page_index::column_index::{ColumnIndexMetaData, PrimitiveColumnIndex},
@@ -937,9 +910,10 @@ mod tests {
         let mut storage = Grid::new(keep_rows, keep_cols);
 
         // Test insertion and retrieval
-        storage.insert(0, 5, ci.clone());
-        storage.insert(3, 10, ci.clone());
-        storage.insert(7, 99, ci.clone());
+        assert!(storage.insert(0, 5, ci.clone()));
+        assert!(storage.insert(3, 10, ci.clone()));
+        assert!(storage.insert(7, 99, ci.clone()));
+        assert!(!storage.insert(1, 5, ci.clone()));
 
         // Test successful retrievals
         assert!(storage.get(0, 5).is_some());
@@ -966,6 +940,17 @@ mod tests {
     }
 
     #[test]
+    fn test_builder_put_reports_missing_storage() {
+        let ci = colidx_for_test();
+        let mut grid = Grid::new(Keep::new([0], 1), Keep::new([0], 2));
+        assert!(grid.insert(0, 0, ci.clone()));
+
+        let mut builder = PageIndex::new(Some(grid), None).into_builder();
+        assert!(builder.put_column_index(ci.clone(), 0, 0));
+        assert!(!builder.put_column_index(ci, 0, 1));
+    }
+
+    #[test]
     fn test_grid_is_empty() {
         let ci = colidx_for_test();
 
@@ -974,7 +959,7 @@ mod tests {
         let mut storage = Grid::new(keep_rows, keep_cols);
         assert!(storage.is_empty());
 
-        storage.insert(0, 5, ci.clone());
+        assert!(storage.insert(0, 5, ci.clone()));
         assert!(!storage.is_empty());
     }
 }
