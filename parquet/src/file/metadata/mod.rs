@@ -49,6 +49,9 @@
 //! Please see [`external_metadata.rs`]
 //!
 //! [`external_metadata.rs`]: https://github.com/apache/arrow-rs/tree/master/parquet/examples/external_metadata.rs
+//!
+#[cfg(feature = "arrow")]
+mod dictionary;
 mod footer_tail;
 mod memory;
 mod options;
