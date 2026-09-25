@@ -224,12 +224,86 @@ impl PushBuffers {
         }
     }
 
+    /// Release every buffered byte that falls in any of `ranges`, whatever
+    /// shape the bytes were pushed in.
+    ///
+    /// Unlike [`Self::clear_ranges`], which only drops buffers whose range
+    /// matches exactly, this trims or splits any buffer that overlaps a range
+    /// and keeps the parts outside it. The parts are zero-copy slices, so the
+    /// underlying allocation is freed only once every slice of it is released.
+    ///
+    /// Adjacent and overlapping ranges are merged first, so a caller that
+    /// releases many consecutive pages in one call changes each run of
+    /// buffers in one step.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn release_ranges(&mut self, ranges: &[Range<u64>]) {
+        for range in merge_ranges(ranges) {
+            self.release_merged(&range);
+        }
+        self.reset_if_empty();
+    }
+
+    /// Release the bytes in the non-empty `range`, replacing only the buffers
+    /// that can overlap it.
+    #[cfg(feature = "arrow")]
+    fn release_merged(&mut self, range: &Range<u64>) {
+        // A buffer that starts `max_len` or more bytes before `range.start`
+        // ends at or before it, and a buffer that starts at or after
+        // `range.end` is after it. Only the buffers between can overlap.
+        let lo = self
+            .ranges
+            .partition_point(|r| r.start.saturating_add(self.max_len) <= range.start);
+        let hi = self.ranges.partition_point(|r| r.start < range.end);
+        if !self.ranges[lo..hi].iter().any(|r| r.end > range.start) {
+            return;
+        }
+        let mut kept = Vec::with_capacity(hi - lo + 1);
+        let mut tails = vec![];
+        for (r, buffer) in self.ranges[lo..hi].iter().zip(&self.buffers[lo..hi]) {
+            if r.end <= range.start {
+                kept.push((r.clone(), buffer.clone()));
+                continue;
+            }
+            if r.start < range.start {
+                let len = (range.start - r.start) as usize;
+                kept.push((r.start..range.start, buffer.slice(..len)));
+            }
+            if range.end < r.end {
+                let offset = (range.end - r.start) as usize;
+                tails.push((range.end..r.end, buffer.slice(offset..)));
+            }
+        }
+        // The kept parts keep their start, so they stay in order. Every tail
+        // starts at `range.end`, which is after every start in the window and
+        // at or before every start after it.
+        kept.extend(tails);
+        let (ranges, buffers): (Vec<_>, Vec<_>) = kept.into_iter().unzip();
+        self.ranges.splice(lo..hi, ranges);
+        self.buffers.splice(lo..hi, buffers);
+    }
+
     /// Clear all buffered ranges and their corresponding data
     pub(crate) fn clear_all_ranges(&mut self) {
         self.ranges.clear();
         self.buffers.clear();
         self.max_len = 0;
     }
+}
+
+/// Sort `ranges` by start, drop empty ranges, and merge ranges that overlap
+/// or touch.
+#[cfg(feature = "arrow")]
+fn merge_ranges(ranges: &[Range<u64>]) -> Vec<Range<u64>> {
+    let mut sorted: Vec<Range<u64>> = ranges.iter().filter(|r| !r.is_empty()).cloned().collect();
+    sorted.sort_unstable_by_key(|r| r.start);
+    let mut merged: Vec<Range<u64>> = Vec::with_capacity(sorted.len());
+    for range in sorted {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
 }
 
 impl Length for PushBuffers {
@@ -285,6 +359,12 @@ impl ChunkReader for PushBuffers {
 mod tests {
     use super::*;
 
+    /// Release one range.
+    #[cfg(feature = "arrow")]
+    fn release(buffers: &mut PushBuffers, range: Range<u64>) {
+        buffers.release_ranges(std::slice::from_ref(&range));
+    }
+
     #[test]
     fn push_range_accepts_matching_length() {
         let mut buffers = PushBuffers::new(100);
@@ -305,6 +385,43 @@ mod tests {
             "Parquet error: Buffer length (4) does not match length (10) of range 10..20"
         );
         assert!(!buffers.has_range(&(10..20)));
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn release_range_trims_and_splits_buffers() {
+        let mut buffers = PushBuffers::new(100);
+        buffers
+            .push_range(0..10, Bytes::from_static(b"0123456789"))
+            .unwrap();
+        buffers
+            .push_range(20..24, Bytes::from_static(b"abcd"))
+            .unwrap();
+
+        // Split the first buffer, leave the second one alone.
+        release(&mut buffers, 3..5);
+        assert_eq!(buffers.buffered_bytes(), 12);
+        assert!(buffers.has_range(&(0..3)));
+        assert!(buffers.has_range(&(5..10)));
+        assert!(!buffers.has_range(&(3..4)));
+        assert_eq!(
+            buffers.get_bytes(5, 5).unwrap(),
+            Bytes::from_static(b"56789")
+        );
+        assert!(buffers.has_range(&(20..24)));
+
+        // A range that spans several buffers trims each of them.
+        release(&mut buffers, 8..22);
+        assert_eq!(buffers.buffered_bytes(), 3 + 3 + 2);
+        assert_eq!(buffers.get_bytes(5, 3).unwrap(), Bytes::from_static(b"567"));
+        assert_eq!(buffers.get_bytes(22, 2).unwrap(), Bytes::from_static(b"cd"));
+
+        // Releasing bytes that are not buffered does nothing.
+        release(&mut buffers, 50..60);
+        assert_eq!(buffers.buffered_bytes(), 8);
+
+        release(&mut buffers, 0..100);
+        assert_eq!(buffers.buffered_bytes(), 0);
     }
 
     /// The bytes of a fake file: byte `i` is `i % 251`, so any slice of it is
@@ -378,6 +495,52 @@ mod tests {
 
     #[test]
     #[cfg(feature = "arrow")]
+    fn release_splits_buffers_and_lookups_span_the_parts() {
+        let mut buffers = PushBuffers::new(1000);
+        for range in [100..200, 0..50, 150..300] {
+            push(&mut buffers, range);
+        }
+        // Splits 100..200 in two and trims the start of 150..300.
+        release(&mut buffers, 120..160);
+        assert_sorted(&buffers);
+        assert_eq!(buffers.ranges, vec![0..50, 100..120, 160..200, 160..300]);
+        assert_eq!(buffers.buffered_bytes(), 50 + 20 + 40 + 140);
+        assert!(buffers.has_range(&(100..120)));
+        assert!(!buffers.has_range(&(110..130)));
+        assert!(!buffers.has_range(&(119..161)));
+        // A lookup after the split still finds the longer, trimmed buffer.
+        assert_eq!(buffers.get_bytes(170, 100).unwrap(), file_bytes(170..270));
+
+        // Several ranges at once, in any order, merged when they touch.
+        buffers.release_ranges(&[180..190, 10..20, 20..30, 250..250]);
+        assert_sorted(&buffers);
+        assert_eq!(
+            buffers.ranges,
+            vec![
+                0..10,
+                30..50,
+                100..120,
+                160..180,
+                160..180,
+                190..200,
+                190..300
+            ]
+        );
+        assert_eq!(buffers.get_bytes(195, 100).unwrap(), file_bytes(195..295));
+        assert!(!buffers.has_range(&(179..181)));
+
+        // Releasing bytes that are not buffered does nothing.
+        let before = buffers.ranges.clone();
+        buffers.release_ranges(&[50..100, 120..160, 300..400]);
+        assert_eq!(buffers.ranges, before);
+
+        release(&mut buffers, 0..1000);
+        assert_eq!(buffers.buffered_bytes(), 0);
+        assert_eq!(buffers.max_len, 0);
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
     fn clear_ranges_drops_exact_matches_only() {
         let mut buffers = PushBuffers::new(1000);
         for range in [10..20, 0..30, 10..15, 40..50] {
@@ -386,6 +549,79 @@ mod tests {
         buffers.clear_ranges(&[40..50, 10..15, 5..30]);
         assert_sorted(&buffers);
         assert_eq!(buffers.ranges, vec![0..30, 10..20]);
+    }
+
+    /// Random pushes, releases and lookups against a list that is scanned in
+    /// full for every lookup.
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn matches_a_linear_scan() {
+        use rand::rngs::StdRng;
+        use rand::{RngExt, SeedableRng};
+
+        fn random_range(rng: &mut StdRng) -> Range<u64> {
+            let start = rng.random_range(0..500);
+            let len = [0, 1, 5, 20, 100, 300][rng.random_range(0..6)];
+            start..start + len
+        }
+
+        for seed in 0..200 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut buffers = PushBuffers::new(1000);
+            let mut model: Vec<Range<u64>> = vec![];
+            for _ in 0..60 {
+                match rng.random_range(0..10) {
+                    0..4 => {
+                        let range = random_range(&mut rng);
+                        push(&mut buffers, range.clone());
+                        model.push(range);
+                    }
+                    4..6 => {
+                        let ranges: Vec<_> = (0..rng.random_range(1..4))
+                            .map(|_| random_range(&mut rng))
+                            .collect();
+                        buffers.release_ranges(&ranges);
+                        for release in ranges.iter().filter(|r| !r.is_empty()) {
+                            model = model
+                                .into_iter()
+                                .flat_map(|r| {
+                                    if r.end <= release.start || release.end <= r.start {
+                                        return vec![r];
+                                    }
+                                    let mut parts = vec![];
+                                    if r.start < release.start {
+                                        parts.push(r.start..release.start);
+                                    }
+                                    if release.end < r.end {
+                                        parts.push(release.end..r.end);
+                                    }
+                                    parts
+                                })
+                                .collect();
+                        }
+                    }
+                    _ => {
+                        let range = random_range(&mut rng);
+                        let expected = model
+                            .iter()
+                            .any(|r| r.start <= range.start && r.end >= range.end);
+                        assert_eq!(buffers.has_range(&range), expected, "seed {seed} {range:?}");
+                        if expected {
+                            let len = (range.end - range.start) as usize;
+                            assert_eq!(
+                                buffers.get_bytes(range.start, len).unwrap(),
+                                file_bytes(range.clone())
+                            );
+                        }
+                    }
+                }
+                assert_sorted(&buffers);
+                let mut actual = buffers.ranges.clone();
+                actual.sort_by_key(|r| (r.start, r.end));
+                model.sort_by_key(|r| (r.start, r.end));
+                assert_eq!(actual, model, "seed {seed}");
+            }
+        }
     }
 
     #[test]

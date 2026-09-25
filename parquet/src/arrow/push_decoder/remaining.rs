@@ -19,16 +19,32 @@ use crate::DecodeResult;
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, RowGroupPlan, RowGroupSelection, RowSelection,
 };
+use crate::arrow::push_decoder::FetchGranularity;
 use crate::arrow::push_decoder::reader_builder::{
-    RowBudget, RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
+    IncrementalBuildResult, RowBudget, RowGroupBuildResult, RowGroupReaderBuilder,
+    RowGroupReaderBuilderParts,
 };
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
+use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
+
+/// One step of [`RemainingRowGroups::try_next_batch_incremental`].
+#[derive(Debug)]
+pub(crate) enum IncrementalStep {
+    /// Bytes needed before the next batch can be decoded.
+    NeedsData(Vec<Range<u64>>),
+    /// The next batch.
+    Batch(RecordBatch),
+    /// A reader for a row group that `try_next_reader` started, to drain.
+    Reader(ParquetRecordBatchReader),
+    /// No more data.
+    Finished,
+}
 
 /// Plan for the next queued row group after row-selection slicing.
 #[derive(Debug)]
@@ -444,6 +460,70 @@ impl RemainingRowGroups {
             return Ok(None);
         }
         self.frontier.peek_next_row_group()
+    }
+
+    /// How [`Self::try_next_batch_incremental`] fetches and decodes.
+    pub fn fetch_granularity(&self) -> FetchGranularity {
+        self.row_group_reader_builder.fetch_granularity()
+    }
+
+    /// Returns true if `try_decode` is decoding the active row group a batch
+    /// at a time.
+    pub fn is_incremental(&self) -> bool {
+        self.row_group_reader_builder.is_incremental()
+    }
+
+    /// Returns the next batch, decoding row groups a batch at a time. See
+    /// [`FetchGranularity::Batch`].
+    pub fn try_next_batch_incremental(&mut self) -> Result<IncrementalStep, ParquetError> {
+        loop {
+            if !self.row_group_reader_builder.has_active_row_group() {
+                match self.frontier.next_readable_row_group()? {
+                    Some(NextRowGroup {
+                        row_group_idx,
+                        row_count,
+                        selection,
+                        budget,
+                    }) => {
+                        self.row_group_reader_builder.next_row_group(
+                            row_group_idx,
+                            row_count,
+                            selection,
+                            budget,
+                        )?;
+                    }
+                    None => return Ok(IncrementalStep::Finished),
+                }
+            }
+
+            match self.row_group_reader_builder.try_build_incremental()? {
+                IncrementalBuildResult::Finished { remaining_budget } => {
+                    self.frontier
+                        .update_budget_after_row_group(remaining_budget);
+                }
+                IncrementalBuildResult::NeedsData(ranges) => {
+                    return Ok(IncrementalStep::NeedsData(ranges));
+                }
+                IncrementalBuildResult::Batch {
+                    batch,
+                    remaining_budget,
+                } => {
+                    if let Some(remaining_budget) = remaining_budget {
+                        self.frontier
+                            .update_budget_after_row_group(remaining_budget);
+                    }
+                    return Ok(IncrementalStep::Batch(batch));
+                }
+                IncrementalBuildResult::Reader {
+                    batch_reader,
+                    remaining_budget,
+                } => {
+                    self.frontier
+                        .update_budget_after_row_group(remaining_budget);
+                    return Ok(IncrementalStep::Reader(batch_reader));
+                }
+            }
+        }
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
