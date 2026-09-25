@@ -436,7 +436,7 @@ impl<T: ToPyArrow> ToPyArrow for Vec<T> {
 
 fn record_batch_from_pyarrow_bound_impl(
     value: &Bound<PyAny>,
-    array_data_from_pyarrow: impl Fn(&Bound<PyAny>) -> PyResult<ArrayData>,
+    validate: bool,
 ) -> PyResult<RecordBatch> {
     // Newer versions of PyArrow as well as other libraries with Arrow data implement this
     // method, so prefer it over _export_to_c.
@@ -447,6 +447,9 @@ fn record_batch_from_pyarrow_bound_impl(
         let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
         let array_data =
             unsafe { ffi::from_ffi(ffi_array, schema_ptr.as_ref()) }.map_err(to_py_err)?;
+        if validate {
+            array_data.validate_full().map_err(to_py_err)?;
+        }
         if !matches!(array_data.data_type(), DataType::Struct(_)) {
             return Err(PyTypeError::new_err(format!(
                 "Expected Struct type from __arrow_c_array__, found {}.",
@@ -476,7 +479,13 @@ fn record_batch_from_pyarrow_bound_impl(
     let arrays = arrays
         .cast::<PyList>()?
         .iter()
-        .map(|a| Ok(make_array(array_data_from_pyarrow(&a)?)))
+        .map(|a| {
+            let data = unsafe { ArrayData::from_pyarrow_bound_unchecked(&a)? };
+            if validate {
+                data.validate_full().map_err(to_py_err)?;
+            }
+            Ok(make_array(data))
+        })
         .collect::<PyResult<_>>()?;
 
     let row_count = value
@@ -492,15 +501,13 @@ impl FromPyArrow for RecordBatch {
     type_hint!(INPUT_TYPE = type_hint_identifier!("pyarrow", "RecordBatch"));
 
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
-        record_batch_from_pyarrow_bound_impl(value, ArrayData::from_pyarrow_bound)
+        record_batch_from_pyarrow_bound_impl(value, true)
     }
 }
 
 impl FromPyArrowUnchecked for RecordBatch {
     unsafe fn from_pyarrow_bound_unchecked(value: &Bound<PyAny>) -> PyResult<Self> {
-        record_batch_from_pyarrow_bound_impl(value, |a| unsafe {
-            ArrayData::from_pyarrow_bound_unchecked(a)
-        })
+        record_batch_from_pyarrow_bound_impl(value, false)
     }
 }
 
