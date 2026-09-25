@@ -969,7 +969,7 @@ mod tests {
 
     #[test]
     fn test_loaded_row_ranges_intersect_column_page_boundaries() {
-        let mut page_index = PageIndexBuilder::new(1, 2);
+        let mut page_index = PageIndexBuilder::new(1, 2).unwrap();
         let column = |first_rows: &[i64]| OffsetIndexMetaData {
             page_locations: first_rows
                 .iter()
@@ -1050,7 +1050,7 @@ mod tests {
 
     #[test]
     fn test_auto_keeps_mask_when_page_pruning_skips_pages() {
-        let mut page_index = PageIndexBuilder::new(1, 1);
+        let mut page_index = PageIndexBuilder::new(1, 1).unwrap();
         page_index.put_offset_index(
             OffsetIndexMetaData {
                 page_locations: [0, 2, 4, 6, 8, 10]

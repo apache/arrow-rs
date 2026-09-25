@@ -387,13 +387,13 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         {
             None
         } else {
-            Some(Grid::from_vec(column_indexes))
+            Some(Grid::from_vec(column_indexes)?)
         };
         // offset index will always be created unless explicitly disabled
         let offset_indexes = if self.props.offset_index_disabled() {
             None
         } else {
-            Some(Grid::from_vec(offset_indexes))
+            Some(Grid::from_vec(offset_indexes)?)
         };
         if column_indexes.is_some() || offset_indexes.is_some() {
             let page_index = PageIndex::new(column_indexes, offset_indexes);

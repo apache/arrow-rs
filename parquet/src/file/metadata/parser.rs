@@ -263,7 +263,7 @@ pub(crate) fn parse_page_index(
         num_columns,
         (column_index_policy != PageIndexPolicy::Skip).then_some(column_index_mask),
         (offset_index_policy != PageIndexPolicy::Skip).then_some(offset_index_mask),
-    );
+    )?;
     if column_index_policy != PageIndexPolicy::Skip {
         parse_column_index(
             metadata,
