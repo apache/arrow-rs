@@ -261,14 +261,9 @@ pub(crate) fn parse_page_index(
     }
     let num_row_groups = metadata.num_row_groups();
     let num_columns = metadata.file_metadata().schema_descr().num_columns();
-    let mut builder = metadata
-        .page_index()
-        .map(|index| {
-            PageIndexBuilder::new_from_provider(index.as_ref(), num_row_groups, num_columns)
-        })
-        .unwrap_or_default();
+    let mut builder = PageIndexBuilder::default();
     if column_index_policy != PageIndexPolicy::Skip {
-        builder.ensure_column_indexes(num_row_groups, num_columns);
+        builder.allocate_column_indexes(num_row_groups, num_columns);
         parse_column_index(
             metadata,
             column_index_policy,
@@ -278,7 +273,7 @@ pub(crate) fn parse_page_index(
         )?;
     }
     if offset_index_policy != PageIndexPolicy::Skip {
-        builder.ensure_offset_indexes(num_row_groups, num_columns);
+        builder.allocate_offset_indexes(num_row_groups, num_columns);
         parse_offset_index(
             metadata,
             offset_index_policy,
