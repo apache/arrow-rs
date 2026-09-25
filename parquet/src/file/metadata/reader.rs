@@ -518,6 +518,13 @@ impl ParquetMetaDataReader {
 
     /// Read the page index structures when a [`ParquetMetaData`] has already been obtained.
     /// See [`Self::new_with_metadata()`] and [`Self::has_metadata()`].
+    ///
+    /// # Behavior on multiple calls
+    ///
+    /// On success, this method replaces any existing page index in the metadata. Index types
+    /// configured as [`PageIndexPolicy::Skip`] are cleared; other index types contain only the
+    /// indexes selected by their configured masks and available according to their policies. If
+    /// neither index type is populated, the page index is cleared.
     pub fn read_page_indexes<R: ChunkReader>(&mut self, reader: &R) -> Result<()> {
         self.read_page_indexes_sized(reader, reader.len())
     }
@@ -527,6 +534,9 @@ impl ParquetMetaDataReader {
     /// a [`Bytes`] struct containing the tail of the file).
     /// See [`Self::new_with_metadata()`] and [`Self::has_metadata()`]. Like
     /// [`Self::try_parse_sized()`] this function may return [`ParquetError::NeedMoreData`].
+    ///
+    /// See [`Self::read_page_indexes()`] for a description of the replacement behavior on
+    /// multiple calls.
     pub fn read_page_indexes_sized<R: ChunkReader>(
         &mut self,
         reader: &R,
@@ -669,6 +679,9 @@ impl ParquetMetaDataReader {
 
     /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
     /// been obtained. See [`Self::new_with_metadata()`].
+    ///
+    /// See [`Self::read_page_indexes()`] for a description of the replacement behavior on
+    /// multiple calls.
     #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn load_page_index<F: MetadataFetch>(&mut self, fetch: F) -> Result<()> {
         self.load_page_index_with_remainder(fetch, None).await

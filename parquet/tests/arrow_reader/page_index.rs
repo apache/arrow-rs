@@ -87,27 +87,103 @@ fn test_parse_with_page_index_mask() {
     );
 }
 
-/*#[test]
-// C11 coverage
-fn test_repeated_page_index_reads_merge_cells() {
+#[test]
+// C11 coverage: verify that repeated calls to read_page_indexes replace existing indexes
+fn test_repeated_page_index_reads_replace() {
     let file = create_test_file();
+    // First read: load indexes for row group 0, column 0
     let metadata = ParquetMetaDataReader::new()
         .with_page_index_policy(PageIndexPolicy::Required)
         .with_page_index_mask(ColumnChunkMask::row_groups_and_columns([0], [0]))
         .parse_and_finish(&file)
         .unwrap();
 
+    // Second read: load indexes for row group 1, column 1
+    // This should REPLACE the previous indexes, not merge with them
     let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
         .with_page_index_policy(PageIndexPolicy::Required)
         .with_page_index_mask(ColumnChunkMask::row_groups_and_columns([1], [1]));
     reader.read_page_indexes(&file).unwrap();
     let metadata = reader.finish().unwrap();
+
+    // After the second read, only row group 1, column 1 should have indexes
+    // The indexes from the first read (row group 0, column 0) should be gone
     assert_page_index_cells(
         &metadata,
-        |rg, col| (rg == 0 && col == 0) || (rg == 1 && col == 1),
-        |rg, col| (rg == 0 && col == 0) || (rg == 1 && col == 1),
+        |rg, col| rg == 1 && col == 1,
+        |rg, col| rg == 1 && col == 1,
     );
-}*/
+}
+
+#[test]
+// C11 coverage: verify that Skip policy clears the corresponding index type
+fn test_page_index_skip_policy_clears_index() {
+    let file = create_test_file();
+    // First read: load both column and offset indexes
+    let metadata = ParquetMetaDataReader::new()
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .parse_and_finish(&file)
+        .unwrap();
+
+    // Verify both indexes are present
+    let page_index = metadata.page_index().expect("page index should be loaded");
+    assert!(
+        page_index.has_column_indexes(),
+        "column indexes should be present"
+    );
+    assert!(
+        page_index.has_offset_indexes(),
+        "offset indexes should be present"
+    );
+
+    // Second read: Skip column index but load offset index
+    let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+        .with_column_index_policy(PageIndexPolicy::Skip)
+        .with_offset_index_policy(PageIndexPolicy::Required);
+    reader.read_page_indexes(&file).unwrap();
+    let metadata = reader.finish().unwrap();
+
+    // After the second read, only offset indexes should be present
+    let page_index = metadata.page_index().expect("page index should be loaded");
+    assert!(
+        !page_index.has_column_indexes(),
+        "column indexes should be cleared"
+    );
+    assert!(
+        page_index.has_offset_indexes(),
+        "offset indexes should be present"
+    );
+
+    // Third read: Skip both indexes
+    let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+        .with_column_index_policy(PageIndexPolicy::Skip)
+        .with_offset_index_policy(PageIndexPolicy::Skip);
+    reader.read_page_indexes(&file).unwrap();
+    let metadata = reader.finish().unwrap();
+
+    // After the third read, no page index should be present
+    assert!(
+        metadata.page_index().is_none(),
+        "page index should be cleared when both policies are Skip"
+    );
+}
+
+#[test]
+fn test_empty_page_index_mask_clears_index() {
+    let file = create_test_file();
+    let metadata = ParquetMetaDataReader::new()
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .parse_and_finish(&file)
+        .unwrap();
+    assert!(metadata.page_index().is_some());
+
+    let mut reader = ParquetMetaDataReader::new_with_metadata(metadata)
+        .with_page_index_policy(PageIndexPolicy::Required)
+        .with_page_index_mask(ColumnChunkMask::none());
+    reader.read_page_indexes(&file).unwrap();
+
+    assert!(reader.finish().unwrap().page_index().is_none());
+}
 
 #[test]
 fn test_partial_page_statistics_remain_aligned() {

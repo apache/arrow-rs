@@ -273,6 +273,11 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// This can be used to parse and populate the page index structures
     /// after the metadata has already been decoded.
+    ///
+    /// When decoding page indexes, any existing page indexes in `metadata` will be
+    /// replaced based on the configured policies. See
+    /// [`crate::file::metadata::ParquetMetaDataReader::read_page_indexes`] for details
+    /// on the replacement behavior.
     pub fn try_new_with_metadata(file_len: u64, metadata: ParquetMetaData) -> Result<Self> {
         let mut new_self = Self::try_new(file_len)?;
         new_self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
@@ -442,14 +447,14 @@ impl ParquetMetaDataPushDecoder {
                         &self.offset_index_mask,
                     );
 
-                    let Some(page_index_range) = range else {
-                        self.state = DecodeState::Finished;
-                        return Ok(DecodeResult::Data(*metadata));
-                    };
-
-                    if !self.buffers.has_range(&page_index_range) {
-                        self.state = DecodeState::ReadingPageIndex(metadata);
-                        return Ok(needs_range(page_index_range));
+                    // Even if there is no range to read (for example, both policies are Skip,
+                    // the masks select nothing, or the file has no indexes), parse the result to
+                    // replace any existing indexes.
+                    if let Some(page_index_range) = range {
+                        if !self.buffers.has_range(&page_index_range) {
+                            self.state = DecodeState::ReadingPageIndex(metadata);
+                            return Ok(needs_range(page_index_range));
+                        }
                     }
 
                     parse_page_index(

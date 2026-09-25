@@ -237,10 +237,10 @@ pub(crate) fn decode_metadata(
     parquet_metadata_from_bytes(buf, options)
 }
 
-/// Parses page index from the provided bytes and adds it to the metadata.
+/// Parses page indexes from the provided bytes and replaces those in the metadata.
 ///
 /// Arguments
-/// * `metadata` - The ParquetMetaData to which the parsed column index will be added.
+/// * `metadata` - The ParquetMetaData whose page index will be replaced.
 /// * `column_index_policy` - The policy for handling column index parsing (e.g.,
 ///   Required, Optional, Skip).
 /// * `offset_index_policy` - The policy for handling offset index parsing (e.g.,
@@ -255,13 +255,10 @@ pub(crate) fn parse_page_index(
     offset_index_mask: &ColumnChunkMask,
     bytes: &PushBuffers,
 ) -> crate::errors::Result<()> {
-    if column_index_policy == PageIndexPolicy::Skip && offset_index_policy == PageIndexPolicy::Skip
-    {
-        return Ok(());
-    }
     let num_row_groups = metadata.num_row_groups();
     let num_columns = metadata.file_metadata().schema_descr().num_columns();
     let mut builder = PageIndexBuilder::default();
+
     if column_index_policy != PageIndexPolicy::Skip {
         builder.allocate_column_indexes(num_row_groups, num_columns);
         parse_column_index(
@@ -283,12 +280,16 @@ pub(crate) fn parse_page_index(
         )?;
     }
 
+    // Always replace the page index, even if both policies are Skip.
+    // This ensures that repeated calls to read_page_indexes replace the existing index
+    // rather than preserving it.
     let page_index = builder.build();
-    // if both indexes are missing from the file, return without modifying `metadata`
-    if !page_index.has_column_indexes() && !page_index.has_offset_indexes() {
-        return Ok(());
+    if page_index.has_column_indexes() || page_index.has_offset_indexes() {
+        metadata.set_page_index(Some(Arc::new(page_index)));
+    } else {
+        // If no indexes were read, clear the page index
+        metadata.set_page_index(None);
     }
-    metadata.set_page_index(Some(Arc::new(page_index)));
     Ok(())
 }
 
