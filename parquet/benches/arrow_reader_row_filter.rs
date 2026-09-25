@@ -53,8 +53,8 @@
 //!
 
 use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, TimestampMillisecondArray};
-use arrow::compute::and;
 use arrow::compute::kernels::cmp::{eq, gt, lt, neq};
+use arrow::compute::{and, not};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow_array::StringViewArray;
@@ -382,7 +382,7 @@ impl FilterType {
             // Unselective Unclustered on float64 column: NOT (float64 > 99.0)
             FilterType::UnselectiveUnclustered => {
                 let array = batch.column(batch.schema().index_of("float64")?);
-                gt(array, &Float64Array::new_scalar(99.0))
+                not(&gt(array, &Float64Array::new_scalar(99.0))?)
             }
             // Unselective Clustered on ts column: ts < 9000
             FilterType::UnselectiveClustered => {

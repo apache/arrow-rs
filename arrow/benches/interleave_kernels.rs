@@ -212,7 +212,7 @@ fn add_benchmark(c: &mut Criterion) {
         bench_values(
             c,
             &format!("interleave dict_distinct {len}"),
-            100,
+            len,
             &[&dict, &sparse_dict],
         );
     }
