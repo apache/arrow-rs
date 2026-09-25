@@ -17,39 +17,9 @@
 
 name: miri
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs that touch certain files and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - .config/nextest.toml
-      - Cargo.toml
-      - Cargo.lock
-      - .github/**
-      - rust-toolchain.toml
-      - arrow/**
-      - arrow-arith/**
-      - arrow-array/**
-      - arrow-avro/**
-      - arrow-buffer/**
-      - arrow-cast/**
-      - arrow-csv/**
-      - arrow-data/**
-      - arrow-ipc/**
-      - arrow-json/**
-      - arrow-cmp/**
-      - arrow-ord/**
-      - arrow-row/**
-      - arrow-schema/**
-      - arrow-select/**
-      - arrow-string/**
-      - parquet/**
+  workflow_call:
 
 permissions:
   contents: read
