@@ -432,11 +432,10 @@ impl Keep {
 
 impl HeapSize for Arc<[u32]> {
     fn heap_size(&self) -> usize {
-        // Arc stores weak and strong counts on the heap alongside an instance of T
-        // T = [u32], so that should be the size of a pointer + the size of the allocation
-        2 * std::mem::size_of::<usize>()
-            + std::mem::size_of::<*mut u32>()
-            + std::mem::size_of_val(self.as_ref())
+        // The heap block contains the strong and weak counts followed by the slice,
+        // padded to the alignment of usize. The fat pointer itself is stored inline.
+        (2 * std::mem::size_of::<usize>() + std::mem::size_of_val(self.as_ref()))
+            .next_multiple_of(std::mem::align_of::<usize>())
     }
 }
 
