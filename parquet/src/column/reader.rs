@@ -317,9 +317,24 @@ where
                     return Ok(num_records - remaining_records);
                 };
 
-                // If dictionary, we must read it
+                // If dictionary, skip it without decoding *when the page
+                // reader can give it back later*: skipping rows never needs
+                // dictionary contents (value skips only advance the index
+                // cursor, whole-page skips touch nothing), so a chunk skipped
+                // end to end never pays the decompression, and a later data
+                // page that does need the dictionary pays it exactly once.
+                //
+                // A reader that does not retain skipped dictionaries must
+                // still be given the eager path: skipping past a dictionary it
+                // cannot return would drop it, and the next dictionary-encoded
+                // data page would have nothing to decode against. See
+                // `PageReader::supports_deferred_dictionary`.
                 if metadata.is_dict {
-                    self.read_dictionary_page()?;
+                    if self.page_reader.supports_deferred_dictionary() {
+                        self.page_reader.skip_next_page()?;
+                    } else {
+                        self.read_dictionary_page()?;
+                    }
                     continue;
                 }
 
@@ -403,8 +418,12 @@ where
         Ok(num_records - remaining_records)
     }
 
-    /// Read the next page as a dictionary page. If the next page is not a dictionary page,
-    /// this will return an error.
+    /// Reads the next page as a dictionary page and installs it.
+    ///
+    /// Used on the skip path for readers that do not retain skipped
+    /// dictionaries, and so must consume the page through `get_next_page`
+    /// while it is still available. Returns an error if the next page is not
+    /// a dictionary page.
     fn read_dictionary_page(&mut self) -> Result<()> {
         match self.page_reader.get_next_page()? {
             Some(Page::DictionaryPage {
@@ -418,6 +437,28 @@ where
             _ => Err(ParquetError::General(
                 "Invalid page. Expecting dictionary page".to_string(),
             )),
+        }
+    }
+
+    /// Installs a dictionary page the page reader skipped past, if this
+    /// column turns out to need one after all. A no-op when nothing was
+    /// deferred: the eager path (a dictionary page arriving through
+    /// `get_next_page`) and the deferred path are mutually exclusive, since
+    /// a skipped page is never returned by `get_next_page` and vice versa.
+    fn install_deferred_dictionary(&mut self) -> Result<()> {
+        match self.page_reader.take_deferred_dictionary()? {
+            Some(Page::DictionaryPage {
+                buf,
+                num_values,
+                encoding,
+                is_sorted,
+            }) => self
+                .values_decoder
+                .set_dict(buf, num_values, encoding, is_sorted),
+            Some(_) => Err(ParquetError::General(
+                "Invalid page. Expecting dictionary page".to_string(),
+            )),
+            None => Ok(()),
         }
     }
 
@@ -449,6 +490,12 @@ where
                             rep_level_encoding,
                             statistics: _,
                         } => {
+                            if matches!(
+                                encoding,
+                                Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY
+                            ) {
+                                self.install_deferred_dictionary()?;
+                            }
                             self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
 
@@ -510,6 +557,12 @@ where
                             is_compressed: _,
                             statistics: _,
                         } => {
+                            if matches!(
+                                encoding,
+                                Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY
+                            ) {
+                                self.install_deferred_dictionary()?;
+                            }
                             if num_nulls > num_values {
                                 return Err(general_err!(
                                     "more nulls than values in page, contained {} values and {} nulls",
