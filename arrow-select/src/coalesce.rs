@@ -262,7 +262,33 @@ impl BatchCoalescer {
         batch: RecordBatch,
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        self.push_batch_with_filtered_columns(batch, filter)
+        // SAFETY: the count is computed from `filter` itself.
+        unsafe { self.push_batch_with_filter_and_count(batch, filter, filter.true_count()) }
+    }
+
+    /// Push a batch into the Coalescer after applying a filter whose number of
+    /// selected rows is already known.
+    ///
+    /// This is [`Self::push_batch_with_filter`] without the count of `filter`
+    /// it performs first. Callers that already track how many rows a filter
+    /// selects, for example to enforce a row limit, can pass that number here.
+    ///
+    /// # Safety
+    ///
+    /// `selected_count` must equal [`BooleanArray::true_count`] of `filter`. It
+    /// sizes the copied rows; see [`FilterBuilder::new_with_count`].
+    pub unsafe fn push_batch_with_filter_and_count(
+        &mut self,
+        batch: RecordBatch,
+        filter: &BooleanArray,
+        selected_count: usize,
+    ) -> Result<(), ArrowError> {
+        debug_assert_eq!(
+            selected_count,
+            filter.true_count(),
+            "selected_count must match the number of rows the filter selects"
+        );
+        self.push_batch_with_filtered_columns(batch, filter, selected_count)
     }
 
     /// Push a batch into the Coalescer after applying a set of indices
@@ -609,7 +635,10 @@ impl BatchCoalescer {
         filter: &BooleanArray,
         selected_count: usize,
     ) -> FilterPredicate {
-        let mut filter_builder = FilterBuilder::new_with_count(filter, selected_count);
+        // SAFETY: `selected_count` is the count of `filter`, either computed by
+        // `push_batch_with_filter` or guaranteed by the caller of
+        // `push_batch_with_filter_and_count`.
+        let mut filter_builder = unsafe { FilterBuilder::new_with_count(filter, selected_count) };
         if batch.num_columns() > 1
             || (batch.num_columns() > 0
                 && FilterBuilder::is_optimize_beneficial(batch.schema_ref().field(0).data_type()))
@@ -623,6 +652,7 @@ impl BatchCoalescer {
         &mut self,
         batch: RecordBatch,
         filter: &BooleanArray,
+        selected_count: usize,
     ) -> Result<(), ArrowError> {
         let filter_len = filter.len();
         let batch_num_rows = batch.num_rows();
@@ -634,7 +664,6 @@ impl BatchCoalescer {
             )));
         }
 
-        let selected_count = filter.true_count();
         if selected_count == 0 {
             return Ok(());
         }
@@ -788,7 +817,7 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{
         BinaryViewArray, Int32Array, Int64Array, RecordBatchOptions, StringArray, StringViewArray,
-        TimestampNanosecondArray, UInt32Array, UInt64Array, make_array,
+        TimestampNanosecondArray, UInt32Array, UInt64Array, make_array, record_batch,
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
@@ -1023,6 +1052,33 @@ mod tests {
                 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 179,
             ])
             .run();
+    }
+
+    #[test]
+    fn test_push_batch_with_filter_and_count() {
+        let batch = record_batch!(
+            ("a", Int32, [1, 2, 3, 4]),
+            ("b", Utf8, ["w", "x", "y", "z"])
+        )
+        .unwrap();
+        // The null is not selected, so the filter selects two rows.
+        let filter = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
+
+        let mut expected = BatchCoalescer::new(batch.schema(), 10);
+        expected
+            .push_batch_with_filter(batch.clone(), &filter)
+            .unwrap();
+        expected.finish_buffered_batch().unwrap();
+
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 10);
+        // SAFETY: the count matches the filter.
+        unsafe { coalescer.push_batch_with_filter_and_count(batch, &filter, 2) }.unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+
+        let completed = coalescer.next_completed_batch().unwrap();
+        assert_eq!(completed.num_rows(), 2);
+        assert_eq!(completed, expected.next_completed_batch().unwrap());
+        assert!(coalescer.next_completed_batch().is_none());
     }
 
     #[test]
