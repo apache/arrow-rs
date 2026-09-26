@@ -92,6 +92,19 @@ pub trait ColumnValueDecoder {
     /// Create a new [`ColumnValueDecoder`]
     fn new(col: &ColumnDescPtr) -> Self;
 
+    /// Request UTF-8 validation of the decoded values.
+    ///
+    /// The Parquet annotation alone does not say whether a string array will be
+    /// built from a column: a reader given a schema (see
+    /// `ArrowReaderOptions::with_schema`) can map a plain `BYTE_ARRAY` column to
+    /// `Utf8`, `LargeUtf8` or `Utf8View`. A decoder that can produce string data
+    /// must validate it when this is set, so that data which is not UTF-8 fails
+    /// to read instead of producing an array that breaks the string invariant.
+    ///
+    /// The default implementation does nothing, for decoders that never produce
+    /// string data.
+    fn set_validate_utf8(&mut self, _validate_utf8: bool) {}
+
     /// Set the current dictionary page
     fn set_dict(
         &mut self,

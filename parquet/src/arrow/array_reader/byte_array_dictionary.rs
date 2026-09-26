@@ -43,7 +43,7 @@ use crate::util::bit_util::BitPacking;
 /// A macro to reduce verbosity of [`make_byte_array_dictionary_reader`]
 macro_rules! make_reader {
     (
-        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr) => match ($k:expr, $v:expr) {
+        ($pages:expr, $column_desc:expr, $data_type:expr, $batch_size:expr, $padding_threshold:expr, $validate_utf8:expr) => match ($k:expr, $v:expr) {
             $(($key_arrow:pat, $value_arrow:pat) => ($key_type:ty, $value_type:ty),)+
         }
     ) => {
@@ -54,6 +54,7 @@ macro_rules! make_reader {
                     if let Some(threshold) = $padding_threshold {
                         reader.set_padding_threshold(threshold);
                     }
+                    reader.set_validate_utf8($validate_utf8);
                     Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::try_new(
                         $pages, $data_type, reader,
                     )?))
@@ -93,10 +94,22 @@ pub fn make_byte_array_dictionary_reader(
             .clone(),
     };
 
+    // A schema given to the reader can map this column to a dictionary with a
+    // string value type even though the Parquet annotation does not describe
+    // one, in which case the decoder still has to validate the data as UTF-8.
+    let validate_utf8 = matches!(
+        &data_type,
+        ArrowType::Dictionary(_, value_type)
+            if matches!(
+                value_type.as_ref(),
+                ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View
+            )
+    );
+
     match &data_type {
         ArrowType::Dictionary(key_type, value_type) => {
             make_reader! {
-                (pages, column_desc, data_type, batch_size, padding_threshold) => match (key_type.as_ref(), value_type.as_ref()) {
+                (pages, column_desc, data_type, batch_size, padding_threshold, validate_utf8) => match (key_type.as_ref(), value_type.as_ref()) {
                     (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (u8, i32),
                     (ArrowType::UInt8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u8, i64),
                     (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::Utf8View | ArrowType::BinaryView | ArrowType::FixedSizeBinary(_)) => (i8, i32),
@@ -322,6 +335,10 @@ where
             value_type,
             phantom: Default::default(),
         }
+    }
+
+    fn set_validate_utf8(&mut self, validate_utf8: bool) {
+        self.validate_utf8 |= validate_utf8;
     }
 
     fn set_dict(
