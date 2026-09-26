@@ -54,6 +54,7 @@ mod page_index;
 
 // Convert the bytes array to i32.
 // The endian of the input bytes array must be big-endian.
+#[inline]
 pub(crate) fn from_bytes_to_i32(b: &[u8]) -> i32 {
     // The bytes array are from parquet file and must be the big-endian.
     // The endian is defined by parquet format, and the reference document
@@ -63,18 +64,21 @@ pub(crate) fn from_bytes_to_i32(b: &[u8]) -> i32 {
 
 // Convert the bytes array to i64.
 // The endian of the input bytes array must be big-endian.
+#[inline]
 pub(crate) fn from_bytes_to_i64(b: &[u8]) -> i64 {
     i64::from_be_bytes(sign_extend_be::<8>(b))
 }
 
 // Convert the bytes array to i128.
 // The endian of the input bytes array must be big-endian.
+#[inline]
 pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
     i128::from_be_bytes(sign_extend_be::<16>(b))
 }
 
 // Convert the bytes array to i256.
 // The endian of the input bytes array must be big-endian.
+#[inline]
 pub(crate) fn from_bytes_to_i256(b: &[u8]) -> i256 {
     i256::from_be_bytes(sign_extend_be::<32>(b))
 }
@@ -1443,8 +1447,6 @@ where
 /// Page statistics for one column, read directly from the stored bytes of
 /// each row group's Parquet `ColumnIndex`.
 ///
-/// Returned by [`StatisticsConverter::data_page_statistics_from_bytes`]. Every
-/// array has one entry per data page, in the order the row groups were given.
 #[derive(Debug, Clone)]
 pub struct DataPageStatistics {
     /// The smallest value in each page, or null if it is not known.
@@ -2144,7 +2146,7 @@ impl<'a> StatisticsConverter<'a> {
             });
         };
 
-        let mut decoder = page_index::ColumnIndexDecoder::new(physical_type, num_pages);
+        let mut decoder = page_index::ColumnIndexDecoder::new(physical_type, data_type, num_pages);
         for (num_pages, bytes) in column_indexes {
             match bytes {
                 Some(bytes) => decoder.append(bytes)?,

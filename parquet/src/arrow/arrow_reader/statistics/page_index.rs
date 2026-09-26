@@ -40,12 +40,13 @@ use arrow_array::types::{
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow_array::{
-    Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BinaryViewArray, BooleanArray,
-    FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    LargeBinaryArray, LargeStringArray, PrimitiveArray, StringArray, StringViewArray, UInt64Array,
-    new_null_array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
+    Float16Array, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
+    LargeStringArray, PrimitiveArray, StringArray, StringViewArray, UInt64Array, new_null_array,
 };
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{
+    BooleanBuffer, BooleanBufferBuilder, NullBuffer, OffsetBuffer, ScalarBuffer, i256,
+};
 use arrow_schema::{DataType, TimeUnit};
 use std::sync::Arc;
 
@@ -70,10 +71,35 @@ enum PhysicalValues {
     /// from them, so their mins and maxes always come out as nulls. They are
     /// still checked for length, as the older decoder does.
     Int96(usize),
+    /// Decimals stored as bytes (in either kind of byte column), turned
+    /// into numbers while reading. This skips keeping a copy of the bytes
+    /// and converting them afterwards, which is much faster.
+    Decimal32(Vec<i32>),
+    Decimal64(Vec<i64>),
+    Decimal128(Vec<i128>),
+    Decimal256(Vec<i256>),
 }
 
 impl PhysicalValues {
-    fn new(physical_type: PhysicalType, capacity: usize) -> Self {
+    /// `data_type` is the Arrow type the caller wants. It only matters for
+    /// decimals stored as bytes, which are turned into numbers right away.
+    fn new(physical_type: PhysicalType, data_type: &DataType, capacity: usize) -> Self {
+        let data_type = match data_type {
+            DataType::Dictionary(_, value_type) => value_type.as_ref(),
+            data_type => data_type,
+        };
+        if matches!(
+            physical_type,
+            PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY
+        ) {
+            match data_type {
+                DataType::Decimal32(..) => return Self::Decimal32(Vec::with_capacity(capacity)),
+                DataType::Decimal64(..) => return Self::Decimal64(Vec::with_capacity(capacity)),
+                DataType::Decimal128(..) => return Self::Decimal128(Vec::with_capacity(capacity)),
+                DataType::Decimal256(..) => return Self::Decimal256(Vec::with_capacity(capacity)),
+                _ => {}
+            }
+        }
         match physical_type {
             PhysicalType::BOOLEAN => Self::Boolean(BooleanBufferBuilder::new(capacity)),
             PhysicalType::INT32 => Self::Int32(Vec::with_capacity(capacity)),
@@ -109,6 +135,10 @@ impl PhysicalValues {
                 offsets.resize(offsets.len() + n, values.len() as i32)
             }
             Self::Int96(count) => *count += n,
+            Self::Decimal32(v) => v.resize(v.len() + n, 0),
+            Self::Decimal64(v) => v.resize(v.len() + n, 0),
+            Self::Decimal128(v) => v.resize(v.len() + n, 0),
+            Self::Decimal256(v) => v.resize(v.len() + n, i256::ZERO),
         }
     }
 
@@ -128,6 +158,10 @@ impl PhysicalValues {
                 first_bytes::<12>(bytes)?;
                 *count += 1;
             }
+            Self::Decimal32(v) => v.push(from_bytes_to_i32(bytes)),
+            Self::Decimal64(v) => v.push(from_bytes_to_i64(bytes)),
+            Self::Decimal128(v) => v.push(from_bytes_to_i128(bytes)),
+            Self::Decimal256(v) => v.push(from_bytes_to_i256(bytes)),
         }
         Ok(())
     }
@@ -182,6 +216,10 @@ impl PhysicalValues {
                 }
                 *count += has_min_max.len();
             }
+            Self::Decimal32(v) => read_each(&mut buf, v, has_min_max, from_bytes_to_i32)?,
+            Self::Decimal64(v) => read_each(&mut buf, v, has_min_max, from_bytes_to_i64)?,
+            Self::Decimal128(v) => read_each(&mut buf, v, has_min_max, from_bytes_to_i128)?,
+            Self::Decimal256(v) => read_each(&mut buf, v, has_min_max, from_bytes_to_i256)?,
         }
         let used = prot.as_slice().len() - buf.len();
         Ok(prot.skip_bytes(used)?)
@@ -203,11 +241,16 @@ impl PhysicalValues {
                 PhysicalArray::Bytes(BinaryArray::new(offsets, values.into(), nulls))
             }
             Self::Int96(count) => PhysicalArray::Int96(count),
+            Self::Decimal32(v) => PhysicalArray::Decimal32(PrimitiveArray::new(v.into(), nulls)),
+            Self::Decimal64(v) => PhysicalArray::Decimal64(PrimitiveArray::new(v.into(), nulls)),
+            Self::Decimal128(v) => PhysicalArray::Decimal128(PrimitiveArray::new(v.into(), nulls)),
+            Self::Decimal256(v) => PhysicalArray::Decimal256(PrimitiveArray::new(v.into(), nulls)),
         }
     }
 }
 
 /// Reads fixed width values, one per page. See [`PhysicalValues::read_list`].
+#[inline(never)]
 fn read_fixed<const N: usize, T: Default>(
     buf: &mut &[u8],
     out: &mut Vec<T>,
@@ -220,6 +263,29 @@ fn read_fixed<const N: usize, T: Default>(
         *buf = rest;
         out.push(if has_value {
             from_le_bytes(first_bytes(bytes)?)
+        } else {
+            T::default()
+        });
+    }
+    Ok(())
+}
+
+/// Reads byte values and turns each into a number with `convert`, one per
+/// page. Pages without a min or max get a filler value, and `convert` is not
+/// called for them. See [`PhysicalValues::read_list`].
+#[inline(never)]
+fn read_each<T: Default>(
+    buf: &mut &[u8],
+    out: &mut Vec<T>,
+    has_min_max: &[bool],
+    convert: impl Fn(&[u8]) -> T,
+) -> Result<()> {
+    out.reserve(has_min_max.len());
+    for &has_value in has_min_max {
+        let (bytes, rest) = split_binary(buf)?;
+        *buf = rest;
+        out.push(if has_value {
+            convert(bytes)
         } else {
             T::default()
         });
@@ -294,6 +360,12 @@ enum PhysicalArray {
     Bytes(BinaryArray),
     /// Only the number of values; see [`PhysicalValues::Int96`]
     Int96(usize),
+    /// Decimals stored as bytes, already turned into numbers; see
+    /// [`PhysicalValues::Decimal32`]. Precision and scale are added later.
+    Decimal32(PrimitiveArray<Decimal32Type>),
+    Decimal64(PrimitiveArray<Decimal64Type>),
+    Decimal128(PrimitiveArray<Decimal128Type>),
+    Decimal256(PrimitiveArray<Decimal256Type>),
 }
 
 impl PhysicalArray {
@@ -306,6 +378,10 @@ impl PhysicalArray {
             Self::Double(a) => a.len(),
             Self::Bytes(a) => a.len(),
             Self::Int96(len) => *len,
+            Self::Decimal32(a) => a.len(),
+            Self::Decimal64(a) => a.len(),
+            Self::Decimal128(a) => a.len(),
+            Self::Decimal256(a) => a.len(),
         }
     }
 }
@@ -338,12 +414,13 @@ pub(super) struct DecodedPageStatistics {
 }
 
 impl ColumnIndexDecoder {
-    pub(super) fn new(physical_type: PhysicalType, capacity: usize) -> Self {
+    /// `data_type` is the Arrow type the statistics will be turned into.
+    pub(super) fn new(physical_type: PhysicalType, data_type: &DataType, capacity: usize) -> Self {
         Self {
             physical_type,
             has_min_max: Vec::with_capacity(capacity),
-            mins: PhysicalValues::new(physical_type, capacity),
-            maxes: PhysicalValues::new(physical_type, capacity),
+            mins: PhysicalValues::new(physical_type, data_type, capacity),
+            maxes: PhysicalValues::new(physical_type, data_type, capacity),
             null_counts: Vec::with_capacity(capacity),
             null_counts_known: BooleanBufferBuilder::new(capacity),
             nan_counts: Vec::with_capacity(capacity),
@@ -793,19 +870,20 @@ fn physical_to_logical(
         (PhysicalArray::Float(a), DataType::Float32) => Arc::new(a),
         (PhysicalArray::Double(a), DataType::Float64) => Arc::new(a),
 
-        // Decimals can be stored as bytes in both kinds of byte columns.
-        (PhysicalArray::Bytes(a), DataType::Decimal32(p, s)) => Arc::new(
-            map_bytes::<Decimal32Type>(&a, from_bytes_to_i32).with_precision_and_scale(*p, *s)?,
-        ),
-        (PhysicalArray::Bytes(a), DataType::Decimal64(p, s)) => Arc::new(
-            map_bytes::<Decimal64Type>(&a, from_bytes_to_i64).with_precision_and_scale(*p, *s)?,
-        ),
-        (PhysicalArray::Bytes(a), DataType::Decimal128(p, s)) => Arc::new(
-            map_bytes::<Decimal128Type>(&a, from_bytes_to_i128).with_precision_and_scale(*p, *s)?,
-        ),
-        (PhysicalArray::Bytes(a), DataType::Decimal256(p, s)) => Arc::new(
-            map_bytes::<Decimal256Type>(&a, from_bytes_to_i256).with_precision_and_scale(*p, *s)?,
-        ),
+        // Decimals stored as bytes, already turned into numbers while reading.
+        // `PhysicalValues::new` only picks these when the wanted type matches.
+        (PhysicalArray::Decimal32(a), DataType::Decimal32(p, s)) => {
+            Arc::new(a.with_precision_and_scale(*p, *s)?)
+        }
+        (PhysicalArray::Decimal64(a), DataType::Decimal64(p, s)) => {
+            Arc::new(a.with_precision_and_scale(*p, *s)?)
+        }
+        (PhysicalArray::Decimal128(a), DataType::Decimal128(p, s)) => {
+            Arc::new(a.with_precision_and_scale(*p, *s)?)
+        }
+        (PhysicalArray::Decimal256(a), DataType::Decimal256(p, s)) => {
+            Arc::new(a.with_precision_and_scale(*p, *s)?)
+        }
 
         // Text and binary types only come from variable length byte columns.
         (PhysicalArray::Bytes(a), DataType::Binary)
@@ -861,27 +939,6 @@ fn physical_to_logical(
         _ => new_null_array(data_type, len),
     };
     Ok(array)
-}
-
-/// Turns each non-null byte value into a number, keeping the same nulls.
-///
-/// This is faster than collecting an iterator of optional values, because
-/// the nulls are reused as they are and the numbers go straight into place.
-fn map_bytes<T: ArrowPrimitiveType>(
-    a: &BinaryArray,
-    convert: impl Fn(&[u8]) -> T::Native,
-) -> PrimitiveArray<T> {
-    let values: Vec<T::Native> = (0..a.len())
-        .map(|i| {
-            if a.is_valid(i) {
-                convert(a.value(i))
-            } else {
-                // null pages hold no bytes, so do not try to convert them
-                T::Native::default()
-            }
-        })
-        .collect();
-    PrimitiveArray::new(values.into(), a.nulls().cloned())
 }
 
 /// Each value as text, or null if it is not valid UTF-8.
@@ -1150,6 +1207,10 @@ mod tests {
             DataType::FixedSizeBinary(2),
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int16)),
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Decimal128(38, 2)),
+            ),
             DataType::Duration(TimeUnit::Second),
             DataType::Null,
         ]
