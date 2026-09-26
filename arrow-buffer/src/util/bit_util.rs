@@ -64,21 +64,111 @@ pub fn compress(value: u64, mask: u64) -> u64 {
 
     #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
     {
-        let mut mask = mask;
-        let mut result = 0_u64;
-        let mut dest_bit = 1_u64;
-        while mask != 0 {
-            // Clear the lowest set bit; the loop-carried dependency is only
-            // this two-operation chain, everything else hangs off it
-            let rest = mask & (mask - 1);
-            let lowest = mask ^ rest;
-            let keep = ((value & lowest) != 0) as u64;
-            result |= dest_bit & keep.wrapping_neg();
-            dest_bit <<= 1;
-            mask = rest;
-        }
-        result
+        compress_with_count(value, mask, mask.count_ones())
     }
+}
+
+/// Precomputed PEXT for all 4-bit mask/value combinations (256 bytes, one cache line).
+/// `NIBBLE_PEXT[mask_nibble][value_nibble]` = bits of `value_nibble` at positions set
+/// in `mask_nibble`, packed into the low bits of the result.
+const NIBBLE_PEXT: [[u8; 16]; 16] = {
+    let mut table = [[0u8; 16]; 16];
+    let mut mask_nibble = 0usize;
+    while mask_nibble < 16 {
+        let mut value_nibble = 0usize;
+        while value_nibble < 16 {
+            let mut packed = 0u8;
+            let mut output_bit = 0u8;
+            let mut remaining_mask = mask_nibble as u8;
+            while remaining_mask != 0 {
+                let selected_bit = remaining_mask & remaining_mask.wrapping_neg();
+                if value_nibble as u8 & selected_bit != 0 {
+                    packed |= 1 << output_bit;
+                }
+                output_bit += 1;
+                remaining_mask &= remaining_mask - 1;
+            }
+            table[mask_nibble][value_nibble] = packed;
+            value_nibble += 1;
+        }
+        mask_nibble += 1;
+    }
+    table
+};
+
+/// Like [`compress`], but accepts the precomputed popcount of `mask` to avoid a
+/// redundant `count_ones()` call when the caller has already computed it.
+///
+/// On x86-64 with BMI2, `count` is ignored — the hardware `pext` instruction handles
+/// all densities in constant time. On other platforms, `count` is used to choose
+/// between the sparse and dense software paths without an extra `count_ones()`.
+#[inline(always)]
+pub fn compress_with_count(value: u64, mask: u64, count: u32) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    {
+        let _ = count;
+        // SAFETY: the `bmi2` target feature is statically enabled for this
+        // build, so the `pext` instruction is guaranteed to be available.
+        unsafe { std::arch::x86_64::_pext_u64(value, mask) }
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        if count <= 8 {
+            compress_sparse(value, mask)
+        } else {
+            compress_dense(value, mask)
+        }
+    }
+}
+
+/// Bit-by-bit extraction; fastest when `mask` has ≤ 8 bits set (≤ 8 loop iterations).
+#[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+#[inline]
+fn compress_sparse(value: u64, mask: u64) -> u64 {
+    let mut remaining_mask = mask;
+    let mut result = 0u64;
+    let mut output_position = 1u64;
+    while remaining_mask != 0 {
+        let rest = remaining_mask & (remaining_mask - 1);
+        let selected_bit = remaining_mask ^ rest;
+        let bit_is_set = ((value & selected_bit) != 0) as u64;
+        result |= output_position & bit_is_set.wrapping_neg();
+        output_position <<= 1;
+        remaining_mask = rest;
+    }
+    result
+}
+
+/// Nibble-LUT extraction; fastest when `mask` has > 8 bits set.
+///
+/// Precomputes each byte's output bit offset so all eight `result |=` operations are
+/// independent of each other (no loop-carried dependency on the accumulator).
+#[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+#[inline(never)]
+fn compress_dense(value: u64, mask: u64) -> u64 {
+    let mut byte_output_offsets = [0u32; 8];
+    let mut bits_written = 0u32;
+    for (byte_idx, offset) in byte_output_offsets.iter_mut().enumerate() {
+        *offset = bits_written;
+        bits_written += ((mask >> (byte_idx * 8)) as u8).count_ones();
+    }
+
+    let mut result = 0u64;
+    for (byte_idx, &output_offset) in byte_output_offsets.iter().enumerate() {
+        let mask_byte = (mask >> (byte_idx * 8)) as u8;
+        if mask_byte == 0 {
+            continue;
+        }
+        let value_byte = (value >> (byte_idx * 8)) as u8;
+        let low_nibble_bits =
+            NIBBLE_PEXT[(mask_byte & 0xF) as usize][(value_byte & 0xF) as usize] as u64;
+        let high_nibble_bits =
+            NIBBLE_PEXT[(mask_byte >> 4) as usize][(value_byte >> 4) as usize] as u64;
+        let packed_byte = low_nibble_bits | (high_nibble_bits << (mask_byte & 0xF).count_ones());
+        result |= packed_byte << output_offset;
+    }
+    result
 }
 
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
