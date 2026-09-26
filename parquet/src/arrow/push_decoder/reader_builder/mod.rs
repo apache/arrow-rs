@@ -129,7 +129,11 @@ impl RowBudget {
             .map(|limit| limit.saturating_add(self.offset.unwrap_or(0)))
     }
 
-    fn apply_to_plan(self, plan_builder: ReadPlanBuilder, row_count: usize) -> BudgetedReadPlan {
+    pub(crate) fn apply_to_plan(
+        self,
+        plan_builder: ReadPlanBuilder,
+        row_count: usize,
+    ) -> BudgetedReadPlan {
         let rows_before_budget = plan_builder.num_rows_selected().unwrap_or(row_count);
         let plan_builder = plan_builder
             .limited(row_count)
@@ -169,17 +173,17 @@ impl RowBudget {
 }
 
 #[derive(Debug)]
-struct BudgetedReadPlan {
+pub(crate) struct BudgetedReadPlan {
     /// Read plan after applying this row group's share of the offset/limit budget.
-    plan_builder: ReadPlanBuilder,
+    pub(crate) plan_builder: ReadPlanBuilder,
     /// Number of rows selected by row selection and predicates before applying
     /// this row group's offset/limit budget.
-    rows_before_budget: usize,
+    pub(crate) rows_before_budget: usize,
     /// Number of selected rows that remain to be read after applying this row
     /// group's offset/limit budget.
-    rows_after_budget: usize,
+    pub(crate) rows_after_budget: usize,
     /// Budget remaining for later row groups.
-    remaining_budget: RowBudget,
+    pub(crate) remaining_budget: RowBudget,
 }
 
 #[derive(Debug)]
@@ -197,6 +201,21 @@ pub(crate) enum RowGroupBuildResult {
         /// Budget remaining after applying this row group's selection.
         remaining_budget: RowBudget,
     },
+}
+
+/// What [`RowGroupReaderBuilder`] uses to decide which bytes a row group
+/// needs, captured so a scan can be planned without decoding it.
+#[derive(Debug, Clone)]
+pub(crate) struct ScanPlanConfig {
+    /// The output batch size, which aligns cached predicate reads.
+    pub(crate) batch_size: usize,
+    /// Columns in the output.
+    pub(crate) projection: ProjectionMask,
+    /// Columns each [`RowFilter`] predicate reads, in evaluation order.
+    pub(crate) predicate_projections: Vec<ProjectionMask>,
+    /// Predicate columns whose decoded values are cached for the output, if
+    /// any. Their selection is expanded to batch boundaries when fetched.
+    pub(crate) cache_projection: Option<ProjectionMask>,
 }
 
 /// Result of a state transition
@@ -826,6 +845,29 @@ impl RowGroupReaderBuilder {
     ///
     /// Returns the columns that are used by the filters *and* then used in the
     /// final projection, excluding any nested columns.
+    /// The configuration [`ScanPlan`](crate::arrow::push_decoder::ScanPlan)
+    /// needs to reproduce this builder's range planning. Must be called before
+    /// decoding starts, while the filter is still owned by the builder.
+    pub(crate) fn scan_plan_config(&self) -> ScanPlanConfig {
+        let (predicate_projections, cache_projection) = match &self.filter {
+            Some(filter) => (
+                filter
+                    .predicates
+                    .iter()
+                    .map(|predicate| predicate.projection().clone())
+                    .collect(),
+                self.compute_cache_projection_inner(filter),
+            ),
+            None => (vec![], None),
+        };
+        ScanPlanConfig {
+            batch_size: self.batch_size,
+            projection: self.projection.clone(),
+            predicate_projections,
+            cache_projection,
+        }
+    }
+
     fn compute_cache_projection(&self, row_group_idx: usize, filter: &RowFilter) -> ProjectionMask {
         let meta = self.metadata.row_group(row_group_idx);
         match self.compute_cache_projection_inner(filter) {

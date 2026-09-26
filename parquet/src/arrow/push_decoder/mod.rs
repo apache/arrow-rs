@@ -20,6 +20,7 @@
 
 mod reader_builder;
 mod remaining;
+mod scan_plan;
 
 use crate::DecodeResult;
 pub use crate::arrow::arrow_reader::RowGroupSelection;
@@ -33,6 +34,7 @@ use arrow_array::RecordBatch;
 use bytes::Bytes;
 use reader_builder::{RowBudget, RowGroupReaderBuilder, RowGroupReaderBuilderParts};
 use remaining::{RemainingRowGroups, RemainingRowGroupsParts};
+pub use scan_plan::{PageKind, PlannedRange, ScanPlan, ScanStage};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -349,10 +351,16 @@ impl ParquetPushDecoderBuilder {
             row_group_reader_builder,
         )?;
 
+        let scan_plan = ScanPlan::new(
+            remaining_row_groups.frontier_snapshot(),
+            remaining_row_groups.scan_plan_config(),
+        );
+
         Ok(ParquetPushDecoder {
             state: ParquetDecoderState::ReadingRowGroup {
                 remaining_row_groups: Box::new(remaining_row_groups),
             },
+            scan_plan: Box::new(scan_plan),
         })
     }
 }
@@ -425,6 +433,10 @@ pub struct ParquetPushDecoder {
     /// so the Rust compiler can ensure that the state is always valid and
     /// transitions are not missed.
     state: ParquetDecoderState,
+
+    /// The scan plan as it was when the decoder was built. See
+    /// [`Self::scan_plan`].
+    scan_plan: Box<ScanPlan>,
 }
 
 impl ParquetPushDecoder {
@@ -603,6 +615,124 @@ impl ParquetPushDecoder {
     /// based on filtering and other criteria.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         self.state.peek_next_row_group()
+    }
+
+    /// Returns the byte ranges this scan may read, in the order decoding needs
+    /// them.
+    ///
+    /// Use this to schedule I/O ahead of [`DecodeResult::NeedsData`]: for
+    /// example, to fetch the next few megabytes in the background while the
+    /// current row group decodes, or to release fetched bytes once decoding
+    /// has passed them. [`DecodeResult::NeedsData`] stays the exact and
+    /// authoritative request. This plan is an upper bound on it, for
+    /// speculation.
+    ///
+    /// # Contract
+    ///
+    /// * **Buffer independent.** The plan does not depend on the data pushed
+    ///   to the decoder. It lists ranges the decoder already has, so the caller
+    ///   decides how to satisfy each range: from decoder buffers, from its own
+    ///   cache, or from storage.
+    /// * **Stable.** The plan covers the whole scan as configured when the
+    ///   decoder was built, including row groups already decoded. It does not
+    ///   change as decoding advances. [`Self::into_builder`] and
+    ///   [`ParquetPushDecoderBuilder::build`] give a new decoder, whose plan
+    ///   covers only the row groups that remain.
+    /// * **Same planning as decoding.** The plan uses the decoder's own
+    ///   row-group order, row selections, offset/limit and projection. Per row
+    ///   group, the planned bytes of a scan without a [`RowFilter`] are the
+    ///   bytes that [`DecodeResult::NeedsData`] requests. With a
+    ///   [`RowFilter`], they are a superset; see [`PlannedRange::conditional`].
+    /// * **Lazy.** The iterator plans one row group at a time when the caller
+    ///   asks for its first range. There is no depth parameter: stop reading
+    ///   the iterator when your read-ahead budget is full. The iterator owns
+    ///   its state, so it can be kept while data is pushed to the decoder.
+    ///   Each call clones the decoder's row-group queue and selections, so call
+    ///   it once per scan, not once per row group.
+    /// * **No I/O and no decoding.**
+    ///
+    /// # Granularity
+    ///
+    /// When the file has an offset index for a column (see
+    /// [`ArrowReaderOptions::with_page_index_policy`]), the plan has one
+    /// [`PageKind::Data`] entry for each page the decoder reads, plus a
+    /// [`PageKind::Dictionary`] entry if the column chunk has a dictionary
+    /// page. Otherwise, it has one [`PageKind::ColumnChunk`] entry for the
+    /// column chunk. Pages let a caller fetch and release data in units
+    /// smaller than a row group, so write files with a page index to get
+    /// the most from this plan.
+    ///
+    /// # Order
+    ///
+    /// Ranges are in row-group order. In a row group, ranges are ordered by
+    /// [`ScanStage`], then by [`PlannedRange::first_row`]. For equal first
+    /// rows, a dictionary page comes before the data pages it serves.
+    ///
+    /// If the decoder would return an error for a row group, for example
+    /// because the row group index is not in the file, the plan ends before
+    /// that row group. The decoder returns the error when it gets there.
+    ///
+    /// # Example
+    ///
+    /// Fetch the planned ranges ahead of the decoder's requests, within a
+    /// read-ahead budget.
+    ///
+    /// ```
+    /// # use std::ops::Range;
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::record_batch;
+    /// # use parquet::DecodeResult;
+    /// # use parquet::arrow::ArrowWriter;
+    /// # use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+    /// # use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
+    /// # use parquet::file::metadata::PageIndexPolicy;
+    /// # use parquet::file::properties::WriterProperties;
+    /// # let file = {
+    /// #   let mut buffer = vec![];
+    /// #   let batch = record_batch!(("a", Int32, [1, 2, 3, 4])).unwrap();
+    /// #   let props = WriterProperties::builder().set_max_row_group_row_count(Some(2)).build();
+    /// #   let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+    /// #   writer.write(&batch).unwrap();
+    /// #   writer.close().unwrap();
+    /// #   Bytes::from(buffer)
+    /// # };
+    /// # let fetch = |range: &Range<u64>| file.slice(range.start as usize..range.end as usize);
+    /// # let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
+    /// # let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
+    /// let mut decoder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
+    ///     .build()
+    ///     .unwrap();
+    ///
+    /// // Read ahead up to this many bytes. Real callers fetch in the
+    /// // background and release ranges as decoding passes them.
+    /// let budget = 1024 * 1024;
+    /// let mut plan = decoder.scan_plan().peekable();
+    /// let mut fetched = 0;
+    /// while let Some(planned) = plan.next_if(|planned| fetched + planned.len() <= budget) {
+    ///     fetched += planned.len();
+    ///     decoder.push_range(planned.range.clone(), fetch(&planned.range)).unwrap();
+    /// }
+    ///
+    /// // Decode. Ranges the plan did not cover come back as `NeedsData`.
+    /// let mut rows = 0;
+    /// loop {
+    ///     match decoder.try_decode().unwrap() {
+    ///         DecodeResult::NeedsData(ranges) => {
+    ///             let data = ranges.iter().map(fetch).collect();
+    ///             decoder.push_ranges(ranges, data).unwrap();
+    ///         }
+    ///         DecodeResult::Data(batch) => rows += batch.num_rows(),
+    ///         DecodeResult::Finished => break,
+    ///     }
+    /// }
+    /// assert_eq!(rows, 4);
+    /// ```
+    ///
+    /// [`RowFilter`]: crate::arrow::arrow_reader::RowFilter
+    /// [`ArrowReaderOptions::with_page_index_policy`]: crate::arrow::arrow_reader::ArrowReaderOptions::with_page_index_policy
+    pub fn scan_plan(&self) -> ScanPlan {
+        ScanPlan::clone(&self.scan_plan)
     }
 
     /// Decompose this decoder back into a [`ParquetPushDecoderBuilder`] for the
