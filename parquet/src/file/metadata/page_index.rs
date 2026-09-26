@@ -611,7 +611,7 @@ impl<T: HeapSize> HeapSize for Grid<T> {
 ///
 /// // Assemble the PageIndex (one entry per row group, each with one
 /// // entry per column) and attach it to the metadata
-/// let mut page_index = PageIndexBuilder::new(1, 1).unwrap();
+/// let mut page_index = PageIndexBuilder::new(1, 1);
 /// page_index.put_column_index(column_index, 0, 0);
 /// page_index.put_offset_index(offset_index, 0, 0);
 /// let page_index = page_index.build();
@@ -742,16 +742,18 @@ impl PageIndexBuilder {
     /// All index entries are initialized to `None` and can be populated using
     /// [`put_column_index`](Self::put_column_index) and [`put_offset_index`](Self::put_offset_index).
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns an error if either dimension exceeds `u32::MAX`.
-    pub fn new(num_row_groups: usize, num_columns: usize) -> Result<Self> {
-        let keep_cols = Keep::new_full(num_columns)?;
-        let keep_rows = Keep::new_full(num_row_groups)?;
-        Ok(Self {
+    /// Panics if either dimension exceeds `u32::MAX`.
+    pub fn new(num_row_groups: usize, num_columns: usize) -> Self {
+        let keep_cols =
+            Keep::new_full(num_columns).expect("page index column count exceeds u32::MAX");
+        let keep_rows =
+            Keep::new_full(num_row_groups).expect("page index row group count exceeds u32::MAX");
+        Self {
             column_indexes: Some(Grid::new(keep_rows.clone(), keep_cols.clone())),
             offset_indexes: Some(Grid::new(keep_rows, keep_cols)),
-        })
+        }
     }
 
     /// Creates a new [`PageIndexBuilder`] from an existing [`PageIndex`]
@@ -775,18 +777,15 @@ impl PageIndexBuilder {
     /// (either a `Default` builder, or one created from a [`PageIndex`] without column indexes).
     /// This replaces any existing column index storage and discards its entries.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns an error if either dimension exceeds `u32::MAX`.
-    pub fn allocate_column_indexes(
-        &mut self,
-        num_row_groups: usize,
-        num_columns: usize,
-    ) -> Result<()> {
-        let keep_cols = Keep::new_full(num_columns)?;
-        let keep_rows = Keep::new_full(num_row_groups)?;
+    /// Panics if either dimension exceeds `u32::MAX`.
+    pub fn allocate_column_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
+        let keep_cols =
+            Keep::new_full(num_columns).expect("page index column count exceeds u32::MAX");
+        let keep_rows =
+            Keep::new_full(num_row_groups).expect("page index row group count exceeds u32::MAX");
         self.column_indexes = Some(Grid::new(keep_rows, keep_cols));
-        Ok(())
     }
 
     /// Allocates space for offset indexes
@@ -799,18 +798,15 @@ impl PageIndexBuilder {
     /// (either a `Default` builder, or one created from a [`PageIndex`] without offset indexes).
     /// This replaces any existing offset index storage and discards its entries.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns an error if either dimension exceeds `u32::MAX`.
-    pub fn allocate_offset_indexes(
-        &mut self,
-        num_row_groups: usize,
-        num_columns: usize,
-    ) -> Result<()> {
-        let keep_cols = Keep::new_full(num_columns)?;
-        let keep_rows = Keep::new_full(num_row_groups)?;
+    /// Panics if either dimension exceeds `u32::MAX`.
+    pub fn allocate_offset_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
+        let keep_cols =
+            Keep::new_full(num_columns).expect("page index column count exceeds u32::MAX");
+        let keep_rows =
+            Keep::new_full(num_row_groups).expect("page index row group count exceeds u32::MAX");
         self.offset_indexes = Some(Grid::new(keep_rows, keep_cols));
-        Ok(())
     }
 
     /// Sets the column index for a specific row group and column
@@ -982,11 +978,19 @@ mod tests {
         let span = u32::MAX as usize + 1;
         assert!(Keep::from_mask(Some(Arc::from([])), span).is_err());
         assert!(Keep::new_full(span).is_err());
-        assert!(PageIndexBuilder::new(0, span).is_err());
-
-        let mut builder = PageIndexBuilder::default();
-        assert!(builder.allocate_column_indexes(0, span).is_err());
-        assert!(builder.allocate_offset_indexes(0, span).is_err());
+        assert!(std::panic::catch_unwind(|| PageIndexBuilder::new(0, span)).is_err());
+        assert!(
+            std::panic::catch_unwind(|| {
+                PageIndexBuilder::default().allocate_column_indexes(0, span)
+            })
+            .is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                PageIndexBuilder::default().allocate_offset_indexes(0, span)
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -1020,16 +1024,16 @@ mod tests {
         let ci = colidx_for_test();
         let mut builder = PageIndexBuilder::default();
 
-        builder.allocate_column_indexes(2, 3).unwrap();
+        builder.allocate_column_indexes(2, 3);
         assert!(builder.put_column_index(ci, 1, 2));
-        builder.allocate_column_indexes(2, 3).unwrap();
+        builder.allocate_column_indexes(2, 3);
         let column_indexes = builder.column_indexes.as_ref().unwrap();
         assert_eq!(column_indexes.rows.len(), 2);
         assert_eq!(column_indexes.cols.len(), 3);
         assert_eq!(column_indexes.cells.len(), 6);
         assert!(column_indexes.is_empty());
 
-        builder.allocate_offset_indexes(2, 3).unwrap();
+        builder.allocate_offset_indexes(2, 3);
         let offset_indexes = builder.offset_indexes.as_ref().unwrap();
         assert_eq!(offset_indexes.rows.len(), 2);
         assert_eq!(offset_indexes.cols.len(), 3);

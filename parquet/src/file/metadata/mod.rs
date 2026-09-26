@@ -2091,7 +2091,7 @@ mod tests {
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
-        let mut page_index = PageIndexBuilder::new(1, 1).unwrap();
+        let mut page_index = PageIndexBuilder::new(1, 1);
 
         let mut column_index = ColumnIndexBuilder::new(Type::BOOLEAN);
         column_index.append(false, vec![1u8], vec![2u8, 3u8], 4, None);
@@ -2229,7 +2229,7 @@ mod tests {
 
     #[test]
     fn test_page_index_builder_partial_population() {
-        let mut builder = PageIndexBuilder::new(1, 1).unwrap();
+        let mut builder = PageIndexBuilder::new(1, 1);
 
         // Add an offset index
         let mut offset_idx_builder = OffsetIndexBuilder::new();
@@ -2249,7 +2249,7 @@ mod tests {
     #[test]
     fn test_page_index_builder_empty_to_none() {
         // Create builder but don't populate any indexes
-        let builder = PageIndexBuilder::new(2, 2).unwrap();
+        let builder = PageIndexBuilder::new(2, 2);
 
         let page_index = builder.build();
 
@@ -2261,7 +2261,7 @@ mod tests {
     #[test]
     fn test_rebuild_page_index() {
         // Create builder with one rowgroup and two columns
-        let mut builder = PageIndexBuilder::new(1, 2).unwrap();
+        let mut builder = PageIndexBuilder::new(1, 2);
 
         // Add column index for first column
         let mut col_idx_builder = ColumnIndexBuilder::new(Type::INT32);
