@@ -961,6 +961,16 @@ impl ShreddingState {
         self.typed_value.as_ref()
     }
 
+    /// Return a validity mask for rows where both shredded columns are absent.
+    pub(crate) fn missing_nulls(&self) -> Option<NullBuffer> {
+        let typed_value = self.typed_value.as_ref()?;
+        let nulls = NullBuffer::from_iter(
+            (0..self.value.len())
+                .map(|index| !self.value.is_null(index) || !typed_value.is_null(index)),
+        );
+        (nulls.null_count() > 0).then_some(nulls)
+    }
+
     /// Slice all the underlying arrays
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
