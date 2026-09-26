@@ -149,13 +149,13 @@ fn compress_sparse(value: u64, mask: u64) -> u64 {
 fn compress_dense(value: u64, mask: u64) -> u64 {
     let mut byte_output_offsets = [0u32; 8];
     let mut bits_written = 0u32;
-    for byte_idx in 0..8usize {
-        byte_output_offsets[byte_idx] = bits_written;
+    for (byte_idx, offset) in byte_output_offsets.iter_mut().enumerate() {
+        *offset = bits_written;
         bits_written += ((mask >> (byte_idx * 8)) as u8).count_ones();
     }
 
     let mut result = 0u64;
-    for byte_idx in 0..8usize {
+    for (byte_idx, &output_offset) in byte_output_offsets.iter().enumerate() {
         let mask_byte = (mask >> (byte_idx * 8)) as u8;
         if mask_byte == 0 {
             continue;
@@ -166,7 +166,7 @@ fn compress_dense(value: u64, mask: u64) -> u64 {
         let high_nibble_bits =
             NIBBLE_PEXT[(mask_byte >> 4) as usize][(value_byte >> 4) as usize] as u64;
         let packed_byte = low_nibble_bits | (high_nibble_bits << (mask_byte & 0xF).count_ones());
-        result |= packed_byte << byte_output_offsets[byte_idx];
+        result |= packed_byte << output_offset;
     }
     result
 }
