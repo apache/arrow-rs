@@ -455,7 +455,7 @@ impl HeapSize for Keep {
 ///
 /// Maps (row_group_idx, column_idx) to values efficiently for sparse access patterns.
 /// This is particularly useful when only a few columns are accessed from wide schemas.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct Grid<T> {
     /// Set of row group indexes that have any values
     rows: Keep,
@@ -468,11 +468,26 @@ pub(crate) struct Grid<T> {
     cells: Vec<Option<T>>,
 }
 
-impl<T: Clone> Grid<T> {
+impl<T: PartialEq> PartialEq for Grid<T> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.rows == other.rows && self.cols == other.cols {
+            return self.cells == other.cells;
+        }
+
+        let num_rows = self.rows.span.max(other.rows.span) as usize;
+        let num_columns = self.cols.span.max(other.cols.span) as usize;
+        (0..num_rows).all(|row| {
+            (0..num_columns).all(|column| self.get(row, column) == other.get(row, column))
+        })
+    }
+}
+
+impl<T> Grid<T> {
     /// Creates a new empty Grid with the specified dimensions
     fn new(rows: Keep, cols: Keep) -> Self {
         let size = rows.len() * cols.len();
-        let cells = vec![None; size];
+        let mut cells = Vec::with_capacity(size);
+        cells.resize_with(size, || None);
         Self { rows, cols, cells }
     }
 
@@ -685,7 +700,7 @@ pub struct PageIndexBuilder {
 }
 
 impl PageIndexBuilder {
-    fn storage_for_selection<T: Clone>(
+    fn storage_for_selection<T>(
         num_row_groups: usize,
         num_columns: usize,
         mask: Option<&ColumnChunkMask>,
@@ -833,7 +848,7 @@ impl PageIndexBuilder {
     }
 
     /// Checks if an index structure is entirely empty (all entries are None)
-    fn is_empty_index<T: Clone>(index: Option<&Grid<T>>) -> bool {
+    fn is_empty_index<T>(index: Option<&Grid<T>>) -> bool {
         match index {
             None => true,
             Some(index) => index.is_empty(),
@@ -966,5 +981,19 @@ mod tests {
 
         assert!(storage.insert(0, 5, ci.clone()));
         assert!(!storage.is_empty());
+    }
+
+    #[test]
+    fn test_grid_equality_ignores_storage_shape() {
+        let ci = colidx_for_test();
+        let mut dense = Grid::new_dense(2, 3).unwrap();
+        assert!(dense.insert(0, 0, ci.clone()));
+
+        let mut sparse = Grid::new(Keep::new([0], 2).unwrap(), Keep::new([0], 3).unwrap());
+        assert!(sparse.insert(0, 0, ci.clone()));
+        assert_eq!(dense, sparse);
+
+        assert!(dense.insert(1, 2, ci));
+        assert_ne!(dense, sparse);
     }
 }
