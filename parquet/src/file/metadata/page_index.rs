@@ -882,7 +882,7 @@ impl From<PageIndex> for PageIndexBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{Grid, Keep, PageIndex, PageIndexBuilder};
+    use super::{Grid, Keep, PageIndexBuilder};
     use crate::{
         basic::BoundaryOrder,
         file::metadata::ColumnChunkMask,
@@ -1032,6 +1032,7 @@ mod tests {
         builder.allocate_column_indexes(2, 3);
         // TODO(ets): need a fallible put
         //assert!(builder.put_column_index(ci, 1, 2));
+        builder.put_column_index(ci, 1, 2);
         builder.allocate_column_indexes(2, 3);
         let column_indexes = builder.column_indexes.as_ref().unwrap();
         assert_eq!(column_indexes.rows.len(), 2);
