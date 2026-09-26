@@ -37,6 +37,7 @@
 //! assert_eq!(7.0, c.value(2));
 //! ```
 
+mod binary;
 mod decimal;
 mod dictionary;
 mod list;
@@ -46,6 +47,7 @@ mod string;
 mod structs;
 mod union;
 
+use crate::cast::binary::*;
 use crate::cast::decimal::*;
 use crate::cast::dictionary::*;
 use crate::cast::list::*;
@@ -56,7 +58,6 @@ use crate::cast::structs::*;
 pub use crate::cast::union::*;
 
 use arrow_buffer::IntervalMonthDayNano;
-use arrow_data::ByteView;
 use chrono::{NaiveTime, Offset, TimeZone, Utc};
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -67,7 +68,7 @@ use crate::parse::{
     string_to_datetime,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, i256};
+use arrow_buffer::{ArrowNativeType, OffsetBuffer, i256};
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
@@ -2587,19 +2588,6 @@ where
     from.unary_opt::<_, R>(num_cast::<T::Native, R::Native>)
 }
 
-fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
-    array: &dyn Array,
-) -> Result<ArrayRef, ArrowError> {
-    let array = array.as_primitive::<FROM>();
-    let size = std::mem::size_of::<FROM::Native>();
-    let offsets = OffsetBuffer::from_repeated_length(size, array.len());
-    Ok(Arc::new(GenericBinaryArray::<O>::try_new(
-        offsets,
-        array.values().inner().clone(),
-        array.nulls().cloned(),
-    )?))
-}
-
 fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
     array: PrimitiveArray<Int64Type>,
     to_tz: &Tz,
@@ -2706,164 +2694,6 @@ where
     } else {
         Some(O::default())
     }
-}
-
-/// Helper function to cast from one `BinaryArray` or 'LargeBinaryArray' to 'FixedSizeBinaryArray'.
-fn cast_binary_to_fixed_size_binary<O: OffsetSizeTrait>(
-    array: &dyn Array,
-    byte_width: i32,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef, ArrowError> {
-    let array = array.as_binary::<O>();
-    let mut builder = FixedSizeBinaryBuilder::with_capacity(array.len(), byte_width);
-
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            builder.append_null();
-        } else {
-            match builder.append_value(array.value(i)) {
-                Ok(()) => {}
-                Err(e) => match cast_options.safe {
-                    true => builder.append_null(),
-                    false => return Err(e),
-                },
-            }
-        }
-    }
-
-    Ok(Arc::new(builder.finish()))
-}
-
-/// Helper function to cast from 'FixedSizeBinaryArray' to one `BinaryArray` or 'LargeBinaryArray'.
-/// If the target one is too large for the source array it will return an Error.
-fn cast_fixed_size_binary_to_binary<O: OffsetSizeTrait>(
-    array: &dyn Array,
-    byte_width: i32,
-) -> Result<ArrayRef, ArrowError> {
-    let array = array
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .unwrap();
-
-    let offsets: i128 = byte_width as i128 * array.len() as i128;
-
-    let is_binary = matches!(GenericBinaryType::<O>::DATA_TYPE, DataType::Binary);
-    if is_binary && offsets > i32::MAX as i128 {
-        return Err(ArrowError::ComputeError(
-            "FixedSizeBinary array too large to cast to Binary array".to_string(),
-        ));
-    } else if !is_binary && offsets > i64::MAX as i128 {
-        return Err(ArrowError::ComputeError(
-            "FixedSizeBinary array too large to cast to LargeBinary array".to_string(),
-        ));
-    }
-
-    let mut builder = GenericBinaryBuilder::<O>::with_capacity(array.len(), array.len());
-
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            builder.append_null();
-        } else {
-            builder.append_value(array.value(i));
-        }
-    }
-
-    Ok(Arc::new(builder.finish()))
-}
-
-fn cast_fixed_size_binary_to_binary_view(
-    array: &dyn Array,
-    _byte_width: i32,
-) -> Result<ArrayRef, ArrowError> {
-    let array = array
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .unwrap();
-
-    let mut builder = BinaryViewBuilder::with_capacity(array.len());
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            builder.append_null();
-        } else {
-            builder.append_value(array.value(i));
-        }
-    }
-
-    Ok(Arc::new(builder.finish()))
-}
-
-/// Helper function to cast from one `ByteArrayType` to another and vice versa.
-/// If the target one (e.g., `LargeUtf8`) is too large for the source array it will return an Error.
-fn cast_byte_container<FROM, TO>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
-where
-    FROM: ByteArrayType,
-    TO: ByteArrayType<Native = FROM::Native>,
-    FROM::Offset: OffsetSizeTrait + ToPrimitive,
-    TO::Offset: OffsetSizeTrait + NumCast,
-{
-    let data = array.to_data();
-    assert_eq!(data.data_type(), &FROM::DATA_TYPE);
-    let str_values_buf = data.buffers()[1].clone();
-    let offsets = data.buffers()[0].typed_data::<FROM::Offset>();
-
-    let mut cast_offsets = Vec::<TO::Offset>::with_capacity(offsets.len());
-    offsets
-        .iter()
-        .try_for_each::<_, Result<_, ArrowError>>(|offset| {
-            let offset =
-                <<TO as ByteArrayType>::Offset as NumCast>::from(*offset).ok_or_else(|| {
-                    ArrowError::ComputeError(format!(
-                        "{}{} array too large to cast to {}{} array",
-                        FROM::Offset::PREFIX,
-                        FROM::PREFIX,
-                        TO::Offset::PREFIX,
-                        TO::PREFIX
-                    ))
-                })?;
-            cast_offsets.push(offset);
-            Ok(())
-        })?;
-
-    let offset_buffer = Buffer::from_vec(cast_offsets);
-
-    let dtype = TO::DATA_TYPE;
-
-    let builder = ArrayData::builder(dtype)
-        .offset(array.offset())
-        .len(array.len())
-        .add_buffer(offset_buffer)
-        .add_buffer(str_values_buf)
-        .nulls(data.nulls().cloned());
-
-    let array_data = unsafe { builder.build_unchecked() };
-
-    Ok(Arc::new(GenericByteArray::<TO>::from(array_data)))
-}
-
-/// Helper function to cast from one `ByteViewType` array to `ByteArrayType` array.
-fn cast_view_to_byte<FROM, TO>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
-where
-    FROM: ByteViewType,
-    TO: ByteArrayType,
-    FROM::Native: AsRef<TO::Native>,
-{
-    let data = array.to_data();
-    let view_array = GenericByteViewArray::<FROM>::from(data);
-
-    let len = view_array.len();
-    let bytes = view_array
-        .views()
-        .iter()
-        .map(|v| ByteView::from(*v).length as usize)
-        .sum::<usize>();
-
-    let mut byte_array_builder = GenericByteBuilder::<TO>::with_capacity(len, bytes);
-
-    for val in &view_array {
-        byte_array_builder.append_option(val);
-    }
-
-    Ok(Arc::new(byte_array_builder.finish()))
 }
 
 #[cfg(test)]
