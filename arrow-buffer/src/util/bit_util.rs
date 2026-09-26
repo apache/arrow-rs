@@ -81,6 +81,78 @@ pub fn compress(value: u64, mask: u64) -> u64 {
     }
 }
 
+/// Parallel bit deposit: scatter the lowest `mask.count_ones()` bits of
+/// `value` into the set positions of `mask`, preserving their order.
+/// All other bits in the result are zero; excess input bits are ignored.
+///
+/// This is the inverse of [`compress`] on the selected bits:
+/// `expand(compress(value, mask), mask) == value & mask`.
+///
+/// Equivalent to the x86 BMI2 `PDEP` instruction. When compiled with the
+/// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
+/// this lowers to the hardware `pdep` instruction; otherwise it falls back
+/// to a portable scalar loop that visits whichever is fewer: unset or set
+/// bits in `mask`.
+///
+/// # Functional Example
+///
+/// Using 8 bits for brevity (the function operates on all 64). The low bits
+/// of `value` are scattered into the set positions of `mask`:
+///
+/// ```text
+/// bit:     7 6 5 4 3 2 1 0
+/// value:   0 0 0 b c e f h
+/// mask:    0 1 1 0 1 1 0 1
+/// result:  0 b c 0 e f 0 h
+/// ```
+///
+/// # Code Example
+///
+/// ```
+/// # use arrow_buffer::bit_util::{compress, expand};
+/// assert_eq!(expand(0b0000_1010, 0b0110_1101), 0b0010_0100);
+/// let value = 0b1011_0100;
+/// let mask = 0b0110_1101;
+/// assert_eq!(expand(compress(value, mask), mask), value & mask);
+/// ```
+#[inline]
+pub fn expand(value: u64, mask: u64) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    {
+        // SAFETY: the `bmi2` target feature is statically enabled for this
+        // build, so the `pdep` instruction is guaranteed to be available.
+        unsafe { std::arch::x86_64::_pdep_u64(value, mask) }
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        let mut value = value;
+        if value == 0 {
+            return 0;
+        }
+
+        let mut zeros = !mask;
+        if zeros.count_ones() <= 32 {
+            // Insert zeros from low to high; excess input bits shift out.
+            while zeros != 0 {
+                let lower = (1_u64 << zeros.trailing_zeros()) - 1;
+                value = (value & lower) | ((value & !lower) << 1);
+                zeros &= zeros - 1;
+            }
+            value
+        } else {
+            let mut output = 0;
+            let mut ones = mask;
+            while ones != 0 {
+                output |= (value & 1) << ones.trailing_zeros();
+                value >>= 1;
+                ones &= ones - 1;
+            }
+            output
+        }
+    }
+}
+
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
 ///
 /// # Panics
@@ -973,6 +1045,52 @@ mod tests {
                 reference(value, mask),
                 "value={value:#x} mask={mask:#x}"
             );
+        }
+    }
+
+    #[test]
+    fn test_expand() {
+        fn reference(values: u64, mask: u64) -> u64 {
+            let mut expected = 0;
+            let mut input_idx = 0;
+            for output_idx in 0..64 {
+                if mask & (1 << output_idx) != 0 {
+                    expected |= ((values >> input_idx) & 1) << output_idx;
+                    input_idx += 1;
+                }
+            }
+            expected
+        }
+
+        assert_eq!(expand(0b1010, 0b1111), 0b1010);
+        assert_eq!(expand(0b11, 0b1010), 0b1010);
+        assert_eq!(expand(u64::MAX, 0), 0);
+        assert_eq!(expand(0, u64::MAX), 0);
+        assert_eq!(expand(0, 0x5555_5555_5555_5555), 0);
+        assert_eq!(expand(u64::MAX, u64::MAX), u64::MAX);
+
+        let mut rng = StdRng::seed_from_u64(0x2b7e_1516_28ae_d2a6);
+
+        // Masks with at most one unset bit or at most one set bit
+        for bit in 0..64 {
+            for mask in [u64::MAX, !(1 << bit), 1 << bit, 0] {
+                for _ in 0..16 {
+                    let values = rng.random::<u64>();
+                    assert_eq!(expand(values, mask), reference(values, mask), "{mask:#x}");
+                }
+            }
+        }
+
+        // Masks across the full density range, exercising the hardware `pdep`
+        // path on a `bmi2` build or both portable loops otherwise.
+        for _ in 0..20_000 {
+            let density = rng.random_range(0.0..=1.0);
+            let mask = (0..64).fold(0_u64, |mask, bit| {
+                mask | ((rng.random_bool(density) as u64) << bit)
+            });
+            let values = rng.random::<u64>();
+            assert_eq!(expand(compress(values, mask), mask), values & mask);
+            assert_eq!(expand(values, mask), reference(values, mask), "{mask:#x}");
         }
     }
 
