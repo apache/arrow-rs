@@ -427,6 +427,20 @@ pub struct ParquetPushDecoder {
     state: ParquetDecoderState,
 }
 
+/// A metadata-only snapshot of one row group's next required byte ranges.
+///
+/// No payload or decoded arrays are retained. A caller must compare these ranges
+/// with ordered `NeedsData` demand before consuming speculative I/O: pushing,
+/// consuming, or clearing buffered data, or rebuilding the decoder, can
+/// invalidate a snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowGroupRangePreview {
+    /// File-level row-group index, after selection and offset/limit skipping.
+    pub row_group_index: usize,
+    /// Planned ranges not fully covered by an input buffer.
+    pub ranges: Vec<Range<u64>>,
+}
+
 impl ParquetPushDecoder {
     /// Attempt to decode the next batch of data, or return what data is needed
     ///
@@ -603,6 +617,36 @@ impl ParquetPushDecoder {
     /// based on filtering and other criteria.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         self.state.peek_next_row_group()
+    }
+
+    /// Preview at most two filter-free row groups using the demand range planner.
+    ///
+    /// Returns `None` outside a row-group boundary or when row predicates are
+    /// present; returns an empty vector when there is no selected work. This
+    /// never advances the decoder, evaluates predicates, reads data, or creates
+    /// batch readers. Ranges fully covered by an input buffer are excluded;
+    /// partially covered ranges are returned unchanged, matching `NeedsData`.
+    ///
+    /// `max_row_groups` must be 1 or 2. Errors leave the decoder unchanged;
+    /// speculative callers should defer them to normal ordered demand. The
+    /// snapshot is only advisory: see [`RowGroupRangePreview`]. Cost includes
+    /// cloning the remaining row-group plan and selections.
+    pub fn preview_row_group_ranges(
+        &self,
+        max_row_groups: usize,
+    ) -> Result<Option<Vec<RowGroupRangePreview>>, ParquetError> {
+        if !(1..=2).contains(&max_row_groups) {
+            return Err(ParquetError::General(
+                "range preview depth must be 1 or 2".into(),
+            ));
+        }
+        match &self.state {
+            ParquetDecoderState::ReadingRowGroup {
+                remaining_row_groups,
+            } => remaining_row_groups.preview_row_group_ranges(max_row_groups),
+            ParquetDecoderState::Finished => Ok(Some(vec![])),
+            ParquetDecoderState::DecodingRowGroup { .. } => Ok(None),
+        }
     }
 
     /// Decompose this decoder back into a [`ParquetPushDecoderBuilder`] for the
@@ -2116,6 +2160,296 @@ mod test {
                 .contains("Row group index 2 out of bounds for file with 2 row groups"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn read_ahead_preview_matches_ordered_demand_without_mutation() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .build()
+            .unwrap();
+        let preview = decoder.preview_row_group_ranges(2).unwrap().unwrap();
+        assert_eq!(
+            preview
+                .iter()
+                .map(|p| p.row_group_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(
+            decoder.preview_row_group_ranges(2).unwrap().unwrap(),
+            preview
+        );
+        assert_eq!(decoder.buffered_bytes(), 0);
+        assert_eq!(decoder.row_groups_remaining(), 2);
+        let mut batches = vec![];
+        for expected in preview {
+            let ranges = expect_needs_data(decoder.try_next_reader());
+            assert_eq!(ranges, expected.ranges);
+            assert!(decoder.preview_row_group_ranges(2).unwrap().is_none());
+            push_ranges_to_decoder(&mut decoder, ranges);
+            batches.extend(
+                expect_data(decoder.try_next_reader())
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap(),
+            );
+        }
+        expect_finished(decoder.try_next_reader());
+        assert!(
+            decoder
+                .preview_row_group_ranges(2)
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            concat_batches(&TEST_BATCH.schema(), batches.iter()).unwrap(),
+            *TEST_BATCH
+        );
+    }
+
+    #[test]
+    fn read_ahead_preview_respects_selection_projection_and_budget() {
+        for (offset, limit) in [(25, 220), (175, 20), (0, 0), (500, 20)] {
+            let metadata = test_file_parquet_metadata();
+            let projection = ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0]);
+            let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(metadata)
+                .unwrap()
+                .with_projection(projection)
+                .with_row_selection(
+                    vec![
+                        RowSelector::skip(25),
+                        RowSelector::select(350),
+                        RowSelector::skip(25),
+                    ]
+                    .into(),
+                )
+                .with_offset(offset)
+                .with_limit(limit)
+                .build()
+                .unwrap();
+            let preview = decoder.preview_row_group_ranges(2).unwrap().unwrap();
+            let mut batches = vec![];
+            for expected in preview {
+                let ranges = expect_needs_data(decoder.try_next_reader());
+                assert_eq!(ranges, expected.ranges);
+                push_ranges_to_decoder(&mut decoder, ranges);
+                batches.extend(
+                    expect_data(decoder.try_next_reader())
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap(),
+                );
+            }
+            expect_finished(decoder.try_next_reader());
+            let rows = 350usize.saturating_sub(offset).min(limit);
+            let expected = TEST_BATCH
+                .slice((25 + offset).min(375), rows)
+                .project(&[0])
+                .unwrap();
+            assert_eq!(
+                concat_batches(&expected.schema(), batches.iter()).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn read_ahead_preview_is_bounded_and_excludes_buffered_ranges() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(decoder.preview_row_group_ranges(0).is_err());
+        assert!(decoder.preview_row_group_ranges(3).is_err());
+        let first = decoder.preview_row_group_ranges(1).unwrap().unwrap();
+        assert_eq!(first.len(), 1);
+        // Pushing bytes invalidates a prior snapshot; it does not advance rows.
+        push_ranges_to_decoder(&mut decoder, first[0].ranges.clone());
+        let current = decoder.preview_row_group_ranges(2).unwrap().unwrap();
+        assert!(current[0].ranges.is_empty());
+        assert!(!current[1].ranges.is_empty());
+        assert_eq!(decoder.row_groups_remaining(), 2);
+        let _reader = expect_data(decoder.try_next_reader());
+        assert_eq!(
+            expect_needs_data(decoder.try_next_reader()),
+            current[1].ranges
+        );
+    }
+
+    #[test]
+    fn read_ahead_preview_partial_buffers_match_demand() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .build()
+            .unwrap();
+        let preview = decoder.preview_row_group_ranges(1).unwrap().unwrap();
+        let range = &preview[0].ranges[0];
+        let middle = range.start + (range.end - range.start) / 2;
+        assert!(middle > range.start);
+        push_ranges_to_decoder(&mut decoder, std::iter::once(range.start..middle).collect());
+        // Demand requires one buffer covering the whole planned range, rather
+        // than subtracting the bytes already available in a smaller buffer.
+        assert_eq!(
+            decoder.preview_row_group_ranges(1).unwrap().unwrap(),
+            preview
+        );
+        let ranges = expect_needs_data(decoder.try_next_reader());
+        assert_eq!(ranges, preview[0].ranges);
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let batches = expect_data(decoder.try_next_reader())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            concat_batches(&TEST_BATCH.schema(), batches.iter()).unwrap(),
+            TEST_BATCH.slice(0, 200)
+        );
+    }
+
+    #[test]
+    fn read_ahead_preview_never_evaluates_predicates() {
+        let metadata = test_file_parquet_metadata();
+        let projection = ProjectionMask::all();
+        let predicate = ArrowPredicateFn::new(projection, |_batch: RecordBatch| {
+            panic!("preview must not evaluate row predicates")
+        });
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(metadata)
+            .unwrap()
+            .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+            .build()
+            .unwrap();
+        assert!(decoder.preview_row_group_ranges(2).unwrap().is_none());
+        assert_eq!(decoder.buffered_bytes(), 0);
+        assert_eq!(decoder.row_groups_remaining(), 2);
+        assert!(!expect_needs_data(decoder.try_next_reader()).is_empty());
+    }
+
+    #[test]
+    fn read_ahead_preview_respects_row_group_local_selections() {
+        let selected = concat_batches(
+            &TEST_BATCH.schema(),
+            [&TEST_BATCH.slice(225, 20), &TEST_BATCH.slice(190, 10)],
+        )
+        .unwrap()
+        .project(&[0])
+        .unwrap();
+        for (offset, limit) in [(0, 30), (15, 12)] {
+            let metadata = test_file_parquet_metadata();
+            let projection = ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0]);
+            // The first entry selects nothing. The remaining entries use local
+            // coordinates, mixed selection representations, and reversed order.
+            let bitmap = RowSelection::from_boolean_buffer(BooleanBuffer::from(
+                (0..45).map(|row| row >= 25).collect::<Vec<_>>(),
+            ));
+            let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(metadata)
+                .unwrap()
+                .with_projection(projection)
+                .with_row_group_selections(vec![
+                    RowGroupSelection::new(0, Some(vec![RowSelector::skip(200)].into())),
+                    RowGroupSelection::new(1, Some(bitmap)),
+                    RowGroupSelection::new(
+                        0,
+                        Some(vec![RowSelector::skip(190), RowSelector::select(10)].into()),
+                    ),
+                ])
+                .with_offset(offset)
+                .with_limit(limit)
+                .build()
+                .unwrap();
+            let preview = decoder.preview_row_group_ranges(2).unwrap().unwrap();
+            assert_eq!(
+                preview
+                    .iter()
+                    .map(|p| p.row_group_index)
+                    .collect::<Vec<_>>(),
+                vec![1, 0]
+            );
+            assert_eq!(decoder.row_groups_remaining(), 3);
+            assert_eq!(decoder.buffered_bytes(), 0);
+            let mut batches = vec![];
+            for expected in preview {
+                let ranges = expect_needs_data(decoder.try_next_reader());
+                assert_eq!(ranges, expected.ranges);
+                push_ranges_to_decoder(&mut decoder, ranges);
+                batches.extend(
+                    expect_data(decoder.try_next_reader())
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap(),
+                );
+            }
+            expect_finished(decoder.try_next_reader());
+            assert_eq!(
+                concat_batches(&selected.schema(), batches.iter()).unwrap(),
+                selected.slice(offset, limit)
+            );
+        }
+    }
+
+    #[test]
+    fn read_ahead_preview_preserves_duplicate_row_groups() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(0, None),
+                RowGroupSelection::new(0, None),
+            ])
+            .build()
+            .unwrap();
+        let first = decoder.preview_row_group_ranges(1).unwrap().unwrap();
+        push_ranges_to_decoder(&mut decoder, first[0].ranges.clone());
+        let preview = decoder.preview_row_group_ranges(2).unwrap().unwrap();
+        assert_eq!(
+            preview
+                .iter()
+                .map(|p| p.row_group_index)
+                .collect::<Vec<_>>(),
+            vec![0, 0]
+        );
+        assert!(preview.iter().all(|p| p.ranges.is_empty()));
+        for _ in 0..2 {
+            // Refresh after each read: a prior snapshot does not predict how
+            // subsequent buffer consumption affects another visit to this group.
+            let preview = decoder.preview_row_group_ranges(1).unwrap().unwrap();
+            let reader = match decoder.try_next_reader().unwrap() {
+                DecodeResult::NeedsData(ranges) => {
+                    assert_eq!(ranges, preview[0].ranges);
+                    push_ranges_to_decoder(&mut decoder, ranges);
+                    expect_data(decoder.try_next_reader())
+                }
+                DecodeResult::Data(reader) => {
+                    assert!(preview[0].ranges.is_empty());
+                    reader
+                }
+                DecodeResult::Finished => panic!("selected row group was not decoded"),
+            };
+            let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(
+                concat_batches(&TEST_BATCH.schema(), batches.iter()).unwrap(),
+                TEST_BATCH.slice(0, 200)
+            );
+        }
+        expect_finished(decoder.try_next_reader());
+    }
+
+    #[test]
+    fn read_ahead_preview_error_does_not_advance_decoder() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_groups(vec![0, 2])
+            .build()
+            .unwrap();
+        let error = decoder.preview_row_group_ranges(2).unwrap_err().to_string();
+        assert_eq!(decoder.row_groups_remaining(), 2);
+        assert_eq!(decoder.buffered_bytes(), 0);
+        let ranges = expect_needs_data(decoder.try_next_reader());
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let batches = expect_data(decoder.try_next_reader())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            concat_batches(&TEST_BATCH.schema(), batches.iter()).unwrap(),
+            TEST_BATCH.slice(0, 200)
+        );
+        assert_eq!(decoder.try_next_reader().unwrap_err().to_string(), error);
     }
 
     /// `peek_next_row_group` reports the index of the row group the
