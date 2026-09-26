@@ -345,7 +345,6 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
 // DELTA_BINARY_PACKED encoding
 
 const MAX_PAGE_HEADER_WRITER_SIZE: usize = 32;
-const DEFAULT_BIT_WRITER_SIZE: usize = 1024 * 1024;
 const DEFAULT_NUM_MINI_BLOCKS: usize = 4;
 
 /// Delta bit packed encoder.
@@ -409,7 +408,10 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
 
         DeltaBitPackEncoder {
             page_header_writer: BitWriter::new(MAX_PAGE_HEADER_WRITER_SIZE),
-            bit_writer: BitWriter::new(DEFAULT_BIT_WRITER_SIZE),
+            // Don't pre-allocate: encoders are often created eagerly (e.g. as a
+            // byte array fallback encoder) and may never be used. The buffer
+            // grows on demand and retains its capacity across pages.
+            bit_writer: BitWriter::new(0),
             total_values: 0,
             first_value: 0,
             current_value: 0, // current value to keep adding deltas
