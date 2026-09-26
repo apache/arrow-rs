@@ -55,5 +55,9 @@ serde_json = "1.0"
 name = "variant_kernels"
 harness = false
 
+[[bench]]
+name = "variant_get_list_validity"
+harness = false
+
 [lints]
 workspace = true
