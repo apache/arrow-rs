@@ -38,7 +38,7 @@ use arrow::compute::{CastOptions, DecimalCast, cast_with_options};
 use arrow::datatypes::{self, DataType, DecimalType};
 use arrow::error::{ArrowError, Result};
 use arrow_schema::{FieldRef, Fields, TimeUnit, UnionFields, UnionMode};
-use parquet_variant::{Variant, VariantPath};
+use parquet_variant::{Variant, VariantMetadata, VariantPath, VariantPathElement};
 use std::sync::Arc;
 
 /// Builder for converting variant values into strongly typed Arrow arrays.
@@ -195,10 +195,7 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
 
     // Wrap with path extraction if needed
     if !path.is_empty() {
-        builder = WithPath(VariantPathRowBuilder {
-            builder: Box::new(builder),
-            path,
-        })
+        builder = WithPath(VariantPathRowBuilder::new(builder, path, metadata.clone()))
     }
 
     Ok(builder)
@@ -1178,20 +1175,192 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
     }
 }
 
+/// A path element with any field name already resolved against a specific metadata dictionary.
+///
+/// See [`VariantPathRowBuilder`] for why this resolution is worth caching.
+#[derive(Debug)]
+enum ResolvedVariantPathElement {
+    /// A field name, together with the field id it resolved to.
+    ///
+    /// `field_id` is `None` for an unsorted dictionary, which may hold duplicate entries -- there a
+    /// field id does not identify a single name, so the field must still be matched by name. See
+    /// [`VariantObject::get_by_field_id`].
+    ///
+    /// [`VariantObject::get_by_field_id`]: parquet_variant::VariantObject::get_by_field_id
+    Field { name: String, field_id: Option<u32> },
+    /// A list index, which needs no dictionary to resolve.
+    Index(usize),
+}
+
+/// A path resolved against one metadata dictionary, and the identity of that dictionary.
+struct ResolvedPath {
+    /// Identifies the dictionary `elements` was resolved against, by the address and length of its
+    /// backing bytes. See [`VariantPathRowBuilder`] for why an address may be compared here.
+    metadata_identity: (*const u8, usize),
+    /// `path` with every field name resolved, or `None` when some name is absent from the
+    /// dictionary. A path that cannot be resolved yields no value for any row that shares the
+    /// dictionary, so the absence is worth caching too.
+    elements: Option<Vec<ResolvedVariantPathElement>>,
+}
+
+impl ResolvedPath {
+    /// Whether `metadata` still maps every resolved field id back to the name it was resolved
+    /// from, i.e. whether this really is the dictionary this path was resolved against.
+    ///
+    /// Only used to check [`VariantPathRowBuilder`]'s caching assumption in debug builds; it costs
+    /// about as much as resolving the path again.
+    fn matches(&self, metadata: &VariantMetadata<'_>) -> bool {
+        let Some(elements) = &self.elements else {
+            // The path did not resolve, so there are no field ids to check. Re-resolving is the
+            // only way to tell whether it would still fail to resolve.
+            return true;
+        };
+        elements.iter().all(|element| match element {
+            ResolvedVariantPathElement::Field {
+                name,
+                field_id: Some(field_id),
+            } => metadata
+                .get(*field_id as _)
+                .is_ok_and(|entry| entry == name),
+            _ => true,
+        })
+    }
+}
+
 /// A thin wrapper whose only job is to extract a specific path from a variant value and pass the
 /// result to a nested builder.
+///
+/// A variant object stores its field names as numeric field ids that index into the value's
+/// metadata dictionary, so following a named path element means resolving that name to an id.
+/// Doing that per row is the dominant cost of extracting a path from a wide object: a lookup by
+/// name compares strings, and each candidate name must first be decoded out of the dictionary.
+///
+/// Every row of a batch normally shares one dictionary, so this builder resolves the path once and
+/// reuses the result until a row arrives with a different dictionary. Afterwards each row only
+/// needs to search field ids, which is an integer comparison over unaligned loads.
+///
+/// # Recognizing a shared dictionary
+///
+/// Two rows are taken to share a dictionary when their metadata bytes have the same address and
+/// length. Comparing contents instead would cost more than the resolution being cached, and would
+/// grow with the size of the dictionary.
+///
+/// That makes the cached address outlive the borrow it came from, so every appended value must draw
+/// its metadata from bytes that stay alive -- and therefore keep their address -- for at least as
+/// long as this builder. Otherwise a later, unrelated allocation could reuse the address of a freed
+/// dictionary and be mistaken for it. Callers satisfy this by appending values read out of one
+/// [`VariantArray`], whose buffers they hold for the duration; `metadata` below is the column such
+/// values are read from. [`ResolvedPath::matches`] checks the assumption in debug builds.
 pub(crate) struct VariantPathRowBuilder<'a> {
     builder: Box<VariantToArrowRowBuilder<'a>>,
     path: VariantPath<'a>,
+    /// The `metadata` column appended values are expected to be read from. Held so that its
+    /// dictionaries cannot be freed while `resolved` holds one's address; never read by row.
+    _metadata: ArrayRef,
+    /// The most recently resolved path, reused while consecutive rows share a dictionary.
+    resolved: Option<ResolvedPath>,
 }
 
-impl VariantPathRowBuilder<'_> {
+impl<'a> VariantPathRowBuilder<'a> {
+    /// Creates a builder that extracts `path` from every appended value.
+    ///
+    /// `metadata` is the `metadata` column those values will be read from; see "Recognizing a
+    /// shared dictionary" above for what this builder assumes of it.
+    fn new(
+        builder: VariantToArrowRowBuilder<'a>,
+        path: VariantPath<'a>,
+        metadata: ArrayRef,
+    ) -> Self {
+        Self {
+            builder: Box::new(builder),
+            path,
+            _metadata: metadata,
+            resolved: None,
+        }
+    }
+
+    /// Resolves every field name in `path` against `metadata`, returning `None` if any of them is
+    /// absent from the dictionary.
+    fn resolve_path(
+        path: &VariantPath<'_>,
+        metadata: &VariantMetadata<'_>,
+    ) -> Option<Vec<ResolvedVariantPathElement>> {
+        path.iter()
+            .map(|element| match element {
+                VariantPathElement::Field { name } => {
+                    // Resolving is worthwhile even for an unsorted dictionary, which cannot use the
+                    // field id: failing here means the name is absent from the dictionary, so no
+                    // row sharing it can match.
+                    let (field_id, _) = metadata.get_entry(name)?;
+                    Some(ResolvedVariantPathElement::Field {
+                        name: name.to_string(),
+                        field_id: metadata.is_sorted().then_some(field_id),
+                    })
+                }
+                VariantPathElement::Index { index } => {
+                    Some(ResolvedVariantPathElement::Index(*index))
+                }
+                // `Variant::get_path` does not traverse a list-element wildcard, so neither do we.
+                VariantPathElement::ListElement => None,
+            })
+            .collect()
+    }
+
+    /// Returns the path resolved against `metadata`, resolving it only if the previously cached
+    /// resolution was for a different dictionary.
+    fn resolved_path(
+        &mut self,
+        metadata: &VariantMetadata<'_>,
+    ) -> Option<&[ResolvedVariantPathElement]> {
+        let bytes = metadata.as_bytes();
+        let metadata_identity = (bytes.as_ptr(), bytes.len());
+
+        // Resolve again only when this row's dictionary differs from the cached one.
+        let is_cached = self.resolved.as_ref().is_some_and(|resolved| {
+            let is_cached = resolved.metadata_identity == metadata_identity;
+            debug_assert!(
+                !is_cached || resolved.matches(metadata),
+                "cached path resolution outlived the dictionary it was resolved against"
+            );
+            is_cached
+        });
+        if !is_cached {
+            self.resolved = Some(ResolvedPath {
+                metadata_identity,
+                elements: Self::resolve_path(&self.path, metadata),
+            });
+        }
+
+        self.resolved.as_ref()?.elements.as_deref()
+    }
+
+    /// Follows `path` from `value`, returning `None` if any element is missing.
+    fn get_resolved_path<'m, 'v>(
+        value: Variant<'m, 'v>,
+        path: &[ResolvedVariantPathElement],
+    ) -> Option<Variant<'m, 'v>> {
+        path.iter().try_fold(value, |value, element| match element {
+            ResolvedVariantPathElement::Field {
+                field_id: Some(field_id),
+                ..
+            } => value.get_object_field_by_id(*field_id),
+            ResolvedVariantPathElement::Field { name, .. } => value.get_object_field(name),
+            ResolvedVariantPathElement::Index(index) => value.get_list_element(*index),
+        })
+    }
+
     fn append_null(&mut self) -> Result<()> {
         self.builder.append_null()
     }
 
     fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
-        if let Some(v) = value.get_path(&self.path) {
+        // A variant carries the dictionary its field ids refer to, so the row's own value tells us
+        // which dictionary to resolve against -- no need to re-read the `metadata` column.
+        let resolved = self
+            .resolved_path(value.metadata())
+            .and_then(|path| Self::get_resolved_path(value, path));
+
+        if let Some(v) = resolved {
             self.builder.append_value(v)
         } else {
             self.builder.append_null()?;
