@@ -17,7 +17,11 @@
 
 //! A command line client for Arrow Flight SQL.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
@@ -36,6 +40,10 @@ use tonic::{
     transport::{Channel, ClientTlsConfig, Endpoint},
 };
 use tracing_log::log::info;
+
+/// Reserved location URI meaning "redeem this ticket on the connection that returned the
+/// `FlightInfo`", rather than on a separate server. An empty string means the same.
+const REUSE_CONNECTION_URI: &str = "arrow-flight-reuse-connection://?";
 
 /// Logging CLI config.
 #[derive(Debug, Parser)]
@@ -251,7 +259,7 @@ enum Command {
 async fn main() -> Result<()> {
     let args = Args::parse();
     setup_logging(args.logging_args)?;
-    let mut client = setup_client(args.client_args)
+    let mut client = setup_client(&args.client_args)
         .await
         .context("setup client")?;
 
@@ -317,7 +325,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let batches = execute_flight(&mut client, flight_info)
+    let batches = execute_flight(&mut client, &args.client_args, flight_info)
         .await
         .context("read flight data")?;
 
@@ -329,6 +337,7 @@ async fn main() -> Result<()> {
 
 async fn execute_flight(
     client: &mut FlightSqlServiceClient<Channel>,
+    client_args: &ClientArgs,
     info: FlightInfo,
 ) -> Result<Vec<RecordBatch>> {
     let schema = Arc::new(Schema::try_from(info.clone()).context("valid schema")?);
@@ -336,9 +345,32 @@ async fn execute_flight(
     batches.push(RecordBatch::new_empty(schema));
     info!("decoded schema");
 
+    let mut location_clients = HashMap::new();
+
     for endpoint in info.endpoint {
         let Some(ticket) = &endpoint.ticket else {
             bail!("did not get ticket");
+        };
+
+        // `None` means no location was given, or only the reserved reuse-connection form, so
+        // the ticket is redeemed on the server that returned the `FlightInfo`.
+        let location = endpoint
+            .location
+            .iter()
+            .map(|location| location.uri.as_str())
+            .find(|uri| !uri.is_empty() && *uri != REUSE_CONNECTION_URI);
+
+        let client = match location {
+            None => &mut *client,
+            Some(uri) => match location_clients.entry(uri.to_owned()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    let client = setup_client_for_uri(client_args, uri)
+                        .await
+                        .with_context(|| format!("setup client for endpoint location {uri}"))?;
+                    entry.insert(client)
+                }
+            },
         };
 
         let mut flight_data = client.do_get(ticket.clone()).await.context("do get")?;
@@ -398,12 +430,24 @@ fn setup_logging(args: LoggingArgs) -> Result<()> {
     Ok(())
 }
 
-async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel>> {
+async fn setup_client(args: &ClientArgs) -> Result<FlightSqlServiceClient<Channel>> {
     let port = args.port.unwrap_or(if args.tls { 443 } else { 80 });
 
     let protocol = if args.tls { "https" } else { "http" };
 
-    let mut endpoint = Endpoint::new(format!("{}://{}:{}", protocol, args.host, port))
+    setup_client_for_uri(args, &format!("{}://{}:{}", protocol, args.host, port)).await
+}
+
+/// Connect a client to `uri`, applying the headers, token, handshake and compression settings from
+/// `args`. TLS is used when `uri` has an `https` scheme, so that an endpoint location may differ
+/// from the main connection.
+async fn setup_client_for_uri(
+    args: &ClientArgs,
+    uri: &str,
+) -> Result<FlightSqlServiceClient<Channel>> {
+    let tls = uri.starts_with("https://");
+
+    let mut endpoint = Endpoint::new(uri.to_owned())
         .context("create endpoint")?
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(20))
@@ -413,7 +457,7 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
         .keep_alive_timeout(Duration::from_secs(20))
         .keep_alive_while_idle(true);
 
-    if args.tls {
+    if tls {
         let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
         if args.key_log {
             tls_config = tls_config.use_key_log();
@@ -427,8 +471,8 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
     let channel = endpoint.connect().await.context("connect to endpoint")?;
 
     let mut client = FlightServiceClient::new(channel);
-    for encoding in args.accept_compression {
-        client = client.accept_compressed(encoding.into());
+    for encoding in &args.accept_compression {
+        client = client.accept_compressed((*encoding).into());
     }
     if let Some(encoding) = args.send_compression {
         client = client.send_compressed(encoding.into());
@@ -436,20 +480,20 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
     let mut client = FlightSqlServiceClient::new_from_inner(client);
     info!("connected");
 
-    for (k, v) in args.headers {
+    for (k, v) in &args.headers {
         client.set_header(k, v);
     }
 
-    if let Some(token) = args.token {
-        client.set_token(token);
+    if let Some(token) = &args.token {
+        client.set_token(token.clone());
         info!("token set");
     }
 
-    match (args.username, args.password) {
+    match (&args.username, &args.password) {
         (None, None) => {}
         (Some(username), Some(password)) => {
             client
-                .handshake(&username, &password)
+                .handshake(username, password)
                 .await
                 .context("handshake")?;
             info!("performed handshake");
