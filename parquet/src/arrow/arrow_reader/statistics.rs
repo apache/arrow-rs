@@ -26,6 +26,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaData;
 use crate::file::metadata::page_index::PageIndexProvider;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
+use crate::file::page_index::index_reader::decode_column_index;
 use crate::file::statistics::Statistics as ParquetStatistics;
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::builder::{
@@ -49,6 +50,8 @@ use arrow_buffer::{NullBufferBuilder, i256};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use half::f16;
 use std::sync::Arc;
+
+mod page_index;
 
 // Convert the bytes array to i32.
 // The endian of the input bytes array must be big-endian.
@@ -1438,6 +1441,27 @@ where
     Ok(array)
 }
 
+/// Page statistics for one column, read directly from the stored bytes of
+/// each row group's Parquet `ColumnIndex`.
+///
+/// Returned by [`StatisticsConverter::data_page_statistics_from_bytes`]. Every
+/// array has one entry per data page, in the order the row groups were given.
+#[derive(Debug, Clone)]
+pub struct DataPageStatistics {
+    /// The smallest value in each page, or null if it is not known.
+    /// Same as [`StatisticsConverter::data_page_mins`].
+    pub mins: ArrayRef,
+    /// The largest value in each page, or null if it is not known.
+    /// Same as [`StatisticsConverter::data_page_maxes`].
+    pub maxes: ArrayRef,
+    /// The number of null values in each page, or null if it is not known.
+    /// Same as [`StatisticsConverter::data_page_null_counts`].
+    pub null_counts: UInt64Array,
+    /// The number of NaN values in each page, or null if it is not known.
+    /// Same as [`StatisticsConverter::data_page_nan_counts`].
+    pub nan_counts: UInt64Array,
+}
+
 /// Extracts Parquet statistics as Arrow arrays
 ///
 /// This is used to convert Parquet statistics to Arrow [`ArrayRef`], with
@@ -2003,6 +2027,169 @@ impl<'a> StatisticsConverter<'a> {
             (num_data_pages, column_page_index_per_row_group_per_column)
         });
         nan_counts_page_statistics(iter)
+    }
+
+    /// Reads the min, max, null count and NaN count of every data page,
+    /// straight from the stored bytes of each row group's `ColumnIndex`.
+    ///
+    /// This gives the same results as calling [`Self::data_page_mins`],
+    /// [`Self::data_page_maxes`], [`Self::data_page_null_counts`] and
+    /// [`Self::data_page_nan_counts`], but does not need the page index to be
+    /// loaded into [`ParquetMetaData`] first. The bytes are read once and the
+    /// values are written directly into the returned Arrow arrays, which is
+    /// much less work than building a [`ColumnIndexMetaData`] and then
+    /// converting it.
+    ///
+    /// To use it, load the metadata without the column index, by passing
+    /// [`PageIndexPolicy::Skip`] to `with_column_index_policy` on
+    /// [`ArrowReaderOptions`], [`ParquetMetaDataReader`] or
+    /// [`ParquetMetaDataPushDecoder`]. Then read the bytes for each column
+    /// chunk from the range given by [`ColumnChunkMetaData::column_index_range`],
+    /// only for the columns and row groups you need.
+    ///
+    /// # Parameters
+    ///
+    /// * `column_indexes`: one entry per row group, in the order wanted in
+    ///   the result. Each entry is the number of data pages in that row group,
+    ///   and the stored `ColumnIndex` bytes for this column, or `None` if the
+    ///   row group has no column index.
+    ///
+    /// # Return Value
+    ///
+    /// Each array has one entry per data page. A row group without a column
+    /// index, or a column that is not in the Parquet file, gives nulls for
+    /// its pages (the number of pages given for it).
+    ///
+    /// # Errors
+    ///
+    /// If the bytes are not a valid `ColumnIndex`, for example if the lists
+    /// inside it have different lengths or a count is negative.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use std::fs::File;
+    /// # use std::io::{Read, Seek, SeekFrom};
+    /// # use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+    /// # use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+    /// # use parquet::file::metadata::PageIndexPolicy;
+    /// # fn main() -> parquet::errors::Result<()> {
+    /// let mut file = File::open("data.parquet")?;
+    /// // Load the metadata, but not the column index
+    /// let options = ArrowReaderOptions::new()
+    ///     .with_column_index_policy(PageIndexPolicy::Skip)
+    ///     .with_offset_index_policy(PageIndexPolicy::Required);
+    /// let reader_metadata = ArrowReaderMetadata::load(&file, options)?;
+    /// let metadata = reader_metadata.metadata();
+    ///
+    /// let converter = StatisticsConverter::try_new(
+    ///     "foo",
+    ///     reader_metadata.schema(),
+    ///     metadata.file_metadata().schema_descr(),
+    /// )?;
+    /// let column = converter.parquet_column_index().expect("column is in the file");
+    ///
+    /// // Read the stored column index bytes of each row group
+    /// let mut column_indexes = Vec::new();
+    /// for (row_group_idx, row_group) in metadata.row_groups().iter().enumerate() {
+    ///     // The number of pages comes from the offset index, which was loaded
+    ///     let num_pages = metadata
+    ///         .page_index_for_row_group(row_group_idx)
+    ///         .num_data_pages(column)
+    ///         .unwrap_or(0);
+    ///     let bytes = match row_group.column(column).column_index_range() {
+    ///         Some(range) => {
+    ///             let mut buffer = vec![0u8; (range.end - range.start) as usize];
+    ///             file.seek(SeekFrom::Start(range.start))?;
+    ///             file.read_exact(&mut buffer)?;
+    ///             Some(buffer)
+    ///         }
+    ///         None => None,
+    ///     };
+    ///     column_indexes.push((num_pages, bytes));
+    /// }
+    ///
+    /// let stats = converter.data_page_statistics_from_bytes(
+    ///     column_indexes.iter().map(|(n, bytes)| (*n, bytes.as_deref())),
+    /// )?;
+    /// println!("page mins: {:?}", stats.mins);
+    /// println!("page null counts: {:?}", stats.null_counts);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`ParquetMetaData`]: crate::file::metadata::ParquetMetaData
+    /// [`PageIndexPolicy::Skip`]: crate::file::metadata::PageIndexPolicy::Skip
+    /// [`ArrowReaderOptions`]: crate::arrow::arrow_reader::ArrowReaderOptions
+    /// [`ParquetMetaDataReader`]: crate::file::metadata::ParquetMetaDataReader
+    /// [`ParquetMetaDataPushDecoder`]: crate::file::metadata::ParquetMetaDataPushDecoder
+    /// [`ColumnChunkMetaData::column_index_range`]: crate::file::metadata::ColumnChunkMetaData::column_index_range
+    pub fn data_page_statistics_from_bytes<'b, I>(
+        &self,
+        column_indexes: I,
+    ) -> Result<DataPageStatistics>
+    where
+        I: IntoIterator<Item = (usize, Option<&'b [u8]>)>,
+    {
+        let data_type = self.arrow_field.data_type();
+        let column_indexes: Vec<_> = column_indexes.into_iter().collect();
+        let num_pages: usize = column_indexes.iter().map(|(n, _)| n).sum();
+
+        let (Some(_), Some(physical_type)) = (self.parquet_column_index, self.physical_type) else {
+            // The column is not in the Parquet file, so nothing is known
+            return Ok(DataPageStatistics {
+                mins: new_null_array(data_type, num_pages),
+                maxes: new_null_array(data_type, num_pages),
+                null_counts: UInt64Array::new_null(num_pages),
+                nan_counts: UInt64Array::new_null(num_pages),
+            });
+        };
+
+        let Some(mut decoder) = page_index::ColumnIndexDecoder::try_new(physical_type, num_pages)
+        else {
+            return self.data_page_statistics_via_metadata(&column_indexes, physical_type);
+        };
+        for (num_pages, bytes) in column_indexes {
+            match bytes {
+                Some(bytes) => decoder.append(bytes)?,
+                None => decoder.append_nulls(num_pages),
+            }
+        }
+        let (mins, maxes, null_counts, nan_counts) = decoder.finish().into_arrow(data_type)?;
+        Ok(DataPageStatistics {
+            mins,
+            maxes,
+            null_counts,
+            nan_counts,
+        })
+    }
+
+    /// The slower route for column types the direct reader does not handle:
+    /// build a [`ColumnIndexMetaData`] for each row group, then convert it as
+    /// [`Self::data_page_mins`] and friends do.
+    fn data_page_statistics_via_metadata(
+        &self,
+        column_indexes: &[(usize, Option<&[u8]>)],
+        physical_type: PhysicalType,
+    ) -> Result<DataPageStatistics> {
+        let data_type = self.arrow_field.data_type();
+        let decoded = column_indexes
+            .iter()
+            .map(|(num_pages, bytes)| {
+                let index = bytes
+                    .map(|bytes| decode_column_index(bytes, physical_type))
+                    .transpose()?;
+                Ok((*num_pages, index))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let iter = || decoded.iter().map(|(n, index)| (*n, index.as_ref()));
+
+        Ok(DataPageStatistics {
+            mins: min_page_statistics(data_type, iter(), self.physical_type)?,
+            maxes: max_page_statistics(data_type, iter(), self.physical_type)?,
+            null_counts: null_counts_page_statistics(iter())?,
+            nan_counts: nan_counts_page_statistics(iter())?,
+        })
     }
 
     /// Returns a [`UInt64Array`] with row counts for each data page.
