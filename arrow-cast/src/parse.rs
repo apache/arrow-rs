@@ -135,6 +135,16 @@ impl TimestampParser {
                 let time = time(hour, minute, second, 0)?;
                 Some((time, 17))
             }
+            // 09:26
+            m if m & 0b111111 == 0b011011
+                && self.test(13, b':')
+                && !self.test(16, b':')
+                && !self.test(16, b'.') =>
+            {
+                let hour = self.digits[11] * 10 + self.digits[12];
+                let minute = self.digits[14] * 10 + self.digits[15];
+                Some((time(hour, minute, 0, 0)?, 16))
+            }
             _ => None,
         }
     }
@@ -149,6 +159,7 @@ impl TimestampParser {
 /// Examples of accepted inputs:
 /// * `1997-01-31T09:26:56.123Z`        # RCF3339
 /// * `1997-01-31T09:26:56.123-05:00`   # RCF3339
+/// * `1997-01-31T09:26Z`               # ISO8601 without seconds
 /// * `1997-01-31 09:26:56.123-05:00`   # close to RCF3339 but with a space rather than T
 /// * `2023-01-01 04:05:06.789 -08`     # close to RCF3339, no fractional seconds or time separator
 /// * `1997-01-31T09:26:56.123`         # close to RCF3339 but no timezone offset specified
@@ -1881,6 +1892,20 @@ mod tests {
     }
 
     #[test]
+    fn string_to_timestamp_without_seconds() {
+        let cases = [
+            ("2025-08-14T00:00Z", (2025, 8, 14, 0, 0)),
+            ("2025-08-14T09:26", (2025, 8, 14, 9, 26)),
+            ("2025-08-14 09:26+05:30", (2025, 8, 14, 3, 56)),
+            ("2025-08-14t23:59-08:00", (2025, 8, 15, 7, 59)),
+        ];
+        for (case, (y, m, d, h, min)) in cases {
+            let expected = Utc.with_ymd_and_hms(y, m, d, h, min, 0).unwrap();
+            assert_eq!(string_to_datetime(&Utc, case).unwrap(), expected)
+        }
+    }
+
+    #[test]
     fn string_to_timestamp_invalid() {
         // Test parsing invalid formats
         let cases = [
@@ -1903,6 +1928,10 @@ mod tests {
             ("1997-01-31T092656.123Z", "error parsing time"),
             ("1997-01-10T12:00:06.", "error parsing time"),
             ("1997-01-10T12:00:06. ", "error parsing time"),
+            ("1997-01-10T09:2Z", "error parsing time"),
+            ("1997-01-10T09:26:Z", "error parsing time"),
+            ("1997-01-10T09:26.5Z", "error parsing time"),
+            ("1997-01-10T09:61Z", "error parsing time"),
         ];
 
         for (s, ctx) in cases {
@@ -1995,11 +2024,13 @@ mod tests {
             "2020-12-1",
             "1690-2-5",
             "2020-09-08 01:02:03",
+            "2020-09-08 01:02",
         ];
         for case in cases {
             let v = date32_to_datetime(Date32Type::parse(case).unwrap()).unwrap();
             let expected = NaiveDate::parse_from_str(case, "%Y-%m-%d")
                 .or_else(|_| NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M:%S"))
+                .or_else(|_| NaiveDate::parse_from_str(case, "%Y-%m-%d %H:%M"))
                 .unwrap();
             assert_eq!(v.date(), expected);
         }
@@ -2013,7 +2044,6 @@ mod tests {
             "2020--04-03",
             "2020--",
             "2020-09-08 01",
-            "2020-09-08 01:02",
             "2020-09-08 01-02-03",
             "2020-9-8 01:02:03",
             "2020-09-08 1:2:3",
