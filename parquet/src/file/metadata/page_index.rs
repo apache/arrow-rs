@@ -685,6 +685,9 @@ impl PageIndexProvider for PageIndex {
 
 impl HeapSize for PageIndex {
     fn heap_size(&self) -> usize {
+        // Column and offset grids created from the same ColumnChunkMask may share their
+        // Keep allocations. HeapSize accounts for each Arc independently, so those shared
+        // allocations may be counted more than once.
         self.column_indexes.heap_size() + self.offset_indexes.heap_size()
     }
 }
