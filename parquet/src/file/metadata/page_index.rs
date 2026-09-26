@@ -17,6 +17,8 @@
 
 //! Page Index structures for efficient page-level skipping
 
+use crate::errors::{ParquetError, Result};
+use crate::file::metadata::ColumnChunkMask;
 use crate::file::metadata::memory::HeapSize;
 use crate::file::page_index::{
     column_index::ColumnIndexMetaData,
@@ -363,12 +365,197 @@ impl RowGroupPageIndex {
     }
 }
 
+/// A memory-efficient sparse set representation storing sorted deduplicated indexes
+///
+/// Stores which positions are set in a sparse vector. For example:
+/// `[None, None, Some(...), Some(...), None, Some(...)]` becomes `[2, 3, 5]`
+///
+/// Position checking uses a linear scan for up to 32 indexes and binary search above that.
+/// Stores indexes as `u32` because Parquet/Thrift collections cannot contain more than
+/// `i32::MAX` entries.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Keep {
+    /// Sorted, deduplicated indexes of set positions
+    /// None means all positions in the span are set
+    kept: Option<Arc<[u32]>>,
+    /// Total span of positions (0..span)
+    span: u32,
+}
+
+impl Keep {
+    // shortened version for a full keep set
+    pub(crate) fn new_full(span: usize) -> Result<Self> {
+        Ok(Self {
+            kept: None,
+            span: Self::try_span(span)?,
+        })
+    }
+
+    /// Creates a keep set from an already sorted and deduplicated mask axis.
+    ///
+    /// The mask allocation is shared when all of its indexes are in range.
+    fn from_mask(kept: Option<Arc<[u32]>>, span: usize) -> Result<Self> {
+        let span = Self::try_span(span)?;
+        let Some(kept) = kept else {
+            return Ok(Self { kept: None, span });
+        };
+
+        let in_range = kept.partition_point(|&idx| idx < span);
+        let kept = if in_range == span as usize {
+            None
+        } else if in_range == kept.len() {
+            Some(kept)
+        } else {
+            Some(Arc::from(&kept[..in_range]))
+        };
+        Ok(Self { kept, span })
+    }
+
+    fn try_span(span: usize) -> Result<u32> {
+        u32::try_from(span).map_err(|_| {
+            ParquetError::General(format!("page index dimension exceeds u32::MAX: {span}"))
+        })
+    }
+
+    /// Retrieve a position if set
+    fn position(&self, idx: usize) -> Option<usize> {
+        let needle = u32::try_from(idx).ok()?;
+        // below CUTOFF elements, use linear search
+        const CUTOFF: usize = 32;
+        match self.kept.as_ref() {
+            None => (needle < self.span).then_some(idx),
+            Some(k) if k.len() > CUTOFF => k.binary_search(&needle).ok(),
+            Some(k) => k.iter().position(|&i| i == needle),
+        }
+    }
+
+    /// Returns the number of set positions
+    fn len(&self) -> usize {
+        match &self.kept {
+            None => self.span as usize,
+            Some(indexes) => indexes.len(),
+        }
+    }
+}
+
+impl HeapSize for Arc<[u32]> {
+    fn heap_size(&self) -> usize {
+        // The heap block contains the strong and weak counts followed by the slice,
+        // padded to the alignment of usize. The fat pointer itself is stored inline.
+        (2 * std::mem::size_of::<usize>() + std::mem::size_of_val(self.as_ref()))
+            .next_multiple_of(std::mem::align_of::<usize>())
+    }
+}
+
+impl HeapSize for Keep {
+    fn heap_size(&self) -> usize {
+        self.kept.heap_size()
+    }
+}
+
+/// A memory-efficient 2D sparse grid using Keep structures for rows and columns
+///
+/// Maps (row_group_idx, column_idx) to values efficiently for sparse access patterns.
+/// This is particularly useful when only a few columns are accessed from wide schemas.
+#[derive(Debug, Clone)]
+pub(crate) struct Grid<T> {
+    /// Row group indexes that have storage; a cell can still be `None`
+    rows: Keep,
+    /// Column indexes that have storage; a cell can still be `None`
+    cols: Keep,
+    /// Flattened cells stored in row-major order
+    /// cells[row_offset * cols.len() + col_offset] = value at (row, col)
+    /// where row_offset = position of row in rows.kept
+    /// and col_offset = position of col in cols.kept
+    cells: Vec<Option<T>>,
+}
+
+impl<T: PartialEq> PartialEq for Grid<T> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.rows == other.rows && self.cols == other.cols {
+            return self.cells == other.cells;
+        }
+
+        let num_rows = self.rows.span.max(other.rows.span) as usize;
+        let num_columns = self.cols.span.max(other.cols.span) as usize;
+        (0..num_rows).all(|row| {
+            (0..num_columns).all(|column| self.get(row, column) == other.get(row, column))
+        })
+    }
+}
+
+impl<T> Grid<T> {
+    /// Creates a new empty Grid with the specified dimensions
+    fn new(rows: Keep, cols: Keep) -> Self {
+        let size = rows.len() * cols.len();
+        let mut cells = Vec::with_capacity(size);
+        cells.resize_with(size, || None);
+        Self { rows, cols, cells }
+    }
+
+    pub(crate) fn from_vec(index: Vec<Vec<Option<T>>>) -> Result<Self> {
+        let num_row_groups = index.len();
+        let num_columns = index.first().map_or(0, Vec::len);
+        let mut cells = Vec::with_capacity(num_row_groups * num_columns);
+        for (row_group_idx, row_group) in index.into_iter().enumerate() {
+            if row_group.len() != num_columns {
+                return Err(ParquetError::General(format!(
+                    "ragged page index: row group {row_group_idx} has {} columns, expected {num_columns}",
+                    row_group.len()
+                )));
+            }
+            cells.extend(row_group);
+        }
+
+        Ok(Self {
+            rows: Keep::new_full(num_row_groups)?,
+            cols: Keep::new_full(num_columns)?,
+            cells,
+        })
+    }
+
+    /// Gets a value at the specified row and column
+    pub(crate) fn get(&self, row: usize, col: usize) -> Option<&T> {
+        // Find the offset of this row in the kept rows
+        let row_offset = self.rows.position(row)?;
+        let col_offset = self.cols.position(col)?;
+
+        let index = row_offset * self.cols.len() + col_offset;
+        self.cells.get(index)?.as_ref()
+    }
+
+    /// Sets a value at the specified row and column.
+    ///
+    /// Returns `false`, and drops `value`, if the grid has no storage for the position.
+    pub(crate) fn insert(&mut self, row: usize, col: usize, value: T) -> bool {
+        let (Some(row_offset), Some(col_offset)) =
+            (self.rows.position(row), self.cols.position(col))
+        else {
+            return false;
+        };
+
+        self.cells[row_offset * self.cols.len() + col_offset] = Some(value);
+        true
+    }
+
+    /// Returns true if the grid has no values
+    pub(crate) fn is_empty(&self) -> bool {
+        self.cells.iter().all(|cell| cell.is_none())
+    }
+}
+
+impl<T: HeapSize> HeapSize for Grid<T> {
+    fn heap_size(&self) -> usize {
+        self.rows.heap_size() + self.cols.heap_size() + self.cells.heap_size()
+    }
+}
+
 /// Struct to encapsulate the Parquet [Page Index]
 ///
-/// This struct provides a dense representation of the Page Index. It is
-/// used internally by this crate when assembling and writing the Page
-/// Index. It is also the default implementation of the [`PageIndexProvider`]
-/// contained in the [`ParquetMetaData`].
+/// This struct provides a sparse representation of the Page Index: it has storage only for
+/// the column chunks selected when it was built (all chunks by default). It is used internally
+/// by this crate when assembling and writing the Page Index. It is also the default
+/// implementation of the [`PageIndexProvider`] contained in the [`ParquetMetaData`].
 ///
 /// # Example: Constructing a synthetic `PageIndex`
 ///
@@ -441,14 +628,14 @@ impl RowGroupPageIndex {
 /// [`ParquetMetaData`]: crate::file::metadata::ParquetMetaData
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageIndex {
-    column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
-    offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
+    column_indexes: Option<Grid<ColumnIndexMetaData>>,
+    offset_indexes: Option<Grid<OffsetIndexMetaData>>,
 }
 
 impl PageIndex {
     pub(crate) fn new(
-        column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
-        offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
+        column_indexes: Option<Grid<ColumnIndexMetaData>>,
+        offset_indexes: Option<Grid<OffsetIndexMetaData>>,
     ) -> Self {
         Self {
             column_indexes,
@@ -456,7 +643,11 @@ impl PageIndex {
         }
     }
 
-    /// Convert this `PageIndex` into a [`PageIndexBuilder`]
+    /// Convert this `PageIndex` into a [`PageIndexBuilder`].
+    ///
+    /// The builder retains the storage shape of this index. Consequently, its `put_*`
+    /// methods return `false` for positions outside that shape. The `allocate_*` methods
+    /// can replace it with dense storage, but discard existing entries for that index type.
     pub fn into_builder(self) -> PageIndexBuilder {
         self.into()
     }
@@ -476,8 +667,7 @@ impl PageIndexProvider for PageIndex {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Option<&ColumnIndexMetaData> {
-        let rg = self.column_indexes.as_ref()?.get(row_group_idx)?;
-        rg.get(column_idx)?.as_ref()
+        self.column_indexes.as_ref()?.get(row_group_idx, column_idx)
     }
 
     fn offset_index(
@@ -485,8 +675,7 @@ impl PageIndexProvider for PageIndex {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Option<&OffsetIndexMetaData> {
-        let rg = self.offset_indexes.as_ref()?.get(row_group_idx)?;
-        rg.get(column_idx)?.as_ref()
+        self.offset_indexes.as_ref()?.get(row_group_idx, column_idx)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -496,6 +685,9 @@ impl PageIndexProvider for PageIndex {
 
 impl HeapSize for PageIndex {
     fn heap_size(&self) -> usize {
+        // Column and offset grids created from the same ColumnChunkMask may share their
+        // Keep allocations. HeapSize accounts for each Arc independently, so those shared
+        // allocations may be counted more than once.
         self.column_indexes.heap_size() + self.offset_indexes.heap_size()
     }
 }
@@ -508,28 +700,43 @@ impl HeapSize for PageIndex {
 /// - Automatic conversion of empty structures to `None` to save memory
 #[derive(Default)]
 pub struct PageIndexBuilder {
-    column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
-    offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
+    column_indexes: Option<Grid<ColumnIndexMetaData>>,
+    offset_indexes: Option<Grid<OffsetIndexMetaData>>,
 }
 
 impl PageIndexBuilder {
-    /// Creates an empty index structure with space for the specified number of row groups and columns
-    ///
-    /// Returns `Some` containing a nested vector structure where all entries are initialized to `None`.
-    /// The outer vector has one entry per row group, and each inner vector has one entry per column.
-    ///
-    /// # Type Parameters
-    /// * `T` - The type of index this is to be, either `ColumnIndexMetaData` or `OffsetIndexMetaData`
-    fn empty_index<T>(num_row_groups: usize, num_columns: usize) -> Option<Vec<Vec<Option<T>>>> {
-        Some(
-            (0..num_row_groups)
-                .map(|_| {
-                    let mut idx = Vec::with_capacity(num_columns);
-                    idx.resize_with(num_columns, || None);
-                    idx
-                })
-                .collect(),
-        )
+    fn storage_for_selection<T>(
+        num_row_groups: usize,
+        num_columns: usize,
+        mask: Option<&ColumnChunkMask>,
+    ) -> Result<Option<Grid<T>>> {
+        let Some(mask) = mask else {
+            return Ok(None);
+        };
+
+        let rows = Keep::from_mask(mask.selected_row_groups_shared(), num_row_groups)?;
+        let cols = Keep::from_mask(mask.selected_columns_shared(), num_columns)?;
+        Ok(Some(Grid::new(rows, cols)))
+    }
+
+    pub(crate) fn new_for_read(
+        num_row_groups: usize,
+        num_columns: usize,
+        column_index_mask: Option<&ColumnChunkMask>,
+        offset_index_mask: Option<&ColumnChunkMask>,
+    ) -> Result<Self> {
+        Ok(Self {
+            column_indexes: Self::storage_for_selection(
+                num_row_groups,
+                num_columns,
+                column_index_mask,
+            )?,
+            offset_indexes: Self::storage_for_selection(
+                num_row_groups,
+                num_columns,
+                offset_index_mask,
+            )?,
+        })
     }
 
     /// Creates a new [`PageIndexBuilder`] with space allocated for both column and offset indexes
@@ -537,10 +744,18 @@ impl PageIndexBuilder {
     /// This allocates empty index structures for the specified number of row groups and columns.
     /// All index entries are initialized to `None` and can be populated using
     /// [`put_column_index`](Self::put_column_index) and [`put_offset_index`](Self::put_offset_index).
+    ///
+    /// # Panics
+    ///
+    /// Panics if either dimension exceeds `u32::MAX`.
     pub fn new(num_row_groups: usize, num_columns: usize) -> Self {
+        let keep_cols =
+            Keep::new_full(num_columns).expect("page index column count exceeds u32::MAX");
+        let keep_rows =
+            Keep::new_full(num_row_groups).expect("page index row group count exceeds u32::MAX");
         Self {
-            column_indexes: Self::empty_index(num_row_groups, num_columns),
-            offset_indexes: Self::empty_index(num_row_groups, num_columns),
+            column_indexes: Some(Grid::new(keep_rows.clone(), keep_cols.clone())),
+            offset_indexes: Some(Grid::new(keep_rows, keep_cols)),
         }
     }
 
@@ -563,8 +778,17 @@ impl PageIndexBuilder {
     ///
     /// This can be used to add column index storage to a builder that lacks one
     /// (either a `Default` builder, or one created from a [`PageIndex`] without column indexes).
+    /// This replaces any existing column index storage and discards its entries.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either dimension exceeds `u32::MAX`.
     pub fn allocate_column_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
-        self.column_indexes = Self::empty_index(num_row_groups, num_columns);
+        let keep_cols =
+            Keep::new_full(num_columns).expect("page index column count exceeds u32::MAX");
+        let keep_rows =
+            Keep::new_full(num_row_groups).expect("page index row group count exceeds u32::MAX");
+        self.column_indexes = Some(Grid::new(keep_rows, keep_cols));
     }
 
     /// Allocates space for offset indexes
@@ -575,8 +799,17 @@ impl PageIndexBuilder {
     ///
     /// This can be used to add offset index storage to a builder that lacks one
     /// (either a `Default` builder, or one created from a [`PageIndex`] without offset indexes).
+    /// This replaces any existing offset index storage and discards its entries.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either dimension exceeds `u32::MAX`.
     pub fn allocate_offset_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
-        self.offset_indexes = Self::empty_index(num_row_groups, num_columns);
+        let keep_cols =
+            Keep::new_full(num_columns).expect("page index column count exceeds u32::MAX");
+        let keep_rows =
+            Keep::new_full(num_row_groups).expect("page index row group count exceeds u32::MAX");
+        self.offset_indexes = Some(Grid::new(keep_rows, keep_cols));
     }
 
     /// Sets the column index for a specific row group and column
@@ -589,11 +822,8 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) {
-        if let Some(ref mut indexes) = self.column_indexes
-            && let Some(row_group) = indexes.get_mut(row_group_idx)
-            && let Some(column_slot) = row_group.get_mut(column_idx)
-        {
-            *column_slot = Some(column_index);
+        if let Some(ref mut indexes) = self.column_indexes {
+            indexes.insert(row_group_idx, column_idx, column_index);
         }
     }
 
@@ -607,21 +837,16 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) {
-        if let Some(ref mut indexes) = self.offset_indexes
-            && let Some(row_group) = indexes.get_mut(row_group_idx)
-            && let Some(column_slot) = row_group.get_mut(column_idx)
-        {
-            *column_slot = Some(offset_index);
+        if let Some(ref mut indexes) = self.offset_indexes {
+            indexes.insert(row_group_idx, column_idx, offset_index);
         }
     }
 
     /// Checks if an index structure is entirely empty (all entries are None)
-    fn is_empty_index<T>(index: Option<&Vec<Vec<Option<T>>>>) -> bool {
+    fn is_empty_index<T>(index: Option<&Grid<T>>) -> bool {
         match index {
             None => true,
-            Some(row_groups) => row_groups
-                .iter()
-                .all(|columns| columns.iter().all(|entry| entry.is_none())),
+            Some(index) => index.is_empty(),
         }
     }
 
@@ -652,5 +877,222 @@ impl PageIndexBuilder {
 impl From<PageIndex> for PageIndexBuilder {
     fn from(page_index: PageIndex) -> Self {
         Self::new_from(page_index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Grid, Keep, PageIndexBuilder};
+    use crate::{
+        basic::BoundaryOrder,
+        file::metadata::ColumnChunkMask,
+        file::page_index::column_index::{ColumnIndexMetaData, PrimitiveColumnIndex},
+    };
+    use std::sync::Arc;
+
+    fn colidx_for_test() -> ColumnIndexMetaData {
+        let ci = PrimitiveColumnIndex::<i32>::try_new(
+            vec![false; 3],
+            BoundaryOrder::ASCENDING,
+            Some(vec![0; 3]),
+            Some(vec![0; 3]),
+            None,
+            None,
+            vec![&[0, 0, 0, 0]; 3],
+            vec![&[1, 0, 0, 0]; 3],
+        )
+        .unwrap();
+        ColumnIndexMetaData::INT32(ci)
+    }
+
+    #[test]
+    fn test_sparse_get_put() {
+        let ci = colidx_for_test();
+
+        let keep_rows = Keep::from_mask(Some(Arc::from([0, 3, 7])), 10).unwrap();
+        let keep_cols = Keep::from_mask(Some(Arc::from([5, 10, 99])), 100).unwrap();
+        let mut storage = Grid::new(keep_rows, keep_cols);
+
+        // Test insertion and retrieval
+        assert!(storage.insert(0, 5, ci.clone()));
+        assert!(storage.insert(3, 10, ci.clone()));
+        assert!(storage.insert(7, 99, ci.clone()));
+        assert!(!storage.insert(1, 5, ci.clone()));
+
+        // Test successful retrievals
+        assert!(storage.get(0, 5).is_some());
+        assert!(storage.get(3, 10).is_some());
+        assert!(storage.get(7, 99).is_some());
+
+        // Test missing entries
+        assert!(storage.get(0, 0).is_none());
+        assert!(storage.get(1, 5).is_none());
+        assert!(storage.get(0, 10).is_none());
+
+        // Test out of bounds
+        assert!(storage.get(20, 5).is_none());
+        assert!(storage.get(0, 200).is_none());
+    }
+
+    #[test]
+    fn test_empty_keep_selects_nothing() {
+        let keep = Keep::from_mask(Some(Arc::from([])), 10).unwrap();
+        assert_eq!(keep.len(), 0);
+        assert_eq!(keep.position(0), None);
+        assert_eq!(keep.position(9), None);
+        assert_eq!(keep.position(10), None);
+    }
+
+    #[test]
+    fn test_keep_shares_mask_storage() {
+        let mask = ColumnChunkMask::columns([1, 3]);
+        let selected = mask.selected_columns_shared().unwrap();
+        let keep = Keep::from_mask(Some(Arc::clone(&selected)), 5).unwrap();
+
+        assert!(Arc::ptr_eq(keep.kept.as_ref().unwrap(), &selected));
+        assert_eq!(keep.position(1), Some(0));
+        assert_eq!(keep.position(3), Some(1));
+    }
+
+    #[test]
+    fn test_keep_from_mask_discards_out_of_range_indexes() {
+        let mask = ColumnChunkMask::columns([1, 3, 10]);
+        let keep = Keep::from_mask(mask.selected_columns_shared(), 5).unwrap();
+
+        assert_eq!(keep.kept.as_deref(), Some([1, 3].as_slice()));
+        assert_eq!(keep.position(10), None);
+    }
+
+    #[test]
+    fn test_keep_normalizes_full_selection() {
+        let mask = ColumnChunkMask::columns([2, 0, 1, 2]);
+        let keep = Keep::from_mask(mask.selected_columns_shared(), 3).unwrap();
+
+        assert!(keep.kept.is_none());
+        assert_eq!(keep.len(), 3);
+        assert_eq!(keep.position(0), Some(0));
+        assert_eq!(keep.position(2), Some(2));
+        assert_eq!(keep.position(3), None);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn test_oversized_dimensions_return_error() {
+        let span = u32::MAX as usize + 1;
+        assert!(Keep::from_mask(Some(Arc::from([])), span).is_err());
+        assert!(Keep::new_full(span).is_err());
+        assert!(std::panic::catch_unwind(|| PageIndexBuilder::new(0, span)).is_err());
+        assert!(
+            std::panic::catch_unwind(|| {
+                PageIndexBuilder::default().allocate_column_indexes(0, span)
+            })
+            .is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                PageIndexBuilder::default().allocate_offset_indexes(0, span)
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_builder_put_reports_missing_storage() {
+        let ci = colidx_for_test();
+        let mut grid = Grid::new(
+            Keep::from_mask(Some(Arc::from([0])), 1).unwrap(),
+            Keep::from_mask(Some(Arc::from([0])), 2).unwrap(),
+        );
+        assert!(grid.insert(0, 0, ci.clone()));
+
+        /* TODO(ets): add a fallible put
+        let mut builder = PageIndex::new(Some(grid), None).into_builder();
+        assert!(builder.put_column_index(ci.clone(), 0, 0));
+        assert!(!builder.put_column_index(ci, 0, 1));
+        */
+    }
+
+    #[test]
+    fn test_builder_sparse_storage_shape() {
+        let mask = ColumnChunkMask::columns([0, 2]);
+        let builder = PageIndexBuilder::new_for_read(4, 5, Some(&mask), None).unwrap();
+
+        let column_indexes = builder.column_indexes.unwrap();
+        assert_eq!(column_indexes.rows.len(), 4);
+        assert_eq!(column_indexes.cols.len(), 2);
+        assert_eq!(column_indexes.cells.len(), 8);
+        assert!(builder.offset_indexes.is_none());
+    }
+
+    #[test]
+    fn test_builder_allocate_indexes_creates_dense_empty_storage() {
+        let ci = colidx_for_test();
+        let mut builder = PageIndexBuilder::default();
+
+        builder.allocate_column_indexes(2, 3);
+        // TODO(ets): need a fallible put
+        //assert!(builder.put_column_index(ci, 1, 2));
+        builder.put_column_index(ci, 1, 2);
+        builder.allocate_column_indexes(2, 3);
+        let column_indexes = builder.column_indexes.as_ref().unwrap();
+        assert_eq!(column_indexes.rows.len(), 2);
+        assert_eq!(column_indexes.cols.len(), 3);
+        assert_eq!(column_indexes.cells.len(), 6);
+        assert!(column_indexes.is_empty());
+
+        builder.allocate_offset_indexes(2, 3);
+        let offset_indexes = builder.offset_indexes.as_ref().unwrap();
+        assert_eq!(offset_indexes.rows.len(), 2);
+        assert_eq!(offset_indexes.cols.len(), 3);
+        assert_eq!(offset_indexes.cells.len(), 6);
+        assert!(offset_indexes.is_empty());
+    }
+
+    #[test]
+    fn test_grid_is_empty() {
+        let ci = colidx_for_test();
+
+        let keep_rows = Keep::from_mask(Some(Arc::from([0, 3, 7])), 10).unwrap();
+        let keep_cols = Keep::from_mask(Some(Arc::from([5, 10, 99])), 100).unwrap();
+        let mut storage = Grid::new(keep_rows, keep_cols);
+        assert!(storage.is_empty());
+
+        assert!(storage.insert(0, 5, ci.clone()));
+        assert!(!storage.is_empty());
+    }
+
+    #[test]
+    fn test_grid_equality_ignores_storage_shape() {
+        let ci = colidx_for_test();
+        let mut dense = Grid::new(Keep::new_full(2).unwrap(), Keep::new_full(3).unwrap());
+        assert!(dense.insert(0, 0, ci.clone()));
+
+        let mut sparse = Grid::new(
+            Keep::from_mask(Some(Arc::from([0])), 2).unwrap(),
+            Keep::from_mask(Some(Arc::from([0])), 3).unwrap(),
+        );
+        assert!(sparse.insert(0, 0, ci.clone()));
+        assert_eq!(dense, sparse);
+
+        assert!(dense.insert(1, 2, ci));
+        assert_ne!(dense, sparse);
+    }
+
+    #[test]
+    fn test_grid_from_vec() {
+        let grid = Grid::from_vec(vec![vec![Some(1), None], vec![None, Some(2)]]).unwrap();
+        assert_eq!(grid.get(0, 0), Some(&1));
+        assert_eq!(grid.get(0, 1), None);
+        assert_eq!(grid.get(1, 0), None);
+        assert_eq!(grid.get(1, 1), Some(&2));
+    }
+
+    #[test]
+    fn test_grid_from_vec_rejects_ragged_rows() {
+        let error = Grid::from_vec(vec![vec![None::<i32>], vec![None, Some(1)]]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Parquet error: ragged page index: row group 1 has 2 columns, expected 1"
+        );
     }
 }

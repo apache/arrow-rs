@@ -26,13 +26,14 @@ use crate::errors::ParquetError;
 use crate::file::metadata::page_index::{PageIndexBuilder, PageIndexProvider};
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{
-    ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
+    ColumnChunkMask, ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
 };
 
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::index_reader::{decode_column_index, decode_offset_index};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
-use bytes::Bytes;
+use crate::file::reader::ChunkReader;
+use crate::util::push_buffers::PushBuffers;
 
 /// Helper struct for metadata parsing
 ///
@@ -236,84 +237,82 @@ pub(crate) fn decode_metadata(
     parquet_metadata_from_bytes(buf, options)
 }
 
-/// Parses page index from the provided bytes and adds it to the metadata.
+/// Parses page indexes from the provided bytes and replaces those in the metadata.
 ///
 /// Arguments
-/// * `metadata` - The ParquetMetaData to which the parsed column index will be added.
+/// * `metadata` - The ParquetMetaData whose page index will be replaced.
 /// * `column_index_policy` - The policy for handling column index parsing (e.g.,
 ///   Required, Optional, Skip).
 /// * `offset_index_policy` - The policy for handling offset index parsing (e.g.,
 ///   Required, Optional, Skip).
-/// * `bytes` - The byte slice containing the page index data.
-/// * `start_offset` - The offset where `bytes` begin in the file.
+/// * `bytes` - [`PushBuffers`] that should have already been populated with the bytes containing
+///   the page indexes.
 pub(crate) fn parse_page_index(
     metadata: &mut ParquetMetaData,
     column_index_policy: PageIndexPolicy,
     offset_index_policy: PageIndexPolicy,
-    bytes: &Bytes,
-    start_offset: u64,
+    column_index_mask: &ColumnChunkMask,
+    offset_index_mask: &ColumnChunkMask,
+    bytes: &PushBuffers,
 ) -> crate::errors::Result<()> {
-    if column_index_policy == PageIndexPolicy::Skip && offset_index_policy == PageIndexPolicy::Skip
-    {
-        return Ok(());
-    }
     let num_row_groups = metadata.num_row_groups();
     let num_columns = metadata.file_metadata().schema_descr().num_columns();
-    let mut builder = PageIndexBuilder::default();
+    let mut builder = PageIndexBuilder::new_for_read(
+        num_row_groups,
+        num_columns,
+        (column_index_policy != PageIndexPolicy::Skip).then_some(column_index_mask),
+        (offset_index_policy != PageIndexPolicy::Skip).then_some(offset_index_mask),
+    )?;
     if column_index_policy != PageIndexPolicy::Skip {
-        builder.allocate_column_indexes(num_row_groups, num_columns);
         parse_column_index(
             metadata,
             column_index_policy,
+            column_index_mask,
             &mut builder,
             bytes,
-            start_offset,
         )?;
     }
     if offset_index_policy != PageIndexPolicy::Skip {
-        builder.allocate_offset_indexes(num_row_groups, num_columns);
         parse_offset_index(
             metadata,
             offset_index_policy,
+            offset_index_mask,
             &mut builder,
             bytes,
-            start_offset,
         )?;
     }
 
+    // Always replace the page index, even if both policies are Skip.
+    // This ensures that repeated calls to read_page_indexes replace the existing index
+    // rather than preserving it.
     let page_index = builder.build();
-    // if both indexes are missing from the file, return without modifying `metadata`
-    if !page_index.has_column_indexes() && !page_index.has_offset_indexes() {
-        return Ok(());
+    if page_index.has_column_indexes() || page_index.has_offset_indexes() {
+        metadata.set_page_index(Some(Arc::new(page_index)));
+    } else {
+        // If no indexes were read, clear the page index
+        metadata.set_page_index(None);
     }
-    metadata.set_page_index(Some(Arc::new(page_index)));
     Ok(())
 }
 
 fn parse_column_index(
     metadata: &ParquetMetaData,
     column_index_policy: PageIndexPolicy,
+    mask: &ColumnChunkMask,
     page_index_builder: &mut PageIndexBuilder,
-    bytes: &Bytes,
-    start_offset: u64,
+    bytes: &PushBuffers,
 ) -> crate::errors::Result<()> {
     if column_index_policy == PageIndexPolicy::Skip {
         return Ok(());
     }
-    for rg_idx in 0..metadata.num_row_groups() {
+    for rg_idx in mask.row_group_indices(metadata.num_row_groups()) {
         let rg = metadata.row_group(rg_idx);
-        for col_idx in 0..rg.num_columns() {
+        for col_idx in mask.column_indices(rg.num_columns()) {
             let col = rg.column(col_idx);
             if let Some(r) = col.column_index_range() {
-                let r_start = usize::try_from(r.start - start_offset)?;
-                let r_end = usize::try_from(r.end - start_offset)?;
-                let idx = inner::parse_single_column_index(
-                    &bytes[r_start..r_end],
-                    metadata,
-                    col,
-                    rg_idx,
-                    col_idx,
-                )?;
+                let idx_bytes = bytes.get_bytes(r.start, (r.end - r.start) as usize)?;
+                let idx =
+                    inner::parse_single_column_index(&idx_bytes, metadata, col, rg_idx, col_idx)?;
                 page_index_builder.put_column_index(idx, rg_idx, col_idx);
             }
         }
@@ -325,27 +324,21 @@ fn parse_column_index(
 fn parse_offset_index(
     metadata: &ParquetMetaData,
     offset_index_policy: PageIndexPolicy,
+    mask: &ColumnChunkMask,
     page_index_builder: &mut PageIndexBuilder,
-    bytes: &Bytes,
-    start_offset: u64,
+    bytes: &PushBuffers,
 ) -> crate::errors::Result<()> {
     if offset_index_policy == PageIndexPolicy::Skip {
         return Ok(());
     }
-    for rg_idx in 0..metadata.num_row_groups() {
+    for rg_idx in mask.row_group_indices(metadata.num_row_groups()) {
         let rg = metadata.row_group(rg_idx);
-        for col_idx in 0..rg.num_columns() {
+        for col_idx in mask.column_indices(rg.num_columns()) {
             let col = rg.column(col_idx);
             if let Some(r) = col.offset_index_range() {
-                let r_start = usize::try_from(r.start - start_offset)?;
-                let r_end = usize::try_from(r.end - start_offset)?;
-                let idx = inner::parse_single_offset_index(
-                    &bytes[r_start..r_end],
-                    metadata,
-                    col,
-                    rg_idx,
-                    col_idx,
-                )?;
+                let idx_bytes = bytes.get_bytes(r.start, (r.end - r.start) as usize)?;
+                let idx =
+                    inner::parse_single_offset_index(&idx_bytes, metadata, col, rg_idx, col_idx)?;
                 page_index_builder.put_offset_index(idx, rg_idx, col_idx);
             } else if offset_index_policy == PageIndexPolicy::Required {
                 return Err(general_err!("missing offset index"));
