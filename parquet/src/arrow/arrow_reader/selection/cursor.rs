@@ -22,7 +22,6 @@
 //! matching [`RowSelectionCursor`], which keeps the per-reader position while
 //! the selection itself stays immutable.
 
-use super::boolean::boolean_mask_from_selectors;
 use super::{RowSelection, RowSelector};
 use crate::errors::ParquetError;
 use arrow_array::BooleanArray;
@@ -51,6 +50,38 @@ impl Default for RowSelectionPolicy {
     }
 }
 
+impl RowSelectionPolicy {
+    /// Resolve this policy for a selection without changing its backing.
+    pub(crate) fn resolve(self, selection: Option<&RowSelection>) -> RowSelectionStrategy {
+        match self {
+            Self::Selectors => RowSelectionStrategy::Selectors,
+            Self::Mask => RowSelectionStrategy::Mask,
+            Self::Auto { threshold } => selection
+                .map(|selection| selection.auto_selection_strategy(threshold))
+                .unwrap_or(RowSelectionStrategy::Selectors),
+        }
+    }
+
+    /// Materialize a selection according to this policy, preserving its full
+    /// length, including trailing skips needed for selection composition.
+    pub(crate) fn apply(self, selection: RowSelection) -> RowSelection {
+        match (
+            self.resolve(Some(&selection)),
+            selection.as_mask().is_some(),
+        ) {
+            (RowSelectionStrategy::Mask, true) | (RowSelectionStrategy::Selectors, false) => {
+                selection
+            }
+            (RowSelectionStrategy::Mask, false) => {
+                RowSelection::from_boolean_buffer(selection.into_boolean_buffer())
+            }
+            (RowSelectionStrategy::Selectors, true) => {
+                RowSelection::from(Vec::<RowSelector>::from(selection))
+            }
+        }
+    }
+}
+
 /// Fully resolved strategy for materializing [`RowSelection`] during execution.
 ///
 /// This is determined by [`RowSelectionPolicy`], including selector density for
@@ -61,6 +92,24 @@ pub(crate) enum RowSelectionStrategy {
     Selectors,
     /// Use a boolean mask to materialize the selection
     Mask,
+}
+
+impl RowSelectionStrategy {
+    /// Build a cursor using this strategy. The selection must be trimmed of
+    /// trailing skips before constructing a mask cursor.
+    pub(crate) fn build_cursor(
+        self,
+        selection: RowSelection,
+        loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
+    ) -> RowSelectionCursor {
+        match self {
+            Self::Mask => RowSelectionCursor::new_mask_from_buffer(
+                selection.into_boolean_buffer(),
+                loaded_row_ranges,
+            ),
+            Self::Selectors => RowSelectionCursor::new_selectors(selection.into()),
+        }
+    }
 }
 
 /// Cursor for iterating a [`RowSelection`] during execution within a
@@ -79,25 +128,6 @@ pub enum RowSelectionCursor {
 }
 
 impl RowSelectionCursor {
-    /// Create a [`MaskCursor`] cursor backed by a bitmask, from an existing set of selectors
-    pub(crate) fn new_mask_from_selectors(
-        selectors: Vec<RowSelector>,
-        loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
-    ) -> Self {
-        debug_assert!(
-            selectors
-                .last()
-                .map(|selector| !selector.skip)
-                .unwrap_or(true),
-            "Mask selectors must not end with a skip"
-        );
-        Self::Mask(MaskCursor {
-            mask: boolean_mask_from_selectors(&selectors),
-            position: 0,
-            loaded_row_ranges,
-        })
-    }
-
     /// Create a [`MaskCursor`] cursor backed by an existing bitmask.
     pub(crate) fn new_mask_from_buffer(
         mask: BooleanBuffer,
@@ -378,13 +408,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selection_respects_policy() {
+        let mask = BooleanBuffer::from(vec![true, true, false, false, true, true, false, false]);
+        for (policy, expect_mask) in [
+            (RowSelectionPolicy::Mask, true),
+            (RowSelectionPolicy::Selectors, false),
+            (RowSelectionPolicy::Auto { threshold: 2 }, false),
+            (RowSelectionPolicy::Auto { threshold: 3 }, true),
+        ] {
+            for selection in [
+                RowSelection::from_boolean_buffer(mask.clone()),
+                RowSelection::from(vec![
+                    RowSelector::select(2),
+                    RowSelector::skip(2),
+                    RowSelector::select(2),
+                    RowSelector::skip(2),
+                ]),
+            ] {
+                let selection = policy.apply(selection);
+                assert_eq!(selection.as_mask().is_some(), expect_mask, "{policy:?}");
+                assert_eq!(selection.into_boolean_buffer(), mask);
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_selection_uses_selectors_for_long_runs() {
+        let mask = BooleanBuffer::from_iter((0..1_024).map(|idx| (256..768).contains(&idx)));
+        let selection =
+            RowSelectionPolicy::default().apply(RowSelection::from_boolean_buffer(mask));
+        assert!(selection.as_mask().is_none());
+    }
+
+    #[test]
+    fn adaptive_selection_keeps_fragmented_masks() {
+        let mask = BooleanBuffer::from_iter((0..1_024).map(|idx| idx % 2 == 0));
+        let selection =
+            RowSelectionPolicy::default().apply(RowSelection::from_boolean_buffer(mask));
+        assert!(selection.as_mask().is_some());
+    }
+
+    #[test]
     fn test_loaded_mask_chunk_stops_at_trimmed_mask_end() {
         let loaded = LoadedRowRanges::from_selection(RowSelection::from_consecutive_ranges(
             std::iter::once(0..5),
             10,
         ));
-        let RowSelectionCursor::Mask(mut cursor) = RowSelectionCursor::new_mask_from_selectors(
-            vec![RowSelector::select(1)],
+        let RowSelectionCursor::Mask(mut cursor) = RowSelectionStrategy::Mask.build_cursor(
+            RowSelection::from(vec![RowSelector::select(1)]),
             Some(loaded.into()),
         ) else {
             unreachable!()
@@ -397,13 +468,13 @@ mod tests {
 
     #[test]
     fn test_next_mask_chunk_until_cursor_is_empty() {
-        let RowSelectionCursor::Mask(mut cursor) = RowSelectionCursor::new_mask_from_selectors(
-            vec![
+        let RowSelectionCursor::Mask(mut cursor) = RowSelectionStrategy::Mask.build_cursor(
+            RowSelection::from(vec![
                 RowSelector::skip(2),
                 RowSelector::select(2),
                 RowSelector::skip(1),
                 RowSelector::select(1),
-            ],
+            ]),
             None,
         ) else {
             unreachable!()
