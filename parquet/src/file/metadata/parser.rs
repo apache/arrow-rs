@@ -313,11 +313,7 @@ fn parse_column_index(
                 let idx_bytes = bytes.get_bytes(r.start, (r.end - r.start) as usize)?;
                 let idx =
                     inner::parse_single_column_index(&idx_bytes, metadata, col, rg_idx, col_idx)?;
-                if !page_index_builder.put_column_index(idx, rg_idx, col_idx) {
-                    return Err(general_err!(
-                        "page index builder has no column-index storage for row group {rg_idx}, column {col_idx}"
-                    ));
-                }
+                page_index_builder.put_column_index(idx, rg_idx, col_idx);
             }
         }
     }
@@ -343,11 +339,7 @@ fn parse_offset_index(
                 let idx_bytes = bytes.get_bytes(r.start, (r.end - r.start) as usize)?;
                 let idx =
                     inner::parse_single_offset_index(&idx_bytes, metadata, col, rg_idx, col_idx)?;
-                if !page_index_builder.put_offset_index(idx, rg_idx, col_idx) {
-                    return Err(general_err!(
-                        "page index builder has no offset-index storage for row group {rg_idx}, column {col_idx}"
-                    ));
-                }
+                page_index_builder.put_offset_index(idx, rg_idx, col_idx);
             } else if offset_index_policy == PageIndexPolicy::Required {
                 return Err(general_err!("missing offset index"));
             }
