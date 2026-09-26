@@ -243,6 +243,13 @@ impl VariantBuilderExt for VariantArrayBuilder {
         self.append_variant(value.into());
     }
 
+    fn try_append_value<'m, 'v>(
+        &mut self,
+        value: impl Into<Variant<'m, 'v>>,
+    ) -> Result<(), ArrowError> {
+        ValueBuilder::try_append_variant(self.parent_state(), value.into())
+    }
+
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
         Ok(ListBuilder::new(self.parent_state(), false))
     }
