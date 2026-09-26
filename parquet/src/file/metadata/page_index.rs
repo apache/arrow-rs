@@ -491,25 +491,25 @@ impl<T> Grid<T> {
         Self { rows, cols, cells }
     }
 
-    pub(crate) fn new_dense(num_row_groups: usize, num_columns: usize) -> Result<Self> {
-        let rows = Keep::new_full(num_row_groups)?;
-        let cols = Keep::new_full(num_columns)?;
-        Ok(Self::new(rows, cols))
-    }
-
     pub(crate) fn from_vec(index: Vec<Vec<Option<T>>>) -> Result<Self> {
         let num_row_groups = index.len();
-        let num_columns = if index.is_empty() { 0 } else { index[0].len() };
-        let mut result = Self::new_dense(num_row_groups, num_columns)?;
-        for (rg_idx, row_group) in index.into_iter().enumerate() {
-            for (col_idx, idx) in row_group.into_iter().enumerate() {
-                if let Some(idx) = idx {
-                    result.insert(rg_idx, col_idx, idx);
-                }
+        let num_columns = index.first().map_or(0, Vec::len);
+        let mut cells = Vec::with_capacity(num_row_groups * num_columns);
+        for (row_group_idx, row_group) in index.into_iter().enumerate() {
+            if row_group.len() != num_columns {
+                return Err(ParquetError::General(format!(
+                    "ragged page index: row group {row_group_idx} has {} columns, expected {num_columns}",
+                    row_group.len()
+                )));
             }
+            cells.extend(row_group);
         }
 
-        Ok(result)
+        Ok(Self {
+            rows: Keep::new_full(num_row_groups)?,
+            cols: Keep::new_full(num_columns)?,
+            cells,
+        })
     }
 
     /// Gets a value at the specified row and column
@@ -986,7 +986,7 @@ mod tests {
     #[test]
     fn test_grid_equality_ignores_storage_shape() {
         let ci = colidx_for_test();
-        let mut dense = Grid::new_dense(2, 3).unwrap();
+        let mut dense = Grid::new(Keep::new_full(2).unwrap(), Keep::new_full(3).unwrap());
         assert!(dense.insert(0, 0, ci.clone()));
 
         let mut sparse = Grid::new(Keep::new([0], 2).unwrap(), Keep::new([0], 3).unwrap());
@@ -995,5 +995,23 @@ mod tests {
 
         assert!(dense.insert(1, 2, ci));
         assert_ne!(dense, sparse);
+    }
+
+    #[test]
+    fn test_grid_from_vec() {
+        let grid = Grid::from_vec(vec![vec![Some(1), None], vec![None, Some(2)]]).unwrap();
+        assert_eq!(grid.get(0, 0), Some(&1));
+        assert_eq!(grid.get(0, 1), None);
+        assert_eq!(grid.get(1, 0), None);
+        assert_eq!(grid.get(1, 1), Some(&2));
+    }
+
+    #[test]
+    fn test_grid_from_vec_rejects_ragged_rows() {
+        let error = Grid::from_vec(vec![vec![None::<i32>], vec![None, Some(1)]]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Parquet error: ragged page index: row group 1 has 2 columns, expected 1"
+        );
     }
 }
