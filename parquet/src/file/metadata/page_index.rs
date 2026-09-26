@@ -370,7 +370,7 @@ impl RowGroupPageIndex {
 /// Stores which positions are set in a sparse vector. For example:
 /// `[None, None, Some(...), Some(...), None, Some(...)]` becomes `[2, 3, 5]`
 ///
-/// Position checking uses binary search for O(log n) lookup.
+/// Position checking uses a linear scan for up to 32 indexes and binary search above that.
 /// Stores indexes as `u32` because Parquet/Thrift collections cannot contain more than
 /// `i32::MAX` entries.
 #[derive(Debug, Clone, PartialEq)]
@@ -457,9 +457,9 @@ impl HeapSize for Keep {
 /// This is particularly useful when only a few columns are accessed from wide schemas.
 #[derive(Debug, Clone)]
 pub(crate) struct Grid<T> {
-    /// Set of row group indexes that have any values
+    /// Row group indexes that have storage; a cell can still be `None`
     rows: Keep,
-    /// Set of column indexes that have any values
+    /// Column indexes that have storage; a cell can still be `None`
     cols: Keep,
     /// Flattened cells stored in row-major order
     /// cells[row_offset * cols.len() + col_offset] = value at (row, col)
@@ -550,10 +550,10 @@ impl<T: HeapSize> HeapSize for Grid<T> {
 
 /// Struct to encapsulate the Parquet [Page Index]
 ///
-/// This struct provides a dense representation of the Page Index. It is
-/// used internally by this crate when assembling and writing the Page
-/// Index. It is also the default implementation of the [`PageIndexProvider`]
-/// contained in the [`ParquetMetaData`].
+/// This struct provides a sparse representation of the Page Index: it has storage only for
+/// the column chunks selected when it was built (all chunks by default). It is used internally
+/// by this crate when assembling and writing the Page Index. It is also the default
+/// implementation of the [`PageIndexProvider`] contained in the [`ParquetMetaData`].
 ///
 /// # Example: Constructing a synthetic `PageIndex`
 ///
