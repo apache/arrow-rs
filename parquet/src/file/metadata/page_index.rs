@@ -383,30 +383,32 @@ pub(crate) struct Keep {
 }
 
 impl Keep {
-    pub(crate) fn new(set: impl IntoIterator<Item = usize>, span: usize) -> Result<Self> {
-        let span = Self::try_span(span)?;
-        let mut kept = set
-            .into_iter()
-            .filter_map(|idx| u32::try_from(idx).ok())
-            .filter(|&idx| idx < span)
-            .collect::<Vec<_>>();
-        kept.sort_unstable();
-        kept.dedup();
-        let kept = if kept.len() == span as usize {
-            None
-        } else {
-            Some(Arc::from(kept))
-        };
-
-        Ok(Self { kept, span })
-    }
-
     // shortened version for a full keep set
     pub(crate) fn new_full(span: usize) -> Result<Self> {
         Ok(Self {
             kept: None,
             span: Self::try_span(span)?,
         })
+    }
+
+    /// Creates a keep set from an already sorted and deduplicated mask axis.
+    ///
+    /// The mask allocation is shared when all of its indexes are in range.
+    fn from_mask(kept: Option<Arc<[u32]>>, span: usize) -> Result<Self> {
+        let span = Self::try_span(span)?;
+        let Some(kept) = kept else {
+            return Ok(Self { kept: None, span });
+        };
+
+        let in_range = kept.partition_point(|&idx| idx < span);
+        let kept = if in_range == span as usize {
+            None
+        } else if in_range == kept.len() {
+            Some(kept)
+        } else {
+            Some(Arc::from(&kept[..in_range]))
+        };
+        Ok(Self { kept, span })
     }
 
     fn try_span(span: usize) -> Result<u32> {
@@ -709,14 +711,8 @@ impl PageIndexBuilder {
             return Ok(None);
         };
 
-        let rows = match mask.selected_row_groups() {
-            None => Keep::new_full(num_row_groups)?,
-            Some(selected) => Keep::new(selected.iter().map(|&row| row as usize), num_row_groups)?,
-        };
-        let cols = match mask.selected_columns() {
-            None => Keep::new_full(num_columns)?,
-            Some(selected) => Keep::new(selected.iter().map(|&col| col as usize), num_columns)?,
-        };
+        let rows = Keep::from_mask(mask.selected_row_groups_shared(), num_row_groups)?;
+        let cols = Keep::from_mask(mask.selected_columns_shared(), num_columns)?;
         Ok(Some(Grid::new(rows, cols)))
     }
 
@@ -890,8 +886,10 @@ mod tests {
     use super::{Grid, Keep, PageIndex, PageIndexBuilder};
     use crate::{
         basic::BoundaryOrder,
+        file::metadata::ColumnChunkMask,
         file::page_index::column_index::{ColumnIndexMetaData, PrimitiveColumnIndex},
     };
+    use std::sync::Arc;
 
     fn colidx_for_test() -> ColumnIndexMetaData {
         let ci = PrimitiveColumnIndex::<i32>::try_new(
@@ -912,8 +910,8 @@ mod tests {
     fn test_sparse_get_put() {
         let ci = colidx_for_test();
 
-        let keep_rows = Keep::new([7, 0, 3, 7], 10).unwrap();
-        let keep_cols = Keep::new([5, 10, 99], 100).unwrap();
+        let keep_rows = Keep::from_mask(Some(Arc::from([0, 3, 7])), 10).unwrap();
+        let keep_cols = Keep::from_mask(Some(Arc::from([5, 10, 99])), 100).unwrap();
         let mut storage = Grid::new(keep_rows, keep_cols);
 
         // Test insertion and retrieval
@@ -939,10 +937,30 @@ mod tests {
 
     #[test]
     fn test_empty_keep_selects_nothing() {
-        let keep = Keep::new([], 10).unwrap();
+        let keep = Keep::from_mask(Some(Arc::from([])), 10).unwrap();
         assert_eq!(keep.len(), 0);
         assert_eq!(keep.position(0), None);
         assert_eq!(keep.position(9), None);
+        assert_eq!(keep.position(10), None);
+    }
+
+    #[test]
+    fn test_keep_shares_mask_storage() {
+        let mask = ColumnChunkMask::columns([1, 3]);
+        let selected = mask.selected_columns_shared().unwrap();
+        let keep = Keep::from_mask(Some(Arc::clone(&selected)), 5).unwrap();
+
+        assert!(Arc::ptr_eq(keep.kept.as_ref().unwrap(), &selected));
+        assert_eq!(keep.position(1), Some(0));
+        assert_eq!(keep.position(3), Some(1));
+    }
+
+    #[test]
+    fn test_keep_from_mask_discards_out_of_range_indexes() {
+        let mask = ColumnChunkMask::columns([1, 3, 10]);
+        let keep = Keep::from_mask(mask.selected_columns_shared(), 5).unwrap();
+
+        assert_eq!(keep.kept.as_deref(), Some([1, 3].as_slice()));
         assert_eq!(keep.position(10), None);
     }
 
@@ -950,7 +968,7 @@ mod tests {
     #[test]
     fn test_oversized_dimensions_return_error() {
         let span = u32::MAX as usize + 1;
-        assert!(Keep::new([], span).is_err());
+        assert!(Keep::from_mask(Some(Arc::from([])), span).is_err());
         assert!(Keep::new_full(span).is_err());
         assert!(PageIndexBuilder::new(0, span).is_err());
 
@@ -962,7 +980,10 @@ mod tests {
     #[test]
     fn test_builder_put_reports_missing_storage() {
         let ci = colidx_for_test();
-        let mut grid = Grid::new(Keep::new([0], 1).unwrap(), Keep::new([0], 2).unwrap());
+        let mut grid = Grid::new(
+            Keep::from_mask(Some(Arc::from([0])), 1).unwrap(),
+            Keep::from_mask(Some(Arc::from([0])), 2).unwrap(),
+        );
         assert!(grid.insert(0, 0, ci.clone()));
 
         let mut builder = PageIndex::new(Some(grid), None).into_builder();
@@ -974,8 +995,8 @@ mod tests {
     fn test_grid_is_empty() {
         let ci = colidx_for_test();
 
-        let keep_rows = Keep::new([0, 3, 7], 10).unwrap();
-        let keep_cols = Keep::new([5, 10, 99], 100).unwrap();
+        let keep_rows = Keep::from_mask(Some(Arc::from([0, 3, 7])), 10).unwrap();
+        let keep_cols = Keep::from_mask(Some(Arc::from([5, 10, 99])), 100).unwrap();
         let mut storage = Grid::new(keep_rows, keep_cols);
         assert!(storage.is_empty());
 
@@ -989,7 +1010,10 @@ mod tests {
         let mut dense = Grid::new(Keep::new_full(2).unwrap(), Keep::new_full(3).unwrap());
         assert!(dense.insert(0, 0, ci.clone()));
 
-        let mut sparse = Grid::new(Keep::new([0], 2).unwrap(), Keep::new([0], 3).unwrap());
+        let mut sparse = Grid::new(
+            Keep::from_mask(Some(Arc::from([0])), 2).unwrap(),
+            Keep::from_mask(Some(Arc::from([0])), 3).unwrap(),
+        );
         assert!(sparse.insert(0, 0, ci.clone()));
         assert_eq!(dense, sparse);
 

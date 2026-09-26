@@ -232,6 +232,14 @@ impl ColumnChunkMask {
         self.columns.as_deref()
     }
 
+    pub(crate) fn selected_row_groups_shared(&self) -> Option<Arc<[u32]>> {
+        self.row_groups.clone()
+    }
+
+    pub(crate) fn selected_columns_shared(&self) -> Option<Arc<[u32]>> {
+        self.columns.clone()
+    }
+
     /// Creates a mask selecting the leaf columns in an Arrow projection.
     #[cfg(feature = "arrow")]
     pub fn from_projection(
