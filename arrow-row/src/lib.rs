@@ -2230,11 +2230,11 @@ unsafe fn decode_column(
                 DataType::Boolean => Arc::new(decode_bool(rows, options)),
                 DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
                 DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
-                DataType::BinaryView => Arc::new(decode_binary_view(rows, options)),
+                DataType::BinaryView => Arc::new(decode_binary_view(rows, options)?),
                 DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size, options)),
                 DataType::Utf8 => Arc::new(unsafe{ decode_string::<i32>(rows, options, validate_utf8) }),
                 DataType::LargeUtf8 => Arc::new(unsafe { decode_string::<i64>(rows, options, validate_utf8) }),
-                DataType::Utf8View => Arc::new(unsafe { decode_string_view(rows, options, validate_utf8) }),
+                DataType::Utf8View => Arc::new(unsafe { decode_string_view(rows, options, validate_utf8) }?),
                 _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {data_type}" )))
             }
         }
