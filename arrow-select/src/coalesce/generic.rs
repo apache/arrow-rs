@@ -219,4 +219,41 @@ mod tests {
         // There is still some memory being held by some leftover capacity but not arrays
         assert!(in_progress.size() < source.get_array_memory_size());
     }
+
+    #[test]
+    fn test_push_batch_with_indices() {
+        let source = arr(0..10);
+        let indices: ArrayRef = Arc::new(arrow_array::UInt32Array::from(vec![0, 3, 7, 9]));
+        let mut in_progress = GenericInProgressArray::new();
+        in_progress
+            .push_batch_with_indices(Arc::clone(&source), indices.as_ref())
+            .unwrap();
+        let result = in_progress.finish().unwrap();
+        let expected = Int32Array::from_iter_values([0, 3, 7, 9]);
+        assert_eq!(result.as_ref(), &expected as &dyn arrow_array::Array);
+    }
+
+    #[test]
+    fn test_push_batch_interleaved() {
+        let a = arr(0..5);
+        let b = arr(10..15);
+        let indices = vec![(0, 1), (1, 0), (0, 3), (1, 4)];
+        let mut in_progress = GenericInProgressArray::new();
+        in_progress
+            .push_batch_interleaved(&[Arc::clone(&a), Arc::clone(&b)], &indices)
+            .unwrap();
+        let result = in_progress.finish().unwrap();
+        let expected = Int32Array::from_iter_values([1, 10, 3, 14]);
+        assert_eq!(result.as_ref(), &expected as &dyn arrow_array::Array);
+    }
+
+    #[test]
+    fn test_push_batch_interleaved_empty() {
+        let a = arr(0..5);
+        let mut in_progress = GenericInProgressArray::new();
+        in_progress
+            .push_batch_interleaved(&[Arc::clone(&a)], &[])
+            .unwrap();
+        assert_eq!(in_progress.size(), 0);
+    }
 }
