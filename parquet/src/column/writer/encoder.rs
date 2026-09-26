@@ -24,7 +24,7 @@ use crate::column::writer::{
 };
 use crate::data_type::DataType;
 use crate::data_type::private::ParquetValueType;
-use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
+use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder_with_properties};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, ResolvedColumnProperties, WriterProperties};
 use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
@@ -281,11 +281,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
 
         // Set either main encoder or fallback encoder.
-        let encoder = get_encoder(
+        let encoder = get_encoder_with_properties(
             column_props
                 .encoding
                 .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props)),
             descr,
+            column_props,
         )?;
 
         let statistics_enabled = column_props.statistics_enabled;
