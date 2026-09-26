@@ -306,11 +306,11 @@ where
     /// Given a slice of logical indices, this method returns a `Vec` containing the
     /// corresponding physical indices into the run-ends buffer.
     ///
-    /// This method operates by iterating the logical indices in sorted order, instead of
-    /// finding the physical index for each logical index using binary search via
-    /// the function [`RunEndBuffer::get_physical_index`].
+    /// This method sorts the logical indices and uses binary search via
+    /// [`RunEndBuffer::get_physical_index`] for small selections over large remaining
+    /// buffers. Other selections use a sequential scan of the physical runs.
     ///
-    /// Running benchmarks on both approaches showed that the approach used here
+    /// Running benchmarks on both approaches showed that the sequential scan
     /// scaled well for larger inputs.
     ///
     /// See <https://github.com/apache/arrow-rs/pull/3622#issuecomment-1407753727> for more details.
@@ -350,6 +350,20 @@ where
         // Skip some physical indices based on offset.
         let skip_value = self.get_start_physical_index();
 
+        // Avoid walking a large backing buffer for a small number of lookups.
+        // Keep the sequential scan for larger selections and small buffers.
+        if indices_len <= 8 && self.values().len() - skip_value >= 1024 {
+            let mut physical_indices = vec![0; indices_len];
+            for &index in &ordered_indices {
+                let logical_index = logical_indices[index].as_usize();
+                if logical_index >= len {
+                    return Err(logical_indices[index]);
+                }
+                physical_indices[index] = self.get_physical_index(logical_index);
+            }
+            return Ok(physical_indices);
+        }
+
         let mut physical_indices = vec![0; indices_len];
 
         let mut ordered_index = 0_usize;
@@ -378,7 +392,72 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::ArrowNativeType;
     use crate::buffer::RunEndBuffer;
+
+    #[test]
+    fn test_get_physical_indices_small_selections() {
+        fn check<E: ArrowNativeType>() {
+            let mut expanded = Vec::new();
+            let mut run_ends = Vec::new();
+            for run in 0..2048 {
+                expanded.extend(std::iter::repeat_n(run, 1 + run % 3));
+                run_ends.push(E::from_usize(expanded.len()).unwrap());
+            }
+            let buffer = RunEndBuffer::new(run_ends.into(), 0, expanded.len());
+
+            // Include boundaries, offsets inside runs, and a short tail of a
+            // large backing buffer. Physical indices stay absolute.
+            for (start_run, offset_in_run) in [
+                (0, 0),
+                (1, 0),
+                (1, 1),
+                (1024, 0),
+                (1024, 1),
+                (1025, 0),
+                (2046, 0),
+            ] {
+                let offset =
+                    expanded.iter().position(|&run| run == start_run).unwrap() + offset_in_run;
+                for length in [1, 3, expanded.len() - offset] {
+                    let sliced = buffer.slice(offset, length);
+                    for count in [1, 2, 8, 9] {
+                        let indices = (0..count)
+                            .map(|i| ((i * 17 + length - 1) % length) as u32)
+                            .collect::<Vec<_>>();
+                        let expected = indices
+                            .iter()
+                            .map(|&i| expanded[offset + i as usize])
+                            .collect::<Vec<_>>();
+                        assert_eq!(sliced.get_physical_indices(&indices), Ok(expected));
+                    }
+
+                    // Preserve signed-index errors and the largest-index check.
+                    assert_eq!(sliced.get_physical_indices(&[-1_i32, 0]), Err(-1));
+                    assert_eq!(sliced.get_physical_indices(&[-2_i32, -1]), Err(-1));
+                    assert_eq!(
+                        sliced.get_physical_indices(&[-1_i32, length as i32]),
+                        Err(length as i32)
+                    );
+                }
+            }
+        }
+
+        check::<i16>();
+        check::<i32>();
+        check::<i64>();
+    }
+
+    #[test]
+    fn test_get_physical_indices_prefix() {
+        let buffer = RunEndBuffer::new(vec![2_i32, 4, 7, 9].into(), 0, 9);
+        assert_eq!(buffer.get_physical_indices(&[2, 0, 2]).unwrap(), [1, 0, 1]);
+
+        let sliced = buffer.slice(1, 3);
+        assert_eq!(sliced.get_physical_indices(&[2, 0, 2]).unwrap(), [1, 0, 1]);
+        assert_eq!(sliced.get_physical_indices(&[3, 0]), Err(3));
+        assert_eq!(sliced.get_physical_indices(&[-1, 0]), Err(-1));
+    }
 
     #[test]
     fn test_zero_length_slice() {
