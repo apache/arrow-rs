@@ -23,7 +23,7 @@ use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
 };
 use arrow_data::MAX_INLINE_VIEW_LEN;
-use arrow_schema::SortOptions;
+use arrow_schema::{ArrowError, SortOptions};
 use builder::make_view;
 
 /// The block size of the variable length encoding
@@ -309,10 +309,21 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     }
 }
 
+/// Returns an error if `long_values_len` bytes of non-inlined values cannot be
+/// addressed by the `u32` offset of a view into a single data buffer
+fn check_view_buffer_len(long_values_len: usize) -> Result<(), ArrowError> {
+    if long_values_len > u32::MAX as usize {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "{long_values_len} bytes of non-inlined values too long to decode into a view array with a single u32-indexed data buffer"
+        )));
+    }
+    Ok(())
+}
+
 fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
     rows: &mut [&[u8]],
     options: SortOptions,
-) -> BinaryViewArray {
+) -> Result<BinaryViewArray, ArrowError> {
     let len = rows.len();
     let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
@@ -329,6 +340,9 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
             inline_capacity += len;
         }
     }
+    // Every view offset is at most the total length of the non-inlined values,
+    // so checking it once here keeps the `as u32` casts below in range.
+    check_view_buffer_len(values_capacity - inline_str_max_len)?;
     let mut values = MutableBuffer::new(values_capacity);
     let mut view_utf8_validation_buffer = if VALIDATE_UTF8 {
         Vec::with_capacity(inline_capacity)
@@ -356,6 +370,9 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
                 val.iter_mut().for_each(|o| *o = !*o);
             }
 
+            // Checked above by `check_view_buffer_len`; not using `u32::try_from`
+            // here keeps the check out of the per-row loop.
+            debug_assert!(u32::try_from(start_offset).is_ok());
             views[i] = make_view(val, 0, start_offset as u32);
 
             if decoded_len <= inline_str_max_len {
@@ -375,11 +392,17 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
 
     // SAFETY:
     // Valid by construction above
-    unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()].into(), nulls) }
+    Ok(unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()].into(), nulls) })
 }
 
 /// Decodes a binary view array from `rows` with the provided `options`
-pub fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryViewArray {
+///
+/// Returns an error if the non-inlined values do not fit in a single
+/// `u32`-indexed data buffer
+pub fn decode_binary_view(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+) -> Result<BinaryViewArray, ArrowError> {
     decode_binary_view_inner::<false>(rows, options)
 }
 
@@ -411,17 +434,20 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
 /// # Safety
 ///
 /// The row must contain valid UTF-8 data
+///
+/// Returns an error if the non-inlined values do not fit in a single
+/// `u32`-indexed data buffer
 pub unsafe fn decode_string_view(
     rows: &mut [&[u8]],
     options: SortOptions,
     validate_utf8: bool,
-) -> StringViewArray {
+) -> Result<StringViewArray, ArrowError> {
     let view = if validate_utf8 {
-        decode_binary_view_inner::<true>(rows, options)
+        decode_binary_view_inner::<true>(rows, options)?
     } else {
-        decode_binary_view_inner::<false>(rows, options)
+        decode_binary_view_inner::<false>(rows, options)?
     };
-    unsafe { view.to_string_view_unchecked() }
+    Ok(unsafe { view.to_string_view_unchecked() })
 }
 
 pub fn decode_null_value(rows: &mut [&[u8]], options: SortOptions) {
@@ -433,5 +459,29 @@ pub fn decode_null_value(rows: &mut [&[u8]], options: SortOptions) {
         debug_assert_eq!(row[0], sentinel1, "Expected NULL_VALUE_SENTINEL at byte 0");
         debug_assert_eq!(row[1], sentinel2, "Expected NULL_VALUE_SENTINEL at byte 1");
         *row = &row[2..];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_view_buffer_len() {
+        check_view_buffer_len(0).unwrap();
+        check_view_buffer_len(u32::MAX as usize).unwrap();
+
+        // Only reachable with more than 4 GiB of long values, which is too much
+        // to allocate in a test, so check the bound with synthetic lengths
+        #[cfg(target_pointer_width = "64")]
+        {
+            let err = check_view_buffer_len(u32::MAX as usize + 1).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("4294967296 bytes of non-inlined values too long"),
+                "{err}"
+            );
+            check_view_buffer_len(usize::MAX).unwrap_err();
+        }
     }
 }
