@@ -26,7 +26,6 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaData;
 use crate::file::metadata::page_index::PageIndexProvider;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
-use crate::file::page_index::index_reader::decode_column_index;
 use crate::file::statistics::Statistics as ParquetStatistics;
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::builder::{
@@ -2145,10 +2144,7 @@ impl<'a> StatisticsConverter<'a> {
             });
         };
 
-        let Some(mut decoder) = page_index::ColumnIndexDecoder::try_new(physical_type, num_pages)
-        else {
-            return self.data_page_statistics_via_metadata(&column_indexes, physical_type);
-        };
+        let mut decoder = page_index::ColumnIndexDecoder::new(physical_type, num_pages);
         for (num_pages, bytes) in column_indexes {
             match bytes {
                 Some(bytes) => decoder.append(bytes)?,
@@ -2161,34 +2157,6 @@ impl<'a> StatisticsConverter<'a> {
             maxes,
             null_counts,
             nan_counts,
-        })
-    }
-
-    /// The slower route for column types the direct reader does not handle:
-    /// build a [`ColumnIndexMetaData`] for each row group, then convert it as
-    /// [`Self::data_page_mins`] and friends do.
-    fn data_page_statistics_via_metadata(
-        &self,
-        column_indexes: &[(usize, Option<&[u8]>)],
-        physical_type: PhysicalType,
-    ) -> Result<DataPageStatistics> {
-        let data_type = self.arrow_field.data_type();
-        let decoded = column_indexes
-            .iter()
-            .map(|(num_pages, bytes)| {
-                let index = bytes
-                    .map(|bytes| decode_column_index(bytes, physical_type))
-                    .transpose()?;
-                Ok((*num_pages, index))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let iter = || decoded.iter().map(|(n, index)| (*n, index.as_ref()));
-
-        Ok(DataPageStatistics {
-            mins: min_page_statistics(data_type, iter(), self.physical_type)?,
-            maxes: max_page_statistics(data_type, iter(), self.physical_type)?,
-            null_counts: null_counts_page_statistics(iter())?,
-            nan_counts: nan_counts_page_statistics(iter())?,
         })
     }
 

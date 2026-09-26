@@ -66,12 +66,15 @@ enum PhysicalValues {
         offsets: Vec<i32>,
         values: Vec<u8>,
     },
+    /// `INT96` values are only counted, not kept. No Arrow type is read
+    /// from them, so their mins and maxes always come out as nulls. They are
+    /// still checked for length, as the older decoder does.
+    Int96(usize),
 }
 
 impl PhysicalValues {
-    /// Returns `None` for `INT96`, which is not handled here.
-    fn try_new(physical_type: PhysicalType, capacity: usize) -> Option<Self> {
-        Some(match physical_type {
+    fn new(physical_type: PhysicalType, capacity: usize) -> Self {
+        match physical_type {
             PhysicalType::BOOLEAN => Self::Boolean(BooleanBufferBuilder::new(capacity)),
             PhysicalType::INT32 => Self::Int32(Vec::with_capacity(capacity)),
             PhysicalType::INT64 => Self::Int64(Vec::with_capacity(capacity)),
@@ -85,8 +88,8 @@ impl PhysicalValues {
                     values: Vec::new(),
                 }
             }
-            PhysicalType::INT96 => return None,
-        })
+            PhysicalType::INT96 => Self::Int96(0),
+        }
     }
 
     /// Adds a filler value for a page that has no min or max.
@@ -105,6 +108,7 @@ impl PhysicalValues {
                 // an empty entry: it starts and ends where the data ends now
                 offsets.resize(offsets.len() + n, values.len() as i32)
             }
+            Self::Int96(count) => *count += n,
         }
     }
 
@@ -119,6 +123,10 @@ impl PhysicalValues {
             Self::Bytes { offsets, values } => {
                 values.extend_from_slice(bytes);
                 offsets.push(bytes_end(values)?);
+            }
+            Self::Int96(count) => {
+                first_bytes::<12>(bytes)?;
+                *count += 1;
             }
         }
         Ok(())
@@ -164,6 +172,16 @@ impl PhysicalValues {
                     offsets.push(bytes_end(values)?);
                 }
             }
+            Self::Int96(count) => {
+                for &has_value in has_min_max {
+                    let (bytes, rest) = split_binary(buf)?;
+                    buf = rest;
+                    if has_value {
+                        first_bytes::<12>(bytes)?;
+                    }
+                }
+                *count += has_min_max.len();
+            }
         }
         let used = prot.as_slice().len() - buf.len();
         Ok(prot.skip_bytes(used)?)
@@ -184,6 +202,7 @@ impl PhysicalValues {
                 let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
                 PhysicalArray::Bytes(BinaryArray::new(offsets, values.into(), nulls))
             }
+            Self::Int96(count) => PhysicalArray::Int96(count),
         }
     }
 }
@@ -273,6 +292,8 @@ enum PhysicalArray {
     Float(Float32Array),
     Double(Float64Array),
     Bytes(BinaryArray),
+    /// Only the number of values; see [`PhysicalValues::Int96`]
+    Int96(usize),
 }
 
 impl PhysicalArray {
@@ -284,6 +305,7 @@ impl PhysicalArray {
             Self::Float(a) => a.len(),
             Self::Double(a) => a.len(),
             Self::Bytes(a) => a.len(),
+            Self::Int96(len) => *len,
         }
     }
 }
@@ -316,19 +338,17 @@ pub(super) struct DecodedPageStatistics {
 }
 
 impl ColumnIndexDecoder {
-    /// Returns `None` for column types that are not handled here (only
-    /// `INT96` today). Callers should then use the older decoder instead.
-    pub(super) fn try_new(physical_type: PhysicalType, capacity: usize) -> Option<Self> {
-        Some(Self {
+    pub(super) fn new(physical_type: PhysicalType, capacity: usize) -> Self {
+        Self {
             physical_type,
             has_min_max: Vec::with_capacity(capacity),
-            mins: PhysicalValues::try_new(physical_type, capacity)?,
-            maxes: PhysicalValues::try_new(physical_type, capacity)?,
+            mins: PhysicalValues::new(physical_type, capacity),
+            maxes: PhysicalValues::new(physical_type, capacity),
             null_counts: Vec::with_capacity(capacity),
             null_counts_known: BooleanBufferBuilder::new(capacity),
             nan_counts: Vec::with_capacity(capacity),
             nan_counts_known: BooleanBufferBuilder::new(capacity),
-        })
+        }
     }
 
     /// Adds `n` pages with no statistics, for a row group that has no index.
@@ -880,9 +900,13 @@ fn binary_to_utf8(a: BinaryArray) -> StringArray {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{DataPageStatistics, StatisticsConverter};
+    use super::super::{
+        DataPageStatistics, StatisticsConverter, max_page_statistics, min_page_statistics,
+        nan_counts_page_statistics, null_counts_page_statistics,
+    };
     use crate::basic::Type as PhysicalType;
     use crate::errors::Result;
+    use crate::file::page_index::index_reader::decode_column_index;
     use crate::parquet_thrift::{ElementType, FieldType, ThriftCompactOutputProtocol};
     use crate::schema::types::{SchemaDescriptor, Type as SchemaType};
     use arrow_array::{Array, BinaryArray, Int32Array, StringArray, UInt64Array, new_null_array};
@@ -1030,10 +1054,24 @@ mod tests {
         data_type: &DataType,
         chunks: &[(usize, Option<&[u8]>)],
     ) -> Result<DataPageStatistics> {
-        let schema = schema(physical_type, 2);
-        let field = Field::new("col", data_type.clone(), true);
-        let converter = StatisticsConverter::from_column_index(0, &field, &schema)?;
-        converter.data_page_statistics_via_metadata(chunks, physical_type)
+        let decoded = chunks
+            .iter()
+            .map(|(num_pages, bytes)| {
+                let index = bytes
+                    .map(|bytes| decode_column_index(bytes, physical_type))
+                    .transpose()?;
+                Ok((*num_pages, index))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let iter = || decoded.iter().map(|(n, index)| (*n, index.as_ref()));
+        let physical_type = Some(physical_type);
+
+        Ok(DataPageStatistics {
+            mins: min_page_statistics(data_type, iter(), physical_type)?,
+            maxes: max_page_statistics(data_type, iter(), physical_type)?,
+            null_counts: null_counts_page_statistics(iter())?,
+            nan_counts: nan_counts_page_statistics(iter())?,
+        })
     }
 
     /// Checks that both routes give the same answer.
@@ -1190,7 +1228,7 @@ mod tests {
     }
 
     #[test]
-    fn int96_uses_metadata_route() {
+    fn int96_mins_and_maxes_are_null() {
         let int96 = vec![Some(vec![1u8; 12]), None];
         let bytes = index_of(&int96).to_bytes();
         let data_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
@@ -1200,6 +1238,17 @@ mod tests {
             stats.null_counts,
             UInt64Array::from(vec![Some(0), Some(1), None])
         );
+    }
+
+    #[test]
+    fn int96_value_too_short() {
+        let short: &[u8] = &[1, 2, 3];
+        let bytes = TestIndex::new(&[Some(short)], &[Some(short)]).to_bytes();
+        let data_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let chunks = [(1, Some(bytes.as_slice()))];
+        let new = from_bytes(PhysicalType::INT96, &data_type, &chunks).unwrap_err();
+        let old = via_metadata(PhysicalType::INT96, &data_type, &chunks).unwrap_err();
+        assert_eq!(new.to_string(), old.to_string());
     }
 
     #[test]
