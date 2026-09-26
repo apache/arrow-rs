@@ -22,7 +22,7 @@ use crate::errors::{ParquetError, Result};
 
 use super::Encoder;
 
-use bytes::{BufMut, Bytes};
+use bytes::BufMut;
 use std::cmp;
 use std::marker::PhantomData;
 
@@ -88,12 +88,15 @@ impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
         self.buffer.len()
     }
 
-    fn flush_buffer(&mut self) -> Result<Bytes> {
-        let mut encoded = vec![0; self.buffer.len()];
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        let start = out.len();
+        out.resize(start + self.buffer.len(), 0);
+        let encoded = &mut out[start..];
+
         let type_size = T::get_type_size();
         match type_size {
-            4 => split_streams_const::<4>(&self.buffer, &mut encoded),
-            8 => split_streams_const::<8>(&self.buffer, &mut encoded),
+            4 => split_streams_const::<4>(&self.buffer, encoded),
+            8 => split_streams_const::<8>(&self.buffer, encoded),
             _ => {
                 return Err(general_err!(
                     "byte stream split unsupported for data types of size {} bytes",
@@ -103,7 +106,7 @@ impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
         }
 
         self.buffer.clear();
-        Ok(encoded.into())
+        Ok(())
     }
 
     /// return the estimated memory size of this encoder.
@@ -128,36 +131,30 @@ impl<T: DataType> VariableWidthByteStreamSplitEncoder<T> {
     }
 }
 
+#[cold]
+#[inline(never)]
+fn mismatched_byte_array_size(bytes: usize, type_size: usize) {
+    panic!("Mismatched FixedLenByteArray sizes: {bytes} != {type_size}");
+}
+
 fn put_fixed<T: DataType, const TYPE_SIZE: usize>(dst: &mut [u8], values: &[T::T]) {
-    let mut idx = 0;
-    values.iter().for_each(|x| {
+    for (out, x) in dst.chunks_exact_mut(TYPE_SIZE).zip(values.iter()) {
         let bytes = x.as_bytes();
         if bytes.len() != TYPE_SIZE {
-            panic!(
-                "Mismatched FixedLenByteArray sizes: {} != {}",
-                bytes.len(),
-                TYPE_SIZE
-            );
+            mismatched_byte_array_size(bytes.len(), TYPE_SIZE);
         }
-        dst[idx..(TYPE_SIZE + idx)].copy_from_slice(&bytes[..TYPE_SIZE]);
-        idx += TYPE_SIZE;
-    });
+        out.copy_from_slice(bytes);
+    }
 }
 
 fn put_variable<T: DataType>(dst: &mut [u8], values: &[T::T], type_width: usize) {
-    let mut idx = 0;
-    values.iter().for_each(|x| {
+    for (out, x) in dst.chunks_exact_mut(type_width).zip(values.iter()) {
         let bytes = x.as_bytes();
         if bytes.len() != type_width {
-            panic!(
-                "Mismatched FixedLenByteArray sizes: {} != {}",
-                bytes.len(),
-                type_width
-            );
+            mismatched_byte_array_size(bytes.len(), type_width);
         }
-        dst[idx..idx + type_width].copy_from_slice(bytes);
-        idx += type_width;
-    });
+        out.copy_from_slice(bytes);
+    }
 }
 
 impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
@@ -171,9 +168,7 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
         // slice_as_bytes untenable
         let idx = self.buffer.len();
         let data_len = values.len() * self.type_width;
-        // Ensure enough capacity for the new data
-        self.buffer.reserve(values.len() * self.type_width);
-        // ...and extend the size of buffer to allow direct access
+        // Extend the size of buffer to allow direct access
         self.buffer.put_bytes(0_u8, data_len);
         // Get a slice of the buffer corresponding to the location of the new data
         let out_buf = &mut self.buffer[idx..idx + data_len];
@@ -188,6 +183,8 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
             6 => put_fixed::<T, 6>(out_buf, values),
             7 => put_fixed::<T, 7>(out_buf, values),
             8 => put_fixed::<T, 8>(out_buf, values),
+            12 => put_fixed::<T, 12>(out_buf, values),
+            16 => put_fixed::<T, 16>(out_buf, values),
             _ => put_variable::<T>(out_buf, values, self.type_width),
         }
 
@@ -202,26 +199,33 @@ impl<T: DataType> Encoder<T> for VariableWidthByteStreamSplitEncoder<T> {
         self.buffer.len()
     }
 
-    fn flush_buffer(&mut self) -> Result<Bytes> {
-        let mut encoded = vec![0; self.buffer.len()];
+    fn flush_to(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        let src = &self.buffer[..];
+        let start = out.len();
+        out.resize(start + src.len(), 0);
+        let dst = &mut out[start..];
+
         let type_size = match T::get_physical_type() {
             Type::FIXED_LEN_BYTE_ARRAY => self.type_width,
             _ => T::get_type_size(),
         };
-        // split_streams_const() is faster up to type_width == 8
+        // split_streams_const() is faster up to type_width == 8.
+        // 12 and 16 are included since they auto-vectorize nicely.
         match type_size {
-            2 => split_streams_const::<2>(&self.buffer, &mut encoded),
-            3 => split_streams_const::<3>(&self.buffer, &mut encoded),
-            4 => split_streams_const::<4>(&self.buffer, &mut encoded),
-            5 => split_streams_const::<5>(&self.buffer, &mut encoded),
-            6 => split_streams_const::<6>(&self.buffer, &mut encoded),
-            7 => split_streams_const::<7>(&self.buffer, &mut encoded),
-            8 => split_streams_const::<8>(&self.buffer, &mut encoded),
-            _ => split_streams_variable(&self.buffer, &mut encoded, type_size),
+            2 => split_streams_const::<2>(src, dst),
+            3 => split_streams_const::<3>(src, dst),
+            4 => split_streams_const::<4>(src, dst),
+            5 => split_streams_const::<5>(src, dst),
+            6 => split_streams_const::<6>(src, dst),
+            7 => split_streams_const::<7>(src, dst),
+            8 => split_streams_const::<8>(src, dst),
+            12 => split_streams_const::<12>(src, dst),
+            16 => split_streams_const::<16>(src, dst),
+            _ => split_streams_variable(src, dst, type_size),
         }
 
         self.buffer.clear();
-        Ok(encoded.into())
+        Ok(())
     }
 
     /// return the estimated memory size of this encoder.
