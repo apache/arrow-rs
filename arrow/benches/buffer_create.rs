@@ -48,8 +48,8 @@ fn mutable_buffer_iter_bitset(data: &[Vec<bool>]) -> Vec<Buffer> {
     hint::black_box({
         data.iter()
             .map(|datum| {
-                let mut result =
-                    MutableBuffer::new(data.len().div_ceil(8)).with_bitset(datum.len(), false);
+                let byte_len = datum.len().div_ceil(8);
+                let mut result = MutableBuffer::new(byte_len).with_bitset(byte_len, false);
                 for (i, value) in datum.iter().enumerate() {
                     if *value {
                         unsafe {

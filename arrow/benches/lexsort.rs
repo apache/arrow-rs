@@ -71,7 +71,7 @@ impl Column {
                 Arc::new(create_string_array_with_len::<i32>(size, 0.2, 16))
             }
             Column::Optional50CharString => {
-                Arc::new(create_string_array_with_len::<i32>(size, 0., 50))
+                Arc::new(create_string_array_with_len::<i32>(size, 0.2, 50))
             }
             Column::Optional100Value50CharStringDict => {
                 Arc::new(create_dict_from_values::<Int32Type>(
@@ -179,12 +179,6 @@ fn add_benchmark(c: &mut Criterion) {
             Column::Optional100Value50CharStringDict,
             Column::Optional100Value50CharStringDict,
             Column::Required16CharString,
-        ],
-        &[
-            Column::Optional100Value50CharStringDict,
-            Column::Optional100Value50CharStringDict,
-            Column::Optional100Value50CharStringDict,
-            Column::Optional50CharString,
         ],
         &[
             Column::Optional100Value50CharStringDict,
