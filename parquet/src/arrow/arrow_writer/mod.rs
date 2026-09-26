@@ -4350,6 +4350,38 @@ mod tests {
     }
 
     #[test]
+    fn test_byte_array_decimal_statistics() {
+        // BYTE_ARRAY decimals are big-endian two's complement, so min/max must
+        // use a signed comparison rather than plain byte order
+        let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Binary, false)]));
+        let parquet_schema = crate::schema::parser::parse_message_type(
+            "message schema { REQUIRED BYTE_ARRAY d (DECIMAL(2, 0)); }",
+        )
+        .unwrap();
+        let options = ArrowWriterOptions::new()
+            .with_parquet_schema(SchemaDescriptor::new(Arc::new(parquet_schema)));
+
+        // -1, 0, 1
+        let values = BinaryArray::from_vec(vec![&[0xFF], &[0x00], &[0x01]]);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new_with_options(&mut buf, schema, options).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(Bytes::from(buf)).unwrap();
+        let stats = reader
+            .metadata()
+            .row_group(0)
+            .column(0)
+            .statistics()
+            .unwrap();
+        assert_eq!(stats.min_bytes_opt(), Some([0xFF].as_slice()));
+        assert_eq!(stats.max_bytes_opt(), Some([0x01].as_slice()));
+    }
+
+    #[test]
     fn test_page_encoding_statistics_roundtrip() {
         let batch_schema = Schema::new(vec![Field::new(
             "int32",

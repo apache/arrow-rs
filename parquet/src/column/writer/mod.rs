@@ -2002,7 +2002,7 @@ fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Signed comparison of bytes arrays
-fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     let a_length = a.len();
     let b_length = b.len();
 
