@@ -25,7 +25,7 @@
 //!
 //! [`ColumnIndexMetaData`]: crate::file::page_index::column_index::ColumnIndexMetaData
 
-use super::from_bytes_to_i256;
+use super::{DataPageStatistics, from_bytes_to_i256};
 use super::{from_bytes_to_f16, from_bytes_to_i32, from_bytes_to_i64, from_bytes_to_i128};
 use crate::basic::{BoundaryOrder, Type as PhysicalType};
 use crate::errors::{ParquetError, Result};
@@ -33,16 +33,19 @@ use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftSliceInputProtocol,
     validate_list_type,
 };
+use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Int8Type,
-    Int16Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
+    DecimalType, Int8Type, Int16Type, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
 };
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, FixedSizeBinaryArray,
-    Float16Array, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
-    LargeStringArray, PrimitiveArray, StringArray, StringViewArray, UInt64Array, new_null_array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal32Array, Decimal64Array,
+    Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array,
+    Float64Array, Int32Array, Int64Array, LargeBinaryArray, LargeStringArray, NullArray,
+    StringArray, StringViewArray, UInt64Array, new_null_array,
 };
 use arrow_buffer::{
     BooleanBuffer, BooleanBufferBuilder, NullBuffer, OffsetBuffer, ScalarBuffer, i256,
@@ -118,11 +121,7 @@ impl PhysicalValues {
         }
     }
 
-    /// Adds a filler value for a page that has no min or max.
-    fn append_null(&mut self) {
-        self.append_nulls(1)
-    }
-
+    /// Adds `n` filler values, for pages that have no min or max.
     fn append_nulls(&mut self, n: usize) {
         match self {
             Self::Boolean(b) => b.append_n(n, false),
@@ -172,7 +171,7 @@ impl PhysicalValues {
     /// `false` get a filler value.
     ///
     /// This does the same as calling [`Self::append_value`] or
-    /// [`Self::append_null`] for each value, but picks the value kind once
+    /// [`Self::append_nulls`] for each value, but picks the value kind once
     /// for the whole list rather than once per value, which is much faster.
     fn read_list(
         &mut self,
@@ -191,10 +190,18 @@ impl PhysicalValues {
                     b.append(has_value && first_bytes::<1>(bytes)?[0] != 0);
                 }
             }
-            Self::Int32(v) => read_fixed(&mut buf, v, has_min_max, i32::from_le_bytes)?,
-            Self::Int64(v) => read_fixed(&mut buf, v, has_min_max, i64::from_le_bytes)?,
-            Self::Float(v) => read_fixed(&mut buf, v, has_min_max, f32::from_le_bytes)?,
-            Self::Double(v) => read_fixed(&mut buf, v, has_min_max, f64::from_le_bytes)?,
+            Self::Int32(v) => read_each(&mut buf, v, has_min_max, |b| {
+                Ok(i32::from_le_bytes(first_bytes(b)?))
+            })?,
+            Self::Int64(v) => read_each(&mut buf, v, has_min_max, |b| {
+                Ok(i64::from_le_bytes(first_bytes(b)?))
+            })?,
+            Self::Float(v) => read_each(&mut buf, v, has_min_max, |b| {
+                Ok(f32::from_le_bytes(first_bytes(b)?))
+            })?,
+            Self::Double(v) => read_each(&mut buf, v, has_min_max, |b| {
+                Ok(f64::from_le_bytes(first_bytes(b)?))
+            })?,
             Self::Bytes { offsets, values } => {
                 offsets.reserve(has_min_max.len());
                 for &has_value in has_min_max {
@@ -216,61 +223,48 @@ impl PhysicalValues {
                 }
                 *count += has_min_max.len();
             }
-            Self::Decimal32(v) => read_each(&mut buf, v, has_min_max, from_bytes_to_i32)?,
-            Self::Decimal64(v) => read_each(&mut buf, v, has_min_max, from_bytes_to_i64)?,
-            Self::Decimal128(v) => read_each(&mut buf, v, has_min_max, from_bytes_to_i128)?,
-            Self::Decimal256(v) => read_each(&mut buf, v, has_min_max, from_bytes_to_i256)?,
+            Self::Decimal32(v) => {
+                read_each(&mut buf, v, has_min_max, |b| Ok(from_bytes_to_i32(b)))?
+            }
+            Self::Decimal64(v) => {
+                read_each(&mut buf, v, has_min_max, |b| Ok(from_bytes_to_i64(b)))?
+            }
+            Self::Decimal128(v) => {
+                read_each(&mut buf, v, has_min_max, |b| Ok(from_bytes_to_i128(b)))?
+            }
+            Self::Decimal256(v) => {
+                read_each(&mut buf, v, has_min_max, |b| Ok(from_bytes_to_i256(b)))?
+            }
         }
         let used = prot.as_slice().len() - buf.len();
         Ok(prot.skip_bytes(used)?)
     }
 
     /// Turns the values into an Arrow array of the matching physical type.
-    fn finish(self, nulls: Option<NullBuffer>) -> PhysicalArray {
+    /// Decimals get their default precision and scale; `INT96` gives a
+    /// [`NullArray`].
+    fn finish(self, nulls: Option<NullBuffer>) -> ArrayRef {
         match self {
-            Self::Boolean(mut b) => PhysicalArray::Boolean(BooleanArray::new(b.finish(), nulls)),
-            Self::Int32(v) => PhysicalArray::Int32(Int32Array::new(ScalarBuffer::from(v), nulls)),
-            Self::Int64(v) => PhysicalArray::Int64(Int64Array::new(ScalarBuffer::from(v), nulls)),
-            Self::Float(v) => PhysicalArray::Float(Float32Array::new(ScalarBuffer::from(v), nulls)),
-            Self::Double(v) => {
-                PhysicalArray::Double(Float64Array::new(ScalarBuffer::from(v), nulls))
-            }
+            Self::Boolean(mut b) => Arc::new(BooleanArray::new(b.finish(), nulls)),
+            Self::Int32(v) => Arc::new(Int32Array::new(v.into(), nulls)),
+            Self::Int64(v) => Arc::new(Int64Array::new(v.into(), nulls)),
+            Self::Float(v) => Arc::new(Float32Array::new(v.into(), nulls)),
+            Self::Double(v) => Arc::new(Float64Array::new(v.into(), nulls)),
             Self::Bytes { offsets, values } => {
                 // the offsets never go down, because values are only ever added
-                let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
-                PhysicalArray::Bytes(BinaryArray::new(offsets, values.into(), nulls))
+                let offsets = OffsetBuffer::new(offsets.into());
+                Arc::new(BinaryArray::new(offsets, values.into(), nulls))
             }
-            Self::Int96(count) => PhysicalArray::Int96(count),
-            Self::Decimal32(v) => PhysicalArray::Decimal32(PrimitiveArray::new(v.into(), nulls)),
-            Self::Decimal64(v) => PhysicalArray::Decimal64(PrimitiveArray::new(v.into(), nulls)),
-            Self::Decimal128(v) => PhysicalArray::Decimal128(PrimitiveArray::new(v.into(), nulls)),
-            Self::Decimal256(v) => PhysicalArray::Decimal256(PrimitiveArray::new(v.into(), nulls)),
+            Self::Int96(count) => Arc::new(NullArray::new(count)),
+            Self::Decimal32(v) => Arc::new(Decimal32Array::new(v.into(), nulls)),
+            Self::Decimal64(v) => Arc::new(Decimal64Array::new(v.into(), nulls)),
+            Self::Decimal128(v) => Arc::new(Decimal128Array::new(v.into(), nulls)),
+            Self::Decimal256(v) => Arc::new(Decimal256Array::new(v.into(), nulls)),
         }
     }
 }
 
-/// Reads fixed width values, one per page. See [`PhysicalValues::read_list`].
-#[inline(never)]
-fn read_fixed<const N: usize, T: Default>(
-    buf: &mut &[u8],
-    out: &mut Vec<T>,
-    has_min_max: &[bool],
-    from_le_bytes: impl Fn([u8; N]) -> T,
-) -> Result<()> {
-    out.reserve(has_min_max.len());
-    for &has_value in has_min_max {
-        let (bytes, rest) = split_binary(buf)?;
-        *buf = rest;
-        out.push(if has_value {
-            from_le_bytes(first_bytes(bytes)?)
-        } else {
-            T::default()
-        });
-    }
-    Ok(())
-}
-
-/// Reads byte values and turns each into a number with `convert`, one per
+/// Reads byte values and turns each into a value with `convert`, one per
 /// page. Pages without a min or max get a filler value, and `convert` is not
 /// called for them. See [`PhysicalValues::read_list`].
 #[inline(never)]
@@ -278,14 +272,14 @@ fn read_each<T: Default>(
     buf: &mut &[u8],
     out: &mut Vec<T>,
     has_min_max: &[bool],
-    convert: impl Fn(&[u8]) -> T,
+    convert: impl Fn(&[u8]) -> Result<T>,
 ) -> Result<()> {
     out.reserve(has_min_max.len());
     for &has_value in has_min_max {
         let (bytes, rest) = split_binary(buf)?;
         *buf = rest;
         out.push(if has_value {
-            convert(bytes)
+            convert(bytes)?
         } else {
             T::default()
         });
@@ -349,43 +343,6 @@ fn first_bytes<const N: usize>(bytes: &[u8]) -> Result<[u8; N]> {
     }
 }
 
-/// An Arrow array holding values in their Parquet physical type.
-#[derive(Debug)]
-enum PhysicalArray {
-    Boolean(BooleanArray),
-    Int32(Int32Array),
-    Int64(Int64Array),
-    Float(Float32Array),
-    Double(Float64Array),
-    Bytes(BinaryArray),
-    /// Only the number of values; see [`PhysicalValues::Int96`]
-    Int96(usize),
-    /// Decimals stored as bytes, already turned into numbers; see
-    /// [`PhysicalValues::Decimal32`]. Precision and scale are added later.
-    Decimal32(PrimitiveArray<Decimal32Type>),
-    Decimal64(PrimitiveArray<Decimal64Type>),
-    Decimal128(PrimitiveArray<Decimal128Type>),
-    Decimal256(PrimitiveArray<Decimal256Type>),
-}
-
-impl PhysicalArray {
-    fn len(&self) -> usize {
-        match self {
-            Self::Boolean(a) => a.len(),
-            Self::Int32(a) => a.len(),
-            Self::Int64(a) => a.len(),
-            Self::Float(a) => a.len(),
-            Self::Double(a) => a.len(),
-            Self::Bytes(a) => a.len(),
-            Self::Int96(len) => *len,
-            Self::Decimal32(a) => a.len(),
-            Self::Decimal64(a) => a.len(),
-            Self::Decimal128(a) => a.len(),
-            Self::Decimal256(a) => a.len(),
-        }
-    }
-}
-
 /// Collects the page statistics of one column, across any number of row
 /// groups, while reading the stored `ColumnIndex` bytes.
 #[derive(Debug)]
@@ -400,17 +357,6 @@ pub(super) struct ColumnIndexDecoder {
     null_counts_known: BooleanBufferBuilder,
     nan_counts: Vec<u64>,
     nan_counts_known: BooleanBufferBuilder,
-}
-
-/// What [`ColumnIndexDecoder`] produced, before the min and max values are
-/// turned into the Arrow type the caller asked for.
-#[derive(Debug)]
-pub(super) struct DecodedPageStatistics {
-    physical_type: PhysicalType,
-    mins: PhysicalArray,
-    maxes: PhysicalArray,
-    null_counts: UInt64Array,
-    nan_counts: UInt64Array,
 }
 
 impl ColumnIndexDecoder {
@@ -591,7 +537,7 @@ impl ColumnIndexDecoder {
                 if self.has_min_max[first_page + i] {
                     values.append_value(bytes)?;
                 } else {
-                    values.append_null();
+                    values.append_nulls(1);
                 }
             }
         }
@@ -615,7 +561,8 @@ impl ColumnIndexDecoder {
         Ok(())
     }
 
-    pub(super) fn finish(self) -> DecodedPageStatistics {
+    /// Returns the statistics, with the mins and maxes turned into `data_type`.
+    pub(super) fn finish(self, data_type: &DataType) -> Result<DataPageStatistics> {
         // `collect_bool` packs 64 pages at a time, which is much faster than
         // converting the list one page at a time
         let has_min_max = &self.has_min_max;
@@ -623,13 +570,14 @@ impl ColumnIndexDecoder {
             has_min_max[i]
         }));
         let nulls = (nulls.null_count() > 0).then_some(nulls);
-        DecodedPageStatistics {
-            physical_type: self.physical_type,
-            mins: self.mins.finish(nulls.clone()),
-            maxes: self.maxes.finish(nulls),
+        let mins = self.mins.finish(nulls.clone());
+        let maxes = self.maxes.finish(nulls);
+        Ok(DataPageStatistics {
+            mins: physical_to_logical(mins, data_type, self.physical_type)?,
+            maxes: physical_to_logical(maxes, data_type, self.physical_type)?,
             null_counts: counts_array(self.null_counts, self.null_counts_known),
             nan_counts: counts_array(self.nan_counts, self.nan_counts_known),
-        }
+        })
     }
 }
 
@@ -740,19 +688,6 @@ fn counts_array(counts: Vec<u64>, mut known: BooleanBufferBuilder) -> UInt64Arra
     UInt64Array::new(ScalarBuffer::from(counts), nulls)
 }
 
-impl DecodedPageStatistics {
-    /// Turns the mins and maxes into `data_type`, and returns them with the
-    /// null counts and NaN counts.
-    pub(super) fn into_arrow(
-        self,
-        data_type: &DataType,
-    ) -> Result<(ArrayRef, ArrayRef, UInt64Array, UInt64Array)> {
-        let mins = physical_to_logical(self.mins, data_type, self.physical_type)?;
-        let maxes = physical_to_logical(self.maxes, data_type, self.physical_type)?;
-        Ok((mins, maxes, self.null_counts, self.nan_counts))
-    }
-}
-
 /// Turns values in their Parquet form into the Arrow type the caller wants.
 ///
 /// This must give exactly the same results as `get_data_page_statistics!` in
@@ -763,7 +698,7 @@ impl DecodedPageStatistics {
 /// Where the Parquet form and the Arrow type are the same, the data is reused
 /// without copying.
 fn physical_to_logical(
-    array: PhysicalArray,
+    array: ArrayRef,
     data_type: &DataType,
     physical_type: PhysicalType,
 ) -> Result<ArrayRef> {
@@ -772,173 +707,177 @@ fn physical_to_logical(
         return physical_to_logical(array, value_type, physical_type);
     }
 
-    let len = array.len();
-    let array: ArrayRef = match (array, data_type) {
-        (PhysicalArray::Boolean(a), DataType::Boolean) => Arc::new(a),
+    let converted = match physical_type {
+        PhysicalType::INT32 => int32_to_logical(array.as_primitive(), data_type)?,
+        PhysicalType::INT64 => int64_to_logical(array.as_primitive(), data_type)?,
+        PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+            bytes_to_logical(&array, data_type, physical_type)?
+        }
+        PhysicalType::BOOLEAN | PhysicalType::FLOAT | PhysicalType::DOUBLE => {
+            (array.data_type() == data_type).then(|| Arc::clone(&array))
+        }
+        PhysicalType::INT96 => None,
+    };
+    // Every other pair gives nulls, as the old code does.
+    Ok(converted.unwrap_or_else(|| new_null_array(data_type, array.len())))
+}
 
-        (PhysicalArray::Int32(a), DataType::Int32) => Arc::new(a),
-        (PhysicalArray::Int32(a), DataType::Int8) => {
-            Arc::new(a.unary_opt::<_, Int8Type>(|x| i8::try_from(x).ok()))
-        }
-        (PhysicalArray::Int32(a), DataType::Int16) => {
-            Arc::new(a.unary_opt::<_, Int16Type>(|x| i16::try_from(x).ok()))
-        }
-        (PhysicalArray::Int32(a), DataType::UInt8) => {
-            Arc::new(a.unary_opt::<_, UInt8Type>(|x| u8::try_from(x).ok()))
-        }
-        (PhysicalArray::Int32(a), DataType::UInt16) => {
-            Arc::new(a.unary_opt::<_, UInt16Type>(|x| u16::try_from(x).ok()))
-        }
+fn int32_to_logical(a: &Int32Array, data_type: &DataType) -> Result<Option<ArrayRef>> {
+    let array: ArrayRef = match data_type {
+        DataType::Int32 => Arc::new(a.clone()),
+        DataType::Int8 => Arc::new(a.unary_opt::<_, Int8Type>(|x| i8::try_from(x).ok())),
+        DataType::Int16 => Arc::new(a.unary_opt::<_, Int16Type>(|x| i16::try_from(x).ok())),
+        DataType::UInt8 => Arc::new(a.unary_opt::<_, UInt8Type>(|x| u8::try_from(x).ok())),
+        DataType::UInt16 => Arc::new(a.unary_opt::<_, UInt16Type>(|x| u16::try_from(x).ok())),
         // unsigned values are stored as signed numbers with the same bits
-        (PhysicalArray::Int32(a), DataType::UInt32) => {
-            Arc::new(a.unary::<_, UInt32Type>(|x| x as u32))
-        }
-        (PhysicalArray::Int32(a), DataType::Date32) => Arc::new(a.reinterpret_cast::<Date32Type>()),
+        DataType::UInt32 => Arc::new(a.unary::<_, UInt32Type>(|x| x as u32)),
+        DataType::Date32 => Arc::new(a.reinterpret_cast::<Date32Type>()),
         // stored as days, wanted as milliseconds
-        (PhysicalArray::Int32(a), DataType::Date64) => {
+        DataType::Date64 => {
             Arc::new(a.unary::<_, Date64Type>(|x| (x as i64) * 24 * 60 * 60 * 1000))
         }
-        (PhysicalArray::Int32(a), DataType::Time32(TimeUnit::Second)) => {
-            Arc::new(a.reinterpret_cast::<Time32SecondType>())
-        }
-        (PhysicalArray::Int32(a), DataType::Time32(TimeUnit::Millisecond)) => {
+        DataType::Time32(TimeUnit::Second) => Arc::new(a.reinterpret_cast::<Time32SecondType>()),
+        DataType::Time32(TimeUnit::Millisecond) => {
             Arc::new(a.reinterpret_cast::<Time32MillisecondType>())
         }
-        (PhysicalArray::Int32(a), DataType::Decimal32(p, s)) => Arc::new(
+        DataType::Decimal32(p, s) => Arc::new(
             a.reinterpret_cast::<Decimal32Type>()
                 .with_precision_and_scale(*p, *s)?,
         ),
-        (PhysicalArray::Int32(a), DataType::Decimal64(p, s)) => Arc::new(
+        DataType::Decimal64(p, s) => Arc::new(
             a.unary::<_, Decimal64Type>(|x| x as i64)
                 .with_precision_and_scale(*p, *s)?,
         ),
-        (PhysicalArray::Int32(a), DataType::Decimal128(p, s)) => Arc::new(
+        DataType::Decimal128(p, s) => Arc::new(
             a.unary::<_, Decimal128Type>(|x| x as i128)
                 .with_precision_and_scale(*p, *s)?,
         ),
-        (PhysicalArray::Int32(a), DataType::Decimal256(p, s)) => Arc::new(
-            a.unary::<_, Decimal256Type>(|x| arrow_buffer::i256::from_i128(x as i128))
+        DataType::Decimal256(p, s) => Arc::new(
+            a.unary::<_, Decimal256Type>(|x| i256::from_i128(x as i128))
                 .with_precision_and_scale(*p, *s)?,
         ),
+        _ => return Ok(None),
+    };
+    Ok(Some(array))
+}
 
-        (PhysicalArray::Int64(a), DataType::Int64) => Arc::new(a),
-        (PhysicalArray::Int64(a), DataType::UInt64) => {
-            Arc::new(a.unary::<_, UInt64Type>(|x| x as u64))
+fn int64_to_logical(a: &Int64Array, data_type: &DataType) -> Result<Option<ArrayRef>> {
+    let array: ArrayRef = match data_type {
+        DataType::Int64 => Arc::new(a.clone()),
+        // unsigned values are stored as signed numbers with the same bits
+        DataType::UInt64 => Arc::new(a.unary::<_, UInt64Type>(|x| x as u64)),
+        DataType::Timestamp(unit, tz) => {
+            let tz = tz.clone();
+            match unit {
+                TimeUnit::Second => Arc::new(
+                    a.reinterpret_cast::<TimestampSecondType>()
+                        .with_timezone_opt(tz),
+                ),
+                TimeUnit::Millisecond => Arc::new(
+                    a.reinterpret_cast::<TimestampMillisecondType>()
+                        .with_timezone_opt(tz),
+                ),
+                TimeUnit::Microsecond => Arc::new(
+                    a.reinterpret_cast::<TimestampMicrosecondType>()
+                        .with_timezone_opt(tz),
+                ),
+                TimeUnit::Nanosecond => Arc::new(
+                    a.reinterpret_cast::<TimestampNanosecondType>()
+                        .with_timezone_opt(tz),
+                ),
+            }
         }
-        (PhysicalArray::Int64(a), DataType::Timestamp(unit, tz)) => match unit {
-            TimeUnit::Second => Arc::new(
-                a.reinterpret_cast::<TimestampSecondType>()
-                    .with_timezone_opt(tz.clone()),
-            ),
-            TimeUnit::Millisecond => Arc::new(
-                a.reinterpret_cast::<TimestampMillisecondType>()
-                    .with_timezone_opt(tz.clone()),
-            ),
-            TimeUnit::Microsecond => Arc::new(
-                a.reinterpret_cast::<TimestampMicrosecondType>()
-                    .with_timezone_opt(tz.clone()),
-            ),
-            TimeUnit::Nanosecond => Arc::new(
-                a.reinterpret_cast::<TimestampNanosecondType>()
-                    .with_timezone_opt(tz.clone()),
-            ),
-        },
-        (PhysicalArray::Int64(a), DataType::Date64) => Arc::new(a.reinterpret_cast::<Date64Type>()),
-        (PhysicalArray::Int64(a), DataType::Time64(TimeUnit::Microsecond)) => {
+        DataType::Date64 => Arc::new(a.reinterpret_cast::<Date64Type>()),
+        DataType::Time64(TimeUnit::Microsecond) => {
             Arc::new(a.reinterpret_cast::<Time64MicrosecondType>())
         }
-        (PhysicalArray::Int64(a), DataType::Time64(TimeUnit::Nanosecond)) => {
+        DataType::Time64(TimeUnit::Nanosecond) => {
             Arc::new(a.reinterpret_cast::<Time64NanosecondType>())
         }
-        (PhysicalArray::Int64(a), DataType::Decimal32(p, s)) => Arc::new(
+        DataType::Decimal32(p, s) => Arc::new(
             a.unary_opt::<_, Decimal32Type>(|x| i32::try_from(x).ok())
                 .with_precision_and_scale(*p, *s)?,
         ),
-        (PhysicalArray::Int64(a), DataType::Decimal64(p, s)) => Arc::new(
+        DataType::Decimal64(p, s) => Arc::new(
             a.reinterpret_cast::<Decimal64Type>()
                 .with_precision_and_scale(*p, *s)?,
         ),
-        (PhysicalArray::Int64(a), DataType::Decimal128(p, s)) => Arc::new(
+        DataType::Decimal128(p, s) => Arc::new(
             a.unary::<_, Decimal128Type>(|x| x as i128)
                 .with_precision_and_scale(*p, *s)?,
         ),
-        (PhysicalArray::Int64(a), DataType::Decimal256(p, s)) => Arc::new(
-            a.unary::<_, Decimal256Type>(|x| arrow_buffer::i256::from_i128(x as i128))
+        DataType::Decimal256(p, s) => Arc::new(
+            a.unary::<_, Decimal256Type>(|x| i256::from_i128(x as i128))
                 .with_precision_and_scale(*p, *s)?,
         ),
+        _ => return Ok(None),
+    };
+    Ok(Some(array))
+}
 
-        (PhysicalArray::Float(a), DataType::Float32) => Arc::new(a),
-        (PhysicalArray::Double(a), DataType::Float64) => Arc::new(a),
-
-        // Decimals stored as bytes, already turned into numbers while reading.
-        // `PhysicalValues::new` only picks these when the wanted type matches.
-        (PhysicalArray::Decimal32(a), DataType::Decimal32(p, s)) => {
-            Arc::new(a.with_precision_and_scale(*p, *s)?)
-        }
-        (PhysicalArray::Decimal64(a), DataType::Decimal64(p, s)) => {
-            Arc::new(a.with_precision_and_scale(*p, *s)?)
-        }
-        (PhysicalArray::Decimal128(a), DataType::Decimal128(p, s)) => {
-            Arc::new(a.with_precision_and_scale(*p, *s)?)
-        }
-        (PhysicalArray::Decimal256(a), DataType::Decimal256(p, s)) => {
-            Arc::new(a.with_precision_and_scale(*p, *s)?)
-        }
+/// Converts the values of a `BYTE_ARRAY` or `FIXED_LEN_BYTE_ARRAY` column.
+///
+/// `array` is a [`BinaryArray`], except for decimals, which were already
+/// turned into numbers while reading (see [`PhysicalValues::new`]).
+fn bytes_to_logical(
+    array: &ArrayRef,
+    data_type: &DataType,
+    physical_type: PhysicalType,
+) -> Result<Option<ArrayRef>> {
+    let is_byte_array = physical_type == PhysicalType::BYTE_ARRAY;
+    let binary = || array.as_binary::<i32>();
+    let array: ArrayRef = match data_type {
+        DataType::Decimal32(p, s) => with_precision_and_scale::<Decimal32Type>(array, *p, *s)?,
+        DataType::Decimal64(p, s) => with_precision_and_scale::<Decimal64Type>(array, *p, *s)?,
+        DataType::Decimal128(p, s) => with_precision_and_scale::<Decimal128Type>(array, *p, *s)?,
+        DataType::Decimal256(p, s) => with_precision_and_scale::<Decimal256Type>(array, *p, *s)?,
 
         // Text and binary types only come from variable length byte columns.
-        (PhysicalArray::Bytes(a), DataType::Binary)
-            if physical_type == PhysicalType::BYTE_ARRAY =>
-        {
-            Arc::new(a)
+        DataType::Binary if is_byte_array => Arc::clone(array),
+        DataType::LargeBinary if is_byte_array => {
+            Arc::new(binary().iter().collect::<LargeBinaryArray>())
         }
-        (PhysicalArray::Bytes(a), DataType::LargeBinary)
-            if physical_type == PhysicalType::BYTE_ARRAY =>
-        {
-            Arc::new(a.iter().collect::<LargeBinaryArray>())
+        DataType::BinaryView if is_byte_array => {
+            Arc::new(binary().iter().collect::<BinaryViewArray>())
         }
-        (PhysicalArray::Bytes(a), DataType::BinaryView)
-            if physical_type == PhysicalType::BYTE_ARRAY =>
-        {
-            Arc::new(a.iter().collect::<BinaryViewArray>())
+        DataType::Utf8 if is_byte_array => Arc::new(binary_to_utf8(binary().clone())),
+        DataType::LargeUtf8 if is_byte_array => {
+            Arc::new(utf8_values(binary()).collect::<LargeStringArray>())
         }
-        (PhysicalArray::Bytes(a), DataType::Utf8) if physical_type == PhysicalType::BYTE_ARRAY => {
-            Arc::new(binary_to_utf8(a))
-        }
-        (PhysicalArray::Bytes(a), DataType::LargeUtf8)
-            if physical_type == PhysicalType::BYTE_ARRAY =>
-        {
-            Arc::new(utf8_values(&a).collect::<LargeStringArray>())
-        }
-        (PhysicalArray::Bytes(a), DataType::Utf8View)
-            if physical_type == PhysicalType::BYTE_ARRAY =>
-        {
-            Arc::new(utf8_values(&a).collect::<StringViewArray>())
+        DataType::Utf8View if is_byte_array => {
+            Arc::new(utf8_values(binary()).collect::<StringViewArray>())
         }
 
         // Fixed length types only come from fixed length byte columns. A
         // value of the wrong length becomes null.
-        (PhysicalArray::Bytes(a), DataType::Float16)
-            if physical_type == PhysicalType::FIXED_LEN_BYTE_ARRAY =>
-        {
-            Arc::new(
-                a.iter()
-                    .map(|v| v.and_then(from_bytes_to_f16))
-                    .collect::<Float16Array>(),
-            )
-        }
-        (PhysicalArray::Bytes(a), DataType::FixedSizeBinary(size))
-            if physical_type == PhysicalType::FIXED_LEN_BYTE_ARRAY =>
-        {
-            let values = a.iter().map(|v| v.filter(|v| v.len() == *size as usize));
+        DataType::Float16 if !is_byte_array => Arc::new(
+            binary()
+                .iter()
+                .map(|v| v.and_then(from_bytes_to_f16))
+                .collect::<Float16Array>(),
+        ),
+        DataType::FixedSizeBinary(size) if !is_byte_array => {
+            let values = binary()
+                .iter()
+                .map(|v| v.filter(|v| v.len() == *size as usize));
             Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                 values, *size,
             )?)
         }
-
-        // Every other pair gives nulls, as the old code does.
-        _ => new_null_array(data_type, len),
+        _ => return Ok(None),
     };
-    Ok(array)
+    Ok(Some(array))
+}
+
+/// Sets the precision and scale of a decimal array built by
+/// [`PhysicalValues::finish`].
+fn with_precision_and_scale<T: DecimalType>(
+    array: &ArrayRef,
+    precision: u8,
+    scale: i8,
+) -> Result<ArrayRef> {
+    let array = array.as_primitive::<T>().clone();
+    Ok(Arc::new(array.with_precision_and_scale(precision, scale)?))
 }
 
 /// Each value as text, or null if it is not valid UTF-8.
@@ -1022,15 +961,19 @@ mod tests {
                     }
                 };
 
-            if self.mins_first {
+            let write_mins_maxes = |w: &mut ThriftCompactOutputProtocol<_>, last: &mut i16| {
                 if let Some(mins) = &self.mins {
-                    write_bytes_list(&mut w, 2, last, mins);
-                    last = 2;
+                    write_bytes_list(w, 2, *last, mins);
+                    *last = 2;
                 }
                 if let Some(maxes) = &self.maxes {
-                    write_bytes_list(&mut w, 3, last, maxes);
-                    last = 3;
+                    write_bytes_list(w, 3, *last, maxes);
+                    *last = 3;
                 }
+            };
+
+            if self.mins_first {
+                write_mins_maxes(&mut w, &mut last);
             }
             if let Some(null_pages) = &self.null_pages {
                 w.write_field_begin(FieldType::List, 1, last).unwrap();
@@ -1042,14 +985,7 @@ mod tests {
                 last = 1;
             }
             if !self.mins_first {
-                if let Some(mins) = &self.mins {
-                    write_bytes_list(&mut w, 2, last, mins);
-                    last = 2;
-                }
-                if let Some(maxes) = &self.maxes {
-                    write_bytes_list(&mut w, 3, last, maxes);
-                    last = 3;
-                }
+                write_mins_maxes(&mut w, &mut last);
             }
             if let Some(order) = self.boundary_order {
                 w.write_field_begin(FieldType::I32, 4, last).unwrap();
