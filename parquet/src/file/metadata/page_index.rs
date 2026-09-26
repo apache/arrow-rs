@@ -964,6 +964,18 @@ mod tests {
         assert_eq!(keep.position(10), None);
     }
 
+    #[test]
+    fn test_keep_normalizes_full_selection() {
+        let mask = ColumnChunkMask::columns([2, 0, 1, 2]);
+        let keep = Keep::from_mask(mask.selected_columns_shared(), 3).unwrap();
+
+        assert!(keep.kept.is_none());
+        assert_eq!(keep.len(), 3);
+        assert_eq!(keep.position(0), Some(0));
+        assert_eq!(keep.position(2), Some(2));
+        assert_eq!(keep.position(3), None);
+    }
+
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn test_oversized_dimensions_return_error() {
@@ -989,6 +1001,40 @@ mod tests {
         let mut builder = PageIndex::new(Some(grid), None).into_builder();
         assert!(builder.put_column_index(ci.clone(), 0, 0));
         assert!(!builder.put_column_index(ci, 0, 1));
+    }
+
+    #[test]
+    fn test_builder_sparse_storage_shape() {
+        let mask = ColumnChunkMask::columns([0, 2]);
+        let builder = PageIndexBuilder::new_for_read(4, 5, Some(&mask), None).unwrap();
+
+        let column_indexes = builder.column_indexes.unwrap();
+        assert_eq!(column_indexes.rows.len(), 4);
+        assert_eq!(column_indexes.cols.len(), 2);
+        assert_eq!(column_indexes.cells.len(), 8);
+        assert!(builder.offset_indexes.is_none());
+    }
+
+    #[test]
+    fn test_builder_allocate_indexes_creates_dense_empty_storage() {
+        let ci = colidx_for_test();
+        let mut builder = PageIndexBuilder::default();
+
+        builder.allocate_column_indexes(2, 3).unwrap();
+        assert!(builder.put_column_index(ci, 1, 2));
+        builder.allocate_column_indexes(2, 3).unwrap();
+        let column_indexes = builder.column_indexes.as_ref().unwrap();
+        assert_eq!(column_indexes.rows.len(), 2);
+        assert_eq!(column_indexes.cols.len(), 3);
+        assert_eq!(column_indexes.cells.len(), 6);
+        assert!(column_indexes.is_empty());
+
+        builder.allocate_offset_indexes(2, 3).unwrap();
+        let offset_indexes = builder.offset_indexes.as_ref().unwrap();
+        assert_eq!(offset_indexes.rows.len(), 2);
+        assert_eq!(offset_indexes.cols.len(), 3);
+        assert_eq!(offset_indexes.cells.len(), 6);
+        assert!(offset_indexes.is_empty());
     }
 
     #[test]
