@@ -16,8 +16,7 @@
 // under the License.
 
 use crate::arrow::ProjectionMask;
-use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
-use crate::arrow::arrow_reader::{RowSelection, RowSelectionPolicy, RowSelector};
+use crate::arrow::arrow_reader::{RowSelection, RowSelectionPolicy};
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::{Array, BooleanArray, RecordBatch};
 use arrow_buffer::BooleanBuffer;
@@ -325,7 +324,9 @@ impl ArrowPredicate for FusedPredicate {
             selection = Some(match selection.take() {
                 // Only the accumulated selection drives the composition
                 // algorithm, so adapt it once, right before it is used.
-                Some(prev) => adapt_fusion_selection(prev, self.row_selection_policy)
+                Some(prev) => self
+                    .row_selection_policy
+                    .apply(prev)
                     .and_then(&predicate_selection),
                 None => predicate_selection,
             });
@@ -340,24 +341,6 @@ impl ArrowPredicate for FusedPredicate {
         };
         debug_assert_eq!(mask.len(), num_rows);
         Ok(BooleanArray::new(mask, None))
-    }
-}
-
-/// Apply the reader's row selection policy to a fusion selection.
-fn adapt_fusion_selection(selection: RowSelection, policy: RowSelectionPolicy) -> RowSelection {
-    let strategy = match policy {
-        RowSelectionPolicy::Auto { threshold } => selection.auto_selection_strategy(threshold),
-        RowSelectionPolicy::Mask => RowSelectionStrategy::Mask,
-        RowSelectionPolicy::Selectors => RowSelectionStrategy::Selectors,
-    };
-    match (strategy, selection.as_mask().is_some()) {
-        (RowSelectionStrategy::Mask, true) | (RowSelectionStrategy::Selectors, false) => selection,
-        (RowSelectionStrategy::Mask, false) => {
-            RowSelection::from_boolean_buffer(selection.into_boolean_buffer())
-        }
-        (RowSelectionStrategy::Selectors, true) => {
-            RowSelection::from(Vec::<RowSelector>::from(selection))
-        }
     }
 }
 
@@ -588,31 +571,6 @@ mod tests {
     type PredicateChain = fn() -> Vec<Box<dyn ArrowPredicate>>;
 
     #[test]
-    fn fusion_selection_respects_policy() {
-        let mask = BooleanBuffer::from(vec![true, true, false, false, true, true, false, false]);
-        for (policy, expect_mask) in [
-            (RowSelectionPolicy::Mask, true),
-            (RowSelectionPolicy::Selectors, false),
-            (RowSelectionPolicy::Auto { threshold: 2 }, false),
-            (RowSelectionPolicy::Auto { threshold: 3 }, true),
-        ] {
-            for selection in [
-                RowSelection::from_boolean_buffer(mask.clone()),
-                RowSelection::from(vec![
-                    RowSelector::select(2),
-                    RowSelector::skip(2),
-                    RowSelector::select(2),
-                    RowSelector::skip(2),
-                ]),
-            ] {
-                let selection = adapt_fusion_selection(selection, policy);
-                assert_eq!(selection.as_mask().is_some(), expect_mask, "{policy:?}");
-                assert_eq!(selection.into_boolean_buffer(), mask);
-            }
-        }
-    }
-
-    #[test]
     fn fused_predicate_matches_sequential_evaluation() {
         let cases: Vec<PredicateChain> = vec![
             || vec![even(), divisible_by_three_after_even()],
@@ -677,26 +635,6 @@ mod tests {
             narrowed.column(0).as_primitive::<Int32Type>().values(),
             &[1, 3]
         );
-    }
-
-    #[test]
-    fn adaptive_fusion_selection_uses_selectors_for_long_runs() {
-        let mask = BooleanBuffer::from_iter((0..1_024).map(|idx| (256..768).contains(&idx)));
-        let selection = adapt_fusion_selection(
-            RowSelection::from_boolean_buffer(mask),
-            RowSelectionPolicy::default(),
-        );
-        assert!(selection.as_mask().is_none());
-    }
-
-    #[test]
-    fn adaptive_fusion_selection_keeps_fragmented_masks() {
-        let mask = BooleanBuffer::from_iter((0..1_024).map(|idx| idx % 2 == 0));
-        let selection = adapt_fusion_selection(
-            RowSelection::from_boolean_buffer(mask),
-            RowSelectionPolicy::default(),
-        );
-        assert!(selection.as_mask().is_some());
     }
 
     /// Fusing predicates into one `ReadPlanBuilder::with_predicate` call
