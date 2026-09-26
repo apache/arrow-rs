@@ -330,6 +330,18 @@ impl<'a> BitChunks<'a> {
     /// # Panics
     ///
     /// Panics if `index >= self.chunk_len()`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_buffer::Buffer;
+    /// let buffer = Buffer::from((0..17_u8).collect::<Vec<_>>());
+    /// // Start at bit 8, so chunk 1 holds bytes 9 through 16
+    /// let chunks = buffer.bit_chunks(8, 128);
+    /// assert_eq!(chunks.chunk_len(), 2);
+    /// assert_eq!(chunks.chunk(1), 0x100f0e0d0c0b0a09);
+    /// assert_eq!(chunks.iter().nth(1), Some(chunks.chunk(1)));
+    /// ```
     #[inline]
     pub fn chunk(&self, index: usize) -> u64 {
         assert!(index < self.chunk_len, "chunk index out of bounds");
