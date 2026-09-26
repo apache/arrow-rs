@@ -359,6 +359,34 @@ where
     M::from_decimal(value.into())
 }
 
+/// Returns true if every value of `array` has at most `digits` decimal digits.
+///
+/// If the source type cannot hold that many digits, every value fits;
+/// otherwise the data is scanned, including null slots, since `unary`
+/// converts those as well.
+fn integers_fit_digits<T>(array: &PrimitiveArray<T>, digits: u32) -> bool
+where
+    T: ArrowPrimitiveType,
+    T::Native: ArrowNativeTypeOp,
+{
+    let Ok(bound) = T::Native::usize_as(10).pow_checked(digits) else {
+        // The type's maximum is below the bound, and its minimum, one larger
+        // in magnitude, is a power of two that no power of ten can equal.
+        return true;
+    };
+    let hi = bound.sub_wrapping(T::Native::ONE);
+    // Unsigned types have no negative values to bound.
+    let lo = T::Native::ZERO.sub_checked(hi).unwrap_or(T::Native::ZERO);
+
+    // The scan works in chunks, so an array that does not fit is rejected after
+    // its first failing chunk. Each chunk is checked without branching, so it
+    // vectorizes.
+    array
+        .values()
+        .chunks(64)
+        .all(|chunk| chunk.iter().fold(true, |ok, &v| ok & (v >= lo) & (v <= hi)))
+}
+
 fn cast_integer_to_decimal<
     T: ArrowPrimitiveType,
     D: DecimalType + ArrowPrimitiveType<Native = M>,
@@ -381,6 +409,23 @@ where
         ))
     };
 
+    // An invalid precision or scale would let the bound below admit values the
+    // decimal native type cannot hold, so reject it before choosing a kernel.
+    validate_decimal_precision_and_scale::<D>(precision, scale)?;
+
+    // Scan for values that don't fit in the target type before choosing a
+    // kernel: in the common case that all values fit, the cast is infallible
+    // and we can use the `unary` kernel, which is very fast. Empirically, the
+    // cost of doing the out-of-range scan is small relative to the win from
+    // using a faster kernel.
+    //
+    // A value fits when it has at most `precision - scale` decimal digits: a
+    // nonnegative scale appends that many trailing zeros, and a negative scale
+    // removes digits first. Validation guarantees the difference is not
+    // negative.
+    let digits = (precision as i32 - scale as i32) as u32;
+    let all_fit = integers_fit_digits(array, digits);
+
     let array = if scale < 0 {
         // Compute the scale factor once in the source type. Scaling before the
         // checked conversion permits values that only fit the decimal native
@@ -390,6 +435,10 @@ where
             .ok();
 
         match (scale_factor, cast_options.safe) {
+            (Some(scale_factor), _) if all_fit => array.unary::<_, D>(|v| {
+                integer_to_decimal_native::<_, M>(v.div_wrapping(scale_factor))
+                    .expect("value fits the decimal")
+            }),
             (Some(scale_factor), true) => array.unary_opt::<_, D>(|v| {
                 let v = v
                     .div_checked(scale_factor)
@@ -421,18 +470,25 @@ where
             ))
         })?;
 
-        match cast_options.safe {
-            true => array.unary_opt::<_, D>(|v| {
+        if all_fit {
+            array.unary::<_, D>(|v| {
+                integer_to_decimal_native::<_, M>(v)
+                    .expect("value fits the decimal")
+                    .mul_wrapping(scale_factor)
+            })
+        } else if cast_options.safe {
+            array.unary_opt::<_, D>(|v| {
                 let v = integer_to_decimal_native::<_, M>(v)
                     .and_then(|v| v.mul_checked(scale_factor).ok())?;
                 (D::is_valid_decimal_precision(v, precision)).then_some(v)
-            }),
-            false => array.try_unary::<_, D, _>(|v| {
+            })
+        } else {
+            array.try_unary::<_, D, _>(|v| {
                 let v = integer_to_decimal_native::<_, M>(v)
                     .ok_or_else(|| overflow(v))
                     .and_then(|v| v.mul_checked(scale_factor))?;
                 D::validate_decimal_precision(v, precision, scale).map(|()| v)
-            })?,
+            })?
         }
     };
 
@@ -10563,6 +10619,63 @@ mod tests {
                 Some(65_i128), // round up
             ]
         );
+    }
+
+    /// Casts that cannot overflow, whether the source type or the data decides,
+    /// must match the checked conversion at the extremes, and a value beyond the
+    /// bound must still become null or an error.
+    #[test]
+    fn test_cast_integer_to_decimal_bounds() {
+        // Every i32 has at most ten digits, so the type decides.
+        let array = Int32Array::from(vec![Some(i32::MIN), None, Some(-1), Some(i32::MAX)]);
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &DataType::Decimal128(12, 2),
+            vec![
+                Some(i32::MIN as i128 * 100),
+                None,
+                Some(-100),
+                Some(i32::MAX as i128 * 100)
+            ]
+        );
+        // An i64 can exceed sixteen digits, so the data decides.
+        let bound = 9_999_999_999_999_999_i64;
+        let array = Int64Array::from(vec![Some(-bound), None, Some(bound)]);
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &DataType::Decimal128(18, 2),
+            vec![Some(-bound as i128 * 100), None, Some(bound as i128 * 100)]
+        );
+        // A negative scale divides first, truncating toward zero.
+        let array = Int32Array::from(vec![Some(-1_234_567), Some(9_999_999)]);
+        generate_cast_test_case!(
+            &array,
+            Decimal32Array,
+            &DataType::Decimal32(5, -2),
+            vec![Some(-12_345), Some(99_999)]
+        );
+        // One value beyond the bound sends the whole array down the checked path.
+        let array = Int64Array::from(vec![Some(bound + 1), Some(1)]);
+        let result = cast(&array, &DataType::Decimal128(18, 2)).unwrap();
+        let result = result.as_primitive::<Decimal128Type>();
+        assert!(result.is_null(0));
+        assert_eq!(result.value(1), 100);
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        assert!(cast_with_options(&array, &DataType::Decimal128(18, 2), &options).is_err());
+        // A precision beyond the target type is an error even when the values fit it.
+        let array = Int64Array::from(vec![5_000_000_000]);
+        for safe in [true, false] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            assert!(cast_with_options(&array, &DataType::Decimal32(10, 0), &options).is_err());
+        }
     }
 
     #[test]

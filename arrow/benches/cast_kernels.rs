@@ -260,6 +260,11 @@ fn cast_array(array: &ArrayRef, to_type: DataType) {
 fn add_benchmark(c: &mut Criterion) {
     let i32_array = build_array::<Int32Type>(512);
     let i64_array = build_array::<Int64Type>(512);
+    let i64_within_1e6 = create_primitive_array_range::<Int64Type>(512, 0.1, -1_000_000..1_000_000);
+    let mut values: Vec<Option<i64>> = i64_within_1e6.iter().collect();
+    *values.last_mut().unwrap() = Some(10_000_000_000_000_000);
+    let i64_late_overflow = Arc::new(Int64Array::from(values)) as ArrayRef;
+    let i64_within_1e6 = Arc::new(i64_within_1e6) as ArrayRef;
     let f32_array = build_array::<Float32Type>(512);
     let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
     let i32_utf8_array = cast(&build_array::<Int32Type>(512), &DataType::Utf8).unwrap();
@@ -337,6 +342,16 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast int64 to decimal32(9, -1) 512", |b| {
         b.iter(|| cast_array(&i64_array, DataType::Decimal32(9, -1)))
     });
+    c.bench_function("cast int64 to decimal128(38, 10) 512", |b| {
+        b.iter(|| cast_array(&i64_array, DataType::Decimal128(38, 10)))
+    });
+    c.bench_function("cast int64 within 1e6 to decimal128(18, 2) 512", |b| {
+        b.iter(|| cast_array(&i64_within_1e6, DataType::Decimal128(18, 2)))
+    });
+    c.bench_function(
+        "cast int64 within 1e6 late overflow to decimal128(18, 2) 512",
+        |b| b.iter(|| cast_array(&i64_late_overflow, DataType::Decimal128(18, 2))),
+    );
     c.bench_function("cast date64 to date32 512", |b| {
         b.iter(|| cast_array(&date64_array, DataType::Date32))
     });
