@@ -45,6 +45,11 @@ name = "parquet_variant_json"
 bench = false
 
 [dev-dependencies]
+criterion = { workspace = true, default-features = false }
+
+[[bench]]
+name = "from_json"
+harness = false
 
 [lints]
 workspace = true

@@ -18,14 +18,24 @@
 //! Module for parsing JSON strings as Variant
 
 use arrow_schema::ArrowError;
-use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt};
+use parquet_variant::{
+    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
+    VariantDecimal16,
+};
 use serde_json::{Number, Value};
+use std::borrow::Cow;
+
+const MAX_JSON_DEPTH: usize = 128;
 
 /// Converts a JSON string to Variant using a [`VariantBuilderExt`], such as
 /// [`VariantBuilder`].
 ///
 /// The resulting `value` and `metadata` buffers can be
 /// extracted using `builder.finish()`
+///
+/// Integers use the smallest fitting integer encoding. Fixed-point numbers use the smallest
+/// fitting Variant decimal encoding, while exponent notation and values outside the Variant
+/// decimal range use `Double`.
 ///
 /// # Arguments
 /// * `json` - The JSON string to parse as Variant.
@@ -70,11 +80,7 @@ pub trait JsonToVariant {
 
 impl<T: VariantBuilderExt> JsonToVariant for T {
     fn append_json(&mut self, json: &str) -> Result<(), ArrowError> {
-        let json: Value = serde_json::from_str(json)
-            .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {e}")))?;
-
-        append_json(&json, self)?;
-        Ok(())
+        JsonParser::new(json).parse(self)
     }
 }
 
@@ -91,25 +97,389 @@ fn variant_from_number<'m, 'v>(n: &Number) -> Result<Variant<'m, 'v>, ArrowError
             Ok(i.into())
         }
     } else {
-        // Todo: Try decimal once we implement custom JSON parsing where we have access to strings
-        // Try double - currently json_to_variant does not produce decimal
-        match n.as_f64() {
-            Some(f) => return Ok(f.into()),
-            None => Err(ArrowError::InvalidArgumentError(format!(
-                "Failed to parse {n} as number",
-            ))),
-        }?
+        n.as_f64().map(Variant::from).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!("Failed to parse {n} as number"))
+        })
     }
 }
 
+fn variant_from_number_text(value: &str) -> Result<Variant<'static, 'static>, ArrowError> {
+    if !value.contains(['.', 'e', 'E'])
+        && let Ok(integer) = value.parse::<i64>()
+    {
+        return Ok(if integer as i8 as i64 == integer {
+            (integer as i8).into()
+        } else if integer as i16 as i64 == integer {
+            (integer as i16).into()
+        } else if integer as i32 as i64 == integer {
+            (integer as i32).into()
+        } else {
+            integer.into()
+        });
+    }
+
+    if let Some(decimal) = decimal_from_json_number(value) {
+        return Ok(decimal);
+    }
+
+    let number = value.parse::<f64>().map_err(|error| {
+        ArrowError::InvalidArgumentError(format!("Failed to parse {value} as number: {error}"))
+    })?;
+    if !number.is_finite() {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Failed to parse {value} as finite number"
+        )));
+    }
+    Ok(number.into())
+}
+
+/// Parses fixed-point JSON numbers and integers wider than `i64` without losing precision.
+/// Scientific notation remains a floating-point value, matching the Variant JSON semantics.
+fn decimal_from_json_number(value: &str) -> Option<Variant<'static, 'static>> {
+    if value.contains(['e', 'E']) {
+        return None;
+    }
+
+    let (negative, unsigned) = value
+        .strip_prefix('-')
+        .map_or((false, value), |value| (true, value));
+    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|digit| digit.is_ascii_digit())
+        || !fraction.bytes().all(|digit| digit.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let scale = u8::try_from(fraction.len()).ok()?;
+    let coefficient =
+        whole
+            .bytes()
+            .chain(fraction.bytes())
+            .try_fold(0_i128, |coefficient, digit| {
+                coefficient
+                    .checked_mul(10)?
+                    .checked_add(i128::from(digit - b'0'))
+            })?;
+    let coefficient = if negative {
+        coefficient.checked_neg()?
+    } else {
+        coefficient
+    };
+
+    const DECIMAL4_MAX: i128 = 10_i128.pow(VariantDecimal4::MAX_PRECISION as u32) - 1;
+    const DECIMAL8_MAX: i128 = 10_i128.pow(VariantDecimal8::MAX_PRECISION as u32) - 1;
+    const DECIMAL16_MAX: i128 = 10_i128.pow(VariantDecimal16::MAX_PRECISION as u32) - 1;
+
+    if scale <= VariantDecimal4::MAX_PRECISION
+        && (-DECIMAL4_MAX..=DECIMAL4_MAX).contains(&coefficient)
+    {
+        return VariantDecimal4::try_new(i32::try_from(coefficient).ok()?, scale)
+            .ok()
+            .map(Variant::from);
+    }
+    if scale <= VariantDecimal8::MAX_PRECISION
+        && (-DECIMAL8_MAX..=DECIMAL8_MAX).contains(&coefficient)
+    {
+        return VariantDecimal8::try_new(i64::try_from(coefficient).ok()?, scale)
+            .ok()
+            .map(Variant::from);
+    }
+    if scale <= VariantDecimal16::MAX_PRECISION
+        && (-DECIMAL16_MAX..=DECIMAL16_MAX).contains(&coefficient)
+    {
+        return VariantDecimal16::try_new(coefficient, scale)
+            .ok()
+            .map(Variant::from);
+    }
+    None
+}
+
+struct JsonParser<'a> {
+    input: &'a str,
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> JsonParser<'a> {
+    fn new(input: &'a str) -> Self {
+        Self {
+            input,
+            bytes: input.as_bytes(),
+            offset: 0,
+        }
+    }
+
+    fn parse(&mut self, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        self.skip_whitespace();
+        self.parse_value(builder, 0)?;
+        debug_assert_eq!(self.offset, self.bytes.len());
+        Ok(())
+    }
+
+    fn parse_value(
+        &mut self,
+        builder: &mut impl VariantBuilderExt,
+        depth: usize,
+    ) -> Result<(), ArrowError> {
+        self.skip_whitespace();
+        let next = self.peek();
+        if depth >= MAX_JSON_DEPTH && matches!(next, Some(b'[' | b'{')) {
+            return self.error("recursion limit exceeded");
+        }
+        match next {
+            Some(b'n') => {
+                self.parse_literal(b"null")?;
+                self.ensure_root_end(depth)?;
+                builder.try_append_value(Variant::Null)?;
+            }
+            Some(b't') => {
+                self.parse_literal(b"true")?;
+                self.ensure_root_end(depth)?;
+                builder.try_append_value(true)?;
+            }
+            Some(b'f') => {
+                self.parse_literal(b"false")?;
+                self.ensure_root_end(depth)?;
+                builder.try_append_value(false)?;
+            }
+            Some(b'"') => {
+                let value = self.parse_string()?;
+                self.ensure_root_end(depth)?;
+                builder.try_append_value(value.as_ref())?;
+            }
+            Some(b'[') => self.parse_array(builder, depth)?,
+            Some(b'{') => self.parse_object(builder, depth)?,
+            Some(b'-' | b'0'..=b'9') => {
+                let number = self.parse_number()?;
+                let number = variant_from_number_text(number)?;
+                self.ensure_root_end(depth)?;
+                builder.try_append_value(number)?;
+            }
+            Some(_) => return self.error("expected a JSON value"),
+            None => return self.error("expected a JSON value, found end of input"),
+        }
+        Ok(())
+    }
+
+    fn parse_array(
+        &mut self,
+        builder: &mut impl VariantBuilderExt,
+        depth: usize,
+    ) -> Result<(), ArrowError> {
+        self.offset += 1;
+        let mut list = builder.try_new_list()?;
+        self.skip_whitespace();
+        if self.consume(b']') {
+            self.ensure_root_end(depth)?;
+            list.finish();
+            return Ok(());
+        }
+
+        loop {
+            self.parse_value(&mut list, depth + 1)?;
+            self.skip_whitespace();
+            if self.consume(b']') {
+                self.ensure_root_end(depth)?;
+                list.finish();
+                return Ok(());
+            }
+            self.expect(b',', "expected ',' or ']' after array element")?;
+            self.skip_whitespace();
+        }
+    }
+
+    fn parse_object(
+        &mut self,
+        builder: &mut impl VariantBuilderExt,
+        depth: usize,
+    ) -> Result<(), ArrowError> {
+        self.offset += 1;
+        let mut object = builder.try_new_object()?;
+        self.skip_whitespace();
+        if self.consume(b'}') {
+            self.ensure_root_end(depth)?;
+            object.finish();
+            return Ok(());
+        }
+
+        loop {
+            if self.peek() != Some(b'"') {
+                return self.error("expected a string object key");
+            }
+            let key = self.parse_string()?;
+            self.skip_whitespace();
+            self.expect(b':', "expected ':' after object key")?;
+            {
+                let mut field = ObjectFieldBuilder::new(key.as_ref(), &mut object);
+                self.parse_value(&mut field, depth + 1)?;
+            }
+            self.skip_whitespace();
+            if self.consume(b'}') {
+                self.ensure_root_end(depth)?;
+                object.finish();
+                return Ok(());
+            }
+            self.expect(b',', "expected ',' or '}' after object field")?;
+            self.skip_whitespace();
+        }
+    }
+
+    fn parse_string(&mut self) -> Result<Cow<'a, str>, ArrowError> {
+        let token_start = self.offset;
+        self.offset += 1;
+        let content_start = self.offset;
+        let mut escaped = false;
+
+        while let Some(byte) = self.peek() {
+            match byte {
+                b'"' => {
+                    let content_end = self.offset;
+                    self.offset += 1;
+                    if escaped {
+                        let value =
+                            serde_json::from_slice::<String>(&self.bytes[token_start..self.offset])
+                                .map_err(|error| self.format_error(error.to_string()))?;
+                        return Ok(Cow::Owned(value));
+                    }
+                    let value = self
+                        .input
+                        .get(content_start..content_end)
+                        .ok_or_else(|| self.format_error("invalid string boundary"))?;
+                    return Ok(Cow::Borrowed(value));
+                }
+                b'\\' => {
+                    escaped = true;
+                    self.offset += 1;
+                    if self.peek().is_none() {
+                        return self.error("unterminated string escape");
+                    }
+                    self.offset += 1;
+                }
+                0..=0x1f => return self.error("unescaped control character in string"),
+                _ => self.offset += 1,
+            }
+        }
+        self.error("unterminated string")
+    }
+
+    fn parse_number(&mut self) -> Result<&'a str, ArrowError> {
+        let start = self.offset;
+        self.consume(b'-');
+
+        match self.peek() {
+            Some(b'0') => self.offset += 1,
+            Some(b'1'..=b'9') => {
+                self.offset += 1;
+                while matches!(self.peek(), Some(b'0'..=b'9')) {
+                    self.offset += 1;
+                }
+            }
+            _ => return self.error("expected digit in number"),
+        }
+
+        if self.consume(b'.') {
+            let fraction_start = self.offset;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.offset += 1;
+            }
+            if self.offset == fraction_start {
+                return self.error("expected digit after decimal point");
+            }
+        }
+
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.offset += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.offset += 1;
+            }
+            let exponent_start = self.offset;
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.offset += 1;
+            }
+            if self.offset == exponent_start {
+                return self.error("expected digit in exponent");
+            }
+        }
+
+        self.input
+            .get(start..self.offset)
+            .ok_or_else(|| self.format_error("invalid number boundary"))
+    }
+
+    fn parse_literal(&mut self, literal: &[u8]) -> Result<(), ArrowError> {
+        if self.bytes[self.offset..].starts_with(literal) {
+            self.offset += literal.len();
+            Ok(())
+        } else {
+            self.error("invalid literal")
+        }
+    }
+
+    fn ensure_root_end(&mut self, depth: usize) -> Result<(), ArrowError> {
+        if depth != 0 {
+            return Ok(());
+        }
+        self.skip_whitespace();
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            self.error("trailing characters")
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+            self.offset += 1;
+        }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.offset).copied()
+    }
+
+    fn consume(&mut self, expected: u8) -> bool {
+        if self.peek() == Some(expected) {
+            self.offset += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect(&mut self, expected: u8, message: &str) -> Result<(), ArrowError> {
+        if self.consume(expected) {
+            Ok(())
+        } else {
+            self.error(message)
+        }
+    }
+
+    fn error<T>(&self, message: &str) -> Result<T, ArrowError> {
+        Err(self.format_error(message))
+    }
+
+    fn format_error(&self, message: impl std::fmt::Display) -> ArrowError {
+        ArrowError::InvalidArgumentError(format!(
+            "JSON format error at byte {}: {message}",
+            self.offset
+        ))
+    }
+}
+
+/// Appends an already parsed [`Value`] to a Variant builder.
+///
+/// Unlike [`JsonToVariant::append_json`], this function cannot recover the original numeric
+/// lexeme. Non-integer [`Number`] values therefore use `Double`; use the string API when exact
+/// fixed-point decimal semantics are required.
 pub fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
     match json {
-        Value::Null => builder.append_value(Variant::Null),
-        Value::Bool(b) => builder.append_value(*b),
+        Value::Null => builder.try_append_value(Variant::Null)?,
+        Value::Bool(b) => builder.try_append_value(*b)?,
         Value::Number(n) => {
-            builder.append_value(variant_from_number(n)?);
+            builder.try_append_value(variant_from_number(n)?)?;
         }
-        Value::String(s) => builder.append_value(s.as_str()),
+        Value::String(s) => builder.try_append_value(s.as_str())?,
         Value::Array(arr) => {
             let mut list_builder = builder.try_new_list()?;
             for val in arr {
@@ -226,7 +596,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_basic() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -236,7 +605,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_large_positive() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -246,7 +614,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_large_negative() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -256,7 +623,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_small_positive() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -266,7 +632,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_tiny_positive() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -276,7 +641,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_small_negative() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -286,7 +650,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal8_positive() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -296,7 +659,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal8_negative() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -306,7 +668,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal8_high_precision() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -316,7 +677,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal8_large_with_scale() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -326,7 +686,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal8_large_negative_with_scale() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -336,7 +695,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal16_large_integer() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -346,7 +704,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal16_high_precision() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -356,22 +713,19 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
-    fn test_json_to_variant_decimal16_max_value() -> Result<(), ArrowError> {
+    fn test_json_to_variant_decimal16_29_digit_value() -> Result<(), ArrowError> {
         JsonToVariantTest {
-            json: "79228162514264337593543950335", // 2 ^ 96 - 1
+            json: "79228162514264337593543950335",
             expected: Variant::from(VariantDecimal16::try_new(79228162514264337593543950335, 0)?),
         }
         .run()
     }
 
-    #[ignore]
     #[test]
-    fn test_json_to_variant_decimal16_max_scale() -> Result<(), ArrowError> {
+    fn test_json_to_variant_decimal16_scale_28() -> Result<(), ArrowError> {
         JsonToVariantTest {
-            json: "7.9228162514264337593543950335", // using scale higher than this falls into double
-            // since the max scale is 28.
+            json: "7.9228162514264337593543950335",
             expected: Variant::from(VariantDecimal16::try_new(
                 79228162514264337593543950335,
                 28,
@@ -381,10 +735,42 @@ mod test {
     }
 
     #[test]
+    fn test_json_to_variant_nested_decimals() -> Result<(), ArrowError> {
+        let mut variant_builder = VariantBuilder::new();
+        let mut object_builder = variant_builder.new_object();
+        object_builder.insert("large", VariantDecimal16::try_new(9999999999999999999, 0)?);
+        let mut list_builder = object_builder.new_list("values");
+        list_builder.append_value(VariantDecimal4::try_new(123, 2)?);
+        list_builder.append_value(VariantDecimal8::try_new(9999999990, 1)?);
+        list_builder.append_value(1.5e2_f64);
+        list_builder.finish();
+        object_builder.finish();
+        let (metadata, value) = variant_builder.finish();
+
+        JsonToVariantTest {
+            json: r#"{"large":9999999999999999999,"values":[1.23,999999999.0,1.5e2]}"#,
+            expected: Variant::try_new(&metadata, &value)?,
+        }
+        .run()
+    }
+
+    #[test]
     fn test_json_to_variant_double_precision() -> Result<(), ArrowError> {
         JsonToVariantTest {
-            json: "0.79228162514264337593543950335",
-            expected: Variant::Double(0.792_281_625_142_643_4_f64),
+            json: "0.100000000000000000000000000000000000000",
+            expected: Variant::Double(0.1_f64),
+        }
+        .run()
+    }
+
+    #[test]
+    fn test_json_to_variant_decimal16_max_precision_and_scale() -> Result<(), ArrowError> {
+        JsonToVariantTest {
+            json: "0.99999999999999999999999999999999999999",
+            expected: Variant::from(VariantDecimal16::try_new(
+                99999999999999999999999999999999999999,
+                38,
+            )?),
         }
         .run()
     }
@@ -666,5 +1052,186 @@ mod test {
             expected: variant,
         }
         .run()
+    }
+
+    #[test]
+    fn test_json_to_variant_escaped_strings() -> Result<(), ArrowError> {
+        let json = r#"{"line\nkey":"quote: \"; slash: \\; unicode: \u2764"}"#;
+        let mut variant_builder = VariantBuilder::new();
+        variant_builder.append_json(json)?;
+        let (metadata, value) = variant_builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        assert_eq!(
+            variant.to_json_string()?,
+            "{\"line\\nkey\":\"quote: \\\"; slash: \\\\; unicode: ❤\"}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_variant_rejects_invalid_json() {
+        let invalid = [
+            "",
+            "nul",
+            "True",
+            "[",
+            "{",
+            "[1,]",
+            "[1 2]",
+            "[1,,2]",
+            "{\"a\":1,}",
+            "{\"a\" 1}",
+            "{\"a\":1 \"b\":2}",
+            concat!("{", "a:1}"),
+            "01",
+            "-01",
+            "+1",
+            ".1",
+            "1.",
+            "1e",
+            "1e+",
+            "true false",
+            "\"unterminated",
+            "\"bad\\xescape\"",
+            "\"bad\\u12x4\"",
+            "\"lone high surrogate: \\ud800\"",
+            "\"lone low surrogate: \\udc00\"",
+        ];
+
+        for json in invalid {
+            let mut builder = VariantBuilder::new();
+            assert!(builder.append_json(json).is_err(), "accepted {json:?}");
+        }
+    }
+
+    #[test]
+    fn test_json_to_variant_rejects_non_finite_double() {
+        for json in ["1e400", r#"{"a":1e400,"a":1}"#] {
+            let mut builder = VariantBuilder::new();
+            let error = builder.append_json(json).unwrap_err().to_string();
+            assert!(error.contains("finite number"), "{json}: {error}");
+        }
+    }
+
+    #[test]
+    fn test_json_to_variant_limits_nesting_depth() {
+        let accepted = format!(
+            "{}0{}",
+            "[".repeat(MAX_JSON_DEPTH),
+            "]".repeat(MAX_JSON_DEPTH)
+        );
+        let mut builder = VariantBuilder::new();
+        builder.append_json(&accepted).unwrap();
+
+        let rejected = format!(
+            "{}0{}",
+            "[".repeat(MAX_JSON_DEPTH + 1),
+            "]".repeat(MAX_JSON_DEPTH + 1)
+        );
+        let mut builder = VariantBuilder::new();
+        let error = builder.append_json(&rejected).unwrap_err().to_string();
+        assert!(error.contains("recursion limit"), "{error}");
+
+        for (open, close) in [("[", "]"), ("{\"a\":", "}")] {
+            let accepted_empty = format!(
+                "{}[]{}",
+                open.repeat(MAX_JSON_DEPTH - 1),
+                close.repeat(MAX_JSON_DEPTH - 1)
+            );
+            let mut builder = VariantBuilder::new();
+            builder.append_json(&accepted_empty).unwrap();
+
+            let rejected_empty = format!(
+                "{}[]{}",
+                open.repeat(MAX_JSON_DEPTH),
+                close.repeat(MAX_JSON_DEPTH)
+            );
+            let mut builder = VariantBuilder::new();
+            let error = builder
+                .append_json(&rejected_empty)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("recursion limit"), "{error}");
+        }
+    }
+
+    #[test]
+    fn test_json_to_variant_error_does_not_modify_builder() -> Result<(), ArrowError> {
+        for invalid in ["1x", "true false", "[]x", "{}x", "[1,]", "{\"a\":1,}"] {
+            let mut builder = VariantBuilder::new();
+            assert!(
+                builder.append_json(invalid).is_err(),
+                "accepted {invalid:?}"
+            );
+            builder.append_json("2")?;
+            let (metadata, value) = builder.finish();
+            assert_eq!(Variant::try_new(&metadata, &value)?, Variant::Int8(2));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_variant_duplicate_keys_respect_validation() -> Result<(), ArrowError> {
+        for json in [
+            r#"{"a":1,"a":2}"#,
+            r#"{"a":1,"\u0061":2}"#,
+            r#"{"outer":{"a":1,"a":2}}"#,
+        ] {
+            let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
+            let error = builder.append_json(json).unwrap_err().to_string();
+            assert!(error.contains("Duplicate field name: a"), "{json}: {error}");
+        }
+
+        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
+        builder.append_json(r#"{"a":3}"#)?;
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        assert_eq!(variant.to_json_string()?, r#"{"a":3}"#);
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_parser_matches_serde_for_non_numeric_semantics() -> Result<(), ArrowError> {
+        let cases = [
+            "null",
+            "true",
+            r#""plain""#,
+            r#""escaped\ntext\t\"quote\"""#,
+            r#""\uD834\uDD1E""#,
+            r#"[null,true,false,"text",["nested"]]"#,
+            r#"{"z":null,"a":[true,{"unicode":"\u2764"}]}"#,
+            r#"{"duplicate":"first","duplicate":"last"}"#,
+        ];
+
+        for json in cases {
+            let expected: Value = serde_json::from_str(json).unwrap();
+            let mut builder = VariantBuilder::new();
+            builder.append_json(json)?;
+            let (metadata, value) = builder.finish();
+            let actual = Variant::try_new(&metadata, &value)?.to_json_value()?;
+            assert_eq!(actual, expected, "mismatch for {json}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_string_and_value_apis_document_numeric_difference() -> Result<(), ArrowError> {
+        let mut text_builder = VariantBuilder::new();
+        text_builder.append_json("1.23")?;
+        let (text_metadata, text_value) = text_builder.finish();
+        assert_eq!(
+            Variant::try_new(&text_metadata, &text_value)?,
+            Variant::from(VariantDecimal4::try_new(123, 2)?)
+        );
+
+        let parsed: Value = serde_json::from_str("1.23").unwrap();
+        let mut value_builder = VariantBuilder::new();
+        append_json(&parsed, &mut value_builder)?;
+        let (value_metadata, value_value) = value_builder.finish();
+        assert_eq!(
+            Variant::try_new(&value_metadata, &value_value)?,
+            Variant::Double(1.23)
+        );
+        Ok(())
     }
 }
