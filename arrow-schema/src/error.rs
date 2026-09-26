@@ -21,9 +21,15 @@ use std::io::Write;
 
 use std::error::Error;
 
+use arrow_buffer::BufferError;
+
 /// Many different operations in the `arrow` crate return this error type.
 #[derive(Debug)]
 pub enum ArrowError {
+    /// Error returned by a buffer operation.
+    ///
+    /// Boxed to keep the size of `ArrowError` down.
+    BufferError(Box<BufferError>),
     /// Returned when functionality is not yet available.
     NotYetImplemented(String),
     /// Wraps an external error.
@@ -66,6 +72,12 @@ pub enum ArrowError {
     OffsetOverflowError(usize),
 }
 
+impl From<BufferError> for ArrowError {
+    fn from(err: BufferError) -> Self {
+        Self::BufferError(Box::new(err))
+    }
+}
+
 impl ArrowError {
     /// Wraps an external error in an `ArrowError`.
     pub fn from_external_error(error: Box<dyn Error + Send + Sync>) -> Self {
@@ -100,6 +112,7 @@ impl<W: Write> From<std::io::IntoInnerError<W>> for ArrowError {
 impl Display for ArrowError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            ArrowError::BufferError(err) => Display::fmt(err, f),
             ArrowError::NotYetImplemented(source) => {
                 write!(f, "Not yet implemented: {source}")
             }
@@ -141,6 +154,7 @@ impl Display for ArrowError {
 impl Error for ArrowError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            ArrowError::BufferError(err) => Some(err.as_ref()),
             ArrowError::ExternalError(source) => Some(source.as_ref()),
             ArrowError::IoError(_, source) => Some(source),
             _ => None,
