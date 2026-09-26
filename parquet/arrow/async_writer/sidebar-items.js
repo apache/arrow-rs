@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["store"],"struct":["AsyncArrowWriter","ParquetObjectWriter"],"trait":["AsyncFileWriter"]};
