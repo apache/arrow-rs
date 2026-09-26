@@ -1790,6 +1790,17 @@ impl ParquetRecordBatchReader {
         }
     }
 
+    /// Returns the inner [`ArrayReader`] and discards the [`ReadPlan`].
+    ///
+    /// The `ArrayReader` holds the column readers of a row group, with their
+    /// position and decoded dictionaries. A caller can drive it with a new
+    /// [`ReadPlan`] that starts where this reader stopped, so one row group
+    /// can be decoded with a sequence of short plans without rebuilding the
+    /// column readers.
+    pub(crate) fn into_array_reader(self) -> Box<dyn ArrayReader> {
+        self.array_reader
+    }
+
     #[inline(always)]
     pub(crate) fn batch_size(&self) -> usize {
         self.read_plan.batch_size()

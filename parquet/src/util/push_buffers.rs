@@ -184,6 +184,80 @@ impl PushBuffers {
         self.buffers = new_buffers;
     }
 
+    /// Release every buffered byte that falls in `range`, whatever shape the
+    /// bytes were pushed in.
+    ///
+    /// Unlike [`Self::clear_ranges`], which only drops buffers whose range
+    /// matches exactly, this trims or splits any buffer that overlaps `range`
+    /// and keeps the parts outside it. The parts are zero-copy slices, so the
+    /// underlying allocation is freed only once every slice of it is released.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn release_range(&mut self, range: &Range<u64>) {
+        if range.is_empty()
+            || !self
+                .ranges
+                .iter()
+                .any(|r| r.start < range.end && range.start < r.end)
+        {
+            return;
+        }
+        let mut new_ranges = Vec::with_capacity(self.ranges.len() + 1);
+        let mut new_buffers = Vec::with_capacity(self.buffers.len() + 1);
+        for (r, buffer) in self.ranges.drain(..).zip(self.buffers.drain(..)) {
+            if r.end <= range.start || range.end <= r.start {
+                new_ranges.push(r);
+                new_buffers.push(buffer);
+                continue;
+            }
+            if r.start < range.start {
+                let len = (range.start - r.start) as usize;
+                new_ranges.push(r.start..range.start);
+                new_buffers.push(buffer.slice(..len));
+            }
+            if range.end < r.end {
+                let offset = (range.end - r.start) as usize;
+                new_ranges.push(range.end..r.end);
+                new_buffers.push(buffer.slice(offset..));
+            }
+        }
+        self.ranges = new_ranges;
+        self.buffers = new_buffers;
+    }
+
+    /// Release every buffered byte outside `keep`, whatever shape the bytes
+    /// were pushed in. The parts of a buffer inside `keep` are kept as
+    /// zero-copy slices.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn retain_ranges(&mut self, keep: &[Range<u64>]) {
+        let mut keep: Vec<Range<u64>> = keep.iter().filter(|r| !r.is_empty()).cloned().collect();
+        keep.sort_by_key(|r| r.start);
+        let mut merged: Vec<Range<u64>> = Vec::with_capacity(keep.len());
+        for range in keep {
+            match merged.last_mut() {
+                Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+                _ => merged.push(range),
+            }
+        }
+        let mut new_ranges = Vec::with_capacity(self.ranges.len());
+        let mut new_buffers = Vec::with_capacity(self.buffers.len());
+        for (r, buffer) in self.ranges.drain(..).zip(self.buffers.drain(..)) {
+            let first = merged.partition_point(|k| k.end <= r.start);
+            for k in merged[first..].iter().take_while(|k| k.start < r.end) {
+                let start = k.start.max(r.start);
+                let end = k.end.min(r.end);
+                if start == r.start && end == r.end {
+                    new_buffers.push(buffer.clone());
+                } else {
+                    let offset = (start - r.start) as usize;
+                    new_buffers.push(buffer.slice(offset..offset + (end - start) as usize));
+                }
+                new_ranges.push(start..end);
+            }
+        }
+        self.ranges = new_ranges;
+        self.buffers = new_buffers;
+    }
+
     /// Clear all buffered ranges and their corresponding data
     pub(crate) fn clear_all_ranges(&mut self) {
         self.ranges.clear();
@@ -273,6 +347,67 @@ mod tests {
             "Parquet error: Buffer length (4) does not match length (10) of range 10..20"
         );
         assert!(!buffers.has_range(&(10..20)));
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn release_range_trims_and_splits_buffers() {
+        let mut buffers = PushBuffers::new(100);
+        buffers
+            .push_range(0..10, Bytes::from_static(b"0123456789"))
+            .unwrap();
+        buffers
+            .push_range(20..24, Bytes::from_static(b"abcd"))
+            .unwrap();
+
+        // Split the first buffer, leave the second one alone.
+        buffers.release_range(&(3..5));
+        assert_eq!(buffers.buffered_bytes(), 12);
+        assert!(buffers.has_range(&(0..3)));
+        assert!(buffers.has_range(&(5..10)));
+        assert!(!buffers.has_range(&(3..4)));
+        assert_eq!(
+            buffers.get_bytes(5, 5).unwrap(),
+            Bytes::from_static(b"56789")
+        );
+        assert!(buffers.has_range(&(20..24)));
+
+        // A range that spans several buffers trims each of them.
+        buffers.release_range(&(8..22));
+        assert_eq!(buffers.buffered_bytes(), 3 + 3 + 2);
+        assert_eq!(buffers.get_bytes(5, 3).unwrap(), Bytes::from_static(b"567"));
+        assert_eq!(buffers.get_bytes(22, 2).unwrap(), Bytes::from_static(b"cd"));
+
+        // Releasing bytes that are not buffered does nothing.
+        buffers.release_range(&(50..60));
+        assert_eq!(buffers.buffered_bytes(), 8);
+
+        buffers.release_range(&(0..100));
+        assert_eq!(buffers.buffered_bytes(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn retain_ranges_keeps_only_the_given_bytes() {
+        let mut buffers = PushBuffers::new(100);
+        buffers
+            .push_range(0..10, Bytes::from_static(b"0123456789"))
+            .unwrap();
+        buffers
+            .push_range(20..24, Bytes::from_static(b"abcd"))
+            .unwrap();
+        buffers
+            .push_range(30..32, Bytes::from_static(b"xy"))
+            .unwrap();
+        buffers.retain_ranges(&[22..40, 2..4, 3..5, 8..9]);
+        assert_eq!(buffers.buffered_bytes(), 3 + 1 + 2 + 2);
+        assert_eq!(buffers.get_bytes(2, 3).unwrap(), Bytes::from_static(b"234"));
+        assert_eq!(buffers.get_bytes(8, 1).unwrap(), Bytes::from_static(b"8"));
+        assert!(!buffers.has_range(&(5..6)));
+        assert_eq!(buffers.get_bytes(22, 2).unwrap(), Bytes::from_static(b"cd"));
+        assert_eq!(buffers.get_bytes(30, 2).unwrap(), Bytes::from_static(b"xy"));
+        buffers.retain_ranges(&[]);
+        assert_eq!(buffers.buffered_bytes(), 0);
     }
 
     #[test]
