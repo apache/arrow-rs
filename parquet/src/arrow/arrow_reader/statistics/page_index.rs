@@ -186,14 +186,18 @@ impl PhysicalValues {
                 }
             }
             Self::Int96(v) => read_each(buf, v, has_min_max, |b| first_bytes::<12>(b).map(|_| ()))?,
-            Self::Decimal32(v, ..) => read_each(buf, v, has_min_max, |b| Ok(from_bytes_to_i32(b)))?,
-            Self::Decimal64(v, ..) => read_each(buf, v, has_min_max, |b| Ok(from_bytes_to_i64(b)))?,
-            Self::Decimal128(v, ..) => {
-                read_each(buf, v, has_min_max, |b| Ok(from_bytes_to_i128(b)))?
-            }
-            Self::Decimal256(v, ..) => {
-                read_each(buf, v, has_min_max, |b| Ok(from_bytes_to_i256(b)))?
-            }
+            Self::Decimal32(v, ..) => read_each(buf, v, has_min_max, |b| {
+                decimal_bytes::<4>(b).map(from_bytes_to_i32)
+            })?,
+            Self::Decimal64(v, ..) => read_each(buf, v, has_min_max, |b| {
+                decimal_bytes::<8>(b).map(from_bytes_to_i64)
+            })?,
+            Self::Decimal128(v, ..) => read_each(buf, v, has_min_max, |b| {
+                decimal_bytes::<16>(b).map(from_bytes_to_i128)
+            })?,
+            Self::Decimal256(v, ..) => read_each(buf, v, has_min_max, |b| {
+                decimal_bytes::<32>(b).map(from_bytes_to_i256)
+            })?,
         }
         Ok(start - buf.len())
     }
@@ -330,6 +334,20 @@ fn first_bytes<const N: usize>(bytes: &[u8]) -> Result<[u8; N]> {
             bytes.len()
         )),
     }
+}
+
+/// Checks that a decimal stored as bytes is 1 to `N` bytes long, so it fits
+/// an `N` byte number. The shared `from_bytes_to_*` helpers panic on any
+/// other length, and these bytes come straight from the file.
+#[inline(always)]
+fn decimal_bytes<const N: usize>(bytes: &[u8]) -> Result<&[u8]> {
+    if bytes.is_empty() || bytes.len() > N {
+        return Err(general_err!(
+            "ColumnIndex decimal value has {} bytes, expected 1 to {N}",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
 }
 
 /// The null or NaN counts of every page.
@@ -1101,8 +1119,8 @@ mod tests {
             .map(|v| v.map(|v| v.to_le_bytes().to_vec()))
             .collect();
         let bools = vec![Some(vec![0u8]), None, Some(vec![1u8])];
-        // Every value is 1 to 4 bytes long: empty or longer values make the
-        // shared decimal helper panic for Decimal32, on both routes.
+        // Every value is 1 to 4 bytes long: for Decimal32, empty or longer
+        // values make the old route panic (see `decimal_value_wrong_length`).
         let bytes = vec![
             Some(b"abc".to_vec()),
             None,
@@ -1384,6 +1402,36 @@ mod tests {
                 error_message(PhysicalType::INT32, &index),
                 format!("Parquet error: Required field {name} is missing")
             );
+        }
+    }
+
+    /// A decimal stored as bytes that is empty or wider than the decimal is
+    /// an error, not a panic (the old route panics).
+    #[test]
+    fn decimal_value_wrong_length() {
+        let decimals = [
+            (DataType::Decimal32(9, 2), 4),
+            (DataType::Decimal64(18, 2), 8),
+            (DataType::Decimal128(38, 2), 16),
+            (DataType::Decimal256(76, 2), 32),
+        ];
+        for physical_type in [PhysicalType::BYTE_ARRAY, PhysicalType::FIXED_LEN_BYTE_ARRAY] {
+            for (data_type, width) in &decimals {
+                for len in [0, width + 1] {
+                    let value = vec![1u8; len];
+                    let index = TestIndex::new(&[Some(&value)], &[Some(&value)]);
+                    let bytes = index.to_bytes();
+                    let err =
+                        from_bytes(physical_type, data_type, &[(1, Some(&bytes))]).unwrap_err();
+                    assert_eq!(
+                        err.to_string(),
+                        format!(
+                            "Parquet error: ColumnIndex decimal value has {len} bytes, expected 1 to {width}"
+                        ),
+                        "{physical_type:?} as {data_type}"
+                    );
+                }
+            }
         }
     }
 
