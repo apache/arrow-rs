@@ -581,8 +581,16 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array = StringArray::from(vec!["a"; 8192]);
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
@@ -591,8 +599,16 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array: Int32Array = (0..8192).map(|i| i / 10).collect();
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
@@ -601,8 +617,16 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array: Int32Array = (0..8192).map(|i| i / 1000).collect();
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
@@ -611,8 +635,16 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array: Int32Array = (0..8192).collect();
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });

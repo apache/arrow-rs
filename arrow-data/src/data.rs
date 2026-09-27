@@ -3176,8 +3176,16 @@ mod tests {
     #[cfg(not(feature = "force_validate"))]
     fn test_validate_values_rejects_a_non_integer_run_end() {
         let data_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         let run_end_encoded = unsafe {
             ArrayData::builder(data_type)
