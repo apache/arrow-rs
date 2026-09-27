@@ -1530,7 +1530,7 @@ impl<'a> Iterator for RowsIter<'a> {
 
     fn count(self) -> usize
     where
-      Self: Sized,
+        Self: Sized,
     {
         self.len()
     }
@@ -6844,13 +6844,12 @@ mod tests {
         assert_eq!(rows_iter.next(), None);
     }
 
-
     trait SharedBetweenRowsIteratorAndSliceIter<'a>:
-    ExactSizeIterator<Item = Row<'a>> + DoubleEndedIterator<Item = Row<'a>>
+        ExactSizeIterator<Item = Row<'a>> + DoubleEndedIterator<Item = Row<'a>>
     {
     }
     impl<'a, T: ?Sized + ExactSizeIterator<Item = Row<'a>> + DoubleEndedIterator<Item = Row<'a>>>
-    SharedBetweenRowsIteratorAndSliceIter<'a> for T
+        SharedBetweenRowsIteratorAndSliceIter<'a> for T
     {
     }
 
@@ -6858,16 +6857,14 @@ mod tests {
         let rows_converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
 
         [0, 1, 6, 8, 100, 164]
-          .map(|len| {
-              let source = (0..).take(len).collect::<Vec<i32>>();
+            .map(|len| {
+                let source = (0..).take(len).collect::<Vec<i32>>();
 
-              let source = Int32Array::from(source);
+                let source = Int32Array::from(source);
 
-              rows_converter
-                  .convert_columns(&[Arc::new(source)])
-                  .unwrap()
-          })
-          .into_iter()
+                rows_converter.convert_columns(&[Arc::new(source)]).unwrap()
+            })
+            .into_iter()
     }
 
     fn setup_and_assert(
@@ -6875,7 +6872,9 @@ mod tests {
         assert_fn: impl Fn(RowsIter, Copied<Iter<Row>>),
     ) {
         for rows in get_rows_iterator_cases() {
-            let mut expected = (0..rows.num_rows()).map(|i| rows.row(i)).collect::<Vec<_>>();
+            let expected = (0..rows.num_rows())
+                .map(|i| rows.row(i))
+                .collect::<Vec<_>>();
             let mut expected_iter = expected.iter().copied();
 
             let mut actual = rows.iter();
@@ -6898,7 +6897,8 @@ mod tests {
 
         /// Get the value of the operation for the provided iterator
         /// This will be either a BitIterator or a slice iterator to make sure they produce the same result
-        fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(iter: T) -> Self::Output<'a>;
+        fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(iter: T)
+        -> Self::Output<'a>;
     }
 
     /// Helper function that will assert that the provided operation
@@ -7044,7 +7044,9 @@ mod tests {
             type Output<'a> = usize;
             const NAME: &'static str = "count";
 
-            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(iter: T) -> Self::Output<'a> {
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                iter: T,
+            ) -> Self::Output<'a> {
                 iter.count()
             }
         }
@@ -7060,7 +7062,9 @@ mod tests {
             type Output<'a> = Option<Row<'a>>;
             const NAME: &'static str = "last";
 
-            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(iter: T) -> Self::Output<'a> {
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                iter: T,
+            ) -> Self::Output<'a> {
                 iter.last()
             }
         }
@@ -7076,7 +7080,9 @@ mod tests {
             type Output<'a> = Option<Row<'a>>;
             const NAME: &'static str = if BACK { "nth_back(0)" } else { "nth(0)" };
 
-            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(mut iter: T) -> Self::Output<'a> {
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
                 if BACK { iter.nth_back(0) } else { iter.nth(0) }
             }
         }
@@ -7093,7 +7099,9 @@ mod tests {
             type Output<'a> = Option<Row<'a>>;
             const NAME: &'static str = if BACK { "nth_back(1)" } else { "nth(1)" };
 
-            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(mut iter: T) -> Self::Output<'a> {
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
                 if BACK { iter.nth_back(1) } else { iter.nth(1) }
             }
         }
@@ -7114,7 +7122,9 @@ mod tests {
                 "nth(iter.len() + 1)"
             };
 
-            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(mut iter: T) -> Self::Output<'a> {
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
                 if BACK {
                     iter.nth_back(iter.len() + 1)
                 } else {
@@ -7139,7 +7149,9 @@ mod tests {
                 "nth(iter.len())"
             };
 
-            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(mut iter: T) -> Self::Output<'a> {
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
                 if BACK {
                     iter.nth_back(iter.len())
                 } else {
@@ -7164,7 +7176,9 @@ mod tests {
                 "nth(iter.len().saturating_sub(1))"
             };
 
-            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(mut iter: T) -> Self::Output<'a> {
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
                 if BACK {
                     iter.nth_back(iter.len().saturating_sub(1))
                 } else {
