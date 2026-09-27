@@ -847,6 +847,12 @@ impl<'a> MutableArrayData<'a> {
             return Ok(());
         }
 
+        if matches!(&self.data.data_type, DataType::Union(fields, _) if fields.is_empty()) {
+            return Err(ArrowError::InvalidArgumentError(
+                "Cannot extend a union with no fields with nulls".to_owned(),
+            ));
+        }
+
         self.data.len += len;
         let bit_len = bit_util::ceil(self.data.len, 8);
         let nulls = self.data.null_buffer();
@@ -1040,6 +1046,13 @@ mod test {
             let mut mutable = MutableArrayData::new(vec![&source], true, 0);
 
             mutable.try_extend_nulls(0).unwrap();
+            assert_eq!(mutable.len(), 0);
+
+            let err = mutable.try_extend_nulls(1).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Invalid argument error: Cannot extend a union with no fields with nulls"
+            );
             assert_eq!(mutable.len(), 0);
         }
     }
