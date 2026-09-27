@@ -15,26 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`PageStore`]: the pages of one row group that the push decoder and its
-//! column readers share.
-//!
-//! The decoder adds pages while the readers use the store. The readers read
-//! it through [`ColumnChunkData::Shared`]. See *Page flow* in
-//! the `reader_builder::incremental` module.
-//!
-//! # Lookup
-//!
-//! [`PageStore::get`] returns the bytes from `start` to the end of the entry
-//! that contains `start`. Thus, it supports the two read patterns of
-//! [`SerializedPageReader`]:
-//!
-//! | Offset index | [`SerializedPageReader`] reads | Entries in the store |
-//! |---|---|---|
-//! | yes | one page at a time, at the page start. It skips the other pages without a read. | one per page |
-//! | no | from the column chunk start, one page header at a time | one per column chunk |
-//!
-//! [`ColumnChunkData::Shared`]: crate::arrow::in_memory_row_group::ColumnChunkData::Shared
-//! [`SerializedPageReader`]: crate::file::serialized_reader::SerializedPageReader
+//! [`PageStore`]: pages that the push decoder shares with its column readers.
 
 use bytes::Bytes;
 use std::collections::BTreeMap;
@@ -42,11 +23,22 @@ use std::ops::Range;
 use std::sync::Mutex;
 
 /// The pages (or full column chunks) of one row group, keyed by file offset.
-/// See the module documentation.
 ///
-/// Offsets are unique in a file. Thus, one store holds all column chunks of a
-/// row group. The store is shared by `Arc` and is interior mutable, so that
-/// the decoder can add pages while the readers hold it.
+/// The batch-granular push decoder adds pages while its column readers use
+/// the store. The readers read it through [`ColumnChunkData::Shared`].
+/// Offsets are unique in a file, so one store holds all column chunks of a
+/// row group.
+///
+/// [`PageStore::get`] supports the two read patterns of
+/// [`SerializedPageReader`]:
+///
+/// | Offset index | [`SerializedPageReader`] reads | Entries |
+/// |---|---|---|
+/// | yes | one page at a time, at the page start. It skips the other pages without a read. | one per page |
+/// | no | from the column chunk start, one page header at a time | one per column chunk |
+///
+/// [`ColumnChunkData::Shared`]: crate::arrow::in_memory_row_group::ColumnChunkData::Shared
+/// [`SerializedPageReader`]: crate::file::serialized_reader::SerializedPageReader
 #[derive(Debug, Default)]
 pub(crate) struct PageStore {
     /// file offset of the first byte -> bytes

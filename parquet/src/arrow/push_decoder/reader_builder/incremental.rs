@@ -15,55 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Batch-granular decoding of one row group. This module is the design
-//! document for [`FetchGranularity::Batch`]. The user-visible behavior is in
-//! the documentation of [`FetchGranularity::Batch`].
-//!
-//! | | Row-group mode ([`super::RowGroupReaderBuilder::try_build`]) | [`IncrementalRowGroup`] |
-//! |---|---|---|
-//! | Readers built | after all bytes of the row group are buffered | before any byte is buffered, one time per row group |
-//! | Column chunk data | [`ColumnChunkData::Dense`] or `Sparse` (immutable) | [`ColumnChunkData::Shared`] over one [`PageStore`] (mutable) |
-//! | Bytes requested | all bytes of the row group | the pages of the next step |
-//!
-//! # Page flow
-//!
-//! ```text
-//!            push                 ingest (move)               get
-//!  caller ─────────▶ PushBuffers ──────────────▶ PageStore ◀─────── column readers
-//! ```
-//!
-//! Before each step, [`IncrementalRowGroup::try_next`]:
-//!
-//! 1. Computes the pages that the step reads.
-//! 2. Returns [`IncrementalResult::NeedsData`] if a page is not in the
-//!    [`PageStore`] or in [`PushBuffers`].
-//! 3. Else, moves the pages from [`PushBuffers`] into the [`PageStore`] and
-//!    runs the step.
-//!
-//! The [`PageStore`] holds the pages until the row group is finished.
-//!
-//! # Why the readers do not read a page that is not in the store
-//!
-//! With an offset index, a column reader:
-//!
-//! * loads a page only when it decodes a value from the page or skips a part
-//!   of the page;
-//! * skips a full page with the offset index only, without loading it;
-//! * does not read after the last record that it must return, because a page
-//!   ends at a record boundary.
-//!
-//! Thus, the pages of step 1 are all of the pages that the readers load.
-//!
-//! # Readers
-//!
-//! The decoder keeps one [`ArrayReader`] per predicate and one for the
-//! output, for the full row group. Thus, it decodes each page and each
-//! dictionary one time per reader. Scans without predicates use the same
-//! steps: each window passes to the queue without I/O. See [`Stage`].
-//!
-//! The batches are the same as in the row-group mode.
-//!
-//! [`FetchGranularity::Batch`]: crate::arrow::push_decoder::FetchGranularity::Batch
+//! Batch-granular decoding of one row group. See [`IncrementalRowGroup`].
 
 use super::RowBudget;
 use crate::arrow::ProjectionMask;
@@ -145,7 +97,30 @@ enum Stage {
     },
 }
 
-/// Decodes one row group one batch at a time. See the module documentation.
+/// Decodes one row group one batch at a time, for
+/// [`FetchGranularity::Batch`].
+///
+/// The column readers are built before any byte is pushed. They read from a
+/// [`PageStore`] that the decoder fills one step at a time:
+///
+/// ```text
+///            push                 ingest (move)               get
+///  caller ─────────▶ PushBuffers ──────────────▶ PageStore ◀─────── column readers
+/// ```
+///
+/// Each step (see [`Stage`]) requests only the pages that it reads. This is
+/// sound with an offset index, because a column reader:
+///
+/// * loads a page only when it decodes or skips a part of the page;
+/// * skips a full page with the offset index only, without loading it;
+/// * does not read after the last record that it must return, because a page
+///   ends at a record boundary.
+///
+/// There is one reader per predicate and one for the output, for the full
+/// row group. [`FetchGranularity::Batch`] describes the behavior that users
+/// see.
+///
+/// [`FetchGranularity::Batch`]: crate::arrow::push_decoder::FetchGranularity::Batch
 pub(super) struct IncrementalRowGroup {
     config: IncrementalConfig,
     row_group_idx: usize,
@@ -253,7 +228,7 @@ impl IncrementalRowGroup {
             .map_or(0, |filter| filter.predicates.len())
     }
 
-    /// Runs the next step. See *Page flow* in the module documentation.
+    /// Runs the next step, or returns the bytes that it needs.
     pub(super) fn try_next(
         &mut self,
         buffers: &mut PushBuffers,
@@ -282,11 +257,10 @@ impl IncrementalRowGroup {
         self.ready_rows = 0;
     }
 
-    /// Steps 2 and 3 of *Page flow* in the module documentation.
+    /// Moves `ranges` from `buffers` into the store.
     ///
-    /// Returns the `ranges` that are not in the store or in `buffers`. If none,
-    /// moves the `ranges` from `buffers` into the store and returns an empty
-    /// `Vec`.
+    /// Returns the `ranges` that are not in the store or in `buffers`, and
+    /// then moves nothing.
     fn ingest(
         &self,
         buffers: &mut PushBuffers,
