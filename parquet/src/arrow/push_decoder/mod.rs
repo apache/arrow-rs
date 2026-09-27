@@ -18,6 +18,7 @@
 //! [`ParquetPushDecoder`]: decodes Parquet data with data provided by the
 //! caller (rather than from an underlying reader).
 
+pub(crate) mod page_store;
 mod reader_builder;
 mod remaining;
 
@@ -32,7 +33,7 @@ pub use crate::util::push_buffers::PushBuffers;
 use arrow_array::RecordBatch;
 use bytes::Bytes;
 use reader_builder::{RowBudget, RowGroupReaderBuilder, RowGroupReaderBuilderParts};
-use remaining::{RemainingRowGroups, RemainingRowGroupsParts};
+use remaining::{IncrementalStep, RemainingRowGroups, RemainingRowGroupsParts};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -203,6 +204,86 @@ pub type ParquetPushDecoderBuilder = ArrowReaderBuilder<PushDecoderInput>;
 pub struct PushDecoderInput {
     /// Bytes pushed into the decoder, awaiting decode.
     buffers: PushBuffers,
+    /// How [`ParquetPushDecoder::try_decode`] fetches and decodes row groups.
+    fetch_granularity: FetchGranularity,
+}
+
+/// How [`ParquetPushDecoder::try_decode`] requests data and decodes row
+/// groups.
+///
+/// Set with [`ParquetPushDecoderBuilder::with_fetch_granularity`]. Both
+/// values give the same batches in the same order.
+///
+/// | | [`Self::RowGroup`] (default) | [`Self::Batch`] |
+/// |---|---|---|
+/// | [`DecodeResult::NeedsData`] requests | all bytes that the row group reads | the bytes that the next batch reads |
+/// | First batch of a row group | after the full row group is pushed | after the pages of the batch are pushed |
+/// | Buffered bytes | the row group | the pages of the row group that the decoder requested so far (see *Memory* in [`Self::Batch`]) |
+/// | Offset index | not used | necessary for page granularity |
+/// | `batch_size` of 0 | accepted | [`ParquetPushDecoderBuilder::build`] returns an error if the file has rows |
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FetchGranularity {
+    /// Request and decode a full row group at a time. This is the default.
+    ///
+    /// The decoder builds a reader for a row group only after all of the
+    /// bytes that the row group reads are pushed.
+    #[default]
+    RowGroup,
+    /// Request and decode one batch at a time.
+    ///
+    /// The decoder keeps one set of column readers for the full row group.
+    /// Thus, each reader decodes each page and each dictionary one time
+    /// only.
+    ///
+    /// # Offset index
+    ///
+    /// The decoder uses the page locations of the offset index to find the
+    /// pages of a batch. Load the offset index with
+    /// [`ArrowReaderOptions::with_page_index_policy`]. For a column without an
+    /// offset index, the decoder requests and keeps the full column chunk.
+    ///
+    /// # Memory
+    ///
+    /// The decoder holds the pages of a row group until the row group ends.
+    /// Then it releases all bytes of the row group, as in [`Self::RowGroup`].
+    /// [`ParquetPushDecoder::buffered_bytes`] shows the bytes that the decoder
+    /// holds.
+    ///
+    /// # Row filters
+    ///
+    /// With a [`RowFilter`], the decoder filters the row group one window of
+    /// `batch_size` rows at a time, so that filtering and output overlap:
+    ///
+    /// 1. Evaluate each predicate on the next window, in sequence.
+    /// 2. Add the rows that pass to a queue.
+    /// 3. If the queue has more than `batch_size` rows, or no window is left,
+    ///    decode one output batch from the queue. Else, go to step 1.
+    ///
+    /// Step 3 needs *more than* `batch_size` rows, not equal to it, because
+    /// the decoder must know if a batch is the last batch of the row group.
+    /// Each predicate gets batches of `batch_size` rows or less, from one
+    /// window. The output decodes the predicate columns that it reads again.
+    ///
+    /// Each predicate reads only the pages of the rows that the previous
+    /// predicate passed. Thus, if the caller pushes only the requested
+    /// ranges, each window needs one round trip per predicate plus one round
+    /// trip for the output, in sequence. On storage with high latency, push
+    /// ahead: fetch the ranges that the scan reads (for example, the planned
+    /// ranges) before the decoder requests them.
+    ///
+    /// # Other methods
+    ///
+    /// | Method | Behavior with `Batch` |
+    /// |---|---|
+    /// | [`ParquetPushDecoder::is_at_row_group_boundary`] | `true` after `try_decode` returns the last batch of a row group. A row group without output rows does not show a boundary. |
+    /// | [`ParquetPushDecoder::into_builder`] | Use it at a row-group boundary to change the scan. |
+    /// | [`ParquetPushDecoder::try_next_reader`] | Returns a reader for a full row group, as with [`Self::RowGroup`]. Between row groups, you can use `try_decode` and `try_next_reader` in any sequence. In a row group, use only the method that started the row group. The other method returns an error. |
+    /// | [`ParquetPushDecoder::buffered_bytes`] | Includes the pages that the decoder holds for the current row group. |
+    ///
+    /// [`RowFilter`]: crate::arrow::arrow_reader::RowFilter
+    /// [`ArrowReaderOptions::with_page_index_policy`]: crate::arrow::arrow_reader::ArrowReaderOptions::with_page_index_policy
+    Batch,
 }
 
 /// Methods for building a ParquetDecoder. See the base [`ArrowReaderBuilder`] for
@@ -245,7 +326,22 @@ impl ParquetPushDecoderBuilder {
     /// from, so bytes already fetched are not requested again.
     pub fn with_buffers(self, buffers: PushBuffers) -> Self {
         Self {
-            input: PushDecoderInput { buffers },
+            input: PushDecoderInput {
+                buffers,
+                ..self.input
+            },
+            ..self
+        }
+    }
+
+    /// Set how [`ParquetPushDecoder::try_decode`] requests data and decodes
+    /// row groups. See [`FetchGranularity`].
+    pub fn with_fetch_granularity(self, fetch_granularity: FetchGranularity) -> Self {
+        Self {
+            input: PushDecoderInput {
+                fetch_granularity,
+                ..self.input
+            },
             ..self
         }
     }
@@ -305,7 +401,11 @@ impl ParquetPushDecoderBuilder {
     /// Create a [`ParquetPushDecoder`] with the configured options
     pub fn build(self) -> Result<ParquetPushDecoder, ParquetError> {
         let Self {
-            input: PushDecoderInput { buffers },
+            input:
+                PushDecoderInput {
+                    buffers,
+                    fetch_granularity,
+                },
             metadata: parquet_metadata,
             schema,
             fields,
@@ -319,6 +419,18 @@ impl ParquetPushDecoderBuilder {
             row_selection_policy,
             max_predicate_cache_size,
         } = self;
+
+        // `with_batch_size` clamps the batch size to the number of rows in
+        // the file. Thus, a file without rows has a batch size of 0, which is
+        // valid.
+        if fetch_granularity == FetchGranularity::Batch
+            && batch_size == 0
+            && parquet_metadata.file_metadata().num_rows() > 0
+        {
+            return Err(general_err!(
+                "batch_size must be greater than 0 with FetchGranularity::Batch"
+            ));
+        }
 
         let has_predicates = filter
             .as_ref()
@@ -337,6 +449,7 @@ impl ParquetPushDecoderBuilder {
             max_predicate_cache_size,
             buffers,
             row_selection_policy,
+            fetch_granularity,
         );
 
         // Initialize the decoder with the configured options
@@ -379,6 +492,7 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
         metrics,
         row_selection_policy,
         buffers,
+        fetch_granularity,
     } = reader_builder;
 
     ArrowReaderBuilder {
@@ -399,6 +513,7 @@ fn builder_from_remaining(parts: RemainingRowGroupsParts) -> ParquetPushDecoderB
     // Carry the decoder's already-fetched bytes across the rebuild so the new
     // decoder does not re-request them.
     .with_buffers(buffers)
+    .with_fetch_granularity(fetch_granularity)
 }
 
 /// A push based Parquet Decoder
@@ -459,6 +574,19 @@ impl ParquetPushDecoder {
     /// }
     ///```
     pub fn try_decode(&mut self) -> Result<DecodeResult<RecordBatch>, ParquetError> {
+        if let ParquetDecoderState::ReadingRowGroup {
+            remaining_row_groups,
+        } = &self.state
+            && remaining_row_groups.fetch_granularity() == FetchGranularity::Batch
+            && remaining_row_groups.is_building_reader()
+        {
+            // Do not consume the decoder. The caller can continue with
+            // `try_next_reader`.
+            return Err(ParquetError::General(String::from(
+                "try_decode called while try_next_reader is reading a row group; \
+                 call try_next_reader until it returns the reader",
+            )));
+        }
         let current_state = std::mem::replace(&mut self.state, ParquetDecoderState::Finished);
         let (new_state, decode_result) = current_state.try_next_batch()?;
         self.state = new_state;
@@ -506,6 +634,18 @@ impl ParquetPushDecoder {
     pub fn try_next_reader(
         &mut self,
     ) -> Result<DecodeResult<ParquetRecordBatchReader>, ParquetError> {
+        if let ParquetDecoderState::ReadingRowGroup {
+            remaining_row_groups,
+        } = &self.state
+            && remaining_row_groups.is_incremental()
+        {
+            // Do not consume the decoder. The caller can continue with
+            // `try_decode`.
+            return Err(ParquetError::General(String::from(
+                "try_next_reader called while try_decode is decoding a row group a batch \
+                 at a time; call try_decode until the row group is done",
+            )));
+        }
         let current_state = std::mem::replace(&mut self.state, ParquetDecoderState::Finished);
         let (new_state, decode_result) = current_state.try_next_reader()?;
         self.state = new_state;
@@ -556,7 +696,8 @@ impl ParquetPushDecoder {
     /// structures and that since [`Bytes`] are ref counted memory, this may not
     /// reflect additional memory usage.
     ///
-    /// This can be used to monitor memory usage of the decoder.
+    /// This can be used to monitor memory usage of the decoder. For
+    /// [`FetchGranularity::Batch`], see its *Memory* section.
     pub fn buffered_bytes(&self) -> u64 {
         self.state.buffered_bytes()
     }
@@ -579,7 +720,8 @@ impl ParquetPushDecoder {
     /// and the next row group has not yet been planned. While
     /// [`Self::try_decode`] is iterating an active row group's reader this
     /// returns `false`; with [`Self::try_next_reader`] there is a clean
-    /// window between two consecutive returns where this is `true`.
+    /// window between two consecutive returns where this is `true`. For
+    /// [`FetchGranularity::Batch`], see its *Other methods* section.
     pub fn is_at_row_group_boundary(&self) -> bool {
         self.state.is_at_row_group_boundary()
     }
@@ -670,7 +812,8 @@ impl ParquetPushDecoder {
     /// already fetched for row groups the new configuration still reads are
     /// not re-requested. Bytes the new configuration no longer needs stay
     /// buffered until [`clear_all_ranges`](Self::clear_all_ranges) is called
-    /// or the rebuilt decoder is dropped.
+    /// or the rebuilt decoder is dropped. With [`FetchGranularity::Batch`],
+    /// `build` releases these bytes (see its *Memory* section).
     pub fn into_builder(self) -> Result<ParquetPushDecoderBuilder, ParquetError> {
         self.state.into_builder()
     }
@@ -738,6 +881,9 @@ impl ParquetDecoderState {
     /// This structure is used to reduce the indentation level of the main loop
     /// in try_build
     fn try_next_batch(self) -> Result<(Self, DecodeResult<RecordBatch>), ParquetError> {
+        if self.fetch_granularity() == FetchGranularity::Batch {
+            return self.try_next_batch_incremental();
+        }
         let mut current_state = self;
         loop {
             let (new_state, decode_result) = current_state.transition()?;
@@ -784,6 +930,46 @@ impl ParquetDecoderState {
                     return Ok((Self::Finished, DecodeResult::Finished));
                 }
             }
+        }
+    }
+
+    /// How this decoder fetches and decodes row groups.
+    fn fetch_granularity(&self) -> FetchGranularity {
+        match self {
+            Self::ReadingRowGroup {
+                remaining_row_groups,
+            }
+            | Self::DecodingRowGroup {
+                remaining_row_groups,
+                ..
+            } => remaining_row_groups.fetch_granularity(),
+            Self::Finished => FetchGranularity::default(),
+        }
+    }
+
+    /// [`Self::try_next_batch`] for [`FetchGranularity::Batch`].
+    fn try_next_batch_incremental(self) -> Result<(Self, DecodeResult<RecordBatch>), ParquetError> {
+        match self {
+            Self::ReadingRowGroup {
+                mut remaining_row_groups,
+            } => {
+                let result = match remaining_row_groups.try_next_batch_incremental()? {
+                    IncrementalStep::NeedsData(ranges) => DecodeResult::NeedsData(ranges),
+                    IncrementalStep::Batch(batch) => DecodeResult::Data(batch),
+                    IncrementalStep::Finished => {
+                        return Ok((Self::Finished, DecodeResult::Finished));
+                    }
+                };
+                let state = Self::ReadingRowGroup {
+                    remaining_row_groups,
+                };
+                Ok((state, result))
+            }
+            // `try_decode` does not create this state with `FetchGranularity::Batch`.
+            Self::DecodingRowGroup { .. } => Err(ParquetError::General(String::from(
+                "Internal Error: row group reader with FetchGranularity::Batch",
+            ))),
+            Self::Finished => Ok((Self::Finished, DecodeResult::Finished)),
         }
     }
 
