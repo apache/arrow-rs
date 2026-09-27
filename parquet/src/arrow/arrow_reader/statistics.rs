@@ -2074,7 +2074,7 @@ impl<'a> StatisticsConverter<'a> {
                 None => decoder.append_nulls(num_pages),
             }
         }
-        decoder.finish(data_type)
+        decoder.finish()
     }
 
     /// Returns a [`UInt64Array`] with row counts for each data page.

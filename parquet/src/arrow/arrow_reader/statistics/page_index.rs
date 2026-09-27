@@ -33,19 +33,17 @@ use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftSliceInputProtocol,
     validate_list_type,
 };
-use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
-    DecimalType, Int8Type, Int16Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type,
-    UInt32Type, UInt64Type,
+    Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Int8Type,
+    Int16Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal32Array, Decimal64Array,
     Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array,
-    Float64Array, Int32Array, Int64Array, LargeBinaryArray, LargeStringArray, NullArray,
-    StringArray, StringViewArray, UInt64Array, new_null_array,
+    Float64Array, Int32Array, Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
+    StringViewArray, UInt64Array, new_null_array,
 };
 use arrow_buffer::{
     BooleanBuffer, BooleanBufferBuilder, NullBuffer, OffsetBuffer, ScalarBuffer, i256,
@@ -58,7 +56,7 @@ use std::sync::Arc;
 /// caller asked for.
 #[derive(Debug)]
 enum PhysicalValues {
-    Boolean(BooleanBufferBuilder),
+    Boolean(Vec<bool>),
     Int32(Vec<i32>),
     Int64(Vec<i64>),
     Float(Vec<f32>),
@@ -69,199 +67,190 @@ enum PhysicalValues {
     Bytes {
         offsets: Vec<i32>,
         values: Vec<u8>,
+        /// `true` for `FIXED_LEN_BYTE_ARRAY`
+        fixed_len: bool,
     },
     /// `INT96` values are only counted, not kept. No Arrow type is read
     /// from them, so their mins and maxes always come out as nulls. They are
     /// still checked for length, as the older decoder does.
-    Int96(usize),
+    Int96(Vec<()>),
     /// Decimals stored as bytes (in either kind of byte column), turned
-    /// into numbers while reading. This skips keeping a copy of the bytes
-    /// and converting them afterwards, which is much faster.
-    Decimal32(Vec<i32>),
-    Decimal64(Vec<i64>),
-    Decimal128(Vec<i128>),
-    Decimal256(Vec<i256>),
+    /// into numbers while reading, with their precision and scale. This skips
+    /// keeping a copy of the bytes and converting them afterwards, which is
+    /// much faster.
+    Decimal32(Vec<i32>, u8, i8),
+    Decimal64(Vec<i64>, u8, i8),
+    Decimal128(Vec<i128>, u8, i8),
+    Decimal256(Vec<i256>, u8, i8),
 }
 
 impl PhysicalValues {
     /// `data_type` is the Arrow type the caller wants. It only matters for
     /// decimals stored as bytes, which are turned into numbers right away.
     fn new(physical_type: PhysicalType, data_type: &DataType, capacity: usize) -> Self {
-        let data_type = match data_type {
-            DataType::Dictionary(_, value_type) => value_type.as_ref(),
-            data_type => data_type,
-        };
-        if matches!(
-            physical_type,
-            PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY
-        ) {
-            match data_type {
-                DataType::Decimal32(..) => return Self::Decimal32(Vec::with_capacity(capacity)),
-                DataType::Decimal64(..) => return Self::Decimal64(Vec::with_capacity(capacity)),
-                DataType::Decimal128(..) => return Self::Decimal128(Vec::with_capacity(capacity)),
-                DataType::Decimal256(..) => return Self::Decimal256(Vec::with_capacity(capacity)),
-                _ => {}
+        use PhysicalType::{BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY};
+        match (physical_type, data_type) {
+            (BYTE_ARRAY | FIXED_LEN_BYTE_ARRAY, &DataType::Decimal32(p, s)) => {
+                Self::Decimal32(Vec::with_capacity(capacity), p, s)
             }
-        }
-        match physical_type {
-            PhysicalType::BOOLEAN => Self::Boolean(BooleanBufferBuilder::new(capacity)),
-            PhysicalType::INT32 => Self::Int32(Vec::with_capacity(capacity)),
-            PhysicalType::INT64 => Self::Int64(Vec::with_capacity(capacity)),
-            PhysicalType::FLOAT => Self::Float(Vec::with_capacity(capacity)),
-            PhysicalType::DOUBLE => Self::Double(Vec::with_capacity(capacity)),
-            PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+            (BYTE_ARRAY | FIXED_LEN_BYTE_ARRAY, &DataType::Decimal64(p, s)) => {
+                Self::Decimal64(Vec::with_capacity(capacity), p, s)
+            }
+            (BYTE_ARRAY | FIXED_LEN_BYTE_ARRAY, &DataType::Decimal128(p, s)) => {
+                Self::Decimal128(Vec::with_capacity(capacity), p, s)
+            }
+            (BYTE_ARRAY | FIXED_LEN_BYTE_ARRAY, &DataType::Decimal256(p, s)) => {
+                Self::Decimal256(Vec::with_capacity(capacity), p, s)
+            }
+            (BYTE_ARRAY | FIXED_LEN_BYTE_ARRAY, _) => {
                 let mut offsets = Vec::with_capacity(capacity + 1);
                 offsets.push(0);
                 Self::Bytes {
                     offsets,
                     values: Vec::new(),
+                    fixed_len: physical_type == FIXED_LEN_BYTE_ARRAY,
                 }
             }
-            PhysicalType::INT96 => Self::Int96(0),
+            (PhysicalType::BOOLEAN, _) => Self::Boolean(Vec::with_capacity(capacity)),
+            (PhysicalType::INT32, _) => Self::Int32(Vec::with_capacity(capacity)),
+            (PhysicalType::INT64, _) => Self::Int64(Vec::with_capacity(capacity)),
+            (PhysicalType::FLOAT, _) => Self::Float(Vec::with_capacity(capacity)),
+            (PhysicalType::DOUBLE, _) => Self::Double(Vec::with_capacity(capacity)),
+            (PhysicalType::INT96, _) => Self::Int96(Vec::new()),
         }
     }
 
     /// Adds `n` filler values, for pages that have no min or max.
     fn append_nulls(&mut self, n: usize) {
         match self {
-            Self::Boolean(b) => b.append_n(n, false),
-            Self::Int32(v) => v.resize(v.len() + n, 0),
-            Self::Int64(v) => v.resize(v.len() + n, 0),
-            Self::Float(v) => v.resize(v.len() + n, 0.0),
-            Self::Double(v) => v.resize(v.len() + n, 0.0),
-            Self::Bytes { offsets, values } => {
+            Self::Boolean(v) => pad(v, n),
+            Self::Int32(v) => pad(v, n),
+            Self::Int64(v) => pad(v, n),
+            Self::Float(v) => pad(v, n),
+            Self::Double(v) => pad(v, n),
+            Self::Bytes {
+                offsets, values, ..
+            } => {
                 // an empty entry: it starts and ends where the data ends now
                 offsets.resize(offsets.len() + n, values.len() as i32)
             }
-            Self::Int96(count) => *count += n,
-            Self::Decimal32(v) => v.resize(v.len() + n, 0),
-            Self::Decimal64(v) => v.resize(v.len() + n, 0),
-            Self::Decimal128(v) => v.resize(v.len() + n, 0),
-            Self::Decimal256(v) => v.resize(v.len() + n, i256::ZERO),
+            Self::Int96(v) => pad(v, n),
+            Self::Decimal32(v, ..) => pad(v, n),
+            Self::Decimal64(v, ..) => pad(v, n),
+            Self::Decimal128(v, ..) => pad(v, n),
+            Self::Decimal256(v, ..) => pad(v, n),
         }
     }
 
-    /// Adds one stored min or max value.
-    fn append_value(&mut self, bytes: &[u8]) -> Result<()> {
-        match self {
-            Self::Boolean(b) => b.append(first_bytes::<1>(bytes)?[0] != 0),
-            Self::Int32(v) => v.push(i32::from_le_bytes(first_bytes(bytes)?)),
-            Self::Int64(v) => v.push(i64::from_le_bytes(first_bytes(bytes)?)),
-            Self::Float(v) => v.push(f32::from_le_bytes(first_bytes(bytes)?)),
-            Self::Double(v) => v.push(f64::from_le_bytes(first_bytes(bytes)?)),
-            Self::Bytes { offsets, values } => {
-                values.extend_from_slice(bytes);
-                offsets.push(bytes_end(values)?);
-            }
-            Self::Int96(count) => {
-                first_bytes::<12>(bytes)?;
-                *count += 1;
-            }
-            Self::Decimal32(v) => v.push(from_bytes_to_i32(bytes)),
-            Self::Decimal64(v) => v.push(from_bytes_to_i64(bytes)),
-            Self::Decimal128(v) => v.push(from_bytes_to_i128(bytes)),
-            Self::Decimal256(v) => v.push(from_bytes_to_i256(bytes)),
-        }
-        Ok(())
-    }
-
-    /// Reads one value per page from a list, straight into the buffer.
+    /// Reads one value per page from the list of binary values at the start
+    /// of `buf`, and returns how many bytes the list took.
     ///
     /// `has_min_max` holds one entry for each page in the list. Pages marked
-    /// `false` get a filler value.
+    /// `false` get a filler value, and their stored bytes are not looked at.
     ///
-    /// This does the same as calling [`Self::append_value`] or
-    /// [`Self::append_nulls`] for each value, but picks the value kind once
-    /// for the whole list rather than once per value, which is much faster.
-    fn read_list(
-        &mut self,
-        prot: &mut ThriftSliceInputProtocol,
-        has_min_max: &[bool],
-    ) -> Result<()> {
-        // Work on a local copy of the unread bytes, so the compiler can keep
+    /// The value kind is picked once for the whole list rather than once per
+    /// value, which is much faster.
+    fn read_list(&mut self, mut buf: &[u8], has_min_max: &[bool]) -> Result<usize> {
+        // `buf` is a local copy of the unread bytes, so the compiler can keep
         // the read position in a register rather than in memory. This makes
         // these loops much faster.
-        let mut buf = prot.as_slice();
+        let start = buf.len();
+        let buf = &mut buf;
         match self {
-            Self::Boolean(b) => {
-                for &has_value in has_min_max {
-                    let (bytes, rest) = split_binary(buf)?;
-                    buf = rest;
-                    b.append(has_value && first_bytes::<1>(bytes)?[0] != 0);
-                }
+            Self::Boolean(v) => {
+                read_each(buf, v, has_min_max, |b| Ok(first_bytes::<1>(b)?[0] != 0))?
             }
-            Self::Int32(v) => read_each(&mut buf, v, has_min_max, |b| {
+            Self::Int32(v) => read_each(buf, v, has_min_max, |b| {
                 Ok(i32::from_le_bytes(first_bytes(b)?))
             })?,
-            Self::Int64(v) => read_each(&mut buf, v, has_min_max, |b| {
+            Self::Int64(v) => read_each(buf, v, has_min_max, |b| {
                 Ok(i64::from_le_bytes(first_bytes(b)?))
             })?,
-            Self::Float(v) => read_each(&mut buf, v, has_min_max, |b| {
+            Self::Float(v) => read_each(buf, v, has_min_max, |b| {
                 Ok(f32::from_le_bytes(first_bytes(b)?))
             })?,
-            Self::Double(v) => read_each(&mut buf, v, has_min_max, |b| {
+            Self::Double(v) => read_each(buf, v, has_min_max, |b| {
                 Ok(f64::from_le_bytes(first_bytes(b)?))
             })?,
-            Self::Bytes { offsets, values } => {
+            Self::Bytes {
+                offsets, values, ..
+            } => {
                 offsets.reserve(has_min_max.len());
                 for &has_value in has_min_max {
                     let (bytes, rest) = split_binary(buf)?;
-                    buf = rest;
+                    *buf = rest;
                     if has_value {
                         values.extend_from_slice(bytes);
                     }
                     offsets.push(bytes_end(values)?);
                 }
             }
-            Self::Int96(count) => {
-                for &has_value in has_min_max {
-                    let (bytes, rest) = split_binary(buf)?;
-                    buf = rest;
-                    if has_value {
-                        first_bytes::<12>(bytes)?;
-                    }
-                }
-                *count += has_min_max.len();
+            Self::Int96(v) => read_each(buf, v, has_min_max, |b| first_bytes::<12>(b).map(|_| ()))?,
+            Self::Decimal32(v, ..) => read_each(buf, v, has_min_max, |b| Ok(from_bytes_to_i32(b)))?,
+            Self::Decimal64(v, ..) => read_each(buf, v, has_min_max, |b| Ok(from_bytes_to_i64(b)))?,
+            Self::Decimal128(v, ..) => {
+                read_each(buf, v, has_min_max, |b| Ok(from_bytes_to_i128(b)))?
             }
-            Self::Decimal32(v) => {
-                read_each(&mut buf, v, has_min_max, |b| Ok(from_bytes_to_i32(b)))?
-            }
-            Self::Decimal64(v) => {
-                read_each(&mut buf, v, has_min_max, |b| Ok(from_bytes_to_i64(b)))?
-            }
-            Self::Decimal128(v) => {
-                read_each(&mut buf, v, has_min_max, |b| Ok(from_bytes_to_i128(b)))?
-            }
-            Self::Decimal256(v) => {
-                read_each(&mut buf, v, has_min_max, |b| Ok(from_bytes_to_i256(b)))?
+            Self::Decimal256(v, ..) => {
+                read_each(buf, v, has_min_max, |b| Ok(from_bytes_to_i256(b)))?
             }
         }
-        let used = prot.as_slice().len() - buf.len();
-        Ok(prot.skip_bytes(used)?)
+        Ok(start - buf.len())
     }
 
-    /// Turns the values into an Arrow array of the matching physical type.
-    /// Decimals get their default precision and scale; `INT96` gives a
-    /// [`NullArray`].
-    fn finish(self, nulls: Option<NullBuffer>) -> ArrayRef {
-        match self {
-            Self::Boolean(mut b) => Arc::new(BooleanArray::new(b.finish(), nulls)),
-            Self::Int32(v) => Arc::new(Int32Array::new(v.into(), nulls)),
-            Self::Int64(v) => Arc::new(Int64Array::new(v.into(), nulls)),
-            Self::Float(v) => Arc::new(Float32Array::new(v.into(), nulls)),
-            Self::Double(v) => Arc::new(Float64Array::new(v.into(), nulls)),
-            Self::Bytes { offsets, values } => {
+    /// Turns the `len` values into an Arrow array of `data_type`.
+    ///
+    /// This must give exactly the same results as `get_data_page_statistics!`
+    /// in the parent module. In particular, a value that does not fit the
+    /// wanted type becomes null rather than an error, and a type pair that the
+    /// old code does not know how to handle gives an array of nulls.
+    ///
+    /// Where the Parquet form and the Arrow type are the same, the data is
+    /// reused without copying.
+    fn finish(
+        self,
+        len: usize,
+        nulls: Option<NullBuffer>,
+        data_type: &DataType,
+    ) -> Result<ArrayRef> {
+        let converted = match self {
+            Self::Boolean(v) => same_type(BooleanArray::new(v.into(), nulls), data_type),
+            Self::Int32(v) => int32_to_logical(&Int32Array::new(v.into(), nulls), data_type)?,
+            Self::Int64(v) => int64_to_logical(&Int64Array::new(v.into(), nulls), data_type)?,
+            Self::Float(v) => same_type(Float32Array::new(v.into(), nulls), data_type),
+            Self::Double(v) => same_type(Float64Array::new(v.into(), nulls), data_type),
+            Self::Bytes {
+                offsets,
+                values,
+                fixed_len,
+            } => {
                 // the offsets never go down, because values are only ever added
                 let offsets = OffsetBuffer::new(offsets.into());
-                Arc::new(BinaryArray::new(offsets, values.into(), nulls))
+                let array = BinaryArray::new(offsets, values.into(), nulls);
+                bytes_to_logical(array, data_type, fixed_len)?
             }
-            Self::Int96(count) => Arc::new(NullArray::new(count)),
-            Self::Decimal32(v) => Arc::new(Decimal32Array::new(v.into(), nulls)),
-            Self::Decimal64(v) => Arc::new(Decimal64Array::new(v.into(), nulls)),
-            Self::Decimal128(v) => Arc::new(Decimal128Array::new(v.into(), nulls)),
-            Self::Decimal256(v) => Arc::new(Decimal256Array::new(v.into(), nulls)),
-        }
+            Self::Int96(_) => None,
+            Self::Decimal32(v, p, s) => Some(Arc::new(
+                Decimal32Array::new(v.into(), nulls).with_precision_and_scale(p, s)?,
+            ) as ArrayRef),
+            Self::Decimal64(v, p, s) => Some(Arc::new(
+                Decimal64Array::new(v.into(), nulls).with_precision_and_scale(p, s)?,
+            ) as ArrayRef),
+            Self::Decimal128(v, p, s) => Some(Arc::new(
+                Decimal128Array::new(v.into(), nulls).with_precision_and_scale(p, s)?,
+            ) as ArrayRef),
+            Self::Decimal256(v, p, s) => Some(Arc::new(
+                Decimal256Array::new(v.into(), nulls).with_precision_and_scale(p, s)?,
+            ) as ArrayRef),
+        };
+        // Every other pair gives nulls, as the old code does.
+        Ok(converted.unwrap_or_else(|| new_null_array(data_type, len)))
     }
+}
+
+/// Adds `n` default values to `v`.
+fn pad<T: Default + Clone>(v: &mut Vec<T>, n: usize) {
+    v.resize(v.len() + n, T::default());
 }
 
 /// Reads byte values and turns each into a value with `convert`, one per
@@ -343,46 +332,125 @@ fn first_bytes<const N: usize>(bytes: &[u8]) -> Result<[u8; N]> {
     }
 }
 
+/// The null or NaN counts of every page.
+#[derive(Debug)]
+struct Counts {
+    values: Vec<u64>,
+    /// One entry per page: `true` if its row group stored these counts.
+    known: BooleanBufferBuilder,
+}
+
+impl Counts {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            values: Vec::with_capacity(capacity),
+            known: BooleanBufferBuilder::new(capacity),
+        }
+    }
+
+    /// Adds `n` pages whose count is not known.
+    fn append_nulls(&mut self, n: usize) {
+        pad(&mut self.values, n);
+        self.known.append_n(n, false);
+    }
+
+    /// Reads a list of counts, refusing negative numbers. `what` names the
+    /// counts in errors.
+    fn read(&mut self, prot: &mut ThriftSliceInputProtocol, what: &str) -> Result<()> {
+        let size = read_list_size(prot, ElementType::I64)?;
+        let mut buf = prot.as_slice();
+        self.values.reserve(size);
+        for _ in 0..size {
+            // Numbers are stored so that small values of either sign are short:
+            // 0, -1, 1, -2, 2, ... are stored as 0, 1, 2, 3, 4, ...
+            let (stored, rest) = split_varint(buf)?;
+            buf = rest;
+            let count = (stored >> 1) as i64 ^ -((stored & 1) as i64);
+            let count = u64::try_from(count)
+                .map_err(|_| general_err!("ColumnIndex {what} count is negative {count}"))?;
+            self.values.push(count);
+        }
+        let used = prot.as_slice().len() - buf.len();
+        Ok(prot.skip_bytes(used)?)
+    }
+
+    /// Ends a row group of `len` pages whose counts start at `first`: checks
+    /// that it gave one count per page, or marks every page as unknown if it
+    /// gave none.
+    fn finish_row_group(
+        &mut self,
+        first: usize,
+        present: bool,
+        len: usize,
+        name: &str,
+    ) -> Result<()> {
+        if !present {
+            self.append_nulls(len);
+            return Ok(());
+        }
+        let got = self.values.len() - first;
+        if got != len {
+            return Err(general_err!(
+                "ColumnIndex {name} length mismatch: expected {len}, got {got}"
+            ));
+        }
+        self.known.append_n(len, true);
+        Ok(())
+    }
+
+    fn finish(mut self) -> UInt64Array {
+        let nulls = NullBuffer::new(self.known.finish());
+        let nulls = (nulls.null_count() > 0).then_some(nulls);
+        UInt64Array::new(ScalarBuffer::from(self.values), nulls)
+    }
+}
+
+/// The names of the min and max fields, in the order of
+/// [`ColumnIndexDecoder::min_max`].
+const MIN_MAX_NAMES: [&str; 2] = ["min_values", "max_values"];
+
 /// Collects the page statistics of one column, across any number of row
 /// groups, while reading the stored `ColumnIndex` bytes.
 #[derive(Debug)]
 pub(super) struct ColumnIndexDecoder {
-    physical_type: PhysicalType,
+    /// The Arrow type the mins and maxes are turned into. A dictionary type
+    /// is replaced by its value type, as statistics come out as the values.
+    data_type: DataType,
     /// One entry per page: `true` if the page has a min and max, `false` if
     /// every value in the page is null (or the row group has no index).
     has_min_max: Vec<bool>,
-    mins: PhysicalValues,
-    maxes: PhysicalValues,
-    null_counts: Vec<u64>,
-    null_counts_known: BooleanBufferBuilder,
-    nan_counts: Vec<u64>,
-    nan_counts_known: BooleanBufferBuilder,
+    /// The mins, then the maxes.
+    min_max: [PhysicalValues; 2],
+    null_counts: Counts,
+    nan_counts: Counts,
 }
 
 impl ColumnIndexDecoder {
     /// `data_type` is the Arrow type the statistics will be turned into.
     pub(super) fn new(physical_type: PhysicalType, data_type: &DataType, capacity: usize) -> Self {
+        let data_type = match data_type {
+            DataType::Dictionary(_, value_type) => value_type.as_ref(),
+            data_type => data_type,
+        };
         Self {
-            physical_type,
+            data_type: data_type.clone(),
             has_min_max: Vec::with_capacity(capacity),
-            mins: PhysicalValues::new(physical_type, data_type, capacity),
-            maxes: PhysicalValues::new(physical_type, data_type, capacity),
-            null_counts: Vec::with_capacity(capacity),
-            null_counts_known: BooleanBufferBuilder::new(capacity),
-            nan_counts: Vec::with_capacity(capacity),
-            nan_counts_known: BooleanBufferBuilder::new(capacity),
+            min_max: std::array::from_fn(|_| {
+                PhysicalValues::new(physical_type, data_type, capacity)
+            }),
+            null_counts: Counts::with_capacity(capacity),
+            nan_counts: Counts::with_capacity(capacity),
         }
     }
 
     /// Adds `n` pages with no statistics, for a row group that has no index.
     pub(super) fn append_nulls(&mut self, n: usize) {
         self.has_min_max.resize(self.has_min_max.len() + n, false);
-        self.mins.append_nulls(n);
-        self.maxes.append_nulls(n);
-        self.null_counts.resize(self.null_counts.len() + n, 0);
-        self.null_counts_known.append_n(n, false);
-        self.nan_counts.resize(self.nan_counts.len() + n, 0);
-        self.nan_counts_known.append_n(n, false);
+        for values in &mut self.min_max {
+            values.append_nulls(n);
+        }
+        self.null_counts.append_nulls(n);
+        self.nan_counts.append_nulls(n);
     }
 
     /// Reads one stored `ColumnIndex` (the statistics for one column in one
@@ -395,21 +463,20 @@ impl ColumnIndexDecoder {
 
         // Where this row group's pages start in the shared buffers.
         let first_page = self.has_min_max.len();
-        let first_null_count = self.null_counts.len();
-        let first_nan_count = self.nan_counts.len();
+        let first_null_count = self.null_counts.values.len();
+        let first_nan_count = self.nan_counts.values.len();
 
         let mut num_pages: Option<usize> = None;
-        let mut num_mins: Option<usize> = None;
-        let mut num_maxes: Option<usize> = None;
+        // The number of mins and maxes, in the order of `self.min_max`.
+        let mut num_min_max: [Option<usize>; 2] = [None; 2];
         let mut has_boundary_order = false;
         let mut has_null_counts = false;
         let mut has_nan_counts = false;
         // Writers put the list of null pages first, so we normally know which
         // pages to skip while reading the mins and maxes. If a file stores the
-        // mins or maxes before that list, we hold on to them here and deal
-        // with them at the end.
-        let mut held_back_mins: Option<Vec<&[u8]>> = None;
-        let mut held_back_maxes: Option<Vec<&[u8]>> = None;
+        // mins or maxes before that list, we note where they are and read them
+        // at the end.
+        let mut deferred: [Option<&[u8]>; 2] = [None; 2];
 
         let mut last_field_id = 0i16;
         loop {
@@ -440,48 +507,28 @@ impl ColumnIndexDecoder {
                 }
                 // min_values and max_values
                 (2 | 3, FieldType::List) => {
-                    let is_min = field.id == 2;
-                    let seen = if is_min { num_mins } else { num_maxes };
-                    if seen.is_some() {
+                    let i = (field.id - 2) as usize;
+                    if num_min_max[i].is_some() {
                         return Err(general_err!(
                             "ColumnIndex has more than one {}",
-                            if is_min { "min_values" } else { "max_values" }
+                            MIN_MAX_NAMES[i]
                         ));
                     }
                     let size = read_list_size(&mut prot, ElementType::Binary)?;
-                    match num_pages {
-                        Some(pages) if pages == size => {
-                            let values = if is_min {
-                                &mut self.mins
-                            } else {
-                                &mut self.maxes
-                            };
-                            values.read_list(&mut prot, &self.has_min_max[first_page..])?;
-                        }
-                        // The counts do not match. Step over the values; the
-                        // check after the loop reports the error.
-                        Some(_) => {
-                            for _ in 0..size {
-                                prot.skip(FieldType::Binary)?;
-                            }
-                        }
-                        None => {
-                            let mut held = Vec::with_capacity(size);
-                            for _ in 0..size {
-                                held.push(prot.read_bytes()?);
-                            }
-                            if is_min {
-                                held_back_mins = Some(held);
-                            } else {
-                                held_back_maxes = Some(held);
-                            }
-                        }
-                    }
-                    if is_min {
-                        num_mins = Some(size);
+                    if num_pages == Some(size) {
+                        let has_min_max = &self.has_min_max[first_page..];
+                        let used = self.min_max[i].read_list(prot.as_slice(), has_min_max)?;
+                        prot.skip_bytes(used)?;
                     } else {
-                        num_maxes = Some(size);
+                        // The null pages are not known yet, or the counts do
+                        // not match and the check after the loop reports the
+                        // error. Step over the values for now.
+                        deferred[i] = Some(prot.as_slice());
+                        for _ in 0..size {
+                            prot.skip(FieldType::Binary)?;
+                        }
                     }
+                    num_min_max[i] = Some(size);
                 }
                 // boundary_order: not needed, but read so that a bad value is caught
                 (4, FieldType::I32) => {
@@ -493,7 +540,7 @@ impl ColumnIndexDecoder {
                     if has_null_counts {
                         return Err(general_err!("ColumnIndex has more than one null_counts"));
                     }
-                    read_counts(&mut prot, &mut self.null_counts, "null")?;
+                    self.null_counts.read(&mut prot, "null")?;
                     has_null_counts = true;
                 }
                 // nan_counts
@@ -501,7 +548,7 @@ impl ColumnIndexDecoder {
                     if has_nan_counts {
                         return Err(general_err!("ColumnIndex has more than one nan_counts"));
                     }
-                    read_counts(&mut prot, &mut self.nan_counts, "NaN")?;
+                    self.nan_counts.read(&mut prot, "NaN")?;
                     has_nan_counts = true;
                 }
                 // Anything else, including the level histograms (fields 6 and
@@ -515,11 +562,9 @@ impl ColumnIndexDecoder {
         let Some(len) = num_pages else {
             return Err(general_err!("Required field null_pages is missing"));
         };
-        let Some(num_mins) = num_mins else {
-            return Err(general_err!("Required field min_values is missing"));
-        };
-        let Some(num_maxes) = num_maxes else {
-            return Err(general_err!("Required field max_values is missing"));
+        let [Some(num_mins), Some(num_maxes)] = num_min_max else {
+            let name = MIN_MAX_NAMES[usize::from(num_min_max[0].is_some())];
+            return Err(general_err!("Required field {name} is missing"));
         };
         if !has_boundary_order {
             return Err(general_err!("Required field boundary_order is missing"));
@@ -529,54 +574,34 @@ impl ColumnIndexDecoder {
                 "ColumnIndex min/max length mismatch: expected {len}, got min={num_mins} max={num_maxes}"
             ));
         }
-        for (held, values) in [
-            (held_back_mins, &mut self.mins),
-            (held_back_maxes, &mut self.maxes),
-        ] {
-            for (i, bytes) in held.into_iter().flatten().enumerate() {
-                if self.has_min_max[first_page + i] {
-                    values.append_value(bytes)?;
-                } else {
-                    values.append_nulls(1);
-                }
+        for (values, list) in self.min_max.iter_mut().zip(deferred) {
+            if let Some(list) = list {
+                values.read_list(list, &self.has_min_max[first_page..])?;
             }
         }
 
-        finish_counts(
-            &mut self.null_counts,
-            &mut self.null_counts_known,
-            first_null_count,
-            has_null_counts,
-            len,
-            "null_counts",
-        )?;
-        finish_counts(
-            &mut self.nan_counts,
-            &mut self.nan_counts_known,
-            first_nan_count,
-            has_nan_counts,
-            len,
-            "nan_counts",
-        )?;
+        self.null_counts
+            .finish_row_group(first_null_count, has_null_counts, len, "null_counts")?;
+        self.nan_counts
+            .finish_row_group(first_nan_count, has_nan_counts, len, "nan_counts")?;
         Ok(())
     }
 
-    /// Returns the statistics, with the mins and maxes turned into `data_type`.
-    pub(super) fn finish(self, data_type: &DataType) -> Result<DataPageStatistics> {
+    /// Returns the statistics, with the mins and maxes turned into the Arrow
+    /// type given to [`Self::new`].
+    pub(super) fn finish(self) -> Result<DataPageStatistics> {
         // `collect_bool` packs 64 pages at a time, which is much faster than
         // converting the list one page at a time
+        let len = self.has_min_max.len();
         let has_min_max = &self.has_min_max;
-        let nulls = NullBuffer::new(BooleanBuffer::collect_bool(has_min_max.len(), |i| {
-            has_min_max[i]
-        }));
+        let nulls = NullBuffer::new(BooleanBuffer::collect_bool(len, |i| has_min_max[i]));
         let nulls = (nulls.null_count() > 0).then_some(nulls);
-        let mins = self.mins.finish(nulls.clone());
-        let maxes = self.maxes.finish(nulls);
+        let [mins, maxes] = self.min_max;
         Ok(DataPageStatistics {
-            mins: physical_to_logical(mins, data_type, self.physical_type)?,
-            maxes: physical_to_logical(maxes, data_type, self.physical_type)?,
-            null_counts: counts_array(self.null_counts, self.null_counts_known),
-            nan_counts: counts_array(self.nan_counts, self.nan_counts_known),
+            mins: mins.finish(len, nulls.clone(), &self.data_type)?,
+            maxes: maxes.finish(len, nulls, &self.data_type)?,
+            null_counts: self.null_counts.finish(),
+            nan_counts: self.nan_counts.finish(),
         })
     }
 }
@@ -634,92 +659,9 @@ fn skip_list(prot: &mut ThriftSliceInputProtocol) -> Result<()> {
     Ok(())
 }
 
-/// Reads a list of null or NaN counts, refusing negative numbers.
-fn read_counts(
-    prot: &mut ThriftSliceInputProtocol,
-    counts: &mut Vec<u64>,
-    what: &str,
-) -> Result<()> {
-    let size = read_list_size(prot, ElementType::I64)?;
-    let mut buf = prot.as_slice();
-    counts.reserve(size);
-    for _ in 0..size {
-        // Numbers are stored so that small values of either sign are short:
-        // 0, -1, 1, -2, 2, ... are stored as 0, 1, 2, 3, 4, ...
-        let (stored, rest) = split_varint(buf)?;
-        buf = rest;
-        let count = (stored >> 1) as i64 ^ -((stored & 1) as i64);
-        let count = u64::try_from(count)
-            .map_err(|_| general_err!("ColumnIndex {what} count is negative {count}"))?;
-        counts.push(count);
-    }
-    let used = prot.as_slice().len() - buf.len();
-    Ok(prot.skip_bytes(used)?)
-}
-
-/// Checks that a row group gave one count per page, or fills in "unknown"
-/// for every page if it gave none.
-fn finish_counts(
-    counts: &mut Vec<u64>,
-    known: &mut BooleanBufferBuilder,
-    first: usize,
-    present: bool,
-    len: usize,
-    name: &str,
-) -> Result<()> {
-    if present {
-        let got = counts.len() - first;
-        if got != len {
-            return Err(general_err!(
-                "ColumnIndex {name} length mismatch: expected {len}, got {got}"
-            ));
-        }
-        known.append_n(len, true);
-    } else {
-        counts.resize(first + len, 0);
-        known.append_n(len, false);
-    }
-    Ok(())
-}
-
-fn counts_array(counts: Vec<u64>, mut known: BooleanBufferBuilder) -> UInt64Array {
-    let nulls = NullBuffer::new(known.finish());
-    let nulls = (nulls.null_count() > 0).then_some(nulls);
-    UInt64Array::new(ScalarBuffer::from(counts), nulls)
-}
-
-/// Turns values in their Parquet form into the Arrow type the caller wants.
-///
-/// This must give exactly the same results as `get_data_page_statistics!` in
-/// the parent module. In particular, a value that does not fit the wanted
-/// type becomes null rather than an error, and a type pair that the old code
-/// does not know how to handle gives an array of nulls.
-///
-/// Where the Parquet form and the Arrow type are the same, the data is reused
-/// without copying.
-fn physical_to_logical(
-    array: ArrayRef,
-    data_type: &DataType,
-    physical_type: PhysicalType,
-) -> Result<ArrayRef> {
-    // Dictionary columns report statistics as their value type.
-    if let DataType::Dictionary(_, value_type) = data_type {
-        return physical_to_logical(array, value_type, physical_type);
-    }
-
-    let converted = match physical_type {
-        PhysicalType::INT32 => int32_to_logical(array.as_primitive(), data_type)?,
-        PhysicalType::INT64 => int64_to_logical(array.as_primitive(), data_type)?,
-        PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-            bytes_to_logical(&array, data_type, physical_type)?
-        }
-        PhysicalType::BOOLEAN | PhysicalType::FLOAT | PhysicalType::DOUBLE => {
-            (array.data_type() == data_type).then(|| Arc::clone(&array))
-        }
-        PhysicalType::INT96 => None,
-    };
-    // Every other pair gives nulls, as the old code does.
-    Ok(converted.unwrap_or_else(|| new_null_array(data_type, array.len())))
+/// Keeps `array` if it already has the wanted type.
+fn same_type(array: impl Array + 'static, data_type: &DataType) -> Option<ArrayRef> {
+    (array.data_type() == data_type).then(|| Arc::new(array) as ArrayRef)
 }
 
 fn int32_to_logical(a: &Int32Array, data_type: &DataType) -> Result<Option<ArrayRef>> {
@@ -816,48 +758,36 @@ fn int64_to_logical(a: &Int64Array, data_type: &DataType) -> Result<Option<Array
 }
 
 /// Converts the values of a `BYTE_ARRAY` or `FIXED_LEN_BYTE_ARRAY` column.
-///
-/// `array` is a [`BinaryArray`], except for decimals, which were already
-/// turned into numbers while reading (see [`PhysicalValues::new`]).
+/// Decimals never get here: they were turned into numbers while reading
+/// (see [`PhysicalValues::new`]).
 fn bytes_to_logical(
-    array: &ArrayRef,
+    array: BinaryArray,
     data_type: &DataType,
-    physical_type: PhysicalType,
+    fixed_len: bool,
 ) -> Result<Option<ArrayRef>> {
-    let is_byte_array = physical_type == PhysicalType::BYTE_ARRAY;
-    let binary = || array.as_binary::<i32>();
     let array: ArrayRef = match data_type {
-        DataType::Decimal32(p, s) => with_precision_and_scale::<Decimal32Type>(array, *p, *s)?,
-        DataType::Decimal64(p, s) => with_precision_and_scale::<Decimal64Type>(array, *p, *s)?,
-        DataType::Decimal128(p, s) => with_precision_and_scale::<Decimal128Type>(array, *p, *s)?,
-        DataType::Decimal256(p, s) => with_precision_and_scale::<Decimal256Type>(array, *p, *s)?,
-
         // Text and binary types only come from variable length byte columns.
-        DataType::Binary if is_byte_array => Arc::clone(array),
-        DataType::LargeBinary if is_byte_array => {
-            Arc::new(binary().iter().collect::<LargeBinaryArray>())
+        DataType::Binary if !fixed_len => Arc::new(array),
+        DataType::LargeBinary if !fixed_len => Arc::new(array.iter().collect::<LargeBinaryArray>()),
+        DataType::BinaryView if !fixed_len => Arc::new(array.iter().collect::<BinaryViewArray>()),
+        DataType::Utf8 if !fixed_len => Arc::new(binary_to_utf8(array)),
+        DataType::LargeUtf8 if !fixed_len => {
+            Arc::new(utf8_values(&array).collect::<LargeStringArray>())
         }
-        DataType::BinaryView if is_byte_array => {
-            Arc::new(binary().iter().collect::<BinaryViewArray>())
-        }
-        DataType::Utf8 if is_byte_array => Arc::new(binary_to_utf8(binary().clone())),
-        DataType::LargeUtf8 if is_byte_array => {
-            Arc::new(utf8_values(binary()).collect::<LargeStringArray>())
-        }
-        DataType::Utf8View if is_byte_array => {
-            Arc::new(utf8_values(binary()).collect::<StringViewArray>())
+        DataType::Utf8View if !fixed_len => {
+            Arc::new(utf8_values(&array).collect::<StringViewArray>())
         }
 
         // Fixed length types only come from fixed length byte columns. A
         // value of the wrong length becomes null.
-        DataType::Float16 if !is_byte_array => Arc::new(
-            binary()
+        DataType::Float16 if fixed_len => Arc::new(
+            array
                 .iter()
                 .map(|v| v.and_then(from_bytes_to_f16))
                 .collect::<Float16Array>(),
         ),
-        DataType::FixedSizeBinary(size) if !is_byte_array => {
-            let values = binary()
+        DataType::FixedSizeBinary(size) if fixed_len => {
+            let values = array
                 .iter()
                 .map(|v| v.filter(|v| v.len() == *size as usize));
             Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
@@ -867,17 +797,6 @@ fn bytes_to_logical(
         _ => return Ok(None),
     };
     Ok(Some(array))
-}
-
-/// Sets the precision and scale of a decimal array built by
-/// [`PhysicalValues::finish`].
-fn with_precision_and_scale<T: DecimalType>(
-    array: &ArrayRef,
-    precision: u8,
-    scale: i8,
-) -> Result<ArrayRef> {
-    let array = array.as_primitive::<T>().clone();
-    Ok(Arc::new(array.with_precision_and_scale(precision, scale)?))
 }
 
 /// Each value as text, or null if it is not valid UTF-8.
