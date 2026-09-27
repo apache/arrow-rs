@@ -221,7 +221,7 @@ pub struct PushDecoderInput {
 /// | [`DecodeResult::NeedsData`] requests | all bytes that the row group reads | the bytes that the next batch reads |
 /// | First batch of a row group | after the full row group is pushed | after the pages of the batch are pushed |
 /// | Buffered bytes | the row group | the pages of the row group that the decoder requested so far (see *Memory* in [`Self::Batch`]) |
-/// | Offset index | not used | necessary for page granularity |
+/// | Offset index | used to skip the pages of a row selection | also necessary to request one batch at a time |
 /// | `batch_size` of 0 | accepted | [`ParquetPushDecoderBuilder::build`] returns an error if the file has rows |
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -252,6 +252,9 @@ pub enum FetchGranularity {
     /// [`ParquetPushDecoder::buffered_bytes`] shows the bytes that the decoder
     /// holds.
     ///
+    /// If the scan reads a row group two times, the decoder requests its
+    /// pages again for the second read.
+    ///
     /// # Row filters
     ///
     /// With a [`RowFilter`], the decoder filters the row group one window of
@@ -266,6 +269,10 @@ pub enum FetchGranularity {
     /// the decoder must know if a batch is the last batch of the row group.
     /// Each predicate gets batches of `batch_size` rows or less, from one
     /// window. The output decodes the predicate columns that it reads again.
+    ///
+    /// A window is `batch_size` rows of the row group, not `batch_size`
+    /// selected rows. Thus, with a sparse [`RowSelection`], a predicate gets
+    /// small batches, and the first output batch needs many windows.
     ///
     /// Each predicate reads only the pages of the rows that the previous
     /// predicate passed. Thus, if the caller pushes only the requested
@@ -284,6 +291,7 @@ pub enum FetchGranularity {
     /// | [`ParquetPushDecoder::buffered_bytes`] | Includes the pages that the decoder holds for the current row group. |
     ///
     /// [`RowFilter`]: crate::arrow::arrow_reader::RowFilter
+    /// [`RowSelection`]: crate::arrow::arrow_reader::RowSelection
     /// [`ArrowReaderOptions::with_page_index_policy`]: crate::arrow::arrow_reader::ArrowReaderOptions::with_page_index_policy
     Batch,
 }
@@ -424,10 +432,14 @@ impl ParquetPushDecoderBuilder {
 
         // `with_batch_size` clamps the batch size to the number of rows in
         // the file. Thus, a file without rows has a batch size of 0, which is
-        // valid.
+        // valid. Check the row groups, because the row count of the file can
+        // be wrong.
         if fetch_granularity == FetchGranularity::Batch
             && batch_size == 0
-            && parquet_metadata.file_metadata().num_rows() > 0
+            && parquet_metadata
+                .row_groups()
+                .iter()
+                .any(|row_group| row_group.num_rows() > 0)
         {
             return Err(general_err!(
                 "batch_size must be greater than 0 with FetchGranularity::Batch"
@@ -814,8 +826,7 @@ impl ParquetPushDecoder {
     /// already fetched for row groups the new configuration still reads are
     /// not re-requested. Bytes the new configuration no longer needs stay
     /// buffered until [`clear_all_ranges`](Self::clear_all_ranges) is called
-    /// or the rebuilt decoder is dropped. With [`FetchGranularity::Batch`],
-    /// `build` releases these bytes (see its *Memory* section).
+    /// or the rebuilt decoder is dropped.
     pub fn into_builder(self) -> Result<ParquetPushDecoderBuilder, ParquetError> {
         self.state.into_builder()
     }

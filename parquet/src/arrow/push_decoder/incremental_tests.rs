@@ -1203,6 +1203,73 @@ fn batch_size_zero_is_an_error() {
     }
 }
 
+/// `try_decode` returns the error of a predicate.
+#[test]
+fn predicate_error_is_returned() {
+    let predicate = ArrowPredicateFn::new(columns(&["a"]), |_batch: RecordBatch| {
+        Err(arrow_schema::ArrowError::ComputeError(String::from(
+            "predicate failed",
+        )))
+    });
+    let mut decoder = Scan::default()
+        .builder()
+        .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+        .with_fetch_granularity(FetchGranularity::Batch)
+        .build()
+        .unwrap();
+    let file = 0..TEST_FILE.data.len() as u64;
+    decoder.push_range(file.clone(), fetch(&file)).unwrap();
+    let err = decoder.try_decode().unwrap_err().to_string();
+    assert!(err.contains("predicate failed"), "{err}");
+}
+
+/// A scan that reads a row group two times gives its batches two times. The
+/// decoder requests the pages again for the second read.
+#[test]
+fn row_group_read_two_times() {
+    for predicates in [vec![], vec![PredicateSpec::new("b", Cmp::ModNotZero(3))]] {
+        let scan = Scan {
+            batch_size: Some(100),
+            row_groups: Some(vec![1, 0, 1]),
+            predicates,
+            ..Default::default()
+        };
+        let (row_group, _) = drive_file(scan.row_group_decoder(), &TEST_FILE.data);
+        let (batch, _) = drive_file(scan.batch_decoder(), &TEST_FILE.data);
+        assert_eq!(row_group, batch);
+    }
+}
+
+/// A footer whose file row count is 0, but whose row groups have rows. The
+/// batch size is clamped to 0, and `build` returns an error.
+#[test]
+fn batch_size_zero_with_a_wrong_file_row_count() {
+    use crate::file::metadata::{FileMetaData, ParquetMetaDataBuilder};
+    let metadata = WITHOUT_PAGE_INDEX.metadata();
+    let file = metadata.file_metadata();
+    let file = FileMetaData::new(
+        file.version(),
+        0,
+        file.created_by().map(String::from),
+        file.key_value_metadata().cloned(),
+        file.schema_descr_ptr(),
+        file.column_orders().cloned(),
+    );
+    let metadata = ParquetMetaDataBuilder::new(file)
+        .set_row_groups(metadata.row_groups().to_vec())
+        .build();
+    let err = ParquetPushDecoderBuilder::try_new_decoder(Arc::new(metadata))
+        .unwrap()
+        .with_batch_size(1024)
+        .with_fetch_granularity(FetchGranularity::Batch)
+        .build()
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Parquet error: batch_size must be greater than 0 with FetchGranularity::Batch"
+    );
+}
+
 /// `with_batch_size` clamps the batch size to the file row count, so a file
 /// without rows has a batch size of 0. That is not an error.
 #[test]
