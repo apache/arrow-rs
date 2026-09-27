@@ -464,6 +464,7 @@ impl RowGroupReaderBuilder {
                     metadata: Arc::clone(&self.metadata),
                     fields: self.fields.clone(),
                     metrics: self.metrics.clone(),
+                    row_selection_policy: self.row_selection_policy,
                 };
                 Box::new(IncrementalRowGroup::new(
                     config,
