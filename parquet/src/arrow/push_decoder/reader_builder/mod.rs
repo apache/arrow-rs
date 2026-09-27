@@ -372,6 +372,22 @@ impl RowGroupReaderBuilder {
         self.buffers.buffered_bytes()
     }
 
+    /// The leaf columns that the output or a predicate reads.
+    pub(crate) fn read_columns(&self) -> ProjectionMask {
+        let mut columns = self.projection.clone();
+        if let Some(filter) = &self.filter {
+            for predicate in &filter.predicates {
+                columns.union(predicate.projection());
+            }
+        }
+        columns
+    }
+
+    /// Remove the buffered bytes outside `keep`.
+    pub(crate) fn retain_buffered_ranges(&mut self, keep: &[Range<u64>]) {
+        self.buffers.retain_ranges(keep);
+    }
+
     /// Clear any staged ranges currently buffered for future decode work.
     pub fn clear_all_ranges(&mut self) {
         self.buffers.clear_all_ranges();

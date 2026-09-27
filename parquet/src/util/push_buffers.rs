@@ -184,11 +184,56 @@ impl PushBuffers {
         self.buffers = new_buffers;
     }
 
+    /// Remove all buffered bytes outside `keep`, whatever the shape of the
+    /// pushed buffers.
+    ///
+    /// The parts of a buffer inside `keep` are kept as zero-copy slices.
+    /// Thus, the allocator frees the memory of a pushed [`Bytes`] only after
+    /// all of its parts are removed.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn retain_ranges(&mut self, keep: &[Range<u64>]) {
+        let keep = merge_ranges(keep);
+        let mut new_ranges = Vec::with_capacity(self.ranges.len());
+        let mut new_buffers = Vec::with_capacity(self.buffers.len());
+        for (range, buffer) in self.ranges.drain(..).zip(self.buffers.drain(..)) {
+            let first = keep.partition_point(|k| k.end <= range.start);
+            for k in keep[first..].iter().take_while(|k| k.start < range.end) {
+                let part = k.start.max(range.start)..k.end.min(range.end);
+                if part == range {
+                    new_buffers.push(buffer.clone());
+                } else {
+                    let start = (part.start - range.start) as usize;
+                    let end = (part.end - range.start) as usize;
+                    new_buffers.push(buffer.slice(start..end));
+                }
+                new_ranges.push(part);
+            }
+        }
+        self.ranges = new_ranges;
+        self.buffers = new_buffers;
+    }
+
     /// Clear all buffered ranges and their corresponding data
     pub(crate) fn clear_all_ranges(&mut self) {
         self.ranges.clear();
         self.buffers.clear();
     }
+}
+
+/// Sort `ranges` by start, remove empty ranges, and merge ranges that
+/// overlap or are adjacent.
+#[cfg(feature = "arrow")]
+fn merge_ranges(ranges: &[Range<u64>]) -> Vec<Range<u64>> {
+    let mut sorted: Vec<Range<u64>> = ranges.iter().filter(|r| !r.is_empty()).cloned().collect();
+    sorted.sort_unstable_by_key(|r| r.start);
+    let mut merged: Vec<Range<u64>> = Vec::with_capacity(sorted.len());
+    for range in sorted {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
 }
 
 impl Length for PushBuffers {
@@ -252,6 +297,31 @@ impl ChunkReader for PushBuffers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn retain_ranges_keeps_only_the_given_bytes() {
+        let mut buffers = PushBuffers::new(100);
+        buffers
+            .push_range(0..10, Bytes::from_static(b"0123456789"))
+            .unwrap();
+        buffers
+            .push_range(20..24, Bytes::from_static(b"abcd"))
+            .unwrap();
+        buffers
+            .push_range(30..32, Bytes::from_static(b"xy"))
+            .unwrap();
+        // Ranges in any order, overlapping, and outside the buffers.
+        buffers.retain_ranges(&[22..40, 2..4, 3..5, 8..9]);
+        assert_eq!(buffers.buffered_bytes(), 3 + 1 + 2 + 2);
+        assert_eq!(buffers.get_bytes(2, 3).unwrap(), Bytes::from_static(b"234"));
+        assert_eq!(buffers.get_bytes(8, 1).unwrap(), Bytes::from_static(b"8"));
+        assert!(!buffers.has_range(&(5..6)));
+        assert_eq!(buffers.get_bytes(22, 2).unwrap(), Bytes::from_static(b"cd"));
+        assert_eq!(buffers.get_bytes(30, 2).unwrap(), Bytes::from_static(b"xy"));
+        buffers.retain_ranges(&[]);
+        assert_eq!(buffers.buffered_bytes(), 0);
+    }
 
     #[test]
     fn push_range_accepts_matching_length() {

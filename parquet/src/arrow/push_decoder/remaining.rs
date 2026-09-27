@@ -122,6 +122,17 @@ impl QueuedRowGroups {
         }
     }
 
+    /// The queued row group indexes, in order.
+    fn row_groups(&self) -> Vec<usize> {
+        match self {
+            Self::Global { row_groups, .. } => row_groups.iter().copied().collect(),
+            Self::PerRowGroup(row_groups) => row_groups
+                .iter()
+                .map(|row_group| row_group.row_group_index)
+                .collect(),
+        }
+    }
+
     fn len(&self) -> usize {
         match self {
             Self::Global { row_groups, .. } => row_groups.len(),
@@ -449,6 +460,34 @@ impl RemainingRowGroups {
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
     /// group of rows from the Parquet data, or the list of data ranges still
     /// needed to proceed
+    /// Release the buffered bytes that are outside the read column chunks of
+    /// the queued row groups. The decoder does not read these bytes.
+    pub fn release_unplanned_bytes(&mut self) {
+        let read_columns = self.row_group_reader_builder.read_columns();
+        let metadata = &self.frontier.parquet_metadata;
+        let keep: Vec<Range<u64>> = self
+            .frontier
+            .queued
+            .row_groups()
+            .into_iter()
+            .filter(|&idx| idx < metadata.num_row_groups())
+            .flat_map(|idx| {
+                metadata
+                    .row_group(idx)
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .filter(|(column, _)| read_columns.leaf_included(*column))
+                    .map(|(_, chunk)| {
+                        let (start, len) = chunk.byte_range();
+                        start..start + len
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        self.row_group_reader_builder.retain_buffered_ranges(&keep);
+    }
+
     pub fn try_next_reader(
         &mut self,
     ) -> Result<DecodeResult<ParquetRecordBatchReader>, ParquetError> {
