@@ -127,6 +127,8 @@ pub(super) struct IncrementalRowGroup {
     row_count: usize,
     /// The pages that the readers can read. All readers share it.
     store: Arc<PageStore>,
+    /// The byte ranges of each column chunk. See [`ColumnChunkPages`].
+    chunks: Vec<ColumnChunkPages>,
     /// The offset/limit budget that is left after the rows given so far.
     budget: RowBudget,
     /// The predicates, if any.
@@ -180,11 +182,13 @@ impl IncrementalRowGroup {
             None => std::iter::once(0..row_count).collect(),
         };
         let num_predicates = filter.as_ref().map_or(0, |filter| filter.predicates.len());
+        let chunks = ColumnChunkPages::for_row_group(&config.metadata, row_group_idx);
         Self {
             config,
             row_group_idx,
             row_count,
             store: Arc::new(PageStore::default()),
+            chunks,
             budget,
             filter,
             base,
@@ -373,30 +377,17 @@ impl IncrementalRowGroup {
         self.stage = Stage::Idle;
     }
 
-    /// The byte ranges that [`InMemoryRowGroup::fetch_ranges`] returns for
-    /// these rows and columns. The row-group mode requests the same ranges.
+    /// The byte ranges that the rows `rows` of `projection` read. These are
+    /// the ranges that the row-group mode requests for the same rows
+    /// ([`InMemoryRowGroup::fetch_ranges`]).
     fn fetch_ranges(&self, projection: &ProjectionMask, rows: &[Range<usize>]) -> Vec<Range<u64>> {
-        let num_columns = self
-            .config
-            .metadata
-            .row_group(self.row_group_idx)
-            .columns()
-            .len();
-        let planning = InMemoryRowGroup {
-            row_count: self.row_count,
-            column_chunks: vec![None; num_columns],
-            page_index: row_group_page_index(&self.config.metadata, self.row_group_idx),
-            row_group_idx: self.row_group_idx,
-            metadata: &self.config.metadata,
-        };
-        planning
-            .fetch_ranges(
-                projection,
-                Some(&ranges_to_selection(rows, 0)),
-                self.config.batch_size,
-                None,
-            )
-            .ranges
+        let mut ranges = vec![];
+        for (idx, chunk) in self.chunks.iter().enumerate() {
+            if projection.leaf_included(idx) {
+                chunk.push_ranges(rows, &mut ranges);
+            }
+        }
+        ranges
     }
 
     /// Build a reader for `projection` over the store.
@@ -552,6 +543,81 @@ impl IncrementalRowGroup {
     }
 }
 
+/// The byte ranges of one column chunk, from the offset index. Built one time
+/// per row group, so that each step finds its pages with a binary search.
+enum ColumnChunkPages {
+    /// No offset index: a read of any row reads the full column chunk.
+    Chunk(Range<u64>),
+    Pages {
+        /// The dictionary page, if any.
+        dictionary: Option<Range<u64>>,
+        /// `(byte range, first row)` of each data page, in row order.
+        data: Vec<(Range<u64>, usize)>,
+    },
+}
+
+impl ColumnChunkPages {
+    fn for_row_group(metadata: &ParquetMetaData, row_group_idx: usize) -> Vec<Self> {
+        let page_index = row_group_page_index(metadata, row_group_idx);
+        metadata
+            .row_group(row_group_idx)
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(idx, column)| {
+                let (start, len) = column.byte_range();
+                let Some(locations) = page_index
+                    .as_ref()
+                    .and_then(|page_index| page_index.page_locations(idx))
+                else {
+                    return Self::Chunk(start..start + len);
+                };
+                let dictionary = locations
+                    .first()
+                    .map(|first| first.offset as u64)
+                    .filter(|&first| first != start)
+                    .map(|first| start..first);
+                let data = locations
+                    .iter()
+                    .map(|location| {
+                        let offset = location.offset as u64;
+                        let range = offset..offset + location.compressed_page_size as u64;
+                        (range, location.first_row_index as usize)
+                    })
+                    .collect();
+                Self::Pages { dictionary, data }
+            })
+            .collect()
+    }
+
+    /// Append the byte ranges that the sorted rows `rows` read: the
+    /// dictionary page and each data page that holds one of the rows.
+    fn push_ranges(&self, rows: &[Range<usize>], out: &mut Vec<Range<u64>>) {
+        let (dictionary, data) = match self {
+            Self::Chunk(range) => {
+                out.push(range.clone());
+                return;
+            }
+            Self::Pages { dictionary, data } => (dictionary, data),
+        };
+        out.extend(dictionary.iter().cloned());
+        // The index of the first page that is not pushed yet. A page can hold
+        // rows of more than one range, so it is pushed one time only.
+        let mut next = 0;
+        for rows in rows {
+            let holds_start = data
+                .partition_point(|(_, first_row)| *first_row <= rows.start)
+                .saturating_sub(1);
+            let mut page = holds_start.max(next);
+            while page < data.len() && data[page].1 < rows.end {
+                out.push(data[page].0.clone());
+                page += 1;
+            }
+            next = next.max(page);
+        }
+    }
+}
+
 /// The page index of `row_group_idx`, if the file has offset indexes.
 fn row_group_page_index(
     metadata: &ParquetMetaData,
@@ -680,6 +746,94 @@ fn take_rows(ranges: &mut Vec<Range<usize>>, n: usize) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::push_decoder::test::{
+        test_file_parquet_metadata, test_file_parquet_metadata_with_offset_index,
+    };
+    use rand::rngs::StdRng;
+    use rand::{RngExt, SeedableRng};
+
+    /// One row group of 2000 rows. Pages end at about 200 bytes, so each
+    /// column has its own page boundaries. Column "b" has a dictionary page.
+    fn many_pages_metadata() -> Arc<ParquetMetaData> {
+        use crate::arrow::ArrowWriter;
+        use crate::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
+        use crate::file::properties::WriterProperties;
+        use arrow_array::{ArrayRef, Int64Array, StringArray};
+
+        let a: ArrayRef = Arc::new(Int64Array::from_iter_values(0..2000));
+        let b: ArrayRef = Arc::new(Int64Array::from_iter_values((0..2000).map(|i| i % 10)));
+        let c: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..2000).map(|i| "x".repeat(i % 17)),
+        ));
+        let batch = RecordBatch::try_from_iter([("a", a), ("b", b), ("c", c)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_column_dictionary_enabled("b".into(), true)
+            .set_data_page_size_limit(200)
+            .set_write_batch_size(5)
+            .build();
+        let mut file = vec![];
+        let mut writer = ArrowWriter::try_new(&mut file, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Required)
+            .parse_and_finish(&bytes::Bytes::from(file))
+            .unwrap();
+        Arc::new(metadata)
+    }
+
+    /// [`ColumnChunkPages::push_ranges`] gives the ranges of
+    /// [`InMemoryRowGroup::fetch_ranges`], with and without an offset index.
+    #[test]
+    fn column_chunk_pages_match_fetch_ranges() {
+        let many_pages = many_pages_metadata();
+        let page_index = many_pages.page_index_for_row_group(0);
+        let pages = (0..3)
+            .map(|column| page_index.page_locations(column).unwrap().len())
+            .collect::<Vec<_>>();
+        assert!(pages.iter().all(|&n| n > 5), "{pages:?}");
+        assert!(pages.windows(2).any(|w| w[0] != w[1]), "{pages:?}");
+        for metadata in [
+            many_pages,
+            test_file_parquet_metadata_with_offset_index(),
+            test_file_parquet_metadata(),
+        ] {
+            let row_count = metadata.row_group(0).num_rows() as usize;
+            let num_columns = metadata.row_group(0).num_columns();
+            let chunks = ColumnChunkPages::for_row_group(&metadata, 0);
+            let planning = InMemoryRowGroup {
+                row_count,
+                column_chunks: vec![None; num_columns],
+                page_index: row_group_page_index(&metadata, 0),
+                row_group_idx: 0,
+                metadata: &metadata,
+            };
+            let mut rng = StdRng::seed_from_u64(0);
+            for _ in 0..200 {
+                let mut rows = vec![];
+                let mut row = rng.random_range(0..row_count);
+                while row < row_count {
+                    let end = (row + rng.random_range(1..40)).min(row_count);
+                    rows.push(row..end);
+                    row = end + rng.random_range(1..60);
+                }
+                let mut actual = vec![];
+                for chunk in &chunks {
+                    chunk.push_ranges(&rows, &mut actual);
+                }
+                let expected = planning
+                    .fetch_ranges(
+                        &ProjectionMask::all(),
+                        Some(&ranges_to_selection(&rows, 0)),
+                        100,
+                        None,
+                    )
+                    .ranges;
+                assert_eq!(actual, expected, "{rows:?}");
+            }
+        }
+    }
 
     #[test]
     fn ranges_and_selection_round_trip() {
