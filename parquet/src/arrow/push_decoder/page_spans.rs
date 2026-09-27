@@ -15,54 +15,73 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The byte ranges a column chunk read loads, each tagged with the selected
-//! rows it serves.
+//! The byte ranges that a column chunk read loads, each with the selected
+//! rows that it serves.
 //!
-//! The push decoder uses these spans to decide which pages the next batch
-//! needs and when a page can be released.
+//! The push decoder uses these spans to find the pages that the next batch
+//! needs, and the pages that it can release.
+//!
+//! # Row positions
+//!
+//! A row position counts selected rows only: position `n` is the `n`-th
+//! selected row, plus the `first_row` argument of [`column_page_spans`].
+//!
+//! # Example
+//!
+//! A column chunk with a dictionary page and 3 data pages of 100 rows. The
+//! selection selects rows 0..50 and 250..300, so it skips page 1:
+//!
+//! ```text
+//! pages:          │ dictionary │ page 0     │ page 1     │ page 2     │
+//! rows:           │            │ 0..100     │ 100..200   │ 200..300   │
+//! selected rows:  │            │ 0..50      │            │ 250..300   │
+//! spans:          │ Dictionary │ Data       │ (not read) │ Data       │
+//! row positions:  │ 0..100     │ 0..50      │            │ 50..100    │
+//! ```
+//!
+//! | [`SpanKind`] | Byte range | Rows |
+//! |---|---|---|
+//! | [`SpanKind::Dictionary`] | column chunk start to the first data page | the rows of all data spans of the column chunk |
+//! | [`SpanKind::Data`] | one data page | the selected rows of the page |
+//! | [`SpanKind::ColumnChunk`] | the column chunk (no page locations) | the selected rows of the row group |
 
 use crate::arrow::arrow_reader::RowSelection;
 use crate::file::page_index::offset_index::PageLocation;
 use std::ops::Range;
 
-/// What a [`PageSpan`] contains.
+/// What a [`PageSpan`] contains. See the table in the module documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpanKind {
-    /// The dictionary page of a column chunk.
     Dictionary,
-    /// One data page.
     Data,
-    /// A complete column chunk, because page locations are not known.
     ColumnChunk,
 }
 
-/// A byte range that a column chunk read loads, and the selected rows it
-/// serves.
+/// A byte range that a column chunk read loads, and the rows that it serves.
+/// See the module documentation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PageSpan {
-    /// Byte range in the file.
+    /// The byte range in the file.
     pub(crate) range: Range<u64>,
-    /// First selected row this range serves.
+    /// The row position of the first row that this span serves.
     pub(crate) first_row: u64,
-    /// One past the last selected row this range serves.
+    /// The row position after the last row that this span serves
+    /// (exclusive).
     pub(crate) last_row: u64,
     pub(crate) kind: SpanKind,
 }
 
-/// The spans that reading one column chunk loads, in page order.
+/// Appends to `out` the spans that a read of one column chunk loads, in page
+/// order.
 ///
-/// * `chunk`: the byte range of the column chunk.
-/// * `locations`: the page locations from the offset index. Without them
-///   (or when empty), the column chunk is one [`SpanKind::ColumnChunk`] span.
-/// * `fetch_selection`: the selection the decoder uses to choose pages. The
-///   spans are the pages that
-///   [`RowSelection::scan_ranges`] returns, plus the dictionary page. `None`
-///   reads every page.
-/// * `rows`: counts the selected rows of the row group, which can differ from
-///   `fetch_selection` (for example when the fetch is expanded to batch
-///   boundaries).
-/// * `first_row`: the selected rows before this row group. It is added to
-///   every row position.
+/// | Argument | Meaning |
+/// |---|---|
+/// | `chunk` | the byte range of the column chunk |
+/// | `locations` | the page locations of the offset index. If `None` or empty, the result is one [`SpanKind::ColumnChunk`] span. |
+/// | `fetch_selection` | the selection that chooses the pages: the pages of [`RowSelection::scan_ranges`], plus the dictionary page. `None` selects all pages. |
+/// | `rows` | the selected rows, which give the row positions. Can be different from `fetch_selection`, for example if the fetch is expanded to batch boundaries. |
+/// | `row_count` | the number of rows in the row group |
+/// | `first_row` | the row position of the first selected row of the row group |
 pub(crate) fn column_page_spans(
     chunk: Range<u64>,
     locations: Option<&[PageLocation]>,
@@ -83,8 +102,8 @@ pub(crate) fn column_page_spans(
         return;
     };
 
-    // Without a selection the decoder reads every page. With one, it reads
-    // the pages `scan_ranges` returns, in page order.
+    // `None`: read all pages. Else, read the pages of `scan_ranges`, in page
+    // order.
     let fetched = fetch_selection.map(|selection| selection.scan_ranges(locations));
     let mut fetched = fetched.as_deref().map(|ranges| ranges.iter().peekable());
 
@@ -126,7 +145,7 @@ pub(crate) fn column_page_spans(
         });
     }
 
-    // The dictionary serves exactly the rows of the data pages read.
+    // See the table in the module documentation.
     if let (true, Some(rows)) = (has_dictionary, data_rows) {
         let dictionary = &mut out[dictionary_idx];
         dictionary.first_row = rows.start;
@@ -134,10 +153,10 @@ pub(crate) fn column_page_spans(
     }
 }
 
-/// Counts the selected rows before a position in a row group.
+/// Counts the selected rows before a row of a row group.
 pub(crate) struct SelectedRows {
-    /// `(first raw row, selected rows before it, selected)` per selector.
-    /// `None` when every row is selected.
+    /// `(first row, selected rows before it, selected)` for each selector.
+    /// `None` if all rows are selected.
     runs: Option<Vec<(usize, u64, bool)>>,
 }
 
@@ -157,7 +176,8 @@ impl SelectedRows {
                     selected += selector.row_count as u64;
                 }
             }
-            // A selection shorter than the row group skips the trailing rows.
+            // If the selection is shorter than the row group, it skips the
+            // rows after its end.
             if raw < row_count {
                 runs.push((raw, selected, false));
             }

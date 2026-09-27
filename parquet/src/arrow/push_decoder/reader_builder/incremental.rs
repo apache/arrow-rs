@@ -15,43 +15,55 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Batch-granular decoding of one row group.
+//! Batch-granular decoding of one row group. This module is the design
+//! document for [`FetchGranularity::Batch`]. The user-visible behavior,
+//! including when bytes are released, is in the documentation of
+//! [`FetchGranularity::Batch`].
 //!
-//! See [`FetchGranularity::Batch`]. The default row-group state machine in
-//! [`super::RowGroupReaderBuilder`] builds a reader only when every byte of
-//! the row group is buffered. [`IncrementalRowGroup`] builds its readers
-//! before any byte is present and asks for the bytes one batch at a time.
+//! | | Row-group mode ([`super::RowGroupReaderBuilder::try_build`]) | [`IncrementalRowGroup`] |
+//! |---|---|---|
+//! | Readers built | after all bytes of the row group are buffered | before any byte is buffered, one time per row group |
+//! | Column chunk data | [`ColumnChunkData::Dense`] or `Sparse` (immutable) | [`ColumnChunkData::Shared`] over one [`PageStore`] (mutable) |
+//! | Bytes requested | all bytes of the row group | the pages of the next step |
 //!
-//! # How the readers get their bytes
+//! # Page flow
 //!
-//! Every column chunk of the row group is a [`ColumnChunkData::Shared`] over
-//! one [`PageStore`]. Before each step the decoder computes the pages that
-//! the step reads, moves them from [`PushBuffers`] into the store, and returns
-//! [`IncrementalResult::NeedsData`] if some are not pushed yet. It removes
-//! pages from the store (and from [`PushBuffers`]) when every reader has
-//! passed their rows. A dictionary page, and a column chunk read without an
-//! offset index, stay until the row group is done.
+//! ```text
+//!            push                 ingest (move)               get
+//!  caller ─────────▶ PushBuffers ──────────────▶ PageStore ◀─────── column readers
+//!                                                    │
+//!                                                    ▼ remove, when no reader
+//!                                                      needs the page again
+//! ```
 //!
-//! This is sound because, with an offset index, a column reader loads a page
-//! only when it decodes a value from it or skips part of it. It skips whole
-//! pages with the offset index only, and it does not look past the last
-//! record it was asked for (with an offset index, a page ends at a record
-//! boundary).
+//! Before each step, [`IncrementalRowGroup::try_next`]:
 //!
-//! # Two modes
+//! 1. Computes the pages that the step reads.
+//! 2. Returns [`IncrementalResult::NeedsData`] if a page is not in the
+//!    [`PageStore`] or in [`PushBuffers`].
+//! 3. Else, moves the pages from [`PushBuffers`] into the [`PageStore`] and
+//!    runs the step.
 //!
-//! **No predicates.** The selection is final, so one
-//! [`ParquetRecordBatchReader`] reads the whole row group, exactly as in the
-//! row-group mode. Before each batch, the decoder checks that the pages
-//! serving the next `batch_size` output rows are resident. Batches are the
-//! same as in the row-group mode.
+//! # Why the readers do not read a page that is not in the store
 //!
-//! **Predicates.** The selection is known only after the predicates run, so
-//! filtering and output are interleaved. The decoder evaluates the predicates
-//! one window of `batch_size` rows at a time, queues the rows that pass, and
-//! decodes an output batch from the queue. One reader per predicate and one
-//! for the output are kept for the whole row group, so no page is decoded
-//! twice. The output batches are the same as in the row-group mode.
+//! With an offset index, a column reader:
+//!
+//! * loads a page only when it decodes a value from the page or skips a part
+//!   of the page;
+//! * skips a full page with the offset index only, without loading it;
+//! * does not read after the last record that it must return, because a page
+//!   ends at a record boundary.
+//!
+//! Thus, the pages of step 1 are all of the pages that the readers load.
+//!
+//! # Modes
+//!
+//! | [`Mode`] | Used when | Readers, kept for the full row group | One step |
+//! |---|---|---|---|
+//! | [`Unfiltered`] | no predicates. The selection is final. | one [`ParquetRecordBatchReader`] | one output batch |
+//! | [`Filtered`] | predicates. The selection is known only after the predicates run. | one [`ArrayReader`] per predicate, and one for the output | one stage of [`Stage`] |
+//!
+//! Both modes give the same batches as the row-group mode.
 //!
 //! [`FetchGranularity::Batch`]: crate::arrow::push_decoder::FetchGranularity::Batch
 
@@ -83,15 +95,14 @@ use arrow_select::filter::prep_null_mask_filter;
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
-/// What one step of an [`IncrementalRowGroup`] produced.
+/// The result of [`IncrementalRowGroup::try_next`].
 #[derive(Debug)]
 pub(super) enum IncrementalResult {
-    /// Bytes needed before the next batch can be decoded.
+    /// The bytes that the next step needs.
     NeedsData(Vec<Range<u64>>),
-    /// The next output batch. `last` is `true` if the row group has no more
-    /// batches; the row group is then finished.
+    /// The next output batch. If `last` is `true`, the row group is finished.
     Batch { batch: RecordBatch, last: bool },
-    /// The row group is finished and produced no more batches.
+    /// The row group is finished, without more batches.
     Finished,
 }
 
@@ -107,16 +118,16 @@ pub(super) struct IncrementalConfig {
     pub(super) row_selection_policy: RowSelectionPolicy,
 }
 
-/// Decodes one row group a batch at a time. See the module documentation.
+/// Decodes one row group one batch at a time. See the module documentation.
 pub(super) struct IncrementalRowGroup {
     config: IncrementalConfig,
     row_group_idx: usize,
     row_count: usize,
-    /// Pages resident for this row group, shared with every reader.
+    /// The pages that the readers can read. All readers share it.
     store: Arc<PageStore>,
-    /// Offset/limit budget remaining after the rows handed out so far.
+    /// The offset/limit budget that is left after the rows given so far.
     budget: RowBudget,
-    /// Every leaf column that a predicate or the output reads.
+    /// The leaf columns that a predicate or the output reads.
     read_columns: ProjectionMask,
     mode: Mode,
     finished: bool,
@@ -134,77 +145,106 @@ impl std::fmt::Debug for IncrementalRowGroup {
     }
 }
 
+/// See *Modes* in the module documentation.
 enum Mode {
     Unfiltered(Unfiltered),
     Filtered(Box<Filtered>),
 }
 
-/// State of a row group without predicates.
+/// The state of a row group without predicates.
 struct Unfiltered {
-    /// The reader for the whole row group. `None` when it reads no rows.
+    /// The reader for the full row group. `None` if it reads no rows.
     reader: Option<ParquetRecordBatchReader>,
-    /// Pages not yet released, ordered by `first_row`. Rows are the output
-    /// rows of this row group.
+    /// The pages that are not released, sorted by `first_row`. See
+    /// [`PageSpan`] for the row positions.
     pages: Vec<PageSpan>,
-    /// Output rows produced so far.
+    /// The number of output rows given so far.
     emitted: u64,
-    /// Output rows of the row group.
+    /// The number of output rows of the row group.
     total: u64,
 }
 
-/// Where the filtered state machine is.
+/// The stage of a [`Filtered`] row group.
+///
+/// ```text
+///          next window                     idx == number of predicates
+///  ┌──────┐ ──────────▶ Predicate { idx: 0 } ─▶ … ─▶ queue_survivors ──┐
+///  │ Idle │ ◀─────────────────────────────────────────────────────────┘
+///  └──────┘ ◀──────────────────────┐
+///     │                            │ return the batch
+///     └──────▶ Output { out } ─────┘
+/// ```
+///
+/// | In `Idle`, if | Next stage |
+/// |---|---|
+/// | the queue has more than `batch_size` rows, or no window is left and the queue is not empty | `Output`, with the first `batch_size` rows of the queue |
+/// | no window is left and the queue is empty | none. The row group is finished. |
+/// | else | `Predicate { idx: 0 }`, with the next window that has selected rows |
+///
+/// If a stage needs bytes, the stage does not change and
+/// [`IncrementalRowGroup::try_next`] returns [`IncrementalResult::NeedsData`].
+/// All row ranges are row numbers in the row group.
 enum Stage {
-    /// Choose whether to emit a batch or filter the next window.
     Idle,
-    /// Evaluate predicate `idx` for the candidate rows `cand` (row-group row
-    /// ranges) of the current window.
-    Predicate { cand: Vec<Range<usize>>, idx: usize },
+    /// Evaluate predicate `idx` on the rows `cand` of the current window.
+    Predicate {
+        cand: Vec<Range<usize>>,
+        idx: usize,
+    },
     /// Decode one output batch for the rows `out`.
-    Output { out: Vec<Range<usize>> },
+    Output {
+        out: Vec<Range<usize>>,
+    },
 }
 
-/// State of a row group with predicates.
+/// The state of a row group with predicates. See [`Stage`].
 struct Filtered {
     filter: RowFilter,
     cache: Arc<RwLock<RowGroupCache>>,
+    /// See [`ColumnPages::cached`].
     cache_projection: ProjectionMask,
     /// The row selection of this row group, as row ranges.
     base: Vec<Range<usize>>,
-    /// Rows before this were given to the predicates. Always a multiple of
-    /// `batch_size`, so windows align with predicate cache batches.
+    /// The predicates got all rows before this row. A multiple of
+    /// `batch_size`, so that windows align with the batches of the predicate
+    /// cache.
     window_start: usize,
     /// The predicates do not read rows before this row again.
     filter_frontier: usize,
-    /// No more windows will be filtered.
+    /// No window is left to filter.
     filter_done: bool,
-    /// One reader per predicate, kept for the row group, and the row each
-    /// one has consumed up to.
+    /// One reader per predicate, and the row at which each reader is.
     pred_readers: Vec<Option<Box<dyn ArrayReader>>>,
     pred_pos: Vec<usize>,
-    /// Rows that passed every predicate and the offset/limit budget, in row
-    /// order, not yet output.
+    /// The queue: the rows that passed all predicates and the offset/limit
+    /// budget, and are not output yet. Sorted.
     ready: Vec<Range<usize>>,
     ready_rows: usize,
-    /// The output reader, and the row it has consumed up to.
+    /// The output reader, and the row at which it is.
     out_reader: Option<Box<dyn ArrayReader>>,
     out_pos: usize,
     stage: Stage,
-    /// Data pages of every read column, for release by row position.
+    /// The data pages of each read column. See
+    /// [`IncrementalRowGroup::release_passed_pages`].
     columns: Vec<ColumnPages>,
 }
 
-/// The data pages of one column chunk, for release by row position.
+/// The data pages of one column chunk, in row order.
 struct ColumnPages {
-    /// `(byte range, one past the last row)` of each data page, in row order.
+    /// `(byte range, end row)` of each data page. The end row is exclusive.
     pages: Vec<(Range<u64>, usize)>,
-    /// Pages before this index are released.
+    /// The pages before this index are released.
     next: usize,
     /// A predicate reads this column.
     predicate: bool,
     /// The output reads this column.
     output: bool,
-    /// The output can read this column from the predicate cache. On a cache
-    /// miss the output reads a whole cache batch again.
+    /// The output reads this column from the predicate cache.
+    ///
+    /// If a value is not in the cache (a cache miss), the output reads the
+    /// column again for the full cache batch. A cache batch is `batch_size`
+    /// rows, aligned to a multiple of `batch_size`. Thus, the fetch and the
+    /// release of a cached column use cache batch boundaries.
     cached: bool,
 }
 
@@ -319,8 +359,8 @@ impl IncrementalRowGroup {
 
     /// Prepare to decode a row group with the predicates of `filter`.
     ///
-    /// `cache_projection` is the set of predicate columns whose decoded values
-    /// the output reads from the predicate cache.
+    /// `cache_projection`: the columns that the output reads from the
+    /// predicate cache (see [`ColumnPages::cached`]).
     #[expect(clippy::too_many_arguments)]
     pub(super) fn new_filtered(
         config: IncrementalConfig,
@@ -341,9 +381,8 @@ impl IncrementalRowGroup {
             read_columns.union(predicate.projection());
         }
 
-        // Data pages of every read column, for release by row position.
-        // Columns without an offset index are read as one column chunk and
-        // are released when the row group is done.
+        // A column without an offset index has no pages here. It is one
+        // column chunk, released by `finish`.
         let page_index = row_group_page_index(&config.metadata, row_group_idx);
         let num_columns = config.metadata.row_group(row_group_idx).columns().len();
         let columns = (0..num_columns)
@@ -414,19 +453,19 @@ impl IncrementalRowGroup {
         }
     }
 
-    /// Bytes held resident for this row group, not counting [`PushBuffers`].
+    /// The bytes in the [`PageStore`]. Does not include [`PushBuffers`].
     pub(super) fn buffered_bytes(&self) -> u64 {
         self.store.buffered_bytes()
     }
 
-    /// The offset/limit budget left for the following row groups. Final once
-    /// the row group is finished.
+    /// The offset/limit budget that is left for the next row groups. The value
+    /// is final when the row group is finished.
     pub(super) fn remaining_budget(&self) -> RowBudget {
         self.budget
     }
 
-    /// Returns the [`RowFilter`] of a row group with predicates, leaving an
-    /// empty one in its place.
+    /// Returns the [`RowFilter`] of a row group with predicates, and puts an
+    /// empty [`RowFilter`] in its place.
     pub(super) fn take_filter(&mut self) -> Option<RowFilter> {
         match &mut self.mode {
             Mode::Unfiltered(_) => None,
@@ -437,11 +476,7 @@ impl IncrementalRowGroup {
         }
     }
 
-    /// Produce the next batch, or return the bytes it needs.
-    ///
-    /// Pages are moved from `buffers` into the row group's store as the
-    /// batches need them, and bytes are released from both once every reader
-    /// has passed them.
+    /// Runs the next step. See *Page flow* in the module documentation.
     pub(super) fn try_next(
         &mut self,
         buffers: &mut PushBuffers,
@@ -454,13 +489,13 @@ impl IncrementalRowGroup {
             Mode::Filtered(_) => self.try_next_filtered(buffers),
         };
         if result.is_err() {
-            // The readers are in an unknown state. Release everything.
+            // The state of the readers is unknown. Release all bytes.
             self.finish(buffers);
         }
         result
     }
 
-    /// Mark the row group done and release its bytes.
+    /// Mark the row group finished and release its bytes.
     fn finish(&mut self, buffers: &mut PushBuffers) {
         self.finished = true;
         self.store.clear();
@@ -479,9 +514,8 @@ impl IncrementalRowGroup {
                 state.ready_rows = 0;
             }
         }
-        // Release every byte of the column chunks the row group read,
-        // including bytes that were pushed but never needed (for example
-        // pages that a predicate removed every row of).
+        // Release all bytes of the column chunks that the row group read.
+        // This includes bytes that were pushed but not requested.
         let row_group = self.config.metadata.row_group(self.row_group_idx);
         let chunks: Vec<Range<u64>> = row_group
             .columns()
@@ -496,10 +530,11 @@ impl IncrementalRowGroup {
         buffers.release_ranges(&chunks);
     }
 
-    /// Move the `ranges` that are not resident from `buffers` into the store.
+    /// Steps 2 and 3 of *Page flow* in the module documentation.
     ///
-    /// Returns the ranges that are not pushed yet. When it returns an empty
-    /// `Vec`, every range is resident.
+    /// Returns the `ranges` that are not in the store or in `buffers`. If none,
+    /// moves the `ranges` from `buffers` into the store and returns an empty
+    /// `Vec`.
     fn ingest(
         &self,
         buffers: &mut PushBuffers,
@@ -529,8 +564,8 @@ impl IncrementalRowGroup {
             })?;
             self.store.insert(range.clone(), data);
         }
-        // The store now holds these bytes. Release them in one call, so each
-        // run of consecutive pages changes `buffers` once.
+        // Release all ranges in one call, so that `buffers` changes one time
+        // for each run of adjacent pages.
         buffers.release_ranges(&wanted);
         Ok(vec![])
     }
@@ -548,7 +583,7 @@ impl IncrementalRowGroup {
             return Ok(IncrementalResult::Finished);
         }
 
-        // The pages that serve the next `batch_size` output rows.
+        // The pages of the next `batch_size` output rows.
         let emitted = state.emitted;
         let batch_end = emitted + batch_size;
         let needed: Vec<Range<u64>> = state
@@ -589,9 +624,10 @@ impl IncrementalRowGroup {
             return Ok(IncrementalResult::Batch { batch, last: true });
         }
 
-        // Release the pages whose output rows are all before the cursor. The
-        // reader has loaded every such page already. Only pages that start
-        // before the cursor can end before it.
+        // Release the data pages whose rows are all before `emitted`. The
+        // reader loaded these pages already. `pages` is sorted by
+        // `first_row`, so only the pages in `..prefix` can end before
+        // `emitted`.
         let prefix = state.pages.partition_point(|p| p.first_row < emitted);
         let mut idx = 0;
         let mut released = vec![];
@@ -619,9 +655,7 @@ impl IncrementalRowGroup {
             };
             match std::mem::replace(&mut state.stage, Stage::Idle) {
                 Stage::Idle => {
-                    // Emit a batch only when the queue holds more rows than a
-                    // batch, or when no more rows can come: then the decoder
-                    // knows when it emits the last batch of the row group.
+                    // See the table in `Stage`.
                     if state.ready_rows > batch_size || (state.filter_done && state.ready_rows > 0)
                     {
                         let out = take_rows(&mut state.ready, batch_size);
@@ -674,8 +708,8 @@ impl IncrementalRowGroup {
         }
     }
 
-    /// Apply the offset/limit budget to the rows of a window that passed
-    /// every predicate, and queue them for output.
+    /// Apply the offset/limit budget to the rows `cand` that passed all
+    /// predicates, and add them to the queue.
     fn queue_survivors(&mut self, cand: Vec<Range<usize>>) {
         let batch_size = self.config.batch_size;
         let selected = total_rows(&cand);
@@ -708,13 +742,12 @@ impl IncrementalRowGroup {
         state.stage = Stage::Idle;
     }
 
-    /// The byte ranges that decoding the output rows `out` reads.
+    /// The byte ranges that the output reads for the rows `out`.
     fn output_ranges(&self, out: &[Range<usize>]) -> Vec<Range<u64>> {
         let Mode::Filtered(state) = &self.mode else {
             unreachable!("filtered mode")
         };
-        // On a predicate cache miss the output reads the whole cache batch of
-        // a cached column again, so fetch those columns at batch boundaries.
+        // See `ColumnPages::cached`.
         self.fetch_ranges(
             &self.config.projection,
             &ranges_to_selection(out, 0),
@@ -722,7 +755,8 @@ impl IncrementalRowGroup {
         )
     }
 
-    /// The byte ranges `fetch_ranges` returns for these rows and columns.
+    /// The byte ranges that [`InMemoryRowGroup::fetch_ranges`] returns for
+    /// these rows and columns. The row-group mode requests the same ranges.
     fn fetch_ranges(
         &self,
         projection: &ProjectionMask,
@@ -752,8 +786,10 @@ impl IncrementalRowGroup {
             .ranges
     }
 
-    /// Evaluate predicate `idx` for the rows `cand`. Returns the missing byte
-    /// ranges, or advances the stage with the rows that pass.
+    /// Evaluate predicate `idx` on the rows `cand`.
+    ///
+    /// Returns the missing byte ranges, or `None` and sets the stage to
+    /// predicate `idx + 1` with the rows that pass.
     fn step_predicate(
         &mut self,
         buffers: &mut PushBuffers,
@@ -764,7 +800,7 @@ impl IncrementalRowGroup {
             unreachable!("filtered mode")
         };
         let projection = state.filter.predicates[idx].projection().clone();
-        // Cached columns are read a whole cache batch at a time.
+        // See `ColumnPages::cached`.
         let ranges = self.fetch_ranges(
             &projection,
             &ranges_to_selection(&cand, 0),
@@ -857,8 +893,10 @@ impl IncrementalRowGroup {
         Ok(None)
     }
 
-    /// Decode one output batch for the rows `out`. If some bytes are missing,
-    /// keeps the stage and returns them as the inner `Err`.
+    /// Decode one output batch for the rows `out`.
+    ///
+    /// Returns the missing byte ranges as the inner `Err`, and does not change
+    /// the stage.
     fn step_output(
         &mut self,
         buffers: &mut PushBuffers,
@@ -911,8 +949,8 @@ impl IncrementalRowGroup {
             .out_reader
             .take()
             .ok_or_else(|| general_err!("Internal Error: output reader missing"))?;
-        // `out` has at most `batch_size` rows, so the plan yields one batch:
-        // the batch the row-group mode produces at this point.
+        // `out` has `batch_size` rows or less. Thus, the plan gives one batch,
+        // which is the batch that the row-group mode gives at this point.
         let mut reader = ParquetRecordBatchReader::new(array_reader, plan);
         let batch = reader.next();
         let extra = match &batch {
@@ -935,12 +973,13 @@ impl IncrementalRowGroup {
         }
     }
 
-    /// The read plan for the rows `rows` of `projection`, for a reader that
-    /// has consumed the rows before `pos`.
+    /// The read plan for the rows `rows` of `projection`, for a reader at row
+    /// `pos`.
     ///
-    /// Uses the configured [`RowSelectionPolicy`], as the row-group mode does.
-    /// A mask read decodes every row of a chunk, so it is limited to rows
-    /// whose pages are loaded, as in [`prepare_selection_for_page_skipping`].
+    /// | Strategy of the configured [`RowSelectionPolicy`] | Plan |
+    /// |---|---|
+    /// | [`RowSelectionStrategy::Selectors`] | selectors |
+    /// | [`RowSelectionStrategy::Mask`] | mask, limited to the rows of the loaded pages, as in [`prepare_selection_for_page_skipping`]. A mask decodes all rows, so it must not read a page that is not loaded. |
     fn window_plan(
         &self,
         projection: &ProjectionMask,
@@ -987,15 +1026,24 @@ impl IncrementalRowGroup {
         builder.build()
     }
 
-    /// Release the data pages of each column that no reader reads again.
+    /// Release the data pages that no reader reads again.
+    ///
+    /// A data page is released when its end row is at or before the first
+    /// row that a reader of its column can read again:
+    ///
+    /// | Reader of the column | First row that it can read again |
+    /// |---|---|
+    /// | a predicate | `filter_frontier` |
+    /// | the output | the first row of `Stage::Output`, else of the queue, else `filter_frontier`. Not after `filter_frontier`. |
+    /// | the output, from the predicate cache | the row of the output, rounded down to a multiple of `batch_size` (see [`ColumnPages::cached`]) |
+    ///
+    /// If more than one reader reads the column, the smallest row applies.
     fn release_passed_pages(&mut self, buffers: &mut PushBuffers) {
         let batch_size = self.config.batch_size;
         let Mode::Filtered(state) = &mut self.mode else {
             unreachable!("filtered mode")
         };
-        // Predicates only read rows at or after the window they filter.
         let predicate_row = state.filter_frontier;
-        // The output only reads rows that are queued or not yet filtered.
         let output_row = match &state.stage {
             Stage::Output { out } => out.first().map(|r| r.start),
             _ => None,
@@ -1003,7 +1051,6 @@ impl IncrementalRowGroup {
         .or_else(|| state.ready.first().map(|r| r.start))
         .unwrap_or(predicate_row)
         .min(predicate_row);
-        // On a cache miss, the output reads a whole cache batch.
         let cached_output_row = output_row - output_row % batch_size;
 
         let mut released = vec![];
@@ -1045,8 +1092,8 @@ fn row_group_page_index(
 
 /// A row group whose `projection` columns read from `store`.
 ///
-/// The readers built over it keep an `Arc` of the store, so they read the
-/// pages the decoder adds later.
+/// The readers keep an `Arc` of the store. Thus, they can read the pages
+/// that the decoder adds after the readers are built.
 fn shared_row_group<'a>(
     metadata: &'a ParquetMetaData,
     row_group_idx: usize,
@@ -1077,7 +1124,7 @@ fn shared_row_group<'a>(
     }
 }
 
-/// Row ranges to a [`RowSelection`] whose first row is row `from`.
+/// Row ranges to a [`RowSelection`] that starts at row `from`.
 fn ranges_to_selection(ranges: &[Range<usize>], from: usize) -> RowSelection {
     let mut selectors = Vec::with_capacity(ranges.len() * 2);
     let mut pos = from;
@@ -1092,8 +1139,8 @@ fn ranges_to_selection(ranges: &[Range<usize>], from: usize) -> RowSelection {
     RowSelection::from(selectors)
 }
 
-/// The selected rows of a [`RowSelection`] whose first row is row `from`, as
-/// row ranges. The inverse of [`ranges_to_selection`].
+/// The selected rows of a [`RowSelection`] that starts at row `from`, as row
+/// ranges. The inverse of [`ranges_to_selection`].
 fn selection_to_ranges(selection: &RowSelection, from: usize) -> Vec<Range<usize>> {
     let mut out: Vec<Range<usize>> = vec![];
     let mut pos = from;

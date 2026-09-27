@@ -44,9 +44,21 @@ use std::ops::Range;
 ///
 /// # Ordering
 ///
-/// The buffers are kept sorted by the start of their range, so lookups and
-/// releases use a binary search instead of a scan of every buffer. Pushed
-/// ranges may overlap.
+/// The buffers are sorted by the start of their range. Thus, lookups and
+/// releases use a binary search, not a scan of all buffers. Pushed ranges can
+/// overlap.
+///
+/// # Remove bytes
+///
+/// | Method | Removes |
+/// |---|---|
+/// | `clear_ranges` | the buffers whose range is equal to a given range |
+/// | `release_ranges` | the bytes in the given ranges. It trims or splits the buffers that overlap them. |
+/// | `retain_ranges` | the bytes outside the given ranges. It trims or splits the buffers that overlap them. |
+/// | `clear_all_ranges` | all buffers |
+///
+/// A trimmed or split buffer is a zero-copy slice. Thus, the allocator frees
+/// the memory of a pushed [`Bytes`] only after all of its slices are removed.
 #[derive(Debug, Clone, Default)]
 pub struct PushBuffers {
     /// the virtual "offset" of this buffers (added to any request)
@@ -59,8 +71,9 @@ pub struct PushBuffers {
     /// The buffers of data that can be used to decode the Parquet file, in the
     /// same order as `ranges`
     buffers: Vec<Bytes>,
-    /// Upper bound of the length of every range in `ranges`. A buffer that
-    /// starts more than `max_len` bytes before an offset cannot contain it.
+    /// The maximum length of the ranges in `ranges` (can be larger than the
+    /// real maximum). A buffer that starts more than `max_len` bytes before
+    /// an offset does not contain that offset.
     max_len: u64,
 }
 
@@ -144,8 +157,8 @@ impl PushBuffers {
                 range.end
             ));
         }
-        // Insert after every buffer that starts at or before `range.start`.
-        // Ranges pushed in file order are appended at the end.
+        // Insert after all buffers that start at or before `range.start`.
+        // Thus, ranges pushed in file order go at the end.
         let idx = self.ranges.partition_point(|r| r.start <= range.start);
         self.max_len = self.max_len.max(expected);
         self.ranges.insert(idx, range);
@@ -158,18 +171,29 @@ impl PushBuffers {
         self.find(range.start, range.end).is_some()
     }
 
-    /// Returns the index of a buffer that contains every byte of
-    /// `start..end`, if any.
+    /// Returns the index of a buffer that contains all bytes of `start..end`,
+    /// if any.
+    ///
+    /// Ranges can overlap. Thus, the buffer that starts nearest to `start` is
+    /// not always the buffer that contains `start..end`:
+    ///
+    /// ```text
+    /// buffers:   0..100  ├────────────────────────────────┤
+    ///            50..60                   ├───┤
+    ///            55..58                     ├┤
+    /// find:      55..90                     ├──────────┤    only 0..100 contains it
+    /// ```
+    ///
+    /// Thus, scan back from the last buffer that starts at or before
+    /// `start`. Stop at the first buffer that starts more than `max_len`
+    /// bytes before `end`, because it and all buffers before it end before
+    /// `end`.
+    ///
+    /// Callers usually push pages or column chunks of similar sizes, so the
+    /// scan visits few buffers. The scan is long only if a caller pushes one
+    /// large buffer and then many small buffers after its start.
     fn find(&self, start: u64, end: u64) -> Option<usize> {
-        // Only buffers that start at or before `start` can contain the range.
         let candidates = self.ranges.partition_point(|r| r.start <= start);
-        // Ranges may overlap, so the buffer that starts closest to `start` can
-        // end too early while an earlier, longer buffer contains the range.
-        // Scan backwards, and stop at the first buffer that starts more than
-        // `max_len` bytes before `end`: it and every earlier buffer end before
-        // `end`. Callers push pages or column chunks of similar sizes, so the
-        // scan visits few buffers in practice. It is long only if a caller
-        // pushes one large buffer and then many small buffers after its start.
         self.ranges[..candidates]
             .iter()
             .enumerate()
@@ -224,17 +248,12 @@ impl PushBuffers {
         }
     }
 
-    /// Release every buffered byte that falls in any of `ranges`, whatever
-    /// shape the bytes were pushed in.
+    /// Remove all buffered bytes in `ranges`. See *Remove bytes* in the
+    /// [`PushBuffers`] documentation.
     ///
-    /// Unlike [`Self::clear_ranges`], which only drops buffers whose range
-    /// matches exactly, this trims or splits any buffer that overlaps a range
-    /// and keeps the parts outside it. The parts are zero-copy slices, so the
-    /// underlying allocation is freed only once every slice of it is released.
-    ///
-    /// Adjacent and overlapping ranges are merged first, so a caller that
-    /// releases many consecutive pages in one call changes each run of
-    /// buffers in one step.
+    /// This merges adjacent and overlapping ranges first. Thus, if a caller
+    /// releases many adjacent pages in one call, each run of buffers changes
+    /// one time.
     #[cfg(feature = "arrow")]
     pub(crate) fn release_ranges(&mut self, ranges: &[Range<u64>]) {
         for range in merge_ranges(ranges) {
@@ -243,13 +262,14 @@ impl PushBuffers {
         self.reset_if_empty();
     }
 
-    /// Release the bytes in the non-empty `range`, replacing only the buffers
-    /// that can overlap it.
+    /// Remove the bytes in the non-empty `range`. Replace only the buffers
+    /// that can overlap `range`.
     #[cfg(feature = "arrow")]
     fn release_merged(&mut self, range: &Range<u64>) {
-        // A buffer that starts `max_len` or more bytes before `range.start`
-        // ends at or before it, and a buffer that starts at or after
-        // `range.end` is after it. Only the buffers between can overlap.
+        // Only the buffers in `lo..hi` can overlap `range`:
+        // - The buffers in `..lo` start `max_len` or more bytes before
+        //   `range.start`. Thus, they end at or before `range.start`.
+        // - The buffers in `hi..` start at or after `range.end`.
         let lo = self
             .ranges
             .partition_point(|r| r.start.saturating_add(self.max_len) <= range.start);
@@ -273,18 +293,18 @@ impl PushBuffers {
                 tails.push((range.end..r.end, buffer.slice(offset..)));
             }
         }
-        // The kept parts keep their start, so they stay in order. Every tail
-        // starts at `range.end`, which is after every start in the window and
-        // at or before every start after it.
+        // The order stays sorted:
+        // - The parts in `kept` keep their start.
+        // - All tails start at `range.end`. This is after all starts in
+        //   `lo..hi`, and at or before all starts after `hi`.
         kept.extend(tails);
         let (ranges, buffers): (Vec<_>, Vec<_>) = kept.into_iter().unzip();
         self.ranges.splice(lo..hi, ranges);
         self.buffers.splice(lo..hi, buffers);
     }
 
-    /// Release every buffered byte outside `keep`, whatever shape the bytes
-    /// were pushed in. The parts of a buffer inside `keep` are kept as
-    /// zero-copy slices.
+    /// Remove all buffered bytes outside `keep`. See *Remove bytes* in the
+    /// [`PushBuffers`] documentation.
     #[cfg(feature = "arrow")]
     pub(crate) fn retain_ranges(&mut self, keep: &[Range<u64>]) {
         let merged = merge_ranges(keep);
@@ -305,8 +325,9 @@ impl PushBuffers {
                 }
             }
         }
-        // A part can start after the start of the next buffer when buffers
-        // overlap. The sort is stable and the input is almost sorted.
+        // If buffers overlap, a part can start after the start of the next
+        // buffer. Thus, sort again. The input is almost sorted and the sort is
+        // stable.
         kept.sort_by_key(|(r, _)| r.start);
         (self.ranges, self.buffers) = kept.into_iter().unzip();
         self.reset_if_empty();
@@ -320,8 +341,8 @@ impl PushBuffers {
     }
 }
 
-/// Sort `ranges` by start, drop empty ranges, and merge ranges that overlap
-/// or touch.
+/// Sort `ranges` by start, remove empty ranges, and merge ranges that
+/// overlap or are adjacent.
 #[cfg(feature = "arrow")]
 fn merge_ranges(ranges: &[Range<u64>]) -> Vec<Range<u64>> {
     let mut sorted: Vec<Range<u64>> = ranges.iter().filter(|r| !r.is_empty()).cloned().collect();

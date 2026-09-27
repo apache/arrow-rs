@@ -33,16 +33,23 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
-/// One step of [`RemainingRowGroups::try_next_batch_incremental`].
+/// The result of [`RemainingRowGroups::try_next_batch_incremental`].
+///
+/// | Layer | Result type | Scope |
+/// |---|---|---|
+/// | `IncrementalRowGroup::try_next` | `IncrementalResult` | one row group |
+/// | [`RowGroupReaderBuilder::try_build_incremental`] | [`IncrementalBuildResult`] | the active row group, and its budget |
+/// | [`RemainingRowGroups::try_next_batch_incremental`] | `IncrementalStep` | all row groups |
 #[derive(Debug)]
 pub(crate) enum IncrementalStep {
-    /// Bytes needed before the next batch can be decoded.
+    /// The bytes that the next batch needs.
     NeedsData(Vec<Range<u64>>),
     /// The next batch.
     Batch(RecordBatch),
-    /// A reader for a row group that `try_next_reader` started, to drain.
+    /// The reader of a row group that `try_next_reader` started. The caller
+    /// must drain it.
     Reader(ParquetRecordBatchReader),
-    /// No more data.
+    /// No row group is left.
     Finished,
 }
 
@@ -473,10 +480,9 @@ impl RemainingRowGroups {
         self.frontier.peek_next_row_group()
     }
 
-    /// Release the buffered bytes that no queued row group reads. Used for
-    /// [`FetchGranularity::Batch`] when a decoder is built, so that bytes
-    /// pushed for row groups that a rebuilt decoder no longer reads do not
-    /// stay resident.
+    /// Release the buffered bytes that no queued row group reads. Used when a
+    /// [`FetchGranularity::Batch`] decoder is built (see its *Memory*
+    /// section).
     pub fn release_unplanned_bytes(&mut self) {
         let read_columns = self.row_group_reader_builder.read_columns();
         let metadata = &self.frontier.parquet_metadata;
@@ -508,14 +514,13 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.fetch_granularity()
     }
 
-    /// Returns true if `try_decode` is decoding the active row group a batch
-    /// at a time.
+    /// See [`RowGroupReaderBuilder::is_incremental`].
     pub fn is_incremental(&self) -> bool {
         self.row_group_reader_builder.is_incremental()
     }
 
-    /// Returns the next batch, decoding row groups a batch at a time. See
-    /// [`FetchGranularity::Batch`].
+    /// Returns the next batch. Decodes the row groups one batch at a time.
+    /// See [`FetchGranularity::Batch`].
     pub fn try_next_batch_incremental(&mut self) -> Result<IncrementalStep, ParquetError> {
         loop {
             if !self.row_group_reader_builder.has_active_row_group() {

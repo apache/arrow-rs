@@ -15,42 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`PageStore`]: the pages of one row group that a live reader may read,
-//! shared between the push decoder and that reader.
+//! [`PageStore`]: the pages of one row group that the push decoder and its
+//! column readers share.
 //!
-//! A [`ColumnChunkData::Dense`] or [`ColumnChunkData::Sparse`] chunk is
-//! immutable, so a reader over it can only be built once every byte it reads
-//! is present. A [`ColumnChunkData::Shared`] chunk reads from a `PageStore`
-//! instead. The decoder adds pages to the store before a batch needs them and
-//! removes them after the reader has passed them, so one reader, with its
-//! decoded dictionaries, can decode a whole row group while only a few pages
-//! of it are resident.
+//! The decoder adds and removes pages while the readers use the store. The
+//! readers read it through [`ColumnChunkData::Shared`]. See *Page flow* in
+//! the `reader_builder::incremental` module.
 //!
 //! # Lookup
 //!
-//! With an offset index,
-//! [`SerializedPageReader`](crate::file::serialized_reader::SerializedPageReader)
-//! reads one page at a time, at the exact page start, and skips pages it does
-//! not need without reading them. Without an offset index it reads the column
-//! chunk from its start, one page header at a time. [`PageStore::get`]
-//! supports both: it returns the resident bytes that contain `start`, from
-//! `start` to the end of the entry.
+//! [`PageStore::get`] returns the bytes from `start` to the end of the entry
+//! that contains `start`. Thus, it supports the two read patterns of
+//! [`SerializedPageReader`]:
 //!
-//! [`ColumnChunkData::Dense`]: crate::arrow::in_memory_row_group::ColumnChunkData::Dense
-//! [`ColumnChunkData::Sparse`]: crate::arrow::in_memory_row_group::ColumnChunkData::Sparse
+//! | Offset index | [`SerializedPageReader`] reads | Entries in the store |
+//! |---|---|---|
+//! | yes | one page at a time, at the page start. It skips the other pages without a read. | one per page |
+//! | no | from the column chunk start, one page header at a time | one per column chunk |
+//!
 //! [`ColumnChunkData::Shared`]: crate::arrow::in_memory_row_group::ColumnChunkData::Shared
+//! [`SerializedPageReader`]: crate::file::serialized_reader::SerializedPageReader
 
 use bytes::Bytes;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Mutex;
 
-/// Resident pages (or whole column chunks) of one row group, keyed by file
-/// offset.
+/// The pages (or full column chunks) of one row group, keyed by file offset.
+/// See the module documentation.
 ///
-/// Offsets are unique in a file, so one store serves every column chunk of a
-/// row group. The store is shared by `Arc` and is interior mutable, so the
-/// decoder can add and remove pages while readers hold it.
+/// Offsets are unique in a file. Thus, one store holds all column chunks of a
+/// row group.
 #[derive(Debug, Default)]
 pub(crate) struct PageStore {
     /// file offset of the first byte -> bytes
@@ -58,8 +53,9 @@ pub(crate) struct PageStore {
 }
 
 impl PageStore {
-    /// Add the bytes for `range`. If an entry already starts at
-    /// `range.start`, the store keeps it, so a page pushed twice is held once.
+    /// Add the bytes of `range`. If an entry starts at `range.start`, keep
+    /// that entry. Thus, the store holds a page that is pushed two times one
+    /// time only.
     pub(crate) fn insert(&self, range: Range<u64>, data: Bytes) {
         debug_assert_eq!(range.end - range.start, data.len() as u64);
         self.pages
@@ -69,7 +65,7 @@ impl PageStore {
             .or_insert(data);
     }
 
-    /// Returns `true` if one entry contains every byte of `range`.
+    /// Returns `true` if one entry contains all bytes of `range`.
     pub(crate) fn contains(&self, range: &Range<u64>) -> bool {
         let pages = self.pages.lock().unwrap();
         pages
@@ -78,8 +74,8 @@ impl PageStore {
             .is_some_and(|(start, data)| start + data.len() as u64 >= range.end)
     }
 
-    /// The resident bytes from `start` to the end of the entry that contains
-    /// `start`, if any.
+    /// The bytes from `start` to the end of the entry that contains `start`,
+    /// if any.
     pub(crate) fn get(&self, start: u64) -> Option<Bytes> {
         let pages = self.pages.lock().unwrap();
         let (entry_start, data) = pages.range(..=start).next_back()?;
@@ -92,12 +88,12 @@ impl PageStore {
         self.pages.lock().unwrap().remove(&start);
     }
 
-    /// Remove every entry.
+    /// Remove all entries.
     pub(crate) fn clear(&self) {
         self.pages.lock().unwrap().clear();
     }
 
-    /// Total resident bytes.
+    /// The total number of bytes in the store.
     pub(crate) fn buffered_bytes(&self) -> u64 {
         self.pages
             .lock()
