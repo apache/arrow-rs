@@ -220,7 +220,7 @@ pub struct PushDecoderInput {
 /// |---|---|---|
 /// | [`DecodeResult::NeedsData`] requests | all bytes that the row group reads | the bytes that the next batch reads |
 /// | First batch of a row group | after the full row group is pushed | after the pages of the batch are pushed |
-/// | Buffered bytes | the row group | the pages of the row group that the decoder requested so far (see *Memory* in [`Self::Batch`]) |
+/// | Buffered bytes | the row group | about one batch (see *Memory* in [`Self::Batch`]) |
 /// | Offset index | used to skip the pages of a row selection | also necessary to request one batch at a time |
 /// | `batch_size` of 0 | accepted | [`ParquetPushDecoderBuilder::build`] returns an error if the file has rows |
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -247,10 +247,22 @@ pub enum FetchGranularity {
     ///
     /// # Memory
     ///
-    /// The decoder holds the pages of a row group until the row group ends.
-    /// Then it releases all bytes of the row group, as in [`Self::RowGroup`].
+    /// The decoder releases bytes when it does not need them again:
+    ///
+    /// | Bytes | Released |
+    /// |---|---|
+    /// | Data page of a column that a reader reads, requested or not (for example, a page in which no row passes the predicates) | after all readers of its column have passed its rows |
+    /// | Dictionary page | at the end of the row group |
+    /// | Column chunk without an offset index | at the end of the row group |
+    /// | Pushed bytes of a column chunk of the row group that no reader reads | at the end of the row group |
+    ///
     /// [`ParquetPushDecoder::buffered_bytes`] shows the bytes that the decoder
     /// holds.
+    ///
+    /// The allocator frees a pushed [`Bytes`] only after the decoder releases
+    /// all slices of it. Thus, push each page in a different [`Bytes`]. Then
+    /// the decoder holds approximately one batch and the read-ahead, not the
+    /// full row group.
     ///
     /// If the scan reads a row group two times, the decoder requests its
     /// pages again for the second read.
@@ -286,6 +298,8 @@ pub enum FetchGranularity {
     ///
     /// On storage with high latency, or with a sparse [`RowSelection`], read
     /// ahead: for example, fetch the column chunks of the next row group.
+    /// The *Memory* table above shows when the decoder releases the bytes
+    /// that the caller pushed ahead.
     ///
     /// # Other methods
     ///
@@ -1571,12 +1585,14 @@ mod test {
         let batch = expect_data(decoder.try_decode());
         assert_eq!(batch, TEST_BATCH.slice(0, 100));
 
-        // The decoder holds the pages until the row group is done.
-        let first_page_bytes: u64 = dictionary_and_first_pages
+        // The first data pages were released. The dictionary pages are kept
+        // until the row group is done.
+        let dictionary_bytes: u64 = dictionary_and_first_pages
             .iter()
+            .step_by(2)
             .map(|range| range.end - range.start)
             .sum();
-        assert_eq!(decoder.buffered_bytes(), first_page_bytes);
+        assert_eq!(decoder.buffered_bytes(), dictionary_bytes);
 
         // The second batch needs the second page of each column.
         let ranges = expect_needs_data(decoder.try_decode());

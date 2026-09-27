@@ -188,6 +188,8 @@ struct Cost {
     rounds: usize,
     /// Every range requested, in order.
     requested: Vec<Range<u64>>,
+    /// Highest `buffered_bytes()` seen.
+    peak_buffered: u64,
 }
 
 /// Decode `file`, pushing exactly the requested ranges.
@@ -213,6 +215,7 @@ fn drive_file(mut decoder: ParquetPushDecoder, file: &Bytes) -> (Vec<RecordBatch
             }
             DecodeResult::Finished => break,
         }
+        cost.peak_buffered = cost.peak_buffered.max(decoder.buffered_bytes());
     }
     // The last batch finishes the last row group, which releases its bytes.
     assert_eq!(last_buffered, 0, "bytes left after the last batch");
@@ -459,6 +462,12 @@ fn full_scan() {
     // The same bytes, requested in more and smaller requests.
     assert_eq!(union(row_group.requested), union(batch.requested.clone()));
     assert!(batch.rounds > 3 * 3, "{}", batch.rounds);
+    assert!(
+        batch.peak_buffered * 3 < row_group_bytes(0),
+        "peak {} vs row group {}",
+        batch.peak_buffered,
+        row_group_bytes(0)
+    );
 }
 
 #[test]
@@ -671,8 +680,7 @@ fn partial_pushes_across_batches() {
 }
 
 /// Push every planned byte of the scan up front, one buffer per page, and
-/// check that the decoder releases the bytes of a row group when the row
-/// group ends.
+/// check that the decoder releases pages as it passes them.
 #[test]
 fn releases_bytes_pushed_ahead() {
     let meta = metadata(true);
@@ -718,11 +726,36 @@ fn releases_bytes_pushed_ahead() {
         }
     }
     assert_eq!(rows, NUM_ROWS);
-    // The decoder holds the first row group until it ends. Then only the
-    // second row group is left.
-    assert!(resident[..5].iter().all(|&r| r == pushed), "{resident:?}");
+    // Resident bytes decrease as the first row group is decoded, and by the
+    // end of it only the second row group is left.
+    assert!(
+        resident.windows(2).take(5).all(|w| w[1] < w[0]),
+        "{resident:?}"
+    );
     assert_eq!(resident[5], row_group_bytes(1));
     assert_eq!(decoder.buffered_bytes(), 0);
+}
+
+/// Bytes that are pushed in one buffer are released in parts. The
+/// accounting follows, although the allocation is freed only at the end.
+#[test]
+fn releases_parts_of_one_buffer() {
+    let mut decoder = Scan {
+        batch_size: Some(100),
+        ..Default::default()
+    }
+    .batch_decoder();
+    let file = 0..TEST_FILE.data.len() as u64;
+    decoder.push_range(file.clone(), fetch(&file)).unwrap();
+    let mut previous = decoder.buffered_bytes();
+    let mut batches = 0;
+    while let DecodeResult::Data(_) = decoder.try_decode().unwrap() {
+        let buffered = decoder.buffered_bytes();
+        assert!(buffered < previous, "{buffered} >= {previous}");
+        previous = buffered;
+        batches += 1;
+    }
+    assert_eq!(batches, NUM_ROWS / 100);
 }
 
 #[test]

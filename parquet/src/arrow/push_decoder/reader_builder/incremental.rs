@@ -106,7 +106,14 @@ enum Stage {
 /// ```text
 ///            push                 ingest (move)               get
 ///  caller ─────────▶ PushBuffers ──────────────▶ PageStore ◀─────── column readers
+///                                                    │
+///                                                    ▼ remove, when no reader
+///                                                      needs the page again
 /// ```
+///
+/// [`Self::release_passed_pages`] removes the data pages. Dictionary pages,
+/// and column chunks without an offset index, stay until the row group is
+/// finished.
 ///
 /// Each step (see [`Stage`]) requests only the pages that it reads. This is
 /// sound with an offset index, because a column reader:
@@ -138,6 +145,8 @@ pub(super) struct IncrementalRowGroup {
     /// The predicates got all rows before this row. A multiple of
     /// `batch_size`.
     window_start: usize,
+    /// The predicates do not read rows before this row again.
+    filter_frontier: usize,
     /// No window is left to filter.
     filter_done: bool,
     /// One reader per predicate, and the row at which each reader is.
@@ -151,7 +160,22 @@ pub(super) struct IncrementalRowGroup {
     out_reader: Option<Box<dyn ArrayReader>>,
     out_pos: usize,
     stage: Stage,
+    /// One entry per read column. See
+    /// [`IncrementalRowGroup::release_passed_pages`].
+    release: Vec<ReleaseCursor>,
     finished: bool,
+}
+
+/// The readers of one column, and its next data page to release.
+struct ReleaseCursor {
+    /// The index of the column in [`IncrementalRowGroup::chunks`].
+    column: usize,
+    /// The data pages before this index are released.
+    next: usize,
+    /// A predicate reads this column.
+    predicate: bool,
+    /// The output reads this column.
+    output: bool,
 }
 
 impl std::fmt::Debug for IncrementalRowGroup {
@@ -183,6 +207,23 @@ impl IncrementalRowGroup {
         };
         let num_predicates = filter.as_ref().map_or(0, |filter| filter.predicates.len());
         let chunks = ColumnChunkPages::for_row_group(&config.metadata, row_group_idx);
+        let predicate_reads = |idx: usize| {
+            filter.as_ref().is_some_and(|filter| {
+                filter
+                    .predicates
+                    .iter()
+                    .any(|predicate| predicate.projection().leaf_included(idx))
+            })
+        };
+        let release = (0..chunks.len())
+            .filter(|&idx| config.projection.leaf_included(idx) || predicate_reads(idx))
+            .map(|idx| ReleaseCursor {
+                column: idx,
+                next: 0,
+                predicate: predicate_reads(idx),
+                output: config.projection.leaf_included(idx),
+            })
+            .collect();
         Self {
             config,
             row_group_idx,
@@ -193,6 +234,7 @@ impl IncrementalRowGroup {
             filter,
             base,
             window_start: 0,
+            filter_frontier: 0,
             filter_done: false,
             pred_readers: (0..num_predicates).map(|_| None).collect(),
             pred_pos: vec![0; num_predicates],
@@ -201,6 +243,7 @@ impl IncrementalRowGroup {
             out_reader: None,
             out_pos: 0,
             stage: Stage::Idle,
+            release,
             finished: false,
         }
     }
@@ -325,11 +368,13 @@ impl IncrementalRowGroup {
                     let end = (start + batch_size).min(self.row_count);
                     let cand = intersect(&self.base, start..end);
                     self.window_start = end;
+                    self.filter_frontier = start;
                     self.stage = Stage::Predicate { cand, idx: 0 };
                 }
                 Stage::Predicate { cand, idx } => {
                     if cand.is_empty() || idx == self.num_predicates() {
                         self.queue_survivors(cand);
+                        self.release_passed_pages(buffers);
                         continue;
                     }
                     if let Some(missing) = self.step_predicate(buffers, cand, idx)? {
@@ -344,6 +389,8 @@ impl IncrementalRowGroup {
                     let last = self.filter_done && self.ready_rows == 0;
                     if last {
                         self.finish();
+                    } else {
+                        self.release_passed_pages(buffers);
                     }
                     return Ok(IncrementalResult::Batch { batch, last });
                 }
@@ -369,6 +416,7 @@ impl IncrementalRowGroup {
         };
         self.ready_rows += total_rows(&kept);
         self.ready.extend(kept);
+        self.filter_frontier = self.window_start;
         if self.budget.is_exhausted()
             || next_row_at_or_after(&self.base, self.window_start).is_none()
         {
@@ -529,6 +577,56 @@ impl IncrementalRowGroup {
                 "Internal Error: incremental output plan produced no batch"
             )),
         }
+    }
+
+    /// Release the data pages that no reader reads again.
+    ///
+    /// A data page is released when its end row is at or before the first
+    /// row that a reader of its column can read again:
+    ///
+    /// | Reader of the column | First row that it can read again |
+    /// |---|---|
+    /// | a predicate | `filter_frontier` |
+    /// | the output | the first row of the queue, else `filter_frontier`. Not after `filter_frontier`. |
+    ///
+    /// If more than one reader reads the column, the smallest row applies.
+    fn release_passed_pages(&mut self, buffers: &mut PushBuffers) {
+        let predicate_row = self.filter_frontier;
+        // The callers run after an output batch is done, or after a window
+        // is queued, so no output batch is in progress.
+        let output_row = self
+            .ready
+            .first()
+            .map_or(predicate_row, |r| r.start)
+            .min(predicate_row);
+
+        let mut released = vec![];
+        for cursor in &mut self.release {
+            // A column without an offset index is one column chunk. It is
+            // released when the row group is finished.
+            let ColumnChunkPages::Pages { data, .. } = &self.chunks[cursor.column] else {
+                continue;
+            };
+            let mut row = usize::MAX;
+            if cursor.predicate {
+                row = row.min(predicate_row);
+            }
+            if cursor.output {
+                row = row.min(output_row);
+            }
+            while let Some((range, _)) = data.get(cursor.next) {
+                let end_row = data
+                    .get(cursor.next + 1)
+                    .map_or(self.row_count, |(_, first_row)| *first_row);
+                if end_row > row {
+                    break;
+                }
+                self.store.remove(range.start);
+                released.push(range.clone());
+                cursor.next += 1;
+            }
+        }
+        buffers.release_ranges(&released);
     }
 
     /// The read plan for the rows `rows`, for a reader at row `pos`.
