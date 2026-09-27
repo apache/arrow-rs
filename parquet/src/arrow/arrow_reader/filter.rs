@@ -208,18 +208,14 @@ impl RowFilter {
 
     /// Fuse consecutive predicates on the same single top-level, non-repeated leaf.
     /// This avoids repeated decoding or predicate-cache replay of that column.
-    pub(crate) fn fuse_same_projection(
-        self,
-        parquet_schema: &SchemaDescriptor,
-        row_selection_policy: RowSelectionPolicy,
-    ) -> Self {
+    pub(crate) fn fuse_same_projection(self, parquet_schema: &SchemaDescriptor) -> Self {
         let mut predicates: Vec<Box<dyn ArrowPredicate>> =
             Vec::with_capacity(self.predicates.len());
         let mut group: Vec<Box<dyn ArrowPredicate>> = Vec::new();
         let mut flush_group = |group: &mut Vec<Box<dyn ArrowPredicate>>| {
             if group.len() > 1 && can_fuse_projection(group[0].projection(), parquet_schema) {
                 let group = std::mem::take(group);
-                predicates.push(Box::new(FusedPredicate::new(group, row_selection_policy)));
+                predicates.push(Box::new(FusedPredicate::new(group)));
             } else {
                 predicates.append(group);
             }
@@ -257,20 +253,20 @@ fn can_fuse_projection(projection: &ProjectionMask, parquet_schema: &SchemaDescr
 
 /// Evaluate same-projection predicates in order on one decoded batch.
 /// Later predicates see only surviving rows, sliced when contiguous or compacted
-/// otherwise. Selections follow the reader's row selection policy.
+/// otherwise.
 struct FusedPredicate {
     /// At least two predicates, all with the same projection.
     predicates: Vec<Box<dyn ArrowPredicate>>,
-    row_selection_policy: RowSelectionPolicy,
+    /// Chooses how intermediate selections are composed. The output is always
+    /// a [`BooleanArray`], so this is independent of the reader's
+    /// [`RowSelectionPolicy`], which governs decoding.
+    composition_policy: RowSelectionPolicy,
 }
 
 impl FusedPredicate {
     /// Create a fused predicate from at least two predicates that share one
     /// projection.
-    fn new(
-        predicates: Vec<Box<dyn ArrowPredicate>>,
-        row_selection_policy: RowSelectionPolicy,
-    ) -> Self {
+    fn new(predicates: Vec<Box<dyn ArrowPredicate>>) -> Self {
         debug_assert!(predicates.len() > 1);
         debug_assert!(
             predicates
@@ -279,7 +275,7 @@ impl FusedPredicate {
         );
         Self {
             predicates,
-            row_selection_policy,
+            composition_policy: RowSelectionPolicy::default(),
         }
     }
 }
@@ -325,7 +321,7 @@ impl ArrowPredicate for FusedPredicate {
                 // Only the accumulated selection drives the composition
                 // algorithm, so adapt it once, right before it is used.
                 Some(prev) => self
-                    .row_selection_policy
+                    .composition_policy
                     .apply(prev)
                     .and_then(&predicate_selection),
                 None => predicate_selection,
@@ -460,7 +456,7 @@ mod tests {
             accept_all(a.clone()),
             accept_all(a.clone()),
         ])
-        .fuse_same_projection(&schema, RowSelectionPolicy::default());
+        .fuse_same_projection(&schema);
 
         let projections: Vec<_> = filter
             .predicates()
@@ -480,12 +476,11 @@ mod tests {
         let a = ProjectionMask::leaves(&schema, [0]);
         let b = ProjectionMask::leaves(&schema, [1]);
 
-        let filter = RowFilter::new(vec![accept_all(a), accept_all(b)])
-            .fuse_same_projection(&schema, RowSelectionPolicy::default());
+        let filter =
+            RowFilter::new(vec![accept_all(a), accept_all(b)]).fuse_same_projection(&schema);
         assert_eq!(filter.predicates().len(), 2);
 
-        let filter =
-            RowFilter::new(vec![]).fuse_same_projection(&schema, RowSelectionPolicy::default());
+        let filter = RowFilter::new(vec![]).fuse_same_projection(&schema);
         assert!(filter.predicates().is_empty());
     }
 
@@ -588,7 +583,10 @@ mod tests {
             for make_predicates in &cases {
                 let expected = sequential(&batch, &mut make_predicates());
                 for policy in POLICIES {
-                    let mut fused = FusedPredicate::new(make_predicates(), policy);
+                    let mut fused = FusedPredicate {
+                        predicates: make_predicates(),
+                        composition_policy: policy,
+                    };
                     let actual = fused.evaluate(batch.clone()).unwrap();
                     assert_eq!(actual.null_count(), 0);
                     assert_eq!(
@@ -606,7 +604,7 @@ mod tests {
         let short = Box::new(ArrowPredicateFn::new(ProjectionMask::all(), |_| {
             Ok(BooleanArray::from(vec![true]))
         }));
-        let mut fused = FusedPredicate::new(vec![all_true(), short], RowSelectionPolicy::default());
+        let mut fused = FusedPredicate::new(vec![all_true(), short]);
         let err = fused.evaluate(int_batch(0..4)).unwrap_err();
         assert!(
             err.to_string()
@@ -670,7 +668,7 @@ mod tests {
             }
 
             for policy in POLICIES {
-                let mut fused = FusedPredicate::new(make_predicates(), policy);
+                let mut fused = FusedPredicate::new(make_predicates());
                 let plan = ReadPlanBuilder::new(7)
                     .with_selection(initial.clone())
                     .with_row_selection_policy(policy)
