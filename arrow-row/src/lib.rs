@@ -6886,23 +6886,23 @@ mod tests {
         }
     }
 
-    /// Trait representing an operation on a BitIterator
+    /// Trait representing an operation on a [`RowsIter`]
     /// that can be compared against a slice iterator
     trait RowsIteratorOp {
-        /// What the operation returns (e.g. Option<bool> for last/max, usize for count, etc)
+        /// What the operation returns (e.g. Option<Row> for last, usize for count, etc)
         type Output<'a>: PartialEq + Debug;
 
         /// The name of the operation, used for error messages
         const NAME: &'static str;
 
         /// Get the value of the operation for the provided iterator
-        /// This will be either a BitIterator or a slice iterator to make sure they produce the same result
+        /// This will be either a [`RowsIter`] or a slice iterator to make sure they produce the same result
         fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(iter: T)
         -> Self::Output<'a>;
     }
 
     /// Helper function that will assert that the provided operation
-    /// produces the same result for both BitIterator and slice iterator
+    /// produces the same result for both [`RowsIter`] and slice iterator
     /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
     fn assert_rows_iterator_cases<O: RowsIteratorOp>() {
         setup_and_assert(
