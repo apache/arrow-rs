@@ -88,6 +88,20 @@ enum RowGroupDecoderState {
     Finished,
 }
 
+impl RowGroupDecoderState {
+    /// The index of the row group, if one is active.
+    fn row_group_idx(&self) -> Option<usize> {
+        match self {
+            Self::Start { row_group_info }
+            | Self::Filters { row_group_info, .. }
+            | Self::WaitingOnFilterData { row_group_info, .. }
+            | Self::StartData { row_group_info, .. }
+            | Self::WaitingOnData { row_group_info, .. } => Some(row_group_info.row_group_idx),
+            Self::Finished => None,
+        }
+    }
+}
+
 /// Running offset/limit budget shared across row groups.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) struct RowBudget {
@@ -820,6 +834,31 @@ impl RowGroupReaderBuilder {
             }
         };
         Ok(result)
+    }
+
+    /// The index of the active row group, if any.
+    pub(crate) fn active_row_group_idx(&self) -> Option<usize> {
+        self.state
+            .as_ref()
+            .and_then(RowGroupDecoderState::row_group_idx)
+    }
+
+    /// Remove the buffered bytes of all column chunks of a row group. This
+    /// includes bytes that the caller pushed but the decoder did not request,
+    /// for example the bytes between the requested ranges of a larger pushed
+    /// buffer.
+    pub(crate) fn release_row_group(&mut self, row_group_idx: usize) {
+        let ranges: Vec<Range<u64>> = self
+            .metadata
+            .row_group(row_group_idx)
+            .columns()
+            .iter()
+            .map(|column| {
+                let (start, length) = column.byte_range();
+                start..start + length
+            })
+            .collect();
+        self.buffers.release_ranges(&ranges);
     }
 
     /// Which columns should be cached?
