@@ -579,18 +579,19 @@ impl IncrementalRowGroup {
         }
     }
 
-    /// Release the data pages that no reader reads again.
-    ///
-    /// A data page is released when its end row is at or before the first
-    /// row that a reader of its column can read again:
-    ///
-    /// | Reader of the column | First row that it can read again |
-    /// |---|---|
-    /// | a predicate | `filter_frontier` |
-    /// | the output | the first row of the queue, else `filter_frontier`. Not after `filter_frontier`. |
-    ///
-    /// If more than one reader reads the column, the smallest row applies.
+    /// Release the data pages that no reader reads again, from the store and
+    /// from `buffers`.
     fn release_passed_pages(&mut self, buffers: &mut PushBuffers) {
+        // A data page is released when its end row is at or before the first
+        // row that a reader of its column can read again:
+        //
+        // | Reader of the column | First row that it can read again         |
+        // |----------------------|------------------------------------------|
+        // | a predicate          | `filter_frontier`                        |
+        // | the output           | the first queued row, else               |
+        // |                      | `filter_frontier`; not after it          |
+        //
+        // If more than one reader reads the column, the smallest row applies.
         let predicate_row = self.filter_frontier;
         // The callers run after an output batch is done, or after a window
         // is queued, so no output batch is in progress.
