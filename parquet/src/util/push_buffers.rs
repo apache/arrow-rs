@@ -190,6 +190,8 @@ impl PushBuffers {
     /// The parts of a buffer inside `keep` are kept as zero-copy slices.
     /// Thus, the allocator frees the memory of a pushed [`Bytes`] only after
     /// all of its parts are removed.
+    ///
+    /// If the buffers are sorted by start, they stay sorted.
     #[cfg(feature = "arrow")]
     pub(crate) fn retain_ranges(&mut self, keep: &[Range<u64>]) {
         let keep = merge_ranges(keep);
@@ -209,8 +211,11 @@ impl PushBuffers {
                 new_ranges.push(part);
             }
         }
-        self.ranges = new_ranges;
-        self.buffers = new_buffers;
+        // If buffers overlap, a part can start after the start of the next
+        // buffer. The sort is stable.
+        let mut parts: Vec<_> = new_ranges.into_iter().zip(new_buffers).collect();
+        parts.sort_by_key(|(range, _)| range.start);
+        (self.ranges, self.buffers) = parts.into_iter().unzip();
     }
 
     /// Clear all buffered ranges and their corresponding data
@@ -321,6 +326,19 @@ mod tests {
         assert_eq!(buffers.get_bytes(30, 2).unwrap(), Bytes::from_static(b"xy"));
         buffers.retain_ranges(&[]);
         assert_eq!(buffers.buffered_bytes(), 0);
+    }
+
+    /// Parts of overlapping buffers stay sorted by start.
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn retain_ranges_keeps_the_buffers_sorted() {
+        let mut buffers = PushBuffers::new(100);
+        for range in [0..100, 3..70] {
+            let data = Bytes::from(vec![0u8; (range.end - range.start) as usize]);
+            buffers.push_range(range, data).unwrap();
+        }
+        buffers.retain_ranges(&[0..5, 50..60]);
+        assert_eq!(buffers.ranges, vec![0..5, 3..5, 50..60, 50..60]);
     }
 
     #[test]

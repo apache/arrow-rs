@@ -457,12 +457,12 @@ impl RemainingRowGroups {
         self.frontier.peek_next_row_group()
     }
 
-    /// returns [`ParquetRecordBatchReader`] suitable for reading the next
-    /// group of rows from the Parquet data, or the list of data ranges still
-    /// needed to proceed
     /// Release the buffered bytes that are outside the read column chunks of
     /// the queued row groups. The decoder does not read these bytes.
     pub fn release_unplanned_bytes(&mut self) {
+        if self.row_group_reader_builder.buffered_bytes() == 0 {
+            return;
+        }
         let read_columns = self.row_group_reader_builder.read_columns();
         let metadata = &self.frontier.parquet_metadata;
         let keep: Vec<Range<u64>> = self
@@ -488,6 +488,9 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.retain_buffered_ranges(&keep);
     }
 
+    /// returns [`ParquetRecordBatchReader`] suitable for reading the next
+    /// group of rows from the Parquet data, or the list of data ranges still
+    /// needed to proceed
     pub fn try_next_reader(
         &mut self,
     ) -> Result<DecodeResult<ParquetRecordBatchReader>, ParquetError> {
