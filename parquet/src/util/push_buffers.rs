@@ -191,6 +191,8 @@ impl PushBuffers {
     /// outside the range are kept. The kept parts are zero-copy slices. Thus,
     /// the allocator frees the memory of a pushed [`Bytes`] only after all of
     /// its parts are removed.
+    ///
+    /// If the buffers are sorted by start, they stay sorted.
     #[cfg(feature = "arrow")]
     pub(crate) fn release_ranges(&mut self, ranges: &[Range<u64>]) {
         let release = merge_ranges(ranges);
@@ -223,8 +225,11 @@ impl PushBuffers {
                 keep(start..range.end);
             }
         }
-        self.ranges = new_ranges;
-        self.buffers = new_buffers;
+        // If buffers overlap, the tail of a split buffer can start after the
+        // start of the next buffer. The sort is stable.
+        let mut parts: Vec<_> = new_ranges.into_iter().zip(new_buffers).collect();
+        parts.sort_by_key(|(range, _)| range.start);
+        (self.ranges, self.buffers) = parts.into_iter().unzip();
     }
 
     /// Clear all buffered ranges and their corresponding data
@@ -366,7 +371,7 @@ mod tests {
             buffers.push_range(range, data).unwrap();
         }
         buffers.release_ranges(&[40..50, 10..15]);
-        assert_eq!(buffers.ranges, vec![15..20, 0..10, 15..30]);
+        assert_eq!(buffers.ranges, vec![0..10, 15..20, 15..30]);
     }
 
     #[test]

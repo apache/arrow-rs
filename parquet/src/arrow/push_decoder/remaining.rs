@@ -456,9 +456,6 @@ impl RemainingRowGroups {
         self.frontier.peek_next_row_group()
     }
 
-    /// returns [`ParquetRecordBatchReader`] suitable for reading the next
-    /// group of rows from the Parquet data, or the list of data ranges still
-    /// needed to proceed
     /// Release the buffered bytes of a row group that is done, unless the
     /// queue reads it again. The reader of the row group holds its own
     /// copies of the bytes that it reads.
@@ -471,6 +468,9 @@ impl RemainingRowGroups {
         }
     }
 
+    /// returns [`ParquetRecordBatchReader`] suitable for reading the next
+    /// group of rows from the Parquet data, or the list of data ranges still
+    /// needed to proceed
     pub fn try_next_reader(
         &mut self,
     ) -> Result<DecodeResult<ParquetRecordBatchReader>, ParquetError> {

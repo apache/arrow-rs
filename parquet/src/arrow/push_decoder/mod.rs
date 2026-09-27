@@ -520,11 +520,14 @@ impl ParquetPushDecoder {
     /// Note this can be the entire file or just a part of it. If it is part of the file,
     /// the ranges should correspond to the data ranges requested by the decoder.
     ///
-    /// When the decoder is done with a row group, it releases the pushed bytes
-    /// of all column chunks of that row group, unless the scan reads the row
-    /// group again. This is also true for bytes that the decoder did not
-    /// request, and for bytes in a buffer that is larger than a requested
-    /// range.
+    /// When the decoder is done with a row group that it reads, it releases
+    /// the pushed bytes of all column chunks of that row group, unless the
+    /// scan reads the row group again. This is also true for bytes that the
+    /// decoder did not request, and for bytes in a buffer that is larger than
+    /// a requested range. The decoder does not release the bytes of row
+    /// groups that it does not read (for example, row groups without selected
+    /// rows, or after the limit). Call [`Self::clear_all_ranges`] to release
+    /// them.
     ///
     /// See example in [`ParquetPushDecoderBuilder`]
     pub fn push_range(&mut self, range: Range<u64>, data: Bytes) -> Result<(), ParquetError> {
@@ -1274,6 +1277,27 @@ mod test {
         let batches = decode_with_coalesced_pushes(decoder);
         let all_output = concat_batches(&batches[0].schema(), &batches).unwrap();
         assert_eq!(all_output, TEST_BATCH.project(&[0, 2]).unwrap());
+    }
+
+    /// A plan that reads a row group two times keeps its bytes until the
+    /// second read.
+    #[test]
+    fn test_decoder_keeps_bytes_of_a_row_group_that_is_read_again() {
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata())
+            .unwrap()
+            .with_row_groups(vec![0, 1, 0])
+            .build()
+            .unwrap();
+        prefetch_test_file(&mut decoder);
+        let expected = [
+            TEST_BATCH.slice(0, 200),
+            TEST_BATCH.slice(200, 200),
+            TEST_BATCH.slice(0, 200),
+        ];
+        for expected in expected {
+            assert_eq!(expect_data(decoder.try_decode()), expected);
+        }
+        expect_finished(decoder.try_decode());
     }
 
     /// With a predicate, the decoder requests the bytes of the predicate
