@@ -19,6 +19,11 @@
 
 mod layout;
 mod roundtrip;
+// The integration tests currently use only part of the shared helpers.
+#[expect(dead_code)]
+mod roundtrip_helpers;
+
+use parquet as parquet_crate;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
