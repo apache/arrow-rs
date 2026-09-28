@@ -18,7 +18,7 @@
 #[macro_use]
 extern crate criterion;
 
-use criterion::{BenchmarkId, Criterion, Throughput};
+use criterion::Criterion;
 
 use arrow::array::*;
 use arrow::util::bench_util::*;
@@ -29,34 +29,7 @@ fn bench_concat(v1: &dyn Array, v2: &dyn Array) {
     hint::black_box(concat_elements_dyn(v1, v2).unwrap());
 }
 
-fn bench_concat_slices(c: &mut Criterion) {
-    let parent_len = 131_072;
-    let slice_offset = 8_192;
-    let slice_len = 8_192;
-    let parent = create_string_array_with_len::<i32>(parent_len, 0.1, 32);
-    let sliced = parent.slice(slice_offset, slice_len);
-    let compact = StringArray::from_iter(sliced.iter());
-
-    let mut group = c.benchmark_group("concat_elements_capacity");
-    group.throughput(Throughput::Elements(slice_len as u64));
-    for (name, array) in [("compact", compact), ("sliced", sliced)] {
-        group.bench_function(BenchmarkId::new("pair", name), |b| {
-            b.iter(|| bench_concat(&array, &array))
-        });
-        group.bench_function(BenchmarkId::new("many", name), |b| {
-            b.iter(|| {
-                hint::black_box(
-                    concat_elements_utf8_many(hint::black_box(&[&array, &array, &array])).unwrap(),
-                );
-            })
-        });
-    }
-    group.finish();
-}
-
 fn add_benchmark(c: &mut Criterion) {
-    bench_concat_slices(c);
-
     let v1 = create_string_array::<i32>(1024, 0.0);
     let v2 = create_string_array::<i32>(1024, 0.0);
     c.bench_function("concat str 1024", |b| b.iter(|| bench_concat(&v1, &v2)));
@@ -94,6 +67,21 @@ fn add_benchmark(c: &mut Criterion) {
             );
             c.bench_function(&id, |b| b.iter(|| bench_concat(&array, &array)));
         }
+    }
+
+    // A slice whose values buffer extends far past its last row, compared with
+    // a compact copy of the same rows
+    let sliced = create_string_array_with_len::<i32>(131_072, 0.1, 32).slice(8_192, 8_192);
+    let compact = StringArray::from_iter(sliced.iter());
+    for (name, array) in [("compact", compact), ("sliced", sliced)] {
+        c.bench_function(&format!("concat str {name} 8192"), |b| {
+            b.iter(|| bench_concat(&array, &array))
+        });
+        c.bench_function(&format!("concat str many {name} 8192"), |b| {
+            b.iter(|| {
+                hint::black_box(concat_elements_utf8_many(&[&array, &array, &array]).unwrap())
+            })
+        });
     }
 }
 
