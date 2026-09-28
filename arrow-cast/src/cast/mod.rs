@@ -2657,8 +2657,7 @@ fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
 fn resolve_local_offset(tz: &Tz, local: &NaiveDateTime) -> Option<FixedOffset> {
     match tz.offset_from_local_datetime(local) {
         LocalResult::Single(offset) => Some(offset.fix()),
-        // The second offset of `Ambiguous` is the one that yields the later instant.
-        LocalResult::Ambiguous(_, later) => Some(later.fix()),
+        LocalResult::Ambiguous(_earlier, later) => Some(later.fix()),
         LocalResult::None => {
             // The reading falls in a gap. Recover the offset in effect before
             // the transition by probing 24 hours earlier.
