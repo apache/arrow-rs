@@ -157,21 +157,11 @@ impl PhysicalValues {
         let start = buf.len();
         let buf = &mut buf;
         match self {
-            Self::Boolean(v) => {
-                read_each(buf, v, has_min_max, |b| Ok(first_bytes::<1>(b)?[0] != 0))?
-            }
-            Self::Int32(v) => read_each(buf, v, has_min_max, |b| {
-                Ok(i32::from_le_bytes(first_bytes(b)?))
-            })?,
-            Self::Int64(v) => read_each(buf, v, has_min_max, |b| {
-                Ok(i64::from_le_bytes(first_bytes(b)?))
-            })?,
-            Self::Float(v) => read_each(buf, v, has_min_max, |b| {
-                Ok(f32::from_le_bytes(first_bytes(b)?))
-            })?,
-            Self::Double(v) => read_each(buf, v, has_min_max, |b| {
-                Ok(f64::from_le_bytes(first_bytes(b)?))
-            })?,
+            Self::Boolean(v) => read_fixed(buf, v, has_min_max, |b: [u8; 1]| b[0] != 0)?,
+            Self::Int32(v) => read_fixed(buf, v, has_min_max, i32::from_le_bytes)?,
+            Self::Int64(v) => read_fixed(buf, v, has_min_max, i64::from_le_bytes)?,
+            Self::Float(v) => read_fixed(buf, v, has_min_max, f32::from_le_bytes)?,
+            Self::Double(v) => read_fixed(buf, v, has_min_max, f64::from_le_bytes)?,
             Self::Bytes {
                 offsets, values, ..
             } => {
@@ -182,10 +172,13 @@ impl PhysicalValues {
                     if has_value {
                         values.extend_from_slice(bytes);
                     }
-                    offsets.push(bytes_end(values)?);
+                    // checked once below: the data only grows, so if its
+                    // final size fits, so does every offset before it
+                    offsets.push(values.len() as i32);
                 }
+                bytes_end(values)?;
             }
-            Self::Int96(v) => read_each(buf, v, has_min_max, |b| first_bytes::<12>(b).map(|_| ()))?,
+            Self::Int96(v) => read_fixed(buf, v, has_min_max, |_: [u8; 12]| ())?,
             Self::Decimal32(v, ..) => read_each(buf, v, has_min_max, |b| {
                 decimal_bytes::<4>(b).map(from_bytes_to_i32)
             })?,
@@ -276,6 +269,41 @@ fn read_each<T: Default>(
         } else {
             T::default()
         });
+    }
+    Ok(())
+}
+
+/// Like [`read_each`], for values that are the first `N` bytes of each
+/// stored value.
+#[inline(never)]
+fn read_fixed<const N: usize, T: Default>(
+    buf: &mut &[u8],
+    out: &mut Vec<T>,
+    has_min_max: &[bool],
+    convert: impl Fn([u8; N]) -> T,
+) -> Result<()> {
+    // Fill in filler values first and then overwrite them, which saves
+    // checking the capacity for every value.
+    let start = out.len();
+    out.resize_with(start + has_min_max.len(), T::default);
+    for (slot, &has_value) in out[start..].iter_mut().zip(has_min_max) {
+        // Writers store each value as a one byte length of `N` followed by
+        // the `N` bytes, so handle that directly. Anything else, such as the
+        // empty value of a null page, takes the general route below.
+        if has_value
+            && let Some((&len, rest)) = buf.split_first()
+            && usize::from(len) == N
+            && let Some((value, rest)) = rest.split_first_chunk::<N>()
+        {
+            *slot = convert(*value);
+            *buf = rest;
+            continue;
+        }
+        let (bytes, rest) = split_binary(buf)?;
+        *buf = rest;
+        if has_value {
+            *slot = convert(first_bytes(bytes)?);
+        }
     }
     Ok(())
 }
@@ -378,7 +406,21 @@ impl Counts {
         let size = read_list_size(prot, ElementType::I64)?;
         let mut buf = prot.as_slice();
         self.values.reserve(size);
-        for _ in 0..size {
+        let mut remaining = size;
+        while remaining > 0 {
+            // Counts from 0 to 63 take one byte each, with the top bit and
+            // the sign bit (the lowest) clear. When the next 8 counts are all
+            // like that, which is usual, convert them together.
+            if remaining >= 8
+                && let Some((chunk, rest)) = buf.split_first_chunk::<8>()
+                && u64::from_le_bytes(*chunk) & 0x8181_8181_8181_8181 == 0
+            {
+                self.values.extend(chunk.map(|b| u64::from(b >> 1)));
+                buf = rest;
+                remaining -= 8;
+                continue;
+            }
+            remaining -= 1;
             // Numbers are stored so that small values of either sign are short:
             // 0, -1, 1, -2, 2, ... are stored as 0, 1, 2, 3, 4, ...
             let (stored, rest) = split_varint(buf)?;
@@ -511,15 +553,15 @@ impl ColumnIndexDecoder {
                     let size = read_list_size(&mut prot, ElementType::Bool)?;
                     // Each item is one byte. `read_list_size` checked they are there.
                     let flags = &prot.as_slice()[..size];
-                    self.has_min_max.reserve(size);
-                    for &flag in flags {
-                        // stored as "is this page all null", kept as the opposite
-                        self.has_min_max.push(match flag {
-                            0x01 => false,
-                            0x00 | 0x02 => true,
-                            _ => return Err(general_err!("cannot convert {} into bool", flag)),
-                        });
+                    // `true` is stored as 1, and `false` as 0 or 2. Checking
+                    // all of them first, then converting, lets the compiler
+                    // handle many at a time.
+                    if flags.iter().fold(0, |max, &flag| max.max(flag)) > 2 {
+                        let flag = flags.iter().find(|&&flag| flag > 2).unwrap();
+                        return Err(general_err!("cannot convert {} into bool", flag));
                     }
+                    // stored as "is this page all null", kept as the opposite
+                    self.has_min_max.extend(flags.iter().map(|&flag| flag != 1));
                     prot.skip_bytes(size)?;
                     num_pages = Some(size);
                 }
@@ -660,6 +702,15 @@ fn skip_list(prot: &mut ThriftSliceInputProtocol) -> Result<()> {
             let buf = prot.as_slice();
             let mut seen = 0;
             let mut len = 0;
+            // While at least 8 numbers are left, the next 8 bytes all belong
+            // to the list, so count them together.
+            while count - seen >= 8
+                && let Some(chunk) = buf.get(len..len + 8)
+            {
+                let word = u64::from_le_bytes(chunk.try_into().unwrap());
+                seen += (!word & 0x8080_8080_8080_8080).count_ones() as usize;
+                len += 8;
+            }
             while seen < count {
                 let byte = *buf.get(len).ok_or_else(|| eof_err!("Unexpected EOF"))?;
                 len += 1;
@@ -933,9 +984,12 @@ mod tests {
                 last = 5;
             }
             if self.histograms {
+                // numbers of 1 to 5 bytes, so that skipping them has to
+                // find where each one ends
                 let pages = self.null_pages.as_ref().map_or(0, |p| p.len());
-                write_i64_list(&mut w, 6, last, &vec![1; pages * 2]);
-                write_i64_list(&mut w, 7, 6, &vec![2; pages * 2]);
+                let levels: Vec<i64> = (0..pages as i64 * 2).map(|i| i << (i % 5 * 7)).collect();
+                write_i64_list(&mut w, 6, last, &levels);
+                write_i64_list(&mut w, 7, 6, &levels);
                 last = 7;
             }
             if let Some(counts) = &self.nan_counts {
@@ -1293,6 +1347,24 @@ mod tests {
     }
 
     #[test]
+    fn long_histograms_are_skipped() {
+        // enough numbers that most are skipped 8 bytes at a time
+        for pages in [3, 4, 5, 20, 21] {
+            let values = le_i32(&(0..pages).map(Some).collect::<Vec<_>>());
+            let values: Vec<_> = values.iter().map(|v| v.as_deref()).collect();
+            let mut index = TestIndex::new(&values, &values);
+            index.histograms = true;
+            let nan_counts: Vec<i64> = (0..pages as i64).collect();
+            index.nan_counts = Some(nan_counts.clone());
+            let bytes = index.to_bytes();
+            let chunks = [(pages as usize, Some(bytes.as_slice()))];
+            let stats = assert_same(PhysicalType::INT32, &DataType::Int32, &chunks);
+            let expected = UInt64Array::from_iter_values(nan_counts.iter().map(|&c| c as u64));
+            assert_eq!(stats.nan_counts, expected);
+        }
+    }
+
+    #[test]
     fn mins_and_maxes_before_null_pages() {
         let values = le_i64(&[Some(1), None, Some(3)]);
         let values: Vec<_> = values.iter().map(|v| v.as_deref()).collect();
@@ -1360,6 +1432,41 @@ mod tests {
             error_message(PhysicalType::INT32, &index),
             "Parquet error: ColumnIndex NaN count is negative -1"
         );
+
+        // among other counts that are read 8 at a time
+        let values = le_i32(&[Some(1); 12]);
+        let values: Vec<_> = values.iter().map(|v| v.as_deref()).collect();
+        let mut index = TestIndex::new(&values, &values);
+        let mut counts = vec![0; 12];
+        counts[5] = -2;
+        index.null_counts = Some(counts);
+        assert_eq!(
+            error_message(PhysicalType::INT32, &index),
+            "Parquet error: ColumnIndex null count is negative -2"
+        );
+    }
+
+    #[test]
+    fn long_count_lists() {
+        // one byte counts, which are read 8 at a time, mixed with longer ones
+        let counts: Vec<i64> = (0..30)
+            .map(|i| match i % 11 {
+                3 => 63,
+                4 => 64,
+                7 => 1 << 40,
+                _ => i,
+            })
+            .collect();
+        let values = le_i32(&vec![Some(1); counts.len()]);
+        let values: Vec<_> = values.iter().map(|v| v.as_deref()).collect();
+        let mut index = TestIndex::new(&values, &values);
+        index.null_counts = Some(counts.clone());
+        index.nan_counts = Some(counts.iter().rev().copied().collect());
+        let bytes = index.to_bytes();
+        let chunks = [(counts.len(), Some(bytes.as_slice()))];
+        let stats = assert_same(PhysicalType::INT32, &DataType::Int32, &chunks);
+        let expected = UInt64Array::from_iter_values(counts.iter().map(|&c| c as u64));
+        assert_eq!(stats.null_counts, expected);
     }
 
     #[test]
@@ -1459,11 +1566,23 @@ mod tests {
     fn truncated_bytes() {
         let one = 1i32.to_le_bytes();
         let bytes = TestIndex::new(&[Some(&one)], &[Some(&one)]).to_bytes();
+        truncations_fail(&bytes, 1);
+
+        // long histograms, which are skipped several bytes at a time
+        let values = le_i32(&(0..10).map(Some).collect::<Vec<_>>());
+        let values: Vec<_> = values.iter().map(|v| v.as_deref()).collect();
+        let mut index = TestIndex::new(&values, &values);
+        index.histograms = true;
+        truncations_fail(&index.to_bytes(), 10);
+    }
+
+    /// Checks that decoding fails on every shortened copy of `bytes`
+    fn truncations_fail(bytes: &[u8], pages: usize) {
         for end in 0..bytes.len() {
             let result = from_bytes(
                 PhysicalType::INT32,
                 &DataType::Int32,
-                &[(1, Some(&bytes[..end]))],
+                &[(pages, Some(&bytes[..end]))],
             );
             assert!(
                 result.is_err(),
