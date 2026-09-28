@@ -18,18 +18,45 @@
 #[macro_use]
 extern crate criterion;
 
-use criterion::Criterion;
+use criterion::{BenchmarkId, Criterion, Throughput};
 
 use arrow::array::*;
 use arrow::util::bench_util::*;
-use arrow_string::concat_elements::concat_elements_dyn;
+use arrow_string::concat_elements::{concat_elements_dyn, concat_elements_utf8_many};
 use std::hint;
 
 fn bench_concat(v1: &dyn Array, v2: &dyn Array) {
     hint::black_box(concat_elements_dyn(v1, v2).unwrap());
 }
 
+fn bench_concat_slices(c: &mut Criterion) {
+    let parent_len = 131_072;
+    let slice_offset = 8_192;
+    let slice_len = 8_192;
+    let parent = create_string_array_with_len::<i32>(parent_len, 0.1, 32);
+    let sliced = parent.slice(slice_offset, slice_len);
+    let compact = StringArray::from_iter(sliced.iter());
+
+    let mut group = c.benchmark_group("concat_elements_capacity");
+    group.throughput(Throughput::Elements(slice_len as u64));
+    for (name, array) in [("compact", compact), ("sliced", sliced)] {
+        group.bench_function(BenchmarkId::new("pair", name), |b| {
+            b.iter(|| bench_concat(&array, &array))
+        });
+        group.bench_function(BenchmarkId::new("many", name), |b| {
+            b.iter(|| {
+                hint::black_box(
+                    concat_elements_utf8_many(hint::black_box(&[&array, &array, &array])).unwrap(),
+                );
+            })
+        });
+    }
+    group.finish();
+}
+
 fn add_benchmark(c: &mut Criterion) {
+    bench_concat_slices(c);
+
     let v1 = create_string_array::<i32>(1024, 0.0);
     let v2 = create_string_array::<i32>(1024, 0.0);
     c.bench_function("concat str 1024", |b| b.iter(|| bench_concat(&v1, &v2)));
