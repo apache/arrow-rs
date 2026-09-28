@@ -504,6 +504,24 @@ impl FilterPredicate {
         }
     }
 
+    /// Returns true if any row selected by this predicate is null in `nulls`
+    fn selects_null(&self, nulls: &NullBuffer) -> bool {
+        let len = self.filter.len();
+        assert!(nulls.len() >= len);
+        // Below one selected row per word, probing the precomputed indices
+        // is cheaper than scanning the mask, as in `filter_bits`
+        if let IterationStrategy::Indices(indices) = &self.strategy
+            && self.count <= len / 64
+        {
+            return indices.iter().any(|&idx| nulls.is_null(idx));
+        }
+        let keep = self.filter.values().bit_chunks();
+        let valid = BitChunks::new(nulls.buffer(), nulls.offset(), len);
+        keep.iter_padded()
+            .zip(valid.iter_padded())
+            .any(|(keep, valid)| keep & !valid != 0)
+    }
+
     /// Filters the given `nulls` buffer using this predicate.
     ///
     /// Returns `None` when there is nothing to track in the output, either
@@ -512,7 +530,7 @@ impl FilterPredicate {
     /// [`NullBuffer`] with its precomputed null count.
     pub fn filter_nulls(&self, nulls: Option<&NullBuffer>) -> Option<NullBuffer> {
         let nulls = nulls?;
-        if nulls.null_count() == 0 {
+        if nulls.null_count() == 0 || !self.selects_null(nulls) {
             return None;
         }
 
@@ -1557,6 +1575,67 @@ mod tests {
         assert!(d.is_null(0));
         assert!(!d.is_null(1));
         assert_eq!(9, d.value(1));
+    }
+
+    // Sliced at offset 1 so the null bits sit off a byte boundary, with a
+    // partial trailing word. Rows 0 and 129 are null.
+    fn nullable_slice(null_every: i32) -> Int32Array {
+        let values: Int32Array = (0..131)
+            .map(|i| (i % null_every != 1).then_some(i))
+            .collect();
+        values.slice(1, 130)
+    }
+
+    fn filter_masks(keep: impl Fn(usize) -> bool) -> [BooleanArray; 2] {
+        let mask: BooleanArray = (0..130).map(|i| Some(keep(i))).collect();
+        let sliced: BooleanArray = (0..131).map(|i| Some(i > 0 && keep(i - 1))).collect();
+        [mask, sliced.slice(1, 130)]
+    }
+
+    #[test]
+    fn test_filter_nulls_selecting_only_valid_rows() {
+        // Every 43rd row null puts the dense filter above the slices threshold
+        for null_every in [3, 43] {
+            let values = nullable_slice(null_every);
+            let nulls = values.nulls().unwrap();
+            let masks = filter_masks(|i| nulls.is_valid(i))
+                .into_iter()
+                .chain(filter_masks(|i| i == 128));
+            for mask in masks {
+                for predicate in [
+                    FilterBuilder::new(&mask).build(),
+                    FilterBuilder::new(&mask).optimize().build(),
+                ] {
+                    assert!(!predicate.selects_null(nulls));
+                    let filtered = predicate.filter(&values).unwrap();
+                    assert_eq!(filtered.nulls(), None);
+                    assert_eq!(filtered.len(), mask.true_count());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_filter_nulls_selecting_one_null() {
+        for null_every in [3, 43] {
+            let values = nullable_slice(null_every);
+            let nulls = values.nulls().unwrap();
+            for null_row in [0, 129] {
+                let masks = filter_masks(|i| nulls.is_valid(i) || i == null_row)
+                    .into_iter()
+                    .chain(filter_masks(|i| i == 128 || i == null_row));
+                for mask in masks {
+                    for predicate in [
+                        FilterBuilder::new(&mask).build(),
+                        FilterBuilder::new(&mask).optimize().build(),
+                    ] {
+                        assert!(predicate.selects_null(nulls));
+                        let filtered_nulls = predicate.filter_nulls(Some(nulls)).unwrap();
+                        assert_eq!(filtered_nulls.null_count(), 1);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -2615,5 +2694,14 @@ mod tests {
         let predicate = BooleanArray::from(vec![false; 9]);
         let filter = FilterBuilder::new(&predicate).build();
         filter_native(&values, &filter);
+    }
+
+    #[test]
+    #[should_panic(expected = "nulls.len() >= len")]
+    fn test_filter_nulls_shorter_than_filter() {
+        let nulls = NullBuffer::from_iter((0..8).map(|i| i != 1));
+        let predicate = BooleanArray::from_iter((0..9).map(|i| Some(i == 0)));
+        let filter = FilterBuilder::new(&predicate).optimize().build();
+        filter.filter_nulls(Some(&nulls));
     }
 }
