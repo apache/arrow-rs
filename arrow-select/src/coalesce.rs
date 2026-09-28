@@ -275,9 +275,13 @@ impl BatchCoalescer {
     /// This is [`Self::push_batch_with_filter`] for a [`FilterBuilder`] the
     /// caller has already created. For example, callers that already know how
     /// many rows the filter selects can provide that number with
-    /// [`FilterBuilder::with_count`] so that it is not counted again. The
-    /// coalescer calls [`FilterBuilder::optimize`] itself when it is likely to
-    /// help.
+    /// [`FilterBuilder::with_count`] so that it is not counted again.
+    ///
+    /// Callers do not need to call [`FilterBuilder::optimize`]: like
+    /// [`Self::push_batch_with_filter`], this optimizes the filter when `batch`
+    /// has more than one column, or one column for which
+    /// [`FilterBuilder::is_optimize_beneficial`] returns true. A filter the
+    /// caller already optimized stays optimized.
     ///
     /// # Example
     /// ```
