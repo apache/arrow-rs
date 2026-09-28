@@ -72,6 +72,7 @@ use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
+use half::slice::HalfFloatSliceExt;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
 #[expect(deprecated)]
@@ -1670,7 +1671,7 @@ pub fn cast_with_options(
         (Float16, Int16) => cast_numeric_arrays::<Float16Type, Int16Type>(array, cast_options),
         (Float16, Int32) => cast_numeric_arrays::<Float16Type, Int32Type>(array, cast_options),
         (Float16, Int64) => cast_numeric_arrays::<Float16Type, Int64Type>(array, cast_options),
-        (Float16, Float32) => cast_numeric_arrays::<Float16Type, Float32Type>(array, cast_options),
+        (Float16, Float32) => cast_float16_to_float32(array),
         (Float16, Float64) => cast_numeric_arrays::<Float16Type, Float64Type>(array, cast_options),
 
         (Float32, UInt8) => cast_numeric_arrays::<Float32Type, UInt8Type>(array, cast_options),
@@ -1681,7 +1682,7 @@ pub fn cast_with_options(
         (Float32, Int16) => cast_numeric_arrays::<Float32Type, Int16Type>(array, cast_options),
         (Float32, Int32) => cast_numeric_arrays::<Float32Type, Int32Type>(array, cast_options),
         (Float32, Int64) => cast_numeric_arrays::<Float32Type, Int64Type>(array, cast_options),
-        (Float32, Float16) => cast_numeric_arrays::<Float32Type, Float16Type>(array, cast_options),
+        (Float32, Float16) => cast_float32_to_float16(array),
         (Float32, Float64) => cast_numeric_arrays::<Float32Type, Float64Type>(array, cast_options),
 
         (Float64, UInt8) => cast_numeric_arrays::<Float64Type, UInt8Type>(array, cast_options),
@@ -2518,6 +2519,32 @@ where
     };
 
     Ok(Arc::new(result))
+}
+
+/// Widen `Float16` to `Float32` with `half`'s slice conversion.
+///
+/// The conversion is infallible, so the input null buffer is reused.
+fn cast_float16_to_float32(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_primitive::<Float16Type>();
+    let mut values = vec![0.0f32; array.len()];
+    array.values().convert_to_f32_slice(&mut values);
+    Ok(Arc::new(Float32Array::new(
+        values.into(),
+        array.nulls().cloned(),
+    )))
+}
+
+/// Narrow `Float32` to `Float16` with `half`'s slice conversion.
+///
+/// The conversion is infallible, so the input null buffer is reused.
+fn cast_float32_to_float16(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_primitive::<Float32Type>();
+    let mut values = vec![half::f16::ZERO; array.len()];
+    values.convert_from_f32_slice(array.values());
+    Ok(Arc::new(Float16Array::new(
+        values.into(),
+        array.nulls().cloned(),
+    )))
 }
 
 /// Convert Array into a PrimitiveArray of type, and apply numeric cast
