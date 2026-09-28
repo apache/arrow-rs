@@ -54,9 +54,8 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
     let right_values = right.value_data();
 
     let mut output_values = Vec::with_capacity(
-        left_values.len() + right_values.len()
-            - left_offsets[0].as_usize()
-            - right_offsets[0].as_usize(),
+        (left.offsets().last() - left.offsets().first()).as_usize()
+            + (right.offsets().last() - right.offsets().first()).as_usize(),
     );
 
     let mut output_offsets = Vec::with_capacity(left_offsets.len());
@@ -154,10 +153,9 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         .collect::<Vec<_>>();
 
     let mut output_values = Vec::with_capacity(
-        data_values
+        arrays
             .iter()
-            .zip(offsets.iter_mut())
-            .map(|(data, offset)| data.len() - offset.peek().unwrap().as_usize())
+            .map(|array| (array.offsets().last() - array.offsets().first()).as_usize())
             .sum(),
     );
 
@@ -501,6 +499,46 @@ mod tests {
     use super::*;
     use arrow_array::cast::AsArray;
     use arrow_buffer::Buffer;
+
+    #[test]
+    fn test_concat_slice_capacity() {
+        fn check<O: OffsetSizeTrait>() {
+            let left =
+                GenericStringArray::<O>::from_iter_values(std::iter::repeat_n("hello", 4096));
+            let right =
+                GenericStringArray::<O>::from_iter_values(std::iter::repeat_n(" world", 4096));
+            for (offset, len) in [(0, 2), (1000, 2), (4094, 2), (1000, 0)] {
+                let left = left.slice(offset, len);
+                let right = right.slice(offset / 2, len);
+                let pair = concat_elements_utf8(&left, &right).unwrap();
+                let many = concat_elements_utf8_many(&[&left, &right, &left]).unwrap();
+                assert_eq!(
+                    pair,
+                    GenericStringArray::<O>::from_iter_values(std::iter::repeat_n(
+                        "hello world",
+                        len
+                    ))
+                );
+                assert_eq!(
+                    many,
+                    GenericStringArray::<O>::from_iter_values(std::iter::repeat_n(
+                        "hello worldhello",
+                        len
+                    ))
+                );
+                assert_eq!(pair.values().capacity(), 11 * len);
+                assert_eq!(many.values().capacity(), 16 * len);
+
+                let left = GenericBinaryArray::<O>::from(left);
+                let right = GenericBinaryArray::<O>::from(right);
+                let binary = concat_element_binary(&left, &right).unwrap();
+                assert_eq!(binary.values().capacity(), 11 * len);
+                assert_eq!(binary, GenericBinaryArray::<O>::from(pair));
+            }
+        }
+        check::<i32>();
+        check::<i64>();
+    }
 
     #[test]
     fn test_string_concat() {
