@@ -2636,6 +2636,12 @@ fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
 /// Returns the offset to use when interpreting `local` as a wall clock reading
 /// in `tz`, or `None` if it cannot be resolved.
 ///
+/// `None` is not expected in practice. With the current timezone database no
+/// reading reaches it, because every ambiguous or nonexistent reading resolves
+/// as described below. The `None` path is a safeguard against a future
+/// timezone database that breaks the assumptions of the gap handling. Callers
+/// then apply their usual error or null handling.
+///
 /// In an IANA timezone a wall clock reading does not always identify a unique
 /// instant, and this function picks one following the same rules as PostgreSQL
 /// and DuckDB:
