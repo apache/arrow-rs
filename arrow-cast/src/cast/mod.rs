@@ -2662,8 +2662,7 @@ fn resolve_local_offset(tz: &Tz, local: &NaiveDateTime) -> Option<FixedOffset> {
             // The reading falls in a gap. Recover the offset in effect before
             // the transition by probing 24 hours earlier.
             //
-            // Two separate properties of the timezone database make this sound,
-            // and it is worth stating both:
+            // Two separate properties of the timezone database make this sound:
             //
             // 1. No local gap is longer than 24 hours, so the probe lands
             //    outside this gap and is itself resolvable. Seven zones have a
