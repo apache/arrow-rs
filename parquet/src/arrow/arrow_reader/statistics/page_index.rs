@@ -787,14 +787,13 @@ fn bytes_to_logical(
         // Text and binary types only come from variable length byte columns.
         DataType::Binary if !fixed_len => Arc::new(array),
         DataType::LargeBinary if !fixed_len => Arc::new(array.iter().collect::<LargeBinaryArray>()),
-        DataType::BinaryView if !fixed_len => Arc::new(array.iter().collect::<BinaryViewArray>()),
+        // The views point into the existing byte data rather than copying it.
+        DataType::BinaryView if !fixed_len => Arc::new(BinaryViewArray::from(&array)),
         DataType::Utf8 if !fixed_len => Arc::new(binary_to_utf8(array)),
         DataType::LargeUtf8 if !fixed_len => {
             Arc::new(utf8_values(&array).collect::<LargeStringArray>())
         }
-        DataType::Utf8View if !fixed_len => {
-            Arc::new(utf8_values(&array).collect::<StringViewArray>())
-        }
+        DataType::Utf8View if !fixed_len => Arc::new(StringViewArray::from(&binary_to_utf8(array))),
 
         // Fixed length types only come from fixed length byte columns. A
         // value of the wrong length becomes null.
