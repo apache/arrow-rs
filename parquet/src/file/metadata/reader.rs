@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "arrow")]
+use crate::arrow::ProjectionMask;
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
@@ -234,10 +236,7 @@ impl ColumnChunkMask {
 
     /// Creates a mask selecting the leaf columns in an Arrow projection.
     #[cfg(feature = "arrow")]
-    pub fn from_projection(
-        projection: &crate::arrow::ProjectionMask,
-        schema: &SchemaDescriptor,
-    ) -> Self {
+    pub fn from_projection(projection: &ProjectionMask, schema: &SchemaDescriptor) -> Self {
         Self::columns((0..schema.num_columns()).filter(|&i| projection.leaf_included(i)))
     }
 
