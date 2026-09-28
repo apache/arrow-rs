@@ -17,7 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
+use criterion::{BenchmarkId, Criterion, Throughput};
 use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
@@ -26,6 +26,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::sync::Arc;
 
 use arrow::array::*;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::cast;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
@@ -255,6 +256,34 @@ fn build_string_dict_array(size: usize, distinct: usize) -> ArrayRef {
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
+}
+
+fn boolean_numeric_casts(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cast_boolean_numeric");
+    let size = 8192;
+    group.throughput(Throughput::Elements(size as u64));
+    for (name, null_density) in [("no_nulls", 0.0), ("mixed_nulls", 0.1), ("all_nulls", 1.0)] {
+        let mut rng = seedable_rng();
+        let nulls = (null_density != 0.0).then(|| {
+            NullBuffer::new(BooleanBuffer::collect_bool(size, |_| {
+                rng.random::<f64>() >= null_density
+            }))
+        });
+        // Include zero and nonzero values, even underneath null slots.
+        let values: Vec<i32> = (0..size).map(|_| rng.random_range(-1..=1)).collect();
+        let int32 = Int32Array::new(values.into(), nulls.clone());
+        let boolean = BooleanArray::new(BooleanBuffer::collect_bool(size, |_| rng.random()), nulls);
+        let inputs: [(&str, ArrayRef, DataType); 2] = [
+            ("int32_to_bool", Arc::new(int32), DataType::Boolean),
+            ("bool_to_int32", Arc::new(boolean), DataType::Int32),
+        ];
+        for (direction, input, target) in inputs {
+            group.bench_function(BenchmarkId::new(format!("{direction}/{name}"), size), |b| {
+                b.iter(|| cast_array(&input, target.clone()))
+            });
+        }
+    }
+    group.finish();
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -682,5 +711,5 @@ fn add_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, add_benchmark);
+criterion_group!(benches, add_benchmark, boolean_numeric_casts);
 criterion_main!(benches);
