@@ -661,7 +661,7 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 /// Accepts [`CastOptions`] to specify cast behavior. See also [`cast()`].
 ///
 /// # Behavior
-/// * `Boolean` to `Utf8`: `true` => '1', `false` => `0`
+/// * `Boolean` to `Utf8`, `LargeUtf8`, or `Utf8View`: `true` => `"true"`, `false` => `"false"`
 /// * `Utf8` to `Boolean`: `true`, `yes`, `on`, `1` => `true`, `false`, `no`, `off`, `0` => `false`,
 ///   short variants are accepted, other strings return null or error
 /// * `Utf8` to Numeric: strings that can't be parsed to numbers return null, float strings
@@ -1270,9 +1270,9 @@ pub fn cast_with_options(
             Float16 => cast_bool_to_numeric::<Float16Type>(array, cast_options),
             Float32 => cast_bool_to_numeric::<Float32Type>(array, cast_options),
             Float64 => cast_bool_to_numeric::<Float64Type>(array, cast_options),
-            Utf8View => value_to_string_view(array, cast_options),
-            Utf8 => value_to_string::<i32>(array, cast_options),
-            LargeUtf8 => value_to_string::<i64>(array, cast_options),
+            Utf8View => cast_bool_to_string::<StringViewArray>(array),
+            Utf8 => cast_bool_to_string::<StringArray>(array),
+            LargeUtf8 => cast_bool_to_string::<LargeStringArray>(array),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {from_type} to {to_type} not supported",
             ))),
@@ -2872,7 +2872,7 @@ mod tests {
     use crate::parse::parse_decimal;
     use DataType::*;
     use arrow_array::{Int64Array, RunArray, StringArray};
-    use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
+    use arrow_buffer::{BooleanBuffer, Buffer, IntervalDayTime, NullBuffer};
     use arrow_buffer::{ScalarBuffer, i256};
     use arrow_schema::{DataType, Field};
     use chrono::NaiveDate;
@@ -5014,33 +5014,36 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_bool_to_utf8view() {
-        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let b = cast(&array, &DataType::Utf8View).unwrap();
-        let c = b.as_any().downcast_ref::<StringViewArray>().unwrap();
-        assert_eq!("true", c.value(0));
-        assert_eq!("false", c.value(1));
-        assert!(!c.is_valid(2));
-    }
-
-    #[test]
-    fn test_cast_bool_to_utf8() {
-        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let b = cast(&array, &DataType::Utf8).unwrap();
-        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!("true", c.value(0));
-        assert_eq!("false", c.value(1));
-        assert!(!c.is_valid(2));
-    }
-
-    #[test]
-    fn test_cast_bool_to_large_utf8() {
-        let array = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let b = cast(&array, &DataType::LargeUtf8).unwrap();
-        let c = b.as_any().downcast_ref::<LargeStringArray>().unwrap();
-        assert_eq!("true", c.value(0));
-        assert_eq!("false", c.value(1));
-        assert!(!c.is_valid(2));
+    fn test_cast_bool_to_string() {
+        for nulls in [
+            None,
+            Some(NullBuffer::new_valid(72)),
+            Some(NullBuffer::from([false, false, true, true].repeat(18))),
+            Some(NullBuffer::new_null(72)),
+        ] {
+            // Include both Boolean values under nulls and slices crossing bitmap word boundaries.
+            let array =
+                BooleanArray::new(BooleanBuffer::from([true, false].repeat(36)), nulls.clone());
+            let expected: Vec<_> = ["true", "false"]
+                .repeat(36)
+                .into_iter()
+                .enumerate()
+                .map(|(i, value)| (!nulls.as_ref().is_some_and(|n| n.is_null(i))).then_some(value))
+                .collect();
+            for (offset, len) in [(0, 72), (3, 65), (63, 9), (72, 0)] {
+                let input = array.slice(offset, len);
+                for data_type in [Utf8, LargeUtf8, Utf8View] {
+                    let actual = cast(&input, &data_type).unwrap();
+                    let values: Vec<_> = match data_type {
+                        Utf8 => actual.as_string::<i32>().iter().collect(),
+                        LargeUtf8 => actual.as_string::<i64>().iter().collect(),
+                        Utf8View => actual.as_string_view().iter().collect(),
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(values, expected[offset..offset + len]);
+                }
+            }
+        }
     }
 
     #[test]

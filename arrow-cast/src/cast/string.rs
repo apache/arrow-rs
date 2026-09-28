@@ -18,6 +18,18 @@
 use crate::cast::*;
 use arrow_buffer::NullBuffer;
 
+pub(crate) fn cast_bool_to_string<A>(array: &dyn Array) -> Result<ArrayRef, ArrowError>
+where
+    A: Array + FromIterator<Option<&'static str>> + 'static,
+{
+    let array: A = array
+        .as_boolean()
+        .iter()
+        .map(|value| value.map(|value| if value { "true" } else { "false" }))
+        .collect();
+    Ok(Arc::new(array))
+}
+
 pub(crate) fn value_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,
     options: &CastOptions,
