@@ -370,7 +370,7 @@ impl RowGroupPageIndex {
 /// Stores which positions are set in a sparse vector. For example:
 /// `[None, None, Some(...), Some(...), None, Some(...)]` becomes `[2, 3, 5]`
 ///
-/// Position checking uses a linear scan for up to 32 indexes and binary search above that.
+/// Position checking uses binary search.
 /// Stores indexes as `u32` because Parquet/Thrift collections cannot contain more than
 /// `i32::MAX` entries.
 #[derive(Debug, Clone, PartialEq)]
@@ -420,12 +420,9 @@ impl Keep {
     /// Retrieve a position if set
     fn position(&self, idx: usize) -> Option<usize> {
         let needle = u32::try_from(idx).ok()?;
-        // below CUTOFF elements, use linear search
-        const CUTOFF: usize = 32;
         match self.kept.as_ref() {
             None => (needle < self.span).then_some(idx),
-            Some(k) if k.len() > CUTOFF => k.binary_search(&needle).ok(),
-            Some(k) => k.iter().position(|&i| i == needle),
+            Some(k) => k.binary_search(&needle).ok(),
         }
     }
 
