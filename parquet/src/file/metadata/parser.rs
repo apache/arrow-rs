@@ -245,6 +245,10 @@ pub(crate) fn decode_metadata(
 ///   Required, Optional, Skip).
 /// * `offset_index_policy` - The policy for handling offset index parsing (e.g.,
 ///   Required, Optional, Skip).
+/// * `column_index_mask` - The row groups and leaf columns whose column indexes are parsed.
+///   Ignored when `column_index_policy` is [`PageIndexPolicy::Skip`].
+/// * `offset_index_mask` - The row groups and leaf columns whose offset indexes are parsed.
+///   Ignored when `offset_index_policy` is [`PageIndexPolicy::Skip`].
 /// * `bytes` - [`PushBuffers`] that should have already been populated with the bytes containing
 ///   the page indexes.
 pub(crate) fn parse_page_index(
