@@ -182,7 +182,7 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// to use [FilterBuilder::optimize] if appropriate.
 ///
 /// If the number of rows that `predicate` selects is already known,
-/// [`FilterBuilder::new_with_count`] avoids counting them again.
+/// [`FilterBuilder::with_count`] avoids counting them again.
 ///
 /// # See also
 /// * [`FilterBuilder`] for more control over the filtering process.
@@ -228,7 +228,7 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
 /// to use [FilterBuilder::optimize] if appropriate.
 ///
 /// If the number of rows that `predicate` selects is already known,
-/// [`FilterBuilder::new_with_count`] avoids counting them again.
+/// [`FilterBuilder::with_count`] avoids counting them again.
 pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
@@ -254,27 +254,36 @@ pub fn filter_record_batch(
 #[derive(Debug)]
 pub struct FilterBuilder {
     filter: BooleanArray,
-    count: usize,
-    strategy: IterationStrategy,
+    /// The number of rows `filter` selects, if provided by [`Self::with_count`]
+    count: Option<usize>,
+    optimize: bool,
 }
 
 impl FilterBuilder {
     /// Create a new [`FilterBuilder`] that can be used to construct a [`FilterPredicate`]
     pub fn new(filter: &BooleanArray) -> Self {
-        // SAFETY: the count is computed from `filter` itself.
-        unsafe { Self::new_with_count(filter, filter.true_count()) }
+        let filter = match filter.null_count() {
+            0 => filter.clone(),
+            _ => prep_null_mask_filter(filter),
+        };
+
+        Self {
+            filter,
+            count: None,
+            optimize: false,
+        }
     }
 
-    /// Create a new [`FilterBuilder`] from a mask whose number of selected rows
-    /// is already known, skipping the count that [`Self::new`] performs.
+    /// Set the number of rows that the filter selects, so that [`Self::build`]
+    /// does not have to count them.
     ///
     /// Callers that build a mask row by row, or derive it from a validity
     /// buffer with a cached null count, often already hold this number.
     ///
     /// # Safety
     ///
-    /// `count` must equal [`BooleanArray::true_count`] of `filter`: the number
-    /// of `true` values that are not null.
+    /// `count` must equal [`BooleanArray::true_count`] of the filter passed to
+    /// [`Self::new`]: the number of `true` values that are not null.
     ///
     /// # Example
     /// ```
@@ -284,33 +293,23 @@ impl FilterBuilder {
     /// let mask = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
     /// // The null is not selected, so the mask selects two rows.
     /// // SAFETY: the count matches the mask.
-    /// let predicate = unsafe { FilterBuilder::new_with_count(&mask, 2) }.build();
+    /// let predicate = unsafe { FilterBuilder::new(&mask).with_count(2) }.build();
     /// assert_eq!(predicate.count(), 2);
     /// let filtered = predicate.filter(&values).unwrap();
     /// assert_eq!(filtered.as_ref(), &Int32Array::from(vec![1, 3]));
     /// ```
-    pub unsafe fn new_with_count(filter: &BooleanArray, count: usize) -> Self {
+    pub unsafe fn with_count(mut self, count: usize) -> Self {
         debug_assert_eq!(
             count,
-            filter.true_count(),
+            self.filter.true_count(),
             "count must match the number of rows the filter selects"
         );
-        let filter = match filter.null_count() {
-            0 => filter.clone(),
-            _ => prep_null_mask_filter(filter),
-        };
-
-        let strategy = IterationStrategy::default_strategy(filter.len(), count);
-
-        Self {
-            filter,
-            count,
-            strategy,
-        }
+        self.count = Some(count);
+        self
     }
 
-    /// Compute an optimized representation of the provided `filter` mask that can be
-    /// applied to an array more quickly.
+    /// Compute an optimized representation of the provided `filter` mask in
+    /// [`Self::build`], so that it can be applied to an array more quickly.
     ///
     /// When filtering multiple arrays (e.g. a [`RecordBatch`] or a
     /// [`StructArray`] with multiple fields), optimizing the filter can provide
@@ -320,17 +319,7 @@ impl FilterBuilder {
     /// than the original mask, so it is often faster to filter a single array,
     /// without filter optimization.
     pub fn optimize(mut self) -> Self {
-        match self.strategy {
-            IterationStrategy::SlicesIterator => {
-                let slices = SlicesIterator::new(&self.filter).collect();
-                self.strategy = IterationStrategy::Slices(slices)
-            }
-            IterationStrategy::IndexIterator => {
-                let indices = IndexIterator::new(&self.filter, self.count).collect();
-                self.strategy = IterationStrategy::Indices(indices)
-            }
-            _ => {}
-        }
+        self.optimize = true;
         self
     }
 
@@ -352,10 +341,26 @@ impl FilterBuilder {
 
     /// Construct the final `FilterPredicate`
     pub fn build(self) -> FilterPredicate {
+        let count = self.count.unwrap_or_else(|| self.filter.true_count());
+        let mut strategy = IterationStrategy::default_strategy(self.filter.len(), count);
+        if self.optimize {
+            match strategy {
+                IterationStrategy::SlicesIterator => {
+                    let slices = SlicesIterator::new(&self.filter).collect();
+                    strategy = IterationStrategy::Slices(slices)
+                }
+                IterationStrategy::IndexIterator => {
+                    let indices = IndexIterator::new(&self.filter, count).collect();
+                    strategy = IterationStrategy::Indices(indices)
+                }
+                _ => {}
+            }
+        }
+
         FilterPredicate {
             filter: self.filter,
-            count: self.count,
-            strategy: self.strategy,
+            count,
+            strategy,
         }
     }
 }
@@ -517,6 +522,11 @@ impl FilterPredicate {
     /// Number of rows being selected based on this [`FilterPredicate`]
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    /// Length of the filter mask, including rows that are not selected
+    pub(crate) fn filter_len(&self) -> usize {
+        self.filter.len()
     }
 
     /// Return a [`FilterSelection`] for iterating over the rows selected by
