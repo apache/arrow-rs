@@ -25,7 +25,7 @@ where
     let array: A = array
         .as_boolean()
         .iter()
-        .map(|value| value.map(|value| if value { "true" } else { "false" }))
+        .map(|v| v.map(|b| if b { "true" } else { "false" }))
         .collect();
     Ok(Arc::new(array))
 }

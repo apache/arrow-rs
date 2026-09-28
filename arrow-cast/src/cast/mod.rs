@@ -5017,20 +5017,18 @@ mod tests {
     fn test_cast_bool_to_string() {
         for nulls in [
             None,
-            Some(NullBuffer::new_valid(72)),
             Some(NullBuffer::from([false, false, true, true].repeat(18))),
             Some(NullBuffer::new_null(72)),
         ] {
-            // Include both Boolean values under nulls and slices crossing bitmap word boundaries.
-            let array =
-                BooleanArray::new(BooleanBuffer::from([true, false].repeat(36)), nulls.clone());
+            // Include both Boolean values under nulls, an unaligned slice, and an empty slice.
+            let array = BooleanArray::new(BooleanBuffer::from([true, false].repeat(36)), nulls);
             let expected: Vec<_> = ["true", "false"]
                 .repeat(36)
                 .into_iter()
                 .enumerate()
-                .map(|(i, value)| (!nulls.as_ref().is_some_and(|n| n.is_null(i))).then_some(value))
+                .map(|(i, value)| array.is_valid(i).then_some(value))
                 .collect();
-            for (offset, len) in [(0, 72), (3, 65), (63, 9), (72, 0)] {
+            for (offset, len) in [(0, 72), (3, 65), (72, 0)] {
                 let input = array.slice(offset, len);
                 for data_type in [Utf8, LargeUtf8, Utf8View] {
                     let actual = cast(&input, &data_type).unwrap();

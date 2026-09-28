@@ -26,7 +26,6 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::cast;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
@@ -260,18 +259,11 @@ fn cast_array(array: &ArrayRef, to_type: DataType) {
 
 fn add_boolean_text_benchmarks(c: &mut Criterion) {
     let size = 8192;
-    let mut rng = seedable_rng();
-    let values = BooleanBuffer::collect_bool(size, |_| rng.random());
     let mut group = c.benchmark_group("cast_boolean_text");
     group.throughput(Throughput::Elements(size as u64));
 
     for (nulls, null_density) in [("no_nulls", 0.0), ("mixed_nulls", 0.2)] {
-        let validity = (null_density != 0.0).then(|| {
-            NullBuffer::new(BooleanBuffer::collect_bool(size, |_| {
-                rng.random::<f64>() >= null_density
-            }))
-        });
-        let array: ArrayRef = Arc::new(BooleanArray::new(values.clone(), validity));
+        let array: ArrayRef = Arc::new(create_boolean_array(size, null_density, 0.5));
         for (name, data_type) in [("utf8", DataType::Utf8), ("utf8view", DataType::Utf8View)] {
             group.bench_function(
                 BenchmarkId::new(format!("bool_to_{name}/{nulls}"), size),
