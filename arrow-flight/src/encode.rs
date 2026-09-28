@@ -2061,8 +2061,6 @@ mod tests {
         let array = StringArray::from_iter_values((0..1024).map(|i| "*".repeat(i)));
         let batch = RecordBatch::try_from_iter(vec![("data", Arc::new(array) as _)]).unwrap();
 
-        // improved by adaptively re-splitting on the actual encoded size
-        // https://github.com/apache/arrow-rs/issues/3478
         verify_encoded_split(batch, 168).await;
     }
 
