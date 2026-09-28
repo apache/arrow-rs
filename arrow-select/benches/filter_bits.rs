@@ -39,6 +39,31 @@ fn create_boolean_array(size: usize, true_density: f64, rng: &mut StdRng) -> Boo
         .collect()
 }
 
+/// A mask whose set bits come in runs averaging `run` bits, with the unset
+/// runs sized to give `true_density`: a clustered or sorted column under a
+/// range predicate, rather than independent rows
+fn create_clustered_array(
+    size: usize,
+    true_density: f64,
+    run: f64,
+    rng: &mut StdRng,
+) -> BooleanArray {
+    let leave_set = 1.0 / run;
+    let leave_unset = true_density / (run * (1.0 - true_density));
+    let mut set = rng.random_bool(true_density);
+    (0..size)
+        .map(|_| {
+            let bit = set;
+            set = if set {
+                !rng.random_bool(leave_set)
+            } else {
+                rng.random_bool(leave_unset)
+            };
+            Some(bit)
+        })
+        .collect()
+}
+
 fn bench_filter_bits(predicate: &FilterPredicate, array: &BooleanArray) {
     hint::black_box(predicate.filter(array).unwrap());
 }
@@ -86,5 +111,44 @@ fn add_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, add_benchmark);
+/// `filter_bits` on masks too large for the branch predictor to learn: the
+/// cases above repeat one 1024-word mask, whose per-word branches a recent
+/// core learns, which makes random masks look faster than a real filter.
+/// Lazy strategies only, which compress word by word
+fn add_large_benchmark(c: &mut Criterion) {
+    const SIZE: usize = 1 << 22;
+    let mut rng = StdRng::seed_from_u64(43);
+
+    let data = create_boolean_array(SIZE, 0.5, &mut rng);
+
+    let mut cases = vec![];
+    for (label, true_density) in [
+        ("1/1024", 1.0 / 1024.0),
+        ("1/256", 1.0 / 256.0),
+        ("1/64", 1.0 / 64.0),
+        ("1/16", 1.0 / 16.0),
+        ("1/4", 0.25),
+        ("1/2", 0.5),
+        ("3/4", 0.75),
+        ("15/16", 15.0 / 16.0),
+    ] {
+        let filter = create_boolean_array(SIZE, true_density, &mut rng);
+        cases.push((format!("random, kept {label}"), filter));
+    }
+    for run in [64, 4096] {
+        for (label, true_density) in [("1/8", 0.125), ("1/2", 0.5), ("7/8", 0.875)] {
+            let filter = create_clustered_array(SIZE, true_density, run as f64, &mut rng);
+            cases.push((format!("runs of {run}, kept {label}"), filter));
+        }
+    }
+
+    for (label, filter) in &cases {
+        let predicate = FilterBuilder::new(filter).build();
+        c.bench_function(&format!("filter_bits large ({label})"), |b| {
+            b.iter(|| bench_filter_bits(&predicate, &data))
+        });
+    }
+}
+
+criterion_group!(benches, add_benchmark, add_large_benchmark);
 criterion_main!(benches);
