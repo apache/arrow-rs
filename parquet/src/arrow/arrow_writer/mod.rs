@@ -2932,7 +2932,11 @@ mod tests {
         );
     }
 
-    fn write_with_bloom_filter(array: ArrayRef, dictionary_page_size_limit: usize) -> Bytes {
+    fn write_with_bloom_filter(
+        array: ArrayRef,
+        dictionary_page_size_limit: usize,
+        data_page_row_count_limit: usize,
+    ) -> Bytes {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col",
             array.data_type().clone(),
@@ -2942,6 +2946,7 @@ mod tests {
         let props = WriterProperties::builder()
             .set_dictionary_enabled(true)
             .set_dictionary_page_size_limit(dictionary_page_size_limit)
+            .set_data_page_row_count_limit(data_page_row_count_limit)
             .set_write_batch_size(256)
             .set_bloom_filter_enabled(true)
             .build();
@@ -2967,7 +2972,11 @@ mod tests {
     fn string_column_bloom_filter_populated_from_dictionary() {
         let values: Vec<String> = (0..2000).map(|i| format!("value-{}", i % 10)).collect();
         let array = Arc::new(StringArray::from_iter_values(&values));
-        let file = write_with_bloom_filter(array, 1024 * 1024);
+        let file = write_with_bloom_filter(
+            array,
+            1024 * 1024,
+            crate::file::properties::DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
+        );
         assert!(data_page_encoding_mask(&file).is_only(Encoding::RLE_DICTIONARY));
 
         check_bloom_filter(
@@ -2982,11 +2991,14 @@ mod tests {
 
     /// After falling back from dictionary encoding the filter holds the dictionary's values
     /// and every value written plain afterwards.
+    ///
+    /// Small data pages make the writer flush dictionary-encoded pages before the dictionary
+    /// overflows, so the dictionary is kept and written.
     #[test]
     fn string_column_bloom_filter_across_dictionary_fallback() {
         let values: Vec<String> = (0..2000).map(|i| format!("value-{i}")).collect();
         let array = Arc::new(StringArray::from_iter_values(&values));
-        let file = write_with_bloom_filter(array, 1024);
+        let file = write_with_bloom_filter(array, 1024, 32);
         let encodings = data_page_encoding_mask(&file);
         assert!(
             encodings.is_set(Encoding::RLE_DICTIONARY) && encodings.is_set(Encoding::PLAIN),
@@ -3003,10 +3015,41 @@ mod tests {
         );
     }
 
+    /// When the dictionary overflows before any data page is flushed, the values buffered so
+    /// far are re-encoded and the dictionary is discarded: the filter must still hold them.
+    #[test]
+    fn string_column_bloom_filter_discarded_dictionary() {
+        let values: Vec<String> = (0..2000).map(|i| format!("value-{i}")).collect();
+        let array = Arc::new(StringArray::from_iter_values(&values));
+        let file = write_with_bloom_filter(
+            array,
+            1024,
+            crate::file::properties::DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
+        );
+        let encodings = data_page_encoding_mask(&file);
+        assert!(
+            encodings.is_only(Encoding::PLAIN),
+            "expected only plain data pages, got {encodings:?}"
+        );
+
+        check_bloom_filter(
+            vec![file],
+            "col".to_string(),
+            values.into_iter().map(String::into_bytes).collect(),
+            (2000..2010)
+                .map(|i| format!("value-{i}").into_bytes())
+                .collect(),
+        );
+    }
+
     #[test]
     fn i64_column_bloom_filter_populated_from_dictionary() {
         let array = Arc::new(Int64Array::from_iter_values((0..2000).map(|i| i % 10)));
-        let file = write_with_bloom_filter(array, 1024 * 1024);
+        let file = write_with_bloom_filter(
+            array,
+            1024 * 1024,
+            crate::file::properties::DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
+        );
         assert!(data_page_encoding_mask(&file).is_only(Encoding::RLE_DICTIONARY));
 
         check_bloom_filter(
@@ -3020,7 +3063,7 @@ mod tests {
     #[test]
     fn i64_column_bloom_filter_across_dictionary_fallback() {
         let array = Arc::new(Int64Array::from_iter_values(0..2000i64));
-        let file = write_with_bloom_filter(array, 1024);
+        let file = write_with_bloom_filter(array, 1024, 32);
         let encodings = data_page_encoding_mask(&file);
         assert!(
             encodings.is_set(Encoding::RLE_DICTIONARY) && encodings.is_set(Encoding::PLAIN),
