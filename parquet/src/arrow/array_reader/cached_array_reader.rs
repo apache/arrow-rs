@@ -174,6 +174,9 @@ impl CachedArrayReader {
     /// This is only called for Consumer role readers
     fn cleanup_consumed_batches(&mut self) {
         let current_batch_id = self.get_batch_id_from_position(self.outer_position);
+        // `outer_position` only moves forward, so the watermark can never run
+        // ahead of the batch the reader is currently on.
+        debug_assert!(current_batch_id.val >= self.cleaned_up_to);
 
         // Remove batches that are at least one batch behind the current position
         // This ensures we don't remove batches that might still be needed for the current batch
@@ -183,22 +186,14 @@ impl CachedArrayReader {
         }
         let end = current_batch_id.val - 1;
         // Everything below `cleaned_up_to` was removed by an earlier call.
-        // Rescanning from 0 each time made this quadratic in the number of
-        // batches in the row group, and took the shared cache's write lock on
-        // every `consume_batch` even when there was nothing left to remove.
         if end <= self.cleaned_up_to {
             return;
         }
         let start = self.cleaned_up_to;
         self.cleaned_up_to = end;
         let mut cache = self.shared_cache.write().unwrap();
-        for batch_id_to_remove in start..end {
-            cache.remove(
-                self.column_idx,
-                BatchID {
-                    val: batch_id_to_remove,
-                },
-            );
+        for val in start..end {
+            cache.remove(self.column_idx, BatchID { val });
         }
     }
 }
