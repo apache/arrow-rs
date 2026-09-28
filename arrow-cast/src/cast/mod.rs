@@ -11025,77 +11025,122 @@ mod tests {
 
     #[test]
     fn test_cast_decimal256_negative_scale_metadata() {
-        for scale in [-51, -52, -75, -76] {
-            let input = Decimal256Array::from(vec![
-                Some(i256::ZERO),
-                Some(i256::ONE),
-                Some(i256::MINUS_ONE),
-                Some(i256::from_i128(6)),
-                None,
-            ])
-            .with_precision_and_scale(76, scale)
-            .unwrap();
-            let value = i256::from_i128(10).pow_wrapping((-scale) as u32);
-            let values = if scale == -76 {
-                vec![Some(i256::ZERO), None, None, None, None]
-            } else {
-                vec![
-                    Some(i256::ZERO),
-                    Some(value),
-                    Some(-value),
-                    Some(value * i256::from_i128(6)),
-                    None,
-                ]
-            };
-            let expected = Decimal256Array::from(values)
+        let input = Decimal256Array::from(vec![
+            Some(i256::ZERO),
+            Some(i256::ONE),
+            Some(i256::MINUS_ONE),
+            None,
+        ])
+        .with_precision_and_scale(76, -51)
+        .unwrap();
+        let value = i256::from_i128(10).pow_wrapping(51);
+        let expected =
+            Decimal256Array::from(vec![Some(i256::ZERO), Some(value), Some(-value), None])
                 .with_precision_and_scale(76, 0)
                 .unwrap();
-            let result = cast(&input, &DataType::Decimal256(76, 0)).unwrap();
-            assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
-            let result = cast_with_options(
-                &input,
-                &DataType::Decimal256(76, 0),
-                &CastOptions {
-                    safe: false,
-                    ..Default::default()
-                },
-            );
-            if scale == -76 {
-                assert!(result.is_err());
-            } else {
-                assert_eq!(result.unwrap().as_primitive::<Decimal256Type>(), &expected);
-            }
-        }
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let output_type = DataType::Decimal256(76, 0);
+        let result = cast(&input, &output_type).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+        let result = cast_with_options(&input, &output_type, &options).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+
+        // The precision plus scale increase crosses i8::MAX at -52.
+        let input = input.with_precision_and_scale(76, -52).unwrap();
+        let value = i256::from_i128(10).pow_wrapping(52);
+        let expected =
+            Decimal256Array::from(vec![Some(i256::ZERO), Some(value), Some(-value), None])
+                .with_precision_and_scale(76, 0)
+                .unwrap();
+        let result = cast(&input, &output_type).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+        let result = cast_with_options(&input, &output_type, &options).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+    }
+
+    #[test]
+    fn test_cast_decimal256_negative_scale_precision_overflow() {
+        let input = Decimal256Array::from(vec![Some(i256::ZERO), Some(i256::ONE), None])
+            .with_precision_and_scale(76, -76)
+            .unwrap();
+        let output_type = DataType::Decimal256(76, 0);
+        let expected = Decimal256Array::from(vec![Some(i256::ZERO), None, None])
+            .with_precision_and_scale(76, 0)
+            .unwrap();
+        let result = cast(&input, &output_type).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let error = cast_with_options(&input, &output_type, &options).unwrap_err();
+        let value = i256::from_i128(10).pow_wrapping(76);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Invalid argument error: {value} is too large to store in a Decimal256 of precision 76. Max is {}",
+                value - i256::ONE
+            )
+        );
+    }
+
+    #[test]
+    fn test_cast_decimal256_negative_scale_native_overflow() {
+        let input = Decimal256Array::from(vec![Some(i256::from_i128(6)), None])
+            .with_precision_and_scale(76, -76)
+            .unwrap();
+        let output_type = DataType::Decimal256(76, 0);
+        let expected = Decimal256Array::from(vec![None, None])
+            .with_precision_and_scale(76, 0)
+            .unwrap();
+        let result = cast(&input, &output_type).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let error = cast_with_options(&input, &output_type, &options).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Cast error: Cannot cast to Decimal256(76, 0). Overflowing on 6"
+        );
     }
 
     #[test]
     fn test_cast_decimal256_extreme_scale_difference() {
-        for (low_scale, high_scale) in [(-76, 76), (i8::MIN, 76)] {
-            let input = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::MINUS_ONE), None])
-                .with_precision_and_scale(76, low_scale)
-                .unwrap();
-            for safe in [true, false] {
-                let options = CastOptions {
-                    safe,
-                    ..Default::default()
-                };
-                assert!(
-                    cast_with_options(&input, &DataType::Decimal256(76, high_scale), &options)
-                        .is_err()
-                );
-                let input = input
-                    .clone()
-                    .with_precision_and_scale(76, high_scale)
-                    .unwrap();
-                let expected =
-                    Decimal256Array::from(vec![Some(i256::ZERO), Some(i256::ZERO), None])
-                        .with_precision_and_scale(76, low_scale)
-                        .unwrap();
-                let result =
-                    cast_with_options(&input, &DataType::Decimal256(76, low_scale), &options)
-                        .unwrap();
-                assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
-            }
+        let input = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::MINUS_ONE), None])
+            .with_precision_and_scale(76, i8::MIN)
+            .unwrap();
+        for safe in [true, false] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            let error =
+                cast_with_options(&input, &DataType::Decimal256(76, 76), &options).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Cast error: Cannot cast to Decimal256(76, 76). Value overflows for output scale"
+            );
+        }
+
+        let input = input.with_precision_and_scale(76, 76).unwrap();
+        let expected = Decimal256Array::from(vec![Some(i256::ZERO), Some(i256::ZERO), None])
+            .with_precision_and_scale(76, i8::MIN)
+            .unwrap();
+        for safe in [true, false] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            let result =
+                cast_with_options(&input, &DataType::Decimal256(76, i8::MIN), &options).unwrap();
+            assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
         }
     }
 
