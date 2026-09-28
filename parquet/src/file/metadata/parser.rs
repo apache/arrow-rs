@@ -257,7 +257,7 @@ pub(crate) fn parse_page_index(
 ) -> crate::errors::Result<()> {
     let num_row_groups = metadata.num_row_groups();
     let num_columns = metadata.file_metadata().schema_descr().num_columns();
-    let mut builder = PageIndexBuilder::new_for_read(
+    let mut builder = PageIndexBuilder::try_new_with_masks(
         num_row_groups,
         num_columns,
         (column_index_policy != PageIndexPolicy::Skip).then_some(column_index_mask),

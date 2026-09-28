@@ -436,6 +436,14 @@ impl Keep {
             Some(indexes) => indexes.len(),
         }
     }
+
+    /// Returns the logical index at the specified storage position.
+    fn index(&self, position: usize) -> usize {
+        match &self.kept {
+            None => position,
+            Some(indexes) => indexes[position] as usize,
+        }
+    }
 }
 
 impl HeapSize for Arc<[u32]> {
@@ -538,6 +546,27 @@ impl<T> Grid<T> {
         true
     }
 
+    /// Moves values into a new grid, preserving those whose logical coordinates
+    /// are selected by the new grid.
+    fn reshape(self, mut reshaped: Self) -> Self {
+        let old_num_cols = self.cols.len();
+
+        for (cell_idx, value) in self.cells.into_iter().enumerate() {
+            let Some(value) = value else {
+                continue;
+            };
+
+            let row_offset = cell_idx / old_num_cols;
+            let col_offset = cell_idx % old_num_cols;
+            let row = self.rows.index(row_offset);
+            let col = self.cols.index(col_offset);
+            // A smaller shape or sparse mask may intentionally omit this coordinate.
+            let _ = reshaped.insert(row, col, value);
+        }
+
+        reshaped
+    }
+
     /// Returns true if the grid has no values
     pub(crate) fn is_empty(&self) -> bool {
         self.cells.iter().all(|cell| cell.is_none())
@@ -556,6 +585,11 @@ impl<T: HeapSize> HeapSize for Grid<T> {
 /// the column chunks selected when it was built (all chunks by default). It is used internally
 /// by this crate when assembling and writing the Page Index. It is also the default
 /// implementation of the [`PageIndexProvider`] contained in the [`ParquetMetaData`].
+///
+/// Use [`PageIndexBuilder::new`] to create dense storage for both index types, or
+/// [`PageIndexBuilder::try_new_with_masks`] to select storage independently for column and
+/// offset indexes. An existing index can be reshaped while retaining selected entries with
+/// [`PageIndex::try_into_builder_with_shape`].
 ///
 /// # Example: Constructing a synthetic `PageIndex`
 ///
@@ -622,6 +656,66 @@ impl<T: HeapSize> HeapSize for Grid<T> {
 /// assert!(metadata.page_index().unwrap().is_complete());
 /// ```
 ///
+/// # Example: Expanding a cached sparse `PageIndex`
+///
+/// A query engine may cache only the page indexes needed by an initial query. If a later
+/// query projects another column, the cached index can be reshaped to add storage for that
+/// column without discarding the existing entries.
+///
+/// ```
+/// # use parquet::errors::Result;
+/// # use parquet::file::metadata::{ColumnChunkMask, OffsetIndexBuilder};
+/// # use parquet::file::metadata::page_index::{PageIndexBuilder, PageIndexProvider};
+/// # use parquet::file::page_index::offset_index::OffsetIndexMetaData;
+///
+/// # fn main() -> Result<()> {
+/// fn offset_index(offset: i64) -> OffsetIndexMetaData {
+///     // create an `OffsetIndexMetaData` with the given offset
+/// #    let mut builder = OffsetIndexBuilder::new();
+/// #    builder.append_row_count(10);
+/// #    builder.append_offset_and_size(offset, 100);
+/// #    builder.build()
+/// }
+///
+/// // The file has two row groups and five columns. The first query needs offset
+/// // indexes for columns 0 and 2 in row group 0 only.
+/// // The column index is not used so it is left unallocated.
+/// let initial_projection = ColumnChunkMask::row_groups_and_columns([0], [0, 2]);
+/// let mut builder = PageIndexBuilder::try_new_with_masks(
+///     2,
+///     5,
+///     None,
+///     Some(&initial_projection),
+/// )?;
+/// builder.put_offset_index(offset_index(100), 0, 0);
+/// builder.put_offset_index(offset_index(200), 0, 2);
+/// let cached = builder.build();
+///
+/// assert!(cached.offset_index(0, 0).is_some());
+/// assert!(cached.offset_index(0, 1).is_none());
+/// assert!(cached.offset_index(0, 2).is_some());
+/// assert!(cached.offset_index(1, 0).is_none());
+///
+/// // A later query also projects column 4. Reshape the offset-index grid to
+/// // include it; entries for columns 0 and 2 are retained.
+/// let expanded_projection = ColumnChunkMask::row_groups_and_columns([0], [0, 2, 4]);
+/// let mut builder = cached.try_into_builder_with_shape(
+///     2,
+///     5,
+///     None,
+///     Some(&expanded_projection),
+/// )?;
+/// builder.put_offset_index(offset_index(400), 0, 4);
+/// let expanded = builder.build();
+///
+/// assert!(expanded.offset_index(0, 0).is_some());
+/// assert!(expanded.offset_index(0, 2).is_some());
+/// assert!(expanded.offset_index(0, 4).is_some());
+/// assert!(expanded.offset_index(0, 1).is_none());
+/// # Ok(())
+/// # }
+/// ```
+///
 /// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 /// [`OffsetIndex`]: crate::file::page_index::offset_index::OffsetIndexMetaData
@@ -646,10 +740,38 @@ impl PageIndex {
     /// Convert this `PageIndex` into a [`PageIndexBuilder`].
     ///
     /// The builder retains the storage shape of this index. Consequently, its `put_*`
-    /// methods return `false` for positions outside that shape. The `allocate_*` methods
-    /// can replace it with dense storage, but discard existing entries for that index type.
+    /// methods ignore positions outside that shape. The `allocate_*` methods can replace it
+    /// with dense storage, but discard existing entries for that index type. Use
+    /// [`Self::try_into_builder_with_shape`] to change the shape while preserving entries.
     pub fn into_builder(self) -> PageIndexBuilder {
         self.into()
+    }
+
+    /// Convert this `PageIndex` into a [`PageIndexBuilder`] with the requested shape.
+    ///
+    /// Existing entries selected by the new masks are preserved. Passing `Some` with a
+    /// [`ColumnChunkMask::all`] mask creates dense storage for that index type, passing
+    /// `Some` with another mask creates sparse storage, and passing `None` removes storage
+    /// for that index type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either dimension exceeds `u32::MAX`.
+    pub fn try_into_builder_with_shape(
+        self,
+        num_row_groups: usize,
+        num_columns: usize,
+        column_index_mask: Option<&ColumnChunkMask>,
+        offset_index_mask: Option<&ColumnChunkMask>,
+    ) -> Result<PageIndexBuilder> {
+        let mut builder = self.into_builder();
+        builder.try_reshape(
+            num_row_groups,
+            num_columns,
+            column_index_mask,
+            offset_index_mask,
+        )?;
+        Ok(builder)
     }
 }
 
@@ -719,7 +841,16 @@ impl PageIndexBuilder {
         Ok(Some(Grid::new(rows, cols)))
     }
 
-    pub(crate) fn new_for_read(
+    /// Creates a new builder with storage selected independently for each index type.
+    ///
+    /// Passing `Some` with a [`ColumnChunkMask::all`] mask creates dense storage for that
+    /// index type, passing `Some` with another mask creates sparse storage, and passing
+    /// `None` leaves that index type unallocated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either dimension exceeds `u32::MAX`.
+    pub fn try_new_with_masks(
         num_row_groups: usize,
         num_columns: usize,
         column_index_mask: Option<&ColumnChunkMask>,
@@ -768,6 +899,39 @@ impl PageIndexBuilder {
             column_indexes: page_index.column_indexes,
             offset_indexes: page_index.offset_indexes,
         }
+    }
+
+    /// Changes the shape of the index storage while preserving selected entries.
+    ///
+    /// Existing entries selected by the new masks are preserved. Passing `Some` with a
+    /// [`ColumnChunkMask::all`] mask creates dense storage for that index type, passing
+    /// `Some` with another mask creates sparse storage, and passing `None` removes storage
+    /// for that index type. A mask may also allocate a previously absent index type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either dimension exceeds `u32::MAX`.
+    pub fn try_reshape(
+        &mut self,
+        num_row_groups: usize,
+        num_columns: usize,
+        column_index_mask: Option<&ColumnChunkMask>,
+        offset_index_mask: Option<&ColumnChunkMask>,
+    ) -> Result<()> {
+        let column_indexes =
+            Self::storage_for_selection(num_row_groups, num_columns, column_index_mask)?;
+        let offset_indexes =
+            Self::storage_for_selection(num_row_groups, num_columns, offset_index_mask)?;
+
+        self.column_indexes = match (self.column_indexes.take(), column_indexes) {
+            (Some(old), Some(new)) => Some(old.reshape(new)),
+            (_, new) => new,
+        };
+        self.offset_indexes = match (self.offset_indexes.take(), offset_indexes) {
+            (Some(old), Some(new)) => Some(old.reshape(new)),
+            (_, new) => new,
+        };
+        Ok(())
     }
 
     /// Allocates space for column indexes
@@ -882,7 +1046,7 @@ impl From<PageIndex> for PageIndexBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{Grid, Keep, PageIndexBuilder};
+    use super::{Grid, Keep, PageIndex, PageIndexBuilder};
     use crate::{
         basic::BoundaryOrder,
         file::metadata::ColumnChunkMask,
@@ -994,6 +1158,11 @@ mod tests {
             })
             .is_err()
         );
+        assert!(
+            PageIndexBuilder::default()
+                .try_reshape(0, span, Some(&ColumnChunkMask::all()), None)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1015,7 +1184,7 @@ mod tests {
     #[test]
     fn test_builder_sparse_storage_shape() {
         let mask = ColumnChunkMask::columns([0, 2]);
-        let builder = PageIndexBuilder::new_for_read(4, 5, Some(&mask), None).unwrap();
+        let builder = PageIndexBuilder::try_new_with_masks(4, 5, Some(&mask), None).unwrap();
 
         let column_indexes = builder.column_indexes.unwrap();
         assert_eq!(column_indexes.rows.len(), 4);
@@ -1046,6 +1215,66 @@ mod tests {
         assert_eq!(offset_indexes.cols.len(), 3);
         assert_eq!(offset_indexes.cells.len(), 6);
         assert!(offset_indexes.is_empty());
+    }
+
+    #[test]
+    fn test_builder_reshape_preserves_entries_with_dense_and_sparse_storage() {
+        let ci = colidx_for_test();
+        let mut grid = Grid::new(
+            Keep::from_mask(Some(Arc::from([0, 2])), 3).unwrap(),
+            Keep::from_mask(Some(Arc::from([1])), 3).unwrap(),
+        );
+        assert!(grid.insert(0, 1, ci.clone()));
+        assert!(grid.insert(2, 1, ci.clone()));
+
+        let page_index = PageIndex::new(Some(grid), None);
+        let all = ColumnChunkMask::all();
+        let mut builder = page_index
+            .try_into_builder_with_shape(4, 4, Some(&all), None)
+            .unwrap();
+
+        let column_indexes = builder.column_indexes.as_ref().unwrap();
+        assert!(column_indexes.rows.kept.is_none());
+        assert!(column_indexes.cols.kept.is_none());
+        assert_eq!(column_indexes.cells.len(), 16);
+        assert_eq!(column_indexes.get(0, 1), Some(&ci));
+        assert_eq!(column_indexes.get(2, 1), Some(&ci));
+        assert!(builder.offset_indexes.is_none());
+
+        // A position omitted from the original sparse grid is now available.
+        builder.put_column_index(ci.clone(), 3, 3);
+        assert_eq!(
+            builder.column_indexes.as_ref().unwrap().get(3, 3),
+            Some(&ci)
+        );
+
+        // Sparse reshaping retains selected entries, drops unselected entries, and can
+        // allocate storage for an index type that was previously absent.
+        let column_mask = ColumnChunkMask::row_groups_and_columns([0, 3], [1, 3]);
+        let offset_mask = ColumnChunkMask::row_groups_and_columns([1], [2]);
+        builder
+            .try_reshape(4, 4, Some(&column_mask), Some(&offset_mask))
+            .unwrap();
+        let column_indexes = builder.column_indexes.as_ref().unwrap();
+        assert_eq!(column_indexes.cells.len(), 4);
+        assert_eq!(column_indexes.get(0, 1), Some(&ci));
+        assert!(column_indexes.get(2, 1).is_none());
+        assert_eq!(column_indexes.get(3, 3), Some(&ci));
+        let offset_indexes = builder.offset_indexes.as_ref().unwrap();
+        assert_eq!(offset_indexes.cells.len(), 1);
+        assert!(offset_indexes.get(1, 2).is_none());
+
+        // Changing dimensions preserves only entries that remain in bounds.
+        builder.try_reshape(2, 2, Some(&all), None).unwrap();
+        let column_indexes = builder.column_indexes.as_ref().unwrap();
+        assert_eq!(column_indexes.cells.len(), 4);
+        assert_eq!(column_indexes.get(0, 1), Some(&ci));
+        assert!(column_indexes.get(3, 3).is_none());
+
+        // Passing None removes storage for that index type.
+        builder.try_reshape(4, 4, None, Some(&all)).unwrap();
+        assert!(builder.column_indexes.is_none());
+        assert_eq!(builder.offset_indexes.as_ref().unwrap().cells.len(), 16);
     }
 
     #[test]
