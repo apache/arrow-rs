@@ -18,7 +18,7 @@
 //! Benchmarks of benchmark for extracting arrow statistics from parquet
 
 use arrow::array::{ArrayRef, DictionaryArray, Float64Array, StringArray, UInt64Array};
-use arrow_array::{Decimal128Array, Int32Array, Int64Array, RecordBatch};
+use arrow_array::{Decimal128Array, Int32Array, Int64Array, RecordBatch, StringViewArray};
 use arrow_schema::{
     DataType::{self, *},
     Field, Schema,
@@ -267,6 +267,9 @@ fn make_page_index_column(data_type: &DataType, rows: usize) -> ArrayRef {
         Utf8 => Arc::new(StringArray::from_iter(
             (0..rows).map(|i| valid(i).then(|| format!("value-{i:08}"))),
         )),
+        Utf8View => Arc::new(StringViewArray::from_iter(
+            (0..rows).map(|i| valid(i).then(|| format!("value-{i:08}"))),
+        )),
         Decimal128(precision, scale) => Arc::new(
             Decimal128Array::from_iter((0..rows).map(|i| valid(i).then_some(i as i128 * 1001)))
                 .with_precision_and_scale(*precision, *scale)
@@ -309,7 +312,7 @@ fn create_page_index_file(
 /// building `ColumnIndexMetaData` and converting it to Arrow arrays.
 fn page_index_benchmark(c: &mut Criterion) {
     let row_groups = 20;
-    let data_types = [Int64, Utf8, Decimal128(20, 2)];
+    let data_types = [Int64, Utf8, Utf8View, Decimal128(20, 2)];
     // 10 rows per page, so 100 or 500 pages per row group: 2000 or 10000 pages
     let rows_per_group_options = [1000, 5000];
 
