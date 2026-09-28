@@ -983,9 +983,22 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) {
-        if let Some(ref mut indexes) = self.column_indexes {
-            indexes.insert(row_group_idx, column_idx, column_index);
-        }
+        let _ = self.try_put_column_index(column_index, row_group_idx, column_idx);
+    }
+
+    /// Attempts to set the column index for a specific row group and column.
+    ///
+    /// Returns `false`, and drops `column_index`, if column indexes were not allocated
+    /// (see [`Self::allocate_column_indexes`]) or the grid has no storage for the position.
+    pub fn try_put_column_index(
+        &mut self,
+        column_index: ColumnIndexMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> bool {
+        self.column_indexes
+            .as_mut()
+            .is_some_and(|indexes| indexes.insert(row_group_idx, column_idx, column_index))
     }
 
     /// Sets the offset index for a specific row group and column
@@ -998,9 +1011,22 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) {
-        if let Some(ref mut indexes) = self.offset_indexes {
-            indexes.insert(row_group_idx, column_idx, offset_index);
-        }
+        let _ = self.try_put_offset_index(offset_index, row_group_idx, column_idx);
+    }
+
+    /// Attempts to set the offset index for a specific row group and column.
+    ///
+    /// Returns `false`, and drops `offset_index`, if offset indexes were not allocated
+    /// (see [`Self::allocate_offset_indexes`]) or the grid has no storage for the position.
+    pub fn try_put_offset_index(
+        &mut self,
+        offset_index: OffsetIndexMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> bool {
+        self.offset_indexes
+            .as_mut()
+            .is_some_and(|indexes| indexes.insert(row_group_idx, column_idx, offset_index))
     }
 
     /// Checks if an index structure is entirely empty (all entries are None)
@@ -1163,7 +1189,7 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_put_reports_missing_storage() {
+    fn test_builder_try_put_reports_missing_storage() {
         let ci = colidx_for_test();
         let mut grid = Grid::new(
             Keep::from_mask(Some(Arc::from([0])), 1).unwrap(),
@@ -1171,11 +1197,9 @@ mod tests {
         );
         assert!(grid.insert(0, 0, ci.clone()));
 
-        /* TODO(ets): add a fallible put
         let mut builder = PageIndex::new(Some(grid), None).into_builder();
-        assert!(builder.put_column_index(ci.clone(), 0, 0));
-        assert!(!builder.put_column_index(ci, 0, 1));
-        */
+        assert!(builder.try_put_column_index(ci.clone(), 0, 0));
+        assert!(!builder.try_put_column_index(ci, 0, 1));
     }
 
     #[test]
@@ -1196,9 +1220,7 @@ mod tests {
         let mut builder = PageIndexBuilder::default();
 
         builder.allocate_column_indexes(2, 3);
-        // TODO(ets): need a fallible put
-        //assert!(builder.put_column_index(ci, 1, 2));
-        builder.put_column_index(ci, 1, 2);
+        assert!(builder.try_put_column_index(ci, 1, 2));
         builder.allocate_column_indexes(2, 3);
         let column_indexes = builder.column_indexes.as_ref().unwrap();
         assert_eq!(column_indexes.rows.len(), 2);
