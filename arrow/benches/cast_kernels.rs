@@ -17,7 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
+use criterion::{BenchmarkId, Criterion, Throughput};
 use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
@@ -26,6 +26,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::sync::Arc;
 
 use arrow::array::*;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::cast;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
@@ -257,7 +258,33 @@ fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
 }
 
+fn add_boolean_text_benchmarks(c: &mut Criterion) {
+    let size = 8192;
+    let mut rng = seedable_rng();
+    let values = BooleanBuffer::collect_bool(size, |_| rng.random());
+    let mut group = c.benchmark_group("cast_boolean_text");
+    group.throughput(Throughput::Elements(size as u64));
+
+    for (nulls, null_density) in [("no_nulls", 0.0), ("mixed_nulls", 0.2)] {
+        let validity = (null_density != 0.0).then(|| {
+            NullBuffer::new(BooleanBuffer::collect_bool(size, |_| {
+                rng.random::<f64>() >= null_density
+            }))
+        });
+        let array: ArrayRef = Arc::new(BooleanArray::new(values.clone(), validity));
+        for (name, data_type) in [("utf8", DataType::Utf8), ("utf8view", DataType::Utf8View)] {
+            group.bench_function(
+                BenchmarkId::new(format!("bool_to_{name}/{nulls}"), size),
+                |b| b.iter(|| cast_array(&array, data_type.clone())),
+            );
+        }
+    }
+    group.finish();
+}
+
 fn add_benchmark(c: &mut Criterion) {
+    add_boolean_text_benchmarks(c);
+
     let i32_array = build_array::<Int32Type>(512);
     let i64_array = build_array::<Int64Type>(512);
     let f32_array = build_array::<Float32Type>(512);
