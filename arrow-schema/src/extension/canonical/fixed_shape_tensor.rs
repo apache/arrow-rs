@@ -129,6 +129,30 @@ impl FixedShapeTensor {
     pub fn permutations(&self) -> Option<&[usize]> {
         self.metadata.permutations()
     }
+
+    /// Returns the logical shape.
+    ///
+    /// Logical dimension `i` has the size of physical dimension
+    /// `permutations[i]`. Without a permutation, this is the physical shape.
+    ///
+    /// Physical shape `[100, 200, 500]` and permutation `[2, 0, 1]` have
+    /// logical shape `[500, 100, 200]`.
+    ///
+    /// ```
+    /// # use arrow_schema::extension::FixedShapeTensor;
+    /// # use arrow_schema::DataType;
+    /// let tensor = FixedShapeTensor::try_new(
+    ///     DataType::Float32,
+    ///     [100, 200, 500],
+    ///     None,
+    ///     Some(vec![2, 0, 1]),
+    /// )
+    /// .unwrap();
+    /// assert_eq!(tensor.logical_shape(), vec![500, 100, 200]);
+    /// ```
+    pub fn logical_shape(&self) -> Vec<usize> {
+        self.metadata.logical_shape()
+    }
 }
 
 /// Extension type metadata for [`FixedShapeTensor`].
@@ -355,6 +379,16 @@ impl FixedShapeTensorMetadata {
     pub fn permutations(&self) -> Option<&[usize]> {
         self.permutations.as_ref().map(AsRef::as_ref)
     }
+
+    /// Returns the logical shape.
+    ///
+    /// See [`FixedShapeTensor::logical_shape`].
+    pub fn logical_shape(&self) -> Vec<usize> {
+        match &self.permutations {
+            Some(permutation) => permutation.iter().map(|&index| self.shape[index]).collect(),
+            None => self.shape.clone(),
+        }
+    }
 }
 
 impl ExtensionType for FixedShapeTensor {
@@ -438,7 +472,7 @@ mod tests {
     use crate::extension::CanonicalExtensionType;
     use crate::{
         Field,
-        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
+        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType},
     };
 
     use super::*;
@@ -467,6 +501,27 @@ mod tests {
             field.try_canonical_extension_type()?,
             CanonicalExtensionType::FixedShapeTensor(fixed_shape_tensor)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn logical_shape_follows_permutation() -> Result<(), ArrowError> {
+        let physical = FixedShapeTensor::try_new(DataType::Float32, [100, 200, 500], None, None)?;
+        assert_eq!(physical.logical_shape(), vec![100, 200, 500]);
+        assert_eq!(physical.metadata().logical_shape(), vec![100, 200, 500]);
+
+        let permuted = FixedShapeTensor::try_new(
+            DataType::Float32,
+            [100, 200, 500],
+            Some(vec!["C".to_owned(), "H".to_owned(), "W".to_owned()]),
+            Some(vec![2, 0, 1]),
+        )?;
+        assert_eq!(permuted.logical_shape(), vec![500, 100, 200]);
+        assert_eq!(permuted.metadata().logical_shape(), vec![500, 100, 200]);
+
+        let identity =
+            FixedShapeTensor::try_new(DataType::Float32, [2, 6], None, Some(vec![0, 1]))?;
+        assert_eq!(identity.logical_shape(), vec![2, 6]);
         Ok(())
     }
 
