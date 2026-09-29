@@ -4007,7 +4007,7 @@ mod test {
     #[test]
     fn get_decimal32_precision_overflow_safe() {
         // Exceed Decimal32 after scaling and rounding
-        let mut builder = crate::VariantArrayBuilder::new(2);
+        let mut builder = crate::VariantArrayBuilder::new(6);
         builder.append_variant(
             VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0)
                 .unwrap()
@@ -4018,6 +4018,11 @@ mod test {
                 .unwrap()
                 .into(),
         ); // integer value round up overflows
+        // Float inputs that exceed precision directly or after rounding to 1.00.
+        builder.append_variant(Variant::Float(1.1));
+        builder.append_variant(Variant::Double(1.1));
+        builder.append_variant(Variant::Float(0.999));
+        builder.append_variant(Variant::Double(0.999));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal32(2, 2), true);
@@ -4025,35 +4030,38 @@ mod test {
         let result = variant_get(&variant_array, options).unwrap();
         let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
 
-        assert!(result.is_null(0));
-        assert!(result.is_null(1)); // should overflow because 1.00 does not fit into precision (2)
+        assert_eq!(result.null_count(), 6); // Even 1.00 exceeds precision 2.
     }
 
     #[test]
     fn get_decimal32_precision_overflow_unsafe_errors() {
-        let mut builder = crate::VariantArrayBuilder::new(1);
-        builder.append_variant(
-            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0)
-                .unwrap()
-                .into(),
-        );
-        let variant_array: ArrayRef = ArrayRef::from(builder.build());
-
-        let field = Field::new("result", DataType::Decimal32(9, 2), true);
-        let cast_options = CastOptions {
-            safe: false,
-            ..Default::default()
-        };
-        let options = GetOptions::new()
-            .with_as_type(Some(FieldRef::from(field)))
-            .with_cast_options(cast_options);
-        let err = variant_get(&variant_array, options).unwrap_err();
-
-        assert!(
-            err.to_string().contains(
-                "Failed to cast to Decimal32(precision=9, scale=2) from variant Decimal4"
-            )
-        );
+        for (value, kind) in [
+            (
+                VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0)
+                    .unwrap()
+                    .into(),
+                "Decimal4",
+            ),
+            (Variant::Float(1.1), "Float"),
+            (Variant::Double(1.1), "Double"),
+            (Variant::Float(0.999), "Float"),
+            (Variant::Double(0.999), "Double"),
+        ] {
+            let mut builder = crate::VariantArrayBuilder::new(1);
+            builder.append_variant(value);
+            let variant_array = ArrayRef::from(builder.build());
+            let field = Field::new("result", DataType::Decimal32(2, 2), true);
+            let options = GetOptions::new()
+                .with_as_type(Some(FieldRef::from(field)))
+                .with_cast_options(CastOptions {
+                    safe: false,
+                    ..Default::default()
+                });
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(err.to_string().contains(&format!(
+                "Failed to cast to Decimal32(precision=2, scale=2) from variant {kind}"
+            )));
+        }
     }
 
     #[test]

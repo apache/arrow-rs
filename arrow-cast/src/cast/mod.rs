@@ -76,9 +76,9 @@ use arrow_schema::*;
 use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
+pub use decimal::{DecimalCast, float_to_decimal, rescale_decimal};
 #[expect(deprecated)]
-pub use decimal::parse_string_to_decimal_native;
-pub use decimal::{DecimalCast, rescale_decimal, single_float_to_decimal};
+pub use decimal::{parse_string_to_decimal_native, single_float_to_decimal};
 pub use string::cast_single_string_to_boolean_default;
 
 /// Lossy conversion from decimal to float.
