@@ -900,7 +900,10 @@ fn prepare_selection_for_page_skipping(
         return plan_builder;
     }
 
-    match plan_builder.resolve_selection_strategy() {
+    match plan_builder
+        .row_selection_policy()
+        .resolve(plan_builder.selection())
+    {
         RowSelectionStrategy::Mask => {
             let loaded = loaded_row_ranges_for_projection(
                 plan_builder.selection(),

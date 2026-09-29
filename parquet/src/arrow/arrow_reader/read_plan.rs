@@ -19,9 +19,7 @@
 //! from a Parquet file
 
 use crate::arrow::array_reader::ArrayReader;
-use crate::arrow::arrow_reader::selection::{
-    LoadedRowRanges, RowSelectionPolicy, RowSelectionStrategy,
-};
+use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionPolicy};
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
@@ -153,13 +151,6 @@ impl ReadPlanBuilder {
         self.selection.as_ref().map(|s| s.row_count())
     }
 
-    /// Returns the [`RowSelectionStrategy`] for this plan.
-    ///
-    /// Guarantees to return either `Selectors` or `Mask`, never `Auto`.
-    pub(crate) fn resolve_selection_strategy(&self) -> RowSelectionStrategy {
-        self.row_selection_policy.resolve(self.selection.as_ref())
-    }
-
     /// Evaluates an [`ArrowPredicate`], updating this plan's `selection`
     ///
     /// If the current `selection` is `Some`, the resulting [`RowSelection`]
@@ -286,7 +277,7 @@ impl ReadPlanBuilder {
         }
 
         // Preferred strategy must not be Auto
-        let selection_strategy = self.resolve_selection_strategy();
+        let selection_strategy = self.row_selection_policy.resolve(self.selection.as_ref());
 
         let Self {
             batch_size,
@@ -418,6 +409,7 @@ impl ReadPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 
     const DEFAULT_AUTO_THRESHOLD: usize = 32;
 
@@ -492,7 +484,9 @@ mod tests {
 
         let current_strategy = expected.auto_selection_strategy(DEFAULT_AUTO_THRESHOLD);
         assert_eq!(
-            builder.resolve_selection_strategy(),
+            builder
+                .row_selection_policy
+                .resolve(builder.selection.as_ref()),
             current_strategy,
             "{name}: Auto strategy"
         );
@@ -508,7 +502,9 @@ mod tests {
         let selection = RowSelection::from(vec![RowSelector::select(8)]);
         let builder = builder_with_selection(selection);
         assert_eq!(
-            builder.resolve_selection_strategy(),
+            builder
+                .row_selection_policy
+                .resolve(builder.selection.as_ref()),
             RowSelectionStrategy::Mask
         );
     }
@@ -519,7 +515,9 @@ mod tests {
         let builder = builder_with_selection(selection)
             .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1 });
         assert_eq!(
-            builder.resolve_selection_strategy(),
+            builder
+                .row_selection_policy
+                .resolve(builder.selection.as_ref()),
             RowSelectionStrategy::Selectors
         );
     }
@@ -531,7 +529,9 @@ mod tests {
         let builder = builder_with_selection(selection)
             .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 4 });
         assert_eq!(
-            builder.resolve_selection_strategy(),
+            builder
+                .row_selection_policy
+                .resolve(builder.selection.as_ref()),
             RowSelectionStrategy::Mask
         );
     }
@@ -543,7 +543,9 @@ mod tests {
         let builder = builder_with_selection(selection)
             .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 });
         assert_eq!(
-            builder.resolve_selection_strategy(),
+            builder
+                .row_selection_policy
+                .resolve(builder.selection.as_ref()),
             RowSelectionStrategy::Selectors
         );
     }
@@ -556,14 +558,16 @@ mod tests {
             BooleanBuffer::new_unset(0),
         ));
         assert_eq!(
-            empty.resolve_selection_strategy(),
+            empty.row_selection_policy.resolve(empty.selection.as_ref()),
             RowSelectionStrategy::Mask
         );
 
         let disabled = builder_with_selection(RowSelection::from_boolean_buffer(mask.clone()))
             .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 0 });
         assert_eq!(
-            disabled.resolve_selection_strategy(),
+            disabled
+                .row_selection_policy
+                .resolve(disabled.selection.as_ref()),
             RowSelectionStrategy::Selectors
         );
 
@@ -571,14 +575,14 @@ mod tests {
         let equal = builder_with_selection(RowSelection::from_boolean_buffer(mask.clone()))
             .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 8 });
         assert_eq!(
-            equal.resolve_selection_strategy(),
+            equal.row_selection_policy.resolve(equal.selection.as_ref()),
             RowSelectionStrategy::Selectors
         );
 
         let above = builder_with_selection(RowSelection::from_boolean_buffer(mask))
             .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 9 });
         assert_eq!(
-            above.resolve_selection_strategy(),
+            above.row_selection_policy.resolve(above.selection.as_ref()),
             RowSelectionStrategy::Mask
         );
     }
