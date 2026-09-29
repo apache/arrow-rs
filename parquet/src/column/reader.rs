@@ -430,11 +430,8 @@ where
         }
     }
 
-    /// Installs a dictionary page the page reader skipped past, if this
-    /// column turns out to need one after all. A no-op when nothing was
-    /// deferred: the eager path (a dictionary page arriving through
-    /// `get_next_page`) and the deferred path are mutually exclusive, since
-    /// a skipped page is never returned by `get_next_page` and vice versa.
+    /// Installs a dictionary previously deferred by the page reader.
+    /// A no-op when nothing was deferred.
     fn install_deferred_dictionary(&mut self) -> Result<()> {
         match self.page_reader.take_deferred_dictionary()? {
             Some(Page::DictionaryPage {
