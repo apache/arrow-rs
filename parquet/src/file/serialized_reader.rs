@@ -1228,14 +1228,9 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
         match &self.state {
             // Walking headers identifies dictionaries independently of metadata.
             SerializedPageReaderState::Values { .. } => true,
-            // The offset-index state can only represent a dictionary the
-            // metadata gave an offset for: `dictionary_page` is synthesised
-            // from the gap between `byte_range().0` and the first page
-            // location, and when `dictionary_page_offset` is absent those are
-            // the same address. A dictionary inlined ahead of the first data
-            // page is then indistinguishable from a data page location, so
-            // skipping it would drop it. Decline to defer in that case and let
-            // the column reader install it eagerly instead.
+            // With an offset index, a dictionary is recoverable only when its
+            // location can be inferred before the first data-page location, in
+            // which case `dictionary_page` will be `Some`.
             SerializedPageReaderState::Pages {
                 dictionary_page, ..
             } => dictionary_page.is_some(),
