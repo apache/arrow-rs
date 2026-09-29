@@ -20,7 +20,7 @@
 use crate::concat::concat;
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::ListLikeArray;
-use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
+use arrow_array::builder::{BooleanBufferBuilder, GenericByteViewBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -74,6 +74,9 @@ macro_rules! dict_helper {
 /// ```
 ///
 /// For selecting values by index from a single array see [`crate::take`]
+///
+/// To copy selected byte view values into owned buffers, see
+/// [`interleave_byte_view_compact`].
 pub fn interleave(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
@@ -126,6 +129,89 @@ pub fn interleave(
         DataType::LargeListView(field) => interleave_list_view::<i64>(values, indices, field),
         _ => interleave_fallback(values, indices)
     }
+}
+
+/// Interleaves byte view arrays into independently owned, compact buffers.
+///
+/// Each pair in `indices` selects an array in `values` and a row in that array,
+/// as in [`interleave`]. This supports both [`StringViewArray`] and
+/// [`BinaryViewArray`]. Only selected, non-null values are copied; inline values
+/// need no data buffer. The result does not retain any input buffers.
+///
+/// Use this when selected rows must release their references to input storage,
+/// for example when partitioning a large batch for spilling. Unlike calling
+/// [`interleave`] followed by [`GenericByteViewArray::gc`], this does not first
+/// construct an intermediate array referencing the input data buffers.
+///
+/// Copying can increase total memory usage while the inputs remain alive.
+/// Repeated selections copy their payload each time; values are not deduplicated.
+/// Call [`interleave`] to share input data buffers instead.
+///
+/// # Errors
+///
+/// Returns an error if `values` is empty or the selected payload exceeds the
+/// supported size limits.
+///
+/// # Panics
+///
+/// Panics if an array or row index is out of bounds.
+///
+/// # Example
+///
+/// ```
+/// use arrow_array::StringViewArray;
+/// use arrow_select::interleave::interleave_byte_view_compact;
+///
+/// let a = StringViewArray::from(vec![Some("a long selected value"), None]);
+/// let b = StringViewArray::from(vec!["another selected value"]);
+/// let result = interleave_byte_view_compact(&[&a, &b], &[(1, 0), (0, 1), (0, 0)])?;
+/// assert_eq!(result, StringViewArray::from(vec![
+///     Some("another selected value"), None, Some("a long selected value")
+/// ]));
+/// # Ok::<(), arrow_schema::ArrowError>(())
+/// ```
+pub fn interleave_byte_view_compact<T: ByteViewType>(
+    values: &[&GenericByteViewArray<T>],
+    indices: &[(usize, usize)],
+) -> Result<GenericByteViewArray<T>, ArrowError> {
+    if values.is_empty() {
+        return Err(ArrowError::InvalidArgumentError(
+            "interleave requires input of at least one array".to_string(),
+        ));
+    }
+
+    let bytes = indices.iter().try_fold(0usize, |bytes, &(source, row)| {
+        let array = values[source];
+        if array.is_null(row) {
+            return Ok(bytes);
+        }
+        let len = array.views()[row] as u32 as usize;
+        if len >= u32::MAX as usize {
+            return Err(ArrowError::OffsetOverflowError(len));
+        }
+        if len <= arrow_data::MAX_INLINE_VIEW_LEN as usize {
+            return Ok(bytes);
+        }
+        bytes
+            .checked_add(len)
+            .ok_or(ArrowError::OffsetOverflowError(usize::MAX))
+    })?;
+
+    let mut builder = GenericByteViewBuilder::<T>::with_capacity(indices.len());
+    // Avoid the default minimum block size for small selections. Larger
+    // outputs use the builder's normal growth across multiple blocks.
+    if bytes < u32::MAX as usize {
+        builder = builder.with_fixed_block_size(bytes.max(1) as u32);
+    }
+    for &(source, row) in indices {
+        let array = values[source];
+        if array.is_null(row) {
+            builder.append_null();
+        } else {
+            builder.try_append_value(array.value(row))?;
+        }
+    }
+    Ok(builder.finish())
 }
 
 /// Common functionality for interleaving arrays
