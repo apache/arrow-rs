@@ -110,6 +110,8 @@ struct ClientArgs {
 
     /// Use TLS.
     ///
+    /// Endpoint locations must also use TLS, unless reusing this connection.
+    ///
     /// If not provided, use cleartext connection.
     #[clap(long)]
     tls: bool,
@@ -352,23 +354,26 @@ async fn execute_flight(
             bail!("did not get ticket");
         };
 
-        // `None` means no location was given, or only the reserved reuse-connection form, so
-        // the ticket is redeemed on the server that returned the `FlightInfo`.
-        let location = endpoint
-            .location
-            .iter()
-            .map(|location| location.uri.as_str())
-            .find(|uri| !uri.is_empty() && *uri != REUSE_CONNECTION_URI);
+        let location = select_endpoint_location(
+            endpoint
+                .location
+                .iter()
+                .map(|location| location.uri.as_str()),
+            client_args.tls,
+        )?;
 
         let client = match location {
             None => &mut *client,
             Some(uri) => match location_clients.entry(uri.to_owned()) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
-                    let client = setup_client_for_uri(client_args, uri)
+                    let mut endpoint_client = setup_client_for_uri(client_args, uri)
                         .await
                         .with_context(|| format!("setup client for endpoint location {uri}"))?;
-                    entry.insert(client)
+                    if let Some(token) = client.token() {
+                        endpoint_client.set_token(token.to_owned());
+                    }
+                    entry.insert(endpoint_client)
                 }
             },
         };
@@ -430,17 +435,66 @@ fn setup_logging(args: LoggingArgs) -> Result<()> {
     Ok(())
 }
 
+/// Prefer a separate location, falling back to the original connection when permitted.
+fn select_endpoint_location<'a>(
+    locations: impl IntoIterator<Item = &'a str>,
+    tls: bool,
+) -> Result<Option<&'a str>> {
+    let mut reuse_connection = false;
+    let mut has_locations = false;
+    for uri in locations {
+        has_locations = true;
+        if uri.is_empty() || uri == REUSE_CONNECTION_URI {
+            reuse_connection = true;
+        } else if !tls || uri.starts_with("https://") {
+            // Match the TLS detection policy in setup_client_for_uri.
+            return Ok(Some(uri));
+        }
+    }
+    if tls && has_locations && !reuse_connection {
+        bail!(
+            "--tls requires a secure endpoint location, but only insecure locations were provided"
+        );
+    }
+    Ok(None)
+}
+
 async fn setup_client(args: &ClientArgs) -> Result<FlightSqlServiceClient<Channel>> {
     let port = args.port.unwrap_or(if args.tls { 443 } else { 80 });
 
     let protocol = if args.tls { "https" } else { "http" };
 
-    setup_client_for_uri(args, &format!("{}://{}:{}", protocol, args.host, port)).await
+    let mut client =
+        setup_client_for_uri(args, &format!("{}://{}:{}", protocol, args.host, port)).await?;
+
+    if let Some(token) = &args.token {
+        client.set_token(token.clone());
+        info!("token set");
+    }
+
+    match (&args.username, &args.password) {
+        (None, None) => {}
+        (Some(username), Some(password)) => {
+            client
+                .handshake(username, password)
+                .await
+                .context("handshake")?;
+            info!("performed handshake");
+        }
+        (Some(_), None) => {
+            bail!("when username is set, you also need to set a password")
+        }
+        (None, Some(_)) => {
+            bail!("when password is set, you also need to set a username")
+        }
+    }
+
+    Ok(client)
 }
 
-/// Connect a client to `uri`, applying the headers, token, handshake and compression settings from
-/// `args`. TLS is used when `uri` has an `https` scheme, so that an endpoint location may differ
-/// from the main connection.
+/// Connect a client to `uri`, applying the headers and compression settings from `args`.
+/// TLS is used when `uri` has an `https` scheme. Authentication is handled by the caller,
+/// so separate endpoint clients can reuse the original client's token without a handshake.
 async fn setup_client_for_uri(
     args: &ClientArgs,
     uri: &str,
@@ -484,28 +538,6 @@ async fn setup_client_for_uri(
         client.set_header(k, v);
     }
 
-    if let Some(token) = &args.token {
-        client.set_token(token.clone());
-        info!("token set");
-    }
-
-    match (&args.username, &args.password) {
-        (None, None) => {}
-        (Some(username), Some(password)) => {
-            client
-                .handshake(username, password)
-                .await
-                .context("handshake")?;
-            info!("performed handshake");
-        }
-        (Some(_), None) => {
-            bail!("when username is set, you also need to set a password")
-        }
-        (None, Some(_)) => {
-            bail!("when password is set, you also need to set a username")
-        }
-    }
-
     Ok(client)
 }
 
@@ -538,5 +570,78 @@ fn log_metadata(map: &MetadataMap, what: &'static str) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{REUSE_CONNECTION_URI, select_endpoint_location};
+
+    #[test]
+    fn tls_selects_later_secure_location() {
+        let locations = [
+            REUSE_CONNECTION_URI,
+            "http://insecure:80",
+            "https://secure:443",
+            "https://other:443",
+        ];
+        assert_eq!(
+            select_endpoint_location(locations, true).unwrap(),
+            Some("https://secure:443")
+        );
+    }
+
+    #[test]
+    fn tls_rejects_insecure_only_locations() {
+        let error =
+            select_endpoint_location(["http://insecure:80", "http://other:80"], true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("--tls requires a secure endpoint location")
+        );
+        assert!(error.to_string().contains("only insecure locations"));
+    }
+
+    #[test]
+    fn reuse_falls_back_to_original_connection() {
+        for tls in [false, true] {
+            assert_eq!(select_endpoint_location([], tls).unwrap(), None);
+            assert_eq!(select_endpoint_location([""], tls).unwrap(), None);
+            assert_eq!(
+                select_endpoint_location([REUSE_CONNECTION_URI], tls).unwrap(),
+                None
+            );
+        }
+        for reuse in ["", REUSE_CONNECTION_URI] {
+            for locations in [[reuse, "http://insecure:80"], ["http://insecure:80", reuse]] {
+                assert_eq!(select_endpoint_location(locations, true).unwrap(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn without_tls_selects_first_nonreuse_location() {
+        assert_eq!(
+            select_endpoint_location(
+                [
+                    "",
+                    REUSE_CONNECTION_URI,
+                    "http://first:80",
+                    "https://later:443"
+                ],
+                false,
+            )
+            .unwrap(),
+            Some("http://first:80")
+        );
+        assert_eq!(
+            select_endpoint_location(
+                [REUSE_CONNECTION_URI, "https://first:443", "http://later:80"],
+                false,
+            )
+            .unwrap(),
+            Some("https://first:443")
+        );
     }
 }
