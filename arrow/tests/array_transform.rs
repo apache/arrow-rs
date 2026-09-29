@@ -1190,7 +1190,7 @@ fn test_extend_nulls_sparse_union() {
     let fields = UnionFields::try_new(
         vec![0, 1],
         vec![
-            Field::new("null", DataType::Null, true),
+            Field::new("null", DataType::Null, false),
             Field::new("str", DataType::Utf8, true),
         ],
     )
@@ -1220,9 +1220,9 @@ fn test_extend_nulls_sparse_union() {
     assert_eq!(result_array.len(), 3);
     // First element should be type_id 1 (str)
     assert_eq!(result_array.type_id(0), 1);
-    // Null elements use the first type_id (0)
-    assert_eq!(result_array.type_id(1), 0);
-    assert_eq!(result_array.type_id(2), 0);
+    // Null elements use the nullable type_id (1)
+    assert_eq!(result_array.type_id(1), 1);
+    assert_eq!(result_array.type_id(2), 1);
     // All children should have length 3 (sparse invariant)
     assert_eq!(result_array.child(0).len(), 3);
     assert_eq!(result_array.child(1).len(), 3);
@@ -1233,7 +1233,7 @@ fn test_extend_nulls_dense_union() {
     let fields = UnionFields::try_new(
         vec![0, 1],
         vec![
-            Field::new("i", DataType::Int32, true),
+            Field::new("i", DataType::Int32, false),
             Field::new("str", DataType::Utf8, true),
         ],
     )
@@ -1264,9 +1264,9 @@ fn test_extend_nulls_dense_union() {
     assert_eq!(result_array.len(), 3);
     // First element is type_id 1 (str)
     assert_eq!(result_array.type_id(0), 1);
-    // Null elements use the first type_id (0)
-    assert_eq!(result_array.type_id(1), 0);
-    assert_eq!(result_array.type_id(2), 0);
+    // Null elements use the nullable type_id (1)
+    assert_eq!(result_array.type_id(1), 1);
+    assert_eq!(result_array.type_id(2), 1);
     // First child (int) should have 2 null entries from extend_nulls
     assert_eq!(result_array.child(0).len(), 2);
     // Second child (str) should have 1 entry from extend
