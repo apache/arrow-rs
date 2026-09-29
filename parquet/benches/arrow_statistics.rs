@@ -354,7 +354,7 @@ fn page_index_benchmark(c: &mut Criterion) {
             "Decode page index statistics for {data_type} ({} pages)",
             column_indexes.iter().map(|(n, _)| n).sum::<usize>()
         ));
-        group.bench_function("via ColumnIndexMetaData", |b| {
+        group.bench_function("full page index", |b| {
             b.iter(|| {
                 let mut builder = PageIndexBuilder::new(row_groups, num_columns);
                 for (rg, (_, bytes)) in column_indexes.iter().enumerate() {
