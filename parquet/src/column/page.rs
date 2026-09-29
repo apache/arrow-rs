@@ -423,9 +423,10 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
         false
     }
 
+    /// Returns and removes a previously skipped dictionary page, if any.
+    ///
     /// The default implementation returns `Ok(None)`, meaning the reader
-    /// never defers: every dictionary page it consumes is returned through
-    /// [`Self::get_next_page`] as before.
+    /// never defers.
     fn take_deferred_dictionary(&mut self) -> Result<Option<Page>> {
         Ok(None)
     }
