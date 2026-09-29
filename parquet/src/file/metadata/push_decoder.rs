@@ -462,13 +462,16 @@ impl ParquetMetaDataPushDecoder {
                         return Ok(needs_range(page_index_range));
                     }
 
+                    let buffer = self.get_bytes(&page_index_range)?;
+                    let offset = page_index_range.start;
                     parse_page_index(
                         &mut metadata,
                         self.column_index_policy,
                         self.offset_index_policy,
                         &self.column_index_mask,
                         &self.offset_index_mask,
-                        &self.buffers,
+                        &buffer,
+                        offset,
                     )?;
                     self.state = DecodeState::Finished;
                     return Ok(DecodeResult::Data(*metadata));
