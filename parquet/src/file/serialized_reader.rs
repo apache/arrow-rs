@@ -1140,10 +1140,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
     }
 
     fn skip_next_page(&mut self) -> Result<()> {
-        // Skipping a dictionary page records where it was instead of dropping
-        // it: only value decoding ever needs dictionary contents, so the page
-        // body stays untouched until a data page turns out to need it. See
-        // [`DeferredDictionaryPage`] for the state diagram.
+        // Retain skipped dictionary pages so they can be decoded on demand.
+        // See [`DeferredDictionaryPage`] for the state diagram.
         let deferred = match &mut self.state {
             SerializedPageReaderState::Values {
                 offset,
