@@ -1226,9 +1226,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
     fn supports_deferred_dictionary(&self) -> bool {
         match &self.state {
-            // Page headers are read as the chunk is walked, so a dictionary is
-            // recognised by its header type whether or not the column metadata
-            // recorded a `dictionary_page_offset` for it.
+            // Walking headers identifies dictionaries independently of metadata.
             SerializedPageReaderState::Values { .. } => true,
             // The offset-index state can only represent a dictionary the
             // metadata gave an offset for: `dictionary_page` is synthesised
