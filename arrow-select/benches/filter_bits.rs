@@ -111,15 +111,20 @@ fn add_benchmark(c: &mut Criterion) {
     }
 }
 
-/// `filter_bits` on masks too large for the branch predictor to learn: the
-/// cases above repeat one 1024-word mask, whose per-word branches a recent
-/// core learns, which makes random masks look faster than a real filter.
-/// Lazy strategies only, which compress word by word
-fn add_large_benchmark(c: &mut Criterion) {
-    const SIZE: usize = 1 << 22;
+/// `filter_bits` over 512 batches of 8K rows, each with its own mask, as a
+/// query filters a stream of record batches. A recent core learns the
+/// per-word branches of masks repeated from one iteration to the next, up to
+/// at least 16K words, which makes random masks look faster than a real
+/// filter; 512 batches are 64K words, past that. Lazy strategies only, which
+/// compress word by word
+fn add_batched_benchmark(c: &mut Criterion) {
+    const BATCHES: usize = 512;
+    const ROWS: usize = 8192;
     let mut rng = StdRng::seed_from_u64(43);
 
-    let data = create_boolean_array(SIZE, 0.5, &mut rng);
+    let data: Vec<BooleanArray> = (0..BATCHES)
+        .map(|_| create_boolean_array(ROWS, 0.5, &mut rng))
+        .collect();
 
     let mut cases = vec![];
     for (label, true_density) in [
@@ -132,23 +137,34 @@ fn add_large_benchmark(c: &mut Criterion) {
         ("3/4", 0.75),
         ("15/16", 15.0 / 16.0),
     ] {
-        let filter = create_boolean_array(SIZE, true_density, &mut rng);
-        cases.push((format!("random, kept {label}"), filter));
+        let masks: Vec<_> = (0..BATCHES)
+            .map(|_| create_boolean_array(ROWS, true_density, &mut rng))
+            .collect();
+        cases.push((format!("random, kept {label}"), masks));
     }
-    for run in [64, 4096] {
+    for run in [64, 512] {
         for (label, true_density) in [("1/8", 0.125), ("1/2", 0.5), ("7/8", 0.875)] {
-            let filter = create_clustered_array(SIZE, true_density, run as f64, &mut rng);
-            cases.push((format!("runs of {run}, kept {label}"), filter));
+            let masks: Vec<_> = (0..BATCHES)
+                .map(|_| create_clustered_array(ROWS, true_density, run as f64, &mut rng))
+                .collect();
+            cases.push((format!("runs of {run}, kept {label}"), masks));
         }
     }
 
-    for (label, filter) in &cases {
-        let predicate = FilterBuilder::new(filter).build();
-        c.bench_function(&format!("filter_bits large ({label})"), |b| {
-            b.iter(|| bench_filter_bits(&predicate, &data))
+    for (label, masks) in &cases {
+        let predicates: Vec<_> = masks
+            .iter()
+            .map(|m| FilterBuilder::new(m).build())
+            .collect();
+        c.bench_function(&format!("filter_bits batches ({label})"), |b| {
+            b.iter(|| {
+                for (predicate, array) in predicates.iter().zip(&data) {
+                    bench_filter_bits(predicate, array);
+                }
+            })
         });
     }
 }
 
-criterion_group!(benches, add_benchmark, add_large_benchmark);
+criterion_group!(benches, add_benchmark, add_batched_benchmark);
 criterion_main!(benches);
