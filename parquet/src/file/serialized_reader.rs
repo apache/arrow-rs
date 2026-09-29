@@ -531,9 +531,7 @@ pub(crate) fn decode_page(
     Ok(result)
 }
 
-/// A dictionary page this reader skipped past without decoding, kept as a
-/// location so it can still be decoded if a later data page turns out to
-/// need it.
+/// Location of a dictionary page skipped without decoding.
 ///
 /// ```text
 ///            skip, and the reader can defer         first data page that
