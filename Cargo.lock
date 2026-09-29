@@ -503,6 +503,7 @@ dependencies = [
  "arrow-ord",
  "arrow-schema",
  "arrow-select",
+ "criterion",
  "half",
  "rand 0.10.3",
 ]
