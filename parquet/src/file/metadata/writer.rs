@@ -439,7 +439,9 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         let schema_descr = Arc::new(SchemaDescriptor::new(schema.clone()));
         let created_by = file_metadata.created_by().map(str::to_string);
 
-        let row_groups = self.metadata.row_groups.clone();
+        // need to clone because ThriftMetadataWriter wants to update page
+        // index pointers. we throw this clone away upon calling encoder.finish()
+        let row_groups = self.metadata.row_groups.as_ref().clone();
 
         let key_value_metadata = file_metadata.key_value_metadata().cloned();
 

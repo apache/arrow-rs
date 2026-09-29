@@ -296,11 +296,15 @@ pub(crate) fn parquet_metadata_with_encryption(
         .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
 
     let ParquetMetaData {
-        mut file_metadata,
+        file_metadata,
         row_groups,
         page_index: _,
         file_decryptor: _,
     } = parquet_meta;
+
+    // this is called right after creating parquet_meta, so there should be no other references
+    let mut file_metadata = Arc::unwrap_or_clone(file_metadata);
+    let row_groups = Arc::unwrap_or_clone(row_groups);
 
     // Take the encryption algorithm and footer signing key metadata as they are no longer
     // needed after this.
