@@ -317,18 +317,8 @@ where
                     return Ok(num_records - remaining_records);
                 };
 
-                // If dictionary, skip it without decoding *when the page
-                // reader can give it back later*: skipping rows never needs
-                // dictionary contents (value skips only advance the index
-                // cursor, whole-page skips touch nothing), so a chunk skipped
-                // end to end never pays the decompression, and a later data
-                // page that does need the dictionary pays it exactly once.
-                //
-                // A reader that does not retain skipped dictionaries must
-                // still be given the eager path: skipping past a dictionary it
-                // cannot return would drop it, and the next dictionary-encoded
-                // data page would have nothing to decode against. See
-                // `PageReader::supports_deferred_dictionary`.
+                // Defer dictionary decoding when the page reader can recover it later.
+                // Otherwise, preserve the eager behavior required by existing readers.
                 if metadata.is_dict {
                     if self.page_reader.supports_deferred_dictionary() {
                         self.page_reader.skip_next_page()?;
