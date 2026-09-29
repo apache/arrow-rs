@@ -2629,24 +2629,10 @@ fn cast_numeric_to_bool<FROM>(from: &dyn Array) -> Result<ArrayRef, ArrowError>
 where
     FROM: ArrowPrimitiveType,
 {
-    numeric_to_bool_cast::<FROM>(from.as_primitive::<FROM>()).map(|to| Arc::new(to) as ArrayRef)
-}
-
-fn numeric_to_bool_cast<T>(from: &PrimitiveArray<T>) -> Result<BooleanArray, ArrowError>
-where
-    T: ArrowPrimitiveType,
-{
-    let mut b = BooleanBuilder::with_capacity(from.len());
-
-    for i in 0..from.len() {
-        if from.is_null(i) {
-            b.append_null();
-        } else {
-            b.append_value(cast_num_to_bool::<T::Native>(from.value(i)));
-        }
-    }
-
-    Ok(b.finish())
+    Ok(Arc::new(BooleanArray::from_unary(
+        from.as_primitive::<FROM>(),
+        cast_num_to_bool,
+    )))
 }
 
 /// Cast numeric types to boolean
@@ -2667,7 +2653,6 @@ fn cast_bool_to_numeric<TO>(
 ) -> Result<ArrayRef, ArrowError>
 where
     TO: ArrowPrimitiveType,
-    TO::Native: num_traits::cast::NumCast,
 {
     Ok(Arc::new(bool_to_numeric_cast::<TO>(
         from.as_any().downcast_ref::<BooleanArray>().unwrap(),
@@ -2678,20 +2663,24 @@ where
 fn bool_to_numeric_cast<T>(from: &BooleanArray, _cast_options: &CastOptions) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
-    T::Native: num_traits::NumCast,
 {
-    let iter = (0..from.len()).map(|i| {
-        if from.is_null(i) {
-            None
+    let to_numeric = |bits: u64, i: usize| {
+        if bits & (1 << i) != 0 {
+            T::Native::ONE
         } else {
-            single_bool_to_numeric::<T::Native>(from.value(i))
+            T::Native::ZERO
         }
-    });
-    // Benefit:
-    //     20% performance improvement
-    // Soundness:
-    //     The iterator is trustedLen because it comes from a Range
-    unsafe { PrimitiveArray::<T>::from_trusted_len_iter(iter) }
+    };
+    // Unpack a 64-bit word at a time: the fixed-size inner loop helps the
+    // compiler vectorize the conversion.
+    let chunks = from.values().bit_chunks();
+    let mut values = Vec::with_capacity(from.len());
+    for bits in &chunks {
+        values.extend((0..64).map(|i| to_numeric(bits, i)));
+    }
+    let bits = chunks.remainder_bits();
+    values.extend((0..chunks.remainder_len()).map(|i| to_numeric(bits, i)));
+    PrimitiveArray::new(values.into(), from.nulls().cloned())
 }
 
 /// Cast single bool value to numeric value.
@@ -2872,7 +2861,7 @@ mod tests {
     use crate::parse::parse_decimal;
     use DataType::*;
     use arrow_array::{Int64Array, RunArray, StringArray};
-    use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
+    use arrow_buffer::{BooleanBuffer, Buffer, IntervalDayTime, NullBuffer};
     use arrow_buffer::{ScalarBuffer, i256};
     use arrow_schema::{DataType, Field};
     use chrono::NaiveDate;
@@ -5011,6 +5000,57 @@ mod tests {
         assert_eq!(1, c.value(0));
         assert_eq!(0, c.value(1));
         assert!(!c.is_valid(2));
+    }
+
+    #[test]
+    fn test_cast_bool_numeric_sliced() {
+        for nulls in [
+            None,
+            Some(NullBuffer::from(
+                [false, true, true, false, true, true].repeat(12),
+            )),
+            Some(NullBuffer::new_null(72)),
+        ] {
+            // Include true values under nulls and slices crossing a bitmap word boundary.
+            let booleans = BooleanArray::new(
+                BooleanBuffer::from([true, false, true, false, true, false].repeat(12)),
+                nulls.clone(),
+            );
+            let numbers = Int32Array::new([1, 0, 1, 0, 1, 0].repeat(12).into(), nulls);
+            for data_type in [
+                Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64,
+            ] {
+                let expected = cast(&numbers, &data_type).unwrap();
+                for offset in [0, 3, 63, 72] {
+                    let input = booleans.slice(offset, 72 - offset);
+                    let expected = expected.slice(offset, 72 - offset);
+                    let actual = cast(&input, &data_type).unwrap();
+                    assert_eq!(actual.as_ref(), expected.as_ref());
+
+                    let actual = cast(expected.as_ref(), &Boolean).unwrap();
+                    assert_eq!(actual.as_ref(), &input);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_float_to_bool_special_values() {
+        let numbers = Float64Array::from(vec![
+            0.0,
+            -0.0,
+            1.5,
+            -1.5,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ]);
+        let expected = BooleanArray::from(vec![false, false, true, true, true, true, true]);
+        for data_type in [Float16, Float32, Float64] {
+            let input = cast(&numbers, &data_type).unwrap();
+            let actual = cast(input.as_ref(), &Boolean).unwrap();
+            assert_eq!(actual.as_ref(), &expected);
+        }
     }
 
     #[test]
