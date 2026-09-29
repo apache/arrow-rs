@@ -534,21 +534,22 @@ pub(crate) fn range_for_page_index(
         (column_index_policy, column_index_mask, true),
         (offset_index_policy, offset_index_mask, false),
     ] {
-        if policy != PageIndexPolicy::Skip {
-            for row_group in mask.row_group_indices(metadata.num_row_groups()) {
-                for column in mask.column_indices(metadata.row_group(row_group).num_columns()) {
-                    let column = metadata.row_group(row_group).column(column);
-                    let index = if column_index {
-                        column.column_index_range()
-                    } else {
-                        column.offset_index_range()
-                    };
-                    if let Some(index) = index {
-                        range = Some(match range {
-                            Some(range) => range.start.min(index.start)..range.end.max(index.end),
-                            None => index,
-                        });
-                    }
+        if policy == PageIndexPolicy::Skip {
+            continue;
+        }
+        for row_group in mask.row_group_indices(metadata.num_row_groups()) {
+            for column in mask.column_indices(metadata.row_group(row_group).num_columns()) {
+                let column = metadata.row_group(row_group).column(column);
+                let index = if column_index {
+                    column.column_index_range()
+                } else {
+                    column.offset_index_range()
+                };
+                if let Some(index) = index {
+                    range = Some(match range {
+                        Some(range) => range.start.min(index.start)..range.end.max(index.end),
+                        None => index,
+                    });
                 }
             }
         }
