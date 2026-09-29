@@ -582,9 +582,15 @@ pub struct RowConverter {
 enum Codec {
     /// No additional codec state is necessary
     Stateless,
-    /// A row converter for the dictionary values
-    /// and the encoding of a row containing only nulls
-    Dictionary(RowConverter, OwnedRow),
+    /// A row converter for the dictionary values, the encoding of a row containing
+    /// only nulls, and a cache of the last-encoded values rows keyed by the
+    /// values-array Arc pointer. Reusing the same `Arc` across batches avoids
+    /// re-encoding O(NDV) values on every call to [`Codec::encoder`].
+    Dictionary(
+        RowConverter,
+        OwnedRow,
+        std::sync::Mutex<Option<(usize, std::sync::Arc<Rows>)>>,
+    ),
     /// A row converter for the child fields
     /// and the encoding of a row containing only nulls
     Struct(RowConverter, OwnedRow),
@@ -654,7 +660,7 @@ impl Codec {
                     data: nulls.buffer.into(),
                     config: nulls.config,
                 };
-                Ok(Self::Dictionary(converter, owned))
+                Ok(Self::Dictionary(converter, owned, std::sync::Mutex::new(None)))
             }
             DataType::RunEndEncoded(_, values) => {
                 // Similar to List implementation
@@ -774,9 +780,23 @@ impl Codec {
     fn encoder(&self, array: &dyn Array) -> Result<Encoder<'_>, ArrowError> {
         match self {
             Codec::Stateless => Ok(Encoder::Stateless),
-            Codec::Dictionary(converter, nulls) => {
+            Codec::Dictionary(converter, nulls, cache) => {
                 let values = array.as_any_dictionary().values().clone();
-                let rows = converter.convert_columns(&[values])?;
+                // Cache the encoded Rows by Arc pointer. When the same values Arc is
+                // reused across batches (common in global-dictionary workloads), this
+                // skips O(NDV) re-encoding — the most expensive part of dict encoding.
+                let ptr = std::sync::Arc::as_ptr(&values) as *const () as usize;
+                let rows = {
+                    let mut guard = cache.lock().unwrap();
+                    if guard.as_ref().map(|(p, _)| *p == ptr).unwrap_or(false) {
+                        std::sync::Arc::clone(&guard.as_ref().unwrap().1)
+                    } else {
+                        let encoded =
+                            std::sync::Arc::new(converter.convert_columns(&[values])?);
+                        *guard = Some((ptr, std::sync::Arc::clone(&encoded)));
+                        encoded
+                    }
+                };
                 Ok(Encoder::Dictionary(rows, nulls.row()))
             }
             Codec::Struct(converter, null) => {
@@ -892,7 +912,7 @@ impl Codec {
     fn size(&self) -> usize {
         match self {
             Codec::Stateless => 0,
-            Codec::Dictionary(converter, nulls) => converter.size() + nulls.data.len(),
+            Codec::Dictionary(converter, nulls, _) => converter.size() + nulls.data.len(),
             Codec::Struct(converter, nulls) => converter.size() + nulls.data.len(),
             Codec::List(converter) => converter.size(),
             Codec::Map(converter) => converter.size(),
@@ -909,8 +929,9 @@ impl Codec {
 enum Encoder<'a> {
     /// No additional encoder state is necessary
     Stateless,
-    /// The encoding of the child array and the encoding of a null row
-    Dictionary(Rows, Row<'a>),
+    /// The encoding of the child array (shared via Arc to enable caching across
+    /// batches) and the encoding of a null row.
+    Dictionary(std::sync::Arc<Rows>, Row<'a>),
     /// The row encoding of the child arrays and the encoding of a null row
     ///
     /// It is necessary to encode to a temporary [`Rows`] to avoid serializing
@@ -2238,7 +2259,7 @@ unsafe fn decode_column(
                 _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {data_type}" )))
             }
         }
-        Codec::Dictionary(converter, _) => {
+        Codec::Dictionary(converter, _, _) => {
             let cols = unsafe { converter.convert_raw(rows, validate_utf8) }?;
             cols.into_iter().next().unwrap()
         }
