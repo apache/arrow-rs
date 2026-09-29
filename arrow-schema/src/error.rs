@@ -60,7 +60,7 @@ pub enum ArrowError {
     CDataInterface(String),
     /// Error when a dictionary key is bigger than the key type
     DictionaryKeyOverflowError,
-    /// Error when the run end index in a REE array is bigger than the array length
+    /// Error when a run-end index is bigger than the run-end type
     RunEndIndexOverflowError,
     /// Error when the offset overflows.
     OffsetOverflowError(usize),
@@ -129,7 +129,7 @@ impl Display for ArrowError {
                 write!(f, "Dictionary key bigger than the key type")
             }
             ArrowError::RunEndIndexOverflowError => {
-                write!(f, "Run end encoded array index overflow error")
+                write!(f, "Run end index bigger than the run-end type")
             }
             ArrowError::OffsetOverflowError(offset) => {
                 write!(f, "Offset overflow error: {offset}")
