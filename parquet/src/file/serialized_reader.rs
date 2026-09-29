@@ -1269,7 +1269,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 let page_len = usize::try_from(front.compressed_page_size)?;
                 let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
                 let (offset, header) =
-                    Self::read_page_header_len_from_bytes(&self.context, buffer.as_ref(), 0, true)?;
+                    read_page_header_len_from_bytes(&self.context, buffer.as_ref(), 0, true)?;
                 let bytes = buffer.slice(offset..);
                 let bytes = self.context.decrypt_page_data(bytes, 0, true)?;
                 decode_page(

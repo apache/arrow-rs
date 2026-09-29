@@ -413,12 +413,12 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// the dictionary through this method, which pays the deferred
     /// decompression exactly once. A chunk skipped end to end never pays it.
     ///
-/// Returns whether skipped dictionary pages can later be recovered with
-/// [`Self::take_deferred_dictionary`].
-///
-/// Implementations returning `true` must retain dictionary pages consumed by
-/// [`Self::skip_next_page`]. The default preserves compatibility with existing
-/// readers by requiring dictionaries to be decoded eagerly.
+    /// Returns whether skipped dictionary pages can later be recovered with
+    /// [`Self::take_deferred_dictionary`].
+    ///
+    /// Implementations returning `true` must retain dictionary pages consumed by
+    /// [`Self::skip_next_page`]. The default preserves compatibility with existing
+    /// readers by requiring dictionaries to be decoded eagerly.
     fn supports_deferred_dictionary(&self) -> bool {
         false
     }
