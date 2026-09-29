@@ -17,6 +17,7 @@
 
 //! Module for shredding VariantArray with a given schema.
 
+use crate::type_conversion::VariantCastMode;
 use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
 use crate::variant_to_arrow::{
     ArrayVariantToArrowRowBuilder, PrimitiveVariantToArrowRowBuilder,
@@ -87,7 +88,7 @@ pub(crate) fn shred_variant_with_options(
         cast_options,
         array.len(),
         NullValue::TopLevelVariant,
-        true,
+        VariantCastMode::Shred,
     )?;
     for i in 0..array.len() {
         if array.is_null(i) {
@@ -141,7 +142,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     cast_options: &'a CastOptions,
     capacity: usize,
     null_value: NullValue,
-    shred: bool,
+    cast_mode: VariantCastMode,
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
         DataType::Struct(fields) => {
@@ -150,7 +151,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 cast_options,
                 capacity,
                 null_value,
-                shred,
+                cast_mode,
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
@@ -190,7 +191,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
         | DataType::FixedSizeBinary(16) // UUID
         => {
             let builder =
-                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity, shred)?;
+                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity, cast_mode)?;
             let typed_value_builder =
                 VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, null_value);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
@@ -368,7 +369,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         cast_options: &'a CastOptions,
         capacity: usize,
         null_value: NullValue,
-        shred: bool,
+        cast_mode: VariantCastMode,
     ) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
@@ -376,7 +377,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
                 cast_options,
                 capacity,
                 NullValue::ObjectField,
-                shred,
+                cast_mode,
             )?;
             Ok((field.name().as_str(), builder))
         });
@@ -1082,7 +1083,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
-                true,
+                VariantCastMode::Shred,
             )
             .unwrap();
             primitive_builder.append_null().unwrap();
@@ -1113,7 +1114,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
-                true,
+                VariantCastMode::Shred,
             )
             .unwrap();
             array_builder.append_null().unwrap();
@@ -1142,7 +1143,7 @@ mod tests {
                 &cast_options,
                 1,
                 mode,
-                true,
+                VariantCastMode::Shred,
             )
             .unwrap();
             object_builder.append_null().unwrap();
