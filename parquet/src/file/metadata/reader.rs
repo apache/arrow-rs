@@ -34,6 +34,8 @@ use crate::schema::types::SchemaDescriptor;
 use arrow_array::ArrayRef;
 use bytes::Bytes;
 use std::collections::BTreeSet;
+use std::iter::FusedIterator;
+use std::slice::Iter;
 use std::sync::Arc;
 use std::{io::Read, ops::Range};
 
@@ -241,24 +243,22 @@ impl ColumnChunkMask {
     }
 
     /// Returns an iterator over the row group indices selected by this mask
-    pub fn row_group_indices(&self, num_row_groups: usize) -> Box<dyn Iterator<Item = usize> + '_> {
+    pub fn row_group_indices(&self, num_row_groups: usize) -> impl Iterator<Item = usize> + '_ {
         Self::axis_indices(self.row_groups.as_deref(), num_row_groups)
     }
 
     /// Returns an iterator over the column indices selected by this mask
-    pub fn column_indices(&self, num_columns: usize) -> Box<dyn Iterator<Item = usize> + '_> {
+    pub fn column_indices(&self, num_columns: usize) -> impl Iterator<Item = usize> + '_ {
         Self::axis_indices(self.columns.as_deref(), num_columns)
     }
 
-    fn axis_indices(axis: Option<&[u32]>, len: usize) -> Box<dyn Iterator<Item = usize> + '_> {
+    fn axis_indices(axis: Option<&[u32]>, len: usize) -> AxisIndices<'_> {
         match axis {
-            None => Box::new(0..len),
-            Some(indices) => Box::new(
-                indices
-                    .iter()
-                    .map(|&i| i as usize)
-                    .take_while(move |&i| i < len),
-            ),
+            None => AxisIndices::All(0..len),
+            Some(indices) => {
+                let end = indices.partition_point(|&i| (i as usize) < len);
+                AxisIndices::Selected(indices[..end].iter())
+            }
         }
     }
 
@@ -274,6 +274,33 @@ impl ColumnChunkMask {
         )
     }
 }
+
+// helper for ColumnChunkMask selected index traversal
+enum AxisIndices<'a> {
+    All(Range<usize>),
+    Selected(Iter<'a, u32>),
+}
+
+impl Iterator for AxisIndices<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::All(indices) => indices.next(),
+            Self::Selected(indices) => indices.next().map(|&i| i as usize),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::All(indices) => indices.size_hint(),
+            Self::Selected(indices) => indices.size_hint(),
+        }
+    }
+}
+
+impl ExactSizeIterator for AxisIndices<'_> {}
+impl FusedIterator for AxisIndices<'_> {}
 
 impl ParquetMetaDataReader {
     /// Create a new [`ParquetMetaDataReader`]
@@ -1301,6 +1328,17 @@ mod tests {
         let all = ColumnChunkMask::all();
         assert!(all.is_all());
         assert!(all.includes_column(u32::MAX as usize));
+
+        assert_eq!(all.row_group_indices(3).collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(all.column_indices(2).collect::<Vec<_>>(), [0, 1]);
+
+        let none = ColumnChunkMask::none();
+        assert_eq!(none.row_group_indices(3).count(), 0);
+        assert_eq!(none.column_indices(3).count(), 0);
+
+        let sparse = ColumnChunkMask::row_groups_and_columns([0, 2, 4], [1, 3, 5]);
+        assert_eq!(sparse.row_group_indices(3).collect::<Vec<_>>(), [0, 2]);
+        assert_eq!(sparse.column_indices(4).collect::<Vec<_>>(), [1, 3]);
     }
 }
 
