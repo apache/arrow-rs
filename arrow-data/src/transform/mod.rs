@@ -847,11 +847,7 @@ impl<'a> MutableArrayData<'a> {
             return Ok(());
         }
 
-        if matches!(&self.data.data_type, DataType::Union(fields, _) if fields.is_empty()) {
-            return Err(ArrowError::InvalidArgumentError(
-                "Cannot extend a union with no fields with nulls".to_owned(),
-            ));
-        }
+        (self.extend_nulls)(&mut self.data, len)?;
 
         self.data.len += len;
         let bit_len = bit_util::ceil(self.data.len, 8);
@@ -860,7 +856,6 @@ impl<'a> MutableArrayData<'a> {
             .try_resize(bit_len, 0)
             .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         self.data.null_count += len;
-        (self.extend_nulls)(&mut self.data, len)?;
         Ok(())
     }
 
