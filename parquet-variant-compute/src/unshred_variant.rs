@@ -857,9 +857,7 @@ mod tests {
 
     #[test]
     fn test_shred_unshred_round_trip_annotates_value_non_nullable() {
-        let mut builder = VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::from(42i64));
-        let original = builder.build();
+        let original = VariantArray::from_iter([Some(42_i64)]);
         assert!(!value_field_is_nullable(&original));
 
         let shredded = shred_variant(&original, &DataType::Int64).unwrap();
@@ -892,10 +890,7 @@ mod tests {
 
     #[test]
     fn test_unshred_already_unshredded_reannotates_nullable_value() {
-        let mut builder = VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(42i64));
-        builder.append_null();
-        let original = builder.build();
+        let original = VariantArray::from_iter([Some(42_i64), None]);
 
         // same data, but with the out-of-spec nullable `value` annotation
         let nullable_input = VariantArray::from_parts(
@@ -965,18 +960,14 @@ mod tests {
     /// shape has its own expansion of `handle_unshredded_case`.
     #[test]
     fn test_unshred_missing_row_for_decimal_timestamp_object_list() {
-        let mut builder = VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(1234, 2).unwrap()));
-        builder.append_null();
-        assert_missing_row_unshreds_to_variant_null(&builder.build(), &DataType::Decimal64(18, 2));
+        let decimals =
+            VariantArray::from_iter([Some(VariantDecimal8::try_new(1234, 2).unwrap()), None]);
+        assert_missing_row_unshreds_to_variant_null(&decimals, &DataType::Decimal64(18, 2));
 
-        let mut builder = VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(
-            chrono::DateTime::from_timestamp(1, 0).unwrap(),
-        ));
-        builder.append_null();
+        let timestamps =
+            VariantArray::from_iter([Some(chrono::DateTime::from_timestamp(1, 0).unwrap()), None]);
         assert_missing_row_unshreds_to_variant_null(
-            &builder.build(),
+            &timestamps,
             &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
         );
 
@@ -1010,9 +1001,7 @@ mod tests {
 
     #[test]
     fn test_unshred_value_only_with_unmasked_nulls_materializes_variant_null() {
-        let mut builder = VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::from(42i64));
-        let single = builder.build();
+        let single = VariantArray::from_iter([Some(42_i64)]);
         let metadata_bytes = single.metadata_column().as_binary_view().value(0);
         let value_bytes = single.value_column().as_binary_view().value(0);
 
