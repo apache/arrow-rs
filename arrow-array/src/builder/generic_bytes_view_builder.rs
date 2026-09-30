@@ -350,14 +350,19 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             ArrowError::InvalidArgumentError(format!("String length {} exceeds u32::MAX", v.len()))
         })?;
 
-        if length <= MAX_INLINE_VIEW_LEN {
-            let mut view_buffer = [0; 16];
-            view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
-            view_buffer[4..4 + v.len()].copy_from_slice(v);
-            self.views_buffer.push(u128::from_le_bytes(view_buffer));
-            self.null_buffer_builder.append_non_null();
-            return Ok(());
-        }
+        // Anything at most `MAX_INLINE_VIEW_LEN` bytes long is inlined; everything else
+        // needs a four byte prefix, which `first_chunk` gives us without any indexing.
+        let prefix = match v.first_chunk::<4>() {
+            Some(prefix) if length > MAX_INLINE_VIEW_LEN => u32::from_le_bytes(*prefix),
+            _ => {
+                let mut view_buffer = [0; 16];
+                view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
+                view_buffer[4..4 + v.len()].copy_from_slice(v);
+                self.views_buffer.push(u128::from_le_bytes(view_buffer));
+                self.null_buffer_builder.append_non_null();
+                return Ok(());
+            }
+        };
 
         // Deduplication if:
         // (1) deduplication is enabled.
@@ -416,8 +421,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
         let view = ByteView {
             length,
-            // This won't panic as we checked the length of prefix earlier.
-            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
+            prefix,
             buffer_index,
             offset,
         };
@@ -500,7 +504,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         }
         let views = std::mem::take(&mut self.views_buffer);
         // SAFETY: valid by construction
-        unsafe { GenericByteViewArray::new_unchecked(views.into(), completed, nulls) }
+        unsafe { GenericByteViewArray::new_unchecked(views.into(), completed.into(), nulls) }
     }
 
     /// Builds the [`GenericByteViewArray`] without resetting the builder
@@ -514,7 +518,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         let views = ScalarBuffer::new(views, 0, len);
         let nulls = self.null_buffer_builder.finish_cloned();
         // SAFETY: valid by construction
-        unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
+        unsafe { GenericByteViewArray::new_unchecked(views, completed.into(), nulls) }
     }
 
     /// Returns the current null buffer as a slice
@@ -702,7 +706,8 @@ pub fn make_view(data: &[u8], block_id: u32, offset: u32) -> u128 {
         _ => {
             let view = ByteView {
                 length: len as u32,
-                prefix: u32::from_le_bytes(data[0..4].try_into().unwrap()),
+                // this arm only matches lengths above 12, so there are at least four bytes
+                prefix: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
                 buffer_index: block_id,
                 offset,
             };

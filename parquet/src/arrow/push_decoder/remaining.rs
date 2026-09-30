@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::DecodeResult;
-use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection};
+use crate::arrow::arrow_reader::{
+    ParquetRecordBatchReader, RowGroupPlan, RowGroupSelection, RowSelection,
+};
 use crate::arrow::push_decoder::reader_builder::{
     RowBudget, RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
 };
@@ -42,21 +44,145 @@ enum QueuedRowGroupDecision {
 struct NextRowGroup {
     row_group_idx: usize,
     row_count: usize,
-    /// This row group's slice of the global selection, or `None` when all rows
-    /// are selected.
+    /// This row group's selection, or `None` when all rows are selected.
     selection: Option<RowSelection>,
     /// Budget snapshot to apply while decoding this row group.
     budget: RowBudget,
+}
+
+/// Row groups and selections that have not yet been handed to the row-group
+/// reader builder.
+#[derive(Debug, Clone)]
+enum QueuedRowGroups {
+    /// One selection cursor spans all queued row groups.
+    Global {
+        row_groups: VecDeque<usize>,
+        selection: Option<RowSelection>,
+    },
+    /// Selections are already relative to their respective row groups.
+    PerRowGroup(VecDeque<RowGroupSelection>),
+}
+
+impl QueuedRowGroups {
+    /// Validate and queue a row-group plan for `parquet_metadata`.
+    fn try_new(
+        parquet_metadata: &ParquetMetaData,
+        row_group_plan: RowGroupPlan,
+    ) -> Result<Self, ParquetError> {
+        match row_group_plan {
+            RowGroupPlan::Global {
+                row_groups,
+                selection,
+            } => Ok(Self::Global {
+                row_groups: row_groups
+                    .unwrap_or_else(|| (0..parquet_metadata.num_row_groups()).collect())
+                    .into(),
+                selection,
+            }),
+            RowGroupPlan::PerRowGroup(row_groups) => {
+                for row_group in &row_groups {
+                    let row_count =
+                        parquet_metadata.row_group_num_rows(row_group.row_group_index)?;
+                    if let Some(selection) = &row_group.selection {
+                        let selection_rows = selection.total_row_count();
+                        if selection_rows > row_count {
+                            return Err(ParquetError::General(format!(
+                                "Row selection for row group {} contains {selection_rows} rows, but the row group has {row_count}",
+                                row_group.row_group_index
+                            )));
+                        }
+                    }
+                }
+                Ok(Self::PerRowGroup(row_groups.into()))
+            }
+            RowGroupPlan::Conflicting => Err(RowGroupPlan::conflict_error()),
+        }
+    }
+
+    /// Convert the remaining queue back into a builder configuration.
+    fn into_plan(self) -> RowGroupPlan {
+        match self {
+            Self::Global {
+                row_groups,
+                selection,
+            } => RowGroupPlan::Global {
+                row_groups: Some(Vec::from(row_groups)),
+                selection,
+            },
+            Self::PerRowGroup(row_groups) => RowGroupPlan::PerRowGroup(Vec::from(row_groups)),
+        }
+    }
+
+    fn front(&self) -> Option<usize> {
+        match self {
+            Self::Global { row_groups, .. } => row_groups.front().copied(),
+            Self::PerRowGroup(row_groups) => row_groups
+                .front()
+                .map(|row_group| row_group.row_group_index),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Global { row_groups, .. } => row_groups.len(),
+            Self::PerRowGroup(row_groups) => row_groups.len(),
+        }
+    }
+
+    fn clear(&mut self) {
+        match self {
+            Self::Global {
+                row_groups,
+                selection,
+            } => {
+                row_groups.clear();
+                *selection = None;
+            }
+            Self::PerRowGroup(row_groups) => row_groups.clear(),
+        }
+    }
+
+    /// Returns `true` when a shared global selection has no selected rows left.
+    /// Per-row-group selections are independent and are drained one at a time.
+    fn global_selection_is_exhausted(&self) -> bool {
+        matches!(
+            self,
+            Self::Global {
+                selection: Some(selection),
+                ..
+            } if selection.row_count() == 0
+        )
+    }
+
+    /// Remove the front row group and return its local selection.
+    fn pop_front_selection(&mut self, row_count: usize) -> Option<RowSelection> {
+        match self {
+            Self::Global {
+                row_groups,
+                selection,
+            } => {
+                let popped = row_groups.pop_front();
+                debug_assert!(popped.is_some(), "front row group checked before pop");
+                selection
+                    .as_mut()
+                    .map(|selection| selection.split_off(row_count))
+            }
+            Self::PerRowGroup(row_groups) => {
+                row_groups
+                    .pop_front()
+                    .expect("front row group checked before pop")
+                    .selection
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct RowGroupFrontier {
     /// Metadata used to resolve row counts for queued row groups.
     parquet_metadata: Arc<ParquetMetaData>,
-    /// Row group indices not yet handed to the builder.
-    row_groups: VecDeque<usize>,
-    /// Cross-row-group cursor for the optional global row selection.
-    selection: Option<RowSelection>,
+    /// Row groups not yet handed to the builder.
+    queued: QueuedRowGroups,
     /// Offset/limit budget before the next readable row group is planned.
     budget: RowBudget,
     /// If predicates are present, row groups with selected rows must be read so
@@ -67,26 +193,18 @@ struct RowGroupFrontier {
 impl RowGroupFrontier {
     fn new(
         parquet_metadata: Arc<ParquetMetaData>,
-        row_groups: Vec<usize>,
-        selection: Option<RowSelection>,
+        row_group_plan: RowGroupPlan,
         budget: RowBudget,
         has_predicates: bool,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ParquetError> {
+        let queued = QueuedRowGroups::try_new(&parquet_metadata, row_group_plan)?;
+
+        Ok(Self {
             parquet_metadata,
-            row_groups: VecDeque::from(row_groups),
-            selection,
+            queued,
             budget,
             has_predicates,
-        }
-    }
-
-    fn row_group_num_rows(&self, row_group_idx: usize) -> Result<usize, ParquetError> {
-        self.parquet_metadata
-            .row_group(row_group_idx)
-            .num_rows()
-            .try_into()
-            .map_err(|e| ParquetError::General(format!("Row count overflow: {e}")))
+        })
     }
 
     fn update_budget_after_row_group(&mut self, budget: RowBudget) {
@@ -100,8 +218,8 @@ impl RowGroupFrontier {
     ///
     /// Runs the real [`Self::next_readable_row_group`] advance logic on a
     /// throwaway clone of the frontier, so peek can never drift from the
-    /// read path. The clone copies the queued row-group indices and optional
-    /// row-selection (a `Vec<RowSelector>`); see
+    /// read path. The clone copies the queued row-group plan and selections;
+    /// see
     /// [`RemainingRowGroups::peek_next_row_group`].
     fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         Ok(self
@@ -111,8 +229,7 @@ impl RowGroupFrontier {
     }
 
     fn clear_remaining(&mut self) {
-        self.selection = None;
-        self.row_groups.clear();
+        self.queued.clear();
     }
 
     /// Plan whether a selected row group should be read or skipped.
@@ -142,35 +259,30 @@ impl RowGroupFrontier {
     /// Advance queued row groups until one should be handed to the builder.
     fn next_readable_row_group(&mut self) -> Result<Option<NextRowGroup>, ParquetError> {
         loop {
-            let Some(&row_group_idx) = self.row_groups.front() else {
+            let Some(row_group_idx) = self.queued.front() else {
                 return Ok(None);
             };
-            if self.budget.is_exhausted()
-                || self
-                    .selection
-                    .as_ref()
-                    .is_some_and(|selection| selection.row_count() == 0)
-            {
+            // A global selection can be exhausted before its row-group queue.
+            // Per-row-group selections have no shared cursor to exhaust; empty
+            // local selections are discarded by the `selected_rows == 0` path below.
+            if self.budget.is_exhausted() || self.queued.global_selection_is_exhausted() {
                 self.clear_remaining();
                 return Ok(None);
             }
 
-            let row_count = self.row_group_num_rows(row_group_idx)?;
-            let (selection, selected_rows) = match self.selection.as_mut() {
+            let row_count = self.parquet_metadata.row_group_num_rows(row_group_idx)?;
+            let selection = self.queued.pop_front_selection(row_count);
+            let (selection, selected_rows) = match selection {
                 Some(selection) => {
-                    let selection = selection.split_off(row_count);
                     let selected_rows = selection.row_count();
                     if selected_rows == 0 {
-                        self.row_groups.pop_front();
                         continue;
                     }
-
-                    let selection = if selected_rows == row_count {
-                        None
-                    } else {
-                        Some(selection)
-                    };
-                    (selection, selected_rows)
+                    // An all-rows selection is equivalent to no selection
+                    (
+                        (selected_rows != row_count).then_some(selection),
+                        selected_rows,
+                    )
                 }
                 None => (None, row_count),
             };
@@ -184,11 +296,9 @@ impl RowGroupFrontier {
 
             match self.plan_selected_row_group(next_row_group, selected_rows) {
                 QueuedRowGroupDecision::Read(next_row_group) => {
-                    self.row_groups.pop_front();
                     return Ok(Some(next_row_group));
                 }
                 QueuedRowGroupDecision::Skip { remaining_budget } => {
-                    self.row_groups.pop_front();
                     self.budget = remaining_budget;
                 }
             }
@@ -224,10 +334,8 @@ pub(crate) struct RemainingRowGroupsParts {
     pub schema: SchemaRef,
     /// The Parquet file metadata.
     pub metadata: Arc<ParquetMetaData>,
-    /// Row groups not yet handed to the reader builder.
-    pub row_groups: Vec<usize>,
-    /// The not-yet-consumed slice of the global row selection.
-    pub selection: Option<RowSelection>,
+    /// Row groups and selections not yet handed to the reader builder.
+    pub row_group_plan: RowGroupPlan,
     /// Offset still to be skipped before the next readable row group.
     pub offset: Option<usize>,
     /// Output rows still permitted across the remaining row groups.
@@ -240,23 +348,21 @@ impl RemainingRowGroups {
     pub fn new(
         schema: SchemaRef,
         parquet_metadata: Arc<ParquetMetaData>,
-        row_groups: Vec<usize>,
-        selection: Option<RowSelection>,
+        row_group_plan: RowGroupPlan,
         budget: RowBudget,
         has_predicates: bool,
         row_group_reader_builder: RowGroupReaderBuilder,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ParquetError> {
+        Ok(Self {
             schema,
             frontier: RowGroupFrontier::new(
                 parquet_metadata,
-                row_groups,
-                selection,
+                row_group_plan,
                 budget,
                 has_predicates,
-            ),
+            )?,
             row_group_reader_builder,
-        }
+        })
     }
 
     /// Decompose into [`RemainingRowGroupsParts`].
@@ -273,16 +379,15 @@ impl RemainingRowGroups {
         // `has_predicates` is recomputed by `build()` from the filter.
         let RowGroupFrontier {
             parquet_metadata,
-            row_groups,
-            selection,
+            queued,
             budget,
             has_predicates: _,
         } = frontier;
+        let row_group_plan = queued.into_plan();
         RemainingRowGroupsParts {
             schema,
             metadata: parquet_metadata,
-            row_groups: Vec::from(row_groups),
-            selection,
+            row_group_plan,
             offset: budget.offset(),
             limit: budget.limit(),
             reader_builder: row_group_reader_builder.into_parts(),
@@ -317,7 +422,7 @@ impl RemainingRowGroups {
     /// Number of row groups remaining (not including the one currently
     /// being decoded).
     pub fn row_groups_remaining(&self) -> usize {
-        self.frontier.row_groups.len()
+        self.frontier.queued.len()
     }
 
     /// Peek at the file-level row-group index that the next call to
@@ -330,11 +435,10 @@ impl RemainingRowGroups {
     /// when no row groups remain, or when every remaining row group
     /// would be skipped under the current selection/budget.
     ///
-    /// Cost: one clone of the queued row-group indices and optional
-    /// row-selection per call (the frontier is cloned so the real advance
-    /// logic can run non-destructively). For callers that peek once per
-    /// row-group boundary this is O(remaining row groups + selectors) per
-    /// boundary.
+    /// Cost: one clone of the queued row-group plan and selections per call
+    /// (the frontier is cloned so the real advance logic can run
+    /// non-destructively). For callers that peek once per row-group boundary
+    /// this is O(remaining row groups + selectors) per boundary.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         if self.row_group_reader_builder.has_active_row_group() {
             return Ok(None);
@@ -392,5 +496,180 @@ impl RemainingRowGroups {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arrow::arrow_reader::RowSelector;
+    use crate::arrow::push_decoder::test::test_file_parquet_metadata;
+
+    fn global_plan(
+        row_groups: Option<Vec<usize>>,
+        selection: Option<RowSelection>,
+    ) -> RowGroupPlan {
+        RowGroupPlan::Global {
+            row_groups,
+            selection,
+        }
+    }
+
+    #[test]
+    fn queued_row_groups_encapsulates_plan_transitions() {
+        let metadata = test_file_parquet_metadata();
+
+        let mut all_row_groups =
+            QueuedRowGroups::try_new(&metadata, global_plan(None, None)).unwrap();
+        assert_eq!(all_row_groups.len(), 2);
+        assert_eq!(all_row_groups.front(), Some(0));
+        assert!(!all_row_groups.global_selection_is_exhausted());
+        assert!(all_row_groups.pop_front_selection(200).is_none());
+        assert_eq!(all_row_groups.front(), Some(1));
+        all_row_groups.clear();
+        assert_eq!(all_row_groups.len(), 0);
+        assert!(matches!(
+            all_row_groups.into_plan(),
+            RowGroupPlan::Global {
+                row_groups: Some(row_groups),
+                selection: None,
+            } if row_groups.is_empty()
+        ));
+
+        let global_selection = RowSelection::from(vec![
+            RowSelector::skip(10),
+            RowSelector::select(5),
+            RowSelector::skip(185),
+            RowSelector::select(200),
+        ]);
+        let mut global = QueuedRowGroups::try_new(
+            &metadata,
+            global_plan(Some(vec![0, 1]), Some(global_selection)),
+        )
+        .unwrap();
+        let first = global.pop_front_selection(200).unwrap();
+        assert_eq!(first.row_count(), 5);
+        assert!(!global.global_selection_is_exhausted());
+        assert!(matches!(
+            global.into_plan(),
+            RowGroupPlan::Global {
+                row_groups: Some(row_groups),
+                selection: Some(selection),
+            } if row_groups == vec![1] && selection.row_count() == 200
+        ));
+
+        let local_selection =
+            RowSelection::from(vec![RowSelector::skip(5), RowSelector::select(3)]);
+        let mut local = QueuedRowGroups::try_new(
+            &metadata,
+            RowGroupPlan::PerRowGroup(vec![
+                RowGroupSelection::new(1, Some(local_selection)),
+                RowGroupSelection::new(0, None),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(local.front(), Some(1));
+        assert_eq!(local.pop_front_selection(200).unwrap().row_count(), 3);
+        assert!(!local.global_selection_is_exhausted());
+        assert!(matches!(
+            local.into_plan(),
+            RowGroupPlan::PerRowGroup(row_groups)
+                if row_groups == vec![RowGroupSelection::new(0, None)]
+        ));
+
+        let exhausted = QueuedRowGroups::try_new(
+            &metadata,
+            global_plan(
+                Some(vec![0]),
+                Some(RowSelection::from(vec![RowSelector::skip(200)])),
+            ),
+        )
+        .unwrap();
+        assert!(exhausted.global_selection_is_exhausted());
+    }
+
+    #[test]
+    fn frontier_handles_global_and_local_exhaustion() {
+        let metadata = test_file_parquet_metadata();
+        let budget = RowBudget::new(None, None);
+
+        let mut global = RowGroupFrontier::new(
+            Arc::clone(&metadata),
+            global_plan(
+                Some(vec![0, 1]),
+                Some(RowSelection::from(vec![RowSelector::skip(400)])),
+            ),
+            budget,
+            false,
+        )
+        .unwrap();
+        assert!(global.next_readable_row_group().unwrap().is_none());
+        assert_eq!(global.queued.len(), 0);
+
+        let mut local = RowGroupFrontier::new(
+            Arc::clone(&metadata),
+            RowGroupPlan::PerRowGroup(vec![
+                RowGroupSelection::new(0, Some(RowSelection::from(vec![RowSelector::skip(200)]))),
+                RowGroupSelection::new(1, None),
+            ]),
+            budget,
+            false,
+        )
+        .unwrap();
+        let next = local.next_readable_row_group().unwrap().unwrap();
+        assert_eq!(next.row_group_idx, 1);
+        assert_eq!(next.row_count, 200);
+        assert!(next.selection.is_none());
+
+        let mut exhausted_budget = RowGroupFrontier::new(
+            metadata,
+            RowGroupPlan::PerRowGroup(vec![RowGroupSelection::new(0, None)]),
+            RowBudget::new(None, Some(0)),
+            false,
+        )
+        .unwrap();
+        assert!(
+            exhausted_budget
+                .next_readable_row_group()
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(exhausted_budget.queued.len(), 0);
+    }
+
+    #[test]
+    fn frontier_reports_invalid_global_row_group_while_peeking() {
+        let metadata = test_file_parquet_metadata();
+        let frontier = RowGroupFrontier::new(
+            metadata,
+            global_plan(Some(vec![2]), None),
+            RowBudget::new(None, None),
+            false,
+        )
+        .unwrap();
+
+        let error = frontier.peek_next_row_group().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Row group index 2 out of bounds for file with 2 row groups")
+        );
+    }
+
+    #[test]
+    fn metadata_row_count_overflow_is_reported() {
+        let metadata = test_file_parquet_metadata();
+        let mut builder = metadata.as_ref().clone().into_builder();
+        let mut row_groups = builder.take_row_groups();
+        let negative_row_group = row_groups
+            .remove(0)
+            .into_builder()
+            .set_num_rows(-1)
+            .build()
+            .unwrap();
+        let metadata = builder.set_row_groups(vec![negative_row_group]).build();
+
+        let error = metadata.row_group_num_rows(0).unwrap_err();
+        assert!(error.to_string().contains("Row count overflow"));
     }
 }

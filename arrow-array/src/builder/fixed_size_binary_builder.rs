@@ -135,6 +135,7 @@ impl FixedSizeBinaryBuilder {
             .add_buffer(std::mem::take(&mut self.values_builder).into())
             .nulls(self.null_buffer_builder.finish())
             .len(array_length);
+        // SAFETY: value_length >= 0, values.len() == len * value_length, and nulls.len() == len — all guaranteed by the builder
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
     }
@@ -147,6 +148,7 @@ impl FixedSizeBinaryBuilder {
             .add_buffer(values_buffer)
             .nulls(self.null_buffer_builder.finish_cloned())
             .len(array_length);
+        // SAFETY: value_length >= 0, values.len() == len * value_length, and nulls.len() == len — all guaranteed by the builder
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
     }
@@ -154,6 +156,10 @@ impl FixedSizeBinaryBuilder {
     /// Returns the current null buffer as a slice
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
+    }
+    ///  Returns the total memory capacity in bytes currently
+    pub fn capacity(&self) -> usize {
+        self.values_builder.capacity() + self.null_buffer_builder.allocated_size() + 4 // i32 
     }
 }
 

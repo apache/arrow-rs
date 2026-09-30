@@ -20,7 +20,6 @@ name = "parquet-variant"
 version = { workspace = true }
 license = { workspace = true }
 description = "Apache Parquet Variant implementation in Rust"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]
@@ -45,6 +44,7 @@ name = "parquet_variant"
 bench = false
 
 [dev-dependencies]
+proptest = { version = "1.0", default-features = false, features = ["std"] }
 criterion = { workspace = true, default-features = false }
 rand = { version = "0.10", default-features = false, features = [
     "std",

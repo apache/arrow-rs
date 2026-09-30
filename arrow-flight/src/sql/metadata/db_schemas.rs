@@ -19,7 +19,7 @@
 //!
 //! [`CommandGetDbSchemas`]: crate::sql::CommandGetDbSchemas
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow_arith::boolean::and;
 use arrow_array::{ArrayRef, RecordBatch, StringArray, builder::StringBuilder};
@@ -27,7 +27,6 @@ use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
 use arrow_string::like::like;
-use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
 use crate::error::*;
@@ -175,7 +174,7 @@ fn get_db_schemas_schema() -> SchemaRef {
 }
 
 /// The schema for GetDbSchemas
-static GET_DB_SCHEMAS_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
+static GET_DB_SCHEMAS_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
     Arc::new(Schema::new(vec![
         Field::new("catalog_name", DataType::Utf8, true),
         Field::new("db_schema_name", DataType::Utf8, false),

@@ -38,7 +38,7 @@ pub struct UnalignedBitChunk<'a> {
 }
 
 impl<'a> UnalignedBitChunk<'a> {
-    /// Create a from a byte array, and and an offset and length in bits
+    /// Create from a byte array, offset and length in bits
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         if len == 0 {
             return Self {
@@ -88,6 +88,7 @@ impl<'a> UnalignedBitChunk<'a> {
         }
 
         // Read into prefix and suffix as needed
+        // Safety: u64 has no invalid bit patterns so reinterpreting initialized u8 bytes as u64 is sound.
         let (prefix, mut chunks, suffix) = unsafe { buffer.align_to::<u64>() };
         assert!(
             prefix.len() < 8 && suffix.len() < 8,
@@ -284,6 +285,8 @@ impl<'a> BitChunks<'a> {
             // might be one more than sizeof(u64) if the offset is in the middle of a byte
             let byte_len = ceil(bit_len + bit_offset, 8);
             // pointer to remainder bytes after all complete chunks
+            // Safety: the buffer contains `chunk_len * 8 + ceil(remainder_len + bit_offset, 8)`
+            // bytes, so offsetting by `chunk_len * 8` and reading `byte_len` bytes is in-bounds.
             let base = unsafe {
                 self.buffer
                     .as_ptr()
@@ -319,6 +322,32 @@ impl<'a> BitChunks<'a> {
     #[inline]
     pub fn num_bytes(&self) -> usize {
         ceil(self.chunk_len * 64 + self.remainder_len, 8)
+    }
+
+    /// Returns the `index`th complete chunk of 64 bits, the value
+    /// [`Self::iter`] yields at that position
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= self.chunk_len()`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_buffer::Buffer;
+    /// let buffer = Buffer::from((0..17_u8).collect::<Vec<_>>());
+    /// // Start at bit 8, so chunk 1 holds bytes 9 through 16
+    /// let chunks = buffer.bit_chunks(8, 128);
+    /// assert_eq!(chunks.chunk_len(), 2);
+    /// assert_eq!(chunks.chunk(1), 0x100f0e0d0c0b0a09);
+    /// assert_eq!(chunks.iter().nth(1), Some(chunks.chunk(1)));
+    /// ```
+    #[inline]
+    pub fn chunk(&self, index: usize) -> u64 {
+        assert!(index < self.chunk_len, "chunk index out of bounds");
+        // Safety: `index < chunk_len`, and the constructor checked the buffer
+        // covers every complete chunk plus the remainder byte
+        unsafe { read_chunk(self.buffer, self.bit_offset, index) }
     }
 
     /// Returns an iterator over chunks of 64 bits represented as an `u64`
@@ -357,6 +386,40 @@ impl<'a> IntoIterator for &BitChunks<'a> {
     }
 }
 
+/// Reads the `index`th complete 64-bit chunk of `buffer`, whose bits start
+/// at `bit_offset` (in `0..8`)
+///
+/// # Safety
+///
+/// `index` must be less than the number of complete chunks, so that the
+/// buffer holds at least `index * 8 + 8` bytes, plus one more byte when
+/// `bit_offset != 0` (the remainder byte the constructor guarantees)
+#[inline]
+unsafe fn read_chunk(buffer: &[u8], bit_offset: usize, index: usize) -> u64 {
+    debug_assert!(bit_offset < 8);
+    debug_assert!(buffer.len() >= index * 8 + 8 + usize::from(bit_offset != 0));
+    // cast to *const u64 should be fine since we are using read_unaligned below
+    #[expect(clippy::cast_ptr_alignment)]
+    let raw_data = buffer.as_ptr().cast::<u64>();
+
+    // bit-packed buffers are stored starting with the least-significant byte first
+    // so when reading as u64 on a big-endian machine, the bytes need to be swapped
+    // Safety: the caller guarantees `raw_data.add(index)` is in bounds;
+    // `read_unaligned` handles any pointer alignment.
+    let current = unsafe { std::ptr::read_unaligned(raw_data.add(index)).to_le() };
+
+    if bit_offset == 0 {
+        current
+    } else {
+        // the constructor ensures that bit_offset is in 0..8
+        // that means we need to read at most one additional byte to fill in the high bits
+        // Safety: the caller guarantees the byte at `index + 1` is in bounds
+        let next = unsafe { std::ptr::read_unaligned(raw_data.add(index + 1).cast::<u8>()) as u64 };
+
+        (current >> bit_offset) | (next << (64 - bit_offset))
+    }
+}
+
 impl Iterator for BitChunkIterator<'_> {
     type Item = u64;
 
@@ -367,26 +430,9 @@ impl Iterator for BitChunkIterator<'_> {
             return None;
         }
 
-        // cast to *const u64 should be fine since we are using read_unaligned below
-        #[expect(clippy::cast_ptr_alignment)]
-        let raw_data = self.buffer.as_ptr().cast::<u64>();
-
-        // bit-packed buffers are stored starting with the least-significant byte first
-        // so when reading as u64 on a big-endian machine, the bytes need to be swapped
-        let current = unsafe { std::ptr::read_unaligned(raw_data.add(index)).to_le() };
-
-        let bit_offset = self.bit_offset;
-
-        let combined = if bit_offset == 0 {
-            current
-        } else {
-            // the constructor ensures that bit_offset is in 0..8
-            // that means we need to read at most one additional byte to fill in the high bits
-            let next =
-                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1).cast::<u8>()) as u64 };
-
-            (current >> bit_offset) | (next << (64 - bit_offset))
-        };
+        // Safety: `index < self.chunk_len`, and the constructor checked the
+        // buffer covers every complete chunk plus the remainder byte
+        let combined = unsafe { read_chunk(self.buffer, self.bit_offset, index) };
 
         self.index = index + 1;
 
@@ -500,6 +546,61 @@ mod tests {
             0b100_0000_0011_1111_1100_0000_0011_1111_1100_0000_0011_1111_1100_0000_0011_1111,
             bitchunks.remainder_bits()
         );
+    }
+
+    #[test]
+    fn test_chunk_aligned() {
+        let input: Vec<u8> = (0..24).collect();
+        let buffer = Buffer::from(input);
+
+        let bitchunks = buffer.bit_chunks(0, 24 * 8);
+        assert_eq!(3, bitchunks.chunk_len());
+        assert_eq!(0x0706050403020100, bitchunks.chunk(0));
+        assert_eq!(0x0f0e0d0c0b0a0908, bitchunks.chunk(1));
+        assert_eq!(0x1716151413121110, bitchunks.chunk(2));
+    }
+
+    #[test]
+    fn test_chunk_matches_iter() {
+        // 26 bytes cover three complete chunks at every offset below, with
+        // the last one needing the byte after its eight when the bit offset
+        // is not zero
+        let input: Vec<u8> = (0..26_u8).map(|i| i.wrapping_mul(13)).collect();
+        let buffer = Buffer::from(input);
+
+        // Bit offsets within a byte and across one, lengths ending on and
+        // off a word boundary
+        for offset in (0..8).chain([8, 13]) {
+            for len in [64, 65, 128, 130, 191, 192] {
+                let bitchunks = buffer.bit_chunks(offset, len);
+                assert_eq!(len / 64, bitchunks.chunk_len());
+                for index in 0..bitchunks.chunk_len() {
+                    assert_eq!(
+                        bitchunks.iter().nth(index),
+                        Some(bitchunks.chunk(index)),
+                        "offset {offset} len {len} chunk {index}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "chunk index out of bounds")]
+    fn test_chunk_out_of_bounds() {
+        let buffer = Buffer::from(vec![0xFF_u8; 16]);
+        let bitchunks = buffer.bit_chunks(0, 128);
+        assert_eq!(2, bitchunks.chunk_len());
+        bitchunks.chunk(2);
+    }
+
+    #[test]
+    #[should_panic(expected = "chunk index out of bounds")]
+    fn test_chunk_out_of_bounds_no_complete_chunk() {
+        let buffer = Buffer::from(vec![0xFF_u8; 8]);
+        let bitchunks = buffer.bit_chunks(1, 63);
+        assert_eq!(0, bitchunks.chunk_len());
+        bitchunks.chunk(0);
     }
 
     #[test]
@@ -722,7 +823,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
     fn fuzz_unaligned_bit_chunk_iterator() {
         let mut rng = rng();
 

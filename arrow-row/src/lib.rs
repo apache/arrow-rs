@@ -152,6 +152,13 @@
 //! [compared]: PartialOrd
 //! [compare]: PartialOrd
 //! [the issue]: https://github.com/apache/arrow-rs/issues/4811
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -1051,12 +1058,12 @@ impl RowConverter {
                 columns.len()
             )));
         }
-        for colum in columns.iter().skip(1) {
-            if colum.len() != columns[0].len() {
+        for column in columns.iter().skip(1) {
+            if column.len() != columns[0].len() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "RowConverter columns must all have the same length, expected {} got {}",
                     columns[0].len(),
-                    colum.len()
+                    column.len()
                 )));
             }
         }
@@ -2434,7 +2441,6 @@ unsafe fn decode_column(
 mod tests {
     use arrow_array::builder::*;
     use arrow_array::types::*;
-    use arrow_array::*;
     use arrow_buffer::{Buffer, OffsetBuffer};
     use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
@@ -4779,7 +4785,7 @@ mod tests {
         F: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
-        let values_len = offsets.last().unwrap().to_usize().unwrap();
+        let values_len = offsets.last().as_usize();
         let values = values(rng, values_len);
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
@@ -4835,7 +4841,7 @@ mod tests {
         ValuesFn: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
-        let entries_len = offsets.last().unwrap().to_usize().unwrap();
+        let entries_len = offsets.last().as_usize();
         let keys = gen_keys(rng, entries_len);
         let values = gen_values(rng, entries_len);
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
@@ -5200,7 +5206,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_test() {
         let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..100 {
