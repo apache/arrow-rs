@@ -2535,40 +2535,90 @@ fn cast_numeric_arrays<FROM, TO>(
 where
     FROM: ArrowPrimitiveType,
     TO: ArrowPrimitiveType,
-    FROM::Native: NumCast,
-    TO::Native: NumCast,
+    FROM::Native: NumCast + NumericNative,
+    TO::Native: NumCast + NumericNative,
 {
-    if cast_options.safe {
-        // If the value can't be casted to the `TO::Native`, return null
-        Ok(Arc::new(numeric_cast::<FROM, TO>(
-            from.as_primitive::<FROM>(),
-        )))
+    let from = from.as_primitive::<FROM>();
+    let array: PrimitiveArray<TO> = if const {
+        is_infallible_numeric_cast(
+            <FROM::Native as NumericNative>::KIND,
+            <TO::Native as NumericNative>::KIND,
+        )
+    } {
+        // This cast cannot fail, so the fastest kernel, `unary`, can be used.
+        from.unary(|v| num_cast(v).expect("numeric cast is infallible"))
+    } else if cast_options.safe {
+        // If the value can't be cast to the `TO::Native`, return null
+        from.unary_opt(num_cast)
     } else {
-        // If the value can't be casted to the `TO::Native`, return error
-        Ok(Arc::new(try_numeric_cast::<FROM, TO>(
-            from.as_primitive::<FROM>(),
-        )?))
-    }
+        // If the value can't be cast to the `TO::Native`, return error
+        from.try_unary(|v| {
+            num_cast(v).ok_or_else(|| {
+                ArrowError::CastError(format!("Can't cast value {v:?} to type {}", TO::DATA_TYPE))
+            })
+        })?
+    };
+    Ok(Arc::new(array))
 }
 
-// Natural cast between numeric types
-// If the value of T can't be casted to R, will throw error
-fn try_numeric_cast<T, R>(from: &PrimitiveArray<T>) -> Result<PrimitiveArray<R>, ArrowError>
-where
-    T: ArrowPrimitiveType,
-    R: ArrowPrimitiveType,
-    T::Native: NumCast,
-    R::Native: NumCast,
-{
-    from.try_unary(|value| {
-        num_cast::<T::Native, R::Native>(value).ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Can't cast value {:?} to type {}",
-                value,
-                R::DATA_TYPE
-            ))
-        })
-    })
+/// Properties of a numeric native type that decide whether [`num_cast`] to
+/// another numeric type can fail.
+#[derive(Clone, Copy)]
+struct NumericKind {
+    float: bool,
+    signed: bool,
+    bits: u32,
+}
+
+/// A native type with a [`NumericKind`].
+trait NumericNative {
+    const KIND: NumericKind;
+}
+
+macro_rules! numeric_native {
+    ($($t:ty => $float:literal, $signed:literal;)*) => {$(
+        impl NumericNative for $t {
+            const KIND: NumericKind = NumericKind {
+                float: $float,
+                signed: $signed,
+                bits: 8 * std::mem::size_of::<$t>() as u32,
+            };
+        }
+    )*};
+}
+
+numeric_native! {
+    u8 => false, false;
+    u16 => false, false;
+    u32 => false, false;
+    u64 => false, false;
+    i8 => false, true;
+    i16 => false, true;
+    i32 => false, true;
+    i64 => false, true;
+    half::f16 => true, true;
+    f32 => true, true;
+    f64 => true, true;
+}
+
+/// Returns true if [`num_cast`] succeeds for every value of `from` when casting
+/// to `to`: every cast to a float, and integer casts whose target holds every
+/// source value.
+///
+/// This must hold for every bit pattern of the source type, not only for the
+/// valid values of a particular array, because [`PrimitiveArray::unary`] applies
+/// the conversion to null slots as well, and their contents are arbitrary.
+const fn is_infallible_numeric_cast(from: NumericKind, to: NumericKind) -> bool {
+    if to.float {
+        true
+    } else if from.float {
+        false
+    } else if from.signed == to.signed {
+        to.bits >= from.bits
+    } else {
+        // Only an unsigned source fits a strictly wider signed target.
+        !from.signed && to.bits > from.bits
+    }
 }
 
 /// Natural cast between numeric types
@@ -2580,18 +2630,6 @@ where
     O: NumCast,
 {
     num_traits::cast::cast::<I, O>(value)
-}
-
-// Natural cast between numeric types
-// If the value of T can't be casted to R, it will be converted to null
-fn numeric_cast<T, R>(from: &PrimitiveArray<T>) -> PrimitiveArray<R>
-where
-    T: ArrowPrimitiveType,
-    R: ArrowPrimitiveType,
-    T::Native: NumCast,
-    R::Native: NumCast,
-{
-    from.unary_opt::<_, R>(num_cast::<T::Native, R::Native>)
 }
 
 fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
@@ -4739,6 +4777,52 @@ mod tests {
                 Some(i256::from_i128(1123457_i128)), // round up
             ]
         );
+    }
+
+    /// Checks the fast-path classification against `num_cast` for every pair of
+    /// numeric types. `num_cast` fails only on values outside the target's range,
+    /// so each type's extremes decide, plus NaN for floats.
+    #[test]
+    fn test_is_infallible_numeric_cast() {
+        macro_rules! check {
+            ($from:ty => $values:expr, [$($to:ty),*]) => {$(
+                let infallible = is_infallible_numeric_cast(
+                    <<$from as ArrowPrimitiveType>::Native as NumericNative>::KIND,
+                    <<$to as ArrowPrimitiveType>::Native as NumericNative>::KIND,
+                );
+                let succeeds = $values
+                    .iter()
+                    .all(|&v| num_cast::<_, <$to as ArrowPrimitiveType>::Native>(v).is_some());
+                assert_eq!(
+                    infallible,
+                    succeeds,
+                    "{} to {}",
+                    <$from as ArrowPrimitiveType>::DATA_TYPE,
+                    <$to as ArrowPrimitiveType>::DATA_TYPE
+                );
+            )*};
+        }
+        macro_rules! check_all {
+            ($($from:ty => $values:expr),* $(,)?) => {$(
+                check!($from => $values, [
+                    UInt8Type, UInt16Type, UInt32Type, UInt64Type, Int8Type, Int16Type,
+                    Int32Type, Int64Type, Float16Type, Float32Type, Float64Type
+                ]);
+            )*};
+        }
+        check_all! {
+            UInt8Type => [u8::MIN, u8::MAX],
+            UInt16Type => [u16::MIN, u16::MAX],
+            UInt32Type => [u32::MIN, u32::MAX],
+            UInt64Type => [u64::MIN, u64::MAX],
+            Int8Type => [i8::MIN, i8::MAX],
+            Int16Type => [i16::MIN, i16::MAX],
+            Int32Type => [i32::MIN, i32::MAX],
+            Int64Type => [i64::MIN, i64::MAX],
+            Float16Type => [f16::MIN, f16::MAX, f16::NAN],
+            Float32Type => [f32::MIN, f32::MAX, f32::NAN],
+            Float64Type => [f64::MIN, f64::MAX, f64::NAN],
+        }
     }
 
     #[test]
@@ -11253,6 +11337,127 @@ mod tests {
         let result = result.as_primitive::<Float64Type>();
         assert!(result.value(0).is_finite());
         assert!(result.value(0) < 0.0); // Negative result
+    }
+
+    #[test]
+    fn test_cast_decimal256_negative_scale_metadata() {
+        let input = Decimal256Array::from(vec![
+            Some(i256::ZERO),
+            Some(i256::ONE),
+            Some(i256::MINUS_ONE),
+            None,
+        ])
+        .with_precision_and_scale(76, -51)
+        .unwrap();
+        let value = i256::from_i128(10).pow_wrapping(51);
+        let expected =
+            Decimal256Array::from(vec![Some(i256::ZERO), Some(value), Some(-value), None])
+                .with_precision_and_scale(76, 0)
+                .unwrap();
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let output_type = DataType::Decimal256(76, 0);
+        let result = cast(&input, &output_type).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+        let result = cast_with_options(&input, &output_type, &options).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+
+        // The precision plus scale increase crosses i8::MAX at -52.
+        let input = input.with_precision_and_scale(76, -52).unwrap();
+        let value = i256::from_i128(10).pow_wrapping(52);
+        let expected =
+            Decimal256Array::from(vec![Some(i256::ZERO), Some(value), Some(-value), None])
+                .with_precision_and_scale(76, 0)
+                .unwrap();
+        let result = cast(&input, &output_type).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+        let result = cast_with_options(&input, &output_type, &options).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+    }
+
+    #[test]
+    fn test_cast_decimal256_negative_scale_precision_overflow() {
+        let input = Decimal256Array::from(vec![Some(i256::ZERO), Some(i256::ONE), None])
+            .with_precision_and_scale(76, -76)
+            .unwrap();
+        let output_type = DataType::Decimal256(76, 0);
+        let expected = Decimal256Array::from(vec![Some(i256::ZERO), None, None])
+            .with_precision_and_scale(76, 0)
+            .unwrap();
+        let result = cast(&input, &output_type).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let error = cast_with_options(&input, &output_type, &options).unwrap_err();
+        let value = i256::from_i128(10).pow_wrapping(76);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Invalid argument error: {value} is too large to store in a Decimal256 of precision 76. Max is {}",
+                value - i256::ONE
+            )
+        );
+    }
+
+    #[test]
+    fn test_cast_decimal256_negative_scale_native_overflow() {
+        let input = Decimal256Array::from(vec![Some(i256::from_i128(6)), None])
+            .with_precision_and_scale(76, -76)
+            .unwrap();
+        let output_type = DataType::Decimal256(76, 0);
+        let expected = Decimal256Array::from(vec![None, None])
+            .with_precision_and_scale(76, 0)
+            .unwrap();
+        let result = cast(&input, &output_type).unwrap();
+        assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let error = cast_with_options(&input, &output_type, &options).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Cast error: Cannot cast to Decimal256(76, 0). Overflowing on 6"
+        );
+    }
+
+    #[test]
+    fn test_cast_decimal256_extreme_scale_difference() {
+        let input = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::MINUS_ONE), None])
+            .with_precision_and_scale(76, i8::MIN)
+            .unwrap();
+        for safe in [true, false] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            let error =
+                cast_with_options(&input, &DataType::Decimal256(76, 76), &options).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Cast error: Cannot cast to Decimal256(76, 76). Value overflows for output scale"
+            );
+        }
+
+        let input = input.with_precision_and_scale(76, 76).unwrap();
+        let expected = Decimal256Array::from(vec![Some(i256::ZERO), Some(i256::ZERO), None])
+            .with_precision_and_scale(76, i8::MIN)
+            .unwrap();
+        for safe in [true, false] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            let result =
+                cast_with_options(&input, &DataType::Decimal256(76, i8::MIN), &options).unwrap();
+            assert_eq!(result.as_primitive::<Decimal256Type>(), &expected);
+        }
     }
 
     #[test]
