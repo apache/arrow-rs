@@ -1826,15 +1826,7 @@ mod test {
 
     #[test]
     fn test_variant_array_iter_double_ended() {
-        let mut b = VariantArrayBuilder::new(5);
-
-        b.append_variant(Variant::from(0_i32));
-        b.append_null();
-        b.append_variant(Variant::from(2_i32));
-        b.append_null();
-        b.append_variant(Variant::from(4_i32));
-
-        let array = b.build();
+        let array = VariantArray::from_iter([Some(0_i32), None, Some(2_i32), None, Some(4_i32)]);
         let mut iter = array.iter();
 
         assert_eq!(iter.next(), Some(Some(Variant::from(0_i32))));
@@ -1850,15 +1842,7 @@ mod test {
 
     #[test]
     fn test_variant_array_iter_reverse() {
-        let mut b = VariantArrayBuilder::new(5);
-
-        b.append_variant(Variant::from("a"));
-        b.append_null();
-        b.append_variant(Variant::from("aaa"));
-        b.append_null();
-        b.append_variant(Variant::from("aaaaa"));
-
-        let array = b.build();
+        let array = VariantArray::from_iter([Some("a"), None, Some("aaa"), None, Some("aaaaa")]);
 
         let result: Vec<_> = array.iter().rev().collect();
         assert_eq!(
