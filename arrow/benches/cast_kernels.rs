@@ -17,7 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
+use criterion::{Criterion, Throughput};
 use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
@@ -26,7 +26,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::compute::cast;
+use arrow::compute::{CastOptions, cast, cast_with_options};
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
@@ -690,5 +690,100 @@ fn add_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, add_benchmark);
+// Keep fixture generation and correctness checks outside the timed loop. Safe
+// overflow cases process the whole array; strict overflow would stop early.
+fn integer_to_decimal_bench(c: &mut Criterion) {
+    const ROWS: usize = 8192;
+    let mut group = c.benchmark_group("integer_to_decimal");
+    group.throughput(Throughput::Elements(ROWS as u64));
+    let mut bench =
+        |name: &str, input: ArrayRef, target: DataType, overflow: bool, modes: &[bool]| {
+            for &safe in modes {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                let result = cast_with_options(input.as_ref(), &target, &options).unwrap();
+                assert_eq!(result.data_type(), &target);
+                assert_eq!(result.len(), ROWS);
+                assert_eq!(
+                    result.null_count(),
+                    if overflow { ROWS } else { input.null_count() }
+                );
+                let mode = if safe { "safe" } else { "strict" };
+                group.bench_function(format!("{name}/{target}/{mode}"), |b| {
+                    b.iter(|| {
+                        cast_with_options(
+                            hint::black_box(input.as_ref()),
+                            hint::black_box(&target),
+                            &options,
+                        )
+                        .unwrap()
+                    })
+                });
+            }
+        };
+
+    // Choose fixtures for distinct conversion paths, rather than every type pair.
+    let int32: ArrayRef = Arc::new(create_primitive_array_range::<Int32Type>(
+        ROWS,
+        0.1,
+        -1_000_000..1_000_000,
+    ));
+    let int64: ArrayRef = Arc::new(create_primitive_array_range::<Int64Type>(
+        ROWS,
+        0.1,
+        10..1_000_000,
+    ));
+    let uint64: ArrayRef = Arc::new(create_primitive_array_range::<UInt64Type>(
+        ROWS,
+        0.1,
+        10..1_000_000,
+    ));
+    for (name, input, target) in [
+        ("int32/valid", int32, DataType::Decimal32(9, 0)),
+        ("int64/valid", int64.clone(), DataType::Decimal128(38, 2)),
+    ] {
+        bench(name, input, target, false, &[true, false]);
+    }
+    bench(
+        "uint64/scale_down",
+        uint64,
+        DataType::Decimal256(76, -1),
+        false,
+        &[true],
+    );
+    bench(
+        "int64/all_zero",
+        int64,
+        DataType::Decimal32(9, -20),
+        false,
+        &[true],
+    );
+    let overflow: ArrayRef = Arc::new(create_primitive_array_range::<Int32Type>(
+        ROWS,
+        0.1,
+        100_000_000..1_000_000_000,
+    ));
+    bench(
+        "int32/precision_overflow",
+        overflow,
+        DataType::Decimal32(8, 0),
+        true,
+        &[true],
+    );
+    let wide: ArrayRef = Arc::new(Int64Array::from_iter(
+        (0..ROWS).map(|i| (i % 10 != 0).then_some(5_000_000_000 + i as i64)),
+    ));
+    bench(
+        "int64/scale_before_narrowing",
+        wide,
+        DataType::Decimal32(9, -1),
+        false,
+        &[true],
+    );
+    group.finish();
+}
+
+criterion_group!(benches, add_benchmark, integer_to_decimal_bench);
 criterion_main!(benches);
