@@ -58,17 +58,23 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
 
     /// Creates a new  [`GenericByteBuilder`] from buffers.
     ///
+    /// Any bytes in `value_buffer` after the last offset are dropped.
+    ///
     /// # Safety
     ///
     /// This doesn't verify buffer contents as it assumes the buffers are from
     /// existing and valid [`GenericByteArray`].
     pub unsafe fn new_from_buffer(
         offsets_buffer: MutableBuffer,
-        value_buffer: MutableBuffer,
+        mut value_buffer: MutableBuffer,
         null_buffer: Option<MutableBuffer>,
     ) -> Self {
         let offsets_builder: Vec<T::Offset> =
             ScalarBuffer::<T::Offset>::from(offsets_buffer).into();
+
+        // New values are appended at the end of the values buffer, so it must end
+        // at the last offset
+        value_buffer.truncate(offsets_builder.last().unwrap().as_usize());
         let value_builder: Vec<u8> = ScalarBuffer::<u8>::from(value_buffer).into();
 
         let null_buffer_builder = null_buffer
