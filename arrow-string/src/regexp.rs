@@ -332,6 +332,7 @@ fn get_scalar_pattern_flag_utf8view<'a>(
 
 macro_rules! process_regexp_match {
     ($array:expr, $regex:expr, $list_builder:expr) => {
+        // Reuse capture location storage across matches
         let mut capture_locations = None;
         $array
             .iter()
