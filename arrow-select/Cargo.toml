@@ -19,7 +19,6 @@
 name = "arrow-select"
 version = { workspace = true }
 description = "Selection kernels for arrow arrays"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
