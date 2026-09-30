@@ -113,6 +113,23 @@ impl FixedShapeTensor {
         self.metadata.list_size()
     }
 
+    /// Returns the physical shape of the contained tensors.
+    ///
+    /// [`Self::dimensions`] and [`Self::list_size`] do not identify this
+    /// shape. `[2, 6]` and `[3, 4]` are both 2-dimensional and both have
+    /// 12 elements.
+    ///
+    /// ```
+    /// # use arrow_schema::extension::FixedShapeTensor;
+    /// # use arrow_schema::DataType;
+    /// let tensor = FixedShapeTensor::try_new(DataType::Float32, [2, 6], None, None).unwrap();
+    /// assert_eq!(tensor.shape(), &[2, 6]);
+    /// assert_eq!(tensor.list_size(), 12);
+    /// ```
+    pub fn shape(&self) -> &[usize] {
+        self.metadata.shape()
+    }
+
     /// Returns the number of dimensions in this fixed shape tensor.
     pub fn dimensions(&self) -> usize {
         self.metadata.dimensions()
@@ -358,6 +375,11 @@ impl FixedShapeTensorMetadata {
         })
     }
 
+    /// Returns the physical shape of the contained tensors.
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
     /// Returns the product of all the elements in tensor shape.
     pub fn list_size(&self) -> usize {
         self.shape.iter().product()
@@ -496,6 +518,8 @@ mod tests {
             field.try_extension_type::<FixedShapeTensor>()?,
             fixed_shape_tensor
         );
+        assert_eq!(fixed_shape_tensor.shape(), &[100, 200, 500]);
+        assert_eq!(fixed_shape_tensor.metadata().shape(), &[100, 200, 500]);
         #[cfg(feature = "canonical_extension_types")]
         assert_eq!(
             field.try_canonical_extension_type()?,
@@ -522,6 +546,18 @@ mod tests {
         let identity =
             FixedShapeTensor::try_new(DataType::Float32, [2, 6], None, Some(vec![0, 1]))?;
         assert_eq!(identity.logical_shape(), vec![2, 6]);
+        Ok(())
+    }
+
+    #[test]
+    fn shape_distinguishes_equal_sizes() -> Result<(), ArrowError> {
+        let wide = FixedShapeTensor::try_new(DataType::Float32, [2, 6], None, None)?;
+        let tall = FixedShapeTensor::try_new(DataType::Float32, [3, 4], None, None)?;
+        assert_eq!(wide.dimensions(), tall.dimensions());
+        assert_eq!(wide.list_size(), tall.list_size());
+        assert_eq!(wide.shape(), &[2, 6]);
+        assert_eq!(tall.shape(), &[3, 4]);
+        assert_ne!(wide.shape(), tall.shape());
         Ok(())
     }
 
