@@ -357,9 +357,11 @@ pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(
         Ok(a) => Ok(Arc::new(a)),
         Err(e) => match cast_options.safe {
             true => {
-                // Fallback to slow method to convert invalid sequences to nulls
-                let mut builder =
-                    GenericStringBuilder::<O>::with_capacity(array.len(), array.value_data().len());
+                // Fallback to slow method to convert invalid sequences to nulls.
+                // Reserve only the bytes the offsets span, not the whole values buffer.
+                let offsets = array.offsets();
+                let data_len = (offsets.last() - offsets.first()).as_usize();
+                let mut builder = GenericStringBuilder::<O>::with_capacity(array.len(), data_len);
 
                 extend_valid_utf8(&mut builder, array.iter());
                 Ok(Arc::new(builder.finish()))
