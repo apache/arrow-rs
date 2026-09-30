@@ -68,7 +68,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install typos
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
           tool: typos@1.37.0
       - name: Run typos check

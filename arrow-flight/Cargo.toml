@@ -42,7 +42,6 @@ arrow-string = { workspace = true, optional = true }
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 bytes = { version = "1", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
-once_cell = { version = "1", optional = true }
 prost = { version = "0.14.1", default-features = false, features = ["derive"] }
 # For Timestamp type
 prost-types = { version = "0.14.1", default-features = false }
@@ -61,7 +60,7 @@ all-features = true
 
 [features]
 default = []
-flight-sql = ["dep:arrow-arith", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell"]
+flight-sql = ["dep:arrow-arith", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string"]
 tls-aws-lc= ["tonic/tls-aws-lc"]
 tls-native-roots = ["tonic/tls-native-roots"]
 tls-ring = ["tonic/tls-ring"]

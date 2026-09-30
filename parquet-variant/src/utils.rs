@@ -267,10 +267,12 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
     {
         // Quoted field name, e.g., ['field'] or ['123'] or ["123"]
         VariantPathElement::field(inner.to_string())
+    } else if unescaped == "*" {
+        VariantPathElement::list_element()
     } else {
         let Ok(idx) = unescaped.parse() else {
             return Err(ArrowError::ParseError(format!(
-                "Invalid token in bracket request: `{unescaped}`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+                "Invalid token in bracket request: `{unescaped}`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
             )));
         };
         VariantPathElement::index(idx)

@@ -18,6 +18,12 @@
 //! Tests for [`ArrowWriter`]
 
 mod layout;
+mod roundtrip;
+// The integration tests currently use only part of the shared helpers.
+#[expect(dead_code)]
+mod roundtrip_helpers;
+
+use parquet as parquet_crate;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -39,9 +45,7 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 
 #[test]
-#[should_panic(
-    expected = "DeltaBitPackDecoder only supports Int32Type, UInt32Type, Int64Type, and UInt64Type"
-)]
+#[should_panic(expected = "Encoding DELTA_BINARY_PACKED is not supported for physical type DOUBLE")]
 fn test_delta_bit_pack_type() {
     let props = WriterProperties::builder()
         .set_column_encoding("col".into(), Encoding::DELTA_BINARY_PACKED)
