@@ -57,7 +57,9 @@ pub use crate::cast::union::*;
 
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_data::ByteView;
-use chrono::{NaiveTime, Offset, TimeZone, Utc};
+use chrono::{
+    FixedOffset, LocalResult, NaiveDateTime, NaiveTime, Offset, TimeDelta, TimeZone, Utc,
+};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -1921,6 +1923,11 @@ pub fn cast_with_options(
                 // unchanged.
                 //
                 // i.e. Timestamp('2001-01-01T00:00', None) -> Timestamp('2001-01-01T00:00', '+0700')
+                //
+                // For IANA timezones a wall clock reading is not always a unique
+                // instant: a "fall back" DST transition makes an hour occur twice
+                // and a "spring forward" transition skips an hour entirely. See
+                // `resolve_local_offset` for how those readings are resolved.
                 (None, Some(to_tz)) => {
                     let to_tz: Tz = to_tz.parse()?;
                     match to_unit {
@@ -2600,6 +2607,65 @@ fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
     )?))
 }
 
+/// Returns the offset to use when interpreting `local` as a wall clock reading
+/// in `tz`, or `None` if it cannot be resolved.
+///
+/// `None` is not expected in practice. With the current timezone database no
+/// reading reaches it, because every ambiguous or nonexistent reading resolves
+/// as described below. The `None` path is a safeguard against a future
+/// timezone database that breaks the assumptions of the gap handling. Callers
+/// then apply their usual error or null handling.
+///
+/// In an IANA timezone a wall clock reading does not always identify a unique
+/// instant, and this function picks one following the same rules as PostgreSQL
+/// and DuckDB:
+///
+/// * **Ambiguous** -- when the clocks go back ("fall back") the same reading
+///   occurs twice. The *later* instant is chosen, i.e. the offset in effect
+///   after the transition. For example `2024-11-03T01:30:00` in
+///   `America/New_York` is read as `-05:00` (EST), not `-04:00` (EDT).
+/// * **Nonexistent** -- when the clocks go forward ("spring forward") the
+///   reading never occurs. It is shifted forward by the length of the gap,
+///   which is the same as reading it with the offset in effect *before* the
+///   transition. For example `2024-03-10T02:30:00` in `America/New_York` is
+///   read as `-05:00` (EST) and therefore denotes `2024-03-10T03:30:00-04:00`.
+///
+/// Timezones with a fixed offset are never ambiguous and have no gaps.
+///
+/// See <https://github.com/apache/arrow-rs/issues/11037> for the PostgreSQL and
+/// ICU (DuckDB) sources these rules are taken from.
+fn resolve_local_offset(tz: &Tz, local: &NaiveDateTime) -> Option<FixedOffset> {
+    match tz.offset_from_local_datetime(local) {
+        LocalResult::Single(offset) => Some(offset.fix()),
+        LocalResult::Ambiguous(_earlier, later) => Some(later.fix()),
+        LocalResult::None => {
+            // The reading falls in a gap. Recover the offset in effect before
+            // the transition by probing 24 hours earlier.
+            //
+            // Two separate properties of the timezone database make this sound:
+            //
+            // 1. No local gap is longer than 24 hours, so the probe lands
+            //    outside this gap and is itself resolvable. Seven zones have a
+            //    gap of exactly 24 hours -- the dateline changes, such as
+            //    `Pacific/Apia` in 2011 and `Pacific/Kiritimati` in 1994. At the
+            //    last second of one of those the probe lands one second before
+            //    the gap starts, so the true margin here is one second, not a
+            //    comfortable one.
+            // 2. No two transitions are closer together than 24 hours, so the
+            //    offset the probe finds is the one in effect immediately before
+            //    this transition, and not some older offset. The smallest
+            //    observed interval is 167 hours (`America/Boa_Vista`, 2000).
+            //
+            // Property 1 is what makes the probe resolvable; property 2 is what
+            // makes the answer correct. If the probe is still unresolvable, give
+            // up and let the caller apply the usual error / null handling.
+            tz.offset_from_local_datetime(&(*local - TimeDelta::hours(24)))
+                .earliest()
+                .map(|offset| offset.fix())
+        }
+    }
+}
+
 fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
     array: PrimitiveArray<Int64Type>,
     to_tz: &Tz,
@@ -2607,8 +2673,8 @@ fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(
 ) -> Result<PrimitiveArray<Int64Type>, ArrowError> {
     let adjust = |o| {
         let local = as_datetime::<T>(o)?;
-        let offset = to_tz.offset_from_local_datetime(&local).single()?;
-        T::from_naive_datetime(local - offset.fix(), None)
+        let offset = resolve_local_offset(to_tz, &local)?;
+        T::from_naive_datetime(local - offset, None)
     };
     let adjusted = if cast_options.safe {
         array.unary_opt::<_, Int64Type>(adjust)
@@ -2629,24 +2695,10 @@ fn cast_numeric_to_bool<FROM>(from: &dyn Array) -> Result<ArrayRef, ArrowError>
 where
     FROM: ArrowPrimitiveType,
 {
-    numeric_to_bool_cast::<FROM>(from.as_primitive::<FROM>()).map(|to| Arc::new(to) as ArrayRef)
-}
-
-fn numeric_to_bool_cast<T>(from: &PrimitiveArray<T>) -> Result<BooleanArray, ArrowError>
-where
-    T: ArrowPrimitiveType,
-{
-    let mut b = BooleanBuilder::with_capacity(from.len());
-
-    for i in 0..from.len() {
-        if from.is_null(i) {
-            b.append_null();
-        } else {
-            b.append_value(cast_num_to_bool::<T::Native>(from.value(i)));
-        }
-    }
-
-    Ok(b.finish())
+    Ok(Arc::new(BooleanArray::from_unary(
+        from.as_primitive::<FROM>(),
+        cast_num_to_bool,
+    )))
 }
 
 /// Cast numeric types to boolean
@@ -2667,7 +2719,6 @@ fn cast_bool_to_numeric<TO>(
 ) -> Result<ArrayRef, ArrowError>
 where
     TO: ArrowPrimitiveType,
-    TO::Native: num_traits::cast::NumCast,
 {
     Ok(Arc::new(bool_to_numeric_cast::<TO>(
         from.as_any().downcast_ref::<BooleanArray>().unwrap(),
@@ -2678,20 +2729,24 @@ where
 fn bool_to_numeric_cast<T>(from: &BooleanArray, _cast_options: &CastOptions) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
-    T::Native: num_traits::NumCast,
 {
-    let iter = (0..from.len()).map(|i| {
-        if from.is_null(i) {
-            None
+    let to_numeric = |bits: u64, i: usize| {
+        if bits & (1 << i) != 0 {
+            T::Native::ONE
         } else {
-            single_bool_to_numeric::<T::Native>(from.value(i))
+            T::Native::ZERO
         }
-    });
-    // Benefit:
-    //     20% performance improvement
-    // Soundness:
-    //     The iterator is trustedLen because it comes from a Range
-    unsafe { PrimitiveArray::<T>::from_trusted_len_iter(iter) }
+    };
+    // Unpack a 64-bit word at a time: the fixed-size inner loop helps the
+    // compiler vectorize the conversion.
+    let chunks = from.values().bit_chunks();
+    let mut values = Vec::with_capacity(from.len());
+    for bits in &chunks {
+        values.extend((0..64).map(|i| to_numeric(bits, i)));
+    }
+    let bits = chunks.remainder_bits();
+    values.extend((0..chunks.remainder_len()).map(|i| to_numeric(bits, i)));
+    PrimitiveArray::new(values.into(), from.nulls().cloned())
 }
 
 /// Cast single bool value to numeric value.
@@ -2872,7 +2927,7 @@ mod tests {
     use crate::parse::parse_decimal;
     use DataType::*;
     use arrow_array::{Int64Array, RunArray, StringArray};
-    use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
+    use arrow_buffer::{BooleanBuffer, Buffer, IntervalDayTime, NullBuffer};
     use arrow_buffer::{ScalarBuffer, i256};
     use arrow_schema::{DataType, Field};
     use chrono::NaiveDate;
@@ -5014,6 +5069,57 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_bool_numeric_sliced() {
+        for nulls in [
+            None,
+            Some(NullBuffer::from(
+                [false, true, true, false, true, true].repeat(12),
+            )),
+            Some(NullBuffer::new_null(72)),
+        ] {
+            // Include true values under nulls and slices crossing a bitmap word boundary.
+            let booleans = BooleanArray::new(
+                BooleanBuffer::from([true, false, true, false, true, false].repeat(12)),
+                nulls.clone(),
+            );
+            let numbers = Int32Array::new([1, 0, 1, 0, 1, 0].repeat(12).into(), nulls);
+            for data_type in [
+                Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64,
+            ] {
+                let expected = cast(&numbers, &data_type).unwrap();
+                for offset in [0, 3, 63, 72] {
+                    let input = booleans.slice(offset, 72 - offset);
+                    let expected = expected.slice(offset, 72 - offset);
+                    let actual = cast(&input, &data_type).unwrap();
+                    assert_eq!(actual.as_ref(), expected.as_ref());
+
+                    let actual = cast(expected.as_ref(), &Boolean).unwrap();
+                    assert_eq!(actual.as_ref(), &input);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_float_to_bool_special_values() {
+        let numbers = Float64Array::from(vec![
+            0.0,
+            -0.0,
+            1.5,
+            -1.5,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ]);
+        let expected = BooleanArray::from(vec![false, false, true, true, true, true, true]);
+        for data_type in [Float16, Float32, Float64] {
+            let input = cast(&numbers, &data_type).unwrap();
+            let actual = cast(input.as_ref(), &Boolean).unwrap();
+            assert_eq!(actual.as_ref(), &expected);
+        }
+    }
+
+    #[test]
     fn test_cast_bool_to_utf8view() {
         let array = BooleanArray::from(vec![Some(true), Some(false), None]);
         let b = cast(&array, &DataType::Utf8View).unwrap();
@@ -6914,6 +7020,191 @@ mod tests {
         assert_eq!("1999-12-31T16:00:00-08:00", result.value(0));
         assert_eq!("2009-12-31T16:00:00-08:00", result.value(1));
         assert!(result.is_null(2));
+    }
+
+    /// The i64 value of a `Timestamp(Second, None)` holding the given wall clock
+    /// reading (a naive timestamp is stored as if it were UTC).
+    fn naive_seconds(y: i32, m: u32, d: u32, h: u32, min: u32) -> i64 {
+        NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, min, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp()
+    }
+
+    /// The instant, in seconds since the epoch, denoted by the given wall clock
+    /// reading at a fixed offset of `offset_hours`.
+    fn instant_seconds(y: i32, m: u32, d: u32, h: u32, min: u32, offset_hours: i32) -> i64 {
+        let offset = FixedOffset::east_opt(offset_hours * 3600).unwrap();
+        NaiveDate::from_ymd_opt(y, m, d)
+            .unwrap()
+            .and_hms_opt(h, min, 0)
+            .unwrap()
+            .and_local_timezone(offset)
+            .unwrap()
+            .timestamp()
+    }
+
+    // Cast Timestamp(_, None) -> Timestamp(_, Some(IANA timezone)) across DST
+    // transitions. See `resolve_local_offset`.
+    #[test]
+    fn test_cast_timestamp_to_named_timezone_dst() {
+        // Unambiguous, EDT (-04:00) is in effect.
+        let unambiguous = naive_seconds(2024, 11, 1, 0, 0);
+        // Ambiguous: the clocks go back at 2024-11-03T02:00 EDT, so 01:30
+        // happens twice, first at -04:00 and then at -05:00.
+        let ambiguous = naive_seconds(2024, 11, 3, 1, 30);
+        // Nonexistent: the clocks go forward at 2024-03-10T02:00 EST, so 02:30
+        // never happens.
+        let nonexistent = naive_seconds(2024, 3, 10, 2, 30);
+        assert_eq!(
+            [unambiguous, ambiguous, nonexistent],
+            [1_730_419_200, 1_730_597_400, 1_710_037_800]
+        );
+
+        let array = TimestampSecondArray::from(vec![
+            Some(unambiguous),
+            Some(ambiguous),
+            Some(nonexistent),
+            None,
+        ]);
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampSecondType>();
+
+        assert_eq!(c.value(0), instant_seconds(2024, 11, 1, 0, 0, -4));
+        assert_eq!(c.value(0), 1_730_433_600);
+        // The later of the two candidates, i.e. EST rather than EDT.
+        assert_eq!(c.value(1), instant_seconds(2024, 11, 3, 1, 30, -5));
+        assert_eq!(c.value(1), 1_730_615_400);
+        // Shifted forward by the one hour gap: 02:30 EST is 03:30 EDT.
+        assert_eq!(c.value(2), instant_seconds(2024, 3, 10, 2, 30, -5));
+        assert_eq!(c.value(2), instant_seconds(2024, 3, 10, 3, 30, -4));
+        assert_eq!(c.value(2), 1_710_055_800);
+        assert!(c.is_null(3));
+    }
+
+    // The same values must not become null when `safe` casting is requested.
+    #[test]
+    fn test_cast_timestamp_to_named_timezone_dst_safe() {
+        let array = TimestampSecondArray::from(vec![
+            Some(naive_seconds(2024, 11, 1, 0, 0)),
+            Some(naive_seconds(2024, 11, 3, 1, 30)),
+            Some(naive_seconds(2024, 3, 10, 2, 30)),
+            None,
+        ]);
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(c.null_count(), 1);
+        assert_eq!(c.value(0), 1_730_433_600);
+        assert_eq!(c.value(1), 1_730_615_400);
+        assert_eq!(c.value(2), 1_710_055_800);
+        assert!(c.is_null(3));
+    }
+
+    // Southern hemisphere: the transitions run the other way around.
+    #[test]
+    fn test_cast_timestamp_to_named_timezone_dst_southern_hemisphere() {
+        // Ambiguous: clocks go back at 2024-04-07T03:00 AEDT (+11:00 -> +10:00).
+        let ambiguous = naive_seconds(2024, 4, 7, 2, 30);
+        // Nonexistent: clocks go forward at 2024-10-06T02:00 AEST (+10:00 -> +11:00).
+        let nonexistent = naive_seconds(2024, 10, 6, 2, 30);
+
+        let array = TimestampSecondArray::from(vec![Some(ambiguous), Some(nonexistent)]);
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("Australia/Sydney".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampSecondType>();
+
+        // The later of the two candidates, i.e. AEST (+10:00).
+        assert_eq!(c.value(0), instant_seconds(2024, 4, 7, 2, 30, 10));
+        assert_eq!(c.value(0), 1_712_421_000);
+        // Shifted forward by the one hour gap: 02:30 AEST is 03:30 AEDT.
+        assert_eq!(c.value(1), instant_seconds(2024, 10, 6, 2, 30, 10));
+        assert_eq!(c.value(1), instant_seconds(2024, 10, 6, 3, 30, 11));
+        assert_eq!(c.value(1), 1_728_145_800);
+    }
+
+    // The resolution is independent of the time unit.
+    #[test]
+    fn test_cast_timestamp_to_named_timezone_dst_nanosecond() {
+        let ambiguous = naive_seconds(2024, 11, 3, 1, 30) * 1_000_000_000 + 123_456_789;
+        let nonexistent = naive_seconds(2024, 3, 10, 2, 30) * 1_000_000_000 + 123_456_789;
+        let array = TimestampNanosecondArray::from(vec![Some(ambiguous), Some(nonexistent)]);
+        let to_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(c.value(0), 1_730_615_400 * 1_000_000_000 + 123_456_789);
+        assert_eq!(c.value(1), 1_710_055_800 * 1_000_000_000 + 123_456_789);
+    }
+
+    // Unit conversion still composes with the timezone adjustment.
+    #[test]
+    fn test_cast_timestamp_to_named_timezone_dst_changing_unit() {
+        let array = TimestampSecondArray::from(vec![
+            Some(naive_seconds(2024, 11, 3, 1, 30)),
+            Some(naive_seconds(2024, 3, 10, 2, 30)),
+        ]);
+        let to_type = DataType::Timestamp(TimeUnit::Millisecond, Some("America/New_York".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(c.value(0), 1_730_615_400_000);
+        assert_eq!(c.value(1), 1_710_055_800_000);
+    }
+
+    // A fixed offset has no transitions, so the same readings are unaffected.
+    #[test]
+    fn test_cast_timestamp_to_fixed_offset_timezone_unaffected() {
+        let array = TimestampSecondArray::from(vec![
+            Some(naive_seconds(2024, 11, 1, 0, 0)),
+            Some(naive_seconds(2024, 11, 3, 1, 30)),
+            Some(naive_seconds(2024, 3, 10, 2, 30)),
+            None,
+        ]);
+        let to_type = DataType::Timestamp(TimeUnit::Second, Some("+08:00".into()));
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let b = cast_with_options(&array, &to_type, &options).unwrap();
+        assert_eq!(b.data_type(), &to_type);
+        let c = b.as_primitive::<TimestampSecondType>();
+        assert_eq!(c.value(0), instant_seconds(2024, 11, 1, 0, 0, 8));
+        assert_eq!(c.value(1), instant_seconds(2024, 11, 3, 1, 30, 8));
+        assert_eq!(c.value(2), instant_seconds(2024, 3, 10, 2, 30, 8));
+        assert!(c.is_null(3));
     }
 
     #[test]
@@ -12558,11 +12849,14 @@ mod tests {
         };
 
         for dt in data_types {
-            assert_eq!(
-                cast_with_options(&array, &dt, &cast_options)
-                    .unwrap_err()
-                    .to_string(),
-                "Parser error: Invalid timezone \"ZZTOP\": only offset based timezones supported without chrono-tz feature"
+            // The trailing detail of the message differs depending on whether
+            // `chrono-tz` is enabled, so only the common prefix is asserted.
+            let err = cast_with_options(&array, &dt, &cast_options)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.starts_with("Parser error: Invalid timezone \"ZZTOP\":"),
+                "{err}"
             );
         }
     }
