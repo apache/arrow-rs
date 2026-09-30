@@ -20,7 +20,7 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::arrow::arrow_reader::selection::{
-    LoadedRowRanges, RowSelectionInner, RowSelectionPolicy, RowSelectionStrategy,
+    LoadedRowRanges, RowSelectionPolicy, RowSelectionStrategy,
 };
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
@@ -157,17 +157,7 @@ impl ReadPlanBuilder {
     ///
     /// Guarantees to return either `Selectors` or `Mask`, never `Auto`.
     pub(crate) fn resolve_selection_strategy(&self) -> RowSelectionStrategy {
-        match self.row_selection_policy {
-            RowSelectionPolicy::Selectors => RowSelectionStrategy::Selectors,
-            RowSelectionPolicy::Mask => RowSelectionStrategy::Mask,
-            RowSelectionPolicy::Auto { threshold, .. } => {
-                let Some(selection) = self.selection.as_ref() else {
-                    return RowSelectionStrategy::Selectors;
-                };
-
-                selection.auto_selection_strategy(threshold)
-            }
-        }
+        self.row_selection_policy.resolve(self.selection.as_ref())
     }
 
     /// Evaluates an [`ArrowPredicate`], updating this plan's `selection`
@@ -306,34 +296,12 @@ impl ReadPlanBuilder {
         } = self;
 
         let row_selection_cursor = selection
-            .map(|s| build_cursor(s.trim(), selection_strategy, loaded_row_ranges))
+            .map(|s| selection_strategy.build_cursor(s.trim(), loaded_row_ranges))
             .unwrap_or_else(RowSelectionCursor::new_all);
 
         ReadPlan {
             batch_size,
             row_selection_cursor,
-        }
-    }
-}
-
-/// Lower a [`RowSelection`] to the cursor form requested by the resolved strategy.
-fn build_cursor(
-    selection: RowSelection,
-    strategy: RowSelectionStrategy,
-    loaded_row_ranges: Option<Arc<LoadedRowRanges>>,
-) -> RowSelectionCursor {
-    match (strategy, selection.into_inner()) {
-        (RowSelectionStrategy::Mask, RowSelectionInner::Mask(mask)) => {
-            RowSelectionCursor::new_mask_from_buffer((*mask).into_mask(), loaded_row_ranges)
-        }
-        (RowSelectionStrategy::Mask, RowSelectionInner::Selectors(selectors)) => {
-            RowSelectionCursor::new_mask_from_selectors(selectors, loaded_row_ranges)
-        }
-        (RowSelectionStrategy::Selectors, RowSelectionInner::Selectors(selectors)) => {
-            RowSelectionCursor::new_selectors(selectors)
-        }
-        (RowSelectionStrategy::Selectors, RowSelectionInner::Mask(mask)) => {
-            RowSelectionCursor::new_selectors((*mask).into_selectors())
         }
     }
 }
