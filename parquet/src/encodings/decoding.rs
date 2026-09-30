@@ -2191,12 +2191,19 @@ mod tests {
     }
 
     #[test]
-    fn test_byte_stream_split_uses_encoded_value_count() {
+    fn test_byte_stream_split_rejects_short_buffer() {
         let mut decoder = ByteStreamSplitDecoder::<DoubleType>::new();
 
-        decoder.set_data(Bytes::from(vec![0; 64]), 63).unwrap();
-        assert_eq!(decoder.values_left(), 8);
+        // 64 bytes holds 8 f64s. A declared count of 63 must not be ignored.
+        let err = decoder.set_data(Bytes::from(vec![0; 64]), 63).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid BYTE_STREAM_SPLIT data length: expected at least 504 bytes for 63 values of size 8, got 64"
+        );
 
+        // Exact-size input still decodes, including into a larger output buffer.
+        decoder.set_data(Bytes::from(vec![0; 64]), 8).unwrap();
+        assert_eq!(decoder.values_left(), 8);
         let mut values = vec![0.; 63];
         assert_eq!(decoder.get(&mut values).unwrap(), 8);
         assert_eq!(decoder.values_left(), 0);
