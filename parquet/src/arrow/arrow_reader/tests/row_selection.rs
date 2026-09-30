@@ -18,6 +18,7 @@
 //! Row selection and skipping for flat and nested data, including randomized selections.
 
 use super::*;
+use crate::arrow::arrow_reader::RowSelectionPolicy;
 
 /// Given a RecordBatch containing all the column data, return the expected batches given
 /// a `batch_size` and `selection`
@@ -357,4 +358,51 @@ fn test_list_selection_fuzz() {
             }
         }
     }
+}
+
+#[test]
+fn test_is_exhausted_after_the_last_selected_row() {
+    let batch = RecordBatch::try_from_iter([(
+        "a",
+        Arc::new(Int32Array::from_iter_values(0..100)) as ArrayRef,
+    )])
+    .unwrap();
+    let mut buf = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    let data = Bytes::from(buf);
+
+    for policy in [RowSelectionPolicy::Selectors, RowSelectionPolicy::Mask] {
+        let reader = |selection: Vec<RowSelector>| {
+            ParquetRecordBatchReaderBuilder::try_new(data.clone())
+                .unwrap()
+                .with_batch_size(10)
+                .with_row_selection(selection.into())
+                .with_row_selection_policy(policy)
+                .build()
+                .unwrap()
+        };
+
+        // The selection ends with a selected row.
+        let mut ends_selected = reader(vec![RowSelector::skip(5), RowSelector::select(10)]);
+        assert!(!ends_selected.is_exhausted());
+        assert_eq!(ends_selected.next().unwrap().unwrap().num_rows(), 10);
+        assert!(ends_selected.is_exhausted());
+        assert!(ends_selected.next().is_none());
+
+        // The selection has rows left after the first batch.
+        let mut rows_left = reader(vec![RowSelector::select(15)]);
+        assert_eq!(rows_left.next().unwrap().unwrap().num_rows(), 10);
+        assert!(!rows_left.is_exhausted());
+        assert_eq!(rows_left.next().unwrap().unwrap().num_rows(), 5);
+        assert!(rows_left.is_exhausted());
+    }
+
+    // A plan that reads all rows is never exhausted.
+    let all = ParquetRecordBatchReaderBuilder::try_new(data)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(!all.is_exhausted());
 }

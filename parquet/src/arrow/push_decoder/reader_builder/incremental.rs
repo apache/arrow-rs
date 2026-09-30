@@ -515,8 +515,11 @@ impl IncrementalRowGroup {
         let plan = self.window_plan(&self.config.projection, &out, pos);
         let mut reader = ParquetRecordBatchReader::new(array_reader, plan);
         let batch = reader.next();
+        // Only ask for another batch if the plan has rows left. With
+        // selectors, `next` on an exhausted plan still decodes an empty batch
+        // of every column.
         let extra = match &batch {
-            Some(Ok(_)) => reader.next(),
+            Some(Ok(_)) if !reader.is_exhausted() => reader.next(),
             _ => None,
         };
         self.out_reader = Some(reader.into_array_reader());
@@ -996,6 +999,38 @@ mod tests {
                     matches!(plan.row_selection_cursor_mut(), RowSelectionCursor::Mask(_));
                 assert_eq!(is_mask, expect_mask, "{policy:?} {rows:?} {pos}");
             }
+        }
+    }
+
+    #[test]
+    fn window_plan_is_exhausted_after_its_rows() {
+        let config = IncrementalConfig {
+            batch_size: 100,
+            projection: ProjectionMask::all(),
+            metadata: test_file_parquet_metadata_with_offset_index(),
+            fields: None,
+            metrics: ArrowReaderMetrics::disabled(),
+            row_selection_policy: RowSelectionPolicy::Selectors,
+        };
+        let row_group =
+            IncrementalRowGroup::new(config, 0, 200, None, RowBudget::new(None, None), None);
+        // `step_output` checks for a second batch only if the plan has rows
+        // left after the first batch. The plan ends at the last selected
+        // row, so reading the selected rows exhausts it.
+        for (rows, pos) in [(vec![0..10, 20..30], 0), (vec![150..160, 170..180], 20)] {
+            let mut plan = row_group.window_plan(&ProjectionMask::all(), &rows, pos);
+            let RowSelectionCursor::Selectors(cursor) = plan.row_selection_cursor_mut() else {
+                panic!("expected selectors");
+            };
+            let mut selected = 0;
+            while selected < 20 {
+                let selector = cursor.next_selector();
+                if !selector.skip {
+                    selected += selector.row_count;
+                }
+            }
+            assert_eq!(selected, 20);
+            assert!(cursor.is_empty(), "{rows:?} {pos}");
         }
     }
 
