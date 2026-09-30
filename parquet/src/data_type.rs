@@ -557,6 +557,7 @@ pub trait SliceAsBytes: Sized {
 }
 
 impl AsBytes for [u8] {
+    #[inline]
     fn as_bytes(&self) -> &[u8] {
         self
     }
@@ -565,6 +566,7 @@ impl AsBytes for [u8] {
 macro_rules! gen_as_bytes {
     ($source_ty:ident) => {
         impl AsBytes for $source_ty {
+            #[inline]
             fn as_bytes(&self) -> &[u8] {
                 // SAFETY: macro is only used with primitive types that have no padding, so the
                 // resulting slice always refers to initialized memory.
@@ -638,6 +640,7 @@ unimplemented_slice_as_bytes!(ByteArray);
 unimplemented_slice_as_bytes!(FixedLenByteArray);
 
 impl AsBytes for bool {
+    #[inline]
     fn as_bytes(&self) -> &[u8] {
         // SAFETY: a bool is guaranteed to be either 0x00 or 0x01 in memory, so the memory is
         // valid.
@@ -655,12 +658,14 @@ impl AsBytes for Int96 {
 }
 
 impl AsBytes for ByteArray {
+    #[inline]
     fn as_bytes(&self) -> &[u8] {
         self.data()
     }
 }
 
 impl AsBytes for FixedLenByteArray {
+    #[inline]
     fn as_bytes(&self) -> &[u8] {
         self.data()
     }
@@ -700,11 +705,19 @@ pub(crate) mod private {
     use crate::basic::Type;
     use crate::file::metadata::HeapSize;
 
-    /// Sealed trait to start to remove specialisation from implementations
-    ///
-    /// This is done to force the associated value type to be unimplementable outside of this
-    /// crate, and thus hint to the type system (and end user) traits are public for the contract
-    /// and not for extension.
+    /// Convert a byte-array payload length to its four-byte PLAIN prefix.
+    #[inline]
+    pub(crate) fn byte_array_length(len: usize) -> Result<u32> {
+        len.try_into().map_err(|_| {
+            general_err!(
+                "Byte array length {} exceeds the Parquet limit of {} bytes",
+                len,
+                u32::MAX
+            )
+        })
+    }
+
+    /// Internal value contract for supported Parquet physical types.
     pub trait ParquetValueType:
         PartialEq
         + std::fmt::Debug
@@ -718,12 +731,14 @@ pub(crate) mod private {
         + Send
         + HeapSize
         + crate::encodings::decoding::private::GetDecoder
-        + crate::encodings::encoding::private::GetEncoder
+        + crate::encodings::encoding::AlpValue
         + crate::file::statistics::private::MakeStatistics
     {
         const PHYSICAL_TYPE: Type;
 
-        /// Encode the value directly from a higher level encoder
+        /// Full PLAIN support for the deprecated generic encoder, including BYTE_ARRAY.
+        /// Typed writer families use their narrower serialization capabilities directly.
+        #[cfg(feature = "experimental")]
         fn encode<W: std::io::Write>(
             values: &[Self],
             writer: &mut W,
@@ -762,6 +777,7 @@ pub(crate) mod private {
         ///
         /// This is essentially the same as `std::convert::TryInto<u64>` but can't be
         /// implemented for `f32` and `f64`, types that would fail orphan rules
+        #[inline]
         fn as_u64(&self) -> Result<u64> {
             self.as_i64()
                 .map_err(|_| general_err!("Type cannot be converted to u64"))
@@ -782,9 +798,15 @@ pub(crate) mod private {
         }
     }
 
-    impl ParquetValueType for bool {
-        const PHYSICAL_TYPE: Type = Type::BOOLEAN;
+    pub trait PlainEncoderValue: ParquetValueType {
+        fn encode<W: std::io::Write>(
+            values: &[Self],
+            writer: &mut W,
+            bit_writer: &mut BitWriter,
+        ) -> Result<()>;
+    }
 
+    impl PlainEncoderValue for bool {
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -793,6 +815,20 @@ pub(crate) mod private {
         ) -> Result<()> {
             bit_writer.put_batch(values, 1);
             Ok(())
+        }
+    }
+
+    impl ParquetValueType for bool {
+        const PHYSICAL_TYPE: Type = Type::BOOLEAN;
+
+        #[cfg(feature = "experimental")]
+        #[inline]
+        fn encode<W: std::io::Write>(
+            values: &[Self],
+            writer: &mut W,
+            bit_writer: &mut BitWriter,
+        ) -> Result<()> {
+            <Self as PlainEncoderValue>::encode(values, writer, bit_writer)
         }
 
         #[inline]
@@ -836,9 +872,7 @@ pub(crate) mod private {
 
     macro_rules! impl_from_raw {
         ($ty: ty, $physical_ty: expr, $self: ident => $as_i64: block) => {
-            impl ParquetValueType for $ty {
-                const PHYSICAL_TYPE: Type = $physical_ty;
-
+            impl PlainEncoderValue for $ty {
                 #[inline]
                 fn encode<W: std::io::Write>(values: &[Self], writer: &mut W, _: &mut BitWriter) -> Result<()> {
                     // SAFETY: Self is one of i32, i64, f32, f64, which have no padding.
@@ -851,6 +885,20 @@ pub(crate) mod private {
                     writer.write_all(raw)?;
 
                     Ok(())
+                }
+            }
+
+            impl ParquetValueType for $ty {
+                const PHYSICAL_TYPE: Type = $physical_ty;
+
+                #[cfg(feature = "experimental")]
+                #[inline]
+                fn encode<W: std::io::Write>(
+                    values: &[Self],
+                    writer: &mut W,
+                    bit_writer: &mut BitWriter,
+                ) -> Result<()> {
+                    <Self as PlainEncoderValue>::encode(values, writer, bit_writer)
                 }
 
                 #[inline]
@@ -925,9 +973,7 @@ pub(crate) mod private {
     impl_from_raw!(f32, Type::FLOAT, self => { Err(general_err!("Type cannot be converted to i64")) });
     impl_from_raw!(f64, Type::DOUBLE, self => { Err(general_err!("Type cannot be converted to i64")) });
 
-    impl ParquetValueType for super::Int96 {
-        const PHYSICAL_TYPE: Type = Type::INT96;
-
+    impl PlainEncoderValue for super::Int96 {
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -939,6 +985,20 @@ pub(crate) mod private {
                 writer.write_all(raw)?;
             }
             Ok(())
+        }
+    }
+
+    impl ParquetValueType for super::Int96 {
+        const PHYSICAL_TYPE: Type = Type::INT96;
+
+        #[cfg(feature = "experimental")]
+        #[inline]
+        fn encode<W: std::io::Write>(
+            values: &[Self],
+            writer: &mut W,
+            bit_writer: &mut BitWriter,
+        ) -> Result<()> {
+            <Self as PlainEncoderValue>::encode(values, writer, bit_writer)
         }
 
         #[inline]
@@ -1019,6 +1079,7 @@ pub(crate) mod private {
     impl ParquetValueType for super::ByteArray {
         const PHYSICAL_TYPE: Type = Type::BYTE_ARRAY;
 
+        #[cfg(feature = "experimental")]
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -1027,9 +1088,8 @@ pub(crate) mod private {
         ) -> Result<()> {
             for value in values {
                 let len: u32 = value.len().try_into().unwrap();
-                writer.write_all(&len.to_ne_bytes())?;
-                let raw = value.data();
-                writer.write_all(raw)?;
+                writer.write_all(&len.to_le_bytes())?;
+                writer.write_all(value.data())?;
             }
             Ok(())
         }
@@ -1116,9 +1176,7 @@ pub(crate) mod private {
         }
     }
 
-    impl ParquetValueType for super::FixedLenByteArray {
-        const PHYSICAL_TYPE: Type = Type::FIXED_LEN_BYTE_ARRAY;
-
+    impl PlainEncoderValue for super::FixedLenByteArray {
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -1126,10 +1184,23 @@ pub(crate) mod private {
             _: &mut BitWriter,
         ) -> Result<()> {
             for value in values {
-                let raw = value.data();
-                writer.write_all(raw)?;
+                writer.write_all(value.data())?;
             }
             Ok(())
+        }
+    }
+
+    impl ParquetValueType for super::FixedLenByteArray {
+        const PHYSICAL_TYPE: Type = Type::FIXED_LEN_BYTE_ARRAY;
+
+        #[cfg(feature = "experimental")]
+        #[inline]
+        fn encode<W: std::io::Write>(
+            values: &[Self],
+            writer: &mut W,
+            bit_writer: &mut BitWriter,
+        ) -> Result<()> {
+            <Self as PlainEncoderValue>::encode(values, writer, bit_writer)
         }
 
         #[inline]
@@ -1218,7 +1289,7 @@ pub(crate) mod private {
 /// presentation.
 pub trait DataType: 'static + Send {
     /// The physical type of the Parquet data type.
-    type T: private::ParquetValueType;
+    type T: private::ParquetValueType + crate::column::writer::encoder::ColumnWriterValue;
 
     /// Returns Parquet physical type.
     fn get_physical_type() -> Type {
@@ -1246,6 +1317,7 @@ pub trait DataType: 'static + Send {
         Self: Sized;
 
     /// Returns a mutable reference to the underlying [`ColumnWriterImpl`] for the given
+    /// [`ColumnWriter`].
     fn get_column_writer_mut<'a, 'b: 'a>(
         column_writer: &'a mut ColumnWriter<'b>,
     ) -> Option<&'a mut ColumnWriterImpl<'b, Self>>
@@ -1283,8 +1355,8 @@ macro_rules! make_type {
             }
 
             fn get_column_writer_ref<'a, 'b: 'a>(
-                column_writer: &'a ColumnWriter<'b>,
-            ) -> Option<&'a ColumnWriterImpl<'b, Self>> {
+                column_writer: &'b ColumnWriter<'a>,
+            ) -> Option<&'b ColumnWriterImpl<'a, Self>> {
                 match column_writer {
                     ColumnWriter::$writer_ident(w) => Some(w),
                     _ => None,
@@ -1395,6 +1467,19 @@ mod tests {
         );
         let buf = vec![6u8, 7u8, 8u8, 9u8, 10u8];
         assert_eq!(ByteArray::from(buf).data(), &[6u8, 7u8, 8u8, 9u8, 10u8]);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn test_byte_array_length_rejects_overflow() {
+        assert_eq!(
+            private::byte_array_length(u32::MAX as usize).unwrap(),
+            u32::MAX
+        );
+        let error = private::byte_array_length(u32::MAX as usize + 1)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exceeds the Parquet limit"));
     }
 
     #[test]

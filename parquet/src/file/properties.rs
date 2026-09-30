@@ -94,7 +94,10 @@ pub const DEFAULT_CDC_NORM_LEVEL: i32 = 0;
 /// Each content-defined chunk is written as a separate parquet data page. The
 /// following options control the chunks' size and the chunking process. Note
 /// that the chunk size is calculated based on the logical value of the data,
-/// before any encoding or compression is applied.
+/// before any encoding or compression is applied. Dictionary-encoded leaf
+/// arrays are an exception: their physical key bytes are hashed, so equivalent
+/// arrays with different dictionary layouts may produce different chunk
+/// boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CdcOptions {
     /// Minimum chunk size in bytes, default is 256 KiB.

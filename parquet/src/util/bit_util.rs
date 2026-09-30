@@ -725,6 +725,39 @@ impl BitWriter {
         }
     }
 
+    /// Writes `len` bits from `data`, starting at `bit_offset`.
+    ///
+    /// When source and destination are byte-aligned this copies whole bytes
+    /// directly. Any unaligned prefix or suffix is written bit-by-bit.
+    #[cfg(any(test, feature = "arrow"))]
+    #[inline]
+    pub fn put_bits(&mut self, data: &[u8], bit_offset: usize, len: usize) {
+        let mut src_offset = bit_offset;
+        let mut remaining = len;
+
+        while remaining > 0 && (!self.bit_offset.is_multiple_of(8) || !src_offset.is_multiple_of(8))
+        {
+            self.put_value(get_bit(data, src_offset) as u64, 1);
+            src_offset += 1;
+            remaining -= 1;
+        }
+
+        if remaining >= 8 && src_offset.is_multiple_of(8) {
+            self.flush();
+            let byte_offset = src_offset / 8;
+            let byte_len = remaining / 8;
+            self.buffer
+                .extend_from_slice(&data[byte_offset..byte_offset + byte_len]);
+            let copied_bits = byte_len * 8;
+            src_offset += copied_bits;
+            remaining -= copied_bits;
+        }
+
+        for idx in 0..remaining {
+            self.put_value(get_bit(data, src_offset + idx) as u64, 1);
+        }
+    }
+
     /// Writes the first `num_bytes` little-endian bytes of `val` to the
     /// writer at the next byte boundary.
     ///
@@ -1691,6 +1724,30 @@ mod tests {
                 i, values[i], v
             );
         });
+    }
+
+    #[test]
+    fn test_put_bits_matches_scalar_bits() {
+        let data = [0b1011_0010, 0b0110_1101, 0b1110_0001, 0b0101_1010];
+        let cases = [(0, 0, 32), (3, 0, 21), (8, 0, 16), (5, 3, 19), (11, 5, 14)];
+
+        for (bit_offset, prefix_bits, len) in cases {
+            let mut fast = BitWriter::new(64);
+            let mut scalar = BitWriter::new(64);
+
+            for _ in 0..prefix_bits {
+                fast.put_value(1, 1);
+                scalar.put_value(1, 1);
+            }
+
+            fast.put_bits(&data, bit_offset, len);
+
+            for idx in 0..len {
+                scalar.put_value(get_bit(&data, bit_offset + idx) as u64, 1);
+            }
+
+            assert_eq!(fast.consume(), scalar.consume());
+        }
     }
 
     #[test]

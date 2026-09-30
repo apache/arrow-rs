@@ -20,10 +20,10 @@
 
 use bytes::Bytes;
 
-use crate::basic::{Encoding, Type};
-use crate::data_type::DataType;
-use crate::data_type::private::ParquetValueType;
-use crate::encodings::encoding::{Encoder, PlainEncoder};
+use crate::basic::Encoding;
+use crate::data_type::private::{ParquetValueType, PlainEncoderValue};
+use crate::data_type::{DataType, Int96};
+use crate::encodings::encoding::{Encoder, PlainEncoderImpl as PlainEncoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
@@ -31,32 +31,24 @@ use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
 
 #[derive(Debug)]
-struct KeyStorage<T: DataType> {
-    uniques: Vec<T::T>,
+pub struct KeyStorage<T: ParquetValueType> {
+    uniques: Vec<T>,
 
     /// size of unique values (keys) in the dictionary, in bytes.
     size_in_bytes: usize,
-
-    type_length: usize,
 }
 
-impl<T: DataType> Storage for KeyStorage<T> {
+impl<T: ParquetValueType> Storage for KeyStorage<T> {
     type Key = u64;
-    type Value = T::T;
+    type Value = T;
 
+    #[inline]
     fn get(&self, idx: Self::Key) -> &Self::Value {
         &self.uniques[idx as usize]
     }
 
     fn push(&mut self, value: &Self::Value) -> Self::Key {
-        let (base_size, num_elements) = value.dict_encoding_size();
-
-        let unique_size = match T::get_physical_type() {
-            Type::BYTE_ARRAY => base_size + num_elements,
-            Type::FIXED_LEN_BYTE_ARRAY => self.type_length,
-            _ => base_size,
-        };
-        self.size_in_bytes += unique_size;
+        self.size_in_bytes += value.dict_encoding_size().0;
 
         let key = self.uniques.len() as u64;
         self.uniques.push(value.clone());
@@ -64,12 +56,184 @@ impl<T: DataType> Storage for KeyStorage<T> {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        let uniques_heap_bytes = match T::get_physical_type() {
-            Type::FIXED_LEN_BYTE_ARRAY => self.type_length * self.uniques.len(),
-            _ => <Self::Value as ParquetValueType>::variable_length_bytes(&self.uniques)
-                .unwrap_or(0) as usize,
-        };
-        self.uniques.capacity() * std::mem::size_of::<T::T>() + uniques_heap_bytes
+        self.uniques.capacity() * std::mem::size_of::<T>()
+    }
+}
+
+pub trait DictionaryStorage<T>: Send {
+    fn new(desc: &ColumnDescPtr) -> Self;
+    fn intern(&mut self, value: &T) -> Result<u64>;
+    fn intern_bytes(&mut self, bytes: &[u8], make: impl FnOnce() -> T) -> Result<u64>;
+    fn len_and_size(&self) -> (usize, usize);
+    /// Visit each distinct physical value's bytes without materializing typed wrappers.
+    fn visit_uniques(&self, visit: impl FnMut(&[u8]));
+    fn estimated_memory_size(&self) -> usize;
+    fn write_dict<D: DataType<T = T>>(&self) -> Result<Bytes>;
+    fn into_dict<D: DataType<T = T>>(self) -> Result<Bytes>
+    where
+        Self: Sized,
+    {
+        self.write_dict::<D>()
+    }
+}
+
+type TypedDictionaryStorage<T> = Interner<KeyStorage<T>>;
+
+impl<T: PlainEncoderValue> DictionaryStorage<T> for TypedDictionaryStorage<T> {
+    fn new(_desc: &ColumnDescPtr) -> Self {
+        Interner::new(KeyStorage {
+            uniques: vec![],
+            size_in_bytes: 0,
+        })
+    }
+
+    #[inline]
+    fn intern(&mut self, value: &T) -> Result<u64> {
+        Ok(Interner::intern(self, value))
+    }
+
+    #[inline(always)]
+    fn intern_bytes(&mut self, bytes: &[u8], make: impl FnOnce() -> T) -> Result<u64> {
+        Ok(Interner::intern_bytes(self, bytes, make))
+    }
+
+    fn len_and_size(&self) -> (usize, usize) {
+        (self.storage().uniques.len(), self.storage().size_in_bytes)
+    }
+
+    fn visit_uniques(&self, mut visit: impl FnMut(&[u8])) {
+        for value in &self.storage().uniques {
+            visit(value.as_bytes());
+        }
+    }
+
+    fn estimated_memory_size(&self) -> usize {
+        Interner::estimated_memory_size(self)
+    }
+
+    fn write_dict<D: DataType<T = T>>(&self) -> Result<Bytes> {
+        let mut plain_encoder = PlainEncoder::<D>::new();
+        plain_encoder.put(&self.storage().uniques)?;
+        plain_encoder.flush_buffer()
+    }
+}
+
+/// Selects the unique-value storage for a physical value type.
+pub trait DictionaryValue: Sized {
+    type Storage: DictionaryStorage<Self>;
+}
+
+macro_rules! typed_dictionary_value {
+    ($($ty:ty),+ $(,)?) => {
+        $(impl DictionaryValue for $ty {
+            type Storage = TypedDictionaryStorage<$ty>;
+        })+
+    };
+}
+
+typed_dictionary_value!(bool, i32, i64, Int96, f32, f64);
+
+/// The buffered dictionary indices of one column chunk's data page.
+///
+/// Flat input appends one index per value to `indices`. Grouped input
+/// appends `(index, count)` pairs to `index_runs` — a run of `count` identical
+/// logical values shares one dictionary entry — so grouped chunks stay
+/// O(runs). The two buffers preserve append order: if dense values follow
+/// buffered runs, the runs are materialized into `indices` first.
+#[derive(Debug, Default)]
+pub(crate) struct RunIndexBuffer {
+    /// The buffered indices, one per value (the dense path).
+    indices: Vec<u64>,
+    /// Run-buffered indices `(index, count)` for grouped input.
+    index_runs: Vec<(u64, u64)>,
+    /// Logical value count buffered in `index_runs` (the sum of its run
+    /// lengths), tracked so size/length queries stay O(1).
+    run_value_count: usize,
+}
+
+impl RunIndexBuffer {
+    /// Append one dense index. Any run-buffered indices must already have been
+    /// materialized; see [`Self::materialize`].
+    #[inline]
+    pub(crate) fn push(&mut self, index: u64) {
+        debug_assert!(
+            self.index_runs.is_empty(),
+            "dense push after buffered run without materialize would reorder RLE_DICTIONARY values"
+        );
+        self.indices.push(index);
+    }
+
+    /// Append a run of `count` identical logical values sharing dictionary
+    /// `index`, without materializing one index per value.
+    #[inline]
+    pub(crate) fn push_run(&mut self, index: u64, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.index_runs.push((index, count as u64));
+        self.run_value_count += count;
+    }
+
+    /// Materialize pending run-buffered indices into the dense index buffer.
+    /// This preserves append order when a column chunk mixes grouped and flat
+    /// batches.
+    #[inline]
+    pub(crate) fn materialize(&mut self) {
+        if !self.index_runs.is_empty() {
+            self.materialize_cold();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn materialize_cold(&mut self) {
+        self.indices.reserve(self.run_value_count);
+        for &(index, count) in &self.index_runs {
+            self.indices
+                .extend(std::iter::repeat_n(index, count as usize));
+        }
+        self.index_runs.clear();
+        self.run_value_count = 0;
+    }
+
+    /// Reserve capacity for `additional` more dense indices, materializing any
+    /// pending runs first.
+    pub(crate) fn reserve(&mut self, additional: usize) {
+        self.materialize();
+        self.indices.reserve(additional);
+    }
+
+    /// Logical value count buffered (dense indices plus run lengths).
+    pub(crate) fn num_values(&self) -> usize {
+        self.indices.len() + self.run_value_count
+    }
+
+    /// Serialize and reset the buffered indices as an `RLE_DICTIONARY` data
+    /// page: the bit width in the first byte, followed by the dense indices
+    /// and then the buffered runs. [`RleEncoder::put_run`] encodes each counted
+    /// group without expanding its indices. Shared by both dictionary encoders
+    /// so the page framing lives in one place.
+    pub(crate) fn write_indices(&mut self, bit_width: u8) -> Result<Bytes> {
+        // One byte for the bit width and the encoded indices.
+        let mut buffer = Vec::with_capacity(
+            1 + RleEncoder::max_buffer_size(bit_width, self.indices.len() + self.index_runs.len()),
+        );
+        buffer.push(bit_width);
+        let mut encoder = RleEncoder::new_from_buf(bit_width, buffer);
+        encoder.put_batch(&self.indices);
+        for &(index, count) in &self.index_runs {
+            encoder.put_run(index, count as usize);
+        }
+        self.indices.clear();
+        self.index_runs.clear();
+        self.run_value_count = 0;
+        Ok(encoder.consume().into())
+    }
+
+    /// Heap footprint of the buffered indices.
+    pub(crate) fn estimated_memory_size(&self) -> usize {
+        self.indices.capacity() * std::mem::size_of::<u64>()
+            + self.index_runs.capacity() * std::mem::size_of::<(u64, u64)>()
     }
 }
 
@@ -84,24 +248,23 @@ impl<T: DataType> Storage for KeyStorage<T> {
 /// (max bit width = 32), followed by the values encoded using RLE/Bit packed described
 /// above (with the given bit width).
 pub struct DictEncoder<T: DataType> {
-    interner: Interner<KeyStorage<T>>,
+    dictionary: <T::T as DictionaryValue>::Storage,
 
-    /// The buffered indices
-    indices: Vec<u64>,
+    /// The buffered data-page indices (dense and run-buffered).
+    indices: RunIndexBuffer,
+
+    #[cfg(feature = "arrow")]
+    arrow_indices: Vec<u64>,
 }
 
 impl<T: DataType> DictEncoder<T> {
     /// Creates new dictionary encoder.
     pub fn new(desc: ColumnDescPtr) -> Self {
-        let storage = KeyStorage {
-            uniques: vec![],
-            size_in_bytes: 0,
-            type_length: desc.type_length() as usize,
-        };
-
         Self {
-            interner: Interner::new(storage),
-            indices: vec![],
+            dictionary: DictionaryStorage::new(&desc),
+            indices: RunIndexBuffer::default(),
+            #[cfg(feature = "arrow")]
+            arrow_indices: vec![],
         }
     }
 
@@ -113,43 +276,142 @@ impl<T: DataType> DictEncoder<T> {
 
     /// Returns number of unique values (keys) in the dictionary.
     pub fn num_entries(&self) -> usize {
-        self.interner.storage().uniques.len()
+        self.dictionary.len_and_size().0
     }
 
-    /// Returns the distinct values interned so far, in dictionary order.
-    pub fn uniques(&self) -> &[T::T] {
-        &self.interner.storage().uniques
+    /// Visits the bytes of each distinct physical value in dictionary order.
+    ///
+    /// Values are borrowed directly from the physical storage. In particular,
+    /// byte-array dictionaries do not allocate per-value wrappers or copy their page.
+    pub fn visit_uniques(&self, visit: impl FnMut(&[u8])) {
+        self.dictionary.visit_uniques(visit);
     }
 
     /// Returns size of unique values (keys) in the dictionary, in bytes.
     pub fn dict_encoded_size(&self) -> usize {
-        self.interner.storage().size_in_bytes
+        self.dictionary.len_and_size().1
     }
 
     /// Writes out the dictionary values with PLAIN encoding in a byte buffer, and return
     /// the result.
+    #[cfg(any(test, feature = "experimental"))]
     pub fn write_dict(&self) -> Result<Bytes> {
-        let mut plain_encoder = PlainEncoder::<T>::new();
-        plain_encoder.put(&self.interner.storage().uniques)?;
-        plain_encoder.flush_buffer()
+        self.dictionary.write_dict::<T>()
+    }
+
+    /// Consumes this encoder and returns its PLAIN-encoded dictionary page.
+    pub(crate) fn into_dict_page(self) -> Result<Bytes> {
+        self.dictionary.into_dict::<T>()
     }
 
     /// Writes out the dictionary values with RLE encoding in a byte buffer, and return
     /// the result.
     pub fn write_indices(&mut self) -> Result<Bytes> {
-        let buffer_len = self.estimated_data_encoded_size();
-        let mut buffer = Vec::with_capacity(buffer_len);
-        buffer.push(self.bit_width());
-
-        // Write bit width in the first byte
-        let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
-        encoder.put_batch(&self.indices);
-        self.indices.clear();
-        Ok(encoder.consume().into())
+        self.indices.write_indices(self.bit_width())
     }
 
-    fn put_one(&mut self, value: &T::T) {
-        self.indices.push(self.interner.intern(value));
+    /// Intern `value` and append it as a run of `count` repetitions. Used by
+    /// the grouped write path so the index buffer is O(groups), not
+    /// O(rows).
+    #[cfg(feature = "arrow")]
+    #[inline]
+    pub(crate) fn put_value_run(&mut self, value: &T::T, count: usize) -> Result<()> {
+        if count == 0 {
+            return Ok(());
+        }
+        let index = self.dictionary.intern(value)?;
+        self.indices.push_run(index, count);
+        Ok(())
+    }
+
+    /// Intern `value` and append its dictionary index to the dense `indices`
+    /// buffer. Any run-buffered indices must first be materialized through
+    /// [`DictEncoder::reserve`]; debug builds assert this precondition in
+    /// [`RunIndexBuffer::push`].
+    #[inline]
+    pub(crate) fn put_one(&mut self, value: &T::T) -> Result<()> {
+        self.indices.push(self.dictionary.intern(value)?);
+        Ok(())
+    }
+
+    /// Cache an Arrow physical slot's Parquet dictionary index. `count` is
+    /// `None` for a flat index and `Some` for a run-group index.
+    #[cfg(feature = "arrow")]
+    #[inline(always)]
+    pub(crate) fn put_arrow_dictionary(
+        &mut self,
+        physical_index: usize,
+        count: Option<usize>,
+        intern: impl FnOnce(&mut <T::T as DictionaryValue>::Storage) -> Result<u64>,
+    ) -> Result<()> {
+        if count == Some(0) {
+            return Ok(());
+        }
+        if physical_index >= self.arrow_indices.len() {
+            self.arrow_indices.resize(physical_index + 1, 0);
+        }
+        let cached = self.arrow_indices[physical_index];
+        let index = if cached == 0 {
+            let index = intern(&mut self.dictionary)?;
+            self.arrow_indices[physical_index] = index + 1;
+            index
+        } else {
+            cached - 1
+        };
+        match count {
+            Some(count) => self.indices.push_run(index, count),
+            None => self.indices.push(index),
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "arrow")]
+    #[inline]
+    pub(crate) fn has_arrow_dictionary(&self, physical_index: usize) -> bool {
+        self.arrow_indices
+            .get(physical_index)
+            .is_some_and(|&index| index != 0)
+    }
+
+    #[cfg(feature = "arrow")]
+    pub(crate) fn start_arrow_source(&mut self) {
+        self.arrow_indices.clear();
+    }
+
+    /// Intern raw bytes. Typed storage invokes `make` only on a miss; byte-array
+    /// page storage appends the bytes directly.
+    #[inline(always)]
+    pub(crate) fn put_value_bytes(
+        &mut self,
+        bytes: &[u8],
+        make: impl FnOnce() -> T::T,
+    ) -> Result<()> {
+        self.indices
+            .push(self.dictionary.intern_bytes(bytes, make)?);
+        Ok(())
+    }
+
+    /// Intern a byte-backed value and append it as a run of `count` repetitions.
+    /// Run-end input only comes from Arrow.
+    #[cfg_attr(not(feature = "arrow"), allow(dead_code))]
+    #[inline]
+    pub(crate) fn put_value_bytes_run(
+        &mut self,
+        bytes: &[u8],
+        count: usize,
+        make: impl FnOnce() -> T::T,
+    ) -> Result<()> {
+        if count == 0 {
+            return Ok(());
+        }
+        let index = self.dictionary.intern_bytes(bytes, make)?;
+        self.indices.push_run(index, count);
+        Ok(())
+    }
+
+    /// Reserve capacity for `additional` more dictionary indices.
+    pub(crate) fn reserve(&mut self, additional: usize) {
+        self.indices.reserve(additional);
     }
 
     #[inline]
@@ -162,7 +424,7 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         self.indices.reserve(values.len());
         for i in values {
-            self.put_one(i)
+            self.put_one(i)?;
         }
         Ok(())
     }
@@ -180,7 +442,7 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
     /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_encoded_size(&self) -> usize {
         let bit_width = self.bit_width();
-        RleEncoder::max_buffer_size(bit_width, self.indices.len())
+        1 + RleEncoder::max_buffer_size(bit_width, self.indices.num_values())
     }
 
     fn flush_buffer(&mut self) -> Result<Bytes> {
@@ -191,15 +453,136 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
     ///
     /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
     fn estimated_memory_size(&self) -> usize {
-        self.interner.estimated_memory_size() + self.indices.capacity() * std::mem::size_of::<u64>()
+        #[cfg(feature = "arrow")]
+        let arrow = self.arrow_indices.capacity() * std::mem::size_of::<u64>();
+        #[cfg(not(feature = "arrow"))]
+        let arrow = 0;
+        self.dictionary.estimated_memory_size() + self.indices.estimated_memory_size() + arrow
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn push_run_keeps_grouped_metadata_constant_size() {
+        let mut indices = RunIndexBuffer::default();
+        indices.push(7);
+        indices.push_run(7, 1_000_000);
+        assert_eq!(indices.num_values(), 1_000_001);
+        assert_eq!(indices.indices, [7]);
+        assert_eq!(indices.index_runs, [(7, 1_000_000)]);
+
+        // A following dense write materializes in output order only when that
+        // representation is actually required. Use a small second fixture so
+        // this assertion doesn't itself allocate the million-row expansion.
+        let mut ordered = RunIndexBuffer::default();
+        ordered.push(7);
+        ordered.push_run(7, 3);
+        ordered.reserve(1);
+        ordered.push(8);
+        assert!(ordered.index_runs.is_empty());
+        assert_eq!(ordered.indices, [7, 7, 7, 7, 8]);
+    }
+
+    #[test]
+    fn dictionary_storage_contract() {
+        use crate::data_type::ByteArray;
+        let desc = make_col_desc::<ByteArrayType>();
+        let mut storage: <ByteArray as DictionaryValue>::Storage = DictionaryStorage::new(&desc);
+        assert_eq!(
+            DictionaryStorage::intern_bytes(&mut storage, b"", || panic!("must borrow bytes"))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            DictionaryStorage::intern_bytes(&mut storage, b"abc", || panic!("must borrow bytes"))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            DictionaryStorage::intern_bytes(&mut storage, b"abc", || panic!("must borrow bytes"))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            DictionaryStorage::intern(&mut storage, &ByteArray::from("z")).unwrap(),
+            2
+        );
+        let expected = b"\0\0\0\0\x03\0\0\0abc\x01\0\0\0z";
+        assert_eq!(storage.len_and_size(), (3, expected.len()));
+        assert!(DictionaryStorage::estimated_memory_size(&storage) >= expected.len());
+        assert_eq!(
+            storage.write_dict::<ByteArrayType>().unwrap().as_ref(),
+            expected
+        );
+        assert_eq!(
+            storage.into_dict::<ByteArrayType>().unwrap().as_ref(),
+            expected
+        );
+
+        let mut encoder = DictEncoder::<ByteArrayType>::new(desc);
+        encoder
+            .put(&[
+                ByteArray::from(""),
+                ByteArray::from("abc"),
+                ByteArray::from("abc"),
+            ])
+            .unwrap();
+        assert_eq!(encoder.num_entries(), 2);
+        let mut visited = Vec::new();
+        encoder.visit_uniques(|bytes| visited.push(bytes.to_vec()));
+        assert_eq!(visited, [b"".to_vec(), b"abc".to_vec()]);
+        assert!(!encoder.flush_buffer().unwrap().is_empty());
+        assert_eq!(encoder.indices.num_values(), 0);
+        encoder.put(&[ByteArray::from("z")]).unwrap();
+        assert_eq!(encoder.num_entries(), 3);
+        encoder.flush_buffer().unwrap();
+        assert_eq!(encoder.into_dict_page().unwrap().as_ref(), expected);
+    }
+
+    #[cfg(feature = "arrow")]
+    #[test]
+    fn arrow_cache_reuses_indices_and_resets_between_sources() {
+        let mut encoder = DictEncoder::<ByteArrayType>::new(make_col_desc::<ByteArrayType>());
+        for &(index, value) in &[(0, b"same".as_slice()), (0, b"same"), (1, b"same")] {
+            encoder
+                .put_arrow_dictionary(index, None, |dictionary| {
+                    Ok(Interner::intern(dictionary, value))
+                })
+                .unwrap();
+        }
+        encoder.start_arrow_source();
+        encoder
+            .put_arrow_dictionary(0, None, |dictionary| {
+                Ok(Interner::intern(dictionary, b"other"))
+            })
+            .unwrap();
+
+        assert_eq!(encoder.num_entries(), 2);
+        assert_eq!(encoder.indices.indices, [0, 0, 0, 1]);
+
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        for (index, value) in [(0, 42), (0, 42), (1, 42)] {
+            encoder
+                .put_arrow_dictionary(index, None, |dictionary| Ok(dictionary.intern(&value)))
+                .unwrap();
+        }
+        encoder.start_arrow_source();
+        for count in [None, Some(3)] {
+            encoder
+                .put_arrow_dictionary(0, count, |dictionary| Ok(dictionary.intern(&99)))
+                .unwrap();
+        }
+        assert_eq!(encoder.num_entries(), 2);
+        assert_eq!(encoder.indices.indices, [0, 0, 0, 1]);
+        assert_eq!(encoder.indices.index_runs, [(1, 3)]);
+    }
+
     use crate::data_type::{
         ByteArray, ByteArrayType, FixedLenByteArray, FixedLenByteArrayType, Int32Type,
     };
@@ -353,9 +736,9 @@ mod tests {
 
         let size = encoder.estimated_memory_size();
 
-        // Must account for the 3 unique dictionary entries: struct overhead plus the
-        // fixed-length bytes allocated per entry.
-        let dict_entry_size = 3 * std::mem::size_of::<FixedLenByteArray>() + 3 * TYPE_LEN;
+        // Fixed-length dictionary entries are stored contiguously in their final
+        // PLAIN representation, without one heap-backed wrapper per value.
+        let dict_entry_size = 3 * TYPE_LEN;
         assert!(
             size >= empty_size + dict_entry_size,
             "memory size {size} should grow by at least the dict storage ({dict_entry_size} bytes)"
@@ -385,9 +768,9 @@ mod tests {
 
         let size = encoder.estimated_memory_size();
 
-        // Must account for the 100 unique dictionary entries: struct overhead plus the
-        // fixed-length bytes allocated per entry.
-        let dict_entry_size = 100 * std::mem::size_of::<FixedLenByteArray>() + 100 * TYPE_LEN;
+        // Fixed-length dictionary entries are stored contiguously in their final
+        // PLAIN representation, without one heap-backed wrapper per value.
+        let dict_entry_size = 100 * TYPE_LEN;
         assert!(
             size >= empty_size + dict_entry_size,
             "memory size {size} should grow by at least the dict storage ({dict_entry_size} bytes)"
@@ -399,6 +782,29 @@ mod tests {
             size >= empty_size + dict_entry_size + indices_size,
             "memory size {size} should include indices ({indices_size} bytes)"
         );
+    }
+
+    #[test]
+    fn fixed_len_byte_array_dictionary_interns_directly_into_plain_page() {
+        const TYPE_LEN: usize = 3;
+        let mut encoder = DictEncoder::<FixedLenByteArrayType>::new(make_col_desc_with_length::<
+            FixedLenByteArrayType,
+        >(TYPE_LEN as i32));
+        let constructions = Cell::new(0);
+
+        for value in [b"foo".as_slice(), b"bar", b"foo"] {
+            encoder
+                .put_value_bytes(value, || {
+                    constructions.set(constructions.get() + 1);
+                    FixedLenByteArray::from(value.to_vec())
+                })
+                .unwrap();
+        }
+
+        assert_eq!(constructions.get(), 0);
+        assert_eq!(encoder.num_entries(), 2);
+        assert_eq!(encoder.dict_encoded_size(), 2 * TYPE_LEN);
+        assert_eq!(encoder.write_dict().unwrap().as_ref(), b"foobar");
     }
 
     #[test]

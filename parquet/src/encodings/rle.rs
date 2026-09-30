@@ -149,6 +149,50 @@ impl RleEncoder {
         self.repeat_count += count;
     }
 
+    /// Encodes `count` consecutive copies of `value` as a single logical run.
+    ///
+    /// Equivalent to calling [`put`](Self::put) `count` times, but starts
+    /// group-aligned runs directly in RLE mode without staging their values.
+    /// Only partial or short groups use the scalar path, so a long run costs
+    /// O(1) rather than O(count). Used to emit run-end-encoded dictionary
+    /// indices without materializing one index per row.
+    #[inline]
+    pub fn put_run(&mut self, value: u64, mut count: usize) {
+        while count != 0 {
+            if self.is_accumulating_rle(value) {
+                self.extend_run(count);
+                return;
+            }
+
+            if count >= BIT_PACK_GROUP_SIZE
+                && self
+                    .pending_values
+                    .len()
+                    .is_multiple_of(BIT_PACK_GROUP_SIZE)
+            {
+                // The next complete group is uniform. Make the same decision
+                // as `put_batch`, without allocating a literal staging buffer.
+                if self.repeat_count >= BIT_PACK_GROUP_SIZE {
+                    debug_assert!(self.pending_values.is_empty());
+                    self.flush_rle_run();
+                } else {
+                    debug_assert_eq!(self.repeat_count, 0);
+                    if !self.pending_values.is_empty() {
+                        self.close_bit_packed_run();
+                    }
+                }
+                self.current_value = value;
+                self.repeat_count = count;
+                return;
+            }
+
+            // Complete a partial group or buffer a short tail, then reconsider
+            // the direct path at the next group boundary.
+            self.put(value);
+            count -= 1;
+        }
+    }
+
     /// Encodes `value`, which must be representable with `bit_width` bits.
     #[inline]
     pub fn put(&mut self, value: u64) {
@@ -1193,6 +1237,131 @@ mod tests {
         let n = dec.get_batch::<i32>(&mut out).unwrap();
         assert_eq!(n, 100);
         assert!(out.iter().all(|&v| v == value as i32));
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn test_put_run_matches_individual_puts() {
+        let bit_width = 3;
+        // Mixed runs: length 1, below the RLE boundary, and well past it.
+        let runs: &[(u64, usize)] = &[(1, 1), (2, 5), (3, 100), (1, 8), (4, 3), (2, 1), (5, 250)];
+
+        // Reference: expand each run into individual `put`s.
+        let mut reference = RleEncoder::new(bit_width, 256);
+        for &(v, n) in runs {
+            for _ in 0..n {
+                reference.put(v);
+            }
+        }
+        let reference = reference.consume();
+
+        // Under test: one `put_run` per run — must produce byte-identical output.
+        let mut run_encoded = RleEncoder::new(bit_width, 256);
+        for &(v, n) in runs {
+            run_encoded.put_run(v, n);
+        }
+        let run_encoded = run_encoded.consume();
+        assert_eq!(run_encoded, reference, "put_run must match individual puts");
+
+        // `put_run(_, 0)` is a no-op.
+        let mut a = RleEncoder::new(bit_width, 64);
+        a.put(7);
+        let mut b = RleEncoder::new(bit_width, 64);
+        b.put(7);
+        b.put_run(3, 0);
+        assert_eq!(a.consume(), b.consume());
+    }
+
+    #[test]
+    fn test_put_run_without_literal_allocation() {
+        for (bit_width, value) in [
+            (0, 0),
+            (1, 1),
+            (3, 5),
+            (32, u64::from(u32::MAX)),
+            (64, u64::MAX),
+        ] {
+            for count in [8, 9, 128, 8192] {
+                let mut reference = RleEncoder::new(bit_width, 64);
+                let mut encoded = RleEncoder::new(bit_width, 64);
+                let other = if bit_width == 0 { 0 } else { value ^ 1 };
+                // Start, ignore a zero count with another value, extend with
+                // short counts, and switch to a different long run.
+                for (value, count) in [
+                    (value, count),
+                    (other, 0),
+                    (value, 1),
+                    (value, 7),
+                    (other, 8),
+                ] {
+                    for _ in 0..count {
+                        reference.put(value);
+                    }
+                    encoded.put_run(value, count);
+                    assert!(encoded.pending_values.is_empty());
+                    assert_eq!(encoded.pending_values.capacity(), 0);
+                }
+                // Flushing must also leave the next counted run on the direct path.
+                reference.flush();
+                encoded.flush();
+                for _ in 0..8 {
+                    reference.put(value);
+                }
+                encoded.put_run(value, 8);
+                assert_eq!(encoded.pending_values.capacity(), 0);
+                assert_eq!(encoded.consume(), reference.consume());
+            }
+        }
+    }
+
+    #[test]
+    fn test_put_run_literal_boundaries() {
+        // Cover partial groups, aligned pending literals, and the maximum
+        // literal-run boundary (504 values), with scalar and batched prefixes.
+        for prefix_len in (0_usize..17).chain([495, 496, 503, 504, 505, 511, 512]) {
+            let prefix: Vec<u64> = (0..prefix_len).map(|i| (i % 7) as u64).collect();
+            for count in [0, 1, 7, 8, 9, 15, 16, 17, 511] {
+                for value in [0, 2, 5] {
+                    for batch_prefix in [false, true] {
+                        let mut encoded = RleEncoder::new(3, 1024);
+                        if batch_prefix {
+                            encoded.put_batch(&prefix);
+                        } else {
+                            for &value in &prefix {
+                                encoded.put(value);
+                            }
+                        }
+                        let literal_capacity = encoded.pending_values.capacity();
+                        encoded.put_run(value, count);
+                        if prefix_len.is_multiple_of(BIT_PACK_GROUP_SIZE)
+                            && count >= BIT_PACK_GROUP_SIZE
+                        {
+                            assert!(encoded.is_accumulating_rle(value));
+                            assert_eq!(encoded.pending_values.capacity(), literal_capacity);
+                        }
+                        let suffix = [7, 3, 3, 0, 1, 2, 2, 2, 4];
+                        encoded.put_batch(&suffix);
+                        encoded.put_run(6, 9);
+
+                        let mut reference = RleEncoder::new(3, 1024);
+                        for value in prefix
+                            .iter()
+                            .copied()
+                            .chain(std::iter::repeat_n(value, count))
+                            .chain(suffix)
+                            .chain(std::iter::repeat_n(6, 9))
+                        {
+                            reference.put(value);
+                        }
+                        assert_eq!(
+                            encoded.consume(),
+                            reference.consume(),
+                            "prefix_len={prefix_len}, count={count}, value={value}, batch_prefix={batch_prefix}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

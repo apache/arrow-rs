@@ -17,18 +17,20 @@
 
 use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be};
+use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
-use crate::column::reader::decoder::ColumnValueDecoder;
+use crate::column::reader::decoder::{ColumnValueDecoder, validate_fixed_len_byte_array_payload};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
     ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
+    OffsetSizeTrait,
 };
 use arrow_buffer::{Buffer, IntervalDayTime, i256};
 use arrow_data::ArrayDataBuilder;
@@ -279,7 +281,7 @@ impl ArrayReader for FixedLenByteArrayReader {
 }
 
 #[derive(Default)]
-struct FixedLenByteArrayBuffer {
+pub(super) struct FixedLenByteArrayBuffer {
     buffer: Vec<u8>,
     /// The length of each element in bytes
     byte_length: Option<usize>,
@@ -379,10 +381,84 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
     }
 }
 
-struct ValueDecoder {
+pub(super) struct ValueDecoder {
     byte_length: usize,
     dict_page: Option<Bytes>,
     decoder: Option<Decoder>,
+}
+
+impl ValueDecoder {
+    pub(super) fn read_offsets<I: OffsetSizeTrait>(
+        &mut self,
+        out: &mut OffsetBuffer<I>,
+        num_values: usize,
+    ) -> Result<usize> {
+        let start = out.values.len();
+        let read = self.read_values(&mut out.values, num_values)?;
+        out.offsets.reserve(read);
+        for value in 1..=read {
+            out.offsets.push(
+                I::from_usize(start + value * self.byte_length)
+                    .ok_or_else(|| general_err!("index overflow decoding fixed byte array"))?,
+            );
+        }
+        Ok(read)
+    }
+
+    fn read_values(&mut self, out: &mut Vec<u8>, num_values: usize) -> Result<usize> {
+        if self.byte_length == 0 {
+            return Ok(num_values);
+        }
+
+        match self.decoder.as_mut().unwrap() {
+            Decoder::Plain { offset, buf } => {
+                let to_read =
+                    (num_values * self.byte_length).min(buf.len() - *offset) / self.byte_length;
+                let end_offset = *offset + to_read * self.byte_length;
+                out.extend_from_slice(&buf.as_ref()[*offset..end_offset]);
+                *offset = end_offset;
+                Ok(to_read)
+            }
+            Decoder::Dict { decoder } => {
+                let dict = self.dict_page.as_ref().unwrap();
+                if dict.is_empty() {
+                    return Ok(0);
+                }
+
+                decoder.read(num_values, |keys| {
+                    out.reserve(keys.len() * self.byte_length);
+                    for key in keys {
+                        let offset = *key as usize * self.byte_length;
+                        out.extend_from_slice(&dict.as_ref()[offset..offset + self.byte_length]);
+                    }
+                    Ok(())
+                })
+            }
+            Decoder::Delta { decoder } => {
+                let to_read = num_values.min(decoder.remaining());
+                out.reserve(to_read * self.byte_length);
+
+                decoder.read(to_read, |slice| {
+                    if slice.len() != self.byte_length {
+                        return Err(general_err!(
+                            "encountered array with incorrect length, got {} expected {}",
+                            slice.len(),
+                            self.byte_length
+                        ));
+                    }
+                    out.extend_from_slice(slice);
+                    Ok(())
+                })
+            }
+            Decoder::ByteStreamSplit { buf, offset } => {
+                let total_values = buf.len() / self.byte_length;
+                let to_read = num_values.min(total_values - *offset);
+                read_byte_stream_split(out, buf, *offset, to_read, self.byte_length);
+                *offset += to_read;
+                Ok(to_read)
+            }
+        }
+    }
 }
 
 impl ColumnValueDecoder for ValueDecoder {
@@ -412,14 +488,12 @@ impl ColumnValueDecoder for ValueDecoder {
                 encoding
             ));
         }
-        let expected_len = num_values as usize * self.byte_length;
-        if expected_len > buf.len() {
-            return Err(general_err!(
-                "too few bytes in dictionary page, expected {} got {}",
-                expected_len,
-                buf.len()
-            ));
-        }
+        validate_fixed_len_byte_array_payload(
+            buf.len(),
+            num_values as usize,
+            self.byte_length,
+            "dictionary page",
+        )?;
 
         self.dict_page = Some(buf);
         Ok(())
@@ -473,66 +547,14 @@ impl ColumnValueDecoder for ValueDecoder {
             }
         }
 
-        match self.decoder.as_mut().unwrap() {
-            Decoder::Plain { offset, buf } => {
-                let to_read =
-                    (num_values * self.byte_length).min(buf.len() - *offset) / self.byte_length;
-                let end_offset = *offset + to_read * self.byte_length;
-                out.buffer
-                    .extend_from_slice(&buf.as_ref()[*offset..end_offset]);
-                *offset = end_offset;
-                Ok(to_read)
-            }
-            Decoder::Dict { decoder } => {
-                let dict = self.dict_page.as_ref().unwrap();
-                // All data must be NULL
-                if dict.is_empty() {
-                    return Ok(0);
-                }
-
-                decoder.read(num_values, |keys| {
-                    out.buffer.reserve(keys.len() * self.byte_length);
-                    for key in keys {
-                        let offset = *key as usize * self.byte_length;
-                        let val = &dict.as_ref()[offset..offset + self.byte_length];
-                        out.buffer.extend_from_slice(val);
-                    }
-                    Ok(())
-                })
-            }
-            Decoder::Delta { decoder } => {
-                let to_read = num_values.min(decoder.remaining());
-                out.buffer.reserve(to_read * self.byte_length);
-
-                decoder.read(to_read, |slice| {
-                    if slice.len() != self.byte_length {
-                        return Err(general_err!(
-                            "encountered array with incorrect length, got {} expected {}",
-                            slice.len(),
-                            self.byte_length
-                        ));
-                    }
-                    out.buffer.extend_from_slice(slice);
-                    Ok(())
-                })
-            }
-            Decoder::ByteStreamSplit { buf, offset } => {
-                // we have n=`byte_length` streams of length `buf.len/byte_length`
-                // to read value i, we need the i'th byte from each of the streams
-                // so `offset` should be the value offset, not the byte offset
-                let total_values = buf.len() / self.byte_length;
-                let to_read = num_values.min(total_values - *offset);
-
-                // now read the n streams and reassemble values into the output buffer
-                read_byte_stream_split(&mut out.buffer, buf, *offset, to_read, self.byte_length);
-
-                *offset += to_read;
-                Ok(to_read)
-            }
-        }
+        self.read_values(&mut out.buffer, num_values)
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        if self.byte_length == 0 {
+            return Ok(num_values);
+        }
+
         match self.decoder.as_mut().unwrap() {
             Decoder::Plain { offset, buf } => {
                 let to_read = num_values.min((buf.len() - *offset) / self.byte_length);

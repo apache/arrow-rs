@@ -163,14 +163,25 @@ fn sample_values<F: AlpFloat>(values: &[F], out: &mut Vec<F>) {
 /// winners are tallied, and the most frequent are carried forward so that each
 /// vector only has to choose among a handful of candidates.
 fn build_preset<F: AlpFloat>(values: &[F]) -> Vec<ExponentAndFactor> {
-    let num_vectors = values.len().div_ceil(VECTOR_SIZE);
+    build_preset_from_samples(values.len(), |start, len, sample| {
+        sample_values(&values[start..start + len], sample);
+    })
+}
+
+/// Use the same sampling positions for dense and counted input. Only the
+/// bounded sample is materialized; an entire counted first page never is.
+fn build_preset_from_samples<F: AlpFloat>(
+    len: usize,
+    mut sample_vector: impl FnMut(usize, usize, &mut Vec<F>),
+) -> Vec<ExponentAndFactor> {
+    let num_vectors = len.div_ceil(VECTOR_SIZE);
     let vector_stride = num_vectors.div_ceil(SAMPLE_VECTORS).max(1);
 
     let mut sample = Vec::with_capacity(SAMPLES_PER_VECTOR);
     let mut tally: Vec<Combination> = Vec::new();
 
-    for vector in values.chunks(VECTOR_SIZE).step_by(vector_stride) {
-        sample_values(vector, &mut sample);
+    for start in (0..len).step_by(VECTOR_SIZE * vector_stride) {
+        sample_vector(start, (len - start).min(VECTOR_SIZE), &mut sample);
 
         // Start from the worst case - every value an exception, unpacked - so
         // that any candidate that manages to encode anything beats it.
@@ -485,6 +496,9 @@ struct StreamingPage<F: AlpFloat> {
     vector_offsets: Vec<u32>,
     /// Values not yet forming a complete vector, carried across `put`s.
     carry: Vec<F>,
+    /// Reusable encoded full vector for repeated values; its bytes may be copied
+    /// for each subsequent identical vector without re-encoding 1024 scalars.
+    repeated_vector: Vec<u8>,
     /// Total values appended to this page so far.
     count: usize,
 }
@@ -495,6 +509,7 @@ impl<F: AlpFloat> StreamingPage<F> {
             body: Vec::new(),
             vector_offsets: Vec::new(),
             carry: Vec::new(),
+            repeated_vector: Vec::new(),
             count: 0,
         }
     }
@@ -503,6 +518,7 @@ impl<F: AlpFloat> StreamingPage<F> {
         self.body.capacity()
             + self.vector_offsets.capacity() * std::mem::size_of::<u32>()
             + self.carry.capacity() * std::mem::size_of::<F>()
+            + self.repeated_vector.capacity()
     }
 
     /// Encode one complete vector and append it to `body`.
@@ -555,6 +571,51 @@ impl<F: AlpFloat> StreamingPage<F> {
         Ok(())
     }
 
+    /// Encode a counted value using at most one raw vector of scratch. Full
+    /// repeated vectors are encoded once and their encoded bytes reused; work
+    /// scales with the encoded output, not repeated scalar conversion.
+    fn put_repeated(
+        &mut self,
+        value: F,
+        mut count: usize,
+        preset: &[ExponentAndFactor],
+        scratch: &mut Scratch<F>,
+    ) -> Result<()> {
+        self.count = checked_page_len(self.count, count)?;
+        if !self.carry.is_empty() {
+            let take = count.min(VECTOR_SIZE - self.carry.len());
+            self.carry.resize(self.carry.len() + take, value);
+            count -= take;
+            if self.carry.len() == VECTOR_SIZE {
+                let mut vector = std::mem::take(&mut self.carry);
+                self.push_vector(&vector, preset, scratch)?;
+                vector.clear();
+                self.carry = vector;
+            }
+        }
+        let full_vectors = count / VECTOR_SIZE;
+        if full_vectors != 0 {
+            let vector = [value; VECTOR_SIZE];
+            let params = select_params(&vector, preset, &mut scratch.sample);
+            self.repeated_vector.clear();
+            encode_vector(&vector, params, scratch, &mut self.repeated_vector)?;
+            let additional = full_vectors
+                .checked_mul(self.repeated_vector.len())
+                .and_then(|bytes| self.body.len().checked_add(bytes))
+                .filter(|&bytes| u32::try_from(bytes).is_ok())
+                .ok_or_else(|| general_err!("Invalid ALP page: body exceeds u32 offset range"))?;
+            self.body.reserve(additional - self.body.len());
+            self.vector_offsets.reserve(full_vectors);
+            for _ in 0..full_vectors {
+                self.vector_offsets.push(self.body.len() as u32);
+                self.body.extend_from_slice(&self.repeated_vector);
+            }
+            count %= VECTOR_SIZE;
+        }
+        self.carry.resize(self.carry.len() + count, value);
+        Ok(())
+    }
+
     /// Encode the trailing partial vector, then assemble `[header][offsets][body]`
     /// and reset for the next page.
     fn finish(
@@ -596,12 +657,47 @@ impl<F: AlpFloat> StreamingPage<F> {
     }
 }
 
+fn checked_page_len(current: usize, additional: usize) -> Result<usize> {
+    current
+        .checked_add(additional)
+        .filter(|&count| i32::try_from(count).is_ok())
+        .ok_or_else(|| general_err!("Invalid ALP page: num_elements exceeds i32::MAX"))
+}
+
+#[derive(Clone, Copy)]
+enum FirstPageSource<F> {
+    Dense { offset: usize },
+    Repeated(F),
+}
+
+#[derive(Clone, Copy)]
+struct FirstPageSpan<F> {
+    /// Cumulative logical value count, for bounded sampling by binary search.
+    end: usize,
+    source: FirstPageSource<F>,
+}
+
+fn first_page_value<F: Copy>(values: &[F], spans: &[FirstPageSpan<F>], index: usize) -> F {
+    let span = spans.partition_point(|span| span.end <= index);
+    match spans[span].source {
+        FirstPageSource::Dense { offset } => {
+            let start = if span == 0 { 0 } else { spans[span - 1].end };
+            values[offset + index - start]
+        }
+        FirstPageSource::Repeated(value) => value,
+    }
+}
+
 /// Encoder for ALP-encoded floating-point pages (`f32`/`f64`).
 ///
-/// The first page is buffered whole: ALP samples it to choose the column chunk's
-/// candidate `(exponent, factor)` set, which needs all of the page's data. Once
-/// that preset is fixed, later pages are encoded incrementally, a vector at a
-/// time, without ever holding the whole page of raw floats (see [`StreamingPage`]).
+/// Dense first-page input is retained for preset sampling. Counted input is
+/// retained as compact spans and sampled at exactly the same logical positions,
+/// without expanding runs. Once the preset is fixed, subsequent pages stream
+/// one vector at a time (see [`StreamingPage`]).
+#[expect(
+    private_bounds,
+    reason = "ALP capabilities are sealed; concrete types are exposed through AlpValue"
+)]
 pub struct AlpEncoder<T: DataType>
 where
     T::T: AlpFloat,
@@ -609,6 +705,9 @@ where
     /// Values buffered for the first page, until the preset is built. Empty once
     /// streaming begins.
     values: Vec<T::T>,
+    /// Empty for a purely dense first page; otherwise describes interleaved
+    /// ranges of `values` and counted values, in logical output order.
+    first_page_spans: Vec<FirstPageSpan<T::T>>,
     /// Candidate `(exponent, factor)` pairs for this column chunk, sampled once
     /// from the first page and reused for the rest of the chunk. `None` until the
     /// first page is flushed; its presence is what switches `put` to streaming.
@@ -618,6 +717,10 @@ where
     streaming: StreamingPage<T::T>,
 }
 
+#[expect(
+    private_bounds,
+    reason = "ALP capabilities are sealed; concrete types are exposed through AlpValue"
+)]
 impl<T: DataType> AlpEncoder<T>
 where
     T::T: AlpFloat,
@@ -625,6 +728,7 @@ where
     pub(crate) fn new() -> Self {
         Self {
             values: Vec::new(),
+            first_page_spans: Vec::new(),
             preset: None,
             scratch: Scratch::new(),
             streaming: StreamingPage::new(),
@@ -635,10 +739,43 @@ where
     /// later pages in the streaming buffer. Used only for size estimates.
     fn current_page_len(&self) -> usize {
         if self.preset.is_none() {
-            self.values.len()
+            self.first_page_spans
+                .last()
+                .map_or(self.values.len(), |span| span.end)
         } else {
             self.streaming.count
         }
+    }
+
+    /// Append a counted value without expanding its first-page representation.
+    pub(crate) fn put_repeated(&mut self, value: T::T, count: usize) -> Result<()> {
+        if count == 0 {
+            return Ok(());
+        }
+        let end = checked_page_len(self.current_page_len(), count)?;
+        if let Some(preset) = &self.preset {
+            return self
+                .streaming
+                .put_repeated(value, count, preset, &mut self.scratch);
+        }
+        if self.first_page_spans.is_empty() && !self.values.is_empty() {
+            self.first_page_spans.push(FirstPageSpan {
+                end: self.values.len(),
+                source: FirstPageSource::Dense { offset: 0 },
+            });
+        }
+        if let Some(last) = self.first_page_spans.last_mut()
+            && let FirstPageSource::Repeated(previous) = last.source
+            && previous.to_exact_bits() == value.to_exact_bits()
+        {
+            last.end = end;
+        } else {
+            self.first_page_spans.push(FirstPageSpan {
+                end,
+                source: FirstPageSource::Repeated(value),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -647,16 +784,33 @@ where
     T::T: AlpFloat,
 {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let end = checked_page_len(self.current_page_len(), values.len())?;
         let Self {
             values: buffer,
+            first_page_spans: spans,
             preset,
             scratch,
             streaming,
         } = self;
         match preset.as_deref() {
-            // First page: buffer until the preset can be built on flush.
-            None => buffer.extend_from_slice(values),
-            // Later pages: encode incrementally against the fixed preset.
+            None => {
+                if let Some(last) = spans.last_mut() {
+                    if matches!(last.source, FirstPageSource::Dense { .. }) {
+                        last.end = end;
+                    } else {
+                        spans.push(FirstPageSpan {
+                            end,
+                            source: FirstPageSource::Dense {
+                                offset: buffer.len(),
+                            },
+                        });
+                    }
+                }
+                buffer.extend_from_slice(values);
+            }
             Some(preset) => streaming.put(values, preset, scratch)?,
         }
         Ok(())
@@ -686,6 +840,7 @@ where
 
     fn estimated_memory_size(&self) -> usize {
         self.values.capacity() * std::mem::size_of::<T::T>()
+            + self.first_page_spans.capacity() * std::mem::size_of::<FirstPageSpan<T::T>>()
             + self.preset.as_ref().map_or(0, |p| {
                 p.capacity() * std::mem::size_of::<ExponentAndFactor>()
             })
@@ -696,14 +851,45 @@ where
     fn flush_buffer(&mut self) -> Result<Bytes> {
         let Self {
             values,
+            first_page_spans: spans,
             preset,
             scratch,
             streaming,
         } = self;
 
-        // The first nonempty flush builds the preset from the whole buffered
-        // page and encodes it in one pass; that also arms streaming for later pages.
+        // The first nonempty flush samples the same logical positions regardless
+        // of whether the page consists of dense input, counted input, or both.
         let page = match preset {
+            None if !spans.is_empty() => {
+                let len = spans.last().unwrap().end;
+                let built = build_preset_from_samples(len, |start, len, sample| {
+                    sample.clear();
+                    let stride = len.div_ceil(SAMPLES_PER_VECTOR).max(1);
+                    sample.extend(
+                        (start..start + len)
+                            .step_by(stride)
+                            .map(|index| first_page_value(values, spans, index)),
+                    );
+                });
+                let mut start = 0;
+                for span in spans.iter() {
+                    let len = span.end - start;
+                    match span.source {
+                        FirstPageSource::Dense { offset } => {
+                            streaming.put(&values[offset..offset + len], &built, scratch)?;
+                        }
+                        FirstPageSource::Repeated(value) => {
+                            streaming.put_repeated(value, len, &built, scratch)?;
+                        }
+                    }
+                    start = span.end;
+                }
+                let page = streaming.finish(&built, scratch)?;
+                values.clear();
+                spans.clear();
+                *preset = Some(built);
+                page
+            }
             // Nothing to sample, so no preset to build. Leaving it unset keeps the
             // chunk off the fallback parameters, which would make every later
             // fractional value an exception.
@@ -727,6 +913,104 @@ mod tests {
     use crate::data_type::{DoubleType, FloatType};
     use crate::encodings::decoding::Decoder;
     use crate::encodings::decoding::alp_decoder::AlpDecoder;
+
+    #[test]
+    fn counted_pages_match_dense_bits_and_wire_bytes() {
+        fn check<T: DataType>(values: &[T::T])
+        where
+            T::T: AlpFloat,
+            <T::T as AlpFloat>::Exact: Send,
+        {
+            let mut dense = AlpEncoder::<T>::new();
+            let mut counted = AlpEncoder::<T>::new();
+            // An empty first page must not freeze a useless preset.
+            assert_eq!(
+                dense.flush_buffer().unwrap(),
+                counted.flush_buffer().unwrap()
+            );
+            for page in 0..3 {
+                let mut expected = values[..3].to_vec();
+                counted.put(&values[..3]).unwrap();
+                counted.put_repeated(values[0], 0).unwrap();
+                let counts = [0, 1, 1023, 1024, 1025, 2049, 257];
+                for (index, &value) in values.iter().enumerate() {
+                    let count = counts[index % counts.len()] + page;
+                    expected.extend(std::iter::repeat_n(value, count));
+                    counted.put_repeated(value, count).unwrap();
+                    if index % 2 == 0 {
+                        counted.put(std::slice::from_ref(&value)).unwrap();
+                        expected.push(value);
+                    }
+                }
+                dense.put(&expected).unwrap();
+                assert_eq!(
+                    dense.estimated_data_encoded_size(),
+                    counted.estimated_data_encoded_size()
+                );
+                let encoded = counted.flush_buffer().unwrap();
+                assert_eq!(encoded, dense.flush_buffer().unwrap());
+                let mut decoder = AlpDecoder::<T>::new();
+                decoder.set_data(encoded, expected.len()).unwrap();
+                let mut actual = vec![T::T::default(); expected.len()];
+                assert_eq!(decoder.get(&mut actual).unwrap(), expected.len());
+                assert_bits_eq(&actual, &expected);
+                assert!(counted.first_page_spans.is_empty());
+                assert!(counted.values.is_empty());
+            }
+        }
+        check::<FloatType>(&[
+            1.25,
+            -0.0,
+            0.0,
+            f32::from_bits(0x7fc0_1234),
+            f32::INFINITY,
+            -3.5,
+            123.125,
+        ]);
+        check::<DoubleType>(&[
+            1.25,
+            -0.0,
+            0.0,
+            f64::from_bits(0x7ff8_0000_0000_1234),
+            f64::NEG_INFINITY,
+            -3.5,
+            123.125,
+        ]);
+    }
+
+    #[test]
+    fn counted_first_page_storage_is_run_bounded() {
+        let mut encoder = AlpEncoder::<DoubleType>::new();
+        encoder.put_repeated(1.25, 1_000_000).unwrap();
+        encoder.put_repeated(1.25, 1_000_000).unwrap();
+        assert_eq!(encoder.current_page_len(), 2_000_000);
+        assert_eq!(
+            encoder.values.capacity(),
+            0,
+            "counted values must not expand into raw floats"
+        );
+        assert_eq!(
+            encoder.first_page_spans.len(),
+            1,
+            "adjacent identical runs should coalesce"
+        );
+        assert!(encoder.estimated_memory_size() < 64 * 1024);
+        assert!(encoder.put_repeated(1.25, i32::MAX as usize).is_err());
+        assert_eq!(encoder.current_page_len(), 2_000_000);
+        let page = encoder.flush_buffer().unwrap();
+        assert_eq!(
+            AlpHeader::deserialize(&page).unwrap().num_elements,
+            2_000_000
+        );
+        encoder.put_repeated(1.25, 1_000_000).unwrap();
+        assert!(encoder.streaming.carry.len() < VECTOR_SIZE);
+        assert!(encoder.estimated_memory_size() < 256 * 1024);
+        let page = encoder.flush_buffer().unwrap();
+        assert_eq!(
+            AlpHeader::deserialize(&page).unwrap().num_elements,
+            1_000_000
+        );
+    }
 
     /// Encode `values` and read them back through the decoder.
     fn roundtrip<T: DataType>(values: &[T::T]) -> Vec<T::T>
