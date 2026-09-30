@@ -166,6 +166,7 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
+use std::cell::{Ref, RefCell};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::iter::Map;
@@ -582,15 +583,12 @@ pub struct RowConverter {
 enum Codec {
     /// No additional codec state is necessary
     Stateless,
-    /// A row converter for the dictionary values, the encoding of a row containing
-    /// only nulls, and a cache of the last-encoded values rows keyed by the
-    /// values-array Arc pointer. Reusing the same `Arc` across batches avoids
-    /// re-encoding O(NDV) values on every call to [`Codec::encoder`].
-    Dictionary(
-        RowConverter,
-        OwnedRow,
-        std::sync::Mutex<Option<(usize, std::sync::Arc<Rows>)>>,
-    ),
+    /// A row converter for the dictionary values, the encoding of a row
+    /// containing only nulls, and a cache of the last-encoded values rows.
+    ///
+    /// `RefCell` provides the interior mutability needed to update the cache
+    /// through `&self` without making `convert_columns` take `&mut self`.
+    Dictionary(RowConverter, OwnedRow, RefCell<Option<(usize, Rows)>>),
     /// A row converter for the child fields
     /// and the encoding of a row containing only nulls
     Struct(RowConverter, OwnedRow),
@@ -660,7 +658,7 @@ impl Codec {
                     data: nulls.buffer.into(),
                     config: nulls.config,
                 };
-                Ok(Self::Dictionary(converter, owned, std::sync::Mutex::new(None)))
+                Ok(Self::Dictionary(converter, owned, RefCell::new(None)))
             }
             DataType::RunEndEncoded(_, values) => {
                 // Similar to List implementation
@@ -782,22 +780,15 @@ impl Codec {
             Codec::Stateless => Ok(Encoder::Stateless),
             Codec::Dictionary(converter, nulls, cache) => {
                 let values = array.as_any_dictionary().values().clone();
-                // Cache the encoded Rows by Arc pointer. When the same values Arc is
-                // reused across batches (common in global-dictionary workloads), this
-                // skips O(NDV) re-encoding — the most expensive part of dict encoding.
-                let ptr = std::sync::Arc::as_ptr(&values) as *const () as usize;
-                let rows = {
-                    let mut guard = cache.lock().unwrap();
-                    if guard.as_ref().map(|(p, _)| *p == ptr).unwrap_or(false) {
-                        std::sync::Arc::clone(&guard.as_ref().unwrap().1)
-                    } else {
-                        let encoded =
-                            std::sync::Arc::new(converter.convert_columns(&[values])?);
-                        *guard = Some((ptr, std::sync::Arc::clone(&encoded)));
-                        encoded
+                let values_ptr = Arc::as_ptr(&values) as *const () as usize;
+                {
+                    let mut cached = cache.borrow_mut();
+                    if !cached.as_ref().map(|(ptr, _)| *ptr == values_ptr).unwrap_or(false) {
+                        *cached = Some((values_ptr, converter.convert_columns(&[values])?));
                     }
-                };
-                Ok(Encoder::Dictionary(rows, nulls.row()))
+                }
+                let encoded = Ref::map(cache.borrow(), |cached| &cached.as_ref().unwrap().1);
+                Ok(Encoder::Dictionary(encoded, nulls.row()))
             }
             Codec::Struct(converter, null) => {
                 let v = as_struct_array(array);
@@ -929,9 +920,8 @@ impl Codec {
 enum Encoder<'a> {
     /// No additional encoder state is necessary
     Stateless,
-    /// The encoding of the child array (shared via Arc to enable caching across
-    /// batches) and the encoding of a null row.
-    Dictionary(std::sync::Arc<Rows>, Row<'a>),
+    /// The encoding of the child array and the encoding of a null row.
+    Dictionary(Ref<'a, Rows>, Row<'a>),
     /// The row encoding of the child arrays and the encoding of a null row
     ///
     /// It is necessary to encode to a temporary [`Rows`] to avoid serializing
