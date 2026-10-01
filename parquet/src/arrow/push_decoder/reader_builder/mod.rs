@@ -388,14 +388,20 @@ impl RowGroupReaderBuilder {
                     fields: self.fields.clone(),
                     metrics: self.metrics.clone(),
                 };
-                Box::new(IncrementalRowGroup::new(
+                match IncrementalRowGroup::new(
                     config,
                     row_group_idx,
                     row_count,
                     plan_builder.selection().cloned(),
                     budget,
-                    self.filter.take(),
-                ))
+                    &mut self.filter,
+                ) {
+                    Ok(row_group) => Box::new(row_group),
+                    Err(e) => {
+                        self.state = Some(RowGroupDecoderState::Finished);
+                        return Err(e);
+                    }
+                }
             }
             RowGroupDecoderState::Incremental(row_group) => row_group,
             RowGroupDecoderState::Finished => {
