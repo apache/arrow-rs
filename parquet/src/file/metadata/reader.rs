@@ -1353,7 +1353,7 @@ mod tests {
 
         let all = ColumnChunkMask::all();
         assert!(all.is_all());
-        assert!(all.includes_column(u32::MAX as usize));
+        assert!(all.includes_column(i32::MAX as usize));
 
         assert_eq!(all.row_group_indices(3).collect::<Vec<_>>(), [0, 1, 2]);
         assert_eq!(all.column_indices(2).collect::<Vec<_>>(), [0, 1]);
