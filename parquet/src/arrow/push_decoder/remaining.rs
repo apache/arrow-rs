@@ -151,9 +151,9 @@ impl RemainingRowGroups {
     /// when no row groups remain, or when every remaining row group
     /// would be skipped under the current selection/budget.
     ///
-    /// Cost: one clone of the queued row-group plan and selections per call
-    /// (the frontier is cloned so the real advance logic can run
-    /// non-destructively). For callers that peek once per row-group boundary
+    /// Cost: one clone of the queued row-group plan, selections and
+    /// row-group occurrence counts per call (the frontier is cloned so the
+    /// real advance logic can run non-destructively). For callers that peek once per row-group boundary
     /// this is O(remaining row groups + selectors) per boundary.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         if self.row_group_reader_builder.has_active_row_group() {
