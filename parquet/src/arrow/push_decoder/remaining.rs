@@ -162,6 +162,18 @@ impl RemainingRowGroups {
         self.frontier.peek_next_row_group()
     }
 
+    /// Release the buffered bytes of a row group that is done, unless the
+    /// queue reads it again. The reader of the row group holds its own
+    /// copies of the bytes that it reads.
+    fn release_row_group(&mut self, row_group_idx: Option<usize>) {
+        if let Some(row_group_idx) = row_group_idx
+            && !self.frontier.is_queued(row_group_idx)
+        {
+            self.row_group_reader_builder
+                .release_row_group(row_group_idx);
+        }
+    }
+
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
     /// group of rows from the Parquet data, or the list of data ranges still
     /// needed to proceed
@@ -191,10 +203,12 @@ impl RemainingRowGroups {
                 }
             }
 
+            let row_group_idx = self.row_group_reader_builder.active_row_group_idx();
             match self.row_group_reader_builder.try_build()? {
                 RowGroupBuildResult::Finished { remaining_budget } => {
                     self.frontier
                         .update_budget_after_row_group(remaining_budget);
+                    self.release_row_group(row_group_idx);
                     // reader is done, proceed to the next row group
                 }
                 RowGroupBuildResult::NeedsData(ranges) => {
@@ -207,6 +221,7 @@ impl RemainingRowGroups {
                 } => {
                     self.frontier
                         .update_budget_after_row_group(remaining_budget);
+                    self.release_row_group(row_group_idx);
                     // ready to read the row group
                     return Ok(DecodeResult::Data(batch_reader));
                 }

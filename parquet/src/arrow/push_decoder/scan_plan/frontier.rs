@@ -117,6 +117,16 @@ impl QueuedRowGroups {
         }
     }
 
+    /// Returns `true` if `row_group_idx` is in the queue.
+    fn contains(&self, row_group_idx: usize) -> bool {
+        match self {
+            Self::Global { row_groups, .. } => row_groups.contains(&row_group_idx),
+            Self::PerRowGroup(row_groups) => row_groups
+                .iter()
+                .any(|row_group| row_group.row_group_index == row_group_idx),
+        }
+    }
+
     fn len(&self) -> usize {
         match self {
             Self::Global { row_groups, .. } => row_groups.len(),
@@ -200,6 +210,11 @@ impl RowGroupFrontier {
             budget,
             has_predicates,
         })
+    }
+
+    /// Returns `true` if `row_group_idx` is still queued to be read.
+    pub(crate) fn is_queued(&self, row_group_idx: usize) -> bool {
+        self.queued.contains(row_group_idx)
     }
 
     pub(crate) fn update_budget_after_row_group(&mut self, budget: RowBudget) {
