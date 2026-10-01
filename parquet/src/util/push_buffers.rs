@@ -269,8 +269,9 @@ impl PushBuffers {
     /// the allocator frees the memory of a pushed [`Bytes`] only after all of
     /// its parts are removed.
     ///
-    /// If the buffers are sorted by start, they stay sorted. If no buffer
-    /// overlaps `ranges`, the buffers do not change.
+    /// If the buffers are sorted by start, they stay sorted. The order of
+    /// buffers with the same start is not specified. If no buffer overlaps
+    /// `ranges`, the buffers do not change.
     #[cfg(feature = "arrow")]
     pub(crate) fn release_ranges(&mut self, ranges: &[Range<u64>]) {
         let release = merge_ranges(ranges);
@@ -280,45 +281,87 @@ impl PushBuffers {
         // Most calls release ranges that are no longer buffered. Return
         // before reallocating the buffers.
         let overlaps = |range: &Range<u64>| {
-            let first = release.partition_point(|r| r.end <= range.start);
-            release.get(first).is_some_and(|r| r.start < range.end)
+            !range.is_empty() && {
+                let first = release.partition_point(|r| r.end <= range.start);
+                release.get(first).is_some_and(|r| r.start < range.end)
+            }
         };
         if !self.ranges.iter().any(overlaps) {
             return;
         }
-        let mut new_ranges = Vec::with_capacity(self.ranges.len());
-        let mut new_buffers = Vec::with_capacity(self.buffers.len());
-        for (range, buffer) in self.ranges.drain(..).zip(self.buffers.drain(..)) {
-            // Keep the parts of `range` between the released ranges.
+        // Trim the buffers that overlap a released range in place, and do not
+        // clone or move the others. The parts after the first part of a split
+        // buffer go to `split`. A buffer that is released entirely becomes
+        // empty, and is removed below.
+        let mut split = vec![];
+        let mut emptied = false;
+        for (range, buffer) in self.ranges.iter_mut().zip(self.buffers.iter_mut()) {
+            if range.is_empty() {
+                emptied = true;
+                continue;
+            }
+            if !overlaps(range) {
+                continue;
+            }
+            let whole = range.clone();
+            let offset = |pos: u64| (pos - whole.start) as usize;
+            // The parts of `whole` between the released ranges.
+            let first = release.partition_point(|r| r.end <= whole.start);
+            let mut kept = 0;
+            let mut first_part = None;
             let mut keep = |part: Range<u64>| {
-                if part == range {
-                    new_buffers.push(buffer.clone());
+                kept += part.end - part.start;
+                if first_part.is_none() {
+                    first_part = Some(part);
                 } else {
-                    let start = (part.start - range.start) as usize;
-                    let end = (part.end - range.start) as usize;
-                    new_buffers.push(buffer.slice(start..end));
+                    let data = buffer.slice(offset(part.start)..offset(part.end));
+                    split.push((part, data));
                 }
-                new_ranges.push(part);
             };
-            let first = release.partition_point(|r| r.end <= range.start);
-            let mut start = range.start;
-            for r in release[first..].iter().take_while(|r| r.start < range.end) {
+            let mut start = whole.start;
+            for r in release[first..].iter().take_while(|r| r.start < whole.end) {
                 if start < r.start {
                     keep(start..r.start);
                 }
                 start = r.end;
             }
-            if start < range.end {
-                keep(start..range.end);
+            if start < whole.end {
+                keep(start..whole.end);
+            }
+            self.buffered_bytes -= (whole.end - whole.start) - kept;
+            match first_part {
+                Some(part) => {
+                    buffer.truncate(offset(part.end));
+                    let _ = buffer.split_to(offset(part.start));
+                    *range = part;
+                }
+                None => {
+                    *buffer = Bytes::new();
+                    *range = whole.start..whole.start;
+                    emptied = true;
+                }
             }
         }
-        // If buffers overlap, the tail of a split buffer can start after the
-        // start of the next buffer. The sort is stable.
-        self.buffered_bytes = new_ranges.iter().map(|r| r.end - r.start).sum();
-        if new_ranges.is_sorted_by_key(|range| range.start) {
-            (self.ranges, self.buffers) = (new_ranges, new_buffers);
-        } else {
-            let mut parts: Vec<_> = new_ranges.into_iter().zip(new_buffers).collect();
+        if emptied {
+            // Remove the released buffers. As before, this also removes empty
+            // buffers that were pushed. `retain` visits each element exactly
+            // once in the original order, so both calls keep the same indices.
+            let mut keep = self.ranges.iter().map(|range| !range.is_empty());
+            self.buffers.retain(|_| keep.next().unwrap());
+            self.ranges.retain(|range| !range.is_empty());
+        }
+        for (range, buffer) in split {
+            self.ranges.push(range);
+            self.buffers.push(buffer);
+        }
+        // Split parts are appended, and if buffers overlap, the tail of a
+        // trimmed buffer can start after the start of the next buffer. The
+        // sort is stable.
+        if !self.ranges.is_sorted_by_key(|range| range.start) {
+            let mut parts: Vec<_> = std::mem::take(&mut self.ranges)
+                .into_iter()
+                .zip(std::mem::take(&mut self.buffers))
+                .collect();
             parts.sort_by_key(|(range, _)| range.start);
             (self.ranges, self.buffers) = parts.into_iter().unzip();
         }
@@ -655,5 +698,138 @@ mod tests {
             err.to_string(),
             "Parquet error: Number of ranges (2) must match number of buffers (1)"
         );
+    }
+
+    /// The result of `release_ranges`, computed by rebuilding all buffers.
+    #[cfg(feature = "arrow")]
+    fn release_by_rebuild(
+        buffers: &PushBuffers,
+        release: &[Range<u64>],
+    ) -> Vec<(Range<u64>, Bytes)> {
+        let release = merge_ranges(release);
+        let mut parts = vec![];
+        for (range, buffer) in buffers.iter() {
+            let mut start = range.start;
+            let mut keep = |part: Range<u64>| {
+                let offset = |pos: u64| (pos - range.start) as usize;
+                parts.push((
+                    part.clone(),
+                    buffer.slice(offset(part.start)..offset(part.end)),
+                ));
+            };
+            for r in release
+                .iter()
+                .filter(|r| r.start < range.end && r.end > range.start)
+            {
+                if start < r.start {
+                    keep(start..r.start);
+                }
+                start = start.max(r.end);
+            }
+            if start < range.end {
+                keep(start..range.end);
+            }
+        }
+        parts.sort_by_key(|(range, _)| range.start);
+        parts
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    #[expect(clippy::reversed_empty_ranges)]
+    fn release_ranges_splits_and_removes_empty_buffers() {
+        let mut buffers = PushBuffers::new(100);
+        buffers
+            .push_range(0..20, Bytes::from_static(b"abcdefghijklmnopqrst"))
+            .unwrap();
+        // An empty and an inverted range, which `push_range` accepts.
+        buffers.push_range(30..30, Bytes::new()).unwrap();
+        buffers.push_range(10..5, Bytes::new()).unwrap();
+
+        // Split one buffer into three parts.
+        buffers.release_ranges(&[3..5, 8..10]);
+        assert_eq!(buffers.ranges, vec![0..3, 5..8, 10..20]);
+        assert_eq!(buffers.buffered_bytes(), 16);
+        assert_eq!(buffers.get_bytes(5, 3).unwrap(), Bytes::from_static(b"fgh"));
+
+        // Release a whole buffer.
+        release(&mut buffers, 5..8);
+        assert_eq!(buffers.ranges, vec![0..3, 10..20]);
+        assert_eq!(buffers.buffered_bytes(), 13);
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn release_ranges_matches_rebuild() {
+        use rand::{RngExt, SeedableRng, rngs::StdRng};
+        let data: Vec<u8> = (0..=255).collect();
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..2000 {
+            let mut buffers = PushBuffers::new(256);
+            for _ in 0..rng.random_range(0..6) {
+                let start = rng.random_range(0..100u64);
+                if rng.random_bool(0.1) {
+                    // An inverted range, which `push_range` accepts.
+                    let end = start.saturating_sub(rng.random_range(1..5u64));
+                    buffers.push_range(start..end, Bytes::new()).unwrap();
+                    continue;
+                }
+                let end = start + rng.random_range(0..20u64);
+                let bytes = Bytes::copy_from_slice(&data[start as usize..end as usize]);
+                buffers.push_range(start..end, bytes).unwrap();
+            }
+            for _ in 0..3 {
+                let release: Vec<_> = (0..rng.random_range(0..4))
+                    .map(|_| {
+                        let start = rng.random_range(0..110u64);
+                        start..start + rng.random_range(0..15u64)
+                    })
+                    .collect();
+                let overlaps = buffers.iter().any(|(range, _)| {
+                    !range.is_empty()
+                        && release
+                            .iter()
+                            .any(|r| !r.is_empty() && r.start < range.end && r.end > range.start)
+                });
+                let before: Vec<_> = buffers
+                    .iter()
+                    .map(|(r, b)| (r.clone(), b.clone()))
+                    .collect();
+                let expected = release_by_rebuild(&buffers, &release);
+
+                buffers.release_ranges(&release);
+                let actual: Vec<_> = buffers
+                    .iter()
+                    .map(|(r, b)| (r.clone(), b.clone()))
+                    .collect();
+                if overlaps {
+                    // The buffers are sorted by start. The order of buffers
+                    // with the same start is not specified.
+                    assert!(actual.is_sorted_by_key(|(range, _)| range.start));
+                    let by_range = |mut parts: Vec<(Range<u64>, Bytes)>| {
+                        parts.sort_by_key(|(range, _)| (range.start, range.end));
+                        parts
+                    };
+                    assert_eq!(
+                        by_range(actual.clone()),
+                        by_range(expected),
+                        "release {release:?} of {before:?}"
+                    );
+                } else {
+                    assert_eq!(actual, before, "release {release:?} of {before:?}");
+                }
+                for (range, buffer) in actual.iter().filter(|(range, _)| !range.is_empty()) {
+                    assert_eq!(
+                        &data[range.start as usize..range.end as usize],
+                        buffer.as_ref()
+                    );
+                }
+                let total: u64 = actual
+                    .iter()
+                    .map(|(r, _)| r.end.saturating_sub(r.start))
+                    .sum();
+                assert_eq!(buffers.buffered_bytes(), total);
+            }
+        }
     }
 }
