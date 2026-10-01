@@ -24,7 +24,10 @@ use crate::{
         column_crypto_metadata::ColumnCryptoMetaData,
         metadata::{
             HeapSize, ParquetMetaData, ParquetMetaDataOptions, RowGroupMetaData,
-            thrift::{parquet_metadata_from_bytes, read_column_metadata, validate_column_metadata},
+            thrift::{
+                file_metadata_and_row_groups_from_bytes, read_column_metadata,
+                validate_column_metadata,
+            },
         },
     },
     parquet_thrift::{
@@ -292,19 +295,8 @@ pub(crate) fn parquet_metadata_with_encryption(
         }
     }
 
-    let parquet_meta = parquet_metadata_from_bytes(buf, options)
+    let (mut file_metadata, row_groups) = file_metadata_and_row_groups_from_bytes(buf, options)
         .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
-
-    let ParquetMetaData {
-        file_metadata,
-        row_groups,
-        page_index: _,
-        file_decryptor: _,
-    } = parquet_meta;
-
-    // this is called right after creating parquet_meta, so there should be no other references
-    let mut file_metadata = Arc::unwrap_or_clone(file_metadata);
-    let row_groups = Arc::unwrap_or_clone(row_groups);
 
     // Take the encryption algorithm and footer signing key metadata as they are no longer
     // needed after this.
