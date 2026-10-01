@@ -22,7 +22,7 @@ use crate::errors::AvroError;
 use crate::schema::{AvroSchema, AvroSchemaOptions, SCHEMA_METADATA_KEY};
 use crate::writer::encoder::write_long;
 use arrow_schema::Schema;
-use rand::RngCore;
+use rand::Rng;
 use std::fmt::Debug;
 use std::io::Write;
 
@@ -73,7 +73,7 @@ impl AvroFormat for AvroOcfFormat {
                 strip_metadata: true,
             }),
         )
-        .map_err(|e| AvroError::SchemaError(format!("{:?}", e)))?;
+        .map_err(|e| AvroError::SchemaError(format!("{e:?}")))?;
         // Magic
         writer.write_all(b"Obj\x01")?;
         // File metadata map: { "avro.schema": <json>, "avro.codec": <codec> }

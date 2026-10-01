@@ -119,13 +119,13 @@ pub fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result
         }
         Value::Object(obj) => {
             let mut obj_builder = builder.try_new_object()?;
-            for (key, value) in obj.iter() {
+            for (key, value) in obj {
                 let mut field_builder = ObjectFieldBuilder::new(key, &mut obj_builder);
                 append_json(value, &mut field_builder)?;
             }
             obj_builder.finish();
         }
-    };
+    }
     Ok(())
 }
 

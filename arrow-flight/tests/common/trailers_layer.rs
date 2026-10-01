@@ -105,10 +105,10 @@ impl<B: http_body::Body> http_body::Body for WrappedBody<B> {
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let mut result = ready!(self.project().inner.poll_frame(cx));
 
-        if let Some(Ok(frame)) = &mut result {
-            if let Some(trailers) = frame.trailers_mut() {
-                trailers.insert("test-trailer", HeaderValue::from_static("trailer_val"));
-            }
+        if let Some(Ok(frame)) = &mut result
+            && let Some(trailers) = frame.trailers_mut()
+        {
+            trailers.insert("test-trailer", HeaderValue::from_static("trailer_val"));
         }
 
         Poll::Ready(result)

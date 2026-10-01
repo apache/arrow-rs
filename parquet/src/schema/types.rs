@@ -106,17 +106,23 @@ impl Type {
     }
 
     /// Gets the fields from this group type.
-    /// Note that this will panic if called on a non-group type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-group type
     // TODO: should we return `&[&Type]` here?
     pub fn get_fields(&self) -> &[TypePtr] {
         match *self {
             Type::GroupType { ref fields, .. } => &fields[..],
-            _ => panic!("Cannot call get_fields() on a non-group type"),
+            Type::PrimitiveType { .. } => panic!("Cannot call get_fields() on a non-group type"),
         }
     }
 
     /// Gets physical type of this primitive type.
-    /// Note that this will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn get_physical_type(&self) -> PhysicalType {
         match *self {
             Type::PrimitiveType {
@@ -124,25 +130,33 @@ impl Type {
                 physical_type,
                 ..
             } => physical_type,
-            _ => panic!("Cannot call get_physical_type() on a non-primitive type"),
+            Type::GroupType { .. } => {
+                panic!("Cannot call get_physical_type() on a non-primitive type")
+            }
         }
     }
 
     /// Gets precision of this primitive type.
-    /// Note that this will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn get_precision(&self) -> i32 {
         match *self {
             Type::PrimitiveType { precision, .. } => precision,
-            _ => panic!("Cannot call get_precision() on non-primitive type"),
+            Type::GroupType { .. } => panic!("Cannot call get_precision() on non-primitive type"),
         }
     }
 
     /// Gets scale of this primitive type.
-    /// Note that this will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn get_scale(&self) -> i32 {
         match *self {
             Type::PrimitiveType { scale, .. } => scale,
-            _ => panic!("Cannot call get_scale() on non-primitive type"),
+            Type::GroupType { .. } => panic!("Cannot call get_scale() on non-primitive type"),
         }
     }
 
@@ -171,7 +185,7 @@ impl Type {
                 for field in sub_type.get_fields() {
                     if !field_map
                         .get(field.name())
-                        .map(|tpe| tpe.check_contains(field))
+                        .map(|type_| type_.check_contains(field))
                         .unwrap_or(false)
                     {
                         return false;
@@ -197,7 +211,7 @@ impl Type {
     pub fn is_schema(&self) -> bool {
         match *self {
             Type::GroupType { ref basic_info, .. } => !basic_info.has_repetition(),
-            _ => false,
+            Type::PrimitiveType { .. } => false,
         }
     }
 
@@ -314,12 +328,19 @@ impl<'a> PrimitiveTypeBuilder<'a> {
     /// Creates a new `PrimitiveType` instance from the collected attributes.
     /// Returns `Err` in case of any building conditions are not met.
     pub fn build(self) -> Result<Type> {
+        let sort_order = ColumnOrder::column_order_for_type(
+            self.logical_type.as_ref(),
+            self.converted_type,
+            self.physical_type,
+        )
+        .sort_order();
         let mut basic_info = BasicTypeInfo {
             name: String::from(self.name),
             repetition: Some(self.repetition),
             converted_type: self.converted_type,
             logical_type: self.logical_type.clone(),
             id: self.id,
+            sort_order,
         };
 
         // Check length before logical type, since it is used for logical type validation.
@@ -349,7 +370,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             }
             // Check that logical type and physical type are compatible
             match (logical_type, self.physical_type) {
-                (LogicalType::Map, _) | (LogicalType::List, _) => {
+                (LogicalType::Map | LogicalType::List | LogicalType::File, _) => {
                     return Err(general_err!(
                         "{:?} cannot be applied to a primitive type for field '{}'",
                         logical_type,
@@ -645,12 +666,16 @@ impl<'a> GroupTypeBuilder<'a> {
 
     /// Creates a new `GroupType` instance from the gathered attributes.
     pub fn build(self) -> Result<Type> {
+        if matches!(&self.logical_type, Some(LogicalType::File)) {
+            validate_file_type_fields(self.name, &self.fields)?;
+        }
         let mut basic_info = BasicTypeInfo {
             name: String::from(self.name),
             repetition: self.repetition,
             converted_type: self.converted_type,
             logical_type: self.logical_type.clone(),
             id: self.id,
+            sort_order: SortOrder::UNDEFINED,
         };
         // Populate the converted type if only the logical type is populated
         if self.logical_type.is_some() && self.converted_type == ConvertedType::NONE {
@@ -663,6 +688,96 @@ impl<'a> GroupTypeBuilder<'a> {
     }
 }
 
+/// Validates the fields of a `FILE`-annotated group against the Parquet
+/// [specification].
+///
+/// A `FILE` group annotates a reference to a range of bytes. Every field is
+/// optional both in the schema and in the data: a writer may omit any field
+/// from the group definition, and any field that is present must have a field
+/// repetition type of `OPTIONAL`. The recognized fields (identified by name)
+/// and their expected physical/logical types are:
+///
+/// | Field          | Physical type | Logical type |
+/// |----------------|---------------|--------------|
+/// | `uri`          | `BYTE_ARRAY`  | `STRING`     |
+/// | `offset`       | `INT64`       | —            |
+/// | `size`         | `INT64`       | —            |
+/// | `content_type` | `BYTE_ARRAY`  | `STRING`     |
+/// | `checksum`     | `BYTE_ARRAY`  | `STRING`     |
+/// | `inline`       | `BYTE_ARRAY`  | —            |
+///
+/// [specification]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#file
+fn validate_file_type_fields(name: &str, fields: &[TypePtr]) -> Result<()> {
+    // (name, expected physical type, expected logical type)
+    const VALID_FIELDS: &[(&str, PhysicalType, Option<LogicalType>)] = &[
+        ("uri", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+        ("offset", PhysicalType::INT64, None),
+        ("size", PhysicalType::INT64, None),
+        (
+            "content_type",
+            PhysicalType::BYTE_ARRAY,
+            Some(LogicalType::String),
+        ),
+        (
+            "checksum",
+            PhysicalType::BYTE_ARRAY,
+            Some(LogicalType::String),
+        ),
+        ("inline", PhysicalType::BYTE_ARRAY, None),
+    ];
+
+    for field in fields {
+        let field_name = field.get_basic_info().name();
+        let Some((_, expected_physical, expected_logical)) =
+            VALID_FIELDS.iter().find(|(n, _, _)| *n == field_name)
+        else {
+            return Err(general_err!(
+                "FILE type group '{}' contains unrecognized field '{}'. \
+                 Valid fields are: uri, offset, size, content_type, checksum, inline",
+                name,
+                field_name
+            ));
+        };
+
+        // Every field present in a FILE group must be OPTIONAL.
+        let is_optional = field.get_basic_info().has_repetition()
+            && field.get_basic_info().repetition() == Repetition::OPTIONAL;
+        if !is_optional {
+            return Err(general_err!(
+                "FILE type field '{}' must be OPTIONAL in group '{}'",
+                field_name,
+                name
+            ));
+        }
+
+        // FILE fields are always primitives with a fixed physical type.
+        if field.is_group() {
+            return Err(general_err!(
+                "FILE type field '{}' in group '{}' must be a primitive type",
+                field_name,
+                name
+            ));
+        }
+        if field.get_physical_type() != *expected_physical {
+            return Err(general_err!(
+                "FILE type field '{}' in group '{}' must have physical type {:?}",
+                field_name,
+                name,
+                expected_physical
+            ));
+        }
+        if field.get_basic_info().logical_type_ref() != expected_logical.as_ref() {
+            return Err(general_err!(
+                "FILE type field '{}' in group '{}' must have logical type {:?}",
+                field_name,
+                name,
+                expected_logical
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Basic type info. This contains information such as the name of the type,
 /// the repetition level, the logical type and the kind of the type (group, primitive).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -672,6 +787,7 @@ pub struct BasicTypeInfo {
     converted_type: ConvertedType,
     logical_type: Option<LogicalType>,
     id: Option<i32>,
+    sort_order: SortOrder,
 }
 
 impl HeapSize for BasicTypeInfo {
@@ -695,6 +811,10 @@ impl BasicTypeInfo {
     }
 
     /// Returns [`Repetition`] value for the type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the repetition is not set, see [`Self::has_repetition`]
     pub fn repetition(&self) -> Repetition {
         assert!(self.repetition.is_some());
         self.repetition.unwrap()
@@ -703,19 +823,6 @@ impl BasicTypeInfo {
     /// Returns [`ConvertedType`] value for the type.
     pub fn converted_type(&self) -> ConvertedType {
         self.converted_type
-    }
-
-    /// Returns [`LogicalType`] value for the type.
-    ///
-    /// Note that this function will clone the `LogicalType`. If performance is a concern,
-    /// use [`Self::logical_type_ref`] instead.
-    #[deprecated(
-        since = "57.1.0",
-        note = "use `BasicTypeInfo::logical_type_ref` instead (LogicalType cloning is non trivial)"
-    )]
-    pub fn logical_type(&self) -> Option<LogicalType> {
-        // Unlike ConvertedType, LogicalType cannot implement Copy, thus we clone it
-        self.logical_type.clone()
     }
 
     /// Return a reference to the [`LogicalType`] value for the type.
@@ -729,9 +836,18 @@ impl BasicTypeInfo {
     }
 
     /// Returns id value for the type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the id is not set, see [`Self::has_id`]
     pub fn id(&self) -> i32 {
         assert!(self.id.is_some());
         self.id.unwrap()
+    }
+
+    /// Returns [`SortOrder`] for the type.
+    pub fn sort_order(&self) -> SortOrder {
+        self.sort_order
     }
 }
 
@@ -928,6 +1044,11 @@ impl ColumnDescriptor {
         self.primitive_type.clone()
     }
 
+    /// Returns [`BasicTypeInfo`] information for this leaf column.
+    pub fn get_basic_info(&self) -> &BasicTypeInfo {
+        self.primitive_type.get_basic_info()
+    }
+
     /// Returns column name.
     pub fn name(&self) -> &str {
         self.primitive_type.name()
@@ -938,69 +1059,65 @@ impl ColumnDescriptor {
         self.primitive_type.get_basic_info().converted_type()
     }
 
-    /// Returns [`LogicalType`] for this column.
-    ///
-    /// Note that this function will clone the `LogicalType`. If performance is a concern,
-    /// use [`Self::logical_type_ref`] instead.
-    #[deprecated(
-        since = "57.1.0",
-        note = "use `ColumnDescriptor::logical_type_ref` instead (LogicalType cloning is non trivial)"
-    )]
-    pub fn logical_type(&self) -> Option<LogicalType> {
-        self.primitive_type
-            .get_basic_info()
-            .logical_type_ref()
-            .cloned()
-    }
-
     /// Returns a reference to the [`LogicalType`] for this column.
     pub fn logical_type_ref(&self) -> Option<&LogicalType> {
         self.primitive_type.get_basic_info().logical_type_ref()
     }
 
     /// Returns physical type for this column.
-    /// Note that it will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn physical_type(&self) -> PhysicalType {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { physical_type, .. } => *physical_type,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
     /// Returns type length for this column.
-    /// Note that it will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn type_length(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { type_length, .. } => *type_length,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
     /// Returns type precision for this column.
-    /// Note that it will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn type_precision(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { precision, .. } => *precision,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
     /// Returns type scale for this column.
-    /// Note that it will panic if called on a non-primitive type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-primitive type
     pub fn type_scale(&self) -> i32 {
         match self.primitive_type.as_ref() {
             Type::PrimitiveType { scale, .. } => *scale,
-            _ => panic!("Expected primitive type!"),
+            Type::GroupType { .. } => panic!("Expected primitive type!"),
         }
     }
 
-    /// Returns the sort order for this column
+    /// Returns the sort order for this column as currently defined for the logical or
+    /// physical type.
+    ///
+    /// Returns `SortOrder::UNDEFINED` for non-primitive types.
     pub fn sort_order(&self) -> SortOrder {
-        ColumnOrder::sort_order_for_type(
-            self.logical_type_ref(),
-            self.converted_type(),
-            self.physical_type(),
-        )
+        self.primitive_type.get_basic_info().sort_order()
     }
 }
 
@@ -1108,6 +1225,10 @@ impl SchemaDescriptor {
     }
 
     /// Returns [`ColumnDescriptor`] for a field position.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.num_columns()`
     pub fn column(&self, i: usize) -> ColumnDescPtr {
         assert!(
             i < self.leaves.len(),
@@ -1135,12 +1256,20 @@ impl SchemaDescriptor {
     }
 
     /// Returns column root [`Type`] pointer for a leaf position.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.num_columns()`
     pub fn get_column_root_ptr(&self, i: usize) -> TypePtr {
         let result = self.column_root_of(i);
         result.clone()
     }
 
     /// Returns the index of the root column for a field position
+    ///
+    /// # Panics
+    ///
+    /// Panics if `leaf` is out of bounds
     pub fn get_column_root_idx(&self, leaf: usize) -> usize {
         assert!(
             leaf < self.leaves.len(),
@@ -1181,7 +1310,7 @@ pub(crate) fn num_nodes(tp: &TypePtr) -> Result<usize> {
         return Err(general_err!("Root schema must be Group type"));
     }
     let mut n_nodes = 1usize; // count root
-    for f in tp.get_fields().iter() {
+    for f in tp.get_fields() {
         count_nodes(f, &mut n_nodes);
     }
     Ok(n_nodes)
@@ -1202,7 +1331,7 @@ fn num_leaves(tp: &TypePtr) -> Result<usize> {
         return Err(general_err!("Root schema must be Group type"));
     }
     let mut n_leaves = 0usize;
-    for f in tp.get_fields().iter() {
+    for f in tp.get_fields() {
         count_leaves(f, &mut n_leaves);
     }
     Ok(n_leaves)
@@ -1219,7 +1348,7 @@ fn count_leaves(tp: &TypePtr, n_leaves: &mut usize) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn build_tree<'a>(
     tp: &'a TypePtr,
     root_idx: usize,
@@ -1242,7 +1371,7 @@ fn build_tree<'a>(
             max_rep_level += 1;
             repeated_ancestor_def_level = max_def_level;
         }
-        _ => {}
+        Repetition::REQUIRED => {}
     }
 
     match tp.as_ref() {
@@ -1278,20 +1407,23 @@ fn build_tree<'a>(
 }
 
 /// Checks if the logical type is valid.
-fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
-    if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type {
-        if *bit_width != 8 && *bit_width != 16 && *bit_width != 32 && *bit_width != 64 {
-            return Err(general_err!(
-                "Bit width must be 8, 16, 32, or 64 for Integer logical type"
-            ));
-        }
+fn check_logical_type(logical_type: Option<&LogicalType>) -> Result<()> {
+    if let Some(LogicalType::Integer(IntType { bit_width, .. })) = logical_type
+        && *bit_width != 8
+        && *bit_width != 16
+        && *bit_width != 32
+        && *bit_width != 64
+    {
+        return Err(general_err!(
+            "Bit width must be 8, 16, 32, or 64 for Integer logical type"
+        ));
     }
     Ok(())
 }
 
 // convert thrift decoded array of `SchemaElement` into this crate's representation of
 // parquet types. this function consumes `elements`.
-pub(crate) fn parquet_schema_from_array<'a>(elements: Vec<SchemaElement<'a>>) -> Result<TypePtr> {
+pub(crate) fn parquet_schema_from_array(elements: Vec<SchemaElement<'_>>) -> Result<TypePtr> {
     let mut index = 0;
     let num_elements = elements.len();
     let mut schema_nodes = Vec::with_capacity(1); // there should only be one element when done
@@ -1319,8 +1451,8 @@ pub(crate) fn parquet_schema_from_array<'a>(elements: Vec<SchemaElement<'a>>) ->
 }
 
 // recursive helper function for schema conversion
-fn schema_from_array_helper<'a>(
-    elements: &mut IntoIter<SchemaElement<'a>>,
+fn schema_from_array_helper(
+    elements: &mut IntoIter<SchemaElement<'_>>,
     num_elements: usize,
     index: usize,
 ) -> Result<(usize, TypePtr)> {
@@ -1345,10 +1477,10 @@ fn schema_from_array_helper<'a>(
 
     let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
 
-    // LogicalType is prefered to ConvertedType, but both may be present.
+    // LogicalType is preferred to ConvertedType, but both may be present.
     let logical_type = element.logical_type;
 
-    check_logical_type(&logical_type)?;
+    check_logical_type(logical_type.as_ref())?;
 
     let field_id = element.field_id;
     match element.num_children {
@@ -1468,7 +1600,7 @@ mod tests {
                 Type::PrimitiveType { physical_type, .. } => {
                     assert_eq!(physical_type, PhysicalType::INT32);
                 }
-                _ => panic!(),
+                Type::GroupType { .. } => panic!(),
             }
         }
 
@@ -2503,6 +2635,193 @@ mod tests {
 
         let result_schema = parquet_schema_from_array(thrift_schema).unwrap();
         assert_eq!(result_schema, expected_schema);
+    }
+
+    /// Builds an `OPTIONAL` primitive field for use inside a `FILE` group.
+    fn file_field(name: &str, physical: PhysicalType, logical: Option<LogicalType>) -> TypePtr {
+        Arc::new(
+            Type::primitive_type_builder(name, physical)
+                .with_repetition(Repetition::OPTIONAL)
+                .with_logical_type(logical)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// The full set of recognized `FILE` fields, all `OPTIONAL`, per the spec.
+    fn all_file_fields() -> Vec<TypePtr> {
+        vec![
+            file_field("uri", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+            file_field("offset", PhysicalType::INT64, None),
+            file_field("size", PhysicalType::INT64, None),
+            file_field(
+                "content_type",
+                PhysicalType::BYTE_ARRAY,
+                Some(LogicalType::String),
+            ),
+            file_field(
+                "checksum",
+                PhysicalType::BYTE_ARRAY,
+                Some(LogicalType::String),
+            ),
+            file_field("inline", PhysicalType::BYTE_ARRAY, None),
+        ]
+    }
+
+    #[test]
+    fn test_file_logical_type_roundtrip() {
+        let file_group = Arc::new(
+            Type::group_type_builder("f")
+                .with_repetition(Repetition::REQUIRED)
+                .with_logical_type(Some(LogicalType::File))
+                .with_fields(all_file_fields())
+                .build()
+                .unwrap(),
+        );
+        let schema = Arc::new(
+            Type::group_type_builder("example")
+                .with_fields(vec![file_group])
+                .build()
+                .unwrap(),
+        );
+        let result = roundtrip_schema(schema.clone()).unwrap();
+        assert_eq!(result, schema);
+        assert_eq!(
+            result.get_fields()[0].get_basic_info().logical_type_ref(),
+            Some(&LogicalType::File)
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_all_fields() {
+        let result = Type::group_type_builder("file_field")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(all_file_fields())
+            .build();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().get_fields().len(), 6);
+    }
+
+    #[test]
+    fn test_file_logical_type_uri_only() {
+        // Every field is optional, so a group may define just `uri`.
+        let result = Type::group_type_builder("file_field")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![file_field(
+                "uri",
+                PhysicalType::BYTE_ARRAY,
+                Some(LogicalType::String),
+            )])
+            .build();
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap().get_basic_info().logical_type_ref(),
+            Some(&LogicalType::File)
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_inline_only() {
+        // An inline-only group need only define `inline`.
+        let result = Type::group_type_builder("inline_file")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![file_field("inline", PhysicalType::BYTE_ARRAY, None)])
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_file_logical_type_empty_group_is_allowed() {
+        // No field is mandatory in the schema, so an empty group is valid.
+        let result = Type::group_type_builder("empty_file")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![])
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_file_logical_type_rejects_unrecognized_field() {
+        let unknown_field = file_field("unknown_field", PhysicalType::BYTE_ARRAY, None);
+        let result = Type::group_type_builder("bad_file")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![
+                file_field("uri", PhysicalType::BYTE_ARRAY, Some(LogicalType::String)),
+                unknown_field,
+            ])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type group 'bad_file' contains unrecognized field \
+             'unknown_field'. Valid fields are: uri, offset, size, content_type, \
+             checksum, inline"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_requires_optional_fields() {
+        // A REQUIRED field is no longer valid: every field must be OPTIONAL.
+        let uri_field = Arc::new(
+            Type::primitive_type_builder("uri", PhysicalType::BYTE_ARRAY)
+                .with_repetition(Repetition::REQUIRED)
+                .with_logical_type(Some(LogicalType::String))
+                .build()
+                .unwrap(),
+        );
+        let result = Type::group_type_builder("required_uri")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![uri_field])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type field 'uri' must be OPTIONAL in group 'required_uri'"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_rejects_wrong_physical_type() {
+        // `size` must be an INT64, not a BYTE_ARRAY.
+        let bad_size = file_field("size", PhysicalType::BYTE_ARRAY, None);
+        let result = Type::group_type_builder("bad_size")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![bad_size])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type field 'size' in group 'bad_size' must have physical type INT64"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_rejects_wrong_logical_type() {
+        // `uri` must carry the STRING logical type.
+        let bad_uri = file_field("uri", PhysicalType::BYTE_ARRAY, None);
+        let result = Type::group_type_builder("bad_uri")
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .with_fields(vec![bad_uri])
+            .build();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Parquet error: FILE type field 'uri' in group 'bad_uri' must have logical type \
+             Some(String)"
+        );
+    }
+
+    #[test]
+    fn test_file_logical_type_not_allowed_on_primitive() {
+        let result = Type::primitive_type_builder("bad", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_logical_type(Some(LogicalType::File))
+            .build();
+        assert!(result.is_err());
     }
 
     #[test]

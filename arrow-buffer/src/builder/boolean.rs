@@ -63,6 +63,10 @@ impl BooleanBufferBuilder {
     }
 
     /// Creates a new `BooleanBufferBuilder` from [`MutableBuffer`] of `len`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `len > buffer.len() * 8`
     pub fn new_from_buffer(buffer: MutableBuffer, len: usize) -> Self {
         assert!(len <= buffer.len() * 8);
         let mut s = Self {
@@ -80,6 +84,10 @@ impl BooleanBufferBuilder {
     }
 
     /// Sets a bit in the buffer at `index`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index / 8 >= self.as_slice().len()`
     #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
         if v {
@@ -90,6 +98,10 @@ impl BooleanBufferBuilder {
     }
 
     /// Gets a bit in the buffer at `index`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index / 8 >= self.as_slice().len()`
     #[inline]
     pub fn get_bit(&self, index: usize) -> bool {
         bit_util::get_bit(self.buffer.as_slice(), index)
@@ -149,9 +161,11 @@ impl BooleanBufferBuilder {
         self.len = len;
 
         let remainder = self.len % 8;
-        if remainder != 0 {
+        if remainder != 0
+            && let Some(last) = self.buffer.as_mut().last_mut()
+        {
             let mask = (1_u8 << remainder).wrapping_sub(1);
-            *self.buffer.as_mut().last_mut().unwrap() &= mask;
+            *last &= mask;
         }
     }
 
@@ -186,6 +200,46 @@ impl BooleanBufferBuilder {
         }
     }
 
+    /// Appends the low `count` bits from `word` into the buffer.
+    ///
+    /// `word` is treated as a packed LSB-first bitmap. Only the lowest
+    /// `count` bits are appended; higher bits are ignored.
+    ///
+    /// This is significantly faster than calling [`Self::append`] in a
+    /// loop when the caller already has bits packed into a `u64`.
+    #[inline]
+    pub fn append_word(&mut self, word: u64, count: usize) {
+        debug_assert!(count <= 64);
+        let mask = (u64::MAX >> ((64 - count) & 63)) * ((count != 0) as u64);
+        let word = word & mask;
+
+        let new_len = self.len + count;
+        let new_len_bytes = bit_util::ceil(new_len, 8);
+        if new_len_bytes > self.buffer.len() {
+            self.buffer.resize(new_len_bytes, 0);
+        }
+
+        let bit_offset = self.len & 7;
+        let byte_start = self.len / 8;
+        let buf = self.buffer.as_slice_mut();
+
+        // Shift the word to align with the bit offset within the
+        // current byte, then OR it into the buffer. The shift merges
+        // correctly with any existing bits in the partial trailing byte.
+        let shifted = word << bit_offset;
+        let shifted_bytes = shifted.to_le_bytes();
+        let bytes_to_write = bit_util::ceil(count + bit_offset, 8).min(8);
+        for i in 0..bytes_to_write {
+            buf[byte_start + i] |= shifted_bytes[i];
+        }
+        // When bit_offset > 0 the shift can overflow into a 9th byte.
+        if bit_offset > 0 && count + bit_offset > 64 {
+            buf[byte_start + 8] |= (word >> (64 - bit_offset)) as u8;
+        }
+
+        self.len = new_len;
+    }
+
     /// Appends n `additional` bits of value `v` into the buffer
     #[inline]
     pub fn append_n(&mut self, additional: usize, v: bool) {
@@ -196,14 +250,18 @@ impl BooleanBufferBuilder {
                 let cur_remainder = self.len % 8;
                 let new_remainder = new_len % 8;
 
-                if cur_remainder != 0 {
+                if cur_remainder != 0
+                    && let Some(last) = self.buffer.as_slice_mut().last_mut()
+                {
                     // Pad last byte with 1s
-                    *self.buffer.as_slice_mut().last_mut().unwrap() |= !((1 << cur_remainder) - 1)
+                    *last |= !((1 << cur_remainder) - 1);
                 }
                 self.buffer.resize(new_len_bytes, 0xFF);
-                if new_remainder != 0 {
+                if new_remainder != 0
+                    && let Some(last) = self.buffer.as_slice_mut().last_mut()
+                {
                     // Clear remaining bits
-                    *self.buffer.as_slice_mut().last_mut().unwrap() &= (1 << new_remainder) - 1
+                    *last &= (1 << new_remainder) - 1;
                 }
                 self.len = new_len;
             }
@@ -594,7 +652,7 @@ mod tests {
         assert_eq!(builder.len(), 100);
         let finished = builder.finish();
         for (i, v) in bools.into_iter().enumerate() {
-            assert_eq!(finished.value(i), v, "at index {}", i);
+            assert_eq!(finished.value(i), v, "at index {i}");
         }
     }
 
@@ -619,6 +677,102 @@ mod tests {
         }
     }
 
+    /// Helper: build via append_word and verify against bit-by-bit append.
+    fn check_append_word(initial_bits: usize, word: u64, count: usize) {
+        let mut got = BooleanBufferBuilder::new(0);
+        let mut expected = BooleanBufferBuilder::new(0);
+        got.append_n(initial_bits, true);
+        expected.append_n(initial_bits, true);
+        got.append_word(word, count);
+        for i in 0..count {
+            expected.append(word & (1 << i) != 0);
+        }
+        assert_eq!(got.len(), expected.len());
+        assert_eq!(got.finish(), expected.finish());
+    }
+
+    #[test]
+    fn test_append_word_zero_count() {
+        check_append_word(0, u64::MAX, 0);
+        check_append_word(3, u64::MAX, 0);
+    }
+
+    #[test]
+    fn test_append_word_aligned() {
+        for count in [1, 5, 8, 17, 64] {
+            check_append_word(0, 0xDEAD_BEEF_CAFE_BABE, count);
+        }
+    }
+
+    #[test]
+    fn test_append_word_unaligned() {
+        for offset in 1..=7 {
+            check_append_word(offset, 0xDEAD_BEEF_CAFE_BABE, 13);
+        }
+    }
+
+    #[test]
+    fn test_append_word_overflow_9th_byte() {
+        check_append_word(3, u64::MAX, 64);
+        check_append_word(7, 0xA5A5_A5A5_A5A5_A5A5, 64);
+    }
+
+    #[test]
+    fn test_append_word_small_counts() {
+        check_append_word(0, 0b1, 1);
+        check_append_word(0, 0b1010101, 7);
+        check_append_word(3, 0b1, 1);
+        check_append_word(3, 0b1010101, 7);
+    }
+
+    #[test]
+    fn test_append_word_ignores_high_bits_before_later_appends() {
+        let mut builder = BooleanBufferBuilder::new(0);
+        builder.append_word(0b10, 1);
+        builder.append(false);
+
+        let finished = builder.finish();
+        assert_eq!(finished.len(), 2);
+        assert!(!finished.value(0));
+        assert!(!finished.value(1));
+    }
+
+    #[test]
+    fn test_append_word_full_word() {
+        check_append_word(0, u64::MAX, 64);
+        check_append_word(0, 0, 64);
+    }
+
+    #[test]
+    fn test_append_word_sequential() {
+        let mut got = BooleanBufferBuilder::new(0);
+        let mut expected = BooleanBufferBuilder::new(0);
+        for (word, count) in [(0b1010u64, 4), (0b111u64, 3), (0u64, 5), (u64::MAX, 64)] {
+            got.append_word(word, count);
+            for i in 0..count {
+                expected.append(word & (1 << i) != 0);
+            }
+        }
+        assert_eq!(got.finish(), expected.finish());
+    }
+
+    #[test]
+    fn test_append_word_mixed_with_append() {
+        let mut got = BooleanBufferBuilder::new(0);
+        let mut expected = BooleanBufferBuilder::new(0);
+        got.append(true);
+        expected.append(true);
+        got.append_word(0b1100, 4);
+        for i in 0..4 {
+            expected.append(0b1100u64 & (1 << i) != 0);
+        }
+        got.append(false);
+        expected.append(false);
+        got.append_word(0xFF, 8);
+        expected.append_n(8, true);
+        assert_eq!(got.finish(), expected.finish());
+    }
+
     #[test]
     fn test_extend_misaligned_end() {
         for len in 1..130 {
@@ -632,7 +786,7 @@ mod tests {
 
             let finished = builder.finish();
             for (i, &v) in bools.iter().enumerate() {
-                assert_eq!(finished.value(i), v, "at index {} for len {}", i, len);
+                assert_eq!(finished.value(i), v, "at index {i} for len {len}");
             }
         }
     }

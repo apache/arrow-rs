@@ -23,9 +23,7 @@ use arrow::array::{
     Decimal128Builder, Decimal256Array, Decimal256Builder,
 };
 use criterion::Criterion;
-use rand::Rng;
-
-extern crate arrow;
+use rand::RngExt;
 
 use arrow_buffer::i256;
 

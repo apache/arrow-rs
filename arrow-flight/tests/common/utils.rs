@@ -30,6 +30,7 @@ use arrow_schema::{DataType, Field, Schema};
 /// Example:
 /// i: 0, 1, None, 3, 4
 /// f: 5.0, 4.0, None, 2.0, 1.0
+#[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
 #[allow(dead_code)]
 pub fn make_primitive_batch(num_rows: usize) -> RecordBatch {
     let i: UInt8Array = (0..num_rows)
@@ -59,6 +60,7 @@ pub fn make_primitive_batch(num_rows: usize) -> RecordBatch {
 ///
 /// Example:
 /// a: value0, value1, value2, None, value1, value2
+#[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
 #[allow(dead_code)]
 pub fn make_dictionary_batch(num_rows: usize) -> RecordBatch {
     let values: Vec<_> = (0..num_rows)
@@ -81,6 +83,7 @@ pub fn make_dictionary_batch(num_rows: usize) -> RecordBatch {
     RecordBatch::try_from_iter(vec![("a", Arc::new(a) as ArrayRef)]).unwrap()
 }
 
+#[expect(clippy::allow_attributes)] // some issue where expect(dead_code) doesn't fire properly
 #[allow(dead_code)]
 pub fn make_view_batches(num_rows: usize) -> RecordBatch {
     const LONG_TEST_STRING: &str =
@@ -102,7 +105,7 @@ pub fn make_view_batches(num_rows: usize) -> RecordBatch {
     let bin_view_values: Vec<Option<&[u8]>> = (0..num_rows)
         .map(|i| match i % 3 {
             0 => None,
-            1 => Some("bar".as_bytes()),
+            1 => Some(b"bar".as_slice()),
             2 => Some(LONG_TEST_STRING.as_bytes()),
             _ => unreachable!(),
         })

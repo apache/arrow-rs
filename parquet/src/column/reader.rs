@@ -89,6 +89,8 @@ pub fn get_column_reader(
 /// Gets a typed column reader for the specific type `T`, by "up-casting" `col_reader` of
 /// non-generic type to a generic column reader type `ColumnReaderImpl`.
 ///
+/// # Panics
+///
 /// Panics if actual enum value for `col_reader` does not match the type `T`.
 pub fn get_typed_column_reader<T: DataType>(col_reader: ColumnReader) -> ColumnReaderImpl<T> {
     T::get_column_reader(col_reader).unwrap_or_else(|| {
@@ -202,10 +204,32 @@ where
     pub fn read_records(
         &mut self,
         max_records: usize,
+        def_levels: Option<&mut D::Buffer>,
+        rep_levels: Option<&mut R::Buffer>,
+        values: &mut V::Buffer,
+    ) -> Result<(usize, usize, usize)> {
+        self.read_records_with_reservation(
+            max_records,
+            def_levels,
+            rep_levels,
+            values,
+            |_, _, _, _| Ok(()),
+        )
+    }
+
+    /// Like [`Self::read_records`], but invokes `reserve_values` after levels
+    /// are decoded and before values are read.
+    pub(crate) fn read_records_with_reservation<F>(
+        &mut self,
+        max_records: usize,
         mut def_levels: Option<&mut D::Buffer>,
         mut rep_levels: Option<&mut R::Buffer>,
         values: &mut V::Buffer,
-    ) -> Result<(usize, usize, usize)> {
+        mut reserve_values: F,
+    ) -> Result<(usize, usize, usize)>
+    where
+        F: FnMut(&mut V::Buffer, usize, usize, Option<&D::Buffer>) -> Result<()>,
+    {
         let mut total_records_read = 0;
         let mut total_levels_read = 0;
         let mut total_values_read = 0;
@@ -230,9 +254,7 @@ where
                         ));
                     }
                     if levels_read == remaining_levels && self.has_record_delimiter {
-                        // Reached end of page, which implies records_read < remaining_records
-                        // as otherwise would have stopped reading before reaching the end
-                        assert!(records_read < remaining_records); // Sanity check
+                        check_partial_record_fits(records_read, remaining_records)?;
                         records_read += reader.flush_partial() as usize;
                     }
                     (records_read, levels_read)
@@ -262,6 +284,9 @@ where
                 None => levels_to_read,
             };
 
+            let def_levels = def_levels.as_deref();
+            reserve_values(values, values_to_read, levels_to_read, def_levels)?;
+
             let values_read = self.values_decoder.read(values, values_to_read)?;
 
             if values_read != values_to_read {
@@ -288,9 +313,8 @@ where
         let mut remaining_records = num_records;
         while remaining_records != 0 {
             if self.num_buffered_values == self.num_decoded_values {
-                let metadata = match self.page_reader.peek_next_page()? {
-                    None => return Ok(num_records - remaining_records),
-                    Some(metadata) => metadata,
+                let Some(metadata) = self.page_reader.peek_next_page()? else {
+                    return Ok(num_records - remaining_records);
                 };
 
                 // If dictionary, we must read it
@@ -308,12 +332,12 @@ where
                         .then_some(metadata.num_levels)?
                 });
 
-                if let Some(rows) = rows {
-                    if rows <= remaining_records {
-                        self.page_reader.skip_next_page()?;
-                        remaining_records -= rows;
-                        continue;
-                    }
+                if let Some(rows) = rows
+                    && rows <= remaining_records
+                {
+                    self.page_reader.skip_next_page()?;
+                    remaining_records -= rows;
+                    continue;
                 }
                 // because self.num_buffered_values == self.num_decoded_values means
                 // we need reads a new page and set up the decoders for levels
@@ -333,9 +357,7 @@ where
                         decoder.skip_rep_levels(remaining_records, remaining_levels)?;
 
                     if levels_read == remaining_levels && self.has_record_delimiter {
-                        // Reached end of page, which implies records_read < remaining_records
-                        // as otherwise would have stopped reading before reaching the end
-                        assert!(records_read < remaining_records); // Sanity check
+                        check_partial_record_fits(records_read, remaining_records)?;
                         records_read += decoder.flush_partial() as usize;
                     }
 
@@ -417,7 +439,6 @@ where
                         } => {
                             self.values_decoder
                                 .set_dict(buf, num_values, encoding, is_sorted)?;
-                            continue;
                         }
                         // 2. Data page v1
                         Page::DataPage {
@@ -535,7 +556,7 @@ where
                             )?;
                             return Ok(true);
                         }
-                    };
+                    }
                 }
             }
         }
@@ -560,6 +581,22 @@ where
     }
 }
 
+/// Checks that a partial record can still be flushed into the caller's record budget.
+///
+/// Reaching the end of a page with a record delimiter means the decoder stopped because
+/// it ran out of levels, not records, so it cannot have used up the whole budget. A page
+/// whose repetition levels disagree with its record count breaks that, and flushing the
+/// partial record would then take the count past what was asked for.
+fn check_partial_record_fits(records_read: usize, remaining_records: usize) -> Result<()> {
+    if remaining_records <= records_read {
+        return Err(general_err!(
+            "page ended after {records_read} record(s), which is already all of the \
+             {remaining_records} record(s) asked for, so there is no partial record to flush"
+        ));
+    }
+    Ok(())
+}
+
 fn parse_v1_level(
     max_level: i16,
     num_buffered_values: u32,
@@ -580,7 +617,7 @@ fn parse_v1_level(
             }
             Err(general_err!("not enough data to read levels"))
         }
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Encoding::BIT_PACKED => {
             let bit_width = num_required_bits(max_level as u64);
             let num_bytes = ceil(num_buffered_values as usize * bit_width as usize, 8);
@@ -1264,7 +1301,7 @@ mod tests {
 
         // Helper function for the general case of `read_batch()` where `values`,
         // `def_levels` and `rep_levels` are always provided with enough space.
-        #[allow(clippy::too_many_arguments)]
+        #[expect(clippy::too_many_arguments)]
         fn test_read_batch_general(
             &mut self,
             desc: ColumnDescPtr,
@@ -1283,7 +1320,7 @@ mod tests {
 
         // Helper function to test `read_batch()` method with custom buffers for values,
         // definition and repetition levels.
-        #[allow(clippy::too_many_arguments)]
+        #[expect(clippy::too_many_arguments)]
         fn test_read_batch(
             &mut self,
             desc: ColumnDescPtr,
@@ -1312,7 +1349,7 @@ mod tests {
             let max_def_level = desc.max_def_level();
             let max_rep_level = desc.max_rep_level();
             let page_reader = InMemoryPageReader::new(pages);
-            let column_reader: ColumnReader = get_column_reader(desc, Box::new(page_reader));
+            let column_reader = get_column_reader(desc, Box::new(page_reader));
             let mut typed_column_reader = get_typed_column_reader::<T>(column_reader);
 
             let mut values = Vec::new();
@@ -1445,7 +1482,7 @@ mod tests {
         // 5 records total: [10,20], [30,40], [50,60], [70,80], [90,100]
         let pages = VecDeque::from(vec![page1, page2, page3]);
         let page_reader = InMemoryPageReader::new(pages);
-        let column_reader: ColumnReader = get_column_reader(desc, Box::new(page_reader));
+        let column_reader = get_column_reader(desc, Box::new(page_reader));
         let mut typed_reader = get_typed_column_reader::<Int32Type>(column_reader);
 
         // Step 1 — skip 1 record:

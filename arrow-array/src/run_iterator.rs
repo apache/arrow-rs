@@ -172,7 +172,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, rng, seq::SliceRandom};
+    use rand::{RngExt, rng, seq::SliceRandom};
 
     use crate::{
         Array, Int64RunArray, PrimitiveArray, RunArray,

@@ -19,9 +19,7 @@
 extern crate criterion;
 use criterion::Criterion;
 
-use rand::Rng;
-
-extern crate arrow;
+use rand::RngExt;
 
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::create_string_array};
@@ -42,7 +40,7 @@ fn bench<T: Array>(v1: &T, slices: &[(usize, usize)]) {
     let data = v1.to_data();
     let mut mutable = MutableArrayData::new(vec![&data], false, 5);
     for (start, end) in slices {
-        mutable.extend(0, *start, *end)
+        mutable.try_extend(0, *start, *end).unwrap();
     }
     mutable.freeze();
 }

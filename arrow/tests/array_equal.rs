@@ -19,7 +19,7 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, Decimal128Array, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
     FixedSizeListBuilder, GenericBinaryArray, GenericStringArray, Int32Array, Int32Builder,
     Int64Builder, ListArray, ListBuilder, NullArray, OffsetSizeTrait, StringArray,
-    StringDictionaryBuilder, StructArray, UnionBuilder, make_array,
+    StringDictionaryBuilder, StructArray, UnionArray, UnionBuilder, make_array,
 };
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_array::builder::{
@@ -29,9 +29,9 @@ use arrow_array::cast::AsArray;
 use arrow_array::{
     DictionaryArray, FixedSizeListArray, GenericListViewArray, PrimitiveArray, StringViewArray,
 };
-use arrow_buffer::{Buffer, ToByteSlice};
+use arrow_buffer::{Buffer, ScalarBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{DataType, Field, Fields};
+use arrow_schema::{DataType, Field, Fields, UnionFields};
 use arrow_select::take::take;
 use std::sync::Arc;
 
@@ -201,7 +201,7 @@ fn test_primitive_slice() {
     }
 }
 
-#[allow(clippy::eq_op)]
+#[expect(clippy::eq_op)]
 fn test_equal(lhs: &dyn Array, rhs: &dyn Array, expected: bool) {
     // equality is symmetric
     assert_eq!(lhs, lhs);
@@ -1273,6 +1273,104 @@ fn test_union_equal_sparse_slice() {
     test_equal(&a1.slice(1, 2), &a2, true)
 }
 
+/// Builds a sparse union with `Int32` children `a` (type id 0) and `b` (type id 1)
+/// from its component parts, so the values in unselected child slots can be
+/// chosen freely. `UnionBuilder` always pads unselected slots with nulls and so
+/// cannot produce arrays that differ only in unselected values.
+fn sparse_union(type_ids: &[i8], a: Int32Array, b: Int32Array) -> UnionArray {
+    let fields = UnionFields::try_new(
+        [0, 1],
+        [
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ],
+    )
+    .unwrap();
+    UnionArray::try_new(
+        fields,
+        ScalarBuffer::from(type_ids.to_vec()),
+        None,
+        vec![Arc::new(a), Arc::new(b)],
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_union_equal_sparse_ignores_unselected_children() {
+    // Slot 0 selects `a` and slot 1 selects `b`. The unselected child at each
+    // slot holds a different value, or a null, on each side.
+    let lhs = sparse_union(
+        &[0, 1],
+        Int32Array::from(vec![Some(1), Some(10)]),
+        Int32Array::from(vec![Some(20), Some(2)]),
+    );
+    let rhs = sparse_union(
+        &[0, 1],
+        Int32Array::from(vec![Some(1), None]),
+        Int32Array::from(vec![None, Some(2)]),
+    );
+    test_equal(&lhs, &rhs, true);
+    test_equal(&lhs.slice(0, 1), &rhs.slice(0, 1), true);
+    test_equal(&lhs.slice(1, 1), &rhs.slice(1, 1), true);
+
+    // A differing selected value is still detected.
+    let rhs = sparse_union(
+        &[0, 1],
+        Int32Array::from(vec![Some(3), Some(10)]),
+        Int32Array::from(vec![Some(20), Some(2)]),
+    );
+    test_equal(&lhs, &rhs, false);
+    test_equal(&lhs.slice(0, 1), &rhs.slice(0, 1), false);
+    test_equal(&lhs.slice(1, 1), &rhs.slice(1, 1), true);
+
+    // A selected null against a selected value is still detected.
+    let rhs = sparse_union(
+        &[0, 1],
+        Int32Array::from(vec![None, Some(10)]),
+        Int32Array::from(vec![Some(20), Some(2)]),
+    );
+    test_equal(&lhs, &rhs, false);
+}
+
+#[test]
+fn test_union_equal_sparse_runs() {
+    // The type ids form the runs [a, a], [b, b, b], [a].
+    let type_ids = [0, 0, 1, 1, 1, 0];
+    let lhs = sparse_union(
+        &type_ids,
+        Int32Array::from(vec![1, 2, 0, 0, 0, 6]),
+        Int32Array::from(vec![0, 0, 3, 4, 5, 0]),
+    );
+    let rhs = sparse_union(
+        &type_ids,
+        Int32Array::from(vec![1, 2, 9, 9, 9, 6]),
+        Int32Array::from(vec![9, 9, 3, 4, 5, 9]),
+    );
+    test_equal(&lhs, &rhs, true);
+    // Slices starting and ending in the middle of a run.
+    test_equal(&lhs.slice(1, 4), &rhs.slice(1, 4), true);
+    test_equal(&lhs.slice(3, 3), &rhs.slice(3, 3), true);
+
+    // A slice compared against an unsliced array with a different offset.
+    let unsliced = sparse_union(
+        &[0, 1, 1, 1],
+        Int32Array::from(vec![2, 7, 7, 7]),
+        Int32Array::from(vec![7, 3, 4, 5]),
+    );
+    test_equal(&lhs.slice(1, 4), &unsliced, true);
+
+    // A differing selected value in the middle of a run is still detected.
+    let rhs = sparse_union(
+        &type_ids,
+        Int32Array::from(vec![1, 2, 9, 9, 9, 6]),
+        Int32Array::from(vec![9, 9, 3, 7, 5, 9]),
+    );
+    test_equal(&lhs, &rhs, false);
+    test_equal(&lhs.slice(1, 4), &rhs.slice(1, 4), false);
+    test_equal(&lhs.slice(0, 3), &rhs.slice(0, 3), true);
+    test_equal(&lhs.slice(4, 2), &rhs.slice(4, 2), true);
+}
+
 #[test]
 fn test_boolean_slice() {
     let array = BooleanArray::from(vec![true; 32]);
@@ -1358,7 +1456,7 @@ fn make_struct(elements: Vec<Option<(Option<&'static str>, Option<i32>)>>) -> St
                 .field_builder::<StringBuilder>(0)
                 .unwrap()
                 .append_value(s),
-        };
+        }
 
         builder
             .field_builder::<Int32Builder>(1)

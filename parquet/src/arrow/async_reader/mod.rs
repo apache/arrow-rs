@@ -50,6 +50,13 @@ use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 mod metadata;
 pub use metadata::*;
 
+mod spawn;
+pub use spawn::SpawnedReader;
+
+/// Re-exported so [`ParquetRecordBatchStreamBuilder::with_row_group_selections`]
+/// can be used without importing from another module.
+pub use crate::arrow::arrow_reader::RowGroupSelection;
+
 #[cfg(feature = "object_store")]
 mod store;
 
@@ -65,10 +72,94 @@ pub use store::*;
 /// 1. There is a default implementation for types that implement [`AsyncRead`]
 ///    and [`AsyncSeek`], for example [`tokio::fs::File`].
 ///
-/// 2. [`ParquetObjectReader`], available when the `object_store` crate feature
-///    is enabled, implements this interface for [`ObjectStore`].
+/// 2. Implementations for remote storage, such as the `object_store` crate,
+///    can implement this interface directly, typically by pairing a store
+///    handle with an object path and delegating [`Self::get_bytes`] and
+///    [`Self::get_byte_ranges`] to ranged reads. [`SpawnedReader`] can wrap
+///    such a reader to perform its I/O on a dedicated runtime, and
+///    [`ParquetMetaDataReader::with_arrow_reader_options`] simplifies
+///    implementing [`Self::get_metadata`].
 ///
-/// [`ObjectStore`]: object_store::ObjectStore
+/// # Example: implementing `AsyncFileReader` for the `object_store` crate
+///
+/// ```no_run
+/// # use std::ops::Range;
+/// # use std::sync::Arc;
+/// use bytes::Bytes;
+/// use futures::future::BoxFuture;
+/// use futures::{FutureExt, TryFutureExt};
+/// use object_store::path::Path;
+/// use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt};
+/// use parquet::arrow::arrow_reader::ArrowReaderOptions;
+/// use parquet::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
+/// use parquet::errors::{ParquetError, Result};
+/// use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+///
+/// fn to_parquet_err(e: object_store::Error) -> ParquetError {
+///     ParquetError::External(Box::new(e))
+/// }
+///
+/// #[derive(Clone)]
+/// struct ObjectStoreReader {
+///     store: Arc<dyn ObjectStore>,
+///     path: Path,
+/// }
+///
+/// impl AsyncFileReader for ObjectStoreReader {
+///     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+///         self.store
+///             .get_range(&self.path, range)
+///             .map_err(to_parquet_err)
+///             .boxed()
+///     }
+///
+///     fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+///         async move {
+///             self.store
+///                 .get_ranges(&self.path, &ranges)
+///                 .await
+///                 .map_err(to_parquet_err)
+///         }
+///         .boxed()
+///     }
+///
+///     fn get_metadata<'a>(
+///         &'a mut self,
+///         options: Option<&'a ArrowReaderOptions>,
+///     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+///         async move {
+///             let metadata = ParquetMetaDataReader::new()
+///                 .with_arrow_reader_options(options)
+///                 .load_via_suffix_and_finish(self)
+///                 .await?;
+///             Ok(Arc::new(metadata))
+///         }
+///         .boxed()
+///     }
+/// }
+///
+/// /// Supports fetching the parquet footer without knowing the file size,
+/// /// via suffix range requests
+/// impl MetadataSuffixFetch for &mut ObjectStoreReader {
+///     fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+///         let options = GetOptions {
+///             range: Some(GetRange::Suffix(suffix as u64)),
+///             ..Default::default()
+///         };
+///         async move {
+///             let resp = self
+///                 .store
+///                 .get_opts(&self.path, options)
+///                 .await
+///                 .map_err(to_parquet_err)?;
+///             resp.bytes().await.map_err(to_parquet_err)
+///         }
+///         .boxed()
+///     }
+/// }
+/// ```
+///
+/// [`ParquetMetaDataReader::with_arrow_reader_options`]: crate::file::metadata::ParquetMetaDataReader::with_arrow_reader_options
 ///
 /// [`tokio::fs::File`]: https://docs.rs/tokio/latest/tokio/fs/struct.File.html
 pub trait AsyncFileReader: Send {
@@ -80,7 +171,7 @@ pub trait AsyncFileReader: Send {
         async move {
             let mut result = Vec::with_capacity(ranges.len());
 
-            for range in ranges.into_iter() {
+            for range in ranges {
                 let data = self.get_bytes(range).await?;
                 result.push(data);
             }
@@ -164,21 +255,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         async move {
-            let metadata_opts = options.map(|o| o.metadata_options().clone());
-            let mut metadata_reader =
-                ParquetMetaDataReader::new().with_metadata_options(metadata_opts);
-
-            if let Some(opts) = options {
-                metadata_reader = metadata_reader
-                    .with_column_index_policy(opts.column_index_policy())
-                    .with_offset_index_policy(opts.offset_index_policy());
-            }
-
-            #[cfg(feature = "encryption")]
-            let metadata_reader = metadata_reader.with_decryption_properties(
-                options.and_then(|o| o.file_decryption_properties.as_ref().map(Arc::clone)),
-            );
-
+            let metadata_reader = ParquetMetaDataReader::new().with_arrow_reader_options(options);
             let parquet_metadata = metadata_reader.load_via_suffix_and_finish(self).await?;
             Ok(Arc::new(parquet_metadata))
         }
@@ -553,10 +630,15 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         }
 
         let bitset = match column_metadata.bloom_filter_length() {
-            Some(_) => buffer.slice(
-                (TryInto::<usize>::try_into(bitset_offset).unwrap()
-                    - TryInto::<usize>::try_into(offset).unwrap())..,
-            ),
+            Some(_) => {
+                let bitset_start = bitset_offset
+                    .checked_sub(offset)
+                    .and_then(|start| usize::try_from(start).ok())
+                    .ok_or_else(|| {
+                        ParquetError::General("Bloom filter offset is invalid".to_string())
+                    })?;
+                buffer.slice(bitset_start..)
+            }
             None => {
                 let bitset_length: u64 = header.num_bytes.try_into().map_err(|_| {
                     ParquetError::General("Bloom filter length is invalid".to_string())
@@ -570,6 +652,29 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         Ok(Some(Sbbf::new(&bitset)))
     }
 
+    /// Select row groups and rows using row-group-local coordinates.
+    ///
+    /// Entries are decoded in the supplied order, omitted row groups are
+    /// skipped, and a `None` selection reads the whole row group. This is
+    /// mutually exclusive with [`ArrowReaderBuilder::with_row_groups`] and
+    /// [`ArrowReaderBuilder::with_row_selection`]; combining them returns an
+    /// error from [`Self::build`].
+    ///
+    /// See [`ParquetPushDecoderBuilder::with_row_group_selections`] for the
+    /// full semantics and a worked example. This builder supports the same API
+    /// because the async stream is implemented using the push decoder; the
+    /// synchronous reader does not support row-group-local selections.
+    ///
+    /// [`ParquetPushDecoderBuilder::with_row_group_selections`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::with_row_group_selections
+    pub fn with_row_group_selections(
+        mut self,
+        row_group_selections: Vec<RowGroupSelection>,
+    ) -> Self {
+        self.row_group_plan
+            .set_row_group_selections(row_group_selections);
+        self
+    }
+
     /// Build a new [`ParquetRecordBatchStream`]
     ///
     /// See examples on [`ParquetRecordBatchStreamBuilder::new`]
@@ -580,10 +685,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             schema,
             fields,
             batch_size,
-            row_groups,
+            row_group_plan,
             projection,
             filter,
-            selection,
             row_selection_policy: selection_strategy,
             limit,
             offset,
@@ -606,10 +710,9 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             fields,
             projection,
             filter,
-            selection,
+            row_group_plan,
             row_selection_policy: selection_strategy,
             batch_size,
-            row_groups,
             limit,
             offset,
             metrics,
@@ -761,7 +864,7 @@ where
                     match self.decoder.try_next_reader()? {
                         DecodeResult::NeedsData(ranges) => {
                             self.request_state = RequestState::begin_request(input, ranges);
-                            continue; // poll again (as the input might be ready immediately)
+                            // Will loop again: the input might be ready immediately.
                         }
                         DecodeResult::Data(reader) => {
                             self.request_state = RequestState::None { input };
@@ -775,7 +878,7 @@ where
                     // Push the requested data to the decoder and try again
                     self.decoder.push_ranges(ranges, data)?;
                     self.request_state = RequestState::None { input };
-                    continue; // try and decode on next iteration
+                    // Will try and decode on the next iteration.
                 }
                 RequestState::Done => {
                     self.request_state = RequestState::Done;
@@ -823,7 +926,7 @@ where
                     match self.decoder.try_decode()? {
                         DecodeResult::NeedsData(ranges) => {
                             self.request_state = RequestState::begin_request(input, ranges);
-                            continue; // poll again (as the input might be ready immediately)
+                            // Will loop again: the input might be ready immediately.
                         }
                         DecodeResult::Data(batch) => {
                             self.request_state = RequestState::None { input };
@@ -842,7 +945,7 @@ where
                         // Push the requested data to the decoder
                         self.decoder.push_ranges(ranges, data)?;
                         self.request_state = RequestState::None { input };
-                        continue; // next iteration will try to decode the next batch
+                        // The next iteration will try to decode the next batch.
                     }
                     Poll::Pending => {
                         self.request_state = RequestState::Outstanding { ranges, future };
@@ -871,6 +974,7 @@ mod tests {
     use crate::arrow::{ArrowWriter, AsyncArrowWriter, ProjectionMask};
     use crate::file::metadata::PageIndexPolicy;
     use crate::file::metadata::ParquetMetaDataReader;
+    use crate::file::metadata::page_index::PageIndex;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
     use arrow::error::Result as ArrowResult;
@@ -883,7 +987,7 @@ mod tests {
     };
     use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tempfile::tempfile;
@@ -922,12 +1026,7 @@ mod tests {
             &'a mut self,
             options: Option<&'a ArrowReaderOptions>,
         ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-            let mut metadata_reader = ParquetMetaDataReader::new();
-            if let Some(opts) = options {
-                metadata_reader = metadata_reader
-                    .with_column_index_policy(opts.column_index_policy())
-                    .with_offset_index_policy(opts.offset_index_policy());
-            }
+            let metadata_reader = ParquetMetaDataReader::new().with_arrow_reader_options(options);
             self.metadata = Some(Arc::new(
                 metadata_reader.parse_and_finish(&self.data).unwrap(),
             ));
@@ -981,6 +1080,49 @@ mod tests {
                 offset_1 as usize..(offset_1 + length_1) as usize,
                 offset_2 as usize..(offset_2 + length_2) as usize
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_async_reader_row_group_local_selections() {
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(Int32Array::from_iter_values(0..6)) as ArrayRef,
+        )])
+        .unwrap();
+        let mut data = Vec::new();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut data, batch.schema(), Some(properties)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let stream = ParquetRecordBatchStreamBuilder::new(TestReader::new(data.into()))
+            .await
+            .unwrap()
+            .with_row_group_selections(vec![
+                RowGroupSelection::new(1, Some(RowSelection::from(vec![RowSelector::select(1)]))),
+                RowGroupSelection::new(
+                    0,
+                    Some(RowSelection::from(vec![
+                        RowSelector::skip(1),
+                        RowSelector::select(2),
+                    ])),
+                ),
+            ])
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(
+            batches[0].column(0).as_primitive::<Int32Type>().values(),
+            &[3]
+        );
+        assert_eq!(
+            batches[1].column(0).as_primitive::<Int32Type>().values(),
+            &[1, 2]
         );
     }
 
@@ -1058,25 +1200,22 @@ mod tests {
         let metadata_with_index = builder.metadata();
         assert_eq!(metadata_with_index.num_row_groups(), 1);
 
-        // Check offset indexes are present for all columns
-        let offset_index = metadata_with_index.offset_index().unwrap();
-        let column_index = metadata_with_index.column_index().unwrap();
-
-        assert_eq!(offset_index.len(), metadata_with_index.num_row_groups());
-        assert_eq!(column_index.len(), metadata_with_index.num_row_groups());
-
+        // Check offset indexes are present for all columns of all row groups
+        let page_index = metadata_with_index
+            .page_index()
+            .expect("page index should be present");
+        assert!(page_index.is_complete());
+        let num_rowgroups = metadata_with_index.num_row_groups();
         let num_columns = metadata_with_index
             .file_metadata()
             .schema_descr()
             .num_columns();
-
-        // Check page indexes are present for all columns
-        offset_index
-            .iter()
-            .for_each(|x| assert_eq!(x.len(), num_columns));
-        column_index
-            .iter()
-            .for_each(|x| assert_eq!(x.len(), num_columns));
+        for rgidx in 0..num_rowgroups {
+            // some column indexes are not defined, but all offset indexes should be
+            for colidx in 0..num_columns {
+                assert!(page_index.offset_index(rgidx, colidx).is_some());
+            }
+        }
 
         let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![1, 2]);
         let stream = builder
@@ -1646,7 +1785,8 @@ mod tests {
             .await
             .unwrap();
 
-        metadata.set_offset_index(Some(vec![]));
+        let page_index = PageIndex::new(None, Some(vec![]));
+        metadata.set_page_index(Some(Arc::new(page_index)));
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =

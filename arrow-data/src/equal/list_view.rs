@@ -44,27 +44,19 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
         return false;
     }
 
+    // All four slices are `len` long
+    let lhs_range_sizes = &lhs_sizes[lhs_start..lhs_start + len];
+    let rhs_range_sizes = &rhs_sizes[rhs_start..rhs_start + len];
+    let lhs_range_offsets = &lhs_offsets[lhs_start..lhs_start + len];
+    let rhs_range_offsets = &rhs_offsets[rhs_start..rhs_start + len];
+
     if lhs_null_count == 0 {
         // non-null pathway: all sizes must be equal, and all values must be equal
-        let lhs_range_sizes = &lhs_sizes[lhs_start..lhs_start + len];
-        let rhs_range_sizes = &rhs_sizes[rhs_start..rhs_start + len];
-
-        if lhs_range_sizes.len() != rhs_range_sizes.len() {
-            return false;
-        }
-
         if lhs_range_sizes != rhs_range_sizes {
             return false;
         }
 
         // Check values for equality
-        let lhs_range_offsets = &lhs_offsets[lhs_start..lhs_start + len];
-        let rhs_range_offsets = &rhs_offsets[rhs_start..rhs_start + len];
-
-        if lhs_range_offsets.len() != rhs_range_offsets.len() {
-            return false;
-        }
-
         for ((&lhs_offset, &rhs_offset), &size) in lhs_range_offsets
             .iter()
             .zip(rhs_range_offsets)
@@ -81,26 +73,10 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
         }
     } else {
         // Need to integrate validity check in the inner loop.
-        // non-null pathway: all sizes must be equal, and all values must be equal
-        let lhs_range_sizes = &lhs_sizes[lhs_start..lhs_start + len];
-        let rhs_range_sizes = &rhs_sizes[rhs_start..rhs_start + len];
-
         let lhs_nulls = lhs.nulls().unwrap().slice(lhs_start, len);
         let rhs_nulls = rhs.nulls().unwrap().slice(rhs_start, len);
 
-        // Sizes can differ if values are null
-        if lhs_range_sizes.len() != rhs_range_sizes.len() {
-            return false;
-        }
-
         // Check values for equality, with null checking
-        let lhs_range_offsets = &lhs_offsets[lhs_start..lhs_start + len];
-        let rhs_range_offsets = &rhs_offsets[rhs_start..rhs_start + len];
-
-        if lhs_range_offsets.len() != rhs_range_offsets.len() {
-            return false;
-        }
-
         for (index, ((&lhs_offset, &rhs_offset), &size)) in lhs_range_offsets
             .iter()
             .zip(rhs_range_offsets)

@@ -15,8 +15,16 @@
 # specific language governing permissions and limitations
 # under the License.
 import pyspark.sql
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, LongType
+from pyspark.sql.types import (
+    ArrayType,
+    StructType,
+    StructField,
+    StringType,
+    IntegerType,
+    LongType,
+)
 import pandas as pd
+import re
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 import subprocess
 import pathlib
@@ -35,6 +43,27 @@ def create_data_and_spark_df(n):
             StructField("name", StringType(), True),
             StructField("int32", IntegerType(), True),
             StructField("int64", LongType(), True),
+        ]
+    )
+    df = spark.createDataFrame(data, schema).repartition(1)
+    return data, df
+
+
+def create_spark_df_with_arrays(n):
+    def make_list(x):
+        return [x for _ in range(8)]
+
+    spark = pyspark.sql.SparkSession.builder.getOrCreate()
+    data = [
+        (f"id-{i % 10}", f"name-{i%10}", make_list(i + 1), make_list(i + 2))
+        for i in range(n)
+    ]
+    schema = StructType(
+        [
+            StructField("id", StringType(), True),
+            StructField("name", StringType(), True),
+            StructField("int32_list", ArrayType(IntegerType()), True),
+            StructField("int64_list", ArrayType(LongType()), True),
         ]
     )
     df = spark.createDataFrame(data, schema).repartition(1)
@@ -82,6 +111,12 @@ def get_show_filter_cli_output(output_dir, col_name, test_values):
     ]
     for v in test_values:
         args.append(str(v))
+    return subprocess.check_output(args)
+
+
+def get_index_cli_output(output_dir, col_name):
+    (parquet_file,) = sorted(pathlib.Path(output_dir).glob("*.parquet"))
+    args = ["parquet-index", parquet_file, col_name]
     return subprocess.check_output(args)
 
 
@@ -156,3 +191,35 @@ class TestParquetIntegration:
             expected_results.append((v[2], False))
         cli_output = get_show_filter_cli_output(output_dir, "int64", test_values)
         assert cli_output == get_expected_output(expected_results)
+
+
+class TestParquetPageIndexIntegration:
+    @staticmethod
+    def _assert_cli_output(out, pattern):
+        normalized = re.sub(r"\s+", " ", out.decode("utf-8")).strip()
+        if re.search(pattern, normalized):
+            return
+        raise AssertionError("Failed to find expected pattern in cli output")
+
+    def test_index(self):
+        _, df = create_spark_df_with_arrays(10)
+        with TemporaryDirectory() as output_dir:
+            df.write.parquet(output_dir, mode="overwrite")
+
+            name_index_expected_pattern = r"""
+                Page 0 at offset \d+ with length \d+ and row count 10, min id-0, max id-9
+            """.strip()
+            cli_output = get_index_cli_output(output_dir, "id")
+            self._assert_cli_output(cli_output, name_index_expected_pattern)
+
+            int32_list_index_expected_pattern = r"""
+                Page 0 at offset \d+ with length \d+ and row count 10, min 1, max 10
+            """.strip()
+            cli_output = get_index_cli_output(output_dir, "int32_list.list.element")
+            self._assert_cli_output(cli_output, int32_list_index_expected_pattern)
+
+            cli_output = get_index_cli_output(output_dir, "int64_list.list.element")
+            int64_list_index_expected_pattern = r"""
+                Page 0 at offset \d+ with length \d+ and row count 10, min 2, max 11
+            """.strip()
+            self._assert_cli_output(cli_output, int64_list_index_expected_pattern)

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
+use crate::errors::Result;
 use arrow_array::{ArrayRef, BinaryViewArray, StringViewArray};
 use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::DataType as ArrowType;
@@ -56,14 +57,15 @@ impl ViewBuffer {
         let len = self.views.len();
         let views = ScalarBuffer::from(self.views);
         let nulls = null_buffer.and_then(|b| NullBuffer::from_unsliced_buffer(b, len));
+        let buffers = self.buffers.into();
         match data_type {
             ArrowType::Utf8View => {
                 // Safety: views were created correctly, and checked that the data is utf8 when building the buffer
-                unsafe { Arc::new(StringViewArray::new_unchecked(views, self.buffers, nulls)) }
+                unsafe { Arc::new(StringViewArray::new_unchecked(views, buffers, nulls)) }
             }
             ArrowType::BinaryView => {
                 // Safety: views were created correctly
-                unsafe { Arc::new(BinaryViewArray::new_unchecked(views, self.buffers, nulls)) }
+                unsafe { Arc::new(BinaryViewArray::new_unchecked(views, buffers, nulls)) }
             }
             _ => panic!("Unsupported data type: {data_type}"),
         }
@@ -75,15 +77,19 @@ impl ValuesBuffer for ViewBuffer {
         Self::with_capacity(capacity)
     }
 
+    fn reserve_exact(&mut self, additional: usize) {
+        self.views.reserve_exact(additional);
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
         values_read: usize,
         levels_read: usize,
         valid_mask: &[u8],
-    ) {
+    ) -> Result<()> {
         self.views
-            .pad_nulls(read_offset, values_read, levels_read, valid_mask);
+            .pad_nulls(read_offset, values_read, levels_read, valid_mask)
     }
 }
 
@@ -146,7 +152,9 @@ mod tests {
         let valid = [true, false, false, true, false, false, true];
         let valid_mask = Buffer::from_iter(valid.iter().copied());
 
-        buffer.pad_nulls(1, 2, valid.len() - 1, valid_mask.as_slice());
+        buffer
+            .pad_nulls(1, 2, valid.len() - 1, valid_mask.as_slice())
+            .unwrap();
 
         let array = buffer.into_array(Some(valid_mask), &ArrowType::Utf8View);
         let strings = array

@@ -165,7 +165,7 @@ pub trait VariantToJson {
     fn to_json_value(&self) -> Result<Value, ArrowError>;
 }
 
-impl<'m, 'v> VariantToJson for Variant<'m, 'v> {
+impl VariantToJson for Variant<'_, '_> {
     fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError> {
         match self {
             Variant::Null => write!(buffer, "null")?,
@@ -344,10 +344,7 @@ fn format_date_string(date: &chrono::NaiveDate) -> String {
 }
 
 fn format_timestamp_ntz_string(ts: &chrono::NaiveDateTime, precision: usize) -> String {
-    let format_str = format!(
-        "{}",
-        ts.format(&format!("%Y-%m-%dT%H:%M:%S%.{}f", precision))
-    );
+    let format_str = format!("{}", ts.format(&format!("%Y-%m-%dT%H:%M:%S%.{precision}f")));
     ts.format(format_str.as_str()).to_string()
 }
 
@@ -361,9 +358,9 @@ fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
     match micros {
         0 => format!("{}.{}", base, 0),
         _ => {
-            let micros_str = format!("{:06}", micros);
-            let micros_str_trimmed = micros_str.trim_matches('0');
-            format!("{}.{}", base, micros_str_trimmed)
+            let micros_str = format!("{micros:06}");
+            let micros_str_trimmed = micros_str.trim_end_matches('0');
+            format!("{base}.{micros_str_trimmed}")
         }
     }
 }
@@ -508,6 +505,21 @@ mod tests {
         let variant = Variant::Time(naive_time);
         let json = variant.to_json_string()?;
         assert_eq!("\"03:25:45.12346\"", json);
+
+        let expected = [
+            (10, "00:00:00.00001"),
+            (10010, "00:00:00.01001"),
+            (100000, "00:00:00.1"),
+            (123450, "00:00:00.12345"),
+        ];
+
+        for (micros, expected_json) in expected {
+            let naive_time =
+                NaiveTime::from_num_seconds_from_midnight_opt(0, micros * 1000).unwrap();
+            let variant = Variant::Time(naive_time);
+            let json = variant.to_json_string()?;
+            assert_eq!(format!("\"{expected_json}\""), json);
+        }
 
         let json_value = variant.to_json_value()?;
         assert!(matches!(json_value, Value::String(_)));
@@ -872,7 +884,7 @@ mod tests {
         JsonTest {
             variant: Variant::from(""),
             expected_json: "\"\"",
-            expected_value: Value::String("".to_string()),
+            expected_value: Value::String(String::new()),
         }
         .run();
 
@@ -902,7 +914,7 @@ mod tests {
         JsonTest {
             variant: Variant::Binary(b""),
             expected_json: "\"\"", // empty base64
-            expected_value: Value::String("".to_string()),
+            expected_value: Value::String(String::new()),
         }
         .run();
 

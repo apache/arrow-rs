@@ -100,18 +100,18 @@ impl Args {
         let mut writer = SerializedFileWriter::new(output, schema, props)?;
 
         for (input, metadata) in inputs {
-            let column_indexes = metadata.column_index();
-            let offset_indexes = metadata.offset_index();
+            let page_index = metadata.page_index();
 
             for (rg_idx, rg) in metadata.row_groups().iter().enumerate() {
-                let rg_column_indexes = column_indexes.and_then(|ci| ci.get(rg_idx));
-                let rg_offset_indexes = offset_indexes.and_then(|oi| oi.get(rg_idx));
                 let mut rg_out = writer.next_row_group()?;
                 for (col_idx, column) in rg.columns().iter().enumerate() {
                     let bloom_filter = read_bloom_filter(column, &input);
-                    let column_index = rg_column_indexes.and_then(|row| row.get(col_idx)).cloned();
-
-                    let offset_index = rg_offset_indexes.and_then(|row| row.get(col_idx)).cloned();
+                    let column_index = page_index
+                        .and_then(|pi| pi.column_index(rg_idx, col_idx))
+                        .cloned();
+                    let offset_index = page_index
+                        .and_then(|pi| pi.offset_index(rg_idx, col_idx))
+                        .cloned();
 
                     let result = ColumnCloseResult {
                         bytes_written: column.compressed_size() as _,

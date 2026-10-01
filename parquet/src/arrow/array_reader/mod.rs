@@ -56,9 +56,9 @@ use crate::file::metadata::RowGroupMetaData;
 pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
-#[allow(unused_imports)] // Only used for benchmarks
+#[cfg_attr(not(feature = "experimental"), expect(unused_imports))]
 pub use byte_view_array::make_byte_view_array_reader;
-#[allow(unused_imports)] // Only used for benchmarks
+#[cfg_attr(not(feature = "experimental"), expect(unused_imports))]
 pub use fixed_len_byte_array::make_fixed_len_byte_array_reader;
 pub use fixed_size_list_array::FixedSizeListArrayReader;
 pub use list_array::ListArrayReader;
@@ -88,7 +88,6 @@ pub use struct_array::StructArrayReader;
 pub trait ArrayReader: Send {
     // TODO: this function is never used, and the trait is not public. Perhaps this should be
     // removed.
-    #[allow(dead_code)]
     fn as_any(&self) -> &dyn Any;
 
     /// Returns the arrow type of this array reader.
@@ -135,6 +134,19 @@ pub trait ArrayReader: Send {
     ///
     /// This is used by parent [`ArrayReader`] to compute their array offsets
     fn get_rep_levels(&self) -> Option<&[i16]>;
+
+    /// Returns the maximum definition level for this reader as defined by
+    /// the Parquet schema. For leaf readers this is the column's max def level;
+    /// for composite readers it is the level at which the composite itself is
+    /// fully defined.
+    ///
+    /// The default panics. Synthetic readers that are not backed by a Parquet
+    /// column (e.g. row-number or empty-struct readers) may rely on this
+    /// default because they are never used as children of schema-driven
+    /// composite readers (list, map, struct), which are the only callers.
+    fn max_def_level(&self) -> i16 {
+        panic!("max_def_level called on a reader that does not track definition levels")
+    }
 }
 
 /// Interface for reading data pages from the columns of one or more RowGroups.

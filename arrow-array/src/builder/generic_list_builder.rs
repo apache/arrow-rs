@@ -299,6 +299,11 @@ where
     }
 
     /// Builds the [`GenericListArray`] and reset this builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the field set with [`Self::with_field`] does not match the data type
+    /// of the values builder
     pub fn finish(&mut self) -> GenericListArray<OffsetSize> {
         let values = self.values_builder.finish();
         let nulls = self.null_buffer_builder.finish();
@@ -317,6 +322,11 @@ where
     }
 
     /// Builds the [`GenericListArray`] without resetting the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the field set with [`Self::with_field`] does not match the data type
+    /// of the values builder
     pub fn finish_cloned(&self) -> GenericListArray<OffsetSize> {
         let values = self.values_builder.finish_cloned();
         let nulls = self.null_buffer_builder.finish_cloned();
@@ -355,9 +365,19 @@ where
         self.offsets_builder.as_slice()
     }
 
+    /// Returns the current offsets buffer capacity, in offsets.
+    pub fn offsets_capacity(&self) -> usize {
+        self.offsets_builder.capacity()
+    }
+
     /// Returns the current null buffer as a slice
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
+    }
+
+    /// Returns the current null buffer allocated capacity, in bytes.
+    pub fn validity_capacity(&self) -> usize {
+        self.null_buffer_builder.allocated_size()
     }
 }
 
