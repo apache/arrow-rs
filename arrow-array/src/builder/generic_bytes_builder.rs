@@ -58,7 +58,8 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
 
     /// Creates a new  [`GenericByteBuilder`] from buffers.
     ///
-    /// Any bytes in `value_buffer` after the last offset are dropped.
+    /// Any bytes in `value_buffer` after the last offset are dropped. The first
+    /// bit of `null_buffer` is for the first row.
     ///
     /// # Safety
     ///

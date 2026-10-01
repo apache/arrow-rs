@@ -389,15 +389,17 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     pub fn into_builder(self) -> Result<GenericByteBuilder<T>, Self> {
         let (offsets, values, nulls) = self.into_parts();
 
-        // A buffer can be reused only if this array is its sole owner and it
-        // starts at the beginning of its allocation. Otherwise, the original
-        // array is returned.
+        // Puts the parts back together into the original array
         let rebuild = |offsets: Buffer, values: Buffer, nulls: Option<NullBuffer>| {
             // SAFETY: the parts come unchanged from `self`
             unsafe {
                 Self::new_unchecked(OffsetBuffer::new_unchecked(offsets.into()), values, nulls)
             }
         };
+
+        // A buffer can be reused only if this array is its only owner and it
+        // starts at the beginning of its allocation. Otherwise, the original
+        // array is returned.
         let offsets = match offsets.into_inner().into_inner().into_mutable() {
             Ok(offsets) => offsets,
             Err(offsets) => return Err(rebuild(offsets, values, nulls)),
@@ -414,9 +416,10 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         let nulls = nulls.map(|nulls| {
             let bits = nulls.into_inner();
             if bits.offset() == 0 {
+                let len = bits.len();
                 bits.into_inner()
                     .into_mutable()
-                    .unwrap_or_else(|buffer| buffer.to_vec().into())
+                    .unwrap_or_else(|buffer| buffer[..len.div_ceil(8)].to_vec().into())
             } else {
                 // `sliced` returns the bits starting at the first row
                 bits.sliced().to_vec().into()
