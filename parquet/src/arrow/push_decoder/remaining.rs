@@ -83,6 +83,12 @@ impl QueuedRowGroups {
         self.queue.front()
     }
 
+    /// The row groups in the queue, in no specific order and without
+    /// duplicates.
+    fn row_groups(&self) -> impl Iterator<Item = usize> + '_ {
+        self.counts.keys().copied()
+    }
+
     /// Returns `true` if `row_group_idx` is in the queue.
     fn contains(&self, row_group_idx: usize) -> bool {
         self.counts.contains_key(&row_group_idx)
@@ -521,6 +527,13 @@ impl RemainingRowGroups {
             return Ok(None);
         }
         self.frontier.peek_next_row_group()
+    }
+
+    /// Release the buffered bytes that are outside the read column chunks of
+    /// the queued row groups. The decoder does not read these bytes.
+    pub fn release_unread_bytes(&mut self) {
+        self.row_group_reader_builder
+            .release_unread_bytes(self.frontier.queued.row_groups());
     }
 
     /// Release the buffered bytes of a row group that is done, unless the

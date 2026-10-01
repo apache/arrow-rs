@@ -296,6 +296,23 @@ impl PushBuffers {
         }
     }
 
+    /// Remove all buffered bytes outside `keep`, whatever the shape of the
+    /// pushed buffers.
+    ///
+    /// This calls [`Self::release_ranges`] with the complement of `keep`, so
+    /// the same rules apply to the kept parts.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn retain_ranges(&mut self, keep: &[Range<u64>]) {
+        let mut release = vec![];
+        let mut start = 0;
+        for range in merge_ranges(keep) {
+            release.push(start..range.start);
+            start = range.end;
+        }
+        release.push(start..u64::MAX);
+        self.release_ranges(&release);
+    }
+
     /// Clear all buffered ranges and their corresponding data
     pub(crate) fn clear_all_ranges(&mut self) {
         self.ranges.clear();
@@ -462,6 +479,44 @@ mod tests {
         }
         buffers.release_ranges(&[40..50, 10..15]);
         assert_eq!(buffers.ranges, vec![0..10, 15..20, 15..30]);
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn retain_ranges_keeps_only_the_given_bytes() {
+        let mut buffers = PushBuffers::new(100);
+        buffers
+            .push_range(0..10, Bytes::from_static(b"0123456789"))
+            .unwrap();
+        buffers
+            .push_range(20..24, Bytes::from_static(b"abcd"))
+            .unwrap();
+        buffers
+            .push_range(30..32, Bytes::from_static(b"xy"))
+            .unwrap();
+        // Ranges in any order, overlapping, and outside the buffers.
+        buffers.retain_ranges(&[22..40, 2..4, 3..5, 8..9]);
+        assert_eq!(buffers.buffered_bytes(), 3 + 1 + 2 + 2);
+        assert_eq!(buffers.get_bytes(2, 3).unwrap(), Bytes::from_static(b"234"));
+        assert_eq!(buffers.get_bytes(8, 1).unwrap(), Bytes::from_static(b"8"));
+        assert!(!buffers.has_range(&(5..6)));
+        assert_eq!(buffers.get_bytes(22, 2).unwrap(), Bytes::from_static(b"cd"));
+        assert_eq!(buffers.get_bytes(30, 2).unwrap(), Bytes::from_static(b"xy"));
+        buffers.retain_ranges(&[]);
+        assert_eq!(buffers.buffered_bytes(), 0);
+    }
+
+    /// Parts of overlapping buffers stay sorted by start.
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn retain_ranges_keeps_the_buffers_sorted() {
+        let mut buffers = PushBuffers::new(100);
+        for range in [0..100, 3..70] {
+            let data = Bytes::from(vec![0u8; (range.end - range.start) as usize]);
+            buffers.push_range(range, data).unwrap();
+        }
+        buffers.retain_ranges(&[0..5, 50..60]);
+        assert_eq!(buffers.ranges, vec![0..5, 3..5, 50..60, 50..60]);
     }
 
     #[test]
