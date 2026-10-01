@@ -43,11 +43,11 @@
 //! | `pyarrow.Schema`            | [Schema]                                                           |
 //! | `pyarrow.Array`             | [ArrayData]                                                        |
 //! | `pyarrow.RecordBatch`       | [RecordBatch]                                                      |
-//! | `pyarrow.RecordBatchReader` | [ArrowArrayStreamReader] / `Box<dyn RecordBatchReader + Send>` (1) |
+//! | `pyarrow.RecordBatchReader` | [RecordBatchStreamReader] / `Box<dyn RecordBatchReader + Send>` (1) |
 //! | `pyarrow.Table`             | [Table] (2)                                                        |
 //!
-//! (1) `pyarrow.RecordBatchReader` can be imported as [ArrowArrayStreamReader]. Either
-//! [ArrowArrayStreamReader] or `Box<dyn RecordBatchReader + Send>` can be exported
+//! (1) `pyarrow.RecordBatchReader` can be imported as [RecordBatchStreamReader]. Either
+//! [RecordBatchStreamReader] or `Box<dyn RecordBatchReader + Send>` can be exported
 //! as `pyarrow.RecordBatchReader`. (`Box<dyn RecordBatchReader + Send>` is typically
 //! easier to create.)
 //!
@@ -56,7 +56,7 @@
 //! have `Vec<RecordBatch>` on the Rust side and want to export that in bulk as a `pyarrow.Table`.
 //! In general, it is recommended to use streaming approaches instead of dealing with data in bulk.
 //! For example, a `pyarrow.Table` (or any other object that implements the ArrayStream PyCapsule
-//! interface) can be imported to Rust through `PyArrowType<ArrowArrayStreamReader>` instead of
+//! interface) can be imported to Rust through `PyArrowType<RecordBatchStreamReader>` instead of
 //! forcing eager reading into `Vec<RecordBatch>`.
 //!
 //! # Type stubs
@@ -83,7 +83,7 @@ use std::sync::Arc;
 
 use arrow_array::ffi;
 use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::ffi_stream::{FFI_ArrowArrayStream, RecordBatchStreamReader};
 use arrow_array::{
     RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, StructArray,
     make_array,
@@ -120,12 +120,12 @@ fn to_py_err(err: ArrowError) -> PyErr {
 }
 
 /// The type hint shared by every conversion that imports through the ArrowArrayStream PyCapsule
-/// interface, i.e. [`ArrowArrayStreamReader`] and [`Table`].
+/// interface, i.e. [`RecordBatchStreamReader`] and [`Table`].
 ///
 /// Both go through the same `__arrow_c_stream__` path and therefore accept exactly the same
 /// objects, so naming only one of the two classes would make a stub generator reject usage this
 /// crate's own documentation recommends — importing a `pyarrow.Table` as a
-/// `PyArrowType<ArrowArrayStreamReader>`.
+/// `PyArrowType<RecordBatchStreamReader>`.
 #[cfg(feature = "experimental-inspect")]
 const ARRAY_STREAM_INPUT_TYPE: PyStaticExpr = type_hint_union!(
     type_hint_identifier!("pyarrow", "RecordBatchReader"),
@@ -475,8 +475,8 @@ impl ToPyArrow for RecordBatch {
     }
 }
 
-/// Supports conversion from `pyarrow.RecordBatchReader` to [ArrowArrayStreamReader].
-impl FromPyArrow for ArrowArrayStreamReader {
+/// Supports conversion from `pyarrow.RecordBatchReader` to [RecordBatchStreamReader].
+impl FromPyArrow for RecordBatchStreamReader {
     type_hint!(INPUT_TYPE = ARRAY_STREAM_INPUT_TYPE);
 
     fn from_pyarrow_bound(value: &Bound<PyAny>) -> PyResult<Self> {
@@ -490,7 +490,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
                 extract_capsule(&capsule, c"arrow_array_stream", "__arrow_c_stream__")?;
             let stream = unsafe { FFI_ArrowArrayStream::from_raw(stream_ptr.as_ptr()) };
 
-            let stream_reader = ArrowArrayStreamReader::try_new(stream)
+            let stream_reader = RecordBatchStreamReader::try_new(stream)
                 .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
             return Ok(stream_reader);
@@ -509,7 +509,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
             (&raw mut stream as Py_uintptr_t,),
         )?;
 
-        ArrowArrayStreamReader::try_new(stream)
+        RecordBatchStreamReader::try_new(stream)
             .map_err(|err| PyValueError::new_err(err.to_string()))
     }
 }
@@ -529,8 +529,8 @@ impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
     }
 }
 
-/// Convert a [`ArrowArrayStreamReader`] into a `pyarrow.RecordBatchReader`.
-impl IntoPyArrow for ArrowArrayStreamReader {
+/// Convert a [`RecordBatchStreamReader`] into a `pyarrow.RecordBatchReader`.
+impl IntoPyArrow for RecordBatchStreamReader {
     type_hint!(OUTPUT_TYPE = type_hint_identifier!("pyarrow", "RecordBatchReader"));
 
     fn into_pyarrow(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
@@ -544,7 +544,7 @@ impl IntoPyArrow for ArrowArrayStreamReader {
 ///
 /// This could be used in circumstances where you either want to consume a `pyarrow.Table` directly
 /// (although technically, since `pyarrow.Table` implements the ArrayStreamReader PyCapsule
-/// interface, one could also consume a `PyArrowType<ArrowArrayStreamReader>` instead) or, more
+/// interface, one could also consume a `PyArrowType<RecordBatchStreamReader>` instead) or, more
 /// importantly, where one wants to export a `pyarrow.Table` from a `Vec<RecordBatch>` from the Rust
 /// side.
 ///
@@ -612,7 +612,7 @@ impl FromPyArrow for Table {
 
     fn from_pyarrow_bound(ob: &Bound<PyAny>) -> PyResult<Self> {
         let reader: Box<dyn RecordBatchReader> =
-            Box::new(ArrowArrayStreamReader::from_pyarrow_bound(ob)?);
+            Box::new(RecordBatchStreamReader::from_pyarrow_bound(ob)?);
         Self::try_from(reader).map_err(|err| PyValueError::new_err(err.to_string()))
     }
 }
@@ -820,11 +820,11 @@ mod introspection_tests {
     #[test]
     fn readers_and_tables_map_to_their_pyarrow_class() {
         assert_eq!(
-            input_type::<ArrowArrayStreamReader>(),
+            input_type::<RecordBatchStreamReader>(),
             "pyarrow.RecordBatchReader | pyarrow.Table"
         );
         assert_eq!(
-            output_type::<ArrowArrayStreamReader>(),
+            output_type::<RecordBatchStreamReader>(),
             "pyarrow.RecordBatchReader"
         );
         assert_eq!(

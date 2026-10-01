@@ -21,14 +21,15 @@
 //! One interface maps C ABI to native Rust types, i.e. convert c-pointers, c_char, to native rust.
 //! This is handled by [FFI_ArrowArrayStream].
 //!
-//! The second interface is used to import `FFI_ArrowArrayStream` as Rust implementation `RecordBatch` reader.
-//! This is handled by `ArrowArrayStreamReader`.
+//! The second interface is used to import `FFI_ArrowArrayStream` as a Rust reader. A stream
+//! whose top-level type is `Struct` can be read as `RecordBatch` by `RecordBatchStreamReader`;
+//! a stream of any type can be read as `ArrayRef` by `ArrayStreamReader`.
 //!
 //! ```ignore
 //! # use std::fs::File;
 //! # use std::sync::Arc;
 //! # use arrow::error::Result;
-//! # use arrow::ffi_stream::{export_reader_into_raw, ArrowArrayStreamReader, FFI_ArrowArrayStream};
+//! # use arrow::ffi_stream::{export_reader_into_raw, RecordBatchStreamReader, FFI_ArrowArrayStream};
 //! # use arrow::ipc::reader::FileReader;
 //! # use arrow::record_batch::RecordBatchReader;
 //! # fn main() -> Result<()> {
@@ -43,7 +44,7 @@
 //! // consumed and used by something else...
 //!
 //! // import it
-//! let stream_reader = unsafe { ArrowArrayStreamReader::from_raw(&mut stream).unwrap() };
+//! let stream_reader = unsafe { RecordBatchStreamReader::from_raw(&mut stream).unwrap() };
 //! let imported_schema = stream_reader.schema();
 //!
 //! let mut produced_batches = vec![];
@@ -406,10 +407,14 @@ fn get_error_code(err: &ArrowError) -> i32 {
 /// Its main responsibility is to expose `RecordBatchReader` functionality
 /// that requires [FFI_ArrowArrayStream].
 #[derive(Debug)]
-pub struct ArrowArrayStreamReader {
+pub struct RecordBatchStreamReader {
     stream: FFI_ArrowArrayStream,
     schema: SchemaRef,
 }
+
+/// Renamed to [`RecordBatchStreamReader`], to distinguish it from [`ArrayStreamReader`].
+#[deprecated(since = "60.1.0", note = "Use `RecordBatchStreamReader` instead")]
+pub type ArrowArrayStreamReader = RecordBatchStreamReader;
 
 /// Returns the producer's message for the last failed call on a `FFI_ArrowArrayStream`.
 ///
@@ -438,7 +443,7 @@ unsafe fn producer_error(stream_ptr: *mut FFI_ArrowArrayStream) -> Option<String
 }
 
 /// Gets schema from a raw pointer of `FFI_ArrowArrayStream`. This is used when constructing
-/// `ArrowArrayStreamReader` to cache schema.
+/// `RecordBatchStreamReader` to cache schema.
 fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef> {
     let field = get_stream_field(stream_ptr)?;
     match field.data_type() {
@@ -472,8 +477,8 @@ fn get_stream_field(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<FieldRef> {
     }
 }
 
-impl ArrowArrayStreamReader {
-    /// Creates a new `ArrowArrayStreamReader` from a `FFI_ArrowArrayStream`.
+impl RecordBatchStreamReader {
+    /// Creates a new `RecordBatchStreamReader` from a `FFI_ArrowArrayStream`.
     /// This is used to import from the C Stream Interface.
     pub fn try_new(mut stream: FFI_ArrowArrayStream) -> Result<Self> {
         if stream.release.is_none() {
@@ -487,7 +492,7 @@ impl ArrowArrayStreamReader {
         Ok(Self { stream, schema })
     }
 
-    /// Creates a new `ArrowArrayStreamReader` from a raw pointer of `FFI_ArrowArrayStream`.
+    /// Creates a new `RecordBatchStreamReader` from a raw pointer of `FFI_ArrowArrayStream`.
     ///
     /// Assumes that the pointer represents valid C Stream Interfaces.
     /// This function copies the content from the raw pointer and cleans up it to prevent
@@ -502,7 +507,7 @@ impl ArrowArrayStreamReader {
     }
 }
 
-impl Iterator for ArrowArrayStreamReader {
+impl Iterator for RecordBatchStreamReader {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -542,7 +547,7 @@ impl Iterator for ArrowArrayStreamReader {
     }
 }
 
-impl RecordBatchReader for ArrowArrayStreamReader {
+impl RecordBatchReader for RecordBatchStreamReader {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -550,8 +555,9 @@ impl RecordBatchReader for ArrowArrayStreamReader {
 
 /// An [`ArrayReader`] which imports arrays from an [`FFI_ArrowArrayStream`].
 ///
-/// Unlike [`ArrowArrayStreamReader`], the stream's arrays may be of **any** data type. This
-/// supports reading a stream of generic arrays that may not represent record batches.
+/// [`RecordBatchStreamReader`] requires the stream's top-level type to be
+/// [`DataType::Struct`], which it unpacks into a [`RecordBatch`]. This reader has no such
+/// requirement: the stream's arrays may be of any data type.
 #[derive(Debug)]
 pub struct ArrayStreamReader {
     stream: FFI_ArrowArrayStream,
@@ -708,9 +714,9 @@ mod tests {
 
         let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
-        // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
+        // Import through `FFI_ArrowArrayStream` as `RecordBatchStreamReader`
         let stream = FFI_ArrowArrayStream::new(reader);
-        let stream_reader = ArrowArrayStreamReader::try_new(stream).unwrap();
+        let stream_reader = RecordBatchStreamReader::try_new(stream).unwrap();
 
         let imported_schema = stream_reader.schema();
         assert_eq!(imported_schema, schema);
@@ -771,9 +777,9 @@ mod tests {
 
         let reader = Box::new(TestRecordBatchReader::new(schema.clone(), iter));
 
-        // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
+        // Import through `FFI_ArrowArrayStream` as `RecordBatchStreamReader`
         let stream = FFI_ArrowArrayStream::new(reader);
-        let stream_reader = ArrowArrayStreamReader::try_new(stream).unwrap();
+        let stream_reader = RecordBatchStreamReader::try_new(stream).unwrap();
 
         let imported_schema = stream_reader.schema();
         assert_eq!(imported_schema, schema);
@@ -844,8 +850,8 @@ mod tests {
 
     #[test]
     fn test_import_schema_error_reports_producer_message() {
-        let err =
-            ArrowArrayStreamReader::try_new(failing_stream(Some(producer_last_error))).unwrap_err();
+        let err = RecordBatchStreamReader::try_new(failing_stream(Some(producer_last_error)))
+            .unwrap_err();
         assert_eq!(
             err.to_string(),
             format!(
@@ -860,7 +866,7 @@ mod tests {
         // A producer need not supply a message: `get_last_error` may return NULL when no
         // detailed description is available.
         let err =
-            ArrowArrayStreamReader::try_new(failing_stream(Some(null_last_error))).unwrap_err();
+            RecordBatchStreamReader::try_new(failing_stream(Some(null_last_error))).unwrap_err();
         assert_eq!(
             err.to_string(),
             format!(
@@ -871,7 +877,7 @@ mod tests {
 
     #[test]
     fn test_import_schema_error_without_error_callback() {
-        let err = ArrowArrayStreamReader::try_new(failing_stream(None)).unwrap_err();
+        let err = RecordBatchStreamReader::try_new(failing_stream(None)).unwrap_err();
         assert_eq!(
             err.to_string(),
             format!(
@@ -887,7 +893,7 @@ mod tests {
         let mut stream = failing_stream(Some(null_last_error));
         stream.get_schema = Some(working_get_schema);
 
-        let err = ArrowArrayStreamReader::try_new(stream)
+        let err = RecordBatchStreamReader::try_new(stream)
             .unwrap()
             .next()
             .unwrap()
@@ -1137,7 +1143,7 @@ mod tests {
         // `ArrayStreamReader` for that.
         let field = Field::new("a", DataType::Int32, true);
 
-        let err = ArrowArrayStreamReader::try_new(array_stream(field, vec![])).unwrap_err();
+        let err = RecordBatchStreamReader::try_new(array_stream(field, vec![])).unwrap_err();
 
         assert_eq!(
             err.to_string(),
