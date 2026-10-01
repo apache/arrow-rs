@@ -279,23 +279,23 @@ where
         let null_buffer = NullBuffer::union(left.nulls(), right.nulls());
 
         // Compute the required data buffer size, excluding any elements that are null
-        // or are small enough to be stored inline.
-        let data_size = match &null_buffer {
+        // or are small enough to be stored inline. Both lengths are `u32`, and a
+        // pair of them can sum past that, so the addition is done in `usize`.
+        let inline_max = MAX_INLINE_VIEW_LEN as usize;
+        let data_size: usize = match &null_buffer {
             None => left
                 .lengths()
                 .zip(right.lengths())
-                .map(|(l, r)| l + r)
-                .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-                .map(|len| len as usize)
+                .map(|(l, r)| l as usize + r as usize)
+                .filter(|len| *len > inline_max)
                 .sum(),
             Some(nb) => left
                 .lengths()
                 .zip(right.lengths())
                 .zip(nb.iter())
                 .filter(|((_, _), not_null)| *not_null)
-                .map(|((l, r), _)| l + r)
-                .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-                .map(|len| len as usize)
+                .map(|((l, r), _)| l as usize + r as usize)
+                .filter(|len| *len > inline_max)
                 .sum(),
         };
 
@@ -501,6 +501,7 @@ mod tests {
     use super::*;
     use arrow_array::cast::AsArray;
     use arrow_buffer::Buffer;
+    use arrow_data::ByteView;
 
     #[test]
     fn test_string_concat() {
@@ -708,6 +709,30 @@ mod tests {
         assert_eq!(
             output.unwrap_err().to_string(),
             "Invalid argument error: Concatenated FixedSizeBinary value length 3758096384 exceeds i32".to_string()
+        );
+    }
+
+    #[test]
+    #[ignore = "allocates around 8 GiB, run with --release --ignored"]
+    fn test_view_concat_element_length_overflow() {
+        // Two elements of 2 GiB sum to exactly u32::MAX + 1, which is past what
+        // a view can carry in its length
+        let len = 1_usize << 31;
+        let buffer: Buffer = MutableBuffer::from_len_zeroed(len).into();
+        let view = ByteView {
+            length: len as u32,
+            prefix: 0,
+            buffer_index: 0,
+            offset: 0,
+        }
+        .as_u128();
+        let array =
+            BinaryViewArray::try_new(ScalarBuffer::from(vec![view]), vec![buffer], None).unwrap();
+
+        let output = concat_elements_binary_view_array(&array, &array);
+        assert_eq!(
+            output.unwrap_err().to_string(),
+            "Arithmetic overflow: byte array offset overflow".to_string()
         );
     }
 
