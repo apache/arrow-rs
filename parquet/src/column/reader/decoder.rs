@@ -101,6 +101,9 @@ pub trait ColumnValueDecoder {
     /// must validate it when this is set, so that data which is not UTF-8 fails
     /// to read instead of producing an array that breaks the string invariant.
     ///
+    /// Passing `false` does not turn validation off: a column annotated as a
+    /// string is still validated.
+    ///
     /// The default implementation does nothing, for decoders that never produce
     /// string data.
     fn set_validate_utf8(&mut self, _validate_utf8: bool) {}
