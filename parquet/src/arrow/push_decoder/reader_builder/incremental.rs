@@ -512,8 +512,13 @@ impl IncrementalRowGroup {
         // which is the batch that the row-group mode gives at this point.
         let mut reader = ParquetRecordBatchReader::new(array_reader, self.window_plan(&out, pos));
         let batch = reader.next();
+        // Only ask for another batch if the plan has rows left. With
+        // selectors, `next` on an exhausted plan still decodes an empty batch
+        // of every column. `is_exhausted` is always false for a plan without
+        // a selection (`RowSelectionCursor::All`). That case is safe, because
+        // `window_plan` always attaches a selection.
         let extra = match &batch {
-            Some(Ok(_)) => reader.next(),
+            Some(Ok(_)) if !reader.is_exhausted() => reader.next(),
             _ => None,
         };
         self.out_reader = Some(reader.into_array_reader());
@@ -762,6 +767,7 @@ fn take_rows(ranges: &mut Vec<Range<usize>>, n: usize) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::RowSelectionCursor;
     use crate::arrow::push_decoder::test::{
         test_file_parquet_metadata, test_file_parquet_metadata_with_offset_index,
     };
@@ -890,6 +896,37 @@ mod tests {
             err.contains("column 0 of row group 0") && err.contains("no page locations"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn window_plan_is_exhausted_after_its_rows() {
+        let config = IncrementalConfig {
+            batch_size: 100,
+            projection: ProjectionMask::all(),
+            metadata: test_file_parquet_metadata_with_offset_index(),
+            fields: None,
+            metrics: ArrowReaderMetrics::disabled(),
+        };
+        let row_group =
+            IncrementalRowGroup::new(config, 0, 200, None, RowBudget::new(None, None), &mut None)
+                .unwrap();
+        // `step_output` checks for a second batch only if the plan has rows
+        // left after the first batch. The plan ends at the last selected
+        // row, so reading the selected rows exhausts it.
+        for (rows, pos) in [(vec![0..10, 20..30], 0), (vec![150..160, 170..180], 20)] {
+            let mut plan = row_group.window_plan(&rows, pos);
+            let RowSelectionCursor::Selectors(cursor) = plan.row_selection_cursor_mut() else {
+                panic!("expected selectors");
+            };
+            let mut selected = 0;
+            while !cursor.is_empty() {
+                let selector = cursor.next_selector();
+                if !selector.skip {
+                    selected += selector.row_count;
+                }
+            }
+            assert_eq!(selected, 20, "{rows:?} {pos}");
+        }
     }
 
     #[test]
