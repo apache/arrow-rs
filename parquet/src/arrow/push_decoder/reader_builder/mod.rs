@@ -17,6 +17,7 @@
 
 mod data;
 mod filter;
+mod stages;
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache};
@@ -39,6 +40,7 @@ use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
+pub(crate) use stages::{Stage, StageSchedule};
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
@@ -178,6 +180,10 @@ pub(crate) struct RowGroupReaderBuilder {
 
     /// The underlying data store
     buffers: PushBuffers,
+
+    /// What each decoding stage fetches. Kept here because the filter is
+    /// moved out of the builder while a row group is decoded.
+    stages: Arc<StageSchedule>,
 }
 
 /// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
@@ -213,7 +219,7 @@ impl RowGroupReaderBuilder {
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
     ) -> Self {
-        Self {
+        let mut builder = Self {
             batch_size,
             projection,
             metadata,
@@ -224,7 +230,25 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
-        }
+            stages: Arc::new(StageSchedule::new(ProjectionMask::all(), vec![], None)),
+        };
+        let (predicate_projections, cache_projection) = match &builder.filter {
+            Some(filter) => (
+                filter
+                    .predicates
+                    .iter()
+                    .map(|predicate| predicate.projection().clone())
+                    .collect(),
+                builder.compute_cache_projection_inner(filter),
+            ),
+            None => (vec![], None),
+        };
+        builder.stages = Arc::new(StageSchedule::new(
+            builder.projection.clone(),
+            predicate_projections,
+            cache_projection,
+        ));
+        builder
     }
 
     /// Decompose into [`RowGroupReaderBuilderParts`] so the builder can be
@@ -244,6 +268,8 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: _,
             buffers,
+            // Recomputed from `filter` when the builder is rebuilt.
+            stages: _,
         } = self;
         RowGroupReaderBuilderParts {
             batch_size,
@@ -449,7 +475,7 @@ impl RowGroupReaderBuilder {
                 }
 
                 // Make a request for the data needed to evaluate the current predicate
-                let predicate = filter_info.current();
+                let fetch = self.stages.fetch(Stage::Predicate(filter_info.index()));
 
                 // need to fetch pages the column needs for decoding, figure
                 // that out based on the current selection and projection
@@ -458,13 +484,13 @@ impl RowGroupReaderBuilder {
                     row_count,
                     self.batch_size,
                     &self.metadata,
-                    predicate.projection(), // use the predicate's projection
+                    fetch.projection, // use the predicate's projection
                 )
                 .with_selection(plan_builder.selection())
                 // Cached output columns reuse these predicate-stage chunks. Expand their
                 // selection to cache batch boundaries so a cache miss can safely fetch a
                 // complete batch from the retained sparse column data.
-                .with_cache_projection(Some(filter_info.cache_projection()))
+                .with_cache_projection(fetch.cache_projection)
                 .with_column_chunks(column_chunks)
                 .build();
 
@@ -624,17 +650,17 @@ impl RowGroupReaderBuilder {
                     ));
                 }
 
+                let fetch = self.stages.fetch(Stage::Projection);
                 let data_request = DataRequestBuilder::new(
                     row_group_idx,
                     row_count,
                     self.batch_size,
                     &self.metadata,
-                    &self.projection,
+                    fetch.projection,
                 )
                 .with_selection(plan_builder.selection())
                 .with_column_chunks(column_chunks)
-                // Final projection fetch shouldn't expand selection for cache
-                // so don't call with_cache_projection here
+                .with_cache_projection(fetch.cache_projection)
                 .build();
 
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
