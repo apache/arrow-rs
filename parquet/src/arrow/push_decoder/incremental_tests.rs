@@ -24,7 +24,8 @@
 //! * Request shape: the decoder requests only the pages of the next batch
 //!   ([`test_partial_pushes_across_batches`],
 //!   [`test_predicates_do_not_wait_for_the_row_group`],
-//!   [`test_dictionary_page_is_requested_once_per_column_chunk`]).
+//!   [`test_dictionary_page_is_requested_once_per_column_chunk`],
+//!   [`test_mask_policy_reads_only_loaded_pages`]).
 //! * Memory release: the decoder releases the bytes that it no longer needs
 //!   ([`test_full_scan_holds_about_one_batch`],
 //!   [`test_releases_bytes_pushed_ahead`],
@@ -41,7 +42,9 @@ use super::equivalence_tests::{
 use crate::DecodeResult;
 use crate::arrow::ArrowWriter;
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::arrow_reader::{ArrowPredicateFn, RowFilter, RowSelection, RowSelector};
+use crate::arrow::arrow_reader::{
+    ArrowPredicateFn, RowFilter, RowSelection, RowSelectionPolicy, RowSelector,
+};
 use crate::arrow::push_decoder::{FetchGranularity, ParquetPushDecoder, ParquetPushDecoderBuilder};
 use crate::file::metadata::PageIndexPolicy;
 use arrow_array::RecordBatch;
@@ -587,6 +590,51 @@ fn test_sparse_predicate_releases_pages_of_empty_windows() {
         "peak {} vs column {column_a}",
         cost.peak_buffered
     );
+}
+
+/// With [`RowSelectionPolicy::Mask`], a window decodes all rows of its
+/// batch, but only from the pages that the decoder holds. The caller pushes
+/// only the requested ranges, so the store is sparse: a read of a page that
+/// is not loaded would fail.
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_mask_policy_reads_only_loaded_pages() {
+    let mut scan = filtered(vec![PredicateSpec::new("b", Cmp::ModNotZero(3))]);
+    scan.projection = Some(columns(&["a", "b", "c"]));
+    scan.policy = Some(RowSelectionPolicy::Mask);
+    scan.row_groups = Some(vec![0]);
+    scan.selection = Some(RowSelection::from_consecutive_ranges(
+        [10..20, 330..340, 590..600].into_iter(),
+        ROWS_PER_ROW_GROUP,
+    ));
+    let (_, cost) = assert_same_batches(&scan);
+    // No page of `c` without a selected row is requested.
+    let meta = metadata(true);
+    let page_index = meta.metadata().page_index_for_row_group(0);
+    let c = 2;
+    let locations = page_index.page_locations(c).unwrap();
+    let mut skipped = 0;
+    for (i, location) in locations.iter().enumerate() {
+        let first = location.first_row_index as usize;
+        let end = locations
+            .get(i + 1)
+            .map_or(ROWS_PER_ROW_GROUP, |l| l.first_row_index as usize);
+        if [10..20, 330..340, 590..600]
+            .iter()
+            .any(|r| r.start < end && first < r.end)
+        {
+            continue;
+        }
+        skipped += 1;
+        let start = location.offset as u64;
+        assert!(
+            cost.requested
+                .iter()
+                .all(|r| r.start > start || r.end <= start),
+            "page {i} of c was requested"
+        );
+    }
+    assert!(skipped > 10, "{skipped}");
 }
 
 /// Filtering and output overlap: the first batch of a row group is returned
