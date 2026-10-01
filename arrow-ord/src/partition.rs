@@ -20,7 +20,8 @@
 use std::ops::Range;
 
 use arrow_array::{Array, ArrayRef};
-use arrow_buffer::BooleanBuffer;
+use arrow_buffer::bit_util::apply_bitwise_binary_op;
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer};
 use arrow_schema::{ArrowError, SortOptions};
 
 use crate::cmp::{distinct, supports_distinct};
@@ -143,12 +144,14 @@ pub fn partition(columns: &[ArrayRef]) -> Result<Partitions, ArrowError> {
     }
 
     let acc = find_boundaries(&columns[0])?;
-    let acc = columns
-        .iter()
-        .skip(1)
-        .try_fold(acc, |acc, c| find_boundaries(c.as_ref()).map(|b| &acc | &b))?;
+    let mut builder = convert_boolean_buffer_to_builder(acc);
 
-    Ok(Partitions(Some(acc)))
+    for column in columns.iter().skip(1) {
+        let boundaries = find_boundaries(column.as_ref())?;
+        or(&mut builder, boundaries);
+    }
+
+    Ok(Partitions(Some(builder.finish())))
 }
 
 /// Returns a mask with bits set whenever the value or nullability changes
@@ -164,6 +167,46 @@ fn find_boundaries(v: &dyn Array) -> Result<BooleanBuffer, ArrowError> {
     // sort options do not matter.
     let cmp = make_comparator(&v1, &v2, SortOptions::default())?;
     Ok((0..slice_len).map(|i| !cmp(i, i).is_eq()).collect())
+}
+
+fn convert_boolean_buffer_to_builder(buffer: BooleanBuffer) -> BooleanBufferBuilder {
+    let len = buffer.len();
+
+    // This should be 0, but in case it doesn't simplify the code by doing a copy to a new buffer
+    let buffer = if buffer.offset() != 0 {
+        // Recreate
+        BooleanBuffer::from_iter(buffer.iter())
+    } else {
+        buffer
+    };
+    assert_eq!(buffer.offset(), 0);
+
+    let buffer = buffer.into_inner();
+
+    let mutable = buffer
+        .into_mutable()
+        // This should not happen but just in case copy to owned mutable buffer
+        .unwrap_or_else(|buffer| {
+            let mut mutable = MutableBuffer::new(buffer.len());
+            // SAFETY: We just allocated a buffer of the same length as the original buffer, so it is safe to set the length to the original buffer's length.
+            unsafe { mutable.set_len(buffer.len()) };
+            mutable.as_slice_mut().copy_from_slice(buffer.as_slice());
+
+            mutable
+        });
+
+    BooleanBufferBuilder::new_from_buffer(mutable, len)
+}
+
+fn or(lhs: &mut BooleanBufferBuilder, rhs: BooleanBuffer) {
+    apply_bitwise_binary_op(
+        lhs.as_slice_mut(),
+        0,
+        rhs.values(),
+        rhs.offset(),
+        rhs.len(),
+        |a, b| a | b,
+    )
 }
 
 #[cfg(test)]
