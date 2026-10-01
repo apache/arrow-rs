@@ -274,12 +274,18 @@ pub enum FetchGranularity {
     /// selected rows. Thus, with a sparse [`RowSelection`], a predicate gets
     /// small batches, and the first output batch needs many windows.
     ///
-    /// Each predicate reads only the pages of the rows that the previous
-    /// predicate passed. Thus, if the caller pushes only the requested
-    /// ranges, each window needs one round trip per predicate plus one round
-    /// trip for the output, in sequence. On storage with high latency, push
-    /// ahead: fetch the ranges that the scan reads (for example, the planned
-    /// ranges) before the decoder requests them.
+    /// # I/O
+    ///
+    /// [`DecodeResult::NeedsData`] asks only for the bytes of the next step.
+    /// The caller decides how much to fetch:
+    ///
+    /// | The caller pushes | Result |
+    /// |---|---|
+    /// | only the requested ranges | the least memory. But each predicate reads only the pages of the rows that the previous predicate passed, so each window needs one round trip per predicate plus one for the output, in sequence. |
+    /// | more ranges, before the decoder asks (read-ahead) | fewer and larger requests. The decoder runs all steps whose bytes are pushed in one [`ParquetPushDecoder::try_decode`] call, without `NeedsData`. |
+    ///
+    /// On storage with high latency, or with a sparse [`RowSelection`], read
+    /// ahead: for example, fetch the column chunks of the next row group.
     ///
     /// # Other methods
     ///
@@ -3387,7 +3393,7 @@ mod test {
     }
 
     /// return the metadata for the test file, including the offset index
-    fn test_file_parquet_metadata_with_offset_index() -> Arc<ParquetMetaData> {
+    pub fn test_file_parquet_metadata_with_offset_index() -> Arc<ParquetMetaData> {
         let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(test_file_len())
             .unwrap()
             .with_offset_index_policy(PageIndexPolicy::Required);

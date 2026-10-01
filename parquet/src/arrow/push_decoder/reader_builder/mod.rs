@@ -471,20 +471,26 @@ impl RowGroupReaderBuilder {
                     fields: self.fields.clone(),
                     metrics: self.metrics.clone(),
                 };
-                Box::new(IncrementalRowGroup::new(
+                match IncrementalRowGroup::new(
                     config,
                     row_group_idx,
                     row_count,
                     plan_builder.selection().cloned(),
                     budget,
-                    self.filter.take(),
-                ))
+                    &mut self.filter,
+                ) {
+                    Ok(row_group) => Box::new(row_group),
+                    Err(e) => {
+                        self.state = Some(RowGroupDecoderState::Finished);
+                        return Err(e);
+                    }
+                }
             }
             RowGroupDecoderState::Incremental(row_group) => row_group,
             RowGroupDecoderState::Finished => {
                 self.state = Some(RowGroupDecoderState::Finished);
                 return Err(general_err!(
-                    "Internal Error: try_build_incremental called without an active row group"
+                    "Internal Error: try_build_incremental called without an active row group",
                 ));
             }
             other => {
@@ -492,7 +498,7 @@ impl RowGroupReaderBuilder {
                 // calls this method.
                 self.state = Some(other);
                 return Err(general_err!(
-                    "Internal Error: try_build_incremental called for a row group of try_build"
+                    "Internal Error: try_build_incremental called for a row group of try_build",
                 ));
             }
         };
