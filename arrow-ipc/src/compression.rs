@@ -280,7 +280,7 @@ impl CompressionCodec {
         };
         if ret.len() != decompressed_size {
             return Err(ArrowError::IpcError(format!(
-                "Expected compressed length of {decompressed_size} got {}",
+                "Expected decompressed length of {decompressed_size} got {}",
                 ret.len()
             )));
         }
@@ -310,7 +310,18 @@ fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> 
 fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     use std::io::Read;
     let mut output = Vec::with_capacity(decompressed_size);
-    lz4_flex::frame::FrameDecoder::new(input).read_to_end(&mut output)?;
+    let mut decoder = lz4_flex::frame::FrameDecoder::new(input);
+    decoder
+        .by_ref()
+        .take(decompressed_size as u64)
+        .read_to_end(&mut output)?;
+
+    // Probe without growing `output` to reject data exceeding the advertised size.
+    if decoder.read(&mut [0])? != 0 {
+        return Err(ArrowError::IpcError(format!(
+            "LZ4 decompressed buffer exceeds advertised size of {decompressed_size}"
+        )));
+    }
     Ok(output)
 }
 
@@ -411,6 +422,26 @@ mod tests {
             )
             .unwrap();
         assert_eq!(input_bytes, result.as_slice());
+    }
+
+    #[test]
+    #[cfg(feature = "lz4")]
+    fn test_lz4_decompression_rejects_output_exceeding_advertised_size() {
+        let input_bytes = b"hello lz4";
+        let codec = super::CompressionCodec::Lz4Frame;
+        let mut compressed = Vec::new();
+        codec
+            .compress(input_bytes, &mut compressed, &mut Default::default())
+            .unwrap();
+
+        let err = codec
+            .decompress(&compressed, input_bytes.len() - 1, &mut Default::default())
+            .expect_err("output larger than the advertised size should fail");
+
+        assert!(
+            err.to_string().contains("exceeds advertised size"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

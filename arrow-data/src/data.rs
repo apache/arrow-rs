@@ -786,31 +786,46 @@ impl ArrayData {
                     vec![ArrayData::new_empty(v.as_ref())],
                     true,
                 ),
-                DataType::Union(f, mode) => {
-                    let (id, _) = f.iter().next().unwrap();
-                    let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
-                    let buffers = match mode {
-                        UnionMode::Sparse => vec![ids],
-                        UnionMode::Dense => {
-                            let end_offset = i32::from_usize(len).unwrap();
-                            vec![ids, Buffer::from_iter(0_i32..end_offset)]
-                        }
-                    };
-
-                    let children = f
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, (_, f))| {
-                            if idx == 0 || *mode == UnionMode::Sparse {
-                                Self::new_null(f.data_type(), len)
-                            } else {
-                                Self::new_empty(f.data_type())
+                DataType::Union(f, mode) => match f.iter().next() {
+                    // Every slot carries a type id naming one of the children,
+                    // so an empty union has nothing to put in a slot and can
+                    // only be the empty array.
+                    None => {
+                        assert_eq!(
+                            len, 0,
+                            "cannot construct null data from an empty union of length {len}, a slot has no type id to carry"
+                        );
+                        let buffers = match mode {
+                            UnionMode::Sparse => vec![zeroed(0)],
+                            UnionMode::Dense => vec![zeroed(0), zeroed(0)],
+                        };
+                        (buffers, vec![], false)
+                    }
+                    Some((id, _)) => {
+                        let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
+                        let buffers = match mode {
+                            UnionMode::Sparse => vec![ids],
+                            UnionMode::Dense => {
+                                let end_offset = i32::from_usize(len).unwrap();
+                                vec![ids, Buffer::from_iter(0_i32..end_offset)]
                             }
-                        })
-                        .collect();
+                        };
 
-                    (buffers, children, false)
-                }
+                        let children = f
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, (_, f))| {
+                                if idx == 0 || *mode == UnionMode::Sparse {
+                                    Self::new_null(f.data_type(), len)
+                                } else {
+                                    Self::new_empty(f.data_type())
+                                }
+                            })
+                            .collect();
+
+                        (buffers, children, false)
+                    }
+                },
                 DataType::RunEndEncoded(r, v) => {
                     if len == 0 {
                         // For empty arrays, create zero-length child arrays.
@@ -2440,6 +2455,8 @@ pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::UnionFields;
+
     use super::*;
     use crate::ByteView;
     use crate::transform::MutableArrayData;
@@ -3676,5 +3693,24 @@ mod tests {
             ArrayData::try_new(data_type, len, null_bit_buffer, offset, buffers, child_data);
 
         [from_builder_res, from_try_new_res]
+    }
+
+    #[test]
+    fn test_new_null_empty_union() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let data_type = DataType::Union(UnionFields::empty(), mode);
+            let data = ArrayData::new_null(&data_type, 0);
+            data.validate_full()
+                .expect("an empty union of length zero is valid");
+            assert_eq!(data.len(), 0);
+            assert!(data.child_data().is_empty());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot construct null data from an empty union")]
+    fn test_new_null_empty_union_with_slots() {
+        let data_type = DataType::Union(UnionFields::empty(), UnionMode::Dense);
+        let _ = ArrayData::new_null(&data_type, 1);
     }
 }

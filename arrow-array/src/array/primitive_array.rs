@@ -1150,6 +1150,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// `Err(self)`
     pub fn into_builder(self) -> Result<PrimitiveBuilder<T>, Self> {
         let len = self.len();
+        let data_type = self.data_type.clone();
         let data = self.into_data();
         let null_bit_buffer = data.nulls().map(|b| b.inner().sliced());
 
@@ -1191,7 +1192,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         match try_mutable_buffers {
             Ok(builder) => Ok(builder),
             Err((buffer, null_bit_buffer)) => {
-                let builder = ArrayData::builder(T::DATA_TYPE)
+                let builder = ArrayData::builder(data_type)
                     .len(len)
                     .add_buffer(buffer)
                     .null_bit_buffer(null_bit_buffer);
@@ -2933,6 +2934,17 @@ mod tests {
                 assert_eq!(expected, returned)
             }
         }
+    }
+
+    #[test]
+    fn test_into_builder_err_keeps_data_type() {
+        let array = Decimal128Array::from(vec![1, 2])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let shared = array.clone();
+
+        let err_return = array.into_builder().unwrap_err();
+        assert_eq!(err_return.data_type(), shared.data_type());
     }
 
     #[test]

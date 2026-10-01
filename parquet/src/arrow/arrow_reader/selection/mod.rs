@@ -49,7 +49,8 @@ use algebra::{
 };
 pub use boolean::MaskRunIter;
 use boolean::{
-    MaskSelection, limit_mask, mask_has_at_least_runs, offset_mask, split_off_mask, trim_mask,
+    MaskSelection, boolean_mask_from_selectors, limit_mask, mask_has_at_least_runs, offset_mask,
+    split_off_mask, trim_mask,
 };
 pub(crate) use cursor::{LoadedRowRanges, MaskCursor, RowSelectionStrategy};
 pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
@@ -236,6 +237,14 @@ impl RowSelection {
     /// Consume the selection and return its internal storage.
     pub(crate) fn into_inner(self) -> RowSelectionInner {
         self.inner
+    }
+
+    /// Consume this selection and return its bitmap representation.
+    pub(crate) fn into_boolean_buffer(self) -> BooleanBuffer {
+        match self.inner {
+            RowSelectionInner::Mask(mask) => mask.into_mask(),
+            RowSelectionInner::Selectors(selectors) => boolean_mask_from_selectors(&selectors),
+        }
     }
 
     /// Choose the automatic materialisation strategy without converting between
@@ -951,6 +960,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn auto_construction_edge_row_counts() {
         for rows in [0, 1, 7, 8, 31, 32, 33, MAX_RANDOM_ROWS] {
             let masks = [
@@ -976,6 +986,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn auto_construction_randomized_equivalence() {
         let mut rng = StdRng::seed_from_u64(0x1077_6000_5eed);
         let mut case_idx = 0usize;
