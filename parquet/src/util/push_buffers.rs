@@ -66,6 +66,9 @@ pub struct PushBuffers {
     /// when no earlier buffer can reach the requested range, so it checks one
     /// or two buffers, not all of them. See [`Self::find`].
     max_len: u64,
+    /// The sum of the lengths of `ranges`, kept up to date so that
+    /// [`Self::buffered_bytes`] does not scan all ranges.
+    buffered_bytes: u64,
 }
 
 impl Display for PushBuffers {
@@ -105,6 +108,7 @@ impl PushBuffers {
             ranges: Vec::new(),
             buffers: Vec::new(),
             max_len: 0,
+            buffered_bytes: 0,
         }
     }
 
@@ -152,6 +156,7 @@ impl PushBuffers {
         // Thus, ranges pushed in file order go at the end.
         let idx = self.ranges.partition_point(|r| r.start <= range.start);
         self.max_len = self.max_len.max(expected);
+        self.buffered_bytes += expected;
         self.ranges.insert(idx, range);
         self.buffers.insert(idx, buffer);
         Ok(())
@@ -215,7 +220,7 @@ impl PushBuffers {
     /// Return the total of all buffered ranges
     #[cfg(feature = "arrow")]
     pub(crate) fn buffered_bytes(&self) -> u64 {
-        self.ranges.iter().map(|r| r.end - r.start).sum()
+        self.buffered_bytes
     }
 
     /// Clear any range and corresponding buffer that is exactly in the ranges_to_clear
@@ -237,6 +242,7 @@ impl PushBuffers {
         }
         self.ranges = ranges;
         self.buffers = buffers;
+        self.buffered_bytes = self.ranges.iter().map(|r| r.end - r.start).sum();
         self.update_max_len();
     }
 
@@ -263,11 +269,21 @@ impl PushBuffers {
     /// the allocator frees the memory of a pushed [`Bytes`] only after all of
     /// its parts are removed.
     ///
-    /// If the buffers are sorted by start, they stay sorted.
+    /// If the buffers are sorted by start, they stay sorted. If no buffer
+    /// overlaps `ranges`, the buffers do not change.
     #[cfg(feature = "arrow")]
     pub(crate) fn release_ranges(&mut self, ranges: &[Range<u64>]) {
         let release = merge_ranges(ranges);
         if release.is_empty() {
+            return;
+        }
+        // Most calls release ranges that are no longer buffered. Return
+        // before reallocating the buffers.
+        let overlaps = |range: &Range<u64>| {
+            let first = release.partition_point(|r| r.end <= range.start);
+            release.get(first).is_some_and(|r| r.start < range.end)
+        };
+        if !self.ranges.iter().any(overlaps) {
             return;
         }
         let mut new_ranges = Vec::with_capacity(self.ranges.len());
@@ -298,9 +314,15 @@ impl PushBuffers {
         }
         // If buffers overlap, the tail of a split buffer can start after the
         // start of the next buffer. The sort is stable.
-        let mut parts: Vec<_> = new_ranges.into_iter().zip(new_buffers).collect();
-        parts.sort_by_key(|(range, _)| range.start);
-        (self.ranges, self.buffers) = parts.into_iter().unzip();
+        self.buffered_bytes = new_ranges.iter().map(|r| r.end - r.start).sum();
+        if new_ranges.is_sorted_by_key(|range| range.start) {
+            (self.ranges, self.buffers) = (new_ranges, new_buffers);
+        } else {
+            let mut parts: Vec<_> = new_ranges.into_iter().zip(new_buffers).collect();
+            parts.sort_by_key(|(range, _)| range.start);
+            (self.ranges, self.buffers) = parts.into_iter().unzip();
+        }
+        self.update_max_len();
     }
 
     /// Clear all buffered ranges and their corresponding data
@@ -308,6 +330,7 @@ impl PushBuffers {
         self.ranges.clear();
         self.buffers.clear();
         self.max_len = 0;
+        self.buffered_bytes = 0;
     }
 
     /// Panics if `ranges`, `buffers` and `max_len` do not agree, or if the
@@ -402,6 +425,31 @@ mod tests {
     #[cfg(feature = "arrow")]
     fn release(buffers: &mut PushBuffers, range: Range<u64>) {
         buffers.release_ranges(std::slice::from_ref(&range));
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn release_ranges_without_overlap_keeps_buffers() {
+        let mut buffers = PushBuffers::new(100);
+        buffers
+            .push_range(20..24, Bytes::from_static(b"abcd"))
+            .unwrap();
+        buffers
+            .push_range(0..10, Bytes::from_static(b"0123456789"))
+            .unwrap();
+
+        release(&mut buffers, 90..95);
+        release(&mut buffers, 10..20);
+        assert_eq!(buffers.ranges, vec![20..24, 0..10]);
+        assert_eq!(buffers.buffered_bytes(), 14);
+
+        // A release that overlaps a buffer sorts the buffers.
+        release(&mut buffers, 22..24);
+        assert_eq!(buffers.ranges, vec![0..10, 20..22]);
+        assert_eq!(buffers.buffered_bytes(), 12);
+
+        buffers.clear_all_ranges();
+        assert_eq!(buffers.buffered_bytes(), 0);
     }
 
     #[test]
