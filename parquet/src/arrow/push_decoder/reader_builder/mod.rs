@@ -478,6 +478,7 @@ impl RowGroupReaderBuilder {
                     metrics: self.metrics.clone(),
                     cache_projection,
                     max_predicate_cache_size: self.max_predicate_cache_size,
+                    row_selection_policy: self.row_selection_policy,
                 };
                 match IncrementalRowGroup::new(
                     config,

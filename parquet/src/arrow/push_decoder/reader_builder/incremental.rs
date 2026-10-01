@@ -23,6 +23,7 @@ use crate::arrow::array_reader::{
     ArrayReader, ArrayReaderBuilder, CacheOptionsBuilder, RowGroupCache,
 };
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use crate::arrow::arrow_reader::selection::{LoadedRowRanges, RowSelectionStrategy};
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, ReadPlan, ReadPlanBuilder, RowFilter, RowSelection,
     RowSelectionPolicy, RowSelector,
@@ -67,6 +68,7 @@ pub(super) struct IncrementalConfig {
     pub(super) cache_projection: ProjectionMask,
     /// The maximum size in bytes of the predicate cache.
     pub(super) max_predicate_cache_size: usize,
+    pub(super) row_selection_policy: RowSelectionPolicy,
 }
 
 /// The role of an array reader for the predicate cache.
@@ -556,7 +558,8 @@ impl IncrementalRowGroup {
         let pos = self.pred_pos[idx];
         let relative = ranges_to_selection(&cand, pos);
         let consumed = relative.total_row_count();
-        let mut reader = ParquetRecordBatchReader::new(array_reader, self.window_plan(&cand, pos));
+        let plan = self.window_plan(&projection, &cand, pos);
+        let mut reader = ParquetRecordBatchReader::new(array_reader, plan);
         let predicate = self
             .filter
             .as_mut()
@@ -627,7 +630,8 @@ impl IncrementalRowGroup {
         let consumed = ranges_to_selection(&out, pos).total_row_count();
         // `out` has `batch_size` rows or less. Thus, the plan gives one batch,
         // which is the batch that the row-group mode gives at this point.
-        let mut reader = ParquetRecordBatchReader::new(array_reader, self.window_plan(&out, pos));
+        let plan = self.window_plan(&self.config.projection, &out, pos);
+        let mut reader = ParquetRecordBatchReader::new(array_reader, plan);
         let batch = reader.next();
         // Only ask for another batch if the plan has rows left. With
         // selectors, `next` on an exhausted plan still decodes an empty batch
@@ -716,15 +720,76 @@ impl IncrementalRowGroup {
         buffers.release_ranges(&released);
     }
 
-    /// The read plan for the rows `rows`, for a reader at row `pos`.
-    ///
-    /// The plan uses [`RowSelectionPolicy::Selectors`]. A mask decodes all
-    /// rows of a batch, so it can read a page that the store does not hold.
-    fn window_plan(&self, rows: &[Range<usize>], pos: usize) -> ReadPlan {
+    /// The rows of the pages that the rows `rows` of `projection` read, in all
+    /// columns that have an offset index. `None` if these are all rows of the
+    /// row group. The row-group mode computes the same rows with
+    /// `loaded_row_ranges_for_projection`.
+    fn loaded_rows(
+        &self,
+        projection: &ProjectionMask,
+        rows: &[Range<usize>],
+    ) -> Option<Vec<Range<usize>>> {
+        self.chunks
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| projection.leaf_included(*idx))
+            .filter_map(|(_, chunk)| chunk.page_rows(rows, self.row_count))
+            .map(|rows| RowSelection::from_consecutive_ranges(rows.into_iter(), self.row_count))
+            .reduce(|loaded, column| loaded.intersection(&column))
+            .filter(|loaded| loaded.skipped_row_count() != 0)
+            .map(|loaded| selection_to_ranges(&loaded, 0))
+    }
+
+    /// A [`ReadPlanBuilder`] that selects the rows `rows`, for a reader at row
+    /// `pos`.
+    fn plan_builder(&self, rows: &[Range<usize>], pos: usize) -> ReadPlanBuilder {
         ReadPlanBuilder::new(self.config.batch_size)
             .with_selection(Some(ranges_to_selection(rows, pos)))
-            .with_row_selection_policy(RowSelectionPolicy::Selectors)
-            .build()
+    }
+
+    /// The read plan for the rows `rows` of `projection`, for a reader at row
+    /// `pos`. It uses the configured [`RowSelectionPolicy`], as the row-group
+    /// mode does.
+    fn window_plan(
+        &self,
+        projection: &ProjectionMask,
+        rows: &[Range<usize>],
+        pos: usize,
+    ) -> ReadPlan {
+        // Resolve the policy from the rows of this window only. The plan
+        // starts at `pos`, and a reader that is behind would add a long first
+        // skip, which changes the result of `Auto`.
+        let window_start = rows.first().map_or(pos, |range| range.start);
+        let strategy = self
+            .plan_builder(rows, window_start)
+            .with_row_selection_policy(self.config.row_selection_policy)
+            .resolve_selection_strategy();
+        let builder = self.plan_builder(rows, pos);
+        let builder = match strategy {
+            RowSelectionStrategy::Selectors => {
+                builder.with_row_selection_policy(RowSelectionPolicy::Selectors)
+            }
+            // A mask decodes all rows, so it must not read a page that is not
+            // loaded. Limit it to the rows of the loaded pages, as
+            // `prepare_selection_for_page_skipping` does for a row group.
+            RowSelectionStrategy::Mask => {
+                let loaded = self.loaded_rows(projection, rows).map(|loaded| {
+                    // Make the rows relative to `pos`.
+                    let ranges = loaded.into_iter().filter_map(|range| {
+                        let start = range.start.max(pos);
+                        (start < range.end).then(|| start - pos..range.end - pos)
+                    });
+                    LoadedRowRanges::from_selection(RowSelection::from_consecutive_ranges(
+                        ranges,
+                        self.row_count - pos,
+                    ))
+                });
+                builder
+                    .with_row_selection_policy(RowSelectionPolicy::Mask)
+                    .with_loaded_row_ranges(loaded)
+            }
+        };
+        builder.build()
     }
 }
 
@@ -788,6 +853,35 @@ impl ColumnChunkPages {
                 Ok(Self::Pages { dictionary, data })
             })
             .collect()
+    }
+
+    /// The rows of the data pages that hold one of the sorted rows `rows`.
+    /// `None` without an offset index, or without data pages.
+    fn page_rows(&self, rows: &[Range<usize>], row_count: usize) -> Option<Vec<Range<usize>>> {
+        let Self::Pages { data, .. } = self else {
+            return None;
+        };
+        if data.is_empty() {
+            return None;
+        }
+        let mut out: Vec<Range<usize>> = vec![];
+        for rows in rows {
+            let mut page = data
+                .partition_point(|(_, first_row)| *first_row <= rows.start)
+                .saturating_sub(1);
+            while page < data.len() && data[page].1 < rows.end {
+                let end = data.get(page + 1).map_or(row_count, |(_, first)| *first);
+                let page_rows = data[page].1..end;
+                match out.last_mut() {
+                    Some(last) if last.end >= page_rows.start => {
+                        last.end = last.end.max(page_rows.end)
+                    }
+                    _ => out.push(page_rows),
+                }
+                page += 1;
+            }
+        }
+        Some(out)
     }
 
     /// Append the byte ranges that the sorted rows `rows` read: the
@@ -972,7 +1066,7 @@ fn take_rows(ranges: &mut Vec<Range<usize>>, n: usize) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::arrow_reader::RowSelectionCursor;
+    use crate::arrow::arrow_reader::selection::RowSelectionCursor;
     use crate::arrow::push_decoder::test::{
         test_file_parquet_metadata, test_file_parquet_metadata_with_offset_index,
     };
@@ -1103,11 +1197,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn window_plan_is_exhausted_after_its_rows() {
-        let metadata = test_file_parquet_metadata_with_offset_index();
+    /// A config with `batch_size` 100, all columns, no predicate cache and
+    /// the selection policy `policy`.
+    fn test_config(
+        metadata: Arc<ParquetMetaData>,
+        policy: RowSelectionPolicy,
+    ) -> IncrementalConfig {
         let num_columns = metadata.row_group(0).num_columns();
-        let config = IncrementalConfig {
+        IncrementalConfig {
             batch_size: 100,
             projection: ProjectionMask::all(),
             metadata,
@@ -1115,26 +1212,87 @@ mod tests {
             metrics: ArrowReaderMetrics::disabled(),
             cache_projection: ProjectionMask::none(num_columns),
             max_predicate_cache_size: 0,
-        };
-        let row_group =
-            IncrementalRowGroup::new(config, 0, 200, None, RowBudget::new(None, None), &mut None)
-                .unwrap();
-        // `step_output` checks for a second batch only if the plan has rows
-        // left after the first batch. The plan ends at the last selected
-        // row, so reading the selected rows exhausts it.
-        for (rows, pos) in [(vec![0..10, 20..30], 0), (vec![150..160, 170..180], 20)] {
-            let mut plan = row_group.window_plan(&rows, pos);
-            let RowSelectionCursor::Selectors(cursor) = plan.row_selection_cursor_mut() else {
-                panic!("expected selectors");
-            };
-            let mut selected = 0;
-            while !cursor.is_empty() {
-                let selector = cursor.next_selector();
-                if !selector.skip {
-                    selected += selector.row_count;
+            row_selection_policy: policy,
+        }
+    }
+
+    /// [`IncrementalRowGroup::loaded_rows`] gives the rows of
+    /// `loaded_row_ranges_for_projection`, which the row-group mode uses.
+    #[test]
+    fn loaded_rows_match_the_row_group_mode() {
+        use super::super::loaded_row_ranges_for_projection;
+        let metadata = many_pages_metadata();
+        let row_count = metadata.row_group(0).num_rows() as usize;
+        let config = test_config(Arc::clone(&metadata), RowSelectionPolicy::Mask);
+        let row_group = IncrementalRowGroup::new(
+            config,
+            0,
+            row_count,
+            None,
+            RowBudget::new(None, None),
+            &mut None,
+        )
+        .unwrap();
+        let schema = metadata.file_metadata().schema_descr();
+        let mut rng = StdRng::seed_from_u64(0);
+        let mut limited = 0;
+        for _ in 0..200 {
+            let rows = random_rows(&mut rng, row_count, 400);
+            let columns: Vec<usize> = (0..3).filter(|_| rng.random_bool(0.6)).collect();
+            let projection = ProjectionMask::leaves(schema, columns);
+            let expected = loaded_row_ranges_for_projection(
+                Some(&ranges_to_selection(&rows, 0)),
+                &projection,
+                row_group_page_index(&metadata, 0),
+                3,
+                row_count,
+            )
+            .map(|loaded| loaded.ranges().to_vec());
+            limited += usize::from(expected.is_some());
+            assert_eq!(
+                row_group.loaded_rows(&projection, &rows),
+                expected,
+                "{rows:?}"
+            );
+        }
+        assert!(limited > 50, "{limited}");
+    }
+
+    /// The windows use the configured policy, as the row-group mode does. A
+    /// plan ends at its last selected row: `step_output` checks for a second
+    /// batch only if the plan has rows left after the first batch.
+    #[test]
+    fn window_plan_uses_the_configured_policy_and_ends_after_its_rows() {
+        for policy in [RowSelectionPolicy::Selectors, RowSelectionPolicy::Mask] {
+            let config = test_config(test_file_parquet_metadata_with_offset_index(), policy);
+            let row_group = IncrementalRowGroup::new(
+                config,
+                0,
+                200,
+                None,
+                RowBudget::new(None, None),
+                &mut None,
+            )
+            .unwrap();
+            // A reader at the start, and a reader behind the window.
+            for (rows, pos) in [(vec![0..10, 20..30], 0), (vec![150..160, 170..180], 20)] {
+                let mut plan = row_group.window_plan(&ProjectionMask::all(), &rows, pos);
+                match (policy, plan.row_selection_cursor_mut()) {
+                    (RowSelectionPolicy::Selectors, RowSelectionCursor::Selectors(cursor)) => {
+                        // Reading the selected rows exhausts the plan.
+                        let mut selected = 0;
+                        while !cursor.is_empty() {
+                            let selector = cursor.next_selector();
+                            if !selector.skip {
+                                selected += selector.row_count;
+                            }
+                        }
+                        assert_eq!(selected, 20, "{rows:?} {pos}");
+                    }
+                    (RowSelectionPolicy::Mask, RowSelectionCursor::Mask(_)) => {}
+                    _ => panic!("{policy:?} {rows:?} {pos}: wrong cursor"),
                 }
             }
-            assert_eq!(selected, 20, "{rows:?} {pos}");
         }
     }
 
