@@ -25,8 +25,8 @@ use std::sync::Mutex;
 
 /// The pages (or full column chunks) of one row group, keyed by file offset.
 ///
-/// The batch-granular push decoder adds pages while its column readers use
-/// the store. The readers read it through [`ColumnChunkData::Shared`].
+/// The batch-granular push decoder adds and removes pages while its column
+/// readers use the store. The readers read it through [`ColumnChunkData::Shared`].
 /// Offsets are unique in a file, so one store holds all column chunks of a
 /// row group.
 ///
@@ -84,6 +84,11 @@ impl PageStore {
         (offset < data.len()).then(|| data.slice(offset..))
     }
 
+    /// Remove the entry that starts at `start`, if any.
+    pub(crate) fn remove(&self, start: u64) {
+        self.pages.lock().unwrap().remove(&start);
+    }
+
     /// Remove all entries.
     pub(crate) fn clear(&self) {
         self.pages.lock().unwrap().clear();
@@ -105,7 +110,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn insert_contains_get_clear() {
+    fn insert_contains_get_remove() {
         let store = PageStore::default();
         assert!(!store.contains(&(10..20)));
         assert!(store.get(10).is_none());
@@ -122,6 +127,9 @@ mod tests {
 
         store.insert(30..32, Bytes::from_static(b"xy"));
         assert_eq!(store.buffered_bytes(), 12);
+        store.remove(10);
+        assert!(store.get(12).is_none());
+        assert_eq!(store.buffered_bytes(), 2);
         store.clear();
         assert_eq!(store.buffered_bytes(), 0);
     }

@@ -274,7 +274,7 @@ pub(crate) enum ColumnChunkData {
     /// Full column chunk and the offset within the original file
     Dense { offset: usize, data: Bytes },
     /// Pages in a [`PageStore`] that the push decoder shares with the reader.
-    /// The decoder can add pages while the reader uses them.
+    /// The decoder can add and remove pages while the reader uses them.
     Shared {
         /// Length of the full column chunk
         length: usize,
