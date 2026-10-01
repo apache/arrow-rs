@@ -35,6 +35,7 @@
 //! `try_next_reader` and configuration errors.
 
 use crate::DecodeResult;
+use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions, RowFilter,
     RowSelection, RowSelectionPolicy, RowSelector,
@@ -236,6 +237,11 @@ fn drive_with<B>(
             return Some(value);
         }
     }
+}
+
+/// Decode [`TEST_FILE`], pushing exactly the requested ranges.
+fn drive(decoder: ParquetPushDecoder) -> (Vec<RecordBatch>, Cost) {
+    drive_file(decoder, &TEST_FILE.data)
 }
 
 /// Decode `file`, pushing exactly the requested ranges.
@@ -943,6 +949,52 @@ fn predicate_batch_smaller_than_page() {
     let mut scan = filtered(vec![PredicateSpec::new("b", Cmp::ModNotZero(5))]);
     scan.batch_size = Some(10);
     assert_same_batches(&scan);
+}
+
+/// The output reads a predicate column from the predicate cache.
+#[test]
+fn predicate_cache_is_used() {
+    let metrics = ArrowReaderMetrics::enabled();
+    let mut scan = filtered(vec![PredicateSpec::new("b", Cmp::ModNotZero(3))]);
+    scan.projection = Some(columns(&["a", "b"]));
+    let decoder = scan
+        .builder()
+        .with_metrics(metrics.clone())
+        .with_fetch_granularity(FetchGranularity::Batch)
+        .build()
+        .unwrap();
+    let (batches, _) = drive(decoder);
+    assert!(!batches.is_empty());
+    // The output reads every row of `b` from the cache. A mask can read
+    // more rows than it selects, so this is a lower bound.
+    let output_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+    assert!(output_rows > 0);
+    let from_cache = metrics.records_read_from_cache().unwrap();
+    assert!(from_cache >= output_rows, "{from_cache} < {output_rows}");
+    // Only the predicate decodes `b`, one time per row. If the output
+    // decoded `b` again, this would be more than `NUM_ROWS`.
+    let from_inner = metrics.records_read_from_inner().unwrap();
+    assert_eq!(from_inner, NUM_ROWS);
+}
+
+/// A cache of 1 byte cannot hold a batch, so the output reads the predicate
+/// columns again, at cache batch boundaries. A cache of 0 bytes disables the
+/// cache.
+#[test]
+fn predicate_cache_misses() {
+    for size in [0, 1] {
+        let mut scan = filtered(vec![
+            PredicateSpec::new("a", Cmp::ModNotZero(7)),
+            PredicateSpec::new("b", Cmp::ModNotZero(3)),
+        ]);
+        scan.projection = Some(columns(&["a", "b", "c"]));
+        scan.max_predicate_cache_size = Some(size);
+        scan.selection = Some(RowSelection::from_consecutive_ranges(
+            [10..20, 90..400, 1000..1001].into_iter(),
+            NUM_ROWS,
+        ));
+        assert_same_batches(&scan);
+    }
 }
 
 /// Filtering and output overlap: the first batch of a row group is returned

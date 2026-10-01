@@ -268,7 +268,8 @@ pub enum FetchGranularity {
     /// Step 3 needs *more than* `batch_size` rows, not equal to it, because
     /// the decoder must know if a batch is the last batch of the row group.
     /// Each predicate gets batches of `batch_size` rows or less, from one
-    /// window. The output decodes the predicate columns that it reads again.
+    /// window. The output reads the predicate columns from the predicate
+    /// cache, as with [`Self::RowGroup`].
     ///
     /// A window is `batch_size` rows of the row group, not `batch_size`
     /// selected rows. Thus, with a sparse [`RowSelection`], a predicate gets
@@ -281,7 +282,7 @@ pub enum FetchGranularity {
     ///
     /// | The caller pushes | Result |
     /// |---|---|
-    /// | only the requested ranges | the least memory. But each predicate reads only the pages of the rows that the previous predicate passed, so each window needs one round trip per predicate plus one for the output, in sequence. |
+    /// | only the requested ranges | the least memory. But each predicate reads only the pages of the rows that the previous predicate passed (for a column in the predicate cache: all pages of the window, as with [`Self::RowGroup`]), so each window needs one round trip per predicate plus one for the output, in sequence. |
     /// | more ranges, before the decoder asks (read-ahead) | fewer and larger requests. The decoder runs all steps whose bytes are pushed in one [`ParquetPushDecoder::try_decode`] call, without `NeedsData`. |
     ///
     /// On storage with high latency, or with a sparse [`RowSelection`], read
