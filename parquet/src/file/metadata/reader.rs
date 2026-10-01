@@ -209,18 +209,14 @@ impl ColumnChunkMask {
         }
     }
 
-    /// Test if `idx` is in the row group set.
-    ///
-    /// Returns `false` if <code>idx > [i32::MAX]</code>.
-    pub fn includes_row_group(&self, idx: usize) -> bool {
-        Self::includes_index(self.row_groups.as_ref(), idx)
+    /// Returns whether row group `idx` is selected and within the bounds `[0, num_row_groups)`.
+    pub fn includes_row_group(&self, idx: usize, num_row_groups: usize) -> bool {
+        idx < num_row_groups && Self::includes_index(self.row_groups.as_ref(), idx)
     }
 
-    /// Test if `idx` is in the column set.
-    ///
-    /// Returns `false` if <code>idx > [i32::MAX]</code>.
-    pub fn includes_column(&self, idx: usize) -> bool {
-        Self::includes_index(self.columns.as_ref(), idx)
+    /// Returns whether column `idx` is selected and within the bounds `[0, num_columns)`.
+    pub fn includes_column(&self, idx: usize, num_columns: usize) -> bool {
+        idx < num_columns && Self::includes_index(self.columns.as_ref(), idx)
     }
 
     fn includes_index(keep: Option<&Arc<[u32]>>, idx: usize) -> bool {
@@ -237,24 +233,14 @@ impl ColumnChunkMask {
         self.row_groups.is_none() && self.columns.is_none()
     }
 
-    /// Returns `true` when this mask selects no column chunks.
+    /// Returns `true` when either configured axis is empty (and thus would select no column chunks).
+    ///
+    /// This does not consider the dimensions of a particular Parquet file, so may return `false`
+    /// when [`Self::column_indices`] or [`Self::row_group_indices`] returns an empty iterator due
+    /// to all elements exceeding the provided upper bound.
     pub fn is_none(&self) -> bool {
         self.row_groups.as_ref().is_some_and(|i| i.is_empty())
             || self.columns.as_ref().is_some_and(|i| i.is_empty())
-    }
-
-    /// Returns selected row groups, or `None` when all row groups are selected.
-    ///
-    /// This returns indices as `u32` because that is how they are stored internally.
-    pub fn selected_row_groups(&self) -> Option<&[u32]> {
-        self.row_groups.as_deref()
-    }
-
-    /// Returns selected leaf columns, or `None` when all columns are selected.
-    ///
-    /// This returns indices as `u32` because that is how they are stored internally.
-    pub fn selected_columns(&self) -> Option<&[u32]> {
-        self.columns.as_deref()
     }
 
     /// Creates a mask selecting the leaf columns in an Arrow projection.
@@ -1342,18 +1328,19 @@ mod tests {
     #[test]
     fn test_chunk_mask() {
         let mask = ColumnChunkMask::row_groups_and_columns([0], [1]);
-        assert!(mask.includes_row_group(0));
-        assert!(!mask.includes_row_group(1));
-        assert!(!mask.includes_column(0));
-        assert!(mask.includes_column(1));
+        assert!(mask.includes_row_group(0, 1));
+        assert!(!mask.includes_row_group(1, 1));
+        assert!(!mask.includes_column(0, 2));
+        assert!(mask.includes_column(1, 2));
 
         let mask = ColumnChunkMask::columns([]);
-        assert!(!mask.includes_column(0));
-        assert_eq!(mask.selected_columns(), Some([].as_slice()));
+        assert!(!mask.includes_column(0, 3));
+        assert_eq!(mask.column_indices(3).count(), 0);
 
         let all = ColumnChunkMask::all();
         assert!(all.is_all());
-        assert!(all.includes_column(i32::MAX as usize));
+        assert!(all.includes_column(2, 3));
+        assert!(!all.includes_column(3, 3));
 
         assert_eq!(all.row_group_indices(3).collect::<Vec<_>>(), [0, 1, 2]);
         assert_eq!(all.column_indices(2).collect::<Vec<_>>(), [0, 1]);
