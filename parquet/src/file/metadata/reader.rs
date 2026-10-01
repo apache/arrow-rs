@@ -117,7 +117,7 @@ impl From<bool> for PageIndexPolicy {
     }
 }
 
-/// Struct to specify column chunks for which metadata is required.
+/// A cheaply cloneable struct to specify column chunks for which metadata is required.
 ///
 /// Column chunks are identified by row group index and leaf column index (the index of the
 /// column in [`SchemaDescriptor::columns`], not the index of a root or Arrow field). This struct
