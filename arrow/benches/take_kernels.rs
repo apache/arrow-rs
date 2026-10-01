@@ -617,7 +617,7 @@ fn repartition_scan_branchless(assignment: &[u32], p: u32) -> Vec<u32> {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn repartition_scan_avx2_inner(assignment: &[u32], p: u32) -> Vec<u32> {
+unsafe fn repartition_scan_simd_inner(assignment: &[u32], p: u32) -> Vec<u32> {
     use std::arch::x86_64::*;
     let mut out = Vec::with_capacity(assignment.len());
     let target = _mm256_set1_epi32(p as i32);
@@ -642,11 +642,42 @@ unsafe fn repartition_scan_avx2_inner(assignment: &[u32], p: u32) -> Vec<u32> {
     out
 }
 
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn repartition_scan_simd_inner(assignment: &[u32], p: u32) -> Vec<u32> {
+    use std::arch::aarch64::*;
+    let mut out = Vec::with_capacity(assignment.len());
+    let target = vdupq_n_u32(p);
+    let lane_bits = vld1q_u32([1u32, 2, 4, 8].as_ptr());
+    let chunks = assignment.len() / 4;
+    for c in 0..chunks {
+        let ptr = assignment.as_ptr().add(c * 4);
+        let data = vld1q_u32(ptr);
+        let eq = vceqq_u32(data, target);
+        let mut mask = vaddvq_u32(vandq_u32(eq, lane_bits)) as u8;
+        let base = (c * 4) as u32;
+        while mask != 0 {
+            let bit = mask.trailing_zeros();
+            out.push(base + bit);
+            mask &= mask - 1;
+        }
+    }
+    for i in (chunks * 4)..assignment.len() {
+        if *assignment.get_unchecked(i) == p {
+            out.push(i as u32);
+        }
+    }
+    out
+}
+
 fn repartition_scan_simd(assignment: &[u32], p: u32) -> Vec<u32> {
     #[cfg(target_arch = "x86_64")]
     if is_x86_feature_detected!("avx2") {
-        return unsafe { repartition_scan_avx2_inner(assignment, p) };
+        return unsafe { repartition_scan_simd_inner(assignment, p) };
     }
+    #[cfg(target_arch = "aarch64")]
+    return unsafe { repartition_scan_simd_inner(assignment, p) };
+    #[allow(unreachable_code)]
     repartition_scan_scalar(assignment, p)
 }
 
@@ -668,6 +699,115 @@ fn repartition_scan_prefetch(assignment: &[u32], p: u32) -> Vec<u32> {
             out.push(i as u32);
         }
     }
+    out
+}
+
+/// Branchless write + software prefetch combined.
+#[inline(always)]
+fn repartition_scan_branchless_prefetch(assignment: &[u32], p: u32) -> Vec<u32> {
+    const DIST: usize = 16;
+    let len = assignment.len();
+    let mut out = Vec::with_capacity(len);
+    unsafe { out.set_len(len) };
+    let mut count = 0usize;
+    for i in 0..len {
+        let pf = i + DIST;
+        if pf < len {
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                std::arch::x86_64::_mm_prefetch(
+                    assignment.as_ptr().add(pf) as *const i8,
+                    std::arch::x86_64::_MM_HINT_T0,
+                );
+            }
+            // aarch64 (Apple Silicon) has a strong HW prefetcher; no SW hint needed.
+        }
+        unsafe { *out.get_unchecked_mut(count) = i as u32 };
+        count += unsafe { (*assignment.get_unchecked(i) == p) as usize };
+    }
+    unsafe { out.set_len(count) };
+    out
+}
+
+/// Branchless with 4× manual loop unrolling.
+#[inline(always)]
+fn repartition_scan_unrolled(assignment: &[u32], p: u32) -> Vec<u32> {
+    let len = assignment.len();
+    let mut out = Vec::with_capacity(len);
+    unsafe { out.set_len(len) };
+    let mut count = 0usize;
+    let chunks4 = len / 4;
+    for c in 0..chunks4 {
+        let i = c * 4;
+        let (v0, v1, v2, v3) = unsafe {
+            (
+                *assignment.get_unchecked(i),
+                *assignment.get_unchecked(i + 1),
+                *assignment.get_unchecked(i + 2),
+                *assignment.get_unchecked(i + 3),
+            )
+        };
+        unsafe { *out.get_unchecked_mut(count) = i as u32 };
+        count += (v0 == p) as usize;
+        unsafe { *out.get_unchecked_mut(count) = (i + 1) as u32 };
+        count += (v1 == p) as usize;
+        unsafe { *out.get_unchecked_mut(count) = (i + 2) as u32 };
+        count += (v2 == p) as usize;
+        unsafe { *out.get_unchecked_mut(count) = (i + 3) as u32 };
+        count += (v3 == p) as usize;
+    }
+    for i in (chunks4 * 4)..len {
+        unsafe { *out.get_unchecked_mut(count) = i as u32 };
+        count += unsafe { (*assignment.get_unchecked(i) == p) as usize };
+    }
+    unsafe { out.set_len(count) };
+    out
+}
+
+/// Branchless + prefetch + 4× unrolling — kitchen sink.
+#[inline(always)]
+fn repartition_scan_branchless_prefetch_unrolled(assignment: &[u32], p: u32) -> Vec<u32> {
+    const DIST: usize = 16;
+    let len = assignment.len();
+    let mut out = Vec::with_capacity(len);
+    unsafe { out.set_len(len) };
+    let mut count = 0usize;
+    let chunks4 = len / 4;
+    for c in 0..chunks4 {
+        let i = c * 4;
+        let pf = i + DIST;
+        if pf < len {
+            #[cfg(target_arch = "x86_64")]
+            unsafe {
+                std::arch::x86_64::_mm_prefetch(
+                    assignment.as_ptr().add(pf) as *const i8,
+                    std::arch::x86_64::_MM_HINT_T0,
+                );
+            }
+            // aarch64 (Apple Silicon) has a strong HW prefetcher; no SW hint needed.
+        }
+        let (v0, v1, v2, v3) = unsafe {
+            (
+                *assignment.get_unchecked(i),
+                *assignment.get_unchecked(i + 1),
+                *assignment.get_unchecked(i + 2),
+                *assignment.get_unchecked(i + 3),
+            )
+        };
+        unsafe { *out.get_unchecked_mut(count) = i as u32 };
+        count += (v0 == p) as usize;
+        unsafe { *out.get_unchecked_mut(count) = (i + 1) as u32 };
+        count += (v1 == p) as usize;
+        unsafe { *out.get_unchecked_mut(count) = (i + 2) as u32 };
+        count += (v2 == p) as usize;
+        unsafe { *out.get_unchecked_mut(count) = (i + 3) as u32 };
+        count += (v3 == p) as usize;
+    }
+    for i in (chunks4 * 4)..len {
+        unsafe { *out.get_unchecked_mut(count) = i as u32 };
+        count += unsafe { (*assignment.get_unchecked(i) == p) as usize };
+    }
+    unsafe { out.set_len(count) };
     out
 }
 
@@ -732,7 +872,7 @@ fn bench_repartition_read(c: &mut Criterion) {
             );
 
             group.bench_with_input(
-                BenchmarkId::new("simd_avx2", &id),
+                BenchmarkId::new("simd", &id),
                 &num_partitions,
                 |b, &num_partitions| {
                     b.iter(|| {
@@ -753,6 +893,54 @@ fn bench_repartition_read(c: &mut Criterion) {
                         for _ in 0..REPARTITION_INNER_ITERS {
                             for p in 0..num_partitions as u32 {
                                 hint::black_box(repartition_scan_prefetch(&assignment, p));
+                            }
+                        }
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("branchless_prefetch", &id),
+                &num_partitions,
+                |b, &num_partitions| {
+                    b.iter(|| {
+                        for _ in 0..REPARTITION_INNER_ITERS {
+                            for p in 0..num_partitions as u32 {
+                                hint::black_box(repartition_scan_branchless_prefetch(
+                                    &assignment,
+                                    p,
+                                ));
+                            }
+                        }
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("unrolled", &id),
+                &num_partitions,
+                |b, &num_partitions| {
+                    b.iter(|| {
+                        for _ in 0..REPARTITION_INNER_ITERS {
+                            for p in 0..num_partitions as u32 {
+                                hint::black_box(repartition_scan_unrolled(&assignment, p));
+                            }
+                        }
+                    })
+                },
+            );
+
+            group.bench_with_input(
+                BenchmarkId::new("branchless_prefetch_unrolled", &id),
+                &num_partitions,
+                |b, &num_partitions| {
+                    b.iter(|| {
+                        for _ in 0..REPARTITION_INNER_ITERS {
+                            for p in 0..num_partitions as u32 {
+                                hint::black_box(repartition_scan_branchless_prefetch_unrolled(
+                                    &assignment,
+                                    p,
+                                ));
                             }
                         }
                     })
