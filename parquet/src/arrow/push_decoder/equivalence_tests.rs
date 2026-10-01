@@ -531,6 +531,27 @@ fn batch_size_strategy() -> impl Strategy<Value = Option<usize>> {
     ]
 }
 
+/// A cache of 1 byte cannot hold a batch, so the output reads the predicate
+/// columns again, at cache batch boundaries. A cache of 0 bytes disables the
+/// cache.
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_predicate_cache_misses() {
+    for size in [0, 1] {
+        let mut scan = filtered(vec![
+            PredicateSpec::new("a", Cmp::ModNotZero(7)),
+            PredicateSpec::new("b", Cmp::ModNotZero(3)),
+        ]);
+        scan.projection = Some(columns(&["a", "b", "c"]));
+        scan.max_predicate_cache_size = Some(size);
+        scan.selection = Some(RowSelection::from_consecutive_ranges(
+            [10..20, 90..400, 1000..1001].into_iter(),
+            NUM_ROWS,
+        ));
+        assert_same_rows(&scan);
+    }
+}
+
 fn predicate_strategy() -> impl Strategy<Value = PredicateSpec> {
     let value = 0..NUM_ROWS as i64;
     prop_oneof![

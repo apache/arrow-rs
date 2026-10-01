@@ -381,12 +381,20 @@ impl RowGroupReaderBuilder {
                     budget,
                 } = row_group_info;
                 debug_assert!(!budget.is_exhausted());
+                let cache_projection = match &self.filter {
+                    Some(filter) => self.compute_cache_projection(row_group_idx, filter),
+                    None => {
+                        ProjectionMask::none(self.metadata.row_group(row_group_idx).columns().len())
+                    }
+                };
                 let config = IncrementalConfig {
                     batch_size: self.batch_size,
                     projection: self.projection.clone(),
                     metadata: Arc::clone(&self.metadata),
                     fields: self.fields.clone(),
                     metrics: self.metrics.clone(),
+                    cache_projection,
+                    max_predicate_cache_size: self.max_predicate_cache_size,
                 };
                 match IncrementalRowGroup::new(
                     config,

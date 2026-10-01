@@ -19,7 +19,9 @@
 
 use super::RowBudget;
 use crate::arrow::ProjectionMask;
-use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
+use crate::arrow::array_reader::{
+    ArrayReader, ArrayReaderBuilder, CacheOptionsBuilder, RowGroupCache,
+};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, ReadPlan, ReadPlanBuilder, RowFilter, RowSelection,
@@ -38,7 +40,7 @@ use crate::util::push_buffers::PushBuffers;
 use arrow_array::{Array, RecordBatch};
 use arrow_select::filter::prep_null_mask_filter;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// The result of [`IncrementalRowGroup::try_next`].
 #[derive(Debug)]
@@ -64,6 +66,22 @@ pub(super) struct IncrementalConfig {
     pub(super) metadata: Arc<ParquetMetaData>,
     pub(super) fields: Option<Arc<ParquetField>>,
     pub(super) metrics: ArrowReaderMetrics,
+    /// The columns in the predicate cache. On a cache miss, the output reads
+    /// the column again for the full cache batch (`batch_size` rows, aligned
+    /// to a multiple of `batch_size`). Thus, the fetch of these columns uses
+    /// cache batch boundaries.
+    pub(super) cache_projection: ProjectionMask,
+    /// The maximum size in bytes of the predicate cache.
+    pub(super) max_predicate_cache_size: usize,
+}
+
+/// The role of an array reader for the predicate cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheRole {
+    /// A predicate reader. It writes the cached columns to the cache.
+    Producer,
+    /// The output reader. It reads the cached columns from the cache.
+    Consumer,
 }
 
 /// The stage of an [`IncrementalRowGroup`].
@@ -139,10 +157,15 @@ pub(super) struct IncrementalRowGroup {
     budget: RowBudget,
     /// The predicates, if any.
     filter: Option<RowFilter>,
+    /// The predicate cache. The predicate readers write the columns of
+    /// [`IncrementalConfig::cache_projection`] to it, and the output reader
+    /// reads them from it, as in the row-group mode.
+    cache: Arc<RwLock<RowGroupCache>>,
     /// The row selection of this row group, as row ranges.
     base: Vec<Range<usize>>,
     /// The predicates got all rows before this row. A multiple of
-    /// `batch_size`.
+    /// `batch_size`, so that windows align with the batches of the predicate
+    /// cache.
     window_start: usize,
     /// No window is left to filter.
     filter_done: bool,
@@ -192,6 +215,10 @@ impl IncrementalRowGroup {
             None => std::iter::once(0..row_count).collect(),
         };
         let num_predicates = filter.as_ref().map_or(0, |filter| filter.predicates.len());
+        let cache = Arc::new(RwLock::new(RowGroupCache::new(
+            config.batch_size,
+            config.max_predicate_cache_size,
+        )));
         Ok(Self {
             config,
             row_group_idx,
@@ -200,6 +227,7 @@ impl IncrementalRowGroup {
             chunks,
             budget,
             filter,
+            cache,
             base,
             window_start: 0,
             filter_done: false,
@@ -387,21 +415,51 @@ impl IncrementalRowGroup {
 
     /// The byte ranges that the rows `rows` of `projection` read. These are
     /// the ranges that the row-group mode requests for the same rows
-    /// ([`InMemoryRowGroup::fetch_ranges`]).
+    /// ([`InMemoryRowGroup::fetch_ranges`]). The cached columns use cache
+    /// batch boundaries (see [`IncrementalConfig::cache_projection`]).
     fn fetch_ranges(&self, projection: &ProjectionMask, rows: &[Range<usize>]) -> Vec<Range<u64>> {
+        let cache_projection = &self.config.cache_projection;
+        let any_cached = (0..self.chunks.len())
+            .any(|idx| projection.leaf_included(idx) && cache_projection.leaf_included(idx));
+        let expanded = if any_cached {
+            expand_to_batch_boundaries(rows, self.config.batch_size, self.row_count)
+        } else {
+            vec![]
+        };
         let mut ranges = vec![];
         for (idx, chunk) in self.chunks.iter().enumerate() {
             if projection.leaf_included(idx) {
+                let rows = if cache_projection.leaf_included(idx) {
+                    &expanded
+                } else {
+                    rows
+                };
                 chunk.push_ranges(rows, &mut ranges);
             }
         }
         ranges
     }
 
+    /// Build a predicate reader for `projection`. It writes the cached
+    /// columns to the predicate cache.
+    fn build_predicate_reader(
+        &self,
+        projection: &ProjectionMask,
+    ) -> Result<Box<dyn ArrayReader>, ParquetError> {
+        self.build_reader(projection, CacheRole::Producer)
+    }
+
+    /// Build the output reader. It reads the cached columns from the
+    /// predicate cache.
+    fn build_output_reader(&self) -> Result<Box<dyn ArrayReader>, ParquetError> {
+        self.build_reader(&self.config.projection, CacheRole::Consumer)
+    }
+
     /// Build a reader for `projection` over the store.
     fn build_reader(
         &self,
         projection: &ProjectionMask,
+        role: CacheRole,
     ) -> Result<Box<dyn ArrayReader>, ParquetError> {
         let shared = shared_row_group(
             &self.config.metadata,
@@ -410,8 +468,14 @@ impl IncrementalRowGroup {
             projection,
             &self.store,
         );
+        let cache_options = CacheOptionsBuilder::new(&self.config.cache_projection, &self.cache);
+        let cache_options = match role {
+            CacheRole::Producer => cache_options.producer(),
+            CacheRole::Consumer => cache_options.consumer(),
+        };
         ArrayReaderBuilder::new(&shared, &self.config.metrics)
             .with_batch_size(self.config.batch_size)
+            .with_cache_options(Some(&cache_options))
             .with_parquet_metadata(&self.config.metadata)
             .build_array_reader(self.config.fields.as_deref(), projection)
     }
@@ -441,7 +505,7 @@ impl IncrementalRowGroup {
 
         let array_reader = match self.pred_readers[idx].take() {
             Some(array_reader) => array_reader,
-            None => self.build_reader(&projection)?,
+            None => self.build_predicate_reader(&projection)?,
         };
         let pos = self.pred_pos[idx];
         let relative = ranges_to_selection(&cand, pos);
@@ -511,7 +575,7 @@ impl IncrementalRowGroup {
 
         let array_reader = match self.out_reader.take() {
             Some(array_reader) => array_reader,
-            None => self.build_reader(&self.config.projection)?,
+            None => self.build_output_reader()?,
         };
         let pos = self.out_pos;
         let consumed = ranges_to_selection(&out, pos).total_row_count();
@@ -717,6 +781,32 @@ fn total_rows(ranges: &[Range<usize>]) -> usize {
     ranges.iter().map(|r| r.end - r.start).sum()
 }
 
+/// Expand the sorted rows `rows` to full batches of `batch_size` rows,
+/// aligned to a multiple of `batch_size`, as
+/// [`RowSelection::expand_to_batch_boundaries`] does.
+///
+/// This does not use the [`RowSelection`] method, because that needs a
+/// conversion of `rows` to a [`RowSelection`] and back on each fetch. This
+/// function works on the ranges directly, in one pass without allocation of
+/// selectors.
+fn expand_to_batch_boundaries(
+    rows: &[Range<usize>],
+    batch_size: usize,
+    row_count: usize,
+) -> Vec<Range<usize>> {
+    let mut expanded: Vec<Range<usize>> = vec![];
+    for range in rows {
+        let start = range.start - range.start % batch_size;
+        let end = range.end.div_ceil(batch_size) * batch_size;
+        let range = start..end.min(row_count);
+        match expanded.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => expanded.push(range),
+        }
+    }
+    expanded
+}
+
 /// The first row of `ranges` at or after `row`.
 fn next_row_at_or_after(ranges: &[Range<usize>], row: usize) -> Option<usize> {
     let idx = ranges.partition_point(|r| r.end <= row);
@@ -892,5 +982,23 @@ mod tests {
             err.contains("column 0 of row group 0") && err.contains("no page locations"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn test_fuzz_expand_to_batch_boundaries_matches_row_selection() {
+        let mut rng = StdRng::seed_from_u64(0);
+        for _ in 0..200 {
+            let row_count = rng.random_range(1..500);
+            let batch_size = rng.random_range(1..50);
+            let rows = random_rows(&mut rng, row_count, 60);
+            let expected =
+                ranges_to_selection(&rows, 0).expand_to_batch_boundaries(batch_size, row_count);
+            let actual = expand_to_batch_boundaries(&rows, batch_size, row_count);
+            assert_eq!(
+                selection_to_ranges(&expected, 0),
+                actual,
+                "{rows:?} {batch_size}"
+            );
+        }
     }
 }

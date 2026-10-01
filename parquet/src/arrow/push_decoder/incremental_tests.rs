@@ -37,6 +37,7 @@ use super::equivalence_tests::{
 };
 use crate::DecodeResult;
 use crate::arrow::ArrowWriter;
+use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::{ArrowPredicateFn, RowFilter, RowSelection, RowSelector};
 use crate::arrow::push_decoder::{FetchGranularity, ParquetPushDecoder, ParquetPushDecoderBuilder};
 use crate::file::metadata::PageIndexPolicy;
@@ -522,6 +523,32 @@ fn test_predicates_do_not_wait_for_the_row_group() {
             assert!(requested.iter().all(|r| r.start != start), "{column}");
         }
     }
+}
+
+/// The output reads a predicate column from the predicate cache.
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_predicate_cache_is_used() {
+    let metrics = ArrowReaderMetrics::enabled();
+    let mut scan = filtered(vec![PredicateSpec::new("b", Cmp::ModNotZero(3))]);
+    scan.projection = Some(columns(&["a", "b"]));
+    let decoder = scan
+        .builder()
+        .with_metrics(metrics.clone())
+        .with_fetch_granularity(FetchGranularity::Batch)
+        .build()
+        .unwrap();
+    let (batches, _) = drive_file(decoder, &TEST_FILE.data);
+    // The output reads every row of `b` from the cache. A mask can read
+    // more rows than it selects, so this is a lower bound.
+    let output_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+    assert!(output_rows > 0);
+    let from_cache = metrics.records_read_from_cache().unwrap();
+    assert!(from_cache >= output_rows, "{from_cache} < {output_rows}");
+    // Only the predicate decodes `b`, one time per row. If the output
+    // decoded `b` again, this would be more than `NUM_ROWS`.
+    let from_inner = metrics.records_read_from_inner().unwrap();
+    assert_eq!(from_inner, NUM_ROWS);
 }
 
 /// Resident bytes stay bounded with a selective predicate, including the

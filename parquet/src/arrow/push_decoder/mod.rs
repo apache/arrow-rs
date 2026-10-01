@@ -263,8 +263,9 @@ pub enum FetchGranularity {
     ///
     /// The decoder evaluates a [`RowFilter`] on `batch_size` rows of the row
     /// group at a time, and returns a batch when enough rows pass. Thus, a
-    /// predicate gets batches of `batch_size` rows or less. The output decodes
-    /// the predicate columns that it reads a second time.
+    /// predicate gets batches of `batch_size` rows or less. The output reads
+    /// the predicate columns from the predicate cache, as with
+    /// [`Self::RowGroup`].
     ///
     /// # Row group boundaries
     ///
