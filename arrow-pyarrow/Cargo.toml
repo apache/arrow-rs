@@ -19,7 +19,6 @@
 name = "arrow-pyarrow"
 version = { workspace = true }
 description = "Pyarrow bindings"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
