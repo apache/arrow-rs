@@ -33,8 +33,8 @@ use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::push_decoder::scan_plan::{BudgetedReadPlan, RowBudget};
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
-use crate::file::metadata::ParquetMetaData;
 use crate::file::metadata::page_index::RowGroupPageIndex;
+use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
 use data::DataRequest;
@@ -103,6 +103,12 @@ impl RowGroupDecoderState {
             Self::Finished => None,
         }
     }
+}
+
+/// The byte range of a column chunk in the file.
+pub(crate) fn column_chunk_range(column: &ColumnChunkMetaData) -> Range<u64> {
+    let (start, length) = column.byte_range();
+    start..start + length
 }
 
 #[derive(Debug)]
@@ -787,12 +793,39 @@ impl RowGroupReaderBuilder {
             .row_group(row_group_idx)
             .columns()
             .iter()
-            .map(|column| {
-                let (start, length) = column.byte_range();
-                start..start + length
-            })
+            .map(column_chunk_range)
             .collect();
         self.buffers.release_ranges(&ranges);
+    }
+
+    /// Remove the buffered bytes outside the read column chunks of
+    /// `row_groups`. A column chunk is read if the output or a predicate
+    /// reads its column. Indexes that are not in the file are ignored.
+    pub(crate) fn release_unread_bytes(&mut self, row_groups: impl IntoIterator<Item = usize>) {
+        if self.buffers.buffered_bytes() == 0 {
+            return;
+        }
+        let mut read_columns = self.projection.clone();
+        if let Some(filter) = &self.filter {
+            for predicate in &filter.predicates {
+                read_columns.union(predicate.projection());
+            }
+        }
+        let mut keep = vec![];
+        for row_group_idx in row_groups {
+            let Some(row_group) = self.metadata.row_groups().get(row_group_idx) else {
+                continue;
+            };
+            keep.extend(
+                row_group
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .filter(|(column_idx, _)| read_columns.leaf_included(*column_idx))
+                    .map(|(_, column)| column_chunk_range(column)),
+            );
+        }
+        self.buffers.retain_ranges(&keep);
     }
 
     /// Which columns should be cached?

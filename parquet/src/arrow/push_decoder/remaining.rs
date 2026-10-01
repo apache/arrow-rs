@@ -162,6 +162,13 @@ impl RemainingRowGroups {
         self.frontier.peek_next_row_group()
     }
 
+    /// Release the buffered bytes that are outside the read column chunks of
+    /// the queued row groups. The decoder does not read these bytes.
+    pub fn release_unread_bytes(&mut self) {
+        self.row_group_reader_builder
+            .release_unread_bytes(self.frontier.queued_row_groups());
+    }
+
     /// Release the buffered bytes of a row group that is done, unless the
     /// queue reads it again. The reader of the row group holds its own
     /// copies of the bytes that it reads.

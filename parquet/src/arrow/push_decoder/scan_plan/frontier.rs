@@ -78,6 +78,12 @@ impl QueuedRowGroups {
         self.queue.front()
     }
 
+    /// The row groups in the queue, in no specific order and without
+    /// duplicates.
+    fn row_groups(&self) -> impl Iterator<Item = usize> + '_ {
+        self.counts.keys().copied()
+    }
+
     /// Returns `true` if `row_group_idx` is in the queue.
     fn contains(&self, row_group_idx: usize) -> bool {
         self.counts.contains_key(&row_group_idx)
@@ -277,6 +283,11 @@ impl RowGroupFrontier {
             budget,
             has_predicates,
         })
+    }
+
+    /// The queued row groups, in no specific order and without duplicates.
+    pub(crate) fn queued_row_groups(&self) -> impl Iterator<Item = usize> + '_ {
+        self.queued.row_groups()
     }
 
     /// Returns `true` if `row_group_idx` is still queued to be read.
