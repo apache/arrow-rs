@@ -308,15 +308,31 @@ struct DictionaryDecoder<K, V> {
     /// Dictionary decoder
     decoder: Option<MaybeDictionaryDecoder>,
 
+    /// Whether the values are validated as UTF-8, and so built as strings,
+    /// see [`Self::value_type`].
     validate_utf8: bool,
-
-    value_type: ArrowType,
 
     /// `Some` only for `FIXED_LEN_BYTE_ARRAY` columns, selecting fixed-width
     /// decoding; `None` for other physical types.
     flba_column_descr: Option<ColumnDescPtr>,
 
     phantom: PhantomData<(K, V)>,
+}
+
+impl<K, V: OffsetSizeTrait> DictionaryDecoder<K, V> {
+    /// The type of the dictionary values.
+    ///
+    /// Values are built as strings exactly when they are validated as UTF-8:
+    /// when the column is annotated as a string, or is read into a dictionary
+    /// with string values even though its annotation does not say so.
+    fn value_type(&self) -> ArrowType {
+        match (V::IS_LARGE, self.validate_utf8) {
+            (true, true) => ArrowType::LargeUtf8,
+            (true, false) => ArrowType::LargeBinary,
+            (false, true) => ArrowType::Utf8,
+            (false, false) => ArrowType::Binary,
+        }
+    }
 }
 
 impl<K, V> ColumnValueDecoder for DictionaryDecoder<K, V>
@@ -329,18 +345,10 @@ where
     fn new(col: &ColumnDescPtr) -> Self {
         let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
 
-        let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
-            (true, true) => ArrowType::LargeUtf8,
-            (true, false) => ArrowType::LargeBinary,
-            (false, true) => ArrowType::Utf8,
-            (false, false) => ArrowType::Binary,
-        };
-
         Self {
             dict: None,
             decoder: None,
             validate_utf8,
-            value_type,
             flba_column_descr: (col.physical_type() == Type::FIXED_LEN_BYTE_ARRAY)
                 .then(|| col.clone()),
             phantom: Default::default(),
@@ -393,7 +401,7 @@ where
                 .read(&mut buffer, usize::MAX)?;
         }
 
-        let array = buffer.into_array(None, self.value_type.clone());
+        let array = buffer.into_array(None, self.value_type());
         self.dict = Some(array);
         Ok(())
     }
@@ -443,6 +451,7 @@ where
     }
 
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
+        let value_type = self.value_type();
         match self.decoder.as_mut().expect("decoder set") {
             MaybeDictionaryDecoder::Fallback(decoder) => {
                 decoder.read(out.spill_values()?, num_values, None)
@@ -462,7 +471,7 @@ where
                     .as_ref()
                     .ok_or_else(|| general_err!("missing dictionary page for column"))?;
 
-                assert_eq!(dict.data_type(), &self.value_type);
+                assert_eq!(dict.data_type(), &value_type);
 
                 if dict.is_empty() {
                     return Ok(0); // All data must be NULL
@@ -488,7 +497,7 @@ where
                         let mut keys = vec![K::default(); len];
                         let len = decoder.get_batch(&mut keys)?;
 
-                        assert_eq!(dict.data_type(), &self.value_type);
+                        assert_eq!(dict.data_type(), &value_type);
 
                         let data = dict.to_data();
                         let dict_buffers = data.buffers();
