@@ -26,8 +26,11 @@
 //!   [`test_predicates_do_not_wait_for_the_row_group`],
 //!   [`test_dictionary_page_is_requested_once_per_column_chunk`]).
 //! * Memory release: the decoder releases the bytes that it no longer needs
-//!   ([`test_releases_bytes_pushed_ahead`],
-//!   [`test_predicates_release_bytes_pushed_ahead`]).
+//!   ([`test_full_scan_holds_about_one_batch`],
+//!   [`test_releases_bytes_pushed_ahead`],
+//!   [`test_releases_parts_of_one_buffer`],
+//!   [`test_predicates_release_bytes_pushed_ahead`],
+//!   [`test_sparse_predicate_releases_pages_of_empty_windows`]).
 //! * The API: row group boundaries, `into_builder`, `try_next_reader` and
 //!   configuration errors.
 
@@ -61,6 +64,8 @@ struct Cost {
     rounds: usize,
     /// Every range requested, in order.
     requested: Vec<Range<u64>>,
+    /// Highest `buffered_bytes()` seen.
+    peak_buffered: u64,
 }
 
 /// What [`drive_with`] passes to its callback.
@@ -115,6 +120,7 @@ fn drive_file(mut decoder: ParquetPushDecoder, file: &Bytes) -> (Vec<RecordBatch
                 last_buffered = decoder.buffered_bytes();
             }
         }
+        cost.peak_buffered = cost.peak_buffered.max(decoder.buffered_bytes());
         ControlFlow::<()>::Continue(())
     });
     // The last batch finishes the last row group, which releases its bytes.
@@ -185,6 +191,29 @@ fn row_group_bytes(row_group: usize) -> u64 {
 // ---------------------------------------------------------------------------
 // No predicates
 // ---------------------------------------------------------------------------
+
+/// A full scan asks for the same bytes as the row-group mode, in more and
+/// smaller requests, and holds about one batch.
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_full_scan_holds_about_one_batch() {
+    let scan = Scan {
+        batch_size: Some(100),
+        ..Default::default()
+    };
+    let (_, batch) = assert_same_batches(&scan);
+    assert!(batch.rounds > 3 * 3, "{}", batch.rounds);
+    // The decoder holds about one batch (100 of 600 rows) plus the
+    // dictionary pages, not the row group. A third of a row group leaves
+    // margin for the pages that a batch shares with the next batch.
+    const MAX_FRACTION_OF_ROW_GROUP: u64 = 3;
+    assert!(
+        batch.peak_buffered * MAX_FRACTION_OF_ROW_GROUP < row_group_bytes(0),
+        "peak {} vs row group {}",
+        batch.peak_buffered,
+        row_group_bytes(0)
+    );
+}
 
 #[test]
 #[cfg_attr(miri, ignore)] // Takes too long
@@ -317,8 +346,7 @@ fn test_partial_pushes_across_batches() {
 }
 
 /// Push every planned byte of the scan up front, one buffer per page, and
-/// check that the decoder releases the bytes of a row group when the row
-/// group ends.
+/// check that the decoder releases pages as it passes them.
 #[test]
 #[cfg_attr(miri, ignore)] // Takes too long
 fn test_releases_bytes_pushed_ahead() {
@@ -363,10 +391,53 @@ fn test_releases_bytes_pushed_ahead() {
         ControlFlow::<()>::Continue(())
     });
     assert_eq!(rows, NUM_ROWS);
-    // The decoder holds the first row group until it ends. Then only the
-    // second row group is left.
-    assert!(resident[..5].iter().all(|&r| r == pushed), "{resident:?}");
+    // Resident bytes decrease as the first row group is decoded, and by the
+    // end of it only the second row group is left.
+    assert!(
+        resident.windows(2).take(5).all(|w| w[1] < w[0]),
+        "{resident:?}"
+    );
     assert_eq!(resident[5], row_group_bytes(1));
+    assert_eq!(decoder.buffered_bytes(), 0);
+}
+
+/// Bytes that are pushed in one buffer are released in parts. The
+/// accounting follows, although the allocation is freed only at the end.
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_releases_parts_of_one_buffer() {
+    let mut decoder = Scan {
+        batch_size: Some(100),
+        ..Default::default()
+    }
+    .batch_decoder();
+    let file = 0..TEST_FILE.data.len() as u64;
+    decoder.push_range(file.clone(), fetch(&file)).unwrap();
+    let initial = decoder.buffered_bytes();
+    let mut previous = initial;
+    let mut batches = 0;
+    let mut rows = 0;
+    drive_with(&mut decoder, &TEST_FILE.data, |decoder, event| {
+        let Event::Batch(batch) = event else {
+            panic!("the whole file was pushed");
+        };
+        // A batch can end inside a page, so a batch does not always release
+        // bytes. It never adds bytes.
+        let buffered = decoder.buffered_bytes();
+        assert!(buffered <= previous, "{buffered} > {previous}");
+        previous = buffered;
+        rows += batch.num_rows();
+        batches += 1;
+        if batches == 2 {
+            assert!(buffered < initial, "{buffered} >= {initial}");
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    assert_eq!(rows, NUM_ROWS);
+    assert_eq!(
+        batches,
+        ROWS_PER_ROW_GROUP.div_ceil(100) * NUM_ROWS / ROWS_PER_ROW_GROUP
+    );
     assert_eq!(decoder.buffered_bytes(), 0);
 }
 
@@ -492,6 +563,31 @@ fn test_try_decode_in_a_row_group_of_try_next_reader() {
 // ---------------------------------------------------------------------------
 // Predicates
 // ---------------------------------------------------------------------------
+
+/// A sparse predicate: no row passes for several windows, so the queue stays
+/// empty, and the pages of the predicate column are released window by
+/// window.
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_sparse_predicate_releases_pages_of_empty_windows() {
+    let mut scan = filtered(vec![PredicateSpec::new("a", Cmp::Ge(450))]);
+    scan.batch_size = Some(100);
+    scan.projection = Some(columns(&["a"]));
+    scan.row_groups = Some(vec![0]);
+    let (_, cost) = assert_same_batches(&scan);
+    let (_, column_a) = metadata(true)
+        .metadata()
+        .row_group(0)
+        .column(0)
+        .byte_range();
+    // The windows 0..400 pass no row. Without the release, the decoder holds
+    // all pages of `a` up to row 500 before the first batch.
+    assert!(
+        cost.peak_buffered * 2 < column_a,
+        "peak {} vs column {column_a}",
+        cost.peak_buffered
+    );
+}
 
 /// Filtering and output overlap: the first batch of a row group is returned
 /// before the pages of later windows are requested.

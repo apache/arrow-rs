@@ -552,6 +552,24 @@ fn test_predicate_cache_misses() {
     }
 }
 
+/// A column that the output reads from the predicate cache is released at
+/// cache-batch boundaries. On a cache miss, the output reads the column again
+/// from the start of the cache batch, before the first row that passed.
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_predicate_cache_misses_with_page_release() {
+    for size in [1, usize::MAX] {
+        // In each row group, only rows 550.. of the window 500..600 pass.
+        // The pages of `a` for rows 500..550 are before the first queued
+        // row, but a cache miss reads them again.
+        let mut scan = filtered(vec![PredicateSpec::new("a", Cmp::Ge(550))]);
+        scan.batch_size = Some(100);
+        scan.projection = Some(columns(&["a", "c"]));
+        scan.max_predicate_cache_size = Some(size);
+        assert_same_rows(&scan);
+    }
+}
+
 fn predicate_strategy() -> impl Strategy<Value = PredicateSpec> {
     let value = 0..NUM_ROWS as i64;
     prop_oneof![

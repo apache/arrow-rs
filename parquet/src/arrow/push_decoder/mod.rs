@@ -254,10 +254,16 @@ pub enum FetchGranularity {
     ///
     /// # Memory
     ///
-    /// The decoder holds the pages of a row group until the row group ends,
-    /// as with [`Self::RowGroup`]. See [`ParquetPushDecoder::buffered_bytes`].
-    /// If the scan reads a row group two times, the decoder requests its
-    /// pages again for the second read.
+    /// The decoder releases each data page after all readers of its column
+    /// have passed its rows. Thus, it holds about one batch and the bytes
+    /// that the caller pushed ahead, not the row group. Dictionary pages, and
+    /// column chunks without an offset index, stay until the row group ends.
+    /// See [`ParquetPushDecoder::buffered_bytes`]. If the scan reads a row
+    /// group two times, the decoder requests its pages again for the second
+    /// read.
+    ///
+    /// The allocator frees a pushed [`Bytes`] only after the decoder releases
+    /// all parts of it. Thus, push each page in a different [`Bytes`].
     ///
     /// # Row filters
     ///
@@ -1601,12 +1607,14 @@ mod test {
         let batch = expect_data(decoder.try_decode());
         assert_eq!(batch, TEST_BATCH.slice(0, 100));
 
-        // The decoder holds the pages until the row group is done.
-        let first_page_bytes: u64 = dictionary_and_first_pages
+        // The first data pages were released. The dictionary pages are kept
+        // until the row group is done.
+        let dictionary_bytes: u64 = dictionary_and_first_pages
             .iter()
+            .step_by(2)
             .map(|range| range.end - range.start)
             .sum();
-        assert_eq!(decoder.buffered_bytes(), first_page_bytes);
+        assert_eq!(decoder.buffered_bytes(), dictionary_bytes);
 
         // The second batch needs the second page of each column.
         let ranges = expect_needs_data(decoder.try_decode());
