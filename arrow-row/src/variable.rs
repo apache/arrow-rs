@@ -327,7 +327,6 @@ fn decode_binary_view_capped<const VALIDATE_UTF8: bool>(
     options: SortOptions,
     max_buffer_len: usize,
 ) -> Result<BinaryViewArray, ArrowError> {
-    let len = rows.len();
     let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
     let nulls = decode_nulls_sentinel(rows, options);
@@ -352,10 +351,46 @@ fn decode_binary_view_capped<const VALIDATE_UTF8: bool>(
             "{longest} byte value too long to decode into a view array, one data buffer addresses at most {max_buffer_len} bytes"
         )));
     }
-    // Long values are written in order, so this is what is left to write after
-    // a roll and what the next buffer asks for
-    let mut remaining_long = values_capacity - inline_str_max_len;
-    let mut completed: Vec<Buffer> = Vec::new();
+
+    let long_values_len = values_capacity - inline_str_max_len;
+    // Rolling is only reachable once the values outgrow one buffer, so deciding
+    // it here leaves the common case the loop it had before, with no roll in it
+    Ok(if long_values_len <= max_buffer_len {
+        decode_views::<VALIDATE_UTF8, false>(
+            rows,
+            options,
+            nulls,
+            values_capacity,
+            inline_capacity,
+            long_values_len,
+            max_buffer_len,
+        )
+    } else {
+        decode_views::<VALIDATE_UTF8, true>(
+            rows,
+            options,
+            nulls,
+            values_capacity,
+            inline_capacity,
+            long_values_len,
+            max_buffer_len,
+        )
+    })
+}
+
+fn decode_views<const VALIDATE_UTF8: bool, const ROLLING: bool>(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+    nulls: Option<NullBuffer>,
+    values_capacity: usize,
+    inline_capacity: usize,
+    mut remaining_long: usize,
+    max_buffer_len: usize,
+) -> BinaryViewArray {
+    let len = rows.len();
+    let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
+
+    let mut completed: Vec<Buffer> = Vec::with_capacity(1);
     let mut block_id = 0_u32;
     let mut values = MutableBuffer::new(values_capacity.min(max_buffer_len));
     let mut view_utf8_validation_buffer = if VALIDATE_UTF8 {
@@ -379,15 +414,16 @@ fn decode_binary_view_capped<const VALIDATE_UTF8: bool>(
         } else {
             // A value the current buffer cannot address moves to a fresh one and
             // every view from here on carries the next block id
-            if decoded_len > inline_str_max_len && start_offset + decoded_len > max_buffer_len {
-                let mut rolled =
-                    MutableBuffer::new(remaining_long.min(max_buffer_len).max(decoded_len));
-                rolled.extend_from_slice(&values[start_offset..]);
-                values.truncate(start_offset);
-                if VALIDATE_UTF8 {
-                    std::str::from_utf8(&values).unwrap();
-                }
-                completed.push(std::mem::replace(&mut values, rolled).into());
+            if ROLLING
+                && decoded_len > inline_str_max_len
+                && start_offset + decoded_len > max_buffer_len
+            {
+                roll_buffer::<VALIDATE_UTF8>(
+                    &mut values,
+                    &mut completed,
+                    start_offset,
+                    remaining_long.min(max_buffer_len).max(decoded_len),
+                );
                 block_id += 1;
                 start_offset = 0;
             }
@@ -406,7 +442,7 @@ fn decode_binary_view_capped<const VALIDATE_UTF8: bool>(
                     view_utf8_validation_buffer.extend_from_slice(val);
                 }
                 values.truncate(start_offset);
-            } else {
+            } else if ROLLING {
                 remaining_long -= decoded_len;
             }
         }
@@ -422,7 +458,26 @@ fn decode_binary_view_capped<const VALIDATE_UTF8: bool>(
 
     // SAFETY:
     // Valid by construction above
-    Ok(unsafe { BinaryViewArray::new_unchecked(views.into(), completed.into(), nulls) })
+    unsafe { BinaryViewArray::new_unchecked(views.into(), completed.into(), nulls) }
+}
+
+/// Moves the value starting at `start_offset` to a buffer of its own, leaving
+/// the one it came from complete
+#[cold]
+#[inline(never)]
+fn roll_buffer<const VALIDATE_UTF8: bool>(
+    values: &mut MutableBuffer,
+    completed: &mut Vec<Buffer>,
+    start_offset: usize,
+    next_capacity: usize,
+) {
+    let mut rolled = MutableBuffer::new(next_capacity);
+    rolled.extend_from_slice(&values[start_offset..]);
+    values.truncate(start_offset);
+    if VALIDATE_UTF8 {
+        std::str::from_utf8(values).unwrap();
+    }
+    completed.push(std::mem::replace(values, rolled).into());
 }
 
 /// Decodes a binary view array from `rows` with the provided `options`
