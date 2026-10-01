@@ -615,8 +615,8 @@ impl Iterator for ArrayStreamReader {
 }
 
 impl ArrayReader for ArrayStreamReader {
-    fn field(&self) -> FieldRef {
-        self.field.clone()
+    fn field(&self) -> &FieldRef {
+        &self.field
     }
 }
 

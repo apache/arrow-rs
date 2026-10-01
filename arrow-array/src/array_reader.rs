@@ -34,11 +34,11 @@ pub trait ArrayReader: Iterator<Item = Result<ArrayRef, ArrowError>> {
     ///
     /// Implementation of this trait should guarantee that all `ArrayRef`'s returned by this
     /// reader should have the same field as returned from this method.
-    fn field(&self) -> FieldRef;
+    fn field(&self) -> &FieldRef;
 }
 
 impl<R: ArrayReader + ?Sized> ArrayReader for Box<R> {
-    fn field(&self) -> FieldRef {
+    fn field(&self) -> &FieldRef {
         self.as_ref().field()
     }
 }
@@ -105,8 +105,8 @@ impl<I> ArrayReader for ArrayIterator<I>
 where
     I: IntoIterator<Item = Result<ArrayRef, ArrowError>>,
 {
-    fn field(&self) -> FieldRef {
-        self.inner_field.clone()
+    fn field(&self) -> &FieldRef {
+        &self.inner_field
     }
 }
 
@@ -134,7 +134,7 @@ mod tests {
             field.clone(),
         );
 
-        assert_eq!(reader.field(), field);
+        assert_eq!(reader.field(), &field);
         assert_eq!(&reader.next().unwrap().unwrap(), &a);
         assert_eq!(&reader.next().unwrap().unwrap(), &b);
         assert!(reader.next().is_none());
@@ -155,6 +155,6 @@ mod tests {
         let reader = ArrayIterator::new(std::iter::empty(), field.clone());
 
         let boxed: Box<dyn ArrayReader + Send> = Box::new(reader);
-        assert_eq!(boxed.field(), field);
+        assert_eq!(boxed.field(), &field);
     }
 }
