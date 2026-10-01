@@ -563,32 +563,47 @@ fn test_schema_error_bad_nullability() {
     )
 }
 
-/// The ways a byte array column is written, each read by a different decoder:
-/// dictionary pages (the default), then PLAIN, DELTA_LENGTH_BYTE_ARRAY and
+/// The ways a byte array column is written, with the encodings each produces:
+/// dictionary pages (the default), dictionary pages that fall back to PLAIN
+/// part way through the column chunk, and PLAIN, DELTA_LENGTH_BYTE_ARRAY and
 /// DELTA_BYTE_ARRAY pages without a dictionary.
-fn byte_array_encodings() -> Vec<(Encoding, WriterProperties)> {
+fn byte_array_encodings() -> Vec<(Vec<Encoding>, WriterProperties)> {
     let without_dictionary = |encoding| {
         WriterProperties::builder()
             .set_dictionary_enabled(false)
             .set_encoding(encoding)
             .build()
     };
+    // A one-byte limit makes the writer abandon the dictionary after the
+    // first value.
+    let dictionary_fallback = WriterProperties::builder()
+        .set_dictionary_page_size_limit(1)
+        .set_write_batch_size(1)
+        .build();
     vec![
-        (Encoding::RLE_DICTIONARY, WriterProperties::default()),
-        (Encoding::PLAIN, without_dictionary(Encoding::PLAIN)),
+        (vec![Encoding::RLE_DICTIONARY], WriterProperties::default()),
         (
-            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            vec![Encoding::RLE_DICTIONARY, Encoding::PLAIN],
+            dictionary_fallback,
+        ),
+        (vec![Encoding::PLAIN], without_dictionary(Encoding::PLAIN)),
+        (
+            vec![Encoding::DELTA_LENGTH_BYTE_ARRAY],
             without_dictionary(Encoding::DELTA_LENGTH_BYTE_ARRAY),
         ),
         (
-            Encoding::DELTA_BYTE_ARRAY,
+            vec![Encoding::DELTA_BYTE_ARRAY],
             without_dictionary(Encoding::DELTA_BYTE_ARRAY),
         ),
     ]
 }
 
-/// Writes `batch` with `props`, checking that every column used `encoding`.
-fn write_with_encoding(batch: &RecordBatch, encoding: Encoding, props: WriterProperties) -> File {
+/// Writes `batch` with `props`, checking that every column used `encodings`.
+fn write_with_encodings(
+    batch: &RecordBatch,
+    encodings: &[Encoding],
+    props: WriterProperties,
+) -> File {
     let file = tempfile().unwrap();
     let mut writer =
         ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), Some(props)).unwrap();
@@ -597,10 +612,10 @@ fn write_with_encoding(batch: &RecordBatch, encoding: Encoding, props: WriterPro
 
     let builder = ParquetRecordBatchReaderBuilder::try_new(file.try_clone().unwrap()).unwrap();
     for column in builder.metadata().row_group(0).columns() {
-        let encodings: Vec<_> = column.encodings().collect();
+        let written: Vec<_> = column.encodings().collect();
         assert!(
-            encodings.contains(&encoding),
-            "{} was written as {encodings:?}, not {encoding}",
+            encodings.iter().all(|encoding| written.contains(encoding)),
+            "{} was written as {written:?}, not {encodings:?}",
             column.column_path()
         );
     }
@@ -666,8 +681,8 @@ fn test_read_binary_as_utf8() {
     ]);
     let supplied_schema = Arc::new(Schema::new(supplied_fields));
 
-    for (encoding, props) in byte_array_encodings() {
-        let file = write_with_encoding(&batch, encoding, props);
+    for (encodings, props) in byte_array_encodings() {
+        let file = write_with_encodings(&batch, &encodings, props);
         let options = ArrowReaderOptions::new().with_schema(Arc::clone(&supplied_schema));
         let mut arrow_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
             .expect("reader builder with schema")
@@ -677,13 +692,13 @@ fn test_read_binary_as_utf8() {
         let read = arrow_reader.next().unwrap().unwrap();
         assert_eq!(read.num_rows(), 3);
         for (field, column) in supplied_schema.fields().iter().zip(read.columns()) {
-            assert_eq!(column.data_type(), field.data_type(), "{encoding}");
+            assert_eq!(column.data_type(), field.data_type(), "{encodings:?}");
             column.to_data().validate_full().unwrap();
             let strings = arrow_cast::cast(column, &ArrowDataType::Utf8).unwrap();
             assert_eq!(
                 strings.as_string::<i32>().iter().collect::<Vec<_>>(),
                 vec![Some("one"), Some("two"), Some("three")],
-                "{} written as {encoding}",
+                "{} written as {encodings:?}",
                 field.name()
             );
         }
@@ -696,13 +711,15 @@ fn test_read_binary_as_utf8() {
 /// produced a string array over arbitrary bytes.
 #[test]
 fn test_read_non_utf8_binary_as_utf8() {
-    // Invalid UTF-8 alongside a null and an empty value.
+    // Invalid UTF-8 after an empty value and a null, so that when the writer
+    // abandons the dictionary after the first value, the invalid values are in
+    // the PLAIN pages that follow.
     let batch = RecordBatch::try_from_iter(vec![(
         "non_utf8_binary",
         Arc::new(BinaryArray::from_opt_vec(vec![
-            Some(b"\xDE\x00\xFF".as_ref()),
-            None,
             Some(b"".as_ref()),
+            None,
+            Some(b"\xDE\x00\xFF".as_ref()),
             Some(b"\xDE\x01\xAA".as_ref()),
         ])) as ArrayRef,
     )])
@@ -711,8 +728,8 @@ fn test_read_non_utf8_binary_as_utf8() {
         ArrowDataType::Dictionary(Box::new(ArrowDataType::Int32), Box::new(value_type))
     };
 
-    for (encoding, props) in byte_array_encodings() {
-        let file = write_with_encoding(&batch, encoding, props);
+    for (encodings, props) in byte_array_encodings() {
+        let file = write_with_encodings(&batch, &encodings, props);
         for supplied_type in [
             ArrowDataType::Utf8,
             ArrowDataType::LargeUtf8,
@@ -740,7 +757,7 @@ fn test_read_non_utf8_binary_as_utf8() {
             let err = arrow_reader.next().unwrap().unwrap_err();
             assert!(
                 err.to_string().contains("encountered non UTF-8 data"),
-                "{encoding} read as {supplied_type}: unexpected error: {err}"
+                "{encodings:?} read as {supplied_type}: unexpected error: {err}"
             );
         }
     }
