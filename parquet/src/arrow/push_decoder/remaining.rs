@@ -19,16 +19,36 @@ use crate::DecodeResult;
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, RowGroupPlan, RowGroupSelection, RowSelection,
 };
+use crate::arrow::push_decoder::FetchGranularity;
 use crate::arrow::push_decoder::reader_builder::{
-    RowBudget, RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
+    IncrementalBuildResult, RowBudget, RowGroupBuildResult, RowGroupReaderBuilder,
+    RowGroupReaderBuilderParts,
 };
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
+use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::sync::Arc;
+
+/// The result of [`RemainingRowGroups::try_next_batch_incremental`].
+///
+/// | Layer | Result type | Scope |
+/// |---|---|---|
+/// | `IncrementalRowGroup::try_next` | `IncrementalResult` | one row group |
+/// | [`RowGroupReaderBuilder::try_build_incremental`] | [`IncrementalBuildResult`] | the active row group, and its budget |
+/// | [`RemainingRowGroups::try_next_batch_incremental`] | `IncrementalStep` | all row groups |
+#[derive(Debug)]
+pub(crate) enum IncrementalStep {
+    /// The bytes that the next batch needs.
+    NeedsData(Vec<Range<u64>>),
+    /// The next batch.
+    Batch(RecordBatch),
+    /// No row group is left.
+    Finished,
+}
 
 /// Plan for the next queued row group after row-selection slicing.
 #[derive(Debug)]
@@ -534,6 +554,71 @@ impl RemainingRowGroups {
     pub fn release_unread_bytes(&mut self) {
         self.row_group_reader_builder
             .release_unread_bytes(self.frontier.queued.row_groups());
+    }
+
+    /// How [`Self::try_next_batch_incremental`] fetches and decodes.
+    pub(crate) fn fetch_granularity(&self) -> FetchGranularity {
+        self.row_group_reader_builder.fetch_granularity()
+    }
+
+    /// See [`RowGroupReaderBuilder::is_incremental`].
+    pub(crate) fn is_incremental(&self) -> bool {
+        self.row_group_reader_builder.is_incremental()
+    }
+
+    /// Returns true if `try_next_reader` started the active row group and
+    /// did not return its reader yet.
+    pub(crate) fn is_building_reader(&self) -> bool {
+        self.row_group_reader_builder.has_active_row_group()
+            && !self.row_group_reader_builder.is_incremental()
+    }
+
+    /// Returns the next batch. Decodes the row groups one batch at a time.
+    /// See [`FetchGranularity::Batch`].
+    pub(crate) fn try_next_batch_incremental(&mut self) -> Result<IncrementalStep, ParquetError> {
+        loop {
+            if !self.row_group_reader_builder.has_active_row_group() {
+                match self.frontier.next_readable_row_group()? {
+                    Some(NextRowGroup {
+                        row_group_idx,
+                        row_count,
+                        selection,
+                        budget,
+                    }) => {
+                        self.row_group_reader_builder.next_row_group(
+                            row_group_idx,
+                            row_count,
+                            selection,
+                            budget,
+                        )?;
+                    }
+                    None => return Ok(IncrementalStep::Finished),
+                }
+            }
+
+            let row_group_idx = self.row_group_reader_builder.active_row_group_idx();
+            match self.row_group_reader_builder.try_build_incremental()? {
+                IncrementalBuildResult::Finished { remaining_budget } => {
+                    self.frontier
+                        .update_budget_after_row_group(remaining_budget);
+                    self.release_row_group(row_group_idx);
+                }
+                IncrementalBuildResult::NeedsData(ranges) => {
+                    return Ok(IncrementalStep::NeedsData(ranges));
+                }
+                IncrementalBuildResult::Batch {
+                    batch,
+                    remaining_budget,
+                } => {
+                    if let Some(remaining_budget) = remaining_budget {
+                        self.frontier
+                            .update_budget_after_row_group(remaining_budget);
+                        self.release_row_group(row_group_idx);
+                    }
+                    return Ok(IncrementalStep::Batch(batch));
+                }
+            }
+        }
     }
 
     /// Release the buffered bytes of a row group that is done, unless the
