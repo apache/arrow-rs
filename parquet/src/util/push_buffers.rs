@@ -184,11 +184,75 @@ impl PushBuffers {
         self.buffers = new_buffers;
     }
 
+    /// Remove all buffered bytes in `ranges`, whatever the shape of the
+    /// pushed buffers.
+    ///
+    /// A buffer that overlaps a range is trimmed or split, and the parts
+    /// outside the range are kept. The kept parts are zero-copy slices. Thus,
+    /// the allocator frees the memory of a pushed [`Bytes`] only after all of
+    /// its parts are removed.
+    ///
+    /// If the buffers are sorted by start, they stay sorted.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn release_ranges(&mut self, ranges: &[Range<u64>]) {
+        let release = merge_ranges(ranges);
+        if release.is_empty() {
+            return;
+        }
+        let mut new_ranges = Vec::with_capacity(self.ranges.len());
+        let mut new_buffers = Vec::with_capacity(self.buffers.len());
+        for (range, buffer) in self.ranges.drain(..).zip(self.buffers.drain(..)) {
+            // Keep the parts of `range` between the released ranges.
+            let mut keep = |part: Range<u64>| {
+                if part == range {
+                    new_buffers.push(buffer.clone());
+                } else {
+                    let start = (part.start - range.start) as usize;
+                    let end = (part.end - range.start) as usize;
+                    new_buffers.push(buffer.slice(start..end));
+                }
+                new_ranges.push(part);
+            };
+            let first = release.partition_point(|r| r.end <= range.start);
+            let mut start = range.start;
+            for r in release[first..].iter().take_while(|r| r.start < range.end) {
+                if start < r.start {
+                    keep(start..r.start);
+                }
+                start = r.end;
+            }
+            if start < range.end {
+                keep(start..range.end);
+            }
+        }
+        // If buffers overlap, the tail of a split buffer can start after the
+        // start of the next buffer. The sort is stable.
+        let mut parts: Vec<_> = new_ranges.into_iter().zip(new_buffers).collect();
+        parts.sort_by_key(|(range, _)| range.start);
+        (self.ranges, self.buffers) = parts.into_iter().unzip();
+    }
+
     /// Clear all buffered ranges and their corresponding data
     pub(crate) fn clear_all_ranges(&mut self) {
         self.ranges.clear();
         self.buffers.clear();
     }
+}
+
+/// Sort `ranges` by start, remove empty ranges, and merge ranges that
+/// overlap or are adjacent.
+#[cfg(feature = "arrow")]
+fn merge_ranges(ranges: &[Range<u64>]) -> Vec<Range<u64>> {
+    let mut sorted: Vec<Range<u64>> = ranges.iter().filter(|r| !r.is_empty()).cloned().collect();
+    sorted.sort_unstable_by_key(|r| r.start);
+    let mut merged: Vec<Range<u64>> = Vec::with_capacity(sorted.len());
+    for range in sorted {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
 }
 
 impl Length for PushBuffers {
@@ -252,6 +316,63 @@ impl ChunkReader for PushBuffers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Release one range.
+    #[cfg(feature = "arrow")]
+    fn release(buffers: &mut PushBuffers, range: Range<u64>) {
+        buffers.release_ranges(std::slice::from_ref(&range));
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn release_ranges_trims_and_splits_buffers() {
+        let mut buffers = PushBuffers::new(100);
+        buffers
+            .push_range(0..10, Bytes::from_static(b"0123456789"))
+            .unwrap();
+        buffers
+            .push_range(20..24, Bytes::from_static(b"abcd"))
+            .unwrap();
+
+        // Split the first buffer, and do not change the second buffer.
+        release(&mut buffers, 3..5);
+        assert_eq!(buffers.buffered_bytes(), 12);
+        assert!(buffers.has_range(&(0..3)));
+        assert!(buffers.has_range(&(5..10)));
+        assert!(!buffers.has_range(&(3..4)));
+        assert_eq!(
+            buffers.get_bytes(5, 5).unwrap(),
+            Bytes::from_static(b"56789")
+        );
+        assert!(buffers.has_range(&(20..24)));
+
+        // One range that overlaps two buffers trims both of them.
+        release(&mut buffers, 8..22);
+        assert_eq!(buffers.buffered_bytes(), 3 + 3 + 2);
+        assert_eq!(buffers.get_bytes(5, 3).unwrap(), Bytes::from_static(b"567"));
+        assert_eq!(buffers.get_bytes(22, 2).unwrap(), Bytes::from_static(b"cd"));
+
+        // Ranges in any order, adjacent or empty, and bytes that are not
+        // buffered.
+        buffers.release_ranges(&[50..60, 1..2, 0..1, 7..7]);
+        assert_eq!(buffers.buffered_bytes(), 1 + 3 + 2);
+        assert_eq!(buffers.get_bytes(2, 1).unwrap(), Bytes::from_static(b"2"));
+
+        release(&mut buffers, 0..100);
+        assert_eq!(buffers.buffered_bytes(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn release_ranges_removes_exact_and_overlapping_buffers() {
+        let mut buffers = PushBuffers::new(100);
+        for range in [10..20, 0..30, 10..15, 40..50] {
+            let data = Bytes::from(vec![0u8; (range.end - range.start) as usize]);
+            buffers.push_range(range, data).unwrap();
+        }
+        buffers.release_ranges(&[40..50, 10..15]);
+        assert_eq!(buffers.ranges, vec![0..10, 15..20, 15..30]);
+    }
 
     #[test]
     fn push_range_accepts_matching_length() {
