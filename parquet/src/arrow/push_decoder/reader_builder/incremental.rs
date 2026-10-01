@@ -519,8 +519,13 @@ impl IncrementalRowGroup {
         // which is the batch that the row-group mode gives at this point.
         let mut reader = ParquetRecordBatchReader::new(array_reader, self.window_plan(&out, pos));
         let batch = reader.next();
+        // Only ask for another batch if the plan has rows left. With
+        // selectors, `next` on an exhausted plan still decodes an empty batch
+        // of every column. `is_exhausted` is always false for a plan without
+        // a selection (`RowSelectionCursor::All`). That case is safe, because
+        // `window_plan` always attaches a selection.
         let extra = match &batch {
-            Some(Ok(_)) => reader.next(),
+            Some(Ok(_)) if !reader.is_exhausted() => reader.next(),
             _ => None,
         };
         self.out_reader = Some(reader.into_array_reader());

@@ -1875,6 +1875,17 @@ impl ParquetRecordBatchReader {
     pub(crate) fn batch_size(&self) -> usize {
         self.read_plan.batch_size()
     }
+
+    /// Returns `true` if the read plan has no rows left, so that
+    /// [`Iterator::next`] returns `None` without reading or skipping records.
+    /// Conservative: always `false` for a plan without a selection.
+    pub(crate) fn is_exhausted(&self) -> bool {
+        match self.read_plan.row_selection_cursor() {
+            RowSelectionCursor::All => false,
+            RowSelectionCursor::Mask(cursor) => cursor.is_empty(),
+            RowSelectionCursor::Selectors(cursor) => cursor.is_empty(),
+        }
+    }
 }
 
 #[cfg(test)]
