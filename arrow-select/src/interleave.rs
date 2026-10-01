@@ -26,10 +26,13 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::bit_mask::set_bits;
 use arrow_buffer::bit_util;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer,
+};
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -314,8 +317,17 @@ fn interleave_views<T: ByteViewType>(
         offsets.push(total_buffers);
     }
 
+    // Marks a buffer in `buffer_to_new_index` that has not yet been referenced.
+    //
+    // The view's buffer index is a signed 32-bit integer in the Arrow specification,
+    // so `u32::MAX` can never be a valid buffer index
+    const UNASSIGNED: u32 = u32::MAX;
+
     // contains the mapping from old buffer index to new buffer index
-    let mut buffer_to_new_index = vec![None; total_buffers];
+    let mut buffer_to_new_index = vec![UNASSIGNED; total_buffers];
+
+    // Contains the index in `buffers` of each buffer already emitted, keyed by identity
+    let mut seen_buffers = BTreeMap::new();
 
     let views: Vec<u128> = indices
         .iter()
@@ -329,12 +341,15 @@ fn interleave_views<T: ByteViewType>(
             // value is big enough to be in a variadic buffer
             let view = ByteView::from(*view);
             let buffer_to_new_idx = offsets[*array_idx] + view.buffer_index as usize;
-            let new_buffer_idx: u32 =
-                *buffer_to_new_index[buffer_to_new_idx].get_or_insert_with(|| {
-                    buffers.push(array.data_buffers()[view.buffer_index as usize].clone());
-                    (buffers.len() - 1) as u32
-                });
-            view.with_buffer_index(new_buffer_idx).as_u128()
+            let new_buffer_idx = &mut buffer_to_new_index[buffer_to_new_idx];
+            if *new_buffer_idx == UNASSIGNED {
+                *new_buffer_idx = push_buffer(
+                    &mut seen_buffers,
+                    &mut buffers,
+                    &array.data_buffers()[view.buffer_index as usize],
+                );
+            }
+            view.with_buffer_index(*new_buffer_idx).as_u128()
         })
         .collect();
 
@@ -342,6 +357,24 @@ fn interleave_views<T: ByteViewType>(
         GenericByteViewArray::<T>::new_unchecked(views.into(), buffers.into(), interleaved.nulls)
     };
     Ok(Arc::new(array))
+}
+
+/// Returns the index of `buffer` in `buffers`, adding it if not already present.
+///
+/// Multiple input arrays, e.g. slices of the same array, may reference the same
+/// buffer, so this checks by identity to ensure it is only emitted once
+#[inline(never)]
+fn push_buffer(
+    seen: &mut BTreeMap<(*const u8, usize), u32>,
+    buffers: &mut Vec<Buffer>,
+    buffer: &Buffer,
+) -> u32 {
+    *seen
+        .entry((buffer.as_ptr(), buffer.len()))
+        .or_insert_with(|| {
+            buffers.push(buffer.clone());
+            (buffers.len() - 1) as u32
+        })
 }
 
 fn interleave_struct(
@@ -1672,6 +1705,41 @@ mod tests {
                 None,
             ]
         );
+    }
+
+    #[test]
+    fn test_interleave_views_shared_buffers() {
+        let long = |i: usize| format!("long_string_not_inlined_{i}");
+        let base = StringViewArray::from_iter_values((0..10).map(long));
+        assert_eq!(base.data_buffers().len(), 1);
+
+        // Slices share the same buffers
+        let a = base.slice(0, 5);
+        let b = base.slice(5, 5);
+        // A distinct buffer list containing the same underlying buffer
+        let c = StringViewArray::try_new(base.views().clone(), base.data_buffers().to_vec(), None)
+            .unwrap();
+
+        let indices = &[(0, 1), (1, 2), (2, 3), (0, 4), (1, 0), (2, 9)];
+        let values = interleave(&[&a, &b, &c], indices).unwrap();
+        let result = values.as_string_view();
+        assert_eq!(result.data_buffers().len(), 1);
+
+        let expected: Vec<_> = [1, 7, 3, 4, 5, 9].into_iter().map(long).collect();
+        let actual: Vec<_> = result.iter().map(|x| x.unwrap().to_string()).collect();
+        assert_eq!(actual, expected);
+
+        // Many slices, exceeding the linear scan threshold
+        let slices: Vec<_> = (0..40).map(|i| base.slice(i % 10, 1)).collect();
+        let arrays: Vec<&dyn Array> = slices.iter().map(|x| x as &dyn Array).collect();
+        let indices: Vec<_> = (0..40).rev().map(|i| (i, 0)).collect();
+        let values = interleave(&arrays, &indices).unwrap();
+        let result = values.as_string_view();
+        assert_eq!(result.data_buffers().len(), 1);
+
+        let expected: Vec<_> = (0..40).rev().map(|i| long(i % 10)).collect();
+        let actual: Vec<_> = result.iter().map(|x| x.unwrap().to_string()).collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]
