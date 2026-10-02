@@ -10229,6 +10229,120 @@ mod tests {
         test::<i64>();
     }
 
+    /// Casts `input` to each of `targets` with `safe` true and false, and checks that the
+    /// result equals the cast of `expected` and has the same number of child values
+    fn check_cast_ignores_hidden_values(
+        input: &dyn Array,
+        expected: &dyn Array,
+        targets: &[DataType],
+    ) {
+        for target in targets {
+            for safe in [true, false] {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                let actual = cast_with_options(input, target, &options).unwrap();
+                let expected = cast_with_options(expected, target, &options).unwrap();
+                assert_eq!(actual.as_ref(), expected.as_ref());
+                assert_eq!(
+                    actual.to_data().child_data()[0].len(),
+                    expected.to_data().child_data()[0].len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_sliced_list_ignores_hidden_values() {
+        fn test<O: OffsetSizeTrait>() {
+            // The first and last rows are outside the slice, and their values do not fit
+            // in Int16
+            let input = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+                Some(vec![Some(i32::MAX)]),
+                Some(vec![Some(1), Some(2)]),
+                Some(vec![]),
+                Some(vec![Some(3)]),
+                Some(vec![Some(i32::MAX); 2]),
+            ]);
+            let expected = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+                Some(vec![Some(1), Some(2)]),
+                Some(vec![]),
+                Some(vec![Some(3)]),
+            ]);
+            // With a non-nullable child field, safe casts fail if they produce nulls
+            let field = Arc::new(Field::new_list_field(DataType::Int16, false));
+            let targets = [
+                DataType::List(field.clone()),
+                DataType::LargeList(field.clone()),
+                DataType::ListView(field.clone()),
+                DataType::LargeListView(field),
+            ];
+            check_cast_ignores_hidden_values(&input.slice(1, 3), &expected, &targets);
+        }
+        test::<i32>();
+        test::<i64>();
+    }
+
+    #[test]
+    fn test_cast_sliced_list_view_ignores_hidden_values() {
+        fn test<O: OffsetSizeTrait>() {
+            // Rows [[i32::MAX], [3], [], [1, 2], [i32::MAX]], out of order in the values.
+            // The empty row's offset is past the values of the other rows in the slice.
+            let input = GenericListViewArray::<O>::new(
+                Arc::new(Field::new_list_field(DataType::Int32, true)),
+                ScalarBuffer::from_iter([0, 3, 5, 1, 4].map(O::usize_as)),
+                ScalarBuffer::from_iter([1, 1, 0, 2, 1].map(O::usize_as)),
+                Arc::new(Int32Array::from(vec![i32::MAX, 1, 2, 3, i32::MAX])),
+                None,
+            );
+            let expected = GenericListViewArray::<O>::from_iter_primitive::<Int32Type, _, _>([
+                Some(vec![Some(3)]),
+                Some(vec![]),
+                Some(vec![Some(1), Some(2)]),
+            ]);
+            let field = Arc::new(Field::new_list_field(DataType::Int16, false));
+            let targets = [
+                DataType::ListView(field.clone()),
+                DataType::LargeListView(field),
+            ];
+            check_cast_ignores_hidden_values(&input.slice(1, 3), &expected, &targets);
+        }
+        test::<i32>();
+        test::<i64>();
+    }
+
+    #[test]
+    fn test_cast_sliced_map_ignores_hidden_entries() {
+        // The first and last rows are outside the slice, and their keys do not fit in Int16
+        let input = MapArray::from_vec_of_maps::<Int32Array, Int32Array, _, _>(
+            vec![
+                Some(vec![(i32::MAX, Some(0))]),
+                Some(vec![(1, Some(10)), (2, Some(20))]),
+                Some(vec![(3, Some(30))]),
+                Some(vec![(i32::MAX, Some(0))]),
+            ],
+            false,
+        );
+        let expected = MapArray::from_vec_of_maps::<Int32Array, Int32Array, _, _>(
+            vec![
+                Some(vec![(1, Some(10)), (2, Some(20))]),
+                Some(vec![(3, Some(30))]),
+            ],
+            false,
+        );
+        let entries = Field::new_struct(
+            "entries",
+            vec![
+                Field::new("keys", DataType::Int16, false),
+                Field::new("values", DataType::Int32, true),
+            ],
+            false,
+        );
+        let target = DataType::Map(Arc::new(entries), false);
+        check_cast_ignores_hidden_values(&input.slice(1, 2), &expected, &[target]);
+    }
+
     #[test]
     fn test_cast_list_to_fsl() {
         // There four noteworthy cases we should handle:
