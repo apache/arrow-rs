@@ -189,6 +189,7 @@ dependencies = [
  "bytes",
  "chrono",
  "criterion",
+ "foldhash",
  "half",
  "memmap2",
  "rand 0.10.2",
