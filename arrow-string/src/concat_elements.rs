@@ -47,16 +47,15 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
 
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
-    let left_offsets = left.value_offsets();
-    let right_offsets = right.value_offsets();
+    let left_offsets = left.offsets();
+    let right_offsets = right.offsets();
 
     let left_values = left.value_data();
     let right_values = right.value_data();
 
     let mut output_values = Vec::with_capacity(
-        left_values.len() + right_values.len()
-            - left_offsets[0].as_usize()
-            - right_offsets[0].as_usize(),
+        (left_offsets.last() - left_offsets.first()).as_usize()
+            + (right_offsets.last() - right_offsets.first()).as_usize(),
     );
 
     let mut output_offsets = Vec::with_capacity(left_offsets.len());
@@ -154,10 +153,9 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         .collect::<Vec<_>>();
 
     let mut output_values = Vec::with_capacity(
-        data_values
+        arrays
             .iter()
-            .zip(offsets.iter_mut())
-            .map(|(data, offset)| data.len() - offset.peek().unwrap().as_usize())
+            .map(|array| (array.offsets().last() - array.offsets().first()).as_usize())
             .sum(),
     );
 
@@ -606,6 +604,20 @@ mod tests {
         let expected = [None, Some("bazfar")].into_iter().collect::<StringArray>();
 
         assert_eq!(output.as_string(), &expected);
+    }
+
+    #[test]
+    fn test_concat_slice_capacity() {
+        let left = StringArray::from(vec!["hello"; 8]).slice(2, 3);
+        let right = StringArray::from(vec![" world"; 8]).slice(4, 3);
+
+        let pair = concat_elements_utf8(&left, &right).unwrap();
+        assert_eq!(pair, StringArray::from(vec!["hello world"; 3]));
+        assert_eq!(pair.values().capacity(), 33);
+
+        let many = concat_elements_utf8_many(&[&left, &right, &left]).unwrap();
+        assert_eq!(many, StringArray::from(vec!["hello worldhello"; 3]));
+        assert_eq!(many.values().capacity(), 48);
     }
 
     #[test]

@@ -451,8 +451,16 @@ fn build_ree_values(rows: usize, run_length: usize) -> Vec<Value> {
 
 fn build_ree_schema() -> Arc<Schema> {
     let ree_type = DataType::RunEndEncoded(
-        Arc::new(Field::new("run_ends", DataType::Int32, false)),
-        Arc::new(Field::new("values", DataType::Int64, true)),
+        Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        )),
+        Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            true,
+        )),
     );
     Arc::new(Schema::new(vec![Field::new("val", ree_type, false)]))
 }

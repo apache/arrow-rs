@@ -1786,8 +1786,16 @@ mod tests {
         let union_fields =
             UnionFields::try_new(vec![1], vec![Field::new("child", DataType::Int32, true)])
                 .unwrap();
-        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
-        let ree_values_field = Arc::new(Field::new("values", DataType::Utf8, true));
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
+        let ree_values_field = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            DataType::Utf8,
+            true,
+        ));
 
         let non_primitive_types = vec![
             DataType::List(item_field.clone()),
