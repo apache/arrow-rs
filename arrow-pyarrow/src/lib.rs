@@ -145,16 +145,6 @@ pub trait FromPyArrowUnchecked: Sized {
     unsafe fn from_pyarrow_bound_unchecked(value: &Bound<PyAny>) -> PyResult<Self>;
 }
 
-impl<T: FromPyArrowUnchecked> FromPyArrowUnchecked for Vec<T> {
-    unsafe fn from_pyarrow_bound_unchecked(value: &Bound<PyAny>) -> PyResult<Self> {
-        let mut v = Vec::with_capacity(value.len().unwrap_or(0));
-        for item in value.try_iter()? {
-            v.push(unsafe { T::from_pyarrow_bound_unchecked(&item?)? });
-        }
-        Ok(v)
-    }
-}
-
 /// Trait for converting Python objects to arrow-rs types.
 pub trait FromPyArrow: Sized {
     /// The Python type this conversion accepts, as a type hint.
