@@ -81,7 +81,58 @@ pub fn interleave(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
-    Interleaver::default().interleave(values, indices)
+    let data_type = validate_interleave_inputs(values)?;
+    if indices.is_empty() {
+        return Ok(new_empty_array(data_type));
+    }
+
+    downcast_primitive! {
+        data_type => (primitive_helper, values, indices, data_type),
+        DataType::Utf8 => interleave_bytes::<Utf8Type>(values, indices),
+        DataType::LargeUtf8 => interleave_bytes::<LargeUtf8Type>(values, indices),
+        DataType::Binary => interleave_bytes::<BinaryType>(values, indices),
+        DataType::LargeBinary => interleave_bytes::<LargeBinaryType>(values, indices),
+        DataType::BinaryView => interleave_views::<BinaryViewType>(values, indices),
+        DataType::Utf8View => interleave_views::<StringViewType>(values, indices),
+        DataType::Dictionary(k, _) => downcast_integer! {
+            k.as_ref() => (dict_helper, values, indices),
+            _ => unreachable!("illegal dictionary key type {k}")
+        },
+        DataType::Struct(fields) => interleave_struct(fields, values, indices),
+        DataType::List(field) => interleave_list::<i32>(values, indices, field),
+        DataType::LargeList(field) => interleave_list::<i64>(values, indices, field),
+        DataType::FixedSizeList(field, size) => interleave_fixed_size_list(values, indices, field, *size),
+        DataType::Map(field, ordered) => interleave_map(values, indices, field, *ordered),
+        DataType::RunEndEncoded(r, _) => match r.data_type() {
+            DataType::Int16 => interleave_run_end::<Int16Type>(values, indices),
+            DataType::Int32 => interleave_run_end::<Int32Type>(values, indices),
+            DataType::Int64 => interleave_run_end::<Int64Type>(values, indices),
+            t => unreachable!("illegal run-end type {t}"),
+        },
+        DataType::ListView(field) => interleave_list_view::<i32>(values, indices, field),
+        DataType::LargeListView(field) => interleave_list_view::<i64>(values, indices, field),
+        _ => interleave_fallback(values, indices)
+    }
+}
+
+#[inline]
+fn validate_interleave_inputs<'a>(values: &[&'a dyn Array]) -> Result<&'a DataType, ArrowError> {
+    if values.is_empty() {
+        return Err(ArrowError::InvalidArgumentError(
+            "interleave requires input of at least one array".to_string(),
+        ));
+    }
+    let data_type = values[0].data_type();
+    for array in values.iter().skip(1) {
+        if array.data_type() != data_type {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "It is not possible to interleave arrays of different data types ({} and {})",
+                data_type,
+                array.data_type()
+            )));
+        }
+    }
+    Ok(data_type)
 }
 
 /// Configurable interleaving of elements from multiple arrays.
@@ -166,37 +217,16 @@ impl Interleaver {
         values: &[&dyn Array],
         indices: &[(usize, usize)],
     ) -> Result<ArrayRef, ArrowError> {
-        if values.is_empty() {
-            return Err(ArrowError::InvalidArgumentError(
-                "interleave requires input of at least one array".to_string(),
-            ));
-        }
-        let data_type = values[0].data_type();
-
-        for array in values.iter().skip(1) {
-            if array.data_type() != data_type {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "It is not possible to interleave arrays of different data types ({} and {})",
-                    data_type,
-                    array.data_type()
-                )));
-            }
-        }
-
-        if indices.is_empty() {
-            return Ok(new_empty_array(data_type));
-        }
-
         if self.compact_byte_views {
-            match data_type {
-                DataType::Utf8View => {
+            match values.first().map(|array| array.data_type()) {
+                Some(DataType::Utf8View) => {
                     return self.interleave_views_compact::<StringViewType>(
                         values,
                         indices,
                         i32::MAX as usize,
                     );
                 }
-                DataType::BinaryView => {
+                Some(DataType::BinaryView) => {
                     return self.interleave_views_compact::<BinaryViewType>(
                         values,
                         indices,
@@ -207,33 +237,7 @@ impl Interleaver {
             }
         }
 
-        downcast_primitive! {
-            data_type => (primitive_helper, values, indices, data_type),
-            DataType::Utf8 => interleave_bytes::<Utf8Type>(values, indices),
-            DataType::LargeUtf8 => interleave_bytes::<LargeUtf8Type>(values, indices),
-            DataType::Binary => interleave_bytes::<BinaryType>(values, indices),
-            DataType::LargeBinary => interleave_bytes::<LargeBinaryType>(values, indices),
-            DataType::BinaryView => interleave_views::<BinaryViewType>(values, indices),
-            DataType::Utf8View => interleave_views::<StringViewType>(values, indices),
-            DataType::Dictionary(k, _) => downcast_integer! {
-                k.as_ref() => (dict_helper, values, indices),
-                _ => unreachable!("illegal dictionary key type {k}")
-            },
-            DataType::Struct(fields) => interleave_struct(fields, values, indices),
-            DataType::List(field) => interleave_list::<i32>(values, indices, field),
-            DataType::LargeList(field) => interleave_list::<i64>(values, indices, field),
-            DataType::FixedSizeList(field, size) => interleave_fixed_size_list(values, indices, field, *size),
-            DataType::Map(field, ordered) => interleave_map(values, indices, field, *ordered),
-            DataType::RunEndEncoded(r, _) => match r.data_type() {
-                DataType::Int16 => interleave_run_end::<Int16Type>(values, indices),
-                DataType::Int32 => interleave_run_end::<Int32Type>(values, indices),
-                DataType::Int64 => interleave_run_end::<Int64Type>(values, indices),
-                t => unreachable!("illegal run-end type {t}"),
-            },
-            DataType::ListView(field) => interleave_list_view::<i32>(values, indices, field),
-            DataType::LargeListView(field) => interleave_list_view::<i64>(values, indices, field),
-            _ => interleave_fallback(values, indices)
-        }
+        interleave(values, indices)
     }
 
     fn interleave_views_compact<T: ByteViewType>(
@@ -242,6 +246,10 @@ impl Interleaver {
         indices: &[(usize, usize)],
         max_buffer_size: usize,
     ) -> Result<ArrayRef, ArrowError> {
+        let data_type = validate_interleave_inputs(values)?;
+        if indices.is_empty() {
+            return Ok(new_empty_array(data_type));
+        }
         if self.preserve_byte_view_sharing {
             interleave_views_compact::<T, true>(values, indices, max_buffer_size)
         } else {
