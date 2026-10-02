@@ -17,7 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::{BenchmarkId, Criterion, Throughput};
+use criterion::Criterion;
 use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
@@ -257,29 +257,11 @@ fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
 }
 
-fn add_boolean_text_benchmarks(c: &mut Criterion) {
-    let size = 8192;
-    let mut group = c.benchmark_group("cast_boolean_text");
-    group.throughput(Throughput::Elements(size as u64));
-
-    for (nulls, null_density) in [("no_nulls", 0.0), ("mixed_nulls", 0.2)] {
-        let array: ArrayRef = Arc::new(create_boolean_array(size, null_density, 0.5));
-        for (name, data_type) in [("utf8", DataType::Utf8), ("utf8view", DataType::Utf8View)] {
-            group.bench_function(
-                BenchmarkId::new(format!("bool_to_{name}/{nulls}"), size),
-                |b| b.iter(|| cast_array(&array, data_type.clone())),
-            );
-        }
-    }
-    group.finish();
-}
-
 fn add_benchmark(c: &mut Criterion) {
-    add_boolean_text_benchmarks(c);
-
     let i32_array = build_array::<Int32Type>(512);
     let i32_array_8192 = build_array::<Int32Type>(8192);
     let bool_array: ArrayRef = Arc::new(create_boolean_array(8192, 0.1, 0.5));
+    let bool_array_no_nulls: ArrayRef = Arc::new(create_boolean_array(8192, 0.0, 0.5));
     let i64_array = build_array::<Int64Type>(512);
     let f32_array = build_array::<Float32Type>(512);
     let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
@@ -345,6 +327,18 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast bool to int32 8192", |b| {
         b.iter(|| cast_array(&bool_array, DataType::Int32))
+    });
+    c.bench_function("cast bool to string 8192", |b| {
+        b.iter(|| cast_array(&bool_array, DataType::Utf8))
+    });
+    c.bench_function("cast bool to string no nulls 8192", |b| {
+        b.iter(|| cast_array(&bool_array_no_nulls, DataType::Utf8))
+    });
+    c.bench_function("cast bool to string view 8192", |b| {
+        b.iter(|| cast_array(&bool_array, DataType::Utf8View))
+    });
+    c.bench_function("cast bool to string view no nulls 8192", |b| {
+        b.iter(|| cast_array(&bool_array_no_nulls, DataType::Utf8View))
     });
     c.bench_function("cast float32 to int32 512", |b| {
         b.iter(|| cast_array(&f32_array, DataType::Int32))
