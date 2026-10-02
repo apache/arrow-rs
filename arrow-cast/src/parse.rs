@@ -835,7 +835,8 @@ pub fn parse_decimal<T: DecimalType>(
     precision: u8,
     scale: i8,
 ) -> Result<T::Native, ArrowError> {
-    parse_decimal_with_rounding::<T>(s, precision, scale, DecimalRoundingMode::default())
+    parse_decimal_checked::<T, RoundHalfAwayFromZero>(s, precision, scale)
+        .map_err(|e| decimal_parse_error::<T>(e, s, precision, scale))
 }
 
 /// Like [`parse_decimal`], but rounds digits beyond `scale` according to
@@ -862,7 +863,27 @@ pub fn parse_decimal_with_rounding<T: DecimalType>(
     scale: i8,
     rounding: DecimalRoundingMode,
 ) -> Result<T::Native, ArrowError> {
-    parse_decimal_checked::<T>(s, precision, scale, rounding).map_err(|e| match e {
+    match rounding {
+        DecimalRoundingMode::HalfAwayFromZero => {
+            parse_decimal_checked::<T, RoundHalfAwayFromZero>(s, precision, scale)
+        }
+        DecimalRoundingMode::HalfToEven => {
+            parse_decimal_checked::<T, RoundHalfToEven>(s, precision, scale)
+        }
+        DecimalRoundingMode::TowardZero => {
+            parse_decimal_checked::<T, RoundTowardZero>(s, precision, scale)
+        }
+    }
+    .map_err(|e| decimal_parse_error::<T>(e, s, precision, scale))
+}
+
+fn decimal_parse_error<T: DecimalType>(
+    e: DecimalParseError,
+    s: &str,
+    precision: u8,
+    scale: i8,
+) -> ArrowError {
+    match e {
         DecimalParseError::Overflow => ArrowError::ParseError(format!(
             "{s:?} does not fit in {}({precision}, {scale})",
             T::PREFIX
@@ -870,7 +891,7 @@ pub fn parse_decimal_with_rounding<T: DecimalType>(
         DecimalParseError::InvalidFormat => {
             ArrowError::ParseError(format!("Invalid decimal format: {s:?}"))
         }
-    })
+    }
 }
 
 /// The reason a decimal string could not be parsed.
@@ -882,16 +903,75 @@ pub(crate) enum DecimalParseError {
     Overflow,
 }
 
-/// Like [`parse_decimal`], but reports failures as a [`DecimalParseError`]
-/// instead of formatting an error message, for callers that discard or
-/// re-wrap the error.
-pub(crate) fn parse_decimal_checked<T: DecimalType>(
+/// A [`DecimalRoundingMode`] selected at compile time.
+///
+/// The parser is instantiated separately for each mode, so that the work one
+/// mode needs (such as checking for a tie) does not slow down the others.
+pub(crate) trait DecimalRounding {
+    /// Whether [`Self::round_up`] uses whether any discarded digit after the
+    /// first one is non-zero
+    const NEEDS_REST: bool;
+
+    /// Returns whether to increase the magnitude of `value` by one, given the
+    /// first discarded digit, whether any discarded digit after it is
+    /// non-zero (only computed if [`Self::NEEDS_REST`]), and the value itself,
+    /// whose least significant digit is the last kept digit.
+    fn round_up<T: DecimalType>(first_discarded: u8, rest_non_zero: bool, value: T::Native)
+    -> bool;
+}
+
+/// [`DecimalRoundingMode::HalfAwayFromZero`]
+pub(crate) struct RoundHalfAwayFromZero;
+
+impl DecimalRounding for RoundHalfAwayFromZero {
+    const NEEDS_REST: bool = false;
+
+    #[inline(always)]
+    fn round_up<T: DecimalType>(first_discarded: u8, _: bool, _: T::Native) -> bool {
+        first_discarded >= 5
+    }
+}
+
+/// [`DecimalRoundingMode::HalfToEven`]
+pub(crate) struct RoundHalfToEven;
+
+impl DecimalRounding for RoundHalfToEven {
+    const NEEDS_REST: bool = true;
+
+    #[inline(always)]
+    fn round_up<T: DecimalType>(
+        first_discarded: u8,
+        rest_non_zero: bool,
+        value: T::Native,
+    ) -> bool {
+        // On a tie, round up only if that makes the last digit even
+        first_discarded > 5
+            || (first_discarded == 5
+                && (rest_non_zero || !value.mod_wrapping(T::Native::usize_as(2)).is_zero()))
+    }
+}
+
+/// [`DecimalRoundingMode::TowardZero`]
+pub(crate) struct RoundTowardZero;
+
+impl DecimalRounding for RoundTowardZero {
+    const NEEDS_REST: bool = false;
+
+    #[inline(always)]
+    fn round_up<T: DecimalType>(_: u8, _: bool, _: T::Native) -> bool {
+        false
+    }
+}
+
+/// Like [`parse_decimal_with_rounding`], but reports failures as a
+/// [`DecimalParseError`] instead of formatting an error message, for callers
+/// that discard or re-wrap the error.
+pub(crate) fn parse_decimal_checked<T: DecimalType, R: DecimalRounding>(
     s: &str,
     precision: u8,
     scale: i8,
-    rounding: DecimalRoundingMode,
 ) -> Result<T::Native, DecimalParseError> {
-    let (value, digits) = parse_decimal_native::<T>(s, scale, rounding)?;
+    let (value, digits) = parse_decimal_native::<T, R>(s, scale)?;
     // A value of at most `precision` digits is within the precision without
     // inspecting it. A precision beyond the type's maximum is invalid.
     let fits = precision <= T::MAX_PRECISION
@@ -909,17 +989,16 @@ pub(crate) fn parse_decimal_checked<T: DecimalType>(
 ///
 /// See [`parse_decimal`] for the accepted syntax and rounding behaviour.
 #[inline]
-fn parse_decimal_native<T: DecimalType>(
+fn parse_decimal_native<T: DecimalType, R: DecimalRounding>(
     s: &str,
     scale: i8,
-    rounding: DecimalRoundingMode,
 ) -> Result<(T::Native, usize), DecimalParseError> {
     let bytes = s.as_bytes().trim_ascii();
     let (negative, mut mantissa) = split_sign(bytes);
 
     let mut scale = scale as i64;
     loop {
-        let exponent_at = match parse_decimal_mantissa::<T>(mantissa, negative, scale, rounding) {
+        let exponent_at = match parse_decimal_mantissa::<T, R>(mantissa, negative, scale) {
             Ok(result) => return Ok(result),
             Err(MantissaError::InvalidFormat) => return Err(DecimalParseError::InvalidFormat),
             Err(MantissaError::Exponent(index)) => index,
@@ -971,15 +1050,14 @@ const MAX_CHUNK_DIGITS: usize = 18;
 /// Scans `mantissa` (digits with at most one decimal point; the sign has
 /// already been removed) and folds the digits that are significant at
 /// `scale` into a native value, rounding the digits that are not according
-/// to `rounding`. Also returns an upper bound on the number of decimal
+/// to `R`. Also returns an upper bound on the number of decimal
 /// digits of the value: the digits kept, the zeros appended to reach the
 /// scale, and the digit that rounding up can add.
 #[inline]
-fn parse_decimal_mantissa<T: DecimalType>(
+fn parse_decimal_mantissa<T: DecimalType, R: DecimalRounding>(
     mantissa: &[u8],
     negative: bool,
     scale: i64,
-    rounding: DecimalRoundingMode,
 ) -> Result<(T::Native, usize), MantissaError> {
     // The number of integer and fractional digits that contribute to the
     // result. For a non-negative scale that is every integer digit and the
@@ -1026,7 +1104,7 @@ fn parse_decimal_mantissa<T: DecimalType>(
             int_kept += 1;
             acc.push(b - b'0')?;
         } else {
-            discard_digit(
+            discard_digit::<R>(
                 &mut first_discarded_digit,
                 &mut rest_discarded_non_zero,
                 b - b'0',
@@ -1046,7 +1124,7 @@ fn parse_decimal_mantissa<T: DecimalType>(
                 frac_kept += 1;
                 acc.push(b - b'0')?;
             } else {
-                discard_digit(
+                discard_digit::<R>(
                     &mut first_discarded_digit,
                     &mut rest_discarded_non_zero,
                     b - b'0',
@@ -1081,16 +1159,8 @@ fn parse_decimal_mantissa<T: DecimalType>(
     // Any discarded digits are below the last kept digit, so `missing <= 0`
     // here and the parity of `value` is that of the last kept digit.
     let round = can_round
-        && match (rounding, first_discarded_digit) {
-            (_, None) | (DecimalRoundingMode::TowardZero, _) => false,
-            (DecimalRoundingMode::HalfAwayFromZero, Some(digit)) => digit >= 5,
-            (DecimalRoundingMode::HalfToEven, Some(digit)) => {
-                digit > 5
-                    || (digit == 5
-                        && (rest_discarded_non_zero
-                            || !value.mod_wrapping(T::Native::usize_as(2)).is_zero()))
-            }
-        };
+        && first_discarded_digit
+            .is_some_and(|digit| R::round_up::<T>(digit, rest_discarded_non_zero, value));
     if round {
         value = if negative {
             value.sub_checked(T::Native::ONE)
@@ -1108,10 +1178,11 @@ fn parse_decimal_mantissa<T: DecimalType>(
 
 /// Records a digit that is below the least significant digit of the result.
 #[inline(always)]
-fn discard_digit(first: &mut Option<u8>, rest_non_zero: &mut bool, digit: u8) {
+fn discard_digit<R: DecimalRounding>(first: &mut Option<u8>, rest_non_zero: &mut bool, digit: u8) {
     match first {
         None => *first = Some(digit),
-        Some(_) => *rest_non_zero |= digit != 0,
+        Some(_) if R::NEEDS_REST => *rest_non_zero |= digit != 0,
+        Some(_) => {}
     }
 }
 
@@ -1783,7 +1854,7 @@ mod tests {
 
     /// Parses `s` without a precision check, for probing the native range
     fn parse_native<T: DecimalType>(s: &str, scale: i8) -> Result<T::Native, DecimalParseError> {
-        parse_decimal_native::<T>(s, scale, DecimalRoundingMode::default()).map(|(value, _)| value)
+        parse_decimal_native::<T, RoundHalfAwayFromZero>(s, scale).map(|(value, _)| value)
     }
 
     #[test]
@@ -3276,13 +3347,16 @@ mod tests {
         assert!(parse_decimal_with_rounding::<Decimal64Type>("99999.5", 5, 0, HalfToEven).is_err());
 
         // Only rounding away from zero overflows the native type here
-        let parse_native = |s, rounding| {
-            parse_decimal_native::<Decimal32Type>(s, 0, rounding).map(|(value, _)| value)
-        };
-        assert_eq!(parse_native("2147483647.9", TowardZero), Ok(i32::MAX));
-        assert_eq!(parse_native("-2147483648.5", HalfToEven), Ok(i32::MIN));
         assert_eq!(
-            parse_native("-2147483648.5", HalfAwayFromZero),
+            parse_decimal_native::<Decimal32Type, RoundTowardZero>("2147483647.9", 0),
+            Ok((i32::MAX, 10))
+        );
+        assert_eq!(
+            parse_decimal_native::<Decimal32Type, RoundHalfToEven>("-2147483648.5", 0),
+            Ok((i32::MIN, 10))
+        );
+        assert_eq!(
+            parse_native::<Decimal32Type>("-2147483648.5", 0),
             Err(DecimalParseError::Overflow)
         );
     }

@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::cast::*;
-use crate::parse::{DecimalParseError, parse_decimal_checked};
+use crate::parse::{
+    DecimalParseError, DecimalRounding, RoundHalfAwayFromZero, RoundHalfToEven, RoundTowardZero,
+    parse_decimal_checked,
+};
 
 /// How to round a value that has more fractional digits than the scale of
 /// the decimal type it is converted to.
@@ -617,18 +620,14 @@ pub fn parse_string_to_decimal_native<T: DecimalType>(
         ))
     };
     let scale = i8::try_from(scale).map_err(|_| overflow())?;
-    parse_decimal_checked::<T>(
-        value_str,
-        T::MAX_PRECISION,
-        scale,
-        DecimalRoundingMode::default(),
+    parse_decimal_checked::<T, RoundHalfAwayFromZero>(value_str, T::MAX_PRECISION, scale).map_err(
+        |e| match e {
+            DecimalParseError::InvalidFormat => {
+                ArrowError::InvalidArgumentError(format!("Invalid decimal format: {value_str:?}"))
+            }
+            DecimalParseError::Overflow => overflow(),
+        },
     )
-    .map_err(|e| match e {
-        DecimalParseError::InvalidFormat => {
-            ArrowError::InvalidArgumentError(format!("Invalid decimal format: {value_str:?}"))
-        }
-        DecimalParseError::Overflow => overflow(),
-    })
 }
 
 pub(crate) fn generic_string_to_decimal_cast<'a, T, S>(
@@ -641,11 +640,36 @@ where
     T: DecimalType,
     &'a S: StringArrayType<'a>,
 {
-    let rounding = cast_options.decimal_rounding;
-    if cast_options.safe {
+    // Dispatch once per array to a parser specialised for the rounding mode
+    let safe = cast_options.safe;
+    match cast_options.decimal_rounding {
+        DecimalRoundingMode::HalfAwayFromZero => {
+            string_to_decimal_cast_with::<T, S, RoundHalfAwayFromZero>(from, precision, scale, safe)
+        }
+        DecimalRoundingMode::HalfToEven => {
+            string_to_decimal_cast_with::<T, S, RoundHalfToEven>(from, precision, scale, safe)
+        }
+        DecimalRoundingMode::TowardZero => {
+            string_to_decimal_cast_with::<T, S, RoundTowardZero>(from, precision, scale, safe)
+        }
+    }
+}
+
+fn string_to_decimal_cast_with<'a, T, S, R>(
+    from: &'a S,
+    precision: u8,
+    scale: i8,
+    safe: bool,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: DecimalType,
+    &'a S: StringArrayType<'a>,
+    R: DecimalRounding,
+{
+    if safe {
         let iter = from
             .iter()
-            .map(|v| parse_decimal_checked::<T>(v?, precision, scale, rounding).ok());
+            .map(|v| parse_decimal_checked::<T, R>(v?, precision, scale).ok());
         // Benefit:
         //     15-19% faster than appending to a PrimitiveBuilder (measured
         //     with the cast_kernels string-to-decimal benchmarks)
@@ -660,7 +684,7 @@ where
         for v in from.iter() {
             match v {
                 Some(v) => {
-                    let v = parse_decimal_checked::<T>(v, precision, scale, rounding).map_err(|e| {
+                    let v = parse_decimal_checked::<T, R>(v, precision, scale).map_err(|e| {
                         let reason = match e {
                             DecimalParseError::InvalidFormat => "invalid decimal format",
                             DecimalParseError::Overflow => "value does not fit",
