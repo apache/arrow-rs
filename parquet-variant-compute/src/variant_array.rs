@@ -225,12 +225,9 @@ impl ExtensionType for VariantType {
 /// ```
 /// # use arrow::array::StructArray;
 /// # use arrow_schema::{Schema, Field, DataType};
-/// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantType};
+/// # use parquet_variant_compute::{VariantArray, VariantType};
 /// # fn get_variant_array() -> VariantArray {
-/// #   let mut builder = VariantArrayBuilder::new(10);
-/// #   builder.append_variant(Variant::from("such wow"));
-/// #   builder.build()
+/// #   VariantArray::from_iter([Some("such wow")])
 /// # }
 /// # fn get_schema() -> Schema {
 /// #   Schema::new(vec![
@@ -253,12 +250,9 @@ impl ExtensionType for VariantType {
 ///
 /// ```
 /// # use arrow_schema::{Schema, Field, DataType};
-/// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantType};
+/// # use parquet_variant_compute::{VariantArray, VariantType};
 /// # fn get_variant_array() -> VariantArray {
-/// #   let mut builder = VariantArrayBuilder::new(10);
-/// #   builder.append_variant(Variant::from("such wow"));
-/// #   builder.build()
+/// #   VariantArray::from_iter([Some("such wow")])
 /// # }
 /// let variant_array = get_variant_array();
 /// // First field is an integer id, second field is a variant
@@ -273,12 +267,9 @@ impl ExtensionType for VariantType {
 ///
 /// ```
 /// # use arrow_schema::{Schema, Field, DataType};
-/// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantType};
+/// # use parquet_variant_compute::{VariantArray, VariantType};
 /// # fn get_variant_array() -> VariantArray {
-/// #   let mut builder = VariantArrayBuilder::new(10);
-/// #   builder.append_variant(Variant::from("such wow"));
-/// #   builder.build()
+/// #   VariantArray::from_iter([Some("such wow")])
 /// # }
 /// # let variant_array = get_variant_array();
 /// // The DataType of a VariantArray varies depending on how it is shredded
@@ -296,12 +287,9 @@ impl ExtensionType for VariantType {
 ///
 /// ```
 /// # use arrow::array::StructArray;
-/// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::VariantArrayBuilder;
+/// # use parquet_variant_compute::VariantArray;
 /// // Create Variant Array
-/// let mut builder = VariantArrayBuilder::new(10);
-/// builder.append_variant(Variant::from("such wow"));
-/// let variant_array = builder.build();
+/// let variant_array = VariantArray::from_iter([Some("such wow")]);
 /// // convert to StructArray
 /// let struct_array: StructArray = variant_array.into();
 /// ```
@@ -311,11 +299,9 @@ impl ExtensionType for VariantType {
 /// ```
 /// # use arrow::array::StructArray;
 /// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray};
+/// # use parquet_variant_compute::VariantArray;
 /// # fn get_struct_array() -> StructArray {
-/// #   let mut builder = VariantArrayBuilder::new(10);
-/// #   builder.append_variant(Variant::from("such wow"));
-/// #   builder.build().into()
+/// #   VariantArray::from_iter([Some("such wow")]).into()
 /// # }
 /// let struct_array: StructArray = get_struct_array();
 /// // try and create a VariantArray from it
@@ -1826,15 +1812,7 @@ mod test {
 
     #[test]
     fn test_variant_array_iter_double_ended() {
-        let mut b = VariantArrayBuilder::new(5);
-
-        b.append_variant(Variant::from(0_i32));
-        b.append_null();
-        b.append_variant(Variant::from(2_i32));
-        b.append_null();
-        b.append_variant(Variant::from(4_i32));
-
-        let array = b.build();
+        let array = VariantArray::from_iter([Some(0_i32), None, Some(2_i32), None, Some(4_i32)]);
         let mut iter = array.iter();
 
         assert_eq!(iter.next(), Some(Some(Variant::from(0_i32))));
@@ -1850,15 +1828,7 @@ mod test {
 
     #[test]
     fn test_variant_array_iter_reverse() {
-        let mut b = VariantArrayBuilder::new(5);
-
-        b.append_variant(Variant::from("a"));
-        b.append_null();
-        b.append_variant(Variant::from("aaa"));
-        b.append_null();
-        b.append_variant(Variant::from("aaaaa"));
-
-        let array = b.build();
+        let array = VariantArray::from_iter([Some("a"), None, Some("aaa"), None, Some("aaaaa")]);
 
         let result: Vec<_> = array.iter().rev().collect();
         assert_eq!(
