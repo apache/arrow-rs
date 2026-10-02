@@ -153,8 +153,16 @@ impl<R: RunEndIndexType> RunArray<R> {
         }
 
         let data_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", run_ends.data_type().clone(), false)),
-            Arc::new(Field::new("values", values.data_type().clone(), true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                run_ends.data_type().clone(),
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                values.data_type().clone(),
+                true,
+            )),
         );
 
         let logical_len = RunArray::logical_len(run_ends);
@@ -670,7 +678,7 @@ pub type Int32RunArray = RunArray<Int32Type>;
 /// ```
 pub type Int64RunArray = RunArray<Int64Type>;
 
-/// A [`RunArray`] typed typed on its child values array
+/// A [`RunArray`] typed on its child values array
 ///
 /// Implements [`ArrayAccessor`] and [`IntoIterator`] allowing fast access to its elements
 ///

@@ -155,18 +155,10 @@ where
     // Nulls in FixedSizeListArray take up space and so we must pad the values
     let values = array.values().to_data();
     let mut mutable = MutableArrayData::new(vec![&values], nullable, cap);
-    // The end position in values of the last incorrectly-sized list slice
-    let mut last_pos = 0;
-
-    // Need to flag when previous vector(s) are empty/None to distinguish from 'All slices were correct length' cases.
-    let is_prev_empty = if array.offsets().len() < 2 {
-        false
-    } else {
-        let first_offset = array.offsets()[0].as_usize();
-        let second_offset = array.offsets()[1].as_usize();
-
-        first_offset == 0 && second_offset == 0
-    };
+    let first_pos = array.offsets()[0].as_usize();
+    // The end position in values of the last incorrectly-sized list slice,
+    // or None if no padding has been needed (including for empty slices).
+    let mut last_pos = None;
 
     for (idx, w) in array.offsets().windows(2).enumerate() {
         let start_pos = w[0].as_usize();
@@ -175,10 +167,11 @@ where
 
         if len != size as usize {
             if cast_options.safe || array.is_null(idx) {
-                if last_pos != start_pos {
+                let copy_start = last_pos.unwrap_or(first_pos);
+                if copy_start != start_pos {
                     // Extend with valid slices
                     mutable
-                        .try_extend(0, last_pos, start_pos)
+                        .try_extend(0, copy_start, start_pos)
                         .map_err(|e| ArrowError::CastError(e.to_string()))?;
                 }
                 // Pad this slice with nulls
@@ -187,7 +180,7 @@ where
                     .map_err(|e| ArrowError::CastError(e.to_string()))?;
                 null_builder.set_bit(idx, false);
                 // Set last_pos to the end of this slice's values
-                last_pos = end_pos
+                last_pos = Some(end_pos)
             } else {
                 return Err(ArrowError::CastError(format!(
                     "Cannot cast to FixedSizeList({size}): value at index {idx} has length {len}",
@@ -197,8 +190,8 @@ where
     }
 
     let values = match last_pos {
-        0 if !is_prev_empty => array.values().slice(0, cap), // All slices were the correct length
-        _ => {
+        None => array.values().slice(first_pos, cap), // All slices were the correct length
+        Some(last_pos) => {
             if mutable.len() != cap {
                 // Remaining slices were all correct length
                 let remaining = cap - mutable.len();

@@ -1187,7 +1187,7 @@ impl WriterPropertiesBuilder {
     /// * If the bloom filter is enabled previously then it is a no-op.
     ///
     /// * If the bloom filter is not enabled, default values for ndv and fpp
-    ///   value are used used. See [`set_bloom_filter_max_ndv`] and
+    ///   value are used. See [`set_bloom_filter_max_ndv`] and
     ///   [`set_bloom_filter_fpp`] to further adjust the ndv and fpp.
     ///
     /// [`set_bloom_filter_max_ndv`]: Self::set_bloom_filter_max_ndv
@@ -2596,6 +2596,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::float_cmp_const)]
     fn test_bloom_filter_builder_default() {
         let props = BloomFilterProperties::builder().build();
         assert_eq!(props.fpp, DEFAULT_BLOOM_FILTER_FPP);
@@ -2615,6 +2616,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::float_cmp_const)]
     fn test_bloom_filter_builder_explicit_ndv() {
         let props = BloomFilterProperties::builder().with_max_ndv(1000).build();
         assert_eq!(props.fpp, DEFAULT_BLOOM_FILTER_FPP);
@@ -2656,6 +2658,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::float_cmp_const)]
     fn test_column_specific_implicit_ndv_uses_row_group_size() {
         let custom_row_group_size: usize = 7777;
         let col = ColumnPath::from("col");

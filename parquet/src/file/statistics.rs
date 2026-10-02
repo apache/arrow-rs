@@ -753,8 +753,6 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
 
 #[cfg(test)]
 mod tests {
-    use core::f32;
-
     use super::*;
 
     #[test]

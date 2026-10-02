@@ -231,7 +231,7 @@ make_stats_iterator!(
     [u8]
 );
 
-/// Special iterator adapter for extracting i128 values from from an iterator of
+/// Special iterator adapter for extracting i128 values from an iterator of
 /// `ParquetStatistics`
 ///
 /// Handles checking if the statistics are present and valid with the correct type.
