@@ -90,6 +90,7 @@ pool = ["arrow-array/pool"]
 [dev-dependencies]
 chrono = { workspace = true }
 criterion = { workspace = true, default-features = false }
+foldhash = "0.1"
 half = { version = "2.1", default-features = false }
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
@@ -179,6 +180,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 name = "take_kernels"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "repartition_kernels"
 harness = false
 required-features = ["test_utils"]
 
