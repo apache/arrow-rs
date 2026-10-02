@@ -1172,7 +1172,7 @@ mod tests {
     fn test_already_shredded_input_error() {
         // Create a VariantArray that already has typed_value_field
         // First create a valid VariantArray, then extract its parts to construct a shredded one
-        let temp_array = VariantArray::from_iter(vec![Some(Variant::from("test"))]);
+        let temp_array = VariantArray::from_iter([Some("test")]);
         let metadata = temp_array.metadata_column().clone();
         let value = temp_array.value_column().clone();
         let typed_value = Arc::new(Int64Array::from(vec![42])) as ArrayRef;
@@ -1206,7 +1206,7 @@ mod tests {
     fn test_invalid_fixed_size_binary_shredding() {
         let mock_uuid_1 = Uuid::new_v4();
 
-        let input = VariantArray::from_iter([Some(Variant::from(mock_uuid_1)), None]);
+        let input = VariantArray::from_iter([Some(mock_uuid_1), None]);
 
         // shred_variant only supports FixedSizeBinary(16). Any other length will err.
         let err = shred_variant(&input, &DataType::FixedSizeBinary(17)).unwrap_err();
@@ -1498,7 +1498,7 @@ mod tests {
 
     #[test]
     fn test_invalid_shredded_types_rejected() {
-        let input = VariantArray::from_iter([Variant::from(42)]);
+        let input = VariantArray::from_iter([Some(42)]);
 
         let invalid_types = vec![
             DataType::UInt8,
