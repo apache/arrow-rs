@@ -77,23 +77,27 @@ pub(super) fn extend_nulls_dense(
     let DataType::Union(fields, _) = &mutable.data_type else {
         unreachable!()
     };
-    let first_type_id = fields
+    let null_type_id = fields
         .iter()
-        .next()
-        .expect("union must have at least one field")
+        .find(|(_, field)| field.is_nullable())
+        .expect("cannot extend nulls in a union with no nullable field")
         .0;
 
     // Extend type_ids buffer
     mutable
         .buffer1
-        .try_extend_from_slice(&vec![first_type_id; len])
+        .try_extend_from_slice(&vec![null_type_id; len])
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-    // Dense: extend offsets pointing into the first child, then extend nulls in that child
-    let child_offset = mutable.child_data[0].len();
+    // Dense: extend offsets pointing into the nullable child, then extend nulls in that child
+    let child_index = fields
+        .iter()
+        .position(|(id, _)| *id == null_type_id)
+        .unwrap();
+    let child_offset = mutable.child_data[child_index].len();
     let (start, end) = (child_offset as i32, (child_offset + len) as i32);
     mutable.buffer2.extend(start..end);
-    mutable.child_data[0].try_extend_nulls(len)?;
+    mutable.child_data[child_index].try_extend_nulls(len)?;
     Ok(())
 }
 
@@ -104,16 +108,16 @@ pub(super) fn extend_nulls_sparse(
     let DataType::Union(fields, _) = &mutable.data_type else {
         unreachable!()
     };
-    let first_type_id = fields
+    let null_type_id = fields
         .iter()
-        .next()
-        .expect("union must have at least one field")
+        .find(|(_, field)| field.is_nullable())
+        .expect("cannot extend nulls in a union with no nullable field")
         .0;
 
     // Extend type_ids buffer
     mutable
         .buffer1
-        .try_extend_from_slice(&vec![first_type_id; len])
+        .try_extend_from_slice(&vec![null_type_id; len])
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     // Sparse: extend nulls in ALL children
