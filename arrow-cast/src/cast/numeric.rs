@@ -17,7 +17,7 @@
 
 //! Cast support for numeric and boolean arrays.
 
-use arrow_array::{builder::*, cast::*, types::*, *};
+use arrow_array::{cast::*, types::*, *};
 use arrow_schema::ArrowError;
 use num_traits::NumCast;
 use std::sync::Arc;
@@ -32,40 +32,90 @@ pub(crate) fn cast_numeric_arrays<FROM, TO>(
 where
     FROM: ArrowPrimitiveType,
     TO: ArrowPrimitiveType,
-    FROM::Native: NumCast,
-    TO::Native: NumCast,
+    FROM::Native: NumCast + NumericNative,
+    TO::Native: NumCast + NumericNative,
 {
-    if cast_options.safe {
-        // If the value can't be casted to the `TO::Native`, return null
-        Ok(Arc::new(numeric_cast::<FROM, TO>(
-            from.as_primitive::<FROM>(),
-        )))
+    let from = from.as_primitive::<FROM>();
+    let array: PrimitiveArray<TO> = if const {
+        is_infallible_numeric_cast(
+            <FROM::Native as NumericNative>::KIND,
+            <TO::Native as NumericNative>::KIND,
+        )
+    } {
+        // This cast cannot fail, so the fastest kernel, `unary`, can be used.
+        from.unary(|v| num_cast(v).expect("numeric cast is infallible"))
+    } else if cast_options.safe {
+        // If the value can't be cast to the `TO::Native`, return null
+        from.unary_opt(num_cast)
     } else {
-        // If the value can't be casted to the `TO::Native`, return error
-        Ok(Arc::new(try_numeric_cast::<FROM, TO>(
-            from.as_primitive::<FROM>(),
-        )?))
-    }
+        // If the value can't be cast to the `TO::Native`, return error
+        from.try_unary(|v| {
+            num_cast(v).ok_or_else(|| {
+                ArrowError::CastError(format!("Can't cast value {v:?} to type {}", TO::DATA_TYPE))
+            })
+        })?
+    };
+    Ok(Arc::new(array))
 }
 
-// Natural cast between numeric types
-// If the value of T can't be casted to R, will throw error
-fn try_numeric_cast<T, R>(from: &PrimitiveArray<T>) -> Result<PrimitiveArray<R>, ArrowError>
-where
-    T: ArrowPrimitiveType,
-    R: ArrowPrimitiveType,
-    T::Native: NumCast,
-    R::Native: NumCast,
-{
-    from.try_unary(|value| {
-        num_cast::<T::Native, R::Native>(value).ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Can't cast value {:?} to type {}",
-                value,
-                R::DATA_TYPE
-            ))
-        })
-    })
+/// Properties of a numeric native type that decide whether [`num_cast`] to
+/// another numeric type can fail.
+#[derive(Clone, Copy)]
+pub(crate) struct NumericKind {
+    float: bool,
+    signed: bool,
+    bits: u32,
+}
+
+/// A native type with a [`NumericKind`].
+pub(crate) trait NumericNative {
+    const KIND: NumericKind;
+}
+
+macro_rules! numeric_native {
+    ($($t:ty => $float:literal, $signed:literal;)*) => {$(
+        impl NumericNative for $t {
+            const KIND: NumericKind = NumericKind {
+                float: $float,
+                signed: $signed,
+                bits: 8 * std::mem::size_of::<$t>() as u32,
+            };
+        }
+    )*};
+}
+
+numeric_native! {
+    u8 => false, false;
+    u16 => false, false;
+    u32 => false, false;
+    u64 => false, false;
+    i8 => false, true;
+    i16 => false, true;
+    i32 => false, true;
+    i64 => false, true;
+    half::f16 => true, true;
+    f32 => true, true;
+    f64 => true, true;
+}
+
+/// Returns true if [`num_cast`] succeeds for every value of `from` when casting
+/// to `to`: every cast to a float, and integer casts whose target holds every
+/// source value.
+///
+/// This must hold for every bit pattern of the source type, not only for the
+/// valid values of a particular array, because [`PrimitiveArray::unary`] applies
+/// the conversion to null slots as well, and their contents are arbitrary.
+pub(crate) const fn is_infallible_numeric_cast(from: NumericKind, to: NumericKind) -> bool {
+    if to.float {
+        true
+    } else if from.float {
+        false
+    } else if from.signed == to.signed {
+        to.bits >= from.bits
+    } else {
+        // Only an unsigned source fits a strictly wider signed target.
+        !from.signed && to.bits > from.bits
+    }
 }
 
 /// Natural cast between numeric types
@@ -79,18 +129,6 @@ where
     num_traits::cast::cast::<I, O>(value)
 }
 
-// Natural cast between numeric types
-// If the value of T can't be casted to R, it will be converted to null
-fn numeric_cast<T, R>(from: &PrimitiveArray<T>) -> PrimitiveArray<R>
-where
-    T: ArrowPrimitiveType,
-    R: ArrowPrimitiveType,
-    T::Native: NumCast,
-    R::Native: NumCast,
-{
-    from.unary_opt::<_, R>(num_cast::<T::Native, R::Native>)
-}
-
 /// Cast numeric types to Boolean
 ///
 /// Any zero value returns `false` while non-zero returns `true`
@@ -98,24 +136,10 @@ pub(crate) fn cast_numeric_to_bool<FROM>(from: &dyn Array) -> Result<ArrayRef, A
 where
     FROM: ArrowPrimitiveType,
 {
-    numeric_to_bool_cast::<FROM>(from.as_primitive::<FROM>()).map(|to| Arc::new(to) as ArrayRef)
-}
-
-fn numeric_to_bool_cast<T>(from: &PrimitiveArray<T>) -> Result<BooleanArray, ArrowError>
-where
-    T: ArrowPrimitiveType,
-{
-    let mut b = BooleanBuilder::with_capacity(from.len());
-
-    for i in 0..from.len() {
-        if from.is_null(i) {
-            b.append_null();
-        } else {
-            b.append_value(cast_num_to_bool::<T::Native>(from.value(i)));
-        }
-    }
-
-    Ok(b.finish())
+    Ok(Arc::new(BooleanArray::from_unary(
+        from.as_primitive::<FROM>(),
+        cast_num_to_bool,
+    )))
 }
 
 /// Cast numeric types to boolean

@@ -120,15 +120,32 @@ pub(crate) mod private {
                     "Cannot initialize this encoding through this function"
                 ));
             }
-            Encoding::RLE => Box::new(RleValueEncoder::new()),
-            Encoding::DELTA_BINARY_PACKED => Box::new(DeltaBitPackEncoder::new()),
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(DeltaLengthByteArrayEncoder::new()),
-            Encoding::DELTA_BYTE_ARRAY => Box::new(DeltaByteArrayEncoder::new()),
+            Encoding::RLE => match T::get_physical_type() {
+                Type::BOOLEAN => Box::new(RleValueEncoder::new()),
+                physical_type => return Err(unsupported_column_encoding(encoding, physical_type)),
+            },
+            Encoding::DELTA_BINARY_PACKED => match T::get_physical_type() {
+                Type::INT32 | Type::INT64 => Box::new(DeltaBitPackEncoder::new()),
+                physical_type => return Err(unsupported_column_encoding(encoding, physical_type)),
+            },
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => match T::get_physical_type() {
+                Type::BYTE_ARRAY => Box::new(DeltaLengthByteArrayEncoder::new()),
+                physical_type => return Err(unsupported_column_encoding(encoding, physical_type)),
+            },
+            Encoding::DELTA_BYTE_ARRAY => match T::get_physical_type() {
+                Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
+                    Box::new(DeltaByteArrayEncoder::new())
+                }
+                physical_type => return Err(unsupported_column_encoding(encoding, physical_type)),
+            },
             Encoding::BYTE_STREAM_SPLIT => match T::get_physical_type() {
                 Type::FIXED_LEN_BYTE_ARRAY => Box::new(VariableWidthByteStreamSplitEncoder::new(
                     descr.type_length(),
                 )),
-                _ => Box::new(ByteStreamSplitEncoder::new()),
+                Type::INT32 | Type::INT64 | Type::FLOAT | Type::DOUBLE => {
+                    Box::new(ByteStreamSplitEncoder::new())
+                }
+                physical_type => return Err(unsupported_column_encoding(encoding, physical_type)),
             },
             Encoding::ALP => {
                 return Err(general_err!(
@@ -173,6 +190,14 @@ pub(crate) mod private {
             }
         }
     }
+}
+
+fn unsupported_column_encoding(encoding: Encoding, physical_type: Type) -> ParquetError {
+    nyi_err!(
+        "Encoding {} is not supported for physical type {:?}",
+        encoding,
+        physical_type
+    )
 }
 
 // ----------------------------------------------------------------------
@@ -345,7 +370,6 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
 // DELTA_BINARY_PACKED encoding
 
 const MAX_PAGE_HEADER_WRITER_SIZE: usize = 32;
-const DEFAULT_BIT_WRITER_SIZE: usize = 1024 * 1024;
 const DEFAULT_NUM_MINI_BLOCKS: usize = 4;
 
 /// Delta bit packed encoder.
@@ -409,7 +433,10 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
 
         DeltaBitPackEncoder {
             page_header_writer: BitWriter::new(MAX_PAGE_HEADER_WRITER_SIZE),
-            bit_writer: BitWriter::new(DEFAULT_BIT_WRITER_SIZE),
+            // Don't pre-allocate: encoders are often created eagerly (e.g. as a
+            // byte array fallback encoder) and may never be used. The buffer
+            // grows on demand and retains its capacity across pages.
+            bit_writer: BitWriter::new(0),
             total_values: 0,
             first_value: 0,
             current_value: 0, // current value to keep adding deltas
@@ -849,8 +876,6 @@ mod tests {
         // supported encodings
         create_and_check_encoder::<Int32Type>(0, Encoding::PLAIN, None);
         create_and_check_encoder::<Int32Type>(0, Encoding::DELTA_BINARY_PACKED, None);
-        create_and_check_encoder::<Int32Type>(0, Encoding::DELTA_LENGTH_BYTE_ARRAY, None);
-        create_and_check_encoder::<Int32Type>(0, Encoding::DELTA_BYTE_ARRAY, None);
         create_and_check_encoder::<BoolType>(0, Encoding::RLE, None);
 
         // error when initializing
@@ -870,6 +895,22 @@ mod tests {
         );
         create_and_check_encoder::<Int32Type>(
             0,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Some(unsupported_column_encoding(
+                Encoding::DELTA_LENGTH_BYTE_ARRAY,
+                Type::INT32,
+            )),
+        );
+        create_and_check_encoder::<Int32Type>(
+            0,
+            Encoding::DELTA_BYTE_ARRAY,
+            Some(unsupported_column_encoding(
+                Encoding::DELTA_BYTE_ARRAY,
+                Type::INT32,
+            )),
+        );
+        create_and_check_encoder::<Int32Type>(
+            0,
             Encoding::ALP,
             Some(general_err!(
                 "Encoding ALP only supports FLOAT and DOUBLE, got INT32"
@@ -883,6 +924,127 @@ mod tests {
             Encoding::BIT_PACKED,
             Some(nyi_err!("Encoding BIT_PACKED is not supported")),
         );
+    }
+
+    #[test]
+    fn column_construction_validates_encoding_fallback_matrix() {
+        use crate::file::properties::{WriterProperties, WriterVersion};
+        use crate::file::writer::SerializedFileWriter;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        use std::sync::Arc;
+
+        fn check_encoder<T: DataType>(encoding: Encoding, supported: bool) {
+            let error = if supported {
+                None
+            } else if encoding == Encoding::ALP {
+                Some(general_err!(
+                    "Encoding ALP only supports FLOAT and DOUBLE, got {}",
+                    T::get_physical_type()
+                ))
+            } else {
+                Some(unsupported_column_encoding(
+                    encoding,
+                    T::get_physical_type(),
+                ))
+            };
+            create_and_check_encoder::<T>(4, encoding, error);
+        }
+
+        let encodings = [
+            Encoding::PLAIN,
+            Encoding::RLE,
+            Encoding::DELTA_BINARY_PACKED,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+            Encoding::BYTE_STREAM_SPLIT,
+            Encoding::ALP,
+        ];
+        for physical in [
+            Type::BOOLEAN,
+            Type::INT32,
+            Type::INT64,
+            Type::INT96,
+            Type::FLOAT,
+            Type::DOUBLE,
+            Type::BYTE_ARRAY,
+            Type::FIXED_LEN_BYTE_ARRAY,
+        ] {
+            let valid: &[Encoding] = match physical {
+                Type::BOOLEAN => &[Encoding::PLAIN, Encoding::RLE],
+                Type::INT32 | Type::INT64 => &[
+                    Encoding::PLAIN,
+                    Encoding::DELTA_BINARY_PACKED,
+                    Encoding::BYTE_STREAM_SPLIT,
+                ],
+                Type::INT96 => &[Encoding::PLAIN],
+                Type::FLOAT | Type::DOUBLE => {
+                    &[Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT, Encoding::ALP]
+                }
+                Type::BYTE_ARRAY => &[
+                    Encoding::PLAIN,
+                    Encoding::DELTA_LENGTH_BYTE_ARRAY,
+                    Encoding::DELTA_BYTE_ARRAY,
+                ],
+                Type::FIXED_LEN_BYTE_ARRAY => &[
+                    Encoding::PLAIN,
+                    Encoding::DELTA_BYTE_ARRAY,
+                    Encoding::BYTE_STREAM_SPLIT,
+                ],
+            };
+            // Check the factory's returned errors directly, independently of the
+            // infallible column writer constructor that unwraps those errors.
+            for encoding in encodings {
+                let supported = valid.contains(&encoding);
+                match physical {
+                    Type::BOOLEAN => check_encoder::<BoolType>(encoding, supported),
+                    Type::INT32 => check_encoder::<Int32Type>(encoding, supported),
+                    Type::INT64 => check_encoder::<Int64Type>(encoding, supported),
+                    Type::INT96 => check_encoder::<Int96Type>(encoding, supported),
+                    Type::FLOAT => check_encoder::<FloatType>(encoding, supported),
+                    Type::DOUBLE => check_encoder::<DoubleType>(encoding, supported),
+                    Type::BYTE_ARRAY => check_encoder::<ByteArrayType>(encoding, supported),
+                    Type::FIXED_LEN_BYTE_ARRAY => {
+                        check_encoder::<FixedLenByteArrayType>(encoding, supported)
+                    }
+                }
+            }
+            for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+                for dictionary in [false, true] {
+                    for encoding in encodings {
+                        let field = Arc::new(
+                            SchemaType::primitive_type_builder("a", physical)
+                                .with_length(4)
+                                .build()
+                                .unwrap(),
+                        );
+                        let schema = Arc::new(
+                            SchemaType::group_type_builder("schema")
+                                .with_fields(vec![field])
+                                .build()
+                                .unwrap(),
+                        );
+                        let props = Arc::new(
+                            WriterProperties::builder()
+                                .set_writer_version(version)
+                                .set_dictionary_enabled(dictionary)
+                                .set_encoding(encoding)
+                                .build(),
+                        );
+                        let created = catch_unwind(AssertUnwindSafe(|| {
+                            let mut writer =
+                                SerializedFileWriter::new(Vec::new(), schema, props).unwrap();
+                            let mut group = writer.next_row_group().unwrap();
+                            group.next_column().unwrap().unwrap();
+                        }));
+                        assert_eq!(
+                            created.is_ok(),
+                            valid.contains(&encoding),
+                            "{physical:?} {version:?} dictionary={dictionary} {encoding:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
