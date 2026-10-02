@@ -382,20 +382,19 @@ impl Planner {
                 && (stage != ScanStage::Predicate(0)
                     || (self.has_limit && !self.at_first_row_group));
             // The decoder reuses a column that an earlier stage read.
-            let new_columns: Vec<usize> =
+            let columns: Vec<StageColumn> =
                 columns_to_fetch(fetch.projection, num_columns, |idx| planned_columns[idx])
+                    .map(|column_idx| {
+                        let (chunk_start, chunk_len) = row_group.column(column_idx).byte_range();
+                        StageColumn {
+                            column_idx,
+                            chunk: chunk_start..chunk_start + chunk_len,
+                        }
+                    })
                     .collect();
-            let columns = new_columns
-                .into_iter()
-                .map(|column_idx| {
-                    planned_columns[column_idx] = true;
-                    let (chunk_start, chunk_len) = row_group.column(column_idx).byte_range();
-                    StageColumn {
-                        column_idx,
-                        chunk: chunk_start..chunk_start + chunk_len,
-                    }
-                })
-                .collect();
+            for column in &columns {
+                planned_columns[column.column_idx] = true;
+            }
             stage_plans.push(StagePlan {
                 stage,
                 conditional,
@@ -678,11 +677,12 @@ impl RowGroupContext {
             self.stages.fetch(stage).cache_projection,
             column_idx,
         );
-        let fetch = ColumnFetch::new(chunk.clone(), self.locations(column_idx), fetch_selection);
+        let all_locations = self.locations(column_idx);
+        let fetch = ColumnFetch::new(chunk.clone(), all_locations, fetch_selection);
         // The decoder fetches a whole column chunk as one range. If page
         // locations are known, the plan splits it into the same bytes, page
         // by page.
-        let locations = self.locations(column_idx).filter(|l| !l.is_empty());
+        let locations = all_locations.filter(|l| !l.is_empty());
         let (dictionary, pages) = match (fetch, locations) {
             (ColumnFetch::Chunk { range }, Some(locations)) => (
                 dictionary_range(range.start, locations),
@@ -718,7 +718,7 @@ impl RowGroupContext {
             next_page: 0,
         };
         if let Some(dictionary) = dictionary {
-            let locations = self.locations(column_idx).expect("pages have locations");
+            let locations = all_locations.expect("pages have locations");
             // The dictionary serves exactly the rows of the data pages read.
             let rows = match cursor.pages.len() {
                 0 => row_group_rows,
