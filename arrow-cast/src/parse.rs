@@ -918,6 +918,11 @@ pub(crate) trait DecimalRounding {
     /// whose least significant digit is the last kept digit.
     fn round_up<T: DecimalType>(first_discarded: u8, rest_non_zero: bool, value: T::Native)
     -> bool;
+
+    /// Rounds the quotient `d` of dividing `x` by a power of ten (at least
+    /// 10), given the remainder `r` (which has the sign of `x`), half the
+    /// divisor and its negation.
+    fn round_quotient<N: ArrowNativeTypeOp>(x: N, d: N, r: N, half: N, half_neg: N) -> N;
 }
 
 /// [`DecimalRoundingMode::HalfAwayFromZero`]
@@ -929,6 +934,15 @@ impl DecimalRounding for RoundHalfAwayFromZero {
     #[inline(always)]
     fn round_up<T: DecimalType>(first_discarded: u8, _: bool, _: T::Native) -> bool {
         first_discarded >= 5
+    }
+
+    #[inline(always)]
+    fn round_quotient<N: ArrowNativeTypeOp>(x: N, d: N, r: N, half: N, half_neg: N) -> N {
+        match x >= N::ZERO {
+            true if r >= half => d.add_wrapping(N::ONE),
+            false if r <= half_neg => d.sub_wrapping(N::ONE),
+            _ => d,
+        }
     }
 }
 
@@ -949,6 +963,20 @@ impl DecimalRounding for RoundHalfToEven {
             || (first_discarded == 5
                 && (rest_non_zero || !value.mod_wrapping(T::Native::usize_as(2)).is_zero()))
     }
+
+    #[inline(always)]
+    fn round_quotient<N: ArrowNativeTypeOp>(_: N, d: N, r: N, half: N, half_neg: N) -> N {
+        // The divisor is even, so a tie is exact: round away from zero only
+        // if that makes `d` even
+        let odd = !d.mod_wrapping(N::ONE.add_wrapping(N::ONE)).is_zero();
+        if r > half || (r == half && odd) {
+            d.add_wrapping(N::ONE)
+        } else if r < half_neg || (r == half_neg && odd) {
+            d.sub_wrapping(N::ONE)
+        } else {
+            d
+        }
+    }
 }
 
 /// [`DecimalRoundingMode::TowardZero`]
@@ -960,6 +988,11 @@ impl DecimalRounding for RoundTowardZero {
     #[inline(always)]
     fn round_up<T: DecimalType>(_: u8, _: bool, _: T::Native) -> bool {
         false
+    }
+
+    #[inline(always)]
+    fn round_quotient<N: ArrowNativeTypeOp>(_: N, d: N, _: N, _: N, _: N) -> N {
+        d
     }
 }
 

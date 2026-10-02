@@ -249,14 +249,13 @@ where
 /// available precision). Callers should therefore produce zero values (preserving nulls) rather
 /// than returning an error.
 ///
-/// Digits removed by the downscaling are rounded according to `rounding`.
+/// Digits removed by the downscaling are rounded according to `R`.
 #[expect(clippy::type_complexity)]
-fn make_downscaler<I: DecimalType, O: DecimalType>(
+fn make_downscaler<I: DecimalType, O: DecimalType, R: DecimalRounding>(
     input_precision: u8,
     input_scale: i8,
     output_precision: u8,
     output_scale: i8,
-    rounding: DecimalRoundingMode,
 ) -> Option<(
     impl Fn(I::Native) -> Option<O::Native>,
     Option<impl Fn(I::Native) -> O::Native>,
@@ -278,34 +277,14 @@ where
     let div = max.add_wrapping(I::Native::ONE);
     let half = div.div_wrapping(I::Native::ONE.add_wrapping(I::Native::ONE));
     let half_neg = half.neg_wrapping();
-    let two = I::Native::ONE.add_wrapping(I::Native::ONE);
 
     let f_fallible = move |x: I::Native| {
         // div is >= 10 and so this cannot overflow
         let d = x.div_wrapping(div);
-        // The remainder has the sign of `x`
         let r = x.mod_wrapping(div);
 
         // Round result
-        let adjusted = match rounding {
-            DecimalRoundingMode::HalfAwayFromZero => match x >= I::Native::ZERO {
-                true if r >= half => d.add_wrapping(I::Native::ONE),
-                false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
-                _ => d,
-            },
-            DecimalRoundingMode::HalfToEven => {
-                // `div` is even, so `half` is exact: a tie rounds to the even quotient
-                let odd = !d.mod_wrapping(two).is_zero();
-                if r > half || (r == half && odd) {
-                    d.add_wrapping(I::Native::ONE)
-                } else if r < half_neg || (r == half_neg && odd) {
-                    d.sub_wrapping(I::Native::ONE)
-                } else {
-                    d
-                }
-            }
-            DecimalRoundingMode::TowardZero => d,
-        };
+        let adjusted = R::round_quotient(x, d, r, half, half_neg);
         O::Native::from_decimal(adjusted)
     };
 
@@ -378,12 +357,11 @@ where
             make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)?;
         apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
     } else {
-        let Some((f, f_infallible)) = make_downscaler::<I, O>(
+        let Some((f, f_infallible)) = make_downscaler::<I, O, RoundHalfAwayFromZero>(
             input_precision,
             input_scale,
             output_precision,
             output_scale,
-            DecimalRoundingMode::default(),
         ) else {
             // Scale reduction exceeds supported precision; result mathematically rounds to zero
             return Some(O::Native::ZERO);
@@ -455,13 +433,46 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    if let Some((f_fallible, f_infallible)) = make_downscaler::<I, O>(
+    // Dispatch once per array to a downscaler specialised for the rounding mode
+    let convert = match cast_options.decimal_rounding {
+        DecimalRoundingMode::HalfAwayFromZero => {
+            convert_to_smaller_scale_decimal_with::<I, O, RoundHalfAwayFromZero>
+        }
+        DecimalRoundingMode::HalfToEven => {
+            convert_to_smaller_scale_decimal_with::<I, O, RoundHalfToEven>
+        }
+        DecimalRoundingMode::TowardZero => {
+            convert_to_smaller_scale_decimal_with::<I, O, RoundTowardZero>
+        }
+    };
+    convert(
+        array,
         input_precision,
         input_scale,
         output_precision,
         output_scale,
-        cast_options.decimal_rounding,
-    ) {
+        cast_options,
+    )
+}
+
+fn convert_to_smaller_scale_decimal_with<I, O, R>(
+    array: &PrimitiveArray<I>,
+    input_precision: u8,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+    R: DecimalRounding,
+{
+    if let Some((f_fallible, f_infallible)) =
+        make_downscaler::<I, O, R>(input_precision, input_scale, output_precision, output_scale)
+    {
         apply_decimal_cast(
             array,
             output_precision,
