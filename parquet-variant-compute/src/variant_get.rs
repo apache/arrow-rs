@@ -517,9 +517,7 @@ mod test {
     use std::sync::Arc;
 
     use super::{GetOptions, requested_field_is_shredded, variant_get};
-    use crate::variant_array::{
-        ShreddedVariantFieldArray, StructArrayBuilder, all_null_value_column,
-    };
+    use crate::variant_array::{ShreddedVariantFieldArray, all_null_value_column};
     use crate::{
         ShreddedSchemaBuilder, VariantArray, VariantArrayBuilder, cast_to_variant, json_to_variant,
         shred_variant,
@@ -531,8 +529,8 @@ mod test {
         Int64Array, Int64Builder, LargeBinaryArray, LargeListArray, LargeListViewArray,
         LargeStringArray, ListArray, ListBuilder, ListViewArray, MapBuilder, NullArray,
         NullBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        UnionArray,
+        StructArrayAssembler, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::{CastOptions, cast};
@@ -3797,10 +3795,11 @@ mod test {
             false, // row 2: outer field NULL
             false, // row 3: top-level NULL
         ]);
-        let outer_typed_value = StructArrayBuilder::new()
+        let outer_typed_value = StructArrayAssembler::new()
             .with_field("inner", ArrayRef::from(inner), false)
             .with_nulls(outer_typed_value_nulls)
-            .build();
+            .build()
+            .unwrap();
 
         let outer =
             ShreddedVariantFieldArray::perfectly_shredded(Arc::new(outer_typed_value) as ArrayRef);
@@ -3811,10 +3810,11 @@ mod test {
             false, // row 2: outer field NULL
             false, // row 3: top-level NULL
         ]);
-        let typed_value = StructArrayBuilder::new()
+        let typed_value = StructArrayAssembler::new()
             .with_field("outer", ArrayRef::from(outer), false)
             .with_nulls(typed_value_nulls)
-            .build();
+            .build()
+            .unwrap();
 
         // Build final VariantArray with top-level nulls
         let metadata_array =
@@ -3884,9 +3884,10 @@ mod test {
         ) as ArrayRef);
 
         // Create main typed_value struct (only contains shredded fields)
-        let typed_value_struct = StructArrayBuilder::new()
+        let typed_value_struct = StructArrayAssembler::new()
             .with_field("x", ArrayRef::from(x_field_shredded), false)
-            .build();
+            .build()
+            .unwrap();
 
         // Build VariantArray with both value and typed_value (PartiallyShredded)
         // Top-level null is encoded in the main StructArray's null mask

@@ -17,13 +17,13 @@
 
 //! Module for shredding VariantArray with a given schema.
 
-use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
+use crate::variant_array::ShreddedVariantFieldArray;
 use crate::variant_to_arrow::{
     ArrayVariantToArrowRowBuilder, PrimitiveVariantToArrowRowBuilder,
     make_primitive_variant_to_arrow_row_builder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
-use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
+use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, StructArrayAssembler};
 use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
@@ -459,7 +459,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
     }
 
     fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
-        let mut builder = StructArrayBuilder::new();
+        let mut builder = StructArrayAssembler::new();
         for (field_name, typed_value_builder) in self.typed_value_builders {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
             let array =
@@ -471,7 +471,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         }
         Ok((
             self.value_builder.build()?,
-            Arc::new(builder.build()),
+            Arc::new(builder.build()?),
             self.nulls.finish(),
         ))
     }
