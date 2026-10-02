@@ -20,21 +20,21 @@ use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, Field, FieldRef, Fields};
 use std::sync::Arc;
 
-/// Builds a [`StructArray`] from completed child arrays.
+/// Assembles a [`StructArray`] from completed child arrays.
 ///
 /// Unlike [`StructBuilder`](super::StructBuilder), which incrementally builds
-/// child arrays, this builder assembles arrays that have already been built.
+/// child arrays, this assembler combines arrays that have already been built.
 ///
 /// # Example
 ///
 /// ```
 /// use std::sync::Arc;
-/// use arrow_array::builder::StructArrayBuilder;
+/// use arrow_array::builder::StructArrayAssembler;
 /// use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
 ///
 /// let names = Arc::new(StringArray::from(vec!["one", "two"])) as ArrayRef;
 /// let values = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
-/// let array = StructArrayBuilder::new()
+/// let array = StructArrayAssembler::new()
 ///     .with_field("name", names, false)
 ///     .with_field("value", values, false)
 ///     .build()
@@ -43,14 +43,14 @@ use std::sync::Arc;
 /// assert_eq!(array.len(), 2);
 /// ```
 #[derive(Debug, Default, Clone)]
-pub struct StructArrayBuilder {
+pub struct StructArrayAssembler {
     fields: Vec<FieldRef>,
     arrays: Vec<ArrayRef>,
     nulls: Option<NullBuffer>,
 }
 
-impl StructArrayBuilder {
-    /// Creates a new empty [`StructArrayBuilder`].
+impl StructArrayAssembler {
+    /// Creates a new empty [`StructArrayAssembler`].
     pub fn new() -> Self {
         Self::default()
     }
@@ -114,7 +114,7 @@ mod tests {
             Arc::new(Field::new("value", DataType::Int32, false).with_metadata(metadata.clone()));
         let nulls = NullBuffer::from(vec![true, false]);
 
-        let array = StructArrayBuilder::new()
+        let array = StructArrayAssembler::new()
             .with_field("name", names, false)
             .with_field_ref(value_field, values)
             .with_nulls(nulls.clone())
@@ -132,7 +132,7 @@ mod tests {
         let names = Arc::new(StringArray::from(vec!["one", "two"])) as ArrayRef;
         let values = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
 
-        let err = StructArrayBuilder::new()
+        let err = StructArrayAssembler::new()
             .with_field("name", names, false)
             .with_field("value", values, false)
             .build()
@@ -149,7 +149,7 @@ mod tests {
         let value_field = Arc::new(Field::new("value", DataType::Int64, false));
         let values = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
 
-        let err = StructArrayBuilder::new()
+        let err = StructArrayAssembler::new()
             .with_field_ref(value_field, values)
             .build()
             .unwrap_err();

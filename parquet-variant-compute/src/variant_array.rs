@@ -23,7 +23,7 @@ use crate::type_conversion::{
     primitive_conversion_single_value,
 };
 use arrow::array::{
-    Array, ArrayRef, AsArray, StructArray, StructArrayBuilder, downcast_dictionary_array,
+    Array, ArrayRef, AsArray, StructArray, StructArrayAssembler, downcast_dictionary_array,
     downcast_run_array, new_null_array,
 };
 use arrow::buffer::NullBuffer;
@@ -407,7 +407,7 @@ impl VariantArray {
         nulls: Option<NullBuffer>,
         value_nullable: bool,
     ) -> Self {
-        let mut builder = StructArrayBuilder::new()
+        let mut builder = StructArrayAssembler::new()
             .with_field("metadata", metadata.clone(), false)
             .with_field("value", value.clone(), value_nullable);
         if let Some(typed_value) = typed_value.clone() {
@@ -825,7 +825,7 @@ impl ShreddedVariantFieldArray {
         typed_value: Option<ArrayRef>,
         nulls: Option<NullBuffer>,
     ) -> Self {
-        let mut builder = StructArrayBuilder::new().with_field("value", value.clone(), true);
+        let mut builder = StructArrayAssembler::new().with_field("value", value.clone(), true);
         if let Some(typed_value) = typed_value.clone() {
             builder = builder.with_field_ref(typed_value_field(&typed_value), typed_value);
         }
@@ -1388,7 +1388,7 @@ mod test {
         let typed_value = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
         let metadata =
             BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
-        let struct_array = StructArrayBuilder::new()
+        let struct_array = StructArrayAssembler::new()
             .with_field("metadata", Arc::new(metadata), false)
             .with_field("typed_value", typed_value, true)
             .build()
@@ -1528,7 +1528,7 @@ mod test {
             typed_value.len(),
         ));
         let value = new_null_array(&DataType::BinaryView, typed_value.len());
-        StructArrayBuilder::new()
+        StructArrayAssembler::new()
             .with_field("metadata", Arc::new(metadata), false)
             .with_field("value", value, true)
             .with_field("typed_value", typed_value, true)
@@ -1555,11 +1555,11 @@ mod test {
         // A shredded object { id: { typed_value: FixedSizeBinary(16) } } whose inner UUID leaf
         // carries no extension type; canonicalization must reach it recursively.
         let leaf = FixedSizeBinaryArray::try_from_iter(std::iter::repeat_n([0u8; 16], 1)).unwrap();
-        let inner = StructArrayBuilder::new()
+        let inner = StructArrayAssembler::new()
             .with_field("typed_value", Arc::new(leaf), true)
             .build()
             .unwrap();
-        let object = StructArrayBuilder::new()
+        let object = StructArrayAssembler::new()
             .with_field("id", Arc::new(inner), false)
             .build()
             .unwrap();

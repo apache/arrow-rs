@@ -516,7 +516,7 @@ mod test {
         FixedSizeListArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
         Int64Array, Int64Builder, LargeBinaryArray, LargeListArray, LargeListViewArray,
         LargeStringArray, ListArray, ListBuilder, ListViewArray, MapBuilder, NullArray,
-        NullBuilder, StringArray, StringBuilder, StringViewArray, StructArray, StructArrayBuilder,
+        NullBuilder, StringArray, StringBuilder, StringViewArray, StructArray, StructArrayAssembler,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
         UnionArray,
     };
@@ -3778,7 +3778,7 @@ mod test {
             false, // row 2: outer field NULL
             false, // row 3: top-level NULL
         ]);
-        let outer_typed_value = StructArrayBuilder::new()
+        let outer_typed_value = StructArrayAssembler::new()
             .with_field("inner", ArrayRef::from(inner), false)
             .with_nulls(outer_typed_value_nulls)
             .build()
@@ -3793,7 +3793,7 @@ mod test {
             false, // row 2: outer field NULL
             false, // row 3: top-level NULL
         ]);
-        let typed_value = StructArrayBuilder::new()
+        let typed_value = StructArrayAssembler::new()
             .with_field("outer", ArrayRef::from(outer), false)
             .with_nulls(typed_value_nulls)
             .build()
@@ -3867,7 +3867,7 @@ mod test {
         ) as ArrayRef);
 
         // Create main typed_value struct (only contains shredded fields)
-        let typed_value_struct = StructArrayBuilder::new()
+        let typed_value_struct = StructArrayAssembler::new()
             .with_field("x", ArrayRef::from(x_field_shredded), false)
             .build()
             .unwrap();

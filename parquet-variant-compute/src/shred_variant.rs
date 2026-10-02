@@ -23,7 +23,7 @@ use crate::variant_to_arrow::{
     make_primitive_variant_to_arrow_row_builder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
-use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, StructArrayBuilder};
+use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, StructArrayAssembler};
 use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
@@ -449,7 +449,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
     }
 
     fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
-        let mut builder = StructArrayBuilder::new();
+        let mut builder = StructArrayAssembler::new();
         for (field_name, typed_value_builder) in self.typed_value_builders {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
             let array =
