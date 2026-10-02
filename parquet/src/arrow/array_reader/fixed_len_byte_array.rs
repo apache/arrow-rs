@@ -24,7 +24,7 @@ use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
-use crate::column::reader::decoder::{ColumnValueDecoder, validate_fixed_len_byte_array_payload};
+use crate::column::reader::decoder::{ColumnValueDecoder, normalize_fixed_len_byte_array_payload};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
@@ -488,8 +488,8 @@ impl ColumnValueDecoder for ValueDecoder {
                 encoding
             ));
         }
-        validate_fixed_len_byte_array_payload(
-            buf.len(),
+        let buf = normalize_fixed_len_byte_array_payload(
+            buf,
             num_values as usize,
             self.byte_length,
             "dictionary page",

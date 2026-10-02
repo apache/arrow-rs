@@ -134,35 +134,82 @@ pub trait ColumnValueDecoder {
     fn skip_values(&mut self, num_values: usize) -> Result<usize>;
 }
 
-/// Validate a decompressed PLAIN fixed-width value section, excluding level data.
-/// Both dictionary entries and non-null data-page values have no length prefixes.
-pub(crate) fn validate_fixed_len_byte_array_payload(
-    actual_len: usize,
+fn fixed_len_byte_array_payload_size(
     num_values: usize,
     type_length: usize,
     page: &str,
-) -> Result<()> {
-    let expected_len = num_values.checked_mul(type_length).ok_or_else(|| {
+) -> Result<usize> {
+    num_values.checked_mul(type_length).ok_or_else(|| {
         general_err!(
             "FIXED_LEN_BYTE_ARRAY {} payload size overflow: {} values of {} bytes",
             page,
             num_values,
             type_length
         )
-    })?;
-    if actual_len != expected_len {
-        return Err(general_err!(
-            "Invalid FIXED_LEN_BYTE_ARRAY {} payload length: expected {} bytes \
-             ({} values of {} bytes), got {}. Length-prefixed BYTE_ARRAY payloads \
-             are not supported.",
-            page,
-            expected_len,
-            num_values,
-            type_length,
-            actual_len
-        ));
+    })
+}
+
+/// Validate a complete decompressed PLAIN FLBA value section, excluding levels.
+/// `num_values` must count physical non-null values, not rows or requested values.
+/// Canonical payloads are returned unchanged, even if values resemble prefixes.
+pub(crate) fn normalize_fixed_len_byte_array_payload(
+    data: Bytes,
+    num_values: usize,
+    type_length: usize,
+    page: &str,
+) -> Result<Bytes> {
+    let expected_len = fixed_len_byte_array_payload_size(num_values, type_length, page)?;
+    if data.len() == expected_len {
+        return Ok(data);
     }
-    Ok(())
+
+    // Temporary mitigation for arrow-rs #11261, reached only for a noncanonical
+    // size. Keep the repair separate from ordinary validation and value decoding.
+    super::legacy_fixed_len_byte_array::decode_length_prefixed_plain(
+        data,
+        num_values,
+        type_length,
+        expected_len,
+        page,
+    )
+}
+
+/// Prepare a complete FLBA data-page value section after extracting the levels.
+/// PLAIN requires exact size validation; other compliant encodings are unchanged.
+pub(crate) fn normalize_fixed_len_byte_array_data(
+    data: Bytes,
+    num_values: usize,
+    type_length: usize,
+    encoding: Encoding,
+) -> Result<(Encoding, Bytes)> {
+    match encoding {
+        Encoding::PLAIN => Ok((
+            encoding,
+            normalize_fixed_len_byte_array_payload(
+                data,
+                num_values,
+                type_length,
+                "PLAIN data page",
+            )?,
+        )),
+        Encoding::DELTA_LENGTH_BYTE_ARRAY => {
+            // Temporary mitigation only: this encoding is not defined for FLBA.
+            // Do not add support for it to the ordinary value decoders.
+            let expected_len = fixed_len_byte_array_payload_size(
+                num_values,
+                type_length,
+                "DELTA_LENGTH_BYTE_ARRAY data page",
+            )?;
+            let data = super::legacy_fixed_len_byte_array::decode_delta_length(
+                data,
+                num_values,
+                type_length,
+                expected_len,
+            )?;
+            Ok((Encoding::PLAIN, data))
+        }
+        _ => Ok((encoding, data)),
+    }
 }
 
 /// Bucket-based storage for decoder instances keyed by `Encoding`.
@@ -211,14 +258,16 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         }
 
         if encoding == Encoding::RLE_DICTIONARY {
-            if self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY {
-                validate_fixed_len_byte_array_payload(
-                    buf.len(),
+            let buf = if self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY {
+                normalize_fixed_len_byte_array_payload(
+                    buf,
                     num_values as usize,
                     self.descr.type_length() as usize,
                     "dictionary page",
-                )?;
-            }
+                )?
+            } else {
+                buf
+            };
             let mut dictionary = PlainDecoder::<T>::new(self.descr.type_length());
             dictionary.set_data(buf, num_values as usize)?;
 
@@ -533,15 +582,70 @@ mod tests {
     use rand::{prelude::*, rng};
 
     #[test]
-    fn fixed_len_payload_checked_size() {
+    fn fixed_len_payload_validation() {
+        let mut rng = StdRng::seed_from_u64(11262);
         for page in ["dictionary page", "PLAIN data page"] {
-            validate_fixed_len_byte_array_payload(12, 3, 4, page).unwrap();
-            validate_fixed_len_byte_array_payload(0, 0, 4, page).unwrap();
-            let err = validate_fixed_len_byte_array_payload(0, usize::MAX, 2, page)
+            for width in [0, 1, 4, 8, 16, 32] {
+                for count in [0, 1, 2, 33] {
+                    let raw: Bytes = (0..width * count).map(|_| rng.random::<u8>()).collect();
+                    let result =
+                        normalize_fixed_len_byte_array_payload(raw.clone(), count, width, page)
+                            .unwrap();
+                    assert_eq!(result, raw);
+                    assert_eq!(
+                        result.as_ptr(),
+                        raw.as_ptr(),
+                        "canonical data must stay zero-copy"
+                    );
+                }
+            }
+            // These are two canonical values, not one length-prefixed value.
+            let raw = Bytes::from_static(b"\x04\0\0\0abcd");
+            assert_eq!(
+                normalize_fixed_len_byte_array_payload(raw.clone(), 2, 4, page).unwrap(),
+                raw
+            );
+            // Truncated and trailing data must still be rejected.
+            for data in [b"abcdefg".as_slice(), b"abcdefghi"] {
+                assert!(
+                    normalize_fixed_len_byte_array_payload(
+                        Bytes::copy_from_slice(data),
+                        2,
+                        4,
+                        page
+                    )
+                    .is_err()
+                );
+            }
+            assert!(
+                normalize_fixed_len_byte_array_payload(Bytes::from_static(b"x"), 0, 4, page)
+                    .is_err()
+            );
+            assert!(
+                normalize_fixed_len_byte_array_payload(Bytes::new(), 1, usize::MAX, page).is_err()
+            );
+            let err = normalize_fixed_len_byte_array_payload(Bytes::new(), usize::MAX, 2, page)
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("payload size overflow"), "{err}");
             assert!(err.contains(page), "{err}");
+        }
+    }
+
+    #[test]
+    fn fixed_len_other_encodings_unchanged() {
+        // No compatibility interpretation applies to other encodings.
+        for encoding in [
+            Encoding::DELTA_BYTE_ARRAY,
+            Encoding::BYTE_STREAM_SPLIT,
+            Encoding::RLE_DICTIONARY,
+        ] {
+            let data = Bytes::from_static(b"\x04\0\0\0abcd");
+            let (actual_encoding, actual) =
+                normalize_fixed_len_byte_array_data(data.clone(), 1, 4, encoding).unwrap();
+            assert_eq!(actual_encoding, encoding);
+            assert_eq!(actual.as_ptr(), data.as_ptr());
+            assert_eq!(actual, data);
         }
     }
 

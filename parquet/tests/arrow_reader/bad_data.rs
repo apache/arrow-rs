@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tests that reading invalid parquet files returns an error
+//! Regression tests for malformed Parquet files.
+//! Historical FLBA compatibility is tested in `legacy_fixed_len_byte_array`.
 
 use arrow::compute::concat_batches;
 use arrow::util::test_util::parquet_test_data;
@@ -34,6 +35,7 @@ static KNOWN_FILES: &[&str] = &[
     "ARROW-GH-43605.parquet",
     "ARROW-RS-GH-6229-DICTHEADER.parquet",
     "ARROW-RS-GH-6229-LEVELS.parquet",
+    "ARROW-RS-GH-11261-FLBA-DICT.parquet",
     "ARROW-GH-45185.parquet",
     "ARROW-GH-47662.parquet",
     "README.md",
@@ -41,7 +43,7 @@ static KNOWN_FILES: &[&str] = &[
 ];
 
 /// Returns the path to 'parquet-testing/bad_data'
-fn bad_data_dir() -> PathBuf {
+pub(super) fn bad_data_dir() -> PathBuf {
     // points to parquet-testing/data
     let parquet_testing_data = parquet_test_data();
     PathBuf::from(parquet_testing_data)
@@ -143,7 +145,7 @@ fn test_arrow_gh_47662() {
     let err = read_file("ARROW-GH-47662.parquet").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External: Parquet argument error: Parquet error: Invalid FIXED_LEN_BYTE_ARRAY PLAIN data page payload length: expected 400 bytes (100 values of 4 bytes), got 364. Length-prefixed BYTE_ARRAY payloads are not supported."
+        "External: Parquet argument error: Parquet error: Invalid FIXED_LEN_BYTE_ARRAY PLAIN data page payload length: expected 400 bytes (100 values of 4 bytes), got 364"
     );
 }
 
