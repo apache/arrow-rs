@@ -278,6 +278,8 @@ fn add_benchmark(c: &mut Criterion) {
     add_boolean_text_benchmarks(c);
 
     let i32_array = build_array::<Int32Type>(512);
+    let i32_array_8192 = build_array::<Int32Type>(8192);
+    let bool_array: ArrayRef = Arc::new(create_boolean_array(8192, 0.1, 0.5));
     let i64_array = build_array::<Int64Type>(512);
     let f32_array = build_array::<Float32Type>(512);
     let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
@@ -337,6 +339,12 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast int32 to int64 512", |b| {
         b.iter(|| cast_array(&i32_array, DataType::Int64))
+    });
+    c.bench_function("cast int32 to bool 8192", |b| {
+        b.iter(|| cast_array(&i32_array_8192, DataType::Boolean))
+    });
+    c.bench_function("cast bool to int32 8192", |b| {
+        b.iter(|| cast_array(&bool_array, DataType::Int32))
     });
     c.bench_function("cast float32 to int32 512", |b| {
         b.iter(|| cast_array(&f32_array, DataType::Int32))
