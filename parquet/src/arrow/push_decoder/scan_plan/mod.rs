@@ -96,32 +96,37 @@ pub(crate) use super::reader_builder::Stage as ScanStage;
 /// decoding needs them.
 ///
 /// Created by [`ParquetPushDecoder::scan_plan`]. Use it to fetch data before
-/// [`DecodeResult::NeedsData`] asks for it. `NeedsData` stays the exact
-/// request.
+/// the decoder asks for it.
+///
+/// A `ScanPlan` is an estimate of the ranges that the decoder may need. The
+/// ranges in [`DecodeResult::NeedsData`] from
+/// [`ParquetPushDecoder::try_decode`] are the ranges that it actually needs.
 ///
 /// * The plan contains every range that the decoder can request after
 ///   the plan is made. It can contain more, for example ranges that a
 ///   [`RowFilter`] makes unnecessary.
+/// * The ranges are generated on demand, as you iterate. The plan does not
+///   calculate a range until you ask for it.
 /// * The plan comes from the current state of the decoder. To plan the
 ///   whole scan, call [`ParquetPushDecoder::scan_plan`] once after
-///   [`ParquetPushDecoderBuilder::build`] and keep the iterator. After
-///   [`ParquetPushDecoder::into_builder`], plan again.
+///   [`ParquetPushDecoderBuilder::build`] and keep the iterator. If you
+///   rebuild the decoder with [`ParquetPushDecoder::into_builder`], the old
+///   plan is not valid for the new decoder. Call `scan_plan` again on the new
+///   decoder.
 /// * Row groups are in read order. In a row group, the columns of the
 ///   [`RowFilter`] predicates come first, then the other output columns. The
 ///   ranges are ordered by the first row that they serve, and the ranges of
 ///   one column chunk stay in file order.
 /// * There is one range for each page if the column has an offset index,
-///   and one range for the column chunk if not.
+///   and one range for the entire column chunk if not.
 /// * The plan does not change decoding, does no I/O and does not depend
-///   on pushed data. It is lazy, and its state does not grow with the number
-///   of pages.
-/// * If a row group is not valid, the plan ends before it. The decoder
-///   reports the error.
+///   on pushed data. Its state does not grow with the number of pages.
+/// * If the decoder will return an error for a row group, the plan ends
+///   before that row group. An example is a row selection with more rows
+///   than the row group.
 ///
-/// Keep the fetched ranges in your own cache, and push exactly the ranges
-/// that `NeedsData` requests. The decoder does not use a requested range
-/// that is split over two pushed buffers, and it releases a pushed buffer
-/// only if its range is equal to a requested range.
+/// Keep the fetched ranges in your own cache, and answer each `NeedsData`
+/// with exactly the requested ranges. See [`ParquetPushDecoder::push_ranges`].
 ///
 /// # Example
 ///
@@ -184,6 +189,8 @@ pub(crate) use super::reader_builder::Stage as ScanStage;
 /// loop {
 ///     match decoder.try_decode().unwrap() {
 ///         DecodeResult::NeedsData(ranges) => {
+///             // `read` takes the data from the cache. If a range is not in
+///             // the cache, it fetches it here.
 ///             let data = ranges.iter().map(|range| read(&cache, range)).collect();
 ///             decoder.push_ranges(ranges, data).unwrap();
 ///         }
@@ -197,6 +204,8 @@ pub(crate) use super::reader_builder::Stage as ScanStage;
 /// [`DecodeResult::NeedsData`]: crate::DecodeResult::NeedsData
 /// [`ParquetPushDecoder::scan_plan`]: super::ParquetPushDecoder::scan_plan
 /// [`ParquetPushDecoder::into_builder`]: super::ParquetPushDecoder::into_builder
+/// [`ParquetPushDecoder::try_decode`]: super::ParquetPushDecoder::try_decode
+/// [`ParquetPushDecoder::push_ranges`]: super::ParquetPushDecoder::push_ranges
 /// [`ParquetPushDecoderBuilder::build`]: super::ParquetPushDecoderBuilder::build
 #[derive(Debug, Clone)]
 pub struct ScanPlan {

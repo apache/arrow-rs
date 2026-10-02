@@ -202,13 +202,8 @@ fn make_paged_test_file(num_columns: usize, pages_per_column: usize) -> Bytes {
     Bytes::from(buf)
 }
 
-type BuilderFn<'a> = Box<dyn Fn() -> ParquetPushDecoderBuilder + 'a>;
-
 /// Plan a wide file with a page index: the first range (what a read-ahead
-/// caller waits for) and the whole scan, which is one row group. For
-/// comparison, `first_reader` builds a decoder, pushes the whole file and
-/// builds the first row group reader, which includes the decoder's own
-/// per-row-group setup.
+/// caller waits for) and the whole scan, which is one row group.
 ///
 /// `all` reads every column and row. `selection` keeps 10 rows of every 100,
 /// so each column chunk reads every other page. `narrow` reads 10 columns.
@@ -225,48 +220,24 @@ fn bench_scan_plan(c: &mut Criterion) {
                 .collect::<Vec<_>>(),
         );
         let narrow = ProjectionMask::leaves(metadata.parquet_schema(), 0..10);
-        let variants: [(&str, BuilderFn); 3] = [
-            (
-                "all",
-                Box::new(|| ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())),
-            ),
-            (
-                "selection",
-                Box::new(|| {
-                    ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())
-                        .with_row_selection(selection.clone())
-                }),
-            ),
-            (
-                "narrow",
-                Box::new(|| {
-                    ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())
-                        .with_projection(narrow.clone())
-                }),
-            ),
+        let builder = || ParquetPushDecoderBuilder::new_with_metadata(metadata.clone());
+        let variants = [
+            ("all", builder()),
+            ("selection", builder().with_row_selection(selection)),
+            ("narrow", builder().with_projection(narrow)),
         ];
 
-        for (variant, builder) in &variants {
-            let decoder = builder().build().unwrap();
+        for (variant, builder) in variants {
+            let decoder = builder.build().unwrap();
             let id = format!("{variant}/{num_cols}cols_{pages}pages");
 
             group.bench_function(BenchmarkId::new("first_range", &id), |b| {
                 b.iter(|| black_box(decoder.scan_plan().next()))
             });
+            // The plan is lazy: `next` plans only the first range, and
+            // `count` forces the planning of every range.
             group.bench_function(BenchmarkId::new("whole_scan", &id), |b| {
                 b.iter(|| black_box(decoder.scan_plan().count()))
-            });
-            group.bench_function(BenchmarkId::new("first_reader", &id), |b| {
-                b.iter(|| {
-                    let mut decoder = builder().build().unwrap();
-                    decoder
-                        .push_range(0..file_data.len() as u64, file_data.clone())
-                        .unwrap();
-                    match decoder.try_next_reader().unwrap() {
-                        DecodeResult::Data(reader) => black_box(reader),
-                        other => panic!("expected a reader, got {other:?}"),
-                    };
-                })
             });
         }
     }

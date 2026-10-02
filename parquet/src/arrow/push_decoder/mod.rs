@@ -535,7 +535,16 @@ impl ParquetPushDecoder {
 
     /// Push data into the decoder for processing
     ///
-    /// This should correspond to the data ranges requested by the decoder
+    /// This should correspond to the data ranges requested by the decoder.
+    ///
+    /// If you fetch data before the decoder requests it, for example with
+    /// [`Self::scan_plan`], keep it in your own cache and push exactly the
+    /// ranges in each [`DecodeResult::NeedsData`]:
+    ///
+    /// * The decoder does not use a requested range that is split over two
+    ///   pushed buffers.
+    /// * The decoder releases a pushed buffer only if its range is equal to a
+    ///   requested range. Other pushed data stays buffered.
     pub fn push_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
