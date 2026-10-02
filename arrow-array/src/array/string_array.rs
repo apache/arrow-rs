@@ -159,7 +159,7 @@ mod tests {
     use crate::Array;
     use crate::builder::{ListBuilder, PrimitiveBuilder, StringBuilder};
     use crate::types::UInt8Type;
-    use arrow_buffer::Buffer;
+    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
     use std::sync::Arc;
@@ -548,6 +548,66 @@ mod tests {
 
         let err_return = array.into_builder().unwrap_err();
         assert_eq!(&err_return, &shared_array);
+    }
+
+    #[test]
+    fn test_into_builder_non_zero_first_offset() {
+        // Sliced, and the only owner of its buffers
+        let array: StringArray = vec!["abcde", "fgh", "ij"].into();
+        let sliced = array.slice(1, 2);
+        drop(array);
+        let err_return = sliced.into_builder().unwrap_err();
+        assert_eq!(err_return, StringArray::from(vec!["fgh", "ij"]));
+
+        // Not sliced, but there are unused bytes before the first offset and
+        // after the last offset
+        let array = StringArray::new(
+            OffsetBuffer::new(vec![3, 5, 8].into()),
+            Buffer::from(b"xxxabcdeyy"),
+            None,
+        );
+        let mut builder = array.into_builder().unwrap();
+        builder.append_value("fg");
+        assert_eq!(builder.finish(), StringArray::from(vec!["ab", "cde", "fg"]));
+    }
+
+    #[test]
+    fn test_into_builder_err_returns_original_buffers() {
+        // The offsets could be reused, but the values buffer is shared
+        let values = Buffer::from(b"abxyz");
+        let array = StringArray::new(
+            OffsetBuffer::new(vec![0, 2, 2].into()),
+            values.clone(),
+            None,
+        );
+        let offsets_ptr = array.offsets().as_ptr();
+
+        let err_return = array.into_builder().unwrap_err();
+        assert_eq!(err_return.offsets().as_ptr(), offsets_ptr);
+        assert_eq!(err_return.values(), &values);
+    }
+
+    #[test]
+    fn test_into_builder_nulls() {
+        // Reused when this array is the only owner
+        let array = StringArray::from(vec![Some("ab"), None]);
+        let nulls_ptr = array.nulls().unwrap().buffer().as_ptr();
+        let builder = array.into_builder().unwrap();
+        assert_eq!(builder.validity_slice().unwrap().as_ptr(), nulls_ptr);
+
+        // Copied when shared
+        let nulls = NullBuffer::from(vec![true, false]);
+        let array = StringArray::new(
+            OffsetBuffer::new(vec![0, 2, 2].into()),
+            Buffer::from(b"ab"),
+            Some(nulls.clone()),
+        );
+        let mut builder = array.into_builder().unwrap();
+        builder.append_value("c");
+        assert_eq!(
+            builder.finish(),
+            StringArray::from(vec![Some("ab"), None, Some("c")])
+        );
     }
 
     #[test]
