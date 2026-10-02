@@ -382,16 +382,20 @@ impl Planner {
                 && (stage != ScanStage::Predicate(0)
                     || (self.has_limit && !self.at_first_row_group));
             // The decoder reuses a column that an earlier stage read.
-            let columns: Vec<StageColumn> =
-                columns_to_fetch(fetch.projection, num_columns, |idx| planned_columns[idx])
-                    .map(|column_idx| {
+            // `columns_to_fetch` filters, so it gives no size hint. Reserve
+            // for every column to avoid growing the vector one column at a time.
+            let mut columns = Vec::with_capacity(num_columns);
+            columns.extend(
+                columns_to_fetch(fetch.projection, num_columns, |idx| planned_columns[idx]).map(
+                    |column_idx| {
                         let (chunk_start, chunk_len) = row_group.column(column_idx).byte_range();
                         StageColumn {
                             column_idx,
                             chunk: chunk_start..chunk_start + chunk_len,
                         }
-                    })
-                    .collect();
+                    },
+                ),
+            );
             for column in &columns {
                 planned_columns[column.column_idx] = true;
             }

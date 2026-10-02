@@ -179,6 +179,7 @@ impl InMemoryRowGroup<'_> {
 ///
 /// A decoding stage of a row group does not fetch a column that an earlier
 /// stage of the same row group read.
+#[inline]
 pub(crate) fn columns_to_fetch<'a>(
     projection: &'a ProjectionMask,
     num_columns: usize,
