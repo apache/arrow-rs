@@ -34,9 +34,9 @@ use arrow_array::{ArrayRef, RecordBatch, UInt32Array};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::coalesce::BatchCoalescer;
 use criterion::{Criterion, criterion_group, criterion_main};
-use std::hint::black_box;
 use foldhash::fast::FixedState;
 use std::hash::BuildHasher;
+use std::hint::black_box;
 use std::mem;
 use std::sync::Arc;
 
