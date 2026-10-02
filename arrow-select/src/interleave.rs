@@ -321,39 +321,60 @@ fn interleave_views_compact<T: ByteViewType, const PRESERVE_SHARING: bool>(
         .iter()
         .map(|&size| Vec::with_capacity(size))
         .collect();
-    let mut current_buffer = 0;
-    for (raw, &(source, row)) in views.iter_mut().zip(indices) {
-        let mut view = ByteView::from(*raw);
-        if view.length <= MAX_INLINE_VIEW_LEN {
-            continue;
-        }
-        let array = arrays[source];
-        let buffer = if PRESERVE_SHARING {
-            let buffer = &mut buffers[view.buffer_index as usize];
-            // First occurrences fill consecutive offsets. Repeated ranges point
-            // behind the write cursor and have already been copied.
-            if view.offset as usize != buffer.len() {
+    if !PRESERVE_SHARING && buffers.len() == 1 {
+        let buffer = &mut buffers[0];
+        for (raw, &(source, _)) in views.iter_mut().zip(indices) {
+            let view = ByteView::from(*raw);
+            if view.length <= MAX_INLINE_VIEW_LEN {
                 continue;
             }
-            view = ByteView::from(array.views()[row]);
-            buffer
-        } else {
-            // Keep source views until this pass, avoiding a second random read
-            // of the input views. Rewrite the final views in place as we copy.
-            if buffers[current_buffer].len() == block_sizes[current_buffer] {
-                current_buffer += 1;
-            }
-            let buffer = &mut buffers[current_buffer];
             *raw = view
-                .with_buffer_index(current_buffer as u32)
+                .with_buffer_index(0)
                 .with_offset(buffer.len() as u32)
                 .as_u128();
-            buffer
-        };
-        let start = view.offset as usize;
-        buffer.extend_from_slice(
-            &array.data_buffers()[view.buffer_index as usize][start..start + view.length as usize],
-        );
+            // SAFETY: the first pass checked every source index and retained
+            // this non-null source view, whose payload is valid for its array.
+            unsafe {
+                copy_view_payload(arrays.get_unchecked(source), view, buffer);
+            }
+        }
+    } else {
+        let mut current_buffer = 0;
+        for (raw, &(source, row)) in views.iter_mut().zip(indices) {
+            let mut view = ByteView::from(*raw);
+            if view.length <= MAX_INLINE_VIEW_LEN {
+                continue;
+            }
+            // SAFETY: the first pass checked every source index.
+            let array = unsafe { arrays.get_unchecked(source) };
+            let buffer = if PRESERVE_SHARING {
+                let buffer = &mut buffers[view.buffer_index as usize];
+                // First occurrences fill consecutive offsets. Repeated ranges point
+                // behind the write cursor and have already been copied.
+                if view.offset as usize != buffer.len() {
+                    continue;
+                }
+                view = ByteView::from(array.views()[row]);
+                buffer
+            } else {
+                // Keep source views until this pass, avoiding a second random read
+                // of the input views. Rewrite the final views in place as we copy.
+                if buffers[current_buffer].len() == block_sizes[current_buffer] {
+                    current_buffer += 1;
+                }
+                let buffer = &mut buffers[current_buffer];
+                *raw = view
+                    .with_buffer_index(current_buffer as u32)
+                    .with_offset(buffer.len() as u32)
+                    .as_u128();
+                buffer
+            };
+            // SAFETY: view is a non-null source view from array, either retained
+            // from the first pass or read above, so its payload range is valid.
+            unsafe {
+                copy_view_payload(array, view, buffer);
+            }
+        }
     }
     let buffers: Vec<_> = buffers.into_iter().map(Buffer::from_vec).collect();
     // SAFETY: inline views are unchanged, null views are zero, and every other
@@ -361,6 +382,29 @@ fn interleave_views_compact<T: ByteViewType, const PRESERVE_SHARING: bool>(
     Ok(Arc::new(unsafe {
         GenericByteViewArray::<T>::new_unchecked(views.into(), buffers.into(), nulls.finish())
     }))
+}
+
+/// Copies the payload addressed by a non-inline source view.
+///
+/// # Safety
+///
+/// The view must reference a valid payload range in `array`.
+#[inline]
+unsafe fn copy_view_payload<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    view: ByteView,
+    output: &mut Vec<u8>,
+) {
+    let start = view.offset as usize;
+    // SAFETY: the caller guarantees that the buffer index and payload range
+    // address valid bytes in array.
+    let bytes = unsafe {
+        array
+            .data_buffers()
+            .get_unchecked(view.buffer_index as usize)
+            .get_unchecked(start..start + view.length as usize)
+    };
+    output.extend_from_slice(bytes);
 }
 
 /// Common functionality for interleaving arrays
@@ -1551,6 +1595,22 @@ mod tests {
                     interleaver.interleave(&[&input, &ints], &[(0, 0)]),
                     Err(ArrowError::InvalidArgumentError(_))
                 ));
+            }
+        }
+    }
+
+    #[test]
+    fn test_compact_invalid_indices_panic_before_copying() {
+        let input = StringViewArray::from(vec!["valid selected long string"]);
+        for preserve in [false, true] {
+            for invalid in [(1, 0), (usize::MAX, 0), (0, 1), (0, usize::MAX)] {
+                let interleaver = Interleaver::new()
+                    .with_compact_byte_views(true)
+                    .with_preserve_byte_view_sharing(preserve);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    interleaver.interleave(&[&input], &[(0, 0), invalid])
+                }));
+                assert!(result.is_err(), "{invalid:?}, preserve={preserve}");
             }
         }
     }

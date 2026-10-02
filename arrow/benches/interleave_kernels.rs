@@ -85,7 +85,7 @@ fn bench_byte_view_compaction(c: &mut Criterion) {
                 b.iter(|| {
                     let selected = interleave(&values, indices).unwrap();
                     let selected = selected.as_any().downcast_ref::<StringViewArray>().unwrap();
-                    hint::black_box(selected.gc())
+                    hint::black_box(Arc::new(selected.gc()) as ArrayRef)
                 })
             },
         );
