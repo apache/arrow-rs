@@ -27,8 +27,7 @@ use arrow_array::*;
 use arrow_buffer::bit_mask::set_bits;
 use arrow_buffer::bit_util;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, NullBufferBuilder,
-    OffsetBuffer,
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer,
 };
 use arrow_data::transform::MutableArrayData;
 use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
@@ -256,24 +255,24 @@ fn interleave_views_compact<T: ByteViewType, const PRESERVE_SHARING: bool>(
     indices: &[(usize, usize)],
     max_buffer_size: usize,
 ) -> Result<ArrayRef, ArrowError> {
-    let arrays: Vec<_> = values
-        .iter()
-        .map(|array| array.as_byte_view::<T>())
-        .collect();
+    let interleaved = Interleave::<GenericByteViewArray<T>>::new(values, indices);
+    let arrays = &interleaved.arrays;
     let mut views = Vec::with_capacity(indices.len());
-    let mut nulls = NullBufferBuilder::new(indices.len());
     let mut block_sizes: Vec<usize> = Vec::new();
+    let mut current_size = 0;
     let mut copied =
         HashMap::<(usize, u32), usize, _>::with_hasher(ahash::RandomState::with_seeds(0, 0, 0, 0));
     for &(source, row) in indices {
         let array = arrays[source];
         let raw = array.views()[row];
-        if array.is_null(row) {
+        if interleaved
+            .nulls
+            .as_ref()
+            .is_some_and(|nulls| nulls.is_null(views.len()))
+        {
             views.push(0);
-            nulls.append_null();
             continue;
         }
-        nulls.append_non_null();
         let mut view = ByteView::from(raw);
         if view.length <= MAX_INLINE_VIEW_LEN {
             views.push(raw);
@@ -297,25 +296,25 @@ fn interleave_views_compact<T: ByteViewType, const PRESERVE_SHARING: bool>(
                 }
             }
         }
-        if block_sizes
-            .last()
-            .is_none_or(|bytes| bytes + len > max_buffer_size)
-        {
-            if block_sizes.len() > i32::MAX as usize {
-                return Err(ArrowError::OffsetOverflowError(block_sizes.len()));
+        if current_size != 0 && current_size + len > max_buffer_size {
+            let next_buffer_index = block_sizes.len() + 1;
+            if next_buffer_index > i32::MAX as usize {
+                return Err(ArrowError::OffsetOverflowError(next_buffer_index));
             }
-            block_sizes.push(0);
+            block_sizes.push(current_size);
+            current_size = 0;
         }
-        let buffer_index = (block_sizes.len() - 1) as u32;
-        let bytes = block_sizes.last_mut().unwrap();
         if PRESERVE_SHARING {
-            view.buffer_index = buffer_index;
-            view.offset = *bytes as u32;
+            view.buffer_index = block_sizes.len() as u32;
+            view.offset = current_size as u32;
         }
-        *bytes += len;
+        current_size += len;
         views.push(view.as_u128());
     }
     drop(copied);
+    if current_size != 0 {
+        block_sizes.push(current_size);
+    }
 
     let mut buffers: Vec<Vec<u8>> = block_sizes
         .iter()
@@ -380,7 +379,7 @@ fn interleave_views_compact<T: ByteViewType, const PRESERVE_SHARING: bool>(
     // SAFETY: inline views are unchanged, null views are zero, and every other
     // view addresses its copied source range with the original length and prefix.
     Ok(Arc::new(unsafe {
-        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers.into(), nulls.finish())
+        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers.into(), interleaved.nulls)
     }))
 }
 
@@ -1520,6 +1519,58 @@ mod tests {
             assert_eq!(compact.views()[0] == compact.views()[3], preserve);
             assert_eq!(compact.views()[1] == compact.views()[6], preserve);
             assert_eq!(compact.views()[4], 0);
+            compact.to_data().validate_full().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_compact_values_at_and_above_buffer_limit() {
+        let exact = "x".repeat(32);
+        let oversized = "y".repeat(33);
+        let input = StringViewArray::from(vec![
+            Some(exact.as_str()),
+            Some(oversized.as_str()),
+            Some("inline"),
+            None,
+        ]);
+        let indices = [
+            (0, 2),
+            (0, 3),
+            (0, 1),
+            (0, 2),
+            (0, 0),
+            (0, 3),
+            (0, 1),
+            (0, 0),
+        ];
+        for preserve in [false, true] {
+            let compact = if preserve {
+                interleave_views_compact::<StringViewType, true>(&[&input], &indices, 32)
+            } else {
+                interleave_views_compact::<StringViewType, false>(&[&input], &indices, 32)
+            }
+            .unwrap();
+            assert_eq!(
+                compact.as_ref(),
+                interleave(&[&input], &indices).unwrap().as_ref()
+            );
+            let compact = compact.as_string_view();
+            let expected_sizes = if preserve {
+                vec![33, 32]
+            } else {
+                vec![33, 32, 33, 32]
+            };
+            assert_eq!(
+                compact
+                    .data_buffers()
+                    .iter()
+                    .map(|buffer| buffer.len())
+                    .collect::<Vec<_>>(),
+                expected_sizes
+            );
+            for buffer in compact.data_buffers().iter() {
+                assert_eq!(buffer.len(), buffer.capacity());
+            }
             compact.to_data().validate_full().unwrap();
         }
     }
