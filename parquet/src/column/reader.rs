@@ -24,7 +24,7 @@ use crate::basic::*;
 use crate::column::reader::decoder::{
     ColumnLevelDecoder, ColumnValueDecoder, ColumnValueDecoderImpl, DefinitionLevelDecoder,
     DefinitionLevelDecoderImpl, RepetitionLevelDecoder, RepetitionLevelDecoderImpl,
-    validate_fixed_len_byte_array_payload,
+    normalize_fixed_len_byte_array_data,
 };
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
@@ -32,6 +32,7 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{ceil, num_required_bits, read_num_bytes};
 
 pub(crate) mod decoder;
+mod legacy_fixed_len_byte_array;
 
 /// Column reader for a Parquet type.
 pub enum ColumnReader {
@@ -455,8 +456,15 @@ where
 
                             let max_rep_level = self.descr.max_rep_level();
                             let max_def_level = self.descr.max_def_level();
-                            let validate_plain_fixed = encoding == Encoding::PLAIN
-                                && self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY;
+                            // PLAIN needs exact size validation. The DELTA_LENGTH_BYTE_ARRAY
+                            // case is solely for the temporary mitigation in
+                            // legacy_fixed_len_byte_array, not a supported FLBA encoding.
+                            let normalize_fixed = self.descr.physical_type()
+                                == Type::FIXED_LEN_BYTE_ARRAY
+                                && matches!(
+                                    encoding,
+                                    Encoding::PLAIN | Encoding::DELTA_LENGTH_BYTE_ARRAY
+                                );
                             let mut non_null_values = num_values as usize;
 
                             let mut offset = 0;
@@ -488,10 +496,10 @@ where
                                 )?;
                                 offset += bytes_read;
 
-                                if validate_plain_fixed {
-                                    // V1 has no non-null count. Count physical values before
-                                    // exposing any data: nulls and nested placeholders have
-                                    // no bytes in the PLAIN value section.
+                                if normalize_fixed {
+                                    // V1 has no non-null count. Both strict PLAIN validation
+                                    // and legacy repair need the physical count: nulls and
+                                    // nested placeholders have no values in the data section.
                                     let mut counter =
                                         DefinitionLevelDecoderImpl::new(max_def_level);
                                     counter.set_data(def_level_encoding, level_data.clone())?;
@@ -499,7 +507,7 @@ where
                                         counter.skip_def_levels(num_values as usize)?;
                                     if levels != num_values as usize {
                                         return Err(general_err!(
-                                            "Invalid FIXED_LEN_BYTE_ARRAY PLAIN data page: \
+                                            "Invalid FIXED_LEN_BYTE_ARRAY {encoding} data page: \
                                              expected {} definition levels, got {}",
                                             num_values,
                                             levels
@@ -514,17 +522,20 @@ where
                                     .set_data(def_level_encoding, level_data)?;
                             }
 
-                            if validate_plain_fixed {
-                                validate_fixed_len_byte_array_payload(
-                                    buf.len() - offset,
+                            let data = buf.slice(offset..);
+                            let (encoding, data) = if normalize_fixed {
+                                normalize_fixed_len_byte_array_data(
+                                    data,
                                     non_null_values,
                                     self.descr.type_length() as usize,
-                                    "PLAIN data page",
-                                )?;
-                            }
+                                    encoding,
+                                )?
+                            } else {
+                                (encoding, data)
+                            };
                             self.values_decoder.set_data(
                                 encoding,
-                                buf.slice(offset..),
+                                data,
                                 num_values as usize,
                                 None,
                             )?;
@@ -582,16 +593,17 @@ where
 
                             let data =
                                 buf.slice((rep_levels_byte_len + def_levels_byte_len) as usize..);
-                            if encoding == Encoding::PLAIN
-                                && self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY
-                            {
-                                validate_fixed_len_byte_array_payload(
-                                    data.len(),
-                                    (num_values - num_nulls) as usize,
-                                    self.descr.type_length() as usize,
-                                    "PLAIN data page",
-                                )?;
-                            }
+                            let (encoding, data) =
+                                if self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY {
+                                    normalize_fixed_len_byte_array_data(
+                                        data,
+                                        (num_values - num_nulls) as usize,
+                                        self.descr.type_length() as usize,
+                                        encoding,
+                                    )?
+                                } else {
+                                    (encoding, data)
+                                };
                             self.values_decoder.set_data(
                                 encoding,
                                 data,
@@ -684,8 +696,28 @@ mod tests {
     use crate::util::test_common::rand_gen::make_pages;
 
     #[test]
-    #[expect(deprecated, reason = "Cover legacy BIT_PACKED definition levels")]
     fn fixed_plain_payload_length_validation() {
+        check_fixed_len_byte_array_pages(
+            |raw| vec![(Encoding::PLAIN, raw.to_vec())],
+            |raw| {
+                let mut extra = raw.to_vec();
+                extra.push(0);
+                let mut malformed = vec![extra];
+                if !raw.is_empty() {
+                    malformed.push(raw[..raw.len() - 1].to_vec());
+                }
+                malformed
+            },
+        );
+    }
+
+    /// Shared page/level assertions, independent of the value representation.
+    /// Keeping the canonical test separate lets it survive removal of legacy support.
+    #[expect(deprecated, reason = "Cover legacy BIT_PACKED definition levels")]
+    pub(super) fn check_fixed_len_byte_array_pages(
+        payloads: impl Fn(&[u8]) -> Vec<(Encoding, Vec<u8>)>,
+        malformed_plain: impl Fn(&[u8]) -> Vec<Vec<u8>>,
+    ) {
         use crate::encodings::levels::LevelEncoder;
         use crate::encodings::rle::RleEncoder;
         use crate::util::bit_util::BitWriter;
@@ -755,21 +787,7 @@ mod tests {
                 .flatten()
                 .copied()
                 .collect();
-            let mut legacy = vec![];
-            for value in raw.as_chunks::<4>().0 {
-                legacy.extend_from_slice(&4_u32.to_le_bytes());
-                legacy.extend_from_slice(value);
-            }
-            if num_values == 0 {
-                // All-null pages must have an empty value section.
-                legacy.extend_from_slice(&4_u32.to_le_bytes());
-            }
-            let mut extra = raw.clone();
-            extra.push(0);
-            let mut malformed = vec![legacy, extra];
-            if !raw.is_empty() {
-                malformed.push(raw[..raw.len() - 1].to_vec());
-            }
+            let malformed = malformed_plain(&raw);
 
             for (v2, level_encoding) in [
                 (false, Encoding::RLE),
@@ -811,58 +829,61 @@ mod tests {
                         Box::new(InMemoryPageReader::new(pages)),
                     )
                 };
-                let mut reader = make_reader(vec![make_page(Encoding::PLAIN, &raw)]);
-                let (mut values, mut actual_def, mut actual_rep) = (vec![], vec![], vec![]);
-                assert_eq!(
+                for (encoding, payload) in payloads(&raw) {
+                    let payload = payload.as_slice();
+                    let mut reader = make_reader(vec![make_page(encoding, payload)]);
+                    let (mut values, mut actual_def, mut actual_rep) = (vec![], vec![], vec![]);
+                    assert_eq!(
+                        reader
+                            .read_records(
+                                usize::MAX,
+                                Some(&mut actual_def),
+                                Some(&mut actual_rep),
+                                &mut values
+                            )
+                            .unwrap(),
+                        (num_rows, num_values, num_levels)
+                    );
+                    assert_eq!(actual_def, def);
+                    assert_eq!(actual_rep, rep);
+                    assert_eq!(
+                        values.iter().map(|v| v.data()).collect::<Vec<_>>(),
+                        raw.as_chunks::<4>().0.iter().collect::<Vec<_>>()
+                    );
+
+                    let first_record_levels = if max_rep == 0 {
+                        1
+                    } else {
+                        rep.iter().skip(1).position(|&v| v == 0).unwrap() + 1
+                    };
+                    let first_record_values = if max_def == 0 {
+                        1
+                    } else {
+                        def[..first_record_levels]
+                            .iter()
+                            .filter(|&&v| v == max_def)
+                            .count()
+                    };
+                    let mut reader = make_reader(vec![make_page(encoding, payload)]);
+                    assert_eq!(reader.skip_records(1).unwrap(), 1);
+                    let mut values = vec![];
                     reader
                         .read_records(
                             usize::MAX,
-                            Some(&mut actual_def),
-                            Some(&mut actual_rep),
+                            Some(&mut vec![]),
+                            Some(&mut vec![]),
                             &mut values,
                         )
-                        .unwrap(),
-                    (num_rows, num_values, num_levels)
-                );
-                assert_eq!(actual_def, def);
-                assert_eq!(actual_rep, rep);
-                assert_eq!(
-                    values.iter().map(|v| v.data()).collect::<Vec<_>>(),
-                    raw.as_chunks::<4>().0.iter().collect::<Vec<_>>()
-                );
-
-                let first_record_levels = if max_rep == 0 {
-                    1
-                } else {
-                    rep.iter().skip(1).position(|&v| v == 0).unwrap() + 1
-                };
-                let first_record_values = if max_def == 0 {
-                    1
-                } else {
-                    def[..first_record_levels]
-                        .iter()
-                        .filter(|&&v| v == max_def)
-                        .count()
-                };
-                let mut reader = make_reader(vec![make_page(Encoding::PLAIN, &raw)]);
-                assert_eq!(reader.skip_records(1).unwrap(), 1);
-                let mut values = vec![];
-                reader
-                    .read_records(
-                        usize::MAX,
-                        Some(&mut vec![]),
-                        Some(&mut vec![]),
-                        &mut values,
-                    )
-                    .unwrap();
-                assert_eq!(
-                    values.iter().map(|v| v.data()).collect::<Vec<_>>(),
-                    raw[first_record_values * 4..]
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .collect::<Vec<_>>()
-                );
+                        .unwrap();
+                    assert_eq!(
+                        values.iter().map(|v| v.data()).collect::<Vec<_>>(),
+                        raw[first_record_values * 4..]
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .collect::<Vec<_>>()
+                    );
+                }
 
                 if !v2 && max_def != 0 && level_encoding == Encoding::RLE {
                     let mut page = make_page(Encoding::PLAIN, &raw);

@@ -35,7 +35,7 @@ use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Encoding, Type};
 use crate::column::page::PageIterator;
-use crate::column::reader::decoder::{ColumnValueDecoder, validate_fixed_len_byte_array_payload};
+use crate::column::reader::decoder::{ColumnValueDecoder, normalize_fixed_len_byte_array_payload};
 use crate::encodings::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
@@ -356,8 +356,8 @@ where
         let len = num_values as usize;
         let mut buffer = OffsetBuffer::<V>::with_capacity(0);
         if let Some(desc) = &self.flba_column_descr {
-            validate_fixed_len_byte_array_payload(
-                buf.len(),
+            let buf = normalize_fixed_len_byte_array_payload(
+                buf,
                 len,
                 desc.type_length() as usize,
                 "dictionary page",
@@ -594,11 +594,12 @@ mod tests {
                 .set_dict(Bytes::new(), 0, encoding, false)
                 .unwrap();
 
-            // The old Arrow dictionary writer emitted BYTE_ARRAY length prefixes.
-            let legacy =
-                Bytes::from_static(b"\x04\0\0\0\x04\0\0\0\x04\0\0\0\xff\xff\xff\xff\x04\0\0\0abcd");
+            // A noncanonical payload with a mismatched prefix must be rejected.
+            // Legacy acceptance is covered separately by the compatibility tests.
+            let bad_prefix =
+                Bytes::from_static(b"\x04\0\0\0\x04\0\0\0\x03\0\0\0\xff\xff\xff\xff\x04\0\0\0abcd");
             for (buf, count) in [
-                (legacy, 3),
+                (bad_prefix, 3),
                 (raw.slice(..11), 3),
                 (raw.clone(), 2),
                 (raw, 0),
