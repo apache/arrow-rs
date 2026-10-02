@@ -234,6 +234,37 @@ impl RowSelection {
         }
     }
 
+    /// Consume this selection and return a mask-backed selection.
+    ///
+    /// If this selection is already mask-backed, it is returned unchanged.
+    /// Otherwise, its selectors are converted to a bitmap, preserving all
+    /// selected and skipped rows, including trailing skips.
+    ///
+    /// This can be used to keep the result of [`Self::intersection`] or
+    /// [`Self::union`] mask-backed when the other selection is mask-backed.
+    ///
+    /// # Example
+    /// ```
+    /// use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+    ///
+    /// let selection = RowSelection::from(vec![
+    ///     RowSelector::skip(2),
+    ///     RowSelector::select(3),
+    ///     RowSelector::skip(1),
+    /// ]).force_mask();
+    ///
+    /// assert!(selection.as_mask().is_some());
+    /// assert_eq!(selection.total_row_count(), 6);
+    /// assert_eq!(selection.row_count(), 3);
+    /// ```
+    pub fn force_mask(self) -> Self {
+        if self.as_mask().is_some() {
+            self
+        } else {
+            Self::from_boolean_buffer(self.into_boolean_buffer())
+        }
+    }
+
     /// Consume the selection and return its internal storage.
     pub(crate) fn into_inner(self) -> RowSelectionInner {
         self.inner
@@ -1129,6 +1160,73 @@ mod tests {
         }
 
         filters
+    }
+
+    #[test]
+    fn test_force_mask_from_selectors() {
+        let cases = [
+            (vec![], vec![]),
+            (vec![RowSelector::select(9)], vec![true; 9]),
+            (vec![RowSelector::skip(9)], vec![false; 9]),
+            (
+                vec![
+                    RowSelector::skip(3),
+                    RowSelector::select(7),
+                    RowSelector::skip(2),
+                    RowSelector::select(1),
+                    RowSelector::skip(4),
+                ],
+                vec![
+                    false, false, false, true, true, true, true, true, true, true, false, false,
+                    true, false, false, false, false,
+                ],
+            ),
+        ];
+
+        for (selectors, bits) in cases {
+            let original = RowSelection::from(selectors);
+            let selection = original.clone().force_mask();
+            assert_eq!(selection.as_mask().unwrap(), &BooleanBuffer::from(bits));
+            assert_eq!(selection.total_row_count(), original.total_row_count());
+            assert_eq!(selection.row_count(), original.row_count());
+            assert_eq!(selection.skipped_row_count(), original.skipped_row_count());
+            assert_eq!(selection, original);
+        }
+    }
+
+    #[test]
+    fn test_force_mask_preserves_existing_mask() {
+        let mask = BooleanBuffer::from(vec![
+            false, true, false, true, true, false, true, false, false, true, false,
+        ])
+        .slice(3, 7);
+        let selection = RowSelection::from_boolean_buffer(mask.clone()).force_mask();
+        assert!(selection.as_mask().unwrap().ptr_eq(&mask));
+        assert_eq!(selection.row_count(), 4);
+
+        // Repeated conversion also preserves the buffer and its bit offset.
+        let selection = selection.force_mask();
+        assert!(selection.as_mask().unwrap().ptr_eq(&mask));
+        assert_eq!(selection.total_row_count(), 7);
+    }
+
+    #[test]
+    fn test_force_mask_preserves_bitmap_intersection() {
+        let existing = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            true, false, true, true, false, true, true, false, true,
+        ]));
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(2),
+            RowSelector::select(5),
+            RowSelector::skip(2),
+        ]);
+        let expected = existing.intersection(&selection);
+        let actual = existing.intersection(&selection.force_mask());
+
+        assert!(actual.as_mask().is_some());
+        assert_eq!(actual, expected);
+        assert_eq!(actual.total_row_count(), 9);
+        assert_eq!(actual.row_count(), 4);
     }
 
     #[test]
