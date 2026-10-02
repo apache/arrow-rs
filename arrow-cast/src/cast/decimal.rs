@@ -18,6 +18,44 @@
 use crate::cast::*;
 use crate::parse::{DecimalParseError, parse_decimal_checked};
 
+/// How to round a value that has more fractional digits than the scale of
+/// the decimal type it is converted to.
+///
+/// Used by [`CastOptions::decimal_rounding`] for casts to decimal types and by
+/// [`parse_decimal_with_rounding`](crate::parse::parse_decimal_with_rounding).
+/// Rounding is applied before the result is checked against the target
+/// precision, so whether a value fits can depend on the mode: `99.995` fits
+/// `Decimal(4, 2)` only when rounded [toward zero](Self::TowardZero).
+///
+/// | Input | Scale | [`HalfAwayFromZero`] | [`HalfToEven`] | [`TowardZero`] |
+/// |-------|-------|----------------------|----------------|----------------|
+/// | 2.5   | 0     | 3                    | 2              | 2              |
+/// | 3.5   | 0     | 4                    | 4              | 3              |
+/// | -2.5  | 0     | -3                   | -2             | -2             |
+/// | 2.51  | 0     | 3                    | 3              | 2              |
+/// | 1.005 | 2     | 1.01                 | 1.00           | 1.00           |
+///
+/// [`HalfAwayFromZero`]: Self::HalfAwayFromZero
+/// [`HalfToEven`]: Self::HalfToEven
+/// [`TowardZero`]: Self::TowardZero
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DecimalRoundingMode {
+    /// Round to the nearest value, and away from zero when exactly halfway
+    /// between two values (e.g. `2.5` to `3` and `-2.5` to `-3`).
+    ///
+    /// This is the default.
+    #[default]
+    HalfAwayFromZero,
+    /// Round to the nearest value, and to the value with an even least
+    /// significant digit when exactly halfway between two values (e.g. `2.5`
+    /// to `2` and `3.5` to `4`). Also known as banker's rounding.
+    HalfToEven,
+    /// Discard the excess digits, rounding toward zero (e.g. `2.9` to `2` and
+    /// `-2.9` to `-2`).
+    TowardZero,
+}
+
 /// A utility trait that provides checked conversions between
 /// decimal types inspired by [`NumCast`]
 pub trait DecimalCast: Sized {
@@ -207,12 +245,15 @@ where
 /// In this scenario, any value would round to zero (e.g., dividing by 10^k where k exceeds the
 /// available precision). Callers should therefore produce zero values (preserving nulls) rather
 /// than returning an error.
+///
+/// Digits removed by the downscaling are rounded according to `rounding`.
 #[expect(clippy::type_complexity)]
 fn make_downscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
     input_scale: i8,
     output_precision: u8,
     output_scale: i8,
+    rounding: DecimalRoundingMode,
 ) -> Option<(
     impl Fn(I::Native) -> Option<O::Native>,
     Option<impl Fn(I::Native) -> O::Native>,
@@ -234,17 +275,33 @@ where
     let div = max.add_wrapping(I::Native::ONE);
     let half = div.div_wrapping(I::Native::ONE.add_wrapping(I::Native::ONE));
     let half_neg = half.neg_wrapping();
+    let two = I::Native::ONE.add_wrapping(I::Native::ONE);
 
     let f_fallible = move |x: I::Native| {
         // div is >= 10 and so this cannot overflow
         let d = x.div_wrapping(div);
+        // The remainder has the sign of `x`
         let r = x.mod_wrapping(div);
 
         // Round result
-        let adjusted = match x >= I::Native::ZERO {
-            true if r >= half => d.add_wrapping(I::Native::ONE),
-            false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
-            _ => d,
+        let adjusted = match rounding {
+            DecimalRoundingMode::HalfAwayFromZero => match x >= I::Native::ZERO {
+                true if r >= half => d.add_wrapping(I::Native::ONE),
+                false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
+                _ => d,
+            },
+            DecimalRoundingMode::HalfToEven => {
+                // `div` is even, so `half` is exact: a tie rounds to the even quotient
+                let odd = !d.mod_wrapping(two).is_zero();
+                if r > half || (r == half && odd) {
+                    d.add_wrapping(I::Native::ONE)
+                } else if r < half_neg || (r == half_neg && odd) {
+                    d.sub_wrapping(I::Native::ONE)
+                } else {
+                    d
+                }
+            }
+            DecimalRoundingMode::TowardZero => d,
         };
         O::Native::from_decimal(adjusted)
     };
@@ -318,9 +375,13 @@ where
             make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)?;
         apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
     } else {
-        let Some((f, f_infallible)) =
-            make_downscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
-        else {
+        let Some((f, f_infallible)) = make_downscaler::<I, O>(
+            input_precision,
+            input_scale,
+            output_precision,
+            output_scale,
+            DecimalRoundingMode::default(),
+        ) else {
             // Scale reduction exceeds supported precision; result mathematically rounds to zero
             return Some(O::Native::ZERO);
         };
@@ -391,9 +452,13 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    if let Some((f_fallible, f_infallible)) =
-        make_downscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
-    {
+    if let Some((f_fallible, f_infallible)) = make_downscaler::<I, O>(
+        input_precision,
+        input_scale,
+        output_precision,
+        output_scale,
+        cast_options.decimal_rounding,
+    ) {
         apply_decimal_cast(
             array,
             output_precision,
@@ -552,7 +617,13 @@ pub fn parse_string_to_decimal_native<T: DecimalType>(
         ))
     };
     let scale = i8::try_from(scale).map_err(|_| overflow())?;
-    parse_decimal_checked::<T>(value_str, T::MAX_PRECISION, scale).map_err(|e| match e {
+    parse_decimal_checked::<T>(
+        value_str,
+        T::MAX_PRECISION,
+        scale,
+        DecimalRoundingMode::default(),
+    )
+    .map_err(|e| match e {
         DecimalParseError::InvalidFormat => {
             ArrowError::InvalidArgumentError(format!("Invalid decimal format: {value_str:?}"))
         }
@@ -570,10 +641,11 @@ where
     T: DecimalType,
     &'a S: StringArrayType<'a>,
 {
+    let rounding = cast_options.decimal_rounding;
     if cast_options.safe {
         let iter = from
             .iter()
-            .map(|v| parse_decimal_checked::<T>(v?, precision, scale).ok());
+            .map(|v| parse_decimal_checked::<T>(v?, precision, scale, rounding).ok());
         // Benefit:
         //     15-19% faster than appending to a PrimitiveBuilder (measured
         //     with the cast_kernels string-to-decimal benchmarks)
@@ -588,7 +660,7 @@ where
         for v in from.iter() {
             match v {
                 Some(v) => {
-                    let v = parse_decimal_checked::<T>(v, precision, scale).map_err(|e| {
+                    let v = parse_decimal_checked::<T>(v, precision, scale, rounding).map_err(|e| {
                         let reason = match e {
                             DecimalParseError::InvalidFormat => "invalid decimal format",
                             DecimalParseError::Overflow => "value does not fit",
@@ -675,12 +747,40 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: DecimalCast,
 {
+    // Dispatch once per array so that the rounding function is inlined into
+    // the loop over the values
+    let safe = cast_options.safe;
+    match cast_options.decimal_rounding {
+        DecimalRoundingMode::HalfAwayFromZero => {
+            float_to_decimal_cast::<T, D>(array, precision, scale, safe, f64::round)
+        }
+        DecimalRoundingMode::HalfToEven => {
+            float_to_decimal_cast::<T, D>(array, precision, scale, safe, f64::round_ties_even)
+        }
+        DecimalRoundingMode::TowardZero => {
+            float_to_decimal_cast::<T, D>(array, precision, scale, safe, f64::trunc)
+        }
+    }
+}
+
+fn float_to_decimal_cast<T: ArrowPrimitiveType, D>(
+    array: &PrimitiveArray<T>,
+    precision: u8,
+    scale: i8,
+    safe: bool,
+    round: impl Fn(f64) -> f64,
+) -> Result<ArrayRef, ArrowError>
+where
+    <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
+    D: DecimalType + ArrowPrimitiveType,
+    <D as ArrowPrimitiveType>::Native: DecimalCast,
+{
     let mul = 10_f64.powi(scale as i32);
 
-    if cast_options.safe {
+    if safe {
         array
             .unary_opt::<_, D>(|v| {
-                single_float_to_decimal::<D>(v.as_(), mul)
+                float_to_decimal_native::<D>(v.as_(), mul, &round)
                     .filter(|v| D::is_valid_decimal_precision(*v, precision))
             })
             .with_precision_and_scale(precision, scale)
@@ -688,7 +788,7 @@ where
     } else {
         array
             .try_unary::<_, D, _>(|v| {
-                let v = single_float_to_decimal::<D>(v.as_(), mul).ok_or_else(|| {
+                let v = float_to_decimal_native::<D>(v.as_(), mul, &round).ok_or_else(|| {
                     ArrowError::CastError(format!(
                         "Cannot cast to {}({}, {}). Overflowing on {:?}",
                         D::PREFIX,
@@ -712,7 +812,18 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: DecimalCast,
 {
-    D::Native::from_f64((mul * input).round())
+    float_to_decimal_native::<D>(input, mul, f64::round)
+}
+
+/// Scales `input` by `mul`, rounds it with `round` and converts it to the
+/// decimal native type, returning `None` if it does not fit.
+#[inline(always)]
+fn float_to_decimal_native<D>(input: f64, mul: f64, round: impl Fn(f64) -> f64) -> Option<D::Native>
+where
+    D: DecimalType,
+    D::Native: DecimalCast,
+{
+    D::Native::from_f64(round(mul * input))
 }
 
 pub(crate) fn cast_decimal_to_integer<D, T>(
