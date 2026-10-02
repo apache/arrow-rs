@@ -200,9 +200,10 @@ where
         // write the last run end to the array.
         self.append_run_end();
 
-        // reset the run index to zero.
+        // reset the run indexes to zero.
         self.current_value = None;
         self.current_run_end_index = 0;
+        self.prev_run_end_index = 0;
 
         // build the run encoded array by adding run_ends and values array as its children.
         let run_ends_array = self.run_ends_builder.finish();
@@ -331,6 +332,23 @@ mod tests {
             array.values().as_primitive::<Int16Type>().values(),
             &[1, 2, 5, 4, 6, 2]
         );
+    }
+
+    #[test]
+    fn test_reuse_after_finish() {
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Int16Type>::new();
+        builder.extend([1, 2, 3].into_iter().map(Some));
+        builder.finish();
+
+        // A single run with the same length as the previous batch
+        builder.extend([7, 7, 7].into_iter().map(Some));
+        let array = builder.finish();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.run_ends().values(), &[3]);
+        assert_eq!(array.values().as_primitive::<Int16Type>().values(), &[7]);
+
+        // Nothing appended since the last finish
+        assert_eq!(builder.finish().len(), 0);
     }
 
     #[test]
