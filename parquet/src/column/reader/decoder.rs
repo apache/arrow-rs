@@ -132,6 +132,27 @@ pub trait ColumnValueDecoder {
     ///
     /// Returns the number of values skipped
     fn skip_values(&mut self, num_values: usize) -> Result<usize>;
+
+    /// Returns an upper bound on the number of values that can still be decoded
+    /// into `out` from the current data page, or `None` if the remainder of the
+    /// page is guaranteed to fit.
+    ///
+    /// Some output buffers cannot represent an arbitrary number of values. The
+    /// clearest case is a 32 bit offset buffer, which cannot address more than
+    /// `i32::MAX` bytes of values, see
+    /// <https://github.com/apache/arrow-rs/issues/7973>. Reporting the bound
+    /// here lets the column reader shorten a batch *before* any levels are
+    /// consumed, which keeps the level and value streams in lockstep.
+    ///
+    /// `Some(0)` means not even one more value fits.
+    ///
+    /// This is called at most once per data page per batch and must not decode
+    /// any values. The default implementation returns `None`, and is compiled
+    /// away for decoders that do not override it because the column reader is
+    /// generic over this trait.
+    fn values_capacity(&self, _out: &Self::Buffer) -> Option<usize> {
+        None
+    }
 }
 
 /// Bucket-based storage for decoder instances keyed by `Encoding`.

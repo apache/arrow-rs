@@ -136,6 +136,11 @@ pub struct GenericColumnReader<R, D, V> {
 
     /// The decoder for the values
     values_decoder: V,
+
+    /// True if the last call to [`Self::read_records`] returned fewer records
+    /// than requested because the values buffer could not accept more data,
+    /// rather than because the column chunk was exhausted
+    stopped_for_capacity: bool,
 }
 
 impl<V> GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelDecoderImpl, V>
@@ -184,6 +189,7 @@ where
             num_decoded_values: 0,
             values_decoder,
             has_record_delimiter: false,
+            stopped_for_capacity: false,
         }
     }
 
@@ -234,9 +240,34 @@ where
         let mut total_levels_read = 0;
         let mut total_values_read = 0;
 
+        self.stopped_for_capacity = false;
+
+        // A repeated column can produce many values for a single record, so a
+        // value budget cannot be turned into a record budget. Only non-repeated
+        // columns are capped.
+        let cap_values = self.rep_level_decoder.is_none();
+
         while total_records_read < max_records && self.has_next()? {
-            let remaining_records = max_records - total_records_read;
+            let mut remaining_records = max_records - total_records_read;
             let remaining_levels = self.num_buffered_values - self.num_decoded_values;
+
+            // `values` may not be able to hold `remaining_records` more values,
+            // e.g. a 32 bit offset buffer whose offsets would overflow. Shorten
+            // the batch here, before any levels are consumed, so that the level
+            // and value streams stay in lockstep. For a non-repeated column a
+            // record contributes at most one value, so capping records by the
+            // value budget is always safe.
+            // https://github.com/apache/arrow-rs/issues/7973
+            if cap_values && let Some(capacity) = self.values_decoder.values_capacity(values) {
+                if capacity == 0 {
+                    self.stopped_for_capacity = true;
+                    break;
+                }
+                if capacity < remaining_records {
+                    remaining_records = capacity;
+                    self.stopped_for_capacity = true;
+                }
+            }
 
             let (records_read, levels_to_read) = match self.rep_level_decoder.as_mut() {
                 Some(reader) => {
@@ -302,6 +333,16 @@ where
         }
 
         Ok((total_records_read, total_values_read, total_levels_read))
+    }
+
+    /// Returns true if the last call to [`Self::read_records`] stopped before
+    /// `max_records` because the values buffer could not accept more data.
+    ///
+    /// Callers must not treat such a short read as an exhausted column chunk.
+    ///
+    /// See [`ColumnValueDecoder::values_capacity`].
+    pub fn stopped_for_capacity(&self) -> bool {
+        self.stopped_for_capacity
     }
 
     /// Skips over `num_records` records, where records are delimited by repetition levels of 0
