@@ -4,8 +4,9 @@
 It is not necessary to raise an issue, but it is encouraged if it is a non-trivial
 enhancement/bug.
 
-If this PR relates to an existing issue, please ensure the wording is changed from
-"Closes #NNN" to "Relates to #NNN" or "Part of #NNN" to avoid false closing an issue.
+If this PR relates to an existing issue, but does not fully resolve it, please change
+the wording below from "Closes #NNN" to "Relates to #NNN" or "Part of #NNN" to avoid
+false closing an issue.
 -->
 
 - Closes #NNN
@@ -16,6 +17,9 @@ If this PR relates to an existing issue, please ensure the wording is changed fr
 Why are you proposing this change? If this is already explained clearly in the
 issue then this section is not needed. Explaining clearly why changes are proposed
 helps reviewers understand your changes and offer better suggestions for fixes.
+
+Please try to explain the problem you are trying to solve in terms of the user-visible
+behavior, rather than the implementation.
 -->
 
 # What changes are included in this PR?
@@ -33,7 +37,7 @@ We typically require tests for all PRs in order to:
 2. Serve as another way to document the expected behavior of the code
 
 If tests are not included in your PR, please explain why (for example, are they
-covered by existing tests)?
+covered by existing tests, if so identify these tests)?
 
 If this PR claims a performance improvement, please include evidence such as
 benchmark results.
@@ -47,7 +51,7 @@ PR, or why it wasn't.
 
 <!--
 Significant user-facing changes include:
-- Breaking API change
+- Breaking public API change
 - Significant change to existing functionality (e.g. function returns something different)
 
 These need to be explicitly called out to ensure we have proper documentation if
