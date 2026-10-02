@@ -2120,6 +2120,29 @@ mod tests {
         statistics::Statistics,
     };
 
+    impl RoundTripTest {
+        /// Set bloom filter
+        fn with_bloom_filter(mut self, bloom_filter: bool) -> Self {
+            self.bloom_filter = bloom_filter;
+            self
+        }
+
+        /// Set bloom filter max ndv
+        fn with_bloom_filter_ndv(mut self, bloom_filter_ndv: u64) -> Self {
+            self.bloom_filter_ndv = Some(bloom_filter_ndv);
+            self
+        }
+
+        /// Set bloom filter position
+        fn with_bloom_filter_position(
+            mut self,
+            bloom_filter_position: BloomFilterPosition,
+        ) -> Self {
+            self.bloom_filter_position = bloom_filter_position;
+            self
+        }
+    }
+
     /// A [`PageStore`] that allocates *sparse, non-contiguous* handles and keeps
     /// blobs in a `HashMap` — nothing like the default `Vec<Bytes>`. Used to
     /// prove the writer relies only on the opaque-handle contract and never on
