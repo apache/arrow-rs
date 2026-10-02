@@ -30,7 +30,9 @@ use crate::arrow::arrow_reader::{
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
-use crate::arrow::push_decoder::scan_plan::{BudgetedReadPlan, RowBudget};
+use crate::arrow::push_decoder::scan_plan::{
+    BudgetedReadPlan, RowBudget, RowGroupFrontier, ScanPlanBuilder,
+};
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
@@ -753,6 +755,12 @@ impl RowGroupReaderBuilder {
             }
         };
         Ok(result)
+    }
+
+    /// A [`ScanPlanBuilder`] that plans the same ranges as this builder, for
+    /// the row groups in `frontier`.
+    pub(crate) fn scan_plan_builder(&self, frontier: RowGroupFrontier) -> ScanPlanBuilder {
+        ScanPlanBuilder::new(frontier, self.batch_size, Arc::clone(&self.stages))
     }
 
     /// Which columns should be cached?
