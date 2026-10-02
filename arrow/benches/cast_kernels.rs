@@ -26,7 +26,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::compute::cast;
+use arrow::compute::{CastOptions, cast, cast_with_options};
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
@@ -701,6 +701,83 @@ fn add_benchmark(c: &mut Criterion) {
         let target_type = DataType::Utf8;
         b.iter(|| cast(&timestamp_micro_utc_array, &target_type).unwrap());
     });
+
+    const ROWS: usize = 8192;
+    let mut bench =
+        |name: &str, input: ArrayRef, target: DataType, overflow: bool, modes: &[bool]| {
+            for &safe in modes {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                // Validate fixtures outside the timed loop.
+                let result = cast_with_options(input.as_ref(), &target, &options).unwrap();
+                assert_eq!(result.data_type(), &target);
+                assert_eq!(result.len(), ROWS);
+                assert_eq!(
+                    result.null_count(),
+                    if overflow { ROWS } else { input.null_count() }
+                );
+                let mode = if safe { "safe" } else { "strict" };
+                c.bench_function(&format!("{name} {mode}"), |b| {
+                    b.iter(|| {
+                        cast_with_options(
+                            hint::black_box(input.as_ref()),
+                            hint::black_box(&target),
+                            &options,
+                        )
+                        .unwrap()
+                    })
+                });
+            }
+        };
+
+    // Choose distinct conversion paths, not every source/destination pair.
+    let float32: ArrayRef = Arc::new(create_primitive_array_range::<Float32Type>(
+        ROWS,
+        0.1,
+        -9999.0..9999.0,
+    ));
+    bench(
+        "cast float32 to decimal32(7, 2) 8192 valid",
+        float32,
+        DataType::Decimal32(7, 2),
+        false,
+        &[true, false],
+    );
+    let float64: ArrayRef = Arc::new(create_primitive_array_range::<Float64Type>(
+        ROWS,
+        0.1,
+        -9999.0..9999.0,
+    ));
+    // Safe Float64 -> Decimal128 and non-finite inputs are already covered above.
+    bench(
+        "cast float64 to decimal128(20, 3) 8192 valid",
+        float64.clone(),
+        DataType::Decimal128(20, 3),
+        false,
+        &[false],
+    );
+    // Decimal256 uses a separate float-to-i256 conversion implementation.
+    bench(
+        "cast float64 to decimal256(40, -2) 8192 scale down",
+        float64,
+        DataType::Decimal256(40, -2),
+        false,
+        &[true],
+    );
+    // Direct and rounding-induced overflow share the precision-failure path.
+    // The existing non-finite benchmark already covers native conversion failure.
+    let samples = [1000.0, -1000.0, 999.75, -999.75];
+    let mut builder = Float64Builder::with_capacity(ROWS);
+    let overflow = build_array_with_samples!(builder, ROWS, 0.1, samples);
+    bench(
+        "cast float64 to decimal64(3, 0) 8192 precision overflow",
+        overflow,
+        DataType::Decimal64(3, 0),
+        true,
+        &[true],
+    );
 }
 
 criterion_group!(benches, add_benchmark);
