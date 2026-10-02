@@ -17,7 +17,7 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::{Criterion, Throughput};
+use criterion::Criterion;
 use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
@@ -688,14 +688,8 @@ fn add_benchmark(c: &mut Criterion) {
         let target_type = DataType::Utf8;
         b.iter(|| cast(&timestamp_micro_utc_array, &target_type).unwrap());
     });
-}
 
-// Keep fixture generation and correctness checks outside the timed loop. Safe
-// overflow cases process the whole array; strict overflow would stop early.
-fn integer_to_decimal_bench(c: &mut Criterion) {
     const ROWS: usize = 8192;
-    let mut group = c.benchmark_group("integer_to_decimal");
-    group.throughput(Throughput::Elements(ROWS as u64));
     let mut bench =
         |name: &str, input: ArrayRef, target: DataType, overflow: bool, modes: &[bool]| {
             for &safe in modes {
@@ -711,7 +705,7 @@ fn integer_to_decimal_bench(c: &mut Criterion) {
                     if overflow { ROWS } else { input.null_count() }
                 );
                 let mode = if safe { "safe" } else { "strict" };
-                group.bench_function(format!("{name}/{target}/{mode}"), |b| {
+                c.bench_function(&format!("{name} {mode}"), |b| {
                     b.iter(|| {
                         cast_with_options(
                             hint::black_box(input.as_ref()),
@@ -741,20 +735,28 @@ fn integer_to_decimal_bench(c: &mut Criterion) {
         10..1_000_000,
     ));
     for (name, input, target) in [
-        ("int32/valid", int32, DataType::Decimal32(9, 0)),
-        ("int64/valid", int64.clone(), DataType::Decimal128(38, 2)),
+        (
+            "cast int32 to decimal32(9, 0) 8192 valid",
+            int32,
+            DataType::Decimal32(9, 0),
+        ),
+        (
+            "cast int64 to decimal128(38, 2) 8192 valid",
+            int64.clone(),
+            DataType::Decimal128(38, 2),
+        ),
     ] {
         bench(name, input, target, false, &[true, false]);
     }
     bench(
-        "uint64/scale_down",
+        "cast uint64 to decimal256(76, -1) 8192 scale down",
         uint64,
         DataType::Decimal256(76, -1),
         false,
         &[true],
     );
     bench(
-        "int64/all_zero",
+        "cast int64 to decimal32(9, -20) 8192 all zero",
         int64,
         DataType::Decimal32(9, -20),
         false,
@@ -766,7 +768,7 @@ fn integer_to_decimal_bench(c: &mut Criterion) {
         100_000_000..1_000_000_000,
     ));
     bench(
-        "int32/precision_overflow",
+        "cast int32 to decimal32(8, 0) 8192 precision overflow",
         overflow,
         DataType::Decimal32(8, 0),
         true,
@@ -776,14 +778,13 @@ fn integer_to_decimal_bench(c: &mut Criterion) {
         (0..ROWS).map(|i| (i % 10 != 0).then_some(5_000_000_000 + i as i64)),
     ));
     bench(
-        "int64/scale_before_narrowing",
+        "cast int64 to decimal32(9, -1) 8192 scale before narrowing",
         wide,
         DataType::Decimal32(9, -1),
         false,
         &[true],
     );
-    group.finish();
 }
 
-criterion_group!(benches, add_benchmark, integer_to_decimal_bench);
+criterion_group!(benches, add_benchmark);
 criterion_main!(benches);
