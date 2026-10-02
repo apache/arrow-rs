@@ -33,7 +33,8 @@ use arrow_array::types::{Float64Type, Int32Type, TimestampNanosecondType};
 use arrow_array::{ArrayRef, RecordBatch, UInt32Array};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::coalesce::BatchCoalescer;
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use foldhash::fast::FixedState;
 use std::hash::BuildHasher;
 use std::mem;
@@ -159,8 +160,8 @@ pub fn repartition_take_push(
     batch: &RecordBatch,
     hashes: &[u64],
     output_partitions: usize,
-    partition_indices: &mut Vec<Vec<u32>>,
-    coalescers: &mut Vec<BatchCoalescer>,
+    partition_indices: &mut [Vec<u32>],
+    coalescers: &mut [BatchCoalescer],
     is_final: bool,
 ) {
     debug_assert_eq!(partition_indices.len(), output_partitions);
@@ -199,9 +200,9 @@ pub fn repartition_take_push(
     // Final batch: drain completed batches first, then flush the in-progress
     // partial buffer so the coalescer is fully consumed.
     if is_final {
-        for partition in 0..output_partitions {
-            while coalescers[partition].next_completed_batch().is_some() {}
-            coalescers[partition].finish_buffered_batch().unwrap();
+        for coalescer in coalescers.iter_mut() {
+            while coalescer.next_completed_batch().is_some() {}
+            coalescer.finish_buffered_batch().unwrap();
         }
     }
 }
