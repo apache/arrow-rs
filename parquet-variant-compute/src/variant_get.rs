@@ -516,9 +516,9 @@ mod test {
         FixedSizeListArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
         Int64Array, Int64Builder, LargeBinaryArray, LargeListArray, LargeListViewArray,
         LargeStringArray, ListArray, ListBuilder, ListViewArray, MapBuilder, NullArray,
-        NullBuilder, StringArray, StringBuilder, StringViewArray, StructArray, StructArrayAssembler,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        UnionArray,
+        NullBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
+        StructArrayAssembler, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::{CastOptions, cast};
