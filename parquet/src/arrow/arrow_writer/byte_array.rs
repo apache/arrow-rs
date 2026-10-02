@@ -401,9 +401,7 @@ impl DictEncoder {
         buffer.push(self.bit_width());
 
         let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
-        for index in &self.indices {
-            encoder.put(*index)
-        }
+        encoder.put_batch(&self.indices);
 
         self.indices.clear();
 
@@ -629,6 +627,13 @@ impl ColumnValueEncoder for ByteArrayEncoder {
                     ));
                 }
 
+                if let Some(bloom_filter) = &mut self.bloom_filter {
+                    let storage = encoder.interner.storage();
+                    for range in &storage.values {
+                        bloom_filter.insert(&storage.page[range.clone()]);
+                    }
+                }
+
                 Ok(Some(encoder.flush_dict_page()))
             }
             _ => Ok(None),
@@ -679,16 +684,18 @@ where
         }
     }
 
-    // encode the values into bloom filter if enabled
-    if let Some(bloom_filter) = &mut encoder.bloom_filter {
-        for idx in indices.clone() {
-            bloom_filter.insert(values.value(idx).as_ref());
-        }
-    }
-
+    // While a dictionary is in use the filter is populated from its distinct values in
+    // `flush_dict_page`, so each value is hashed once rather than once per row.
     match &mut encoder.dict_encoder {
         Some(dict_encoder) => dict_encoder.encode(values, indices),
-        None => encoder.fallback.encode(values, indices),
+        None => {
+            if let Some(bloom_filter) = &mut encoder.bloom_filter {
+                for idx in indices.clone() {
+                    bloom_filter.insert(values.value(idx).as_ref());
+                }
+            }
+            encoder.fallback.encode(values, indices)
+        }
     }
 }
 

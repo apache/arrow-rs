@@ -580,6 +580,31 @@ impl<'a> Parser<'a> {
     fn parse_map(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_field()?;
+        if field.is_nullable() {
+            return Err(make_error(self.val, "Map entries field cannot be nullable"));
+        }
+        if let DataType::Struct(fields) = field.data_type() {
+            if fields.len() != 2 {
+                return Err(make_error(
+                    self.val,
+                    &format!(
+                        "Map entries must contain two children, got {}",
+                        fields.len()
+                    ),
+                ));
+            }
+            if fields[0].is_nullable() {
+                return Err(make_error(self.val, "Map key field cannot be nullable"));
+            }
+        } else {
+            return Err(make_error(
+                self.val,
+                &format!(
+                    "Map entries must be a Struct type, got {}",
+                    field.data_type()
+                ),
+            ));
+        }
         self.expect_token(Token::Comma)?;
         let sorted = self.parse_map_sorted()?;
         self.expect_token(Token::RParen)?;
@@ -597,13 +622,47 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses the next RunEndEncoded (called after `RunEndEncoded` has been consumed)
-    /// E.g: RunEndEncoded("run_ends": UInt32, "values": nonnull Int32)
+    /// Parses the next RunEndEncoded (called after `RunEndEncoded` has been consumed).
+    ///
+    /// Compact form (default field names): `RunEndEncoded(non-null Int32, non-null Utf8)`
+    /// Verbose form (custom field names):  `RunEndEncoded("re": Int32, "v": non-null Utf8)`
     fn parse_run_end_encoded(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let run_ends = self.parse_field()?;
-        self.expect_token(Token::Comma)?;
-        let values = self.parse_field()?;
+
+        // Distinguish compact from verbose by peeking: verbose starts with a double-quoted name.
+        let verbose = matches!(
+            self.tokenizer.peek(),
+            Some(Ok(Token::DoubleQuotedString(_)))
+        );
+
+        let (run_ends, values) = if verbose {
+            let run_ends = self.parse_field()?;
+            if run_ends.is_nullable() {
+                return Err(make_error(
+                    self.val,
+                    "RunEndEncoded run_ends field cannot be nullable",
+                ));
+            }
+            self.expect_token(Token::Comma)?;
+            let values = self.parse_field()?;
+            (run_ends, values)
+        } else {
+            if self.parse_opt_nullable() {
+                return Err(make_error(
+                    self.val,
+                    "RunEndEncoded run_ends field cannot be nullable",
+                ));
+            }
+            let re_type = self.parse_next_type()?;
+            self.expect_token(Token::Comma)?;
+            let v_nullable = self.parse_opt_nullable();
+            let v_type = self.parse_next_type()?;
+            (
+                Field::new(Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME, re_type, false),
+                Field::new(Field::REE_VALUES_FIELD_DEFAULT_NAME, v_type, v_nullable),
+            )
+        };
+
         self.expect_token(Token::RParen)?;
         Ok(DataType::RunEndEncoded(
             Arc::new(run_ends),
@@ -1203,33 +1262,80 @@ mod test {
                 UnionFields::try_new(Vec::<i8>::new(), Vec::<Field>::new()).unwrap(),
                 UnionMode::Sparse,
             ),
-            DataType::Map(Arc::new(Field::new("Int64", DataType::Int64, true)), true),
-            DataType::Map(Arc::new(Field::new("Int64", DataType::Int64, true)), false),
-            DataType::Map(
-                Arc::new(Field::new_map(
-                    "nested_map",
-                    Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
-                    Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
-                    Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::UInt32,
                     false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
                     true,
                 )),
-                true,
-            ),
-            DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", DataType::UInt32, false)),
-                Arc::new(Field::new("values", DataType::Int32, true)),
             ),
             DataType::RunEndEncoded(
                 Arc::new(Field::new(
-                    "nested_run_end_encoded",
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
                     DataType::RunEndEncoded(
-                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
-                        Arc::new(Field::new("values", DataType::Int32, true)),
+                        Arc::new(Field::new(
+                            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                            DataType::UInt32,
+                            false,
+                        )),
+                        Arc::new(Field::new(
+                            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                            DataType::Int32,
+                            true,
+                        )),
                     ),
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
                     true,
                 )),
-                Arc::new(Field::new("values", DataType::Int32, true)),
+            ),
+            // non-default field names trigger verbose display form
+            DataType::RunEndEncoded(
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::RunEndEncoded(
+                        Arc::new(Field::new(
+                            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                            DataType::UInt32,
+                            false,
+                        )),
+                        Arc::new(Field::new(
+                            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                            DataType::Int32,
+                            true,
+                        )),
+                    ),
+                    false,
+                )),
+                Arc::new(Field::new("named_values", DataType::Int32, false)),
+            ),
+            // verbose form with non-null inner values
+            DataType::RunEndEncoded(
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::RunEndEncoded(
+                        Arc::new(Field::new(
+                            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                            DataType::UInt32,
+                            false,
+                        )),
+                        Arc::new(Field::new(
+                            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                            DataType::Int32,
+                            false,
+                        )),
+                    ),
+                    false,
+                )),
+                Arc::new(Field::new("named_values", DataType::Int32, false)),
             ),
         ]
     }
@@ -1605,6 +1711,33 @@ mod test {
             (
                 "Decimal256(0, 0)",
                 "Error Decimal256 precision must be in range [1, 76], got '0'",
+            ),
+            // REE run_ends cannot be nullable
+            (
+                r#"RunEndEncoded("re": nullable Int32, "v": non-null Utf8)"#,
+                "RunEndEncoded run_ends field cannot be nullable",
+            ),
+            (
+                r#"RunEndEncoded("re": Int32, "v": non-null Utf8)"#,
+                "RunEndEncoded run_ends field cannot be nullable",
+            ),
+            (
+                "RunEndEncoded(nullable Int32, non-null Utf8)",
+                "RunEndEncoded run_ends field cannot be nullable",
+            ),
+            // Map entries field cannot be nullable
+            (
+                r#"Map("entries": Struct("key": non-null Utf8, "value": nullable Int32), unsorted)"#,
+                "Map entries field cannot be nullable",
+            ),
+            // Map key cannot be nullable
+            (
+                r#"Map("entries": non-null Struct("key": nullable Utf8, "value": nullable Int32), unsorted)"#,
+                "Map key field cannot be nullable",
+            ),
+            (
+                r#"Map("entries": non-null Struct("key": Utf8, "value": nullable Int32), unsorted)"#,
+                "Map key field cannot be nullable",
             ),
         ];
 

@@ -40,7 +40,12 @@ pub(crate) fn common_prefix_length(a: &[u8], b: &[u8]) -> usize {
     let (a, b) = (&a[..n], &b[..n]);
 
     let mut matched = 0;
-    for (x, y) in a.chunks_exact(BLOCK).zip(b.chunks_exact(BLOCK)) {
+    for (x, y) in a
+        .as_chunks::<BLOCK>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<BLOCK>().0)
+    {
         if x != y {
             break;
         }

@@ -31,10 +31,12 @@ use std::sync::Arc;
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
 mod byte_view;
+mod fixed_size_binary;
 mod generic;
 mod primitive;
 
 use byte_view::InProgressByteViewArray;
+use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
@@ -236,6 +238,10 @@ impl BatchCoalescer {
     /// This is semantically equivalent of calling [`Self::push_batch`]
     /// with the results from [`crate::filter::filter_record_batch`]
     ///
+    /// If the number of rows that `filter` selects is already known,
+    /// [`Self::push_batch_with_filter_builder`] with
+    /// [`FilterBuilder::with_count`] avoids counting them again.
+    ///
     /// # Example
     /// ```
     /// # use arrow_array::{record_batch, BooleanArray};
@@ -260,7 +266,45 @@ impl BatchCoalescer {
         batch: RecordBatch,
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        self.push_batch_with_filtered_columns(batch, filter)
+        self.push_batch_with_filter_builder(batch, FilterBuilder::new(filter))
+    }
+
+    /// Push a batch into the Coalescer after applying the filter described by
+    /// `filter_builder`.
+    ///
+    /// This is [`Self::push_batch_with_filter`] for a [`FilterBuilder`] the
+    /// caller has already created. For example, callers that already know how
+    /// many rows the filter selects can provide that number with
+    /// [`FilterBuilder::with_count`] so that it is not counted again.
+    ///
+    /// Callers do not need to call [`FilterBuilder::optimize`]: like
+    /// [`Self::push_batch_with_filter`], this optimizes the filter when `batch`
+    /// has more than one column, or one column for which
+    /// [`FilterBuilder::is_optimize_beneficial`] returns true. A filter the
+    /// caller already optimized stays optimized.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{record_batch, BooleanArray};
+    /// # use arrow_select::coalesce::BatchCoalescer;
+    /// # use arrow_select::filter::FilterBuilder;
+    /// let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+    /// let filter = BooleanArray::from(vec![true, false, true]);
+    /// // SAFETY: the filter selects two rows
+    /// let filter_builder = unsafe { FilterBuilder::new(&filter).with_count(2) };
+    /// let mut coalescer = BatchCoalescer::new(batch.schema(), 1000);
+    /// coalescer.push_batch_with_filter_builder(batch, filter_builder).unwrap();
+    /// coalescer.finish_buffered_batch().unwrap();
+    /// let expected_batch = record_batch!(("a", Int32, [1, 3])).unwrap();
+    /// assert_eq!(coalescer.next_completed_batch().unwrap(), expected_batch);
+    /// ```
+    pub fn push_batch_with_filter_builder(
+        &mut self,
+        batch: RecordBatch,
+        filter_builder: FilterBuilder,
+    ) -> Result<(), ArrowError> {
+        let predicate = Self::filter_predicate_for_batch(&batch, filter_builder);
+        self.push_batch_with_filtered_columns(batch, &predicate)
     }
 
     /// Push a batch into the Coalescer after applying a set of indices
@@ -604,10 +648,8 @@ impl BatchCoalescer {
 impl BatchCoalescer {
     fn filter_predicate_for_batch(
         batch: &RecordBatch,
-        filter: &BooleanArray,
-        selected_count: usize,
+        mut filter_builder: FilterBuilder,
     ) -> FilterPredicate {
-        let mut filter_builder = FilterBuilder::new_with_count(filter, selected_count);
         if batch.num_columns() > 1
             || (batch.num_columns() > 0
                 && FilterBuilder::is_optimize_beneficial(batch.schema_ref().field(0).data_type()))
@@ -620,9 +662,10 @@ impl BatchCoalescer {
     fn push_batch_with_filtered_columns(
         &mut self,
         batch: RecordBatch,
-        filter: &BooleanArray,
+        predicate: &FilterPredicate,
     ) -> Result<(), ArrowError> {
-        let filter_len = filter.len();
+        let filter_len = predicate.filter_len();
+        let selected_count = predicate.count();
         let batch_num_rows = batch.num_rows();
         let batch_num_columns = batch.num_columns();
 
@@ -632,7 +675,6 @@ impl BatchCoalescer {
             )));
         }
 
-        let selected_count = filter.true_count();
         if selected_count == 0 {
             return Ok(());
         }
@@ -660,16 +702,14 @@ impl BatchCoalescer {
 
         if should_materialize_filter {
             // Use materialized filtering when sparse per-column copying is unavailable.
-            let predicate = Self::filter_predicate_for_batch(&batch, filter, selected_count);
             let filtered_batch = predicate.filter_record_batch(&batch)?;
             return self.push_batch(filtered_batch);
         }
 
-        let predicate = Self::filter_predicate_for_batch(&batch, filter, selected_count);
         let (_schema, arrays, _num_rows) = batch.into_parts();
 
         for (in_progress, array) in self.in_progress_arrays.iter_mut().zip(arrays) {
-            in_progress.copy_rows_by_filter_from(array, &predicate)?;
+            in_progress.copy_rows_by_filter_from(array, predicate)?;
         }
 
         self.buffered_rows += selected_count;
@@ -698,6 +738,9 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::Utf8View => Box::new(InProgressByteViewArray::<StringViewType>::new(batch_size)),
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
+        }
+        DataType::FixedSizeBinary(size) => {
+            Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
         }
         _ => Box::new(GenericInProgressArray::new()),
     }
@@ -783,7 +826,7 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{
         BinaryViewArray, Int32Array, Int64Array, RecordBatchOptions, StringArray, StringViewArray,
-        TimestampNanosecondArray, UInt32Array, UInt64Array, make_array,
+        TimestampNanosecondArray, UInt32Array, UInt64Array, make_array, record_batch,
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
@@ -1018,6 +1061,29 @@ mod tests {
                 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 179,
             ])
             .run();
+    }
+
+    #[test]
+    fn test_push_batch_with_filter_builder() {
+        let batch = record_batch!(("a", Int32, [1, 2, 3, 4])).unwrap();
+        // The null is not selected, so the filter selects two rows.
+        let filter = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
+        let expected = record_batch!(("a", Int32, [1, 4])).unwrap();
+
+        // SAFETY: the count matches the filter.
+        let with_count = unsafe { FilterBuilder::new(&filter).with_count(2) };
+        // The coalescer does not optimize a single primitive column itself, so
+        // this covers a predicate that only the caller optimized.
+        let optimized = FilterBuilder::new(&filter).optimize();
+        for filter_builder in [with_count, optimized] {
+            let mut coalescer = BatchCoalescer::new(batch.schema(), 10);
+            coalescer
+                .push_batch_with_filter_builder(batch.clone(), filter_builder)
+                .unwrap();
+            coalescer.finish_buffered_batch().unwrap();
+            assert_eq!(coalescer.next_completed_batch().unwrap(), expected);
+            assert!(coalescer.next_completed_batch().is_none());
+        }
     }
 
     #[test]

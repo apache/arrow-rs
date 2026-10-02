@@ -156,7 +156,7 @@ pub struct MutableArrayData<'a> {
 
     /// Variadic data buffers referenced by views.
     ///
-    /// Note this this is not stored in `_MutableArrayData` because these values
+    /// Note this is not stored in `_MutableArrayData` because these values
     /// are constant and only needed at the end, when freezing
     /// [_MutableArrayData]
     variadic_data_buffers: Vec<Buffer>,

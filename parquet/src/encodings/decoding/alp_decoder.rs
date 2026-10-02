@@ -224,7 +224,7 @@ fn parse_vector_view<Exact: AlpExact>(
     // Validate exception positions without materializing them. They are decoded
     // straight from the body when the vector is decoded; here we only enforce
     // that every position is in range so the whole page is validated up front.
-    for chunk in data[positions_start..values_start].chunks_exact(2) {
+    for chunk in data[positions_start..values_start].as_chunks::<2>().0 {
         let position = u16::from_le_bytes([chunk[0], chunk[1]]);
         if position >= num_elements {
             return Err(general_err!(
@@ -338,10 +338,15 @@ fn decode_range<Value: AlpFloat>(
         cur.exception_positions.len() / std::mem::size_of::<u16>(),
         cur.exception_values.len() / Value::Exact::WIDTH,
     );
+    #[expect(clippy::chunks_exact_to_as_chunks)]
+    // Requires using generic parameters in const operations: generic_const_exprs
+    let values_chunks = cur.exception_values.chunks_exact(Value::Exact::WIDTH);
     for (pos_chunk, value_chunk) in cur
         .exception_positions
-        .chunks_exact(std::mem::size_of::<u16>())
-        .zip(cur.exception_values.chunks_exact(Value::Exact::WIDTH))
+        .as_chunks::<{ std::mem::size_of::<u16>() }>()
+        .0
+        .iter()
+        .zip(values_chunks)
     {
         let pos = u16::from_le_bytes([pos_chunk[0], pos_chunk[1]]) as usize;
         if (lo..hi).contains(&pos) {
@@ -1129,12 +1134,16 @@ mod tests {
         assert_eq!(view.for_info.bit_width, 0);
 
         let positions: Vec<u16> = body[view.exception_positions_range()]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         let values: Vec<u64> = body[view.exception_values_range()]
-            .chunks_exact(8)
-            .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| u64::from_le_bytes(*c))
             .collect();
         assert_eq!(positions, vec![0]);
         assert_eq!(values, vec![42.5_f64.to_bits()]);

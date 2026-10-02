@@ -116,6 +116,11 @@ impl<T: DataType> DictEncoder<T> {
         self.interner.storage().uniques.len()
     }
 
+    /// Returns the distinct values interned so far, in dictionary order.
+    pub fn uniques(&self) -> &[T::T] {
+        &self.interner.storage().uniques
+    }
+
     /// Returns size of unique values (keys) in the dictionary, in bytes.
     pub fn dict_encoded_size(&self) -> usize {
         self.interner.storage().size_in_bytes
@@ -138,9 +143,7 @@ impl<T: DataType> DictEncoder<T> {
 
         // Write bit width in the first byte
         let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
-        for index in &self.indices {
-            encoder.put(*index)
-        }
+        encoder.put_batch(&self.indices);
         self.indices.clear();
         Ok(encoder.consume().into())
     }

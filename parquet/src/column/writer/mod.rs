@@ -617,12 +617,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             update_max(&self.descr, max, &mut self.column_metrics.max_column_value);
         }
 
-        // We can only set the distinct count if there are no other writes
-        if self.encoder.num_values() == 0 {
-            self.column_metrics.column_distinct_count = distinct_count;
-        } else {
-            self.column_metrics.column_distinct_count = None;
-        }
+        // Encoder counts reset per page; row metrics retain column-wide history.
+        let has_prior_data = self.column_metrics.total_rows_written != 0
+            || self.page_metrics.num_buffered_values != 0;
+        self.column_metrics.column_distinct_count =
+            if has_prior_data { None } else { distinct_count };
 
         let mut values_offset = 0;
         let mut levels_offset = 0;
@@ -826,6 +825,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let metadata = self.build_column_metadata()?;
         self.page_writer.close()?;
 
+        let write_bloom_filter = self.props.bloom_filter_for_dictionary_encoded_chunks()
+            || self.has_non_dictionary_data_page();
+        let bloom_filter = self
+            .encoder
+            .flush_bloom_filter()
+            .filter(|_| write_bloom_filter);
+
         let boundary_order = match (
             self.data_page_boundary_ascending,
             self.data_page_boundary_descending,
@@ -848,7 +854,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         Ok(ColumnCloseResult {
             bytes_written: self.column_metrics.total_bytes_written,
             rows_written: self.column_metrics.total_rows_written,
-            bloom_filter: self.encoder.flush_bloom_filter(),
+            bloom_filter,
             metadata,
             column_index,
             offset_index,
@@ -932,6 +938,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             sub_start = sub_end;
         }
         Ok(values_consumed)
+    }
+
+    fn has_non_dictionary_data_page(&self) -> bool {
+        self.encoding_stats.iter().any(|stats| {
+            matches!(
+                stats.page_type,
+                PageType::DATA_PAGE | PageType::DATA_PAGE_V2
+            ) && !matches!(
+                stats.encoding,
+                Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY
+            )
+        })
     }
 
     /// Index one past the last level of a sub-batch window that starts at
@@ -2229,6 +2247,28 @@ mod tests {
     }
 
     #[test]
+    fn test_bloom_filter_for_dictionary_encoded_chunks() {
+        fn bloom_filter_written(dictionary_enabled: bool, for_dictionary_chunks: bool) -> bool {
+            let props = Arc::new(
+                WriterProperties::builder()
+                    .set_dictionary_enabled(dictionary_enabled)
+                    .set_bloom_filter_enabled(true)
+                    .set_bloom_filter_for_dictionary_encoded_chunks(for_dictionary_chunks)
+                    .build(),
+            );
+            let mut writer =
+                get_test_column_writer::<Int32Type>(get_test_page_writer(), 0, 0, props);
+            writer.write_batch(&[1, 2, 1, 2], None, None).unwrap();
+            writer.close().unwrap().bloom_filter.is_some()
+        }
+
+        assert!(bloom_filter_written(true, true));
+        assert!(bloom_filter_written(false, true));
+        assert!(bloom_filter_written(false, false));
+        assert!(!bloom_filter_written(true, false));
+    }
+
+    #[test]
     fn test_column_writer_default_encoding_support_bool() {
         check_encoding_write_support::<BoolType>(
             WriterVersion::PARQUET_1_0,
@@ -2776,6 +2816,7 @@ mod tests {
         let props = Arc::new(
             WriterProperties::builder()
                 .set_write_page_header_statistics(true)
+                .set_data_page_row_count_limit(4)
                 .build(),
         );
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
@@ -2809,22 +2850,18 @@ mod tests {
         .unwrap();
 
         let pages = reader.collect::<Result<Vec<_>>>().unwrap();
-        assert_eq!(pages.len(), 2);
+        assert_eq!(pages.len(), 3);
 
         assert_eq!(pages[0].page_type(), PageType::DICTIONARY_PAGE);
         assert_eq!(pages[1].page_type(), PageType::DATA_PAGE);
-
-        let page_statistics = pages[1].statistics().unwrap();
-        assert_eq!(
-            page_statistics.min_bytes_opt().unwrap(),
-            1_i32.to_le_bytes()
-        );
-        assert_eq!(
-            page_statistics.max_bytes_opt().unwrap(),
-            7_i32.to_le_bytes()
-        );
-        assert_eq!(page_statistics.null_count_opt(), Some(0));
-        assert!(page_statistics.distinct_count_opt().is_none());
+        assert_eq!(pages[2].page_type(), PageType::DATA_PAGE);
+        for (page, min, max) in [(&pages[1], 1_i32, 4_i32), (&pages[2], 5_i32, 7_i32)] {
+            let stats = page.statistics().unwrap();
+            assert_eq!(stats.min_bytes_opt().unwrap(), min.to_le_bytes());
+            assert_eq!(stats.max_bytes_opt().unwrap(), max.to_le_bytes());
+            assert_eq!(stats.null_count_opt(), Some(0));
+            assert!(stats.distinct_count_opt().is_none());
+        }
     }
 
     #[test]

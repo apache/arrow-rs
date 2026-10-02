@@ -508,7 +508,6 @@ pub fn range_for_page_index(
 mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
-    use crate::file::metadata::PageIndex;
     use crate::file::properties::WriterProperties;
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringViewArray};
     use bytes::Bytes;
@@ -530,7 +529,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 2);
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }
 
     /// It is possible to feed some, but not all, of the footer into the metadata decoder
@@ -549,7 +548,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 2);
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }
 
     /// It is possible to pre-fetch some, but not all, of the necessary data
@@ -576,7 +575,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 2);
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }
 
     #[test]
@@ -622,7 +621,7 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 2);
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
-        assert!(metadata.page_index().is_some_and(PageIndex::is_complete));
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }
 
     /// Decode the metadata incrementally, but without reading the page indexes
