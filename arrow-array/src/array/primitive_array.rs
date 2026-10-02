@@ -1737,6 +1737,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// will be casted to Null
     pub fn null_if_overflow_precision(&self, precision: u8) -> Self {
         self.unary_opt::<_, T>(|v| T::is_valid_decimal_precision(v, precision).then_some(v))
+            .with_data_type(self.data_type().clone())
     }
 
     /// Returns [`Self::value`] formatted as a string
@@ -2756,6 +2757,94 @@ mod tests {
         let result = array.null_if_overflow_precision(5);
         let expected = Decimal128Array::from(vec![None, Some(123), None, None]);
         assert_eq!(result, expected);
+    }
+
+    fn check_decimal_null_if_overflow_precision_metadata<T: DecimalType>()
+    where
+        T::Native: From<i32>,
+    {
+        let build = |values: &[Option<i32>]| {
+            values
+                .iter()
+                .map(|value| value.map(T::Native::from))
+                .collect::<PrimitiveArray<T>>()
+        };
+        let values = [Some(99), Some(100), Some(-99), Some(-100), Some(0), None];
+        let expected = [Some(99), None, Some(-99), None, Some(0), None];
+        let mut cases = vec![(
+            build(&[Some(99)]).with_precision_and_scale(2, 1).unwrap(),
+            vec![Some(99)],
+            Some("9.9"),
+        )];
+        for (scale, text) in [(1, "9.9"), (0, "99"), (-1, "990")] {
+            cases.push((
+                build(&values).with_precision_and_scale(4, scale).unwrap(),
+                expected.to_vec(),
+                Some(text),
+            ));
+        }
+        let mut padded = vec![Some(777), None, Some(888)];
+        padded.extend(values);
+        padded.extend([Some(999), None]);
+        let sliced = build(&padded)
+            .with_precision_and_scale(4, 1)
+            .unwrap()
+            .slice(3, values.len());
+        assert_eq!(sliced.nulls().unwrap().offset(), 3);
+        cases.push((sliced, expected.to_vec(), Some("9.9")));
+        for values in [vec![], vec![None, None]] {
+            cases.push((
+                build(&values).with_precision_and_scale(4, 1).unwrap(),
+                values,
+                None,
+            ));
+        }
+        cases.push((build(&values), expected.to_vec(), None));
+
+        let mut outputs = Vec::new();
+        for (input, expected, text) in cases {
+            if input.scale() >= 0 {
+                input.validate_decimal_precision(input.precision()).unwrap();
+            }
+            let output = input.null_if_overflow_precision(2);
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|value| value.map(T::Native::from))
+                .collect();
+            assert_eq!(output.len(), expected.len());
+            assert_eq!(
+                output.null_count(),
+                expected.iter().filter(|v| v.is_none()).count()
+            );
+            assert_eq!(output.iter().collect::<Vec<_>>(), expected);
+            outputs.push((input, output, text));
+        }
+        for (input, output, text) in outputs {
+            assert_eq!(output.data_type(), input.data_type());
+            if let Some(text) = text {
+                assert_eq!(output.value_as_string(0), text);
+            }
+        }
+    }
+
+    #[test]
+    fn test_decimal32_null_if_overflow_precision_metadata() {
+        check_decimal_null_if_overflow_precision_metadata::<Decimal32Type>();
+    }
+
+    #[test]
+    fn test_decimal64_null_if_overflow_precision_metadata() {
+        check_decimal_null_if_overflow_precision_metadata::<Decimal64Type>();
+    }
+
+    #[test]
+    fn test_decimal128_null_if_overflow_precision_metadata() {
+        check_decimal_null_if_overflow_precision_metadata::<Decimal128Type>();
+    }
+
+    #[test]
+    fn test_decimal256_null_if_overflow_precision_metadata() {
+        check_decimal_null_if_overflow_precision_metadata::<Decimal256Type>();
     }
 
     #[test]
