@@ -401,14 +401,10 @@ impl<W: Write + Send> ArrowWriter<W> {
                     continue;
                 }
 
-                if let Some(avg_row_bytes) = current_bytes
-                    .checked_div(buffered_rows)
-                    .filter(|avg_row_bytes| *avg_row_bytes > 0)
+                let avg_row_bytes = current_bytes / buffered_rows;
+                if let Some(rows_that_fit) = (max_bytes - current_bytes).checked_div(avg_row_bytes)
                 {
                     // At this point, `current_bytes < max_bytes` (checked above)
-                    let remaining_bytes = max_bytes - current_bytes;
-                    let rows_that_fit = remaining_bytes.checked_div(avg_row_bytes).unwrap_or(0);
-
                     if candidate_rows > rows_that_fit {
                         if rows_that_fit > 0 {
                             split_at = Some(rows_that_fit);

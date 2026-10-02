@@ -20,7 +20,6 @@ name = "parquet"
 version = { workspace = true }
 license = { workspace = true }
 description = "Apache Parquet implementation in Rust"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "hadoop"]
@@ -341,6 +340,11 @@ harness = false
 [[bench]]
 name = "arrow_reader_peak_memory"
 required-features = ["arrow", "test_common", "experimental"]
+harness = false
+
+[[bench]]
+name = "arrow_writer_peak_memory"
+required-features = ["arrow"]
 harness = false
 
 [lib]
