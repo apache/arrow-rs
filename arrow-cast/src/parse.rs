@@ -1613,7 +1613,13 @@ impl Interval {
                     ))
                 })?;
 
-                let days = amount.frac * 3 / 10_i64.pow(INTERVAL_PRECISION - 1);
+                // 30 days per month. The leftover fraction of a day is nanoseconds:
+                // rem * 86_400e9 / 10^14 = rem * 108 / 125.
+                // 0.01 month is 7 hours 12 minutes, not a zero interval.
+                let scale = 10_i64.pow(INTERVAL_PRECISION - 1);
+                let scaled = amount.frac * 3;
+                let days = scaled / scale;
+                let nanos = (scaled % scale) * 108 / 125;
                 let days = days.try_into().map_err(|_| {
                     ArrowError::ParseError(format!(
                         "Unable to represent {} months as days in a signed 32-bit integer",
@@ -1624,7 +1630,7 @@ impl Interval {
                 Self::new(
                     self.months.add_checked(months)?,
                     self.days.add_checked(days)?,
-                    self.nanos,
+                    self.nanos.add_checked(nanos)?,
                 )
             }
             IntervalUnit::Week => {
@@ -2465,6 +2471,21 @@ mod tests {
         assert_eq!(
             Interval::new(0i32, -15i32, 0),
             Interval::parse("-.5 months", &config).unwrap(),
+        );
+
+        assert_eq!(
+            Interval::new(0, 0, 7 * NANOS_PER_HOUR + 12 * NANOS_PER_MINUTE),
+            Interval::parse("0.01 months", &config).unwrap(),
+        );
+
+        assert_eq!(
+            Interval::new(0, 1, 4 * NANOS_PER_HOUR + 48 * NANOS_PER_MINUTE),
+            Interval::parse("0.04 months", &config).unwrap(),
+        );
+
+        assert_eq!(
+            Interval::new(0, 0, -(7 * NANOS_PER_HOUR + 12 * NANOS_PER_MINUTE)),
+            Interval::parse("-0.01 months", &config).unwrap(),
         );
 
         assert_eq!(
