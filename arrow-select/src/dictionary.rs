@@ -17,6 +17,8 @@
 
 //! Dictionary utilities for Arrow arrays
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use crate::filter::filter;
@@ -24,12 +26,12 @@ use crate::interleave::interleave;
 use ahash::RandomState;
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, ArrowPrimitiveType, BinaryType, ByteArrayType, LargeBinaryType,
-    LargeUtf8Type, Utf8Type,
+    ArrowDictionaryKeyType, ArrowPrimitiveType, BinaryType, ByteArrayType, ByteViewType,
+    LargeBinaryType, LargeUtf8Type, Utf8Type,
 };
 use arrow_array::{
     AnyDictionaryArray, Array, ArrayRef, ArrowNativeTypeOp, BooleanArray, DictionaryArray,
-    GenericByteArray, PrimitiveArray, downcast_dictionary_array,
+    GenericByteArray, GenericByteViewArray, PrimitiveArray, downcast_dictionary_array,
 };
 use arrow_array::{cast::AsArray, downcast_primitive};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, ScalarBuffer, ToByteSlice};
@@ -140,6 +142,10 @@ impl<'a, V> Interner<'a, V> {
     }
 }
 
+/// For each referenced value of a dictionary, its index within that dictionary's
+/// values and its bytes (`None` for a null value)
+type MaskedValues<'a> = Vec<(usize, Option<&'a [u8]>)>;
+
 pub(crate) struct MergedDictionaries<K: ArrowDictionaryKeyType> {
     /// Provides `key_mappings[`array_idx`][`old_key`] -> new_key`
     pub key_mappings: Vec<Vec<K::Native>>,
@@ -187,6 +193,9 @@ pub(crate) fn should_merge_dictionary_values<K: ArrowDictionaryKeyType>(
         LargeUtf8 => bytes_ptr_eq::<LargeUtf8Type>,
         Binary => bytes_ptr_eq::<BinaryType>,
         LargeBinary => bytes_ptr_eq::<LargeBinaryType>,
+        // View arrays are compared through their `ArrayData`, which covers both
+        // the views buffer and the data buffers they point into
+        Utf8View | BinaryView => |a, b| a.to_data().ptr_eq(&b.to_data()),
         dt => {
             if !dt.is_primitive() {
                 return (
@@ -257,13 +266,84 @@ pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
         values_arrays.push(values)
     }
 
-    // Map from value to new index
-    let mut interner = Interner::new(num_values);
     // Interleave indices for new values array
     let mut indices = Vec::with_capacity(num_values);
 
-    // Compute the mapping for each dictionary
-    let key_mappings = dictionaries
+    // Map from value to new index, best-effort: a hash collision evicts the
+    // previous occupant, so the same value may be assigned more than one key
+    let mut interner = Interner::new(num_values);
+    let interned = compute_key_mappings(
+        dictionaries,
+        &value_slices,
+        |dictionary_idx, value_idx, value| {
+            interner
+                .intern(value, || match K::Native::from_usize(indices.len()) {
+                    Some(idx) => {
+                        indices.push((dictionary_idx, value_idx));
+                        Ok(idx)
+                    }
+                    None => Err(ArrowError::DictionaryKeyOverflowError),
+                })
+                .copied()
+        },
+    );
+
+    let key_mappings = match interned {
+        Ok(key_mappings) => key_mappings,
+        // The duplicates left behind by the interner's hash collisions can push
+        // the output past what the key type can address even though the distinct
+        // values would have fit. Retry with exact deduplication, which allocates
+        // exactly one key per distinct value at the cost of a hash map.
+        //
+        // Dictionaries don't promise unique values, so there is no cheap way to
+        // tell this case apart from a genuine overflow beforehand: when the
+        // distinct values really don't fit, this second pass runs in full and
+        // returns the same error the first pass did.
+        Err(ArrowError::DictionaryKeyOverflowError) => {
+            indices.clear();
+            // Left unsized: it holds at most one entry per addressable key, which
+            // is far fewer than `num_values` whenever this path is reached
+            let mut seen: HashMap<Option<&[u8]>, K::Native, RandomState> =
+                HashMap::with_hasher(RandomState::with_seeds(0, 0, 0, 0));
+            compute_key_mappings(
+                dictionaries,
+                &value_slices,
+                |dictionary_idx, value_idx, value| match seen.entry(value) {
+                    Entry::Occupied(entry) => Ok(*entry.get()),
+                    Entry::Vacant(entry) => {
+                        let idx = K::Native::from_usize(indices.len())
+                            .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+                        indices.push((dictionary_idx, value_idx));
+                        Ok(*entry.insert(idx))
+                    }
+                },
+            )?
+        }
+        Err(e) => return Err(e),
+    };
+
+    Ok(MergedDictionaries {
+        key_mappings,
+        values: interleave(&values_arrays, &indices)?,
+    })
+}
+
+/// Assign a key in the merged values array to every referenced value of every
+/// dictionary, returning `key_mappings[array_idx][old_key] -> new_key`.
+///
+/// `assign_key` is called once per referenced value with its dictionary index,
+/// its index within that dictionary's values, and its bytes, and returns the key
+/// that value takes in the merged output.
+fn compute_key_mappings<'a, K, F>(
+    dictionaries: &[&DictionaryArray<K>],
+    value_slices: &[MaskedValues<'a>],
+    mut assign_key: F,
+) -> Result<Vec<Vec<K::Native>>, ArrowError>
+where
+    K: ArrowDictionaryKeyType,
+    F: FnMut(usize, usize, Option<&'a [u8]>) -> Result<K::Native, ArrowError>,
+{
+    dictionaries
         .iter()
         .enumerate()
         .zip(value_slices)
@@ -272,23 +352,11 @@ pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
             let mut mapping = vec![zero; dictionary.values().len()];
 
             for (value_idx, value) in values {
-                mapping[value_idx] =
-                    *interner.intern(value, || match K::Native::from_usize(indices.len()) {
-                        Some(idx) => {
-                            indices.push((dictionary_idx, value_idx));
-                            Ok(idx)
-                        }
-                        None => Err(ArrowError::DictionaryKeyOverflowError),
-                    })?;
+                mapping[*value_idx] = assign_key(dictionary_idx, *value_idx, *value)?;
             }
             Ok(mapping)
         })
-        .collect::<Result<Vec<_>, ArrowError>>()?;
-
-    Ok(MergedDictionaries {
-        key_mappings,
-        values: interleave(&values_arrays, &indices)?,
-    })
+        .collect()
 }
 
 /// Return a mask identifying the values that are referenced by keys in `dictionary`
@@ -338,27 +406,43 @@ macro_rules! masked_primitive_to_bytes_helper {
 }
 
 /// Return a Vec containing for each set index in `mask`, the index and byte value of that index
-fn get_masked_values<'a>(
-    array: &'a dyn Array,
-    mask: &BooleanBuffer,
-) -> Vec<(usize, Option<&'a [u8]>)> {
+fn get_masked_values<'a>(array: &'a dyn Array, mask: &BooleanBuffer) -> MaskedValues<'a> {
     downcast_primitive! {
         array.data_type() => (masked_primitive_to_bytes_helper, array, mask),
         DataType::Utf8 => masked_bytes(array.as_string::<i32>(), mask),
         DataType::LargeUtf8 => masked_bytes(array.as_string::<i64>(), mask),
         DataType::Binary => masked_bytes(array.as_binary::<i32>(), mask),
         DataType::LargeBinary => masked_bytes(array.as_binary::<i64>(), mask),
+        DataType::Utf8View => masked_byte_views(array.as_string_view(), mask),
+        DataType::BinaryView => masked_byte_views(array.as_binary_view(), mask),
         _ => unimplemented!("Dictionary merging for type {} is not implemented", array.data_type()),
     }
 }
 
 /// Compute [`get_masked_values`] for a [`GenericByteArray`]
 ///
-/// Note: this does not check the null mask and will return values contained in null slots
+/// Note: values in null slots are reported as `None`, not as their contents
 fn masked_bytes<'a, T: ByteArrayType>(
     array: &'a GenericByteArray<T>,
     mask: &BooleanBuffer,
-) -> Vec<(usize, Option<&'a [u8]>)> {
+) -> MaskedValues<'a> {
+    let mut out = Vec::with_capacity(mask.count_set_bits());
+    for idx in mask.set_indices() {
+        out.push((
+            idx,
+            array.is_valid(idx).then_some(array.value(idx).as_ref()),
+        ))
+    }
+    out
+}
+
+/// Compute [`get_masked_values`] for a [`GenericByteViewArray`]
+///
+/// Note: values in null slots are reported as `None`, not as their contents
+fn masked_byte_views<'a, T: ByteViewType>(
+    array: &'a GenericByteViewArray<T>,
+    mask: &BooleanBuffer,
+) -> MaskedValues<'a> {
     let mut out = Vec::with_capacity(mask.count_set_bits());
     for idx in mask.set_indices() {
         out.push((
@@ -379,6 +463,57 @@ mod tests {
     use arrow_array::{DictionaryArray, Int8Array, Int32Array, StringArray};
     use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
     use std::sync::Arc;
+
+    use arrow_array::types::UInt8Type;
+    use arrow_array::{StringViewArray, UInt8Array};
+
+    #[test]
+    fn merge_string_view_dictionaries_deduplicates_exactly() {
+        // Four dictionaries over the same values: 200 distinct strings, an
+        // empty string and a null. Concatenating them would need 808 keys, far
+        // past the u8 range, while the distinct values leave room to spare --
+        // so the merge has to deduplicate them exactly. At this cardinality the
+        // best-effort interner alone leaves enough duplicates behind to
+        // overflow, which forces the exact retry.
+        const DISTINCT: usize = 200;
+        let len = DISTINCT + 2;
+
+        let dictionaries: Vec<DictionaryArray<UInt8Type>> = (0..4)
+            .map(|d| {
+                let values: StringViewArray = (0..DISTINCT)
+                    .map(|i| Some(format!("value_{i:06}")))
+                    .chain([Some(String::new()), None])
+                    .collect();
+                // Offset the keys per dictionary so the merge can't rely on the
+                // arrays being laid out the same way
+                let keys =
+                    UInt8Array::from_iter_values((0..len).map(|i| ((i + d * 7919) % len) as u8));
+                DictionaryArray::<UInt8Type>::new(keys, Arc::new(values))
+            })
+            .collect();
+
+        let refs: Vec<&DictionaryArray<UInt8Type>> = dictionaries.iter().collect();
+        let merged = merge_dictionary_values(&refs, None).unwrap();
+
+        // One key per distinct value, null and empty string kept apart
+        assert_eq!(merged.values.len(), len);
+        assert_eq!(merged.values.data_type(), &DataType::Utf8View);
+        assert_eq!(merged.values.null_count(), 1);
+
+        // Every key still resolves to the value it started out with
+        let merged_values = merged.values.as_string_view();
+        for (dictionary, mapping) in dictionaries.iter().zip(&merged.key_mappings) {
+            let values = dictionary.values().as_string_view();
+            for key in dictionary.keys().values() {
+                let old_key = key.as_usize();
+                let new_key = mapping[old_key].as_usize();
+                assert_eq!(values.is_null(old_key), merged_values.is_null(new_key));
+                if values.is_valid(old_key) {
+                    assert_eq!(values.value(old_key), merged_values.value(new_key));
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_garbage_collect_i32_dictionary() {
