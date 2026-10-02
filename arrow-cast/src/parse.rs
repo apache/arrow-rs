@@ -1159,7 +1159,7 @@ fn parse_decimal_mantissa<T: DecimalType, R: DecimalRounding>(
     // Any discarded digits are below the last kept digit, so `missing <= 0`
     // here and the parity of `value` is that of the last kept digit.
     let round = can_round
-        && first_discarded_digit
+        & first_discarded_digit
             .is_some_and(|digit| R::round_up::<T>(digit, rest_discarded_non_zero, value));
     if round {
         value = if negative {
@@ -1179,10 +1179,10 @@ fn parse_decimal_mantissa<T: DecimalType, R: DecimalRounding>(
 /// Records a digit that is below the least significant digit of the result.
 #[inline(always)]
 fn discard_digit<R: DecimalRounding>(first: &mut Option<u8>, rest_non_zero: &mut bool, digit: u8) {
-    match first {
-        None => *first = Some(digit),
-        Some(_) if R::NEEDS_REST => *rest_non_zero |= digit != 0,
-        Some(_) => {}
+    if R::NEEDS_REST && first.is_some() {
+        *rest_non_zero |= digit != 0;
+    } else {
+        first.get_or_insert(digit);
     }
 }
 
