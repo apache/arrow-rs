@@ -21,9 +21,11 @@ use arrow::util::bench_util::*;
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow_array::FixedSizeBinaryArray;
-use arrow_array::builder::FixedSizeBinaryBuilder;
-use arrow_array::types::{Float64Type, Int32Type, TimestampNanosecondType};
+use arrow_array::{
+    FixedSizeBinaryArray,
+    builder::FixedSizeBinaryBuilder,
+    types::{Float64Type, Int32Type, TimestampNanosecondType},
+};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::coalesce::BatchCoalescer;
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -611,8 +613,110 @@ fn add_all_take_benchmarks(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, add_all_filter_benchmarks, add_all_take_benchmarks);
+criterion_group!(
+    benches,
+    add_all_filter_benchmarks,
+    add_all_take_benchmarks,
+    add_all_interleave_benchmarks
+);
 criterion_main!(benches);
+
+fn add_all_interleave_benchmarks(c: &mut Criterion) {
+    let batch_size = 8192;
+    let num_source_batches = 4;
+
+    // Specialized: primitive types (int32, float64, timestamp)
+    let primitive_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("int32_val", DataType::Int32, true),
+        Field::new("float_val", DataType::Float64, true),
+        Field::new(
+            "timestamp_val",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            true,
+        ),
+    ]));
+
+    // Specialized: StringView (inline ≤12 bytes) and BinaryView
+    let byte_view_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("str_view", DataType::Utf8View, true),
+        Field::new("bin_view", DataType::BinaryView, true),
+    ]));
+
+    // Specialized: FixedSizeBinary
+    let fsb_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("fsb16_val", DataType::FixedSizeBinary(16), true),
+        Field::new("fsb32_val", DataType::FixedSizeBinary(32), true),
+    ]));
+
+    // Generic path: Utf8, Boolean, Dictionary
+    let generic_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("utf8_val", DataType::Utf8, true),
+        Field::new("bool_val", DataType::Boolean, true),
+        Field::new(
+            "dict_val",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ]));
+
+    // Mixed: one column of each path in a single batch — closest to real workloads
+    let mixed_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("int32_val", DataType::Int32, true),
+        Field::new("str_view", DataType::Utf8View, true),
+        Field::new("fsb16_val", DataType::FixedSizeBinary(16), true),
+        Field::new("utf8_val", DataType::Utf8, true),
+    ]));
+
+    for null_density in [0.0, 0.5] {
+        for scenario in [
+            InterleaveBenchmarkScenario {
+                name: "primitive",
+                num_output_batches: 100,
+                max_string_len: 0,
+                schema: &primitive_schema,
+            },
+            InterleaveBenchmarkScenario {
+                name: "byte_view",
+                num_output_batches: 100,
+                max_string_len: 30,
+                schema: &byte_view_schema,
+            },
+            InterleaveBenchmarkScenario {
+                name: "byte_view (all inline)",
+                num_output_batches: 100,
+                max_string_len: 12,
+                schema: &byte_view_schema,
+            },
+            InterleaveBenchmarkScenario {
+                name: "fsb",
+                num_output_batches: 100,
+                max_string_len: 0,
+                schema: &fsb_schema,
+            },
+            InterleaveBenchmarkScenario {
+                name: "generic",
+                num_output_batches: 100,
+                max_string_len: 30,
+                schema: &generic_schema,
+            },
+            InterleaveBenchmarkScenario {
+                name: "mixed",
+                num_output_batches: 100,
+                max_string_len: 30,
+                schema: &mixed_schema,
+            },
+        ] {
+            InterleaveBenchmarkBuilder::from_scenario(
+                c,
+                batch_size,
+                num_source_batches,
+                null_density,
+                scenario,
+            )
+            .build();
+        }
+    }
+}
 
 /// Run the filters with a batch_size, null_density, selectivity, and schema
 struct FilterBenchmarkBuilder<'a> {
@@ -1079,6 +1183,16 @@ impl DataStreamBuilder {
         self
     }
 
+    fn build_single_batch(&self, seed: u64) -> RecordBatch {
+        let columns = self
+            .schema
+            .fields()
+            .iter()
+            .map(|field| self.create_input_array(field, seed))
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(self.schema.clone(), columns).unwrap()
+    }
+
     /// build the data stream (not implemented yet)
     fn build(self) -> DataStream {
         let batches = (0..self.num_batches)
@@ -1201,6 +1315,173 @@ impl DataStreamBuilder {
             _ => panic!("Unsupported data type: {field:?}"),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct InterleaveBenchmarkScenario<'a> {
+    name: &'a str,
+    num_output_batches: usize,
+    max_string_len: usize,
+    schema: &'a SchemaRef,
+}
+
+struct InterleaveBenchmarkBuilder<'a> {
+    c: &'a mut Criterion,
+    name: &'a str,
+    batch_size: usize,
+    num_source_batches: usize,
+    num_output_batches: usize,
+    null_density: f32,
+    max_string_len: usize,
+    schema: &'a SchemaRef,
+}
+
+impl<'a> InterleaveBenchmarkBuilder<'a> {
+    fn from_scenario(
+        c: &'a mut Criterion,
+        batch_size: usize,
+        num_source_batches: usize,
+        null_density: f32,
+        scenario: InterleaveBenchmarkScenario<'a>,
+    ) -> Self {
+        let InterleaveBenchmarkScenario {
+            name,
+            num_output_batches,
+            max_string_len,
+            schema,
+        } = scenario;
+        Self {
+            c,
+            name,
+            batch_size,
+            num_source_batches,
+            num_output_batches,
+            null_density,
+            max_string_len,
+            schema,
+        }
+    }
+
+    fn build(self) {
+        let Self {
+            c,
+            name,
+            batch_size,
+            num_source_batches,
+            num_output_batches,
+            null_density,
+            max_string_len,
+            schema,
+        } = self;
+
+        let source_batches: Arc<[RecordBatch]> = (0..num_source_batches)
+            .map(|seed| {
+                DataStreamBuilder::new(Arc::clone(schema))
+                    .with_batch_size(batch_size)
+                    .with_null_density(null_density)
+                    .with_max_string_len(max_string_len)
+                    .build_single_batch(seed as u64)
+            })
+            .collect::<Vec<_>>()
+            .into();
+
+        let interleave_stream = InterleaveStreamBuilder {
+            batch_size,
+            num_source_batches,
+            output_len: batch_size,
+            num_batches: 11,
+        }
+        .build();
+
+        let id = format!("interleave: {name}, {batch_size}, nulls: {null_density}");
+        c.bench_function(&id, |b| {
+            b.iter(|| {
+                interleave_streams(
+                    num_output_batches,
+                    &source_batches,
+                    interleave_stream.clone(),
+                    schema,
+                    batch_size,
+                );
+            })
+        });
+    }
+}
+
+fn interleave_streams(
+    mut num_output_batches: usize,
+    source_batches: &[RecordBatch],
+    mut interleave_stream: InterleaveStream,
+    schema: &SchemaRef,
+    batch_size: usize,
+) {
+    let batch_refs: Vec<&RecordBatch> = source_batches.iter().collect();
+    let mut coalescer = BatchCoalescer::new(Arc::clone(schema), batch_size);
+    while num_output_batches > 0 {
+        let indices = interleave_stream.next_indices();
+        coalescer
+            .push_batch_interleaved(&batch_refs, indices)
+            .unwrap();
+        if coalescer.next_completed_batch().is_some() {
+            num_output_batches -= 1;
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct InterleaveStream {
+    index: usize,
+    batches: Arc<[Vec<(usize, usize)>]>,
+}
+
+impl InterleaveStream {
+    fn next_indices(&mut self) -> &[(usize, usize)] {
+        let current = self.index;
+        self.index = (self.index + 1) % self.batches.len();
+        &self.batches[current]
+    }
+}
+
+struct InterleaveStreamBuilder {
+    batch_size: usize,
+    num_source_batches: usize,
+    output_len: usize,
+    num_batches: usize,
+}
+
+impl InterleaveStreamBuilder {
+    fn build(self) -> InterleaveStream {
+        let batches = (0..self.num_batches)
+            .map(|seed| {
+                create_interleave_indices(
+                    self.batch_size,
+                    self.num_source_batches,
+                    self.output_len,
+                    seed as u64,
+                )
+            })
+            .collect::<Vec<_>>();
+        InterleaveStream {
+            index: 0,
+            batches: Arc::from(batches),
+        }
+    }
+}
+
+fn create_interleave_indices(
+    batch_size: usize,
+    num_source_batches: usize,
+    output_len: usize,
+    seed: u64,
+) -> Vec<(usize, usize)> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    (0..output_len)
+        .map(|_| {
+            let batch_idx = rng.random_range(0..num_source_batches);
+            let row_idx = rng.random_range(0..batch_size);
+            (batch_idx, row_idx)
+        })
+        .collect()
 }
 
 fn create_fixed_size_binary_array(
