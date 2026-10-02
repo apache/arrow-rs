@@ -18,7 +18,9 @@
 #[macro_use]
 extern crate criterion;
 
-use criterion::Criterion;
+mod interleave_byte_view_cases;
+
+use criterion::{BenchmarkId, Criterion, Throughput};
 use std::ops::Range;
 
 use rand::RngExt;
@@ -64,6 +66,31 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
     c.bench_function(name, |b| {
         b.iter(|| hint::black_box(interleave(values, &indices).unwrap()))
     });
+}
+
+fn bench_byte_view_compaction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("interleave_byte_view_compaction");
+    interleave_byte_view_cases::for_each_case(|case| {
+        let values: Vec<&dyn Array> = case.arrays.iter().map(|a| a as &dyn Array).collect();
+        group.throughput(Throughput::Elements(case.indices.len() as u64));
+        group.bench_with_input(
+            BenchmarkId::new("interleave", &case.name),
+            &case.indices,
+            |b, indices| b.iter(|| hint::black_box(interleave(&values, indices).unwrap())),
+        );
+        group.bench_with_input(
+            BenchmarkId::new("interleave_gc", &case.name),
+            &case.indices,
+            |b, indices| {
+                b.iter(|| {
+                    let selected = interleave(&values, indices).unwrap();
+                    let selected = selected.as_any().downcast_ref::<StringViewArray>().unwrap();
+                    hint::black_box(Arc::new(selected.gc()) as ArrayRef)
+                })
+            },
+        );
+    });
+    group.finish();
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -218,5 +245,5 @@ fn add_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, add_benchmark);
+criterion_group!(benches, add_benchmark, bench_byte_view_compaction);
 criterion_main!(benches);
