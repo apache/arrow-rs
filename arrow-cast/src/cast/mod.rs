@@ -5628,6 +5628,17 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_to_date32_with_surrounding_whitespace() {
+        let array = StringArray::from(vec![" 2026-09-29 ", "2026-09-29"]);
+
+        let result = cast(&array, &DataType::Date32).unwrap();
+        let result = result.as_primitive::<Date32Type>();
+
+        assert!(!result.is_null(0));
+        assert_eq!(result.value(0), result.value(1));
+    }
+
+    #[test]
     fn test_cast_string_to_date32() {
         let a0 = Arc::new(StringViewArray::from(vec![
             Some("2018-12-25"),
