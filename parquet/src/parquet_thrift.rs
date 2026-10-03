@@ -737,14 +737,14 @@ where
     // Each list element occupies at least one byte on the wire. Bound the
     // declared count by remaining input before reserving, so a malformed
     // header cannot abort the process with a huge allocation.
-    if let Some(remaining) = prot.remaining_bytes()
-        && size > remaining
-    {
-        return Err(general_err!(
-            "Thrift list size {} exceeds remaining input length {}",
-            size,
-            remaining
-        ));
+    if let Some(remaining) = prot.remaining_bytes() {
+        if size > remaining {
+            return Err(general_err!(
+                "Thrift list size {} exceeds remaining input length {}",
+                size,
+                remaining
+            ));
+        }
     }
     let mut res = Vec::with_capacity(size);
     for _ in 0..list_ident.size {
