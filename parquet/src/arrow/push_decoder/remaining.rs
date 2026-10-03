@@ -20,7 +20,7 @@ use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowGroupPlan};
 use crate::arrow::push_decoder::reader_builder::{
     RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
 };
-use crate::arrow::push_decoder::scan_plan::{NextRowGroup, RowBudget, RowGroupFrontier};
+use crate::arrow::push_decoder::scan_plan::{NextRowGroup, RowBudget, RowGroupFrontier, ScanPlan};
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
 use arrow_schema::SchemaRef;
@@ -45,6 +45,10 @@ pub(crate) struct RemainingRowGroups {
 
     /// State for building the reader for the current row group
     row_group_reader_builder: RowGroupReaderBuilder,
+
+    /// The row group that the reader builder is fetching, for
+    /// [`Self::scan_plan`]. `None` when the builder requests no more bytes.
+    active_row_group: Option<NextRowGroup>,
 }
 
 /// The state recovered from a [`RemainingRowGroups`] by
@@ -84,6 +88,7 @@ impl RemainingRowGroups {
                 has_predicates,
             )?,
             row_group_reader_builder,
+            active_row_group: None,
         })
     }
 
@@ -97,6 +102,7 @@ impl RemainingRowGroups {
             schema,
             frontier,
             row_group_reader_builder,
+            active_row_group: _,
         } = self;
         // `has_predicates` is recomputed by `build()` from the filter.
         let (parquet_metadata, row_group_plan, budget) = frontier.into_parts();
@@ -108,6 +114,15 @@ impl RemainingRowGroups {
             limit: budget.limit(),
             reader_builder: row_group_reader_builder.into_parts(),
         }
+    }
+
+    /// See [`super::ScanPlan`]. Plans the active row group in full, then the
+    /// row groups that the frontier has not handed over.
+    pub(super) fn scan_plan(&self) -> ScanPlan {
+        self.row_group_reader_builder
+            .scan_plan_builder(self.frontier.clone())
+            .with_active_row_group(self.active_row_group.clone())
+            .build()
     }
 
     /// Push new data buffers that can be used to satisfy pending requests
@@ -193,12 +208,14 @@ impl RemainingRowGroups {
                 // from the frontier, if any.
 
                 match self.frontier.next_readable_row_group()? {
-                    Some(NextRowGroup {
-                        row_group_idx,
-                        row_count,
-                        selection,
-                        budget,
-                    }) => {
+                    Some(next_row_group) => {
+                        self.active_row_group = Some(next_row_group.clone());
+                        let NextRowGroup {
+                            row_group_idx,
+                            row_count,
+                            selection,
+                            budget,
+                        } = next_row_group;
                         self.row_group_reader_builder.next_row_group(
                             row_group_idx,
                             row_count,
@@ -213,6 +230,7 @@ impl RemainingRowGroups {
             let row_group_idx = self.row_group_reader_builder.active_row_group_idx();
             match self.row_group_reader_builder.try_build()? {
                 RowGroupBuildResult::Finished { remaining_budget } => {
+                    self.active_row_group = None;
                     self.frontier
                         .update_budget_after_row_group(remaining_budget);
                     self.release_row_group(row_group_idx);
@@ -226,6 +244,7 @@ impl RemainingRowGroups {
                     batch_reader,
                     remaining_budget,
                 } => {
+                    self.active_row_group = None;
                     self.frontier
                         .update_budget_after_row_group(remaining_budget);
                     self.release_row_group(row_group_idx);
