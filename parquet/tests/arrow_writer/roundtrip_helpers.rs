@@ -33,26 +33,6 @@ use super::parquet_crate::file::properties::{
 
 pub(super) const SMALL_SIZE: usize = 7;
 
-// Write the batch to parquet and read it back out, ensuring
-// that what comes out is the same as what was written in
-pub(super) fn roundtrip(
-    expected_batch: RecordBatch,
-    max_row_group_size: Option<usize>,
-) -> Vec<Bytes> {
-    let mut files = vec![];
-    for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
-        let mut props = WriterProperties::builder().set_writer_version(version);
-
-        if let Some(size) = max_row_group_size {
-            props = props.set_max_row_group_row_count(Some(size))
-        }
-
-        let props = props.build();
-        files.push(roundtrip_opts(&expected_batch, props))
-    }
-    files
-}
-
 // Round trip the specified record batch with the specified writer properties,
 // to an in-memory file, and validate the arrays using the specified function.
 // Returns the in-memory file.
@@ -102,16 +82,18 @@ pub(super) fn roundtrip_opts(expected_batch: &RecordBatch, props: WriterProperti
 /// Round trip testing fixture:
 ///
 /// Tests based on this fixture write data to parquet and then read it back.
+/// Configuration fields used by suite-specific builder methods are visible to
+/// the parent module so those methods can be defined in the consuming test suite.
 pub(super) struct RoundTripTest {
     values: ArrayRef,
     /// Optionally supplied schema
-    schema: Option<SchemaRef>,
+    pub(super) schema: Option<SchemaRef>,
     /// If the created schema should be nullable. Defaults to true. Ignored
     /// if schema is set to Some.
     nullable: bool,
-    bloom_filter: bool,
-    bloom_filter_ndv: Option<u64>,
-    bloom_filter_position: BloomFilterPosition,
+    pub(super) bloom_filter: bool,
+    pub(super) bloom_filter_ndv: Option<u64>,
+    pub(super) bloom_filter_position: BloomFilterPosition,
 }
 
 impl RoundTripTest {
@@ -127,36 +109,9 @@ impl RoundTripTest {
         }
     }
 
-    /// Set the schema
-    pub(super) fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
-        self
-    }
-
     /// Set the nullable flag
     pub(super) fn with_nullable(mut self, nullable: bool) -> Self {
         self.nullable = nullable;
-        self
-    }
-
-    /// Set bloom filter
-    pub(super) fn with_bloom_filter(mut self, bloom_filter: bool) -> Self {
-        self.bloom_filter = bloom_filter;
-        self
-    }
-
-    /// Set bloom filter max ndv
-    pub(super) fn with_bloom_filter_ndv(mut self, bloom_filter_ndv: u64) -> Self {
-        self.bloom_filter_ndv = Some(bloom_filter_ndv);
-        self
-    }
-
-    /// Set bloom filter position
-    pub(super) fn with_bloom_filter_position(
-        mut self,
-        bloom_filter_position: BloomFilterPosition,
-    ) -> Self {
-        self.bloom_filter_position = bloom_filter_position;
         self
     }
 
