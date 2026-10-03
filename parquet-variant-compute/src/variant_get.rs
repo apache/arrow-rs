@@ -5014,6 +5014,36 @@ mod test {
     }
 
     #[test]
+    fn test_variant_get_list_like_null_element_in_non_nullable_item() {
+        let item_field = Arc::new(Field::new("item", Int64, false));
+        let data_types = [
+            (DataType::List(item_field.clone()), "ListArray"),
+            (DataType::LargeList(item_field.clone()), "LargeListArray"),
+            (DataType::ListView(item_field.clone()), "ListViewArray"),
+            (DataType::LargeListView(item_field), "LargeListViewArray"),
+        ];
+        // A null element, and an element that a safe cast turns into null
+        for json in ["[1, null, 3]", r#"[1, "two", 3]"#] {
+            let string_array: ArrayRef = Arc::new(StringArray::from(vec![json]));
+            let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+            for (data_type, array_name) in &data_types {
+                let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+                    "result",
+                    data_type.clone(),
+                    true,
+                ))));
+                let err = variant_get(&variant_array, options).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "Invalid argument error: Non-nullable field of {array_name} \"item\" cannot contain nulls"
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_variant_get_list_like_unsafe_cast_errors_on_non_list() {
         let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2]", "\"not a list\""]));
         let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
