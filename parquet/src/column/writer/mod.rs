@@ -49,7 +49,7 @@ use crate::file::properties::{
     WriterVersion,
 };
 use crate::file::statistics::{Statistics, ValueStatistics};
-use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor, ColumnPath};
+use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 
 mod byte_budget_chunker;
 pub(crate) mod encoder;
@@ -1978,14 +1978,10 @@ fn fallback_encoding(kind: Type, props: &WriterProperties) -> Encoding {
 }
 
 /// Returns true if dictionary is supported for column writer, false otherwise.
-fn has_dictionary_support(kind: Type, props: &WriterProperties, path: &ColumnPath) -> bool {
-    match (kind, props.writer_version()) {
+fn has_dictionary_support(kind: Type) -> bool {
+    match kind {
         // Booleans do not support dict encoding and should use a fallback encoding.
-        (Type::BOOLEAN, _) => false,
-        // Preserve the PARQUET_1_0 default, but honor an explicit opt-in.
-        (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_1_0) => {
-            props.dictionary_enabled_setting(path) == Some(true)
-        }
+        Type::BOOLEAN => false,
         _ => true,
     }
 }
@@ -2572,14 +2568,16 @@ mod tests {
 
     #[test]
     fn test_column_writer_default_encoding_support_fixed_len_byte_array() {
-        let default_props = WriterProperties::builder()
-            .set_writer_version(WriterVersion::PARQUET_1_0)
-            .build();
-        let meta = column_write_and_get_metadata::<FixedLenByteArrayType>(
-            default_props,
-            &[ByteArray::from(vec![1u8]).into()],
-        );
-        assert_eq!(meta.dictionary_page_offset(), None);
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let default_props = WriterProperties::builder()
+                .set_writer_version(version)
+                .build();
+            let meta = column_write_and_get_metadata::<FixedLenByteArrayType>(
+                default_props,
+                &[ByteArray::from(vec![1u8]).into()],
+            );
+            assert_eq!(meta.dictionary_page_offset(), Some(0));
+        }
 
         check_encoding_write_support::<FixedLenByteArrayType>(
             WriterVersion::PARQUET_1_0,
