@@ -230,6 +230,24 @@ fn shredded_get_path(
             // to shred. The builder then walks any remaining path per-row, emitting variant output
             // because `as_type` is `None`.
             let target = if requested_variant {
+                // A missing shredded object field is represented by NULL in both columns. This
+                // is distinct from an empty shredded object, whose typed value is a struct.
+                let missing_nulls = target
+                    .shredding_state()
+                    .typed_value_column()
+                    .filter(|typed| !matches!(typed.data_type(), DataType::Struct(_)))
+                    .and_then(|_| target.shredding_state().missing_nulls());
+                let target = if let Some(missing_nulls) = missing_nulls {
+                    let nulls = NullBuffer::union(target.inner().nulls(), Some(&missing_nulls));
+                    VariantArray::from_parts(
+                        target.metadata_column().clone(),
+                        target.value_column().clone(),
+                        target.typed_value_column().cloned(),
+                        nulls,
+                    )
+                } else {
+                    target
+                };
                 unshred_variant(&target)?
             } else {
                 target
@@ -2465,6 +2483,29 @@ mod test {
         let (unshredded, shredded) = create_variant_get_as_variant_test_data();
         let unshredded_field = VariantArray::try_new(&unshredded).unwrap().field("result");
         assert_variant_field_extraction_returns_unshredded_variant(&shredded, &unshredded_field);
+    }
+
+    #[test]
+    fn test_variant_get_missing_shredded_object_field_preserves_null_semantics() {
+        let input_json: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("{}"),
+            Some(r#"{"a": null}"#),
+            Some(r#"{"a": 42}"#),
+        ]));
+        let input = json_to_variant(&input_json).unwrap();
+        let schema = DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)]));
+        let shredded = shred_variant(&input, &schema).unwrap();
+        let variant_field = input.field("result");
+
+        let options = GetOptions::new_with_path(VariantPath::try_from("a").unwrap())
+            .with_as_type(Some(FieldRef::from(variant_field)));
+        let result = variant_get(&ArrayRef::from(shredded), options).unwrap();
+        let result = VariantArray::try_new(&result).unwrap();
+
+        assert!(result.is_null(0), "a missing field should be SQL NULL");
+        assert!(!result.is_null(1), "an explicit Variant null is a value");
+        assert_eq!(result.value(1), Variant::Null);
+        assert_eq!(result.value(2), Variant::Int64(42));
     }
 
     #[test]
