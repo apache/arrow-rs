@@ -86,6 +86,24 @@ impl<O: OffsetSizeTrait, const IS_VIEW: bool> ArrayDecoder for ListLikeArrayDeco
                     nulls.append_null();
                     *p + 1
                 }
+                // Promote a scalar to a single element list, matching schema inference
+                (
+                    TapeElement::String(_)
+                    | TapeElement::Number(_)
+                    | TapeElement::I64(_)
+                    | TapeElement::I32(_)
+                    | TapeElement::F64(_)
+                    | TapeElement::F32(_)
+                    | TapeElement::True
+                    | TapeElement::False,
+                    nulls,
+                ) => {
+                    if let Some(nulls) = nulls {
+                        nulls.append_non_null();
+                    }
+                    child_pos.push(*p);
+                    *p + 1
+                }
                 _ => return Err(tape.error(*p, "[")),
             };
 
