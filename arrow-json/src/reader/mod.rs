@@ -49,11 +49,11 @@
 //!
 //! # Async Usage
 //!
-//! The lower-level [`Decoder`] can be integrated with various forms of async data streams,
-//! and is designed to be agnostic to the various different kinds of async IO primitives found
+//! The lower-level [`Decoder`] can be integrated with various forms of async
+//! data streams, and can be used with any of the async IO primitives found
 //! within the Rust ecosystem.
 //!
-//! For example, see below for how it can be used with an arbitrary `Stream` of `Bytes`
+//! For example, it can be used with an arbitrary `Stream` of `Bytes` as shown below
 //!
 //! ```
 //! # use std::task::{Poll, ready};
@@ -132,6 +132,14 @@
 //! }
 //! ```
 //!
+//! # Customizing the decoder
+//!
+//! The decoding of each data type can be customized using
+//! [`ReaderBuilder::with_decoder_factory`]. For example, you can override the
+//! default decoding of binary data from hex strings to decode from an array of
+//! integers instead, or provide decoders for types with no built-in decoding.
+//! See the example on [`DecoderFactory`].
+//!
 
 use std::io::BufRead;
 use std::sync::Arc;
@@ -164,7 +172,8 @@ use crate::reader::tape::{TapeDecoder, TapeDecoderOptions};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
 pub use schema::*;
-// `mod tape` stays private so `TapeDecoder` does not become public API
+// `mod tape` is private by design: exposing only these two types means downstream can read a
+// `Tape` but not construct one, keeping `TapeDecoder` an implementation detail.
 pub use tape::{Tape, TapeElement};
 pub use value_iter::ValueIter;
 
@@ -766,20 +775,20 @@ pub trait ArrayDecoder: Send {
 /// handle. The reader-side counterpart of [`EncoderFactory`]; register an
 /// implementation with [`ReaderBuilder::with_decoder_factory`].
 ///
-/// # Examples
+/// # Example: Decode `Binary` from a JSON array of integers
 ///
-/// Decodes `Binary` from a JSON array of integers rather than the default hex string.
+/// This example shows how to decode a `Binary` column from a JSON array of
+/// integers, e.g. `[104, 105]` for the bytes `b"hi"`, as created by the
+/// example in [`EncoderFactory`].
 ///
 /// ```
-/// use std::sync::Arc;
-/// use arrow_array::{Array, ArrayRef, BinaryArray};
-/// use arrow_array::types::Float64Type;
-/// use arrow_array::cast::AsArray;
-/// use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape, TapeElement};
-/// use arrow_json::ReaderBuilder;
-/// use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema};
-/// use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
-/// use arrow_array::StringArray;
+/// # use std::sync::Arc;
+/// # use arrow_array::{Array, ArrayRef, BinaryArray};
+/// # use arrow_array::types::Float64Type;
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape, TapeElement};
+/// # use arrow_json::ReaderBuilder;
+/// # use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema};
 ///
 /// /// Decodes `[104, 105]` into the bytes `b"hi"`
 /// struct IntArrayBinaryDecoder;
@@ -816,19 +825,7 @@ pub trait ArrayDecoder: Send {
 ///     }
 /// }
 ///
-/// /// Upper-cases whatever the reader's own decoder produced
-/// struct ShoutDecoder(Box<dyn ArrayDecoder>);
-///
-/// impl ArrayDecoder for ShoutDecoder {
-///     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
-///         let inner = self.0.decode(tape, pos)?;
-///         let values = inner.as_string::<i32>();
-///         Ok(Arc::new(StringArray::from_iter(
-///             values.iter().map(|v| v.map(str::to_uppercase)),
-///         )))
-///     }
-/// }
-///
+/// /// A factory that overrides the reader's default decoder for `Binary` to decode from an array of integers
 /// #[derive(Debug)]
 /// struct IntArrayBinaryDecoderFactory;
 ///
@@ -839,15 +836,6 @@ pub trait ArrayDecoder: Send {
 ///         field: &FieldRef,
 ///         is_nullable: bool,
 ///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
-///         // Selection can key off metadata, e.g. to recognise an extension type, and
-///         // build on the reader's own decoder for the very same field
-///         if field.metadata().get(EXTENSION_TYPE_NAME_KEY).map(String::as_str)
-///             == Some("apache.shout")
-///         {
-///             let inner = ctx.make_builtin_decoder(field, is_nullable)?;
-///             return Ok(Some(Box::new(ShoutDecoder(inner))));
-///         }
-///
 ///         match field.data_type() {
 ///             DataType::Binary => Ok(Some(Box::new(IntArrayBinaryDecoder))),
 ///             // Returning `None` uses the reader's default decoder
@@ -861,11 +849,9 @@ pub trait ArrayDecoder: Send {
 ///     Field::new("bytes", DataType::Binary, true),
 ///     Field::new("float", DataType::Float64, true),
 ///     Field::new("nested", DataType::Struct(nested), true),
-///     Field::new("shout", DataType::Utf8, true)
-///         .with_metadata([(EXTENSION_TYPE_NAME_KEY, "apache.shout")]),
 /// ]));
 ///
-/// let json = r#"{"bytes": [104, 105], "float": 1.0, "nested": {"inner": [104, 105]}, "shout": "hi"}
+/// let json = r#"{"bytes": [104, 105], "float": 1.0, "nested": {"inner": [104, 105]}}
 /// {"float": 2.3}
 /// {"bytes": [98], "nested": {"inner": [98]}}
 /// "#;
@@ -888,12 +874,85 @@ pub trait ArrayDecoder: Send {
 /// let inner = batch.column(2).as_struct().column(0).as_binary::<i32>();
 /// assert_eq!(inner.value(0), b"hi");
 /// assert_eq!(batch.column(1).as_primitive::<Float64Type>().value(0), 1.0);
+/// ```
+///
+/// # Example: Decode an [extension type] from a JSON string
+///
+/// The choice of decoder can also depend on field metadata rather than just
+/// the data type, for example to recognize an [extension type]. The reader's
+/// own decoder for the field can be invoked with
+/// [`DecoderContext::make_builtin_decoder`].
+///
+/// This example upper-cases the strings produced by the builtin `Utf8` decoder
+/// for a fictional extension type `apache.shout`.
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, StringArray};
+/// # use arrow_array::cast::AsArray;
+/// # use arrow_json::reader::{ArrayDecoder, DecoderContext, DecoderFactory, Tape};
+/// # use arrow_json::ReaderBuilder;
+/// # use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema};
+/// # use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
+///
+/// /// Upper-cases whatever the reader's own decoder produced
+/// struct ShoutDecoder(Box<dyn ArrayDecoder>);
+///
+/// impl ArrayDecoder for ShoutDecoder {
+///     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
+///         let inner = self.0.decode(tape, pos)?;
+///         let values = inner.as_string::<i32>();
+///         Ok(Arc::new(StringArray::from_iter(
+///             values.iter().map(|v| v.map(str::to_uppercase)),
+///         )))
+///     }
+/// }
+///
+/// /// A factory that recognizes the `apache.shout` extension type and upper-cases its strings
+/// #[derive(Debug)]
+/// struct ShoutDecoderFactory;
+///
+/// impl DecoderFactory for ShoutDecoderFactory {
+///     fn make_default_decoder(
+///         &self,
+///         ctx: &DecoderContext,
+///         field: &FieldRef,
+///         is_nullable: bool,
+///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+///         if field.metadata().get(EXTENSION_TYPE_NAME_KEY).map(String::as_str)
+///             == Some("apache.shout")
+///         {
+///             let inner = ctx.make_builtin_decoder(field, is_nullable)?;
+///             return Ok(Some(Box::new(ShoutDecoder(inner))));
+///         }
+///         Ok(None)
+///     }
+/// }
+///
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("shout", DataType::Utf8, true)
+///         .with_metadata([(EXTENSION_TYPE_NAME_KEY, "apache.shout")]),
+///     Field::new("plain", DataType::Utf8, true),
+/// ]));
+///
+/// let json = r#"{"shout": "hi", "plain": "hi"}"#;
+///
+/// let batch = ReaderBuilder::new(schema)
+///     .with_decoder_factory(Arc::new(ShoutDecoderFactory))
+///     .build(json.as_bytes())
+///     .unwrap()
+///     .next()
+///     .unwrap()
+///     .unwrap();
 ///
 /// // Dispatched on metadata, and decoded by the reader's own `Utf8` decoder
-/// assert_eq!(batch.column(3).as_string::<i32>().value(0), "HI");
+/// assert_eq!(batch.column(0).as_string::<i32>().value(0), "HI");
+/// // The factory declines fields without the extension type, so they are decoded as usual
+/// assert_eq!(batch.column(1).as_string::<i32>().value(0), "hi");
 /// ```
 ///
 /// [`EncoderFactory`]: crate::EncoderFactory
+/// [extension type]: https://arrow.apache.org/docs/format/Columnar.html#extension-types
 pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
     /// Make a decoder for `field`, or `Ok(None)` to use the reader's default.
     ///
