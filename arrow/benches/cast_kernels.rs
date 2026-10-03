@@ -22,7 +22,7 @@ use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
 
-use chrono::DateTime;
+use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -259,6 +259,9 @@ fn cast_array(array: &ArrayRef, to_type: DataType) {
 
 fn add_benchmark(c: &mut Criterion) {
     let i32_array = build_array::<Int32Type>(512);
+    let i32_array_8192 = build_array::<Int32Type>(8192);
+    let bool_array: ArrayRef = Arc::new(create_boolean_array(8192, 0.1, 0.5));
+    let bool_array_no_nulls: ArrayRef = Arc::new(create_boolean_array(8192, 0.0, 0.5));
     let i64_array = build_array::<Int64Type>(512);
     let f32_array = build_array::<Float32Type>(512);
     let f32_utf8_array = cast(&build_array::<Float32Type>(512), &DataType::Utf8).unwrap();
@@ -318,6 +321,24 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast int32 to int64 512", |b| {
         b.iter(|| cast_array(&i32_array, DataType::Int64))
+    });
+    c.bench_function("cast int32 to bool 8192", |b| {
+        b.iter(|| cast_array(&i32_array_8192, DataType::Boolean))
+    });
+    c.bench_function("cast bool to int32 8192", |b| {
+        b.iter(|| cast_array(&bool_array, DataType::Int32))
+    });
+    c.bench_function("cast bool to string 8192", |b| {
+        b.iter(|| cast_array(&bool_array, DataType::Utf8))
+    });
+    c.bench_function("cast bool to string no nulls 8192", |b| {
+        b.iter(|| cast_array(&bool_array_no_nulls, DataType::Utf8))
+    });
+    c.bench_function("cast bool to string view 8192", |b| {
+        b.iter(|| cast_array(&bool_array, DataType::Utf8View))
+    });
+    c.bench_function("cast bool to string view no nulls 8192", |b| {
+        b.iter(|| cast_array(&bool_array_no_nulls, DataType::Utf8View))
     });
     c.bench_function("cast float32 to int32 512", |b| {
         b.iter(|| cast_array(&f32_array, DataType::Int32))
@@ -581,8 +602,16 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array = StringArray::from(vec!["a"; 8192]);
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
@@ -591,8 +620,16 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array: Int32Array = (0..8192).map(|i| i / 10).collect();
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
@@ -601,8 +638,16 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array: Int32Array = (0..8192).map(|i| i / 1000).collect();
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
@@ -611,10 +656,50 @@ fn add_benchmark(c: &mut Criterion) {
         let source_array: Int32Array = (0..8192).collect();
         let array_ref = Arc::new(source_array) as ArrayRef;
         let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         b.iter(|| cast(&array_ref, &target_type).unwrap());
+    });
+
+    c.bench_function("cast date to string", |b| {
+        // the min and max of the date32 type
+        let range = NaiveDate::MIN.to_epoch_days()..NaiveDate::MAX.to_epoch_days();
+        let date32_array: PrimitiveArray<Date32Type> =
+            create_primitive_array_range::<Date32Type>(8192, 0.1, range);
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&date32_array, &target_type).unwrap());
+    });
+    c.bench_function("cast time64 to string", |b| {
+        let time64_array: PrimitiveArray<Time64MicrosecondType> =
+            create_primitive_array_range::<Time64MicrosecondType>(8192, 0.1, 0..86400000000);
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&time64_array, &target_type).unwrap());
+    });
+    c.bench_function("cast micro timestamp to string", |b| {
+        let range = NaiveDateTime::MIN.and_utc().timestamp_micros()
+            ..NaiveDateTime::MAX.and_utc().timestamp_micros();
+        let timestamp_micro_array: PrimitiveArray<TimestampMicrosecondType> =
+            create_primitive_array_range::<TimestampMicrosecondType>(8192, 0.1, range);
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&timestamp_micro_array, &target_type).unwrap());
+    });
+    c.bench_function("cast micro timestamp with timezone to string", |b| {
+        let range = NaiveDateTime::MIN.and_utc().timestamp_micros()
+            ..NaiveDateTime::MAX.and_utc().timestamp_micros();
+        let timestamp_micro_utc_array =
+            create_primitive_array_range::<TimestampMicrosecondType>(8192, 0.1, range)
+                .with_timezone("+08:00");
+        let target_type = DataType::Utf8;
+        b.iter(|| cast(&timestamp_micro_utc_array, &target_type).unwrap());
     });
 }
 

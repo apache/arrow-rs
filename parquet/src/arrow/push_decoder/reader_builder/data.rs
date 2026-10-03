@@ -39,7 +39,7 @@ pub(super) struct DataRequest {
     ranges: Vec<Range<u64>>,
     /// Optional page start offsets for each requested range. This is used
     /// to create the relevant InMemoryRowGroup
-    page_start_offsets: Option<Vec<Vec<u64>>>,
+    page_start_offsets: Option<Vec<Option<Vec<u64>>>>,
 }
 
 impl DataRequest {
