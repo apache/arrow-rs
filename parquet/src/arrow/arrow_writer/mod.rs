@@ -1533,7 +1533,6 @@ impl ArrowColumnWriterFactory {
                 ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                     out.push(bytes(leaves.next().unwrap())?)
                 }
-                ArrowDataType::FixedSizeBinary(_) => out.push(bytes(leaves.next().unwrap())?),
                 _ => out.push(col(leaves.next().unwrap())?),
             },
             ArrowDataType::RunEndEncoded(_, value_field) => {
