@@ -18,7 +18,7 @@
 //! [`SerializedFileWriter`]: Low level Parquet writer API
 
 use crate::bloom_filter::Sbbf;
-use crate::file::metadata::page_index::PageIndex;
+use crate::file::metadata::page_index::{Grid, PageIndex};
 use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
@@ -387,13 +387,13 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         {
             None
         } else {
-            Some(column_indexes)
+            Some(Grid::from_vec(column_indexes)?)
         };
         // offset index will always be created unless explicitly disabled
         let offset_indexes = if self.props.offset_index_disabled() {
             None
         } else {
-            Some(offset_indexes)
+            Some(Grid::from_vec(offset_indexes)?)
         };
         if column_indexes.is_some() || offset_indexes.is_some() {
             let page_index = PageIndex::new(column_indexes, offset_indexes);
