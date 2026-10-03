@@ -29,10 +29,10 @@ use arrow_buffer::bit_util;
 use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer,
 };
-use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
+use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -74,27 +74,14 @@ macro_rules! dict_helper {
 /// ```
 ///
 /// For selecting values by index from a single array see [`crate::take`]
+///
+/// To copy selected byte view values into owned buffers, see
+/// [`Interleaver::with_compact_byte_views`].
 pub fn interleave(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
-    if values.is_empty() {
-        return Err(ArrowError::InvalidArgumentError(
-            "interleave requires input of at least one array".to_string(),
-        ));
-    }
-    let data_type = values[0].data_type();
-
-    for array in values.iter().skip(1) {
-        if array.data_type() != data_type {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "It is not possible to interleave arrays of different data types ({} and {})",
-                data_type,
-                array.data_type()
-            )));
-        }
-    }
-
+    let data_type = validate_interleave_inputs(values)?;
     if indices.is_empty() {
         return Ok(new_empty_array(data_type));
     }
@@ -126,6 +113,305 @@ pub fn interleave(
         DataType::LargeListView(field) => interleave_list_view::<i64>(values, indices, field),
         _ => interleave_fallback(values, indices)
     }
+}
+
+#[inline]
+fn validate_interleave_inputs<'a>(values: &[&'a dyn Array]) -> Result<&'a DataType, ArrowError> {
+    if values.is_empty() {
+        return Err(ArrowError::InvalidArgumentError(
+            "interleave requires input of at least one array".to_string(),
+        ));
+    }
+    let data_type = values[0].data_type();
+    for array in values.iter().skip(1) {
+        if array.data_type() != data_type {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "It is not possible to interleave arrays of different data types ({} and {})",
+                data_type,
+                array.data_type()
+            )));
+        }
+    }
+    Ok(data_type)
+}
+
+/// Configurable interleaving of elements from multiple arrays.
+///
+/// The default configuration has the same behavior as [`interleave`].
+#[derive(Debug, Default, Clone)]
+pub struct Interleaver {
+    compact_byte_views: bool,
+    preserve_byte_view_sharing: bool,
+}
+
+impl Interleaver {
+    /// Creates an interleaver with the same behavior as [`interleave`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Copies selected top-level [`StringViewArray`] and [`BinaryViewArray`]
+    /// values into independent buffers when enabled.
+    ///
+    /// Only selected, non-null, non-inline values need payload storage. No input
+    /// buffers are retained. Repeated values are copied for each selected row
+    /// unless [`Self::with_preserve_byte_view_sharing`] is enabled.
+    /// Other array types, including byte views nested inside other arrays, keep
+    /// the behavior of [`interleave`]. This option is disabled by default.
+    ///
+    /// This is useful when selected rows need independent lifetimes, such as
+    /// partitions of a spilling operator. Unlike [`interleave`] followed by
+    /// [`GenericByteViewArray::gc`], it avoids an intermediate shared array and
+    /// source-buffer remapping tables.
+    /// Copying can increase total live memory while inputs remain retained.
+    ///
+    /// ```
+    /// use arrow_array::{Array, StringViewArray};
+    /// use arrow_select::interleave::Interleaver;
+    ///
+    /// let a = StringViewArray::from(vec![Some("a long selected value"), None]);
+    /// let b = StringViewArray::from(vec!["another selected value"]);
+    /// let result = Interleaver::new()
+    ///     .with_compact_byte_views(true)
+    ///     .interleave(&[&a, &b], &[(1, 0), (0, 1), (0, 0)])?;
+    /// assert_eq!(result.as_ref(), &StringViewArray::from(vec![
+    ///     Some("another selected value"), None, Some("a long selected value")
+    /// ]) as &dyn Array);
+    /// # Ok::<(), arrow_schema::ArrowError>(())
+    /// ```
+    pub fn with_compact_byte_views(mut self, compact: bool) -> Self {
+        self.compact_byte_views = compact;
+        self
+    }
+
+    /// Preserves existing source-range sharing when compacting byte views.
+    ///
+    /// Repeated references to the same source byte range share one copy in the
+    /// output, including references through different input arrays. Equal values
+    /// stored at different addresses are not deduplicated. The output still
+    /// retains no input buffers.
+    ///
+    /// This option only affects [`Self::with_compact_byte_views`]. It is disabled
+    /// by default: tracking ranges adds a lookup per non-inline value and
+    /// temporary memory proportional to the number of distinct selected ranges.
+    /// Enable it for selections with shared long values to avoid copying their
+    /// payload repeatedly, for example after a join or dictionary decoding.
+    pub fn with_preserve_byte_view_sharing(mut self, preserve: bool) -> Self {
+        self.preserve_byte_view_sharing = preserve;
+        self
+    }
+
+    /// Selects elements using `(array index, row index)` pairs, as in [`interleave`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for empty inputs, differing input types, or unsupported
+    /// sizes. Compact byte views support values and output buffer indices up to
+    /// [`i32::MAX`], splitting larger total payloads across multiple buffers.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an array or row index is out of bounds.
+    pub fn interleave(
+        &self,
+        values: &[&dyn Array],
+        indices: &[(usize, usize)],
+    ) -> Result<ArrayRef, ArrowError> {
+        if self.compact_byte_views {
+            match values.first().map(|array| array.data_type()) {
+                Some(DataType::Utf8View) => {
+                    return self.interleave_views_compact::<StringViewType>(
+                        values,
+                        indices,
+                        i32::MAX as usize,
+                    );
+                }
+                Some(DataType::BinaryView) => {
+                    return self.interleave_views_compact::<BinaryViewType>(
+                        values,
+                        indices,
+                        i32::MAX as usize,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        interleave(values, indices)
+    }
+
+    fn interleave_views_compact<T: ByteViewType>(
+        &self,
+        values: &[&dyn Array],
+        indices: &[(usize, usize)],
+        max_buffer_size: usize,
+    ) -> Result<ArrayRef, ArrowError> {
+        let data_type = validate_interleave_inputs(values)?;
+        if indices.is_empty() {
+            return Ok(new_empty_array(data_type));
+        }
+        if self.preserve_byte_view_sharing {
+            interleave_views_compact::<T, true>(values, indices, max_buffer_size)
+        } else {
+            interleave_views_compact::<T, false>(values, indices, max_buffer_size)
+        }
+    }
+}
+
+fn interleave_views_compact<T: ByteViewType, const PRESERVE_SHARING: bool>(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+    max_buffer_size: usize,
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<GenericByteViewArray<T>>::new(values, indices);
+    let arrays = &interleaved.arrays;
+    let mut views = Vec::with_capacity(indices.len());
+    let mut block_sizes: Vec<usize> = Vec::new();
+    let mut current_size = 0;
+    let mut copied =
+        HashMap::<(usize, u32), usize, _>::with_hasher(ahash::RandomState::with_seeds(0, 0, 0, 0));
+    for &(source, row) in indices {
+        let array = arrays[source];
+        let raw = array.views()[row];
+        if interleaved
+            .nulls
+            .as_ref()
+            .is_some_and(|nulls| nulls.is_null(views.len()))
+        {
+            views.push(0);
+            continue;
+        }
+        let mut view = ByteView::from(raw);
+        if view.length <= MAX_INLINE_VIEW_LEN {
+            views.push(raw);
+            continue;
+        }
+        let len = view.length as usize;
+        if len > i32::MAX as usize {
+            return Err(ArrowError::OffsetOverflowError(len));
+        }
+        if PRESERVE_SHARING {
+            let buffer = &array.data_buffers()[view.buffer_index as usize];
+            // Effective addresses identify aliases through differently sliced buffers.
+            let address = buffer.as_ptr().wrapping_add(view.offset as usize) as usize;
+            match copied.entry((address, view.length)) {
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    views.push(views[*entry.get()]);
+                    continue;
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(views.len());
+                }
+            }
+        }
+        if current_size != 0 && current_size + len > max_buffer_size {
+            let next_buffer_index = block_sizes.len() + 1;
+            if next_buffer_index > i32::MAX as usize {
+                return Err(ArrowError::OffsetOverflowError(next_buffer_index));
+            }
+            block_sizes.push(current_size);
+            current_size = 0;
+        }
+        if PRESERVE_SHARING {
+            view.buffer_index = block_sizes.len() as u32;
+            view.offset = current_size as u32;
+        }
+        current_size += len;
+        views.push(view.as_u128());
+    }
+    drop(copied);
+    if current_size != 0 {
+        block_sizes.push(current_size);
+    }
+
+    let mut buffers: Vec<Vec<u8>> = block_sizes
+        .iter()
+        .map(|&size| Vec::with_capacity(size))
+        .collect();
+    if !PRESERVE_SHARING && buffers.len() == 1 {
+        let buffer = &mut buffers[0];
+        for (raw, &(source, _)) in views.iter_mut().zip(indices) {
+            let view = ByteView::from(*raw);
+            if view.length <= MAX_INLINE_VIEW_LEN {
+                continue;
+            }
+            *raw = view
+                .with_buffer_index(0)
+                .with_offset(buffer.len() as u32)
+                .as_u128();
+            // SAFETY: the first pass checked every source index and retained
+            // this non-null source view, whose payload is valid for its array.
+            unsafe {
+                copy_view_payload(arrays.get_unchecked(source), view, buffer);
+            }
+        }
+    } else {
+        let mut current_buffer = 0;
+        for (raw, &(source, row)) in views.iter_mut().zip(indices) {
+            let mut view = ByteView::from(*raw);
+            if view.length <= MAX_INLINE_VIEW_LEN {
+                continue;
+            }
+            // SAFETY: the first pass checked every source index.
+            let array = unsafe { arrays.get_unchecked(source) };
+            let buffer = if PRESERVE_SHARING {
+                let buffer = &mut buffers[view.buffer_index as usize];
+                // First occurrences fill consecutive offsets. Repeated ranges point
+                // behind the write cursor and have already been copied.
+                if view.offset as usize != buffer.len() {
+                    continue;
+                }
+                view = ByteView::from(array.views()[row]);
+                buffer
+            } else {
+                // Keep source views until this pass, avoiding a second random read
+                // of the input views. Rewrite the final views in place as we copy.
+                if buffers[current_buffer].len() == block_sizes[current_buffer] {
+                    current_buffer += 1;
+                }
+                let buffer = &mut buffers[current_buffer];
+                *raw = view
+                    .with_buffer_index(current_buffer as u32)
+                    .with_offset(buffer.len() as u32)
+                    .as_u128();
+                buffer
+            };
+            // SAFETY: view is a non-null source view from array, either retained
+            // from the first pass or read above, so its payload range is valid.
+            unsafe {
+                copy_view_payload(array, view, buffer);
+            }
+        }
+    }
+    let buffers: Vec<_> = buffers.into_iter().map(Buffer::from_vec).collect();
+    // SAFETY: inline views are unchanged, null views are zero, and every other
+    // view addresses its copied source range with the original length and prefix.
+    Ok(Arc::new(unsafe {
+        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers.into(), interleaved.nulls)
+    }))
+}
+
+/// Copies the payload addressed by a non-inline source view.
+///
+/// # Safety
+///
+/// The view must reference a valid payload range in `array`.
+#[inline]
+unsafe fn copy_view_payload<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    view: ByteView,
+    output: &mut Vec<u8>,
+) {
+    let start = view.offset as usize;
+    // SAFETY: the caller guarantees that the buffer index and payload range
+    // address valid bytes in array.
+    let bytes = unsafe {
+        array
+            .data_buffers()
+            .get_unchecked(view.buffer_index as usize)
+            .get_unchecked(start..start + view.length as usize)
+    };
+    output.extend_from_slice(bytes);
 }
 
 /// Common functionality for interleaving arrays
@@ -969,11 +1255,454 @@ mod tests {
     use super::*;
     use arrow_array::Int32RunArray;
     use arrow_array::builder::{
-        GenericListBuilder, Int32Builder, PrimitiveBuilder, PrimitiveRunBuilder,
+        BinaryViewBuilder, GenericListBuilder, Int32Builder, PrimitiveBuilder, PrimitiveRunBuilder,
+        StringViewBuilder,
     };
     use arrow_array::types::{Decimal128Type, Int8Type, TimestampMicrosecondType};
     use arrow_buffer::ScalarBuffer;
     use arrow_schema::{Field, TimeUnit};
+
+    #[test]
+    fn test_compact_sliced_multibuffer_sources() {
+        let mut first = StringViewBuilder::new().with_fixed_block_size(32);
+        first.append_value("discard before slice");
+        first.append_value("first selected long string");
+        first.append_null();
+        first.append_value("second selected long string");
+        first.append_value("discard after slice");
+        let first = first.finish().slice(1, 3);
+
+        let mut second = StringViewBuilder::new().with_fixed_block_size(32);
+        second.append_value("discard before slice");
+        second.append_value("third selected long string");
+        second.append_value("short");
+        second.append_value("fourth selected long string");
+        let second = second.finish().slice(1, 3);
+        assert!(first.data_buffers().len() > 1);
+        assert!(second.data_buffers().len() > 1);
+
+        let indices = [(1, 2), (0, 1), (0, 2), (1, 1), (0, 0), (1, 2)];
+        let ordinary = interleave(&[&first, &second], &indices).unwrap();
+        for preserve in [false, true] {
+            let compact = Interleaver::new()
+                .with_compact_byte_views(true)
+                .with_preserve_byte_view_sharing(preserve)
+                .interleave(&[&first, &second], &indices)
+                .unwrap();
+            assert_eq!(compact.as_ref(), ordinary.as_ref());
+            let compact = compact.as_string_view();
+            assert_eq!(
+                compact.iter().collect::<Vec<_>>(),
+                vec![
+                    Some("fourth selected long string"),
+                    None,
+                    Some("second selected long string"),
+                    Some("short"),
+                    Some("first selected long string"),
+                    Some("fourth selected long string"),
+                ]
+            );
+            assert_eq!(compact.views()[0] == compact.views()[5], preserve);
+        }
+    }
+
+    #[test]
+    fn test_compact_binary_inline_boundary() {
+        let inline = [0xff; 12];
+        let external = [0xfe; 13];
+        let mut input = BinaryViewBuilder::new();
+        input.append_value(inline);
+        input.append_value(external);
+        input.append_null();
+        input.append_value([]);
+        let input = input.finish();
+
+        let indices = [(0, 1), (0, 0), (0, 2), (0, 3), (0, 1)];
+        for preserve in [false, true] {
+            let compact = Interleaver::new()
+                .with_compact_byte_views(true)
+                .with_preserve_byte_view_sharing(preserve)
+                .interleave(&[&input], &indices)
+                .unwrap();
+            assert_eq!(
+                compact.as_ref(),
+                interleave(&[&input], &indices).unwrap().as_ref()
+            );
+            let compact = compact.as_binary_view();
+            assert_eq!(compact.value(0), &external);
+            assert_eq!(compact.value(1), &inline);
+            assert!(compact.is_null(2));
+            assert_eq!(compact.value(3), b"");
+            assert_eq!(compact.data_buffers().len(), 1);
+            let copies = if preserve { 1 } else { 2 };
+            assert_eq!(compact.data_buffers()[0].len(), copies * external.len());
+            assert_eq!(compact.views()[0] == compact.views()[4], preserve);
+        }
+    }
+
+    #[test]
+    fn test_compact_skips_hidden_null_payload_and_owns_buffers() {
+        for preserve in [false, true] {
+            let unselected = "u".repeat(32 * 1024);
+            let hidden = "n".repeat(32 * 1024);
+            let selected = "selected long string";
+            let input = StringViewArray::from(vec![unselected.as_str(), selected, hidden.as_str()]);
+            let input = StringViewArray::try_new(
+                input.views().clone(),
+                input.data_buffers().clone(),
+                Some(NullBuffer::from(vec![true, true, false])),
+            )
+            .unwrap();
+            let compact = Interleaver::new()
+                .with_compact_byte_views(true)
+                .with_preserve_byte_view_sharing(preserve)
+                .interleave(&[&input], &[(0, 1), (0, 2), (0, 1)])
+                .unwrap();
+            let compact = compact.as_string_view();
+            assert_eq!(compact.data_buffers().len(), 1);
+            let copies = if preserve { 1 } else { 2 };
+            assert_eq!(compact.data_buffers()[0].len(), copies * selected.len());
+            assert_eq!(
+                compact.data_buffers()[0].capacity(),
+                copies * selected.len()
+            );
+            assert_eq!(compact.views()[1], 0);
+            for output in compact.data_buffers().iter() {
+                for source in input.data_buffers().iter() {
+                    assert_ne!(
+                        output.as_ptr() as usize - output.ptr_offset(),
+                        source.as_ptr() as usize - source.ptr_offset()
+                    );
+                }
+            }
+            assert_ne!(compact.views().as_ptr(), input.views().as_ptr());
+            assert_ne!(
+                compact.nulls().unwrap().buffer().as_ptr(),
+                input.nulls().unwrap().buffer().as_ptr()
+            );
+            drop(input);
+            assert_eq!(
+                compact.iter().collect::<Vec<_>>(),
+                vec![Some(selected), None, Some(selected)]
+            );
+        }
+    }
+
+    #[test]
+    fn test_compact_repeated_range_copies_payload_once() {
+        let value = "x".repeat(1024);
+        let input = StringViewArray::from(vec![value.as_str()]);
+        let compact = Interleaver::new()
+            .with_compact_byte_views(true)
+            .with_preserve_byte_view_sharing(true)
+            .interleave(&[&input], &vec![(0, 0); 10_000])
+            .unwrap();
+        let compact = compact.as_string_view();
+        assert_eq!(compact.len(), 10_000);
+        assert_eq!(compact.data_buffers().len(), 1);
+        assert_eq!(compact.data_buffers()[0].len(), 1024);
+        assert_eq!(compact.data_buffers()[0].capacity(), 1024);
+        assert_ne!(
+            compact.data_buffers()[0].as_ptr(),
+            input.data_buffers()[0].as_ptr()
+        );
+        drop(input);
+        assert!(compact.iter().all(|actual| actual == Some(value.as_str())));
+        assert!(
+            compact
+                .views()
+                .iter()
+                .all(|view| *view == compact.views()[0])
+        );
+        compact.to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_compact_sharing_is_opt_in() {
+        let input = StringViewArray::from(vec!["long repeated payload"]);
+        for interleaver in [
+            Interleaver::new().with_compact_byte_views(true),
+            Interleaver::new()
+                .with_compact_byte_views(true)
+                .with_preserve_byte_view_sharing(true)
+                .with_preserve_byte_view_sharing(false),
+        ] {
+            let output = interleaver
+                .interleave(&[&input], &[(0, 0), (0, 0), (0, 0)])
+                .unwrap();
+            let output = output.as_string_view();
+            assert_eq!(output.data_buffers()[0].len(), 3 * input.value(0).len());
+            assert_eq!(
+                output.data_buffers()[0].capacity(),
+                3 * input.value(0).len()
+            );
+            assert_ne!(output.views()[0], output.views()[1]);
+            assert_ne!(output.views()[1], output.views()[2]);
+            assert!(output.iter().all(|value| value == Some(input.value(0))));
+        }
+    }
+
+    #[test]
+    fn test_compact_aliases_across_sliced_buffers() {
+        fn view(buffer: Buffer, offset: u32, len: u32) -> StringViewArray {
+            let mut builder = StringViewBuilder::new();
+            let block = builder.append_block(buffer);
+            builder.try_append_view(block, offset, len).unwrap();
+            builder.finish()
+        }
+
+        let backing = Buffer::from_vec(
+            b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".to_vec(),
+        );
+        let a = view(backing.clone(), 7, 20);
+        let b = view(backing.slice(7), 0, 20);
+        let c = view(backing.slice(7), 0, 21);
+        let d = view(Buffer::from_vec(backing[7..27].to_vec()), 0, 20);
+        let overlap = view(backing.slice(8), 0, 20);
+        let compact = Interleaver::new()
+            .with_compact_byte_views(true)
+            .with_preserve_byte_view_sharing(true)
+            .interleave(
+                &[&a, &b, &c, &d, &overlap],
+                &[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)],
+            )
+            .unwrap();
+        let compact = compact.as_string_view();
+        assert_eq!(compact.views()[0], compact.views()[1]);
+        assert_ne!(compact.views()[0], compact.views()[2]);
+        assert_ne!(compact.views()[0], compact.views()[3]);
+        assert_ne!(compact.views()[0], compact.views()[4]);
+        assert_eq!(compact.value(0), compact.value(3));
+        assert_eq!(compact.data_buffers()[0].len(), 20 + 21 + 20 + 20);
+        assert_eq!(compact.data_buffers()[0].capacity(), 20 + 21 + 20 + 20);
+        assert_ne!(compact.data_buffers()[0].as_ptr(), backing.as_ptr());
+        assert_eq!(
+            compact.iter().collect::<Vec<_>>(),
+            vec![
+                Some(a.value(0)),
+                Some(b.value(0)),
+                Some(c.value(0)),
+                Some(d.value(0)),
+                Some(overlap.value(0))
+            ]
+        );
+        compact.to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_compact_splits_buffers_and_reuses_earlier_ranges() {
+        let first = "a".repeat(20);
+        let second = "b".repeat(13);
+        let third = "c".repeat(18);
+        let input = StringViewArray::from(vec![
+            Some(first.as_str()),
+            Some(second.as_str()),
+            None,
+            Some(third.as_str()),
+            Some("inline"),
+        ]);
+        let indices = [(0, 0), (0, 1), (0, 3), (0, 0), (0, 2), (0, 4), (0, 1)];
+        for preserve in [false, true] {
+            let compact = if preserve {
+                interleave_views_compact::<StringViewType, true>(&[&input], &indices, 32)
+            } else {
+                interleave_views_compact::<StringViewType, false>(&[&input], &indices, 32)
+            }
+            .unwrap();
+            assert_eq!(
+                compact.as_ref(),
+                interleave(&[&input], &indices).unwrap().as_ref()
+            );
+            let compact = compact.as_string_view();
+            assert_eq!(compact.data_buffers().len(), if preserve { 2 } else { 4 });
+            assert_eq!(compact.data_buffers()[0].len(), 20);
+            assert_eq!(compact.data_buffers()[1].len(), 31);
+            for buffer in compact.data_buffers().iter() {
+                assert!(buffer.len() <= 32);
+                assert_eq!(buffer.len(), buffer.capacity());
+            }
+            assert_eq!(ByteView::from(compact.views()[0]).buffer_index, 0);
+            assert_eq!(ByteView::from(compact.views()[1]).buffer_index, 1);
+            assert_eq!(ByteView::from(compact.views()[2]).offset, 13);
+            assert_eq!(compact.views()[0] == compact.views()[3], preserve);
+            assert_eq!(compact.views()[1] == compact.views()[6], preserve);
+            assert_eq!(compact.views()[4], 0);
+            compact.to_data().validate_full().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_compact_values_at_and_above_buffer_limit() {
+        let exact = "x".repeat(32);
+        let oversized = "y".repeat(33);
+        let input = StringViewArray::from(vec![
+            Some(exact.as_str()),
+            Some(oversized.as_str()),
+            Some("inline"),
+            None,
+        ]);
+        let indices = [
+            (0, 2),
+            (0, 3),
+            (0, 1),
+            (0, 2),
+            (0, 0),
+            (0, 3),
+            (0, 1),
+            (0, 0),
+        ];
+        for preserve in [false, true] {
+            let compact = if preserve {
+                interleave_views_compact::<StringViewType, true>(&[&input], &indices, 32)
+            } else {
+                interleave_views_compact::<StringViewType, false>(&[&input], &indices, 32)
+            }
+            .unwrap();
+            assert_eq!(
+                compact.as_ref(),
+                interleave(&[&input], &indices).unwrap().as_ref()
+            );
+            let compact = compact.as_string_view();
+            let expected_sizes = if preserve {
+                vec![33, 32]
+            } else {
+                vec![33, 32, 33, 32]
+            };
+            assert_eq!(
+                compact
+                    .data_buffers()
+                    .iter()
+                    .map(|buffer| buffer.len())
+                    .collect::<Vec<_>>(),
+                expected_sizes
+            );
+            for buffer in compact.data_buffers().iter() {
+                assert_eq!(buffer.len(), buffer.capacity());
+            }
+            compact.to_data().validate_full().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_compact_empty_null_and_inline_selections() {
+        let input =
+            StringViewArray::from(vec![Some("unselected long string"), None, Some("inline")]);
+        for preserve in [false, true] {
+            for indices in [vec![], vec![(0, 1), (0, 1)], vec![(0, 2), (0, 1)]] {
+                let compact = Interleaver::new()
+                    .with_compact_byte_views(true)
+                    .with_preserve_byte_view_sharing(preserve)
+                    .interleave(&[&input], &indices)
+                    .unwrap();
+                assert_eq!(
+                    compact.as_ref(),
+                    interleave(&[&input], &indices).unwrap().as_ref()
+                );
+                assert!(compact.as_string_view().data_buffers().is_empty());
+            }
+            let empty = StringViewArray::from(Vec::<&str>::new());
+            assert!(
+                Interleaver::new()
+                    .with_compact_byte_views(true)
+                    .with_preserve_byte_view_sharing(preserve)
+                    .interleave(&[&empty], &[])
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn test_compact_configuration_and_type_errors() {
+        let input = StringViewArray::from(vec!["first long view value", "second long view value"]);
+        let indices = [(0, 1), (0, 0), (0, 1)];
+        let ordinary = interleave(&[&input], &indices).unwrap();
+        for interleaver in [
+            Interleaver::default(),
+            Interleaver::new().with_preserve_byte_view_sharing(true),
+            Interleaver::new()
+                .with_compact_byte_views(true)
+                .with_compact_byte_views(false),
+        ] {
+            let output = interleaver.interleave(&[&input], &indices).unwrap();
+            assert_eq!(output.as_ref(), ordinary.as_ref());
+            assert_eq!(
+                output.as_string_view().data_buffers()[0].as_ptr(),
+                input.data_buffers()[0].as_ptr()
+            );
+        }
+        let ints = Int32Array::from(vec![1, 2]);
+        for preserve in [false, true] {
+            for compact in [false, true] {
+                let interleaver = Interleaver::new()
+                    .with_compact_byte_views(compact)
+                    .with_preserve_byte_view_sharing(preserve);
+                let output = interleaver.interleave(&[&ints], &indices).unwrap();
+                assert_eq!(
+                    output.as_ref(),
+                    interleave(&[&ints], &indices).unwrap().as_ref()
+                );
+                assert!(matches!(
+                    interleaver.interleave(&[], &[]),
+                    Err(ArrowError::InvalidArgumentError(_))
+                ));
+                assert!(matches!(
+                    interleaver.interleave(&[&input, &ints], &[]),
+                    Err(ArrowError::InvalidArgumentError(_))
+                ));
+                assert!(matches!(
+                    interleaver.interleave(&[&input, &ints], &[(0, 0)]),
+                    Err(ArrowError::InvalidArgumentError(_))
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn test_compact_invalid_indices_panic_before_copying() {
+        let input = StringViewArray::from(vec!["valid selected long string"]);
+        for preserve in [false, true] {
+            for invalid in [(1, 0), (usize::MAX, 0), (0, 1), (0, usize::MAX)] {
+                let interleaver = Interleaver::new()
+                    .with_compact_byte_views(true)
+                    .with_preserve_byte_view_sharing(preserve);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    interleaver.interleave(&[&input], &[(0, 0), invalid])
+                }));
+                assert!(result.is_err(), "{invalid:?}, preserve={preserve}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_compact_option_leaves_nested_views_unchanged() {
+        let values = StringViewArray::from(vec![
+            "first nested long string",
+            "second nested long string",
+        ]);
+        let pointer = values.data_buffers()[0].as_ptr();
+        let input = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Utf8View, false)),
+            OffsetBuffer::new(vec![0_i32, 1, 2].into()),
+            Arc::new(values),
+            None,
+        );
+        let compact = Interleaver::new()
+            .with_compact_byte_views(true)
+            .interleave(&[&input], &[(0, 1)])
+            .unwrap();
+        let ordinary = interleave(&[&input], &[(0, 1)]).unwrap();
+        assert_eq!(compact.as_ref(), ordinary.as_ref());
+        assert_eq!(
+            compact
+                .as_list::<i32>()
+                .values()
+                .as_string_view()
+                .data_buffers()[0]
+                .as_ptr(),
+            pointer
+        );
+    }
 
     #[test]
     fn test_primitive() {
