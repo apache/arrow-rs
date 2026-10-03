@@ -18,7 +18,7 @@
 //! Contains all supported decoders for Parquet.
 
 use bytes::Bytes;
-use num_traits::{FromPrimitive, WrappingAdd};
+use num_traits::{FromPrimitive, WrappingAdd, WrappingMul};
 use std::{cmp, marker::PhantomData, mem};
 
 use super::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
@@ -670,7 +670,7 @@ where
 
 impl<T: DataType> Decoder<T> for DeltaBitPackDecoder<T>
 where
-    T::T: Default + FromPrimitive + BitPacking + WrappingAdd + Copy,
+    T::T: Default + FromPrimitive + BitPacking + WrappingAdd + WrappingMul + Copy,
 {
     // # of total values is derived from encoding
     #[inline]
@@ -904,19 +904,17 @@ where
                         ));
                     }
 
-                    if min_delta == 0 {
-                        for v in &mut skip_buffer[0..skip_count] {
-                            *v = v.wrapping_add(&self.last_value);
-                            self.last_value = *v;
-                        }
-                    } else {
-                        for v in &mut skip_buffer[0..skip_count] {
-                            *v = v
-                                .wrapping_add(&self.min_delta)
-                                .wrapping_add(&self.last_value);
-                            self.last_value = *v;
-                        }
-                    }
+                    let residual_sum = skip_buffer[0..skip_count]
+                        .iter()
+                        .copied()
+                        .fold(T::T::default(), |sum, residual| sum.wrapping_add(&residual));
+                    let step_count = T::T::from_usize(skip_count)
+                        .ok_or_else(|| general_err!("delta*n overflow in skip"))?;
+                    let total_delta = self
+                        .min_delta
+                        .wrapping_mul(&step_count)
+                        .wrapping_add(&residual_sum);
+                    self.last_value = self.last_value.wrapping_add(&total_delta);
 
                     skipped_in_mini_block += batch_to_skip;
                 }
