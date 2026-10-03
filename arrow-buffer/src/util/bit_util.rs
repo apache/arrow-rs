@@ -26,7 +26,7 @@ use crate::bit_chunk_iterator::BitChunks;
 /// Equivalent to the x86 BMI2 `PEXT` instruction. When compiled with the
 /// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
 /// this lowers to the hardware `pext` instruction; otherwise it falls back
-/// to a portable scalar loop.
+/// to a portable version that picks its method by the mask's popcount.
 ///
 /// # Functional Example
 ///
@@ -51,8 +51,11 @@ use crate::bit_chunk_iterator::BitChunks;
 /// assert_eq!(compress(0b1011_0100, 0b0110_1101), 0b0000_1010);
 /// ```
 //
-// Replace with `value.compress(mask)` when `uint_gather_scatter_bits` is
-// stabilised: <https://github.com/rust-lang/rust/issues/149069>
+// When `uint_gather_scatter_bits` is stabilised
+// (<https://github.com/rust-lang/rust/issues/149069>), measure
+// `value.compress(mask)` against this before switching: its portable
+// version is the constant-time network, which the fallback here beats on
+// sparse and dense masks.
 #[inline]
 pub fn compress(value: u64, mask: u64) -> u64 {
     #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
@@ -64,6 +67,29 @@ pub fn compress(value: u64, mask: u64) -> u64 {
 
     #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
     {
+        compress_portable(value, mask)
+    }
+}
+
+/// [`compress`] without `pext`, by the number of kept bits `k`:
+///
+/// * `k <= 2`: the two lowest kept bits, tested directly
+/// * `k <= 16`: one step per kept bit
+/// * `k >= 62`: `value` with its at most two dropped bits removed
+/// * otherwise [`compress_bytes`]
+///
+/// The two ends need no loop, so no loop exit to mispredict when `k`
+/// varies from word to word.
+// Always: called once a word, so a call would cost more than a sparse word
+#[cfg(any(test, not(all(target_arch = "x86_64", target_feature = "bmi2"))))]
+#[inline(always)]
+fn compress_portable(value: u64, mask: u64) -> u64 {
+    let kept = mask.count_ones();
+    if kept <= 2 {
+        let lowest = mask & mask.wrapping_neg();
+        let second = mask ^ lowest;
+        u64::from(value & lowest != 0) | (u64::from(value & second != 0) << 1)
+    } else if kept <= 16 {
         let mut mask = mask;
         let mut result = 0_u64;
         let mut dest_bit = 1_u64;
@@ -78,7 +104,74 @@ pub fn compress(value: u64, mask: u64) -> u64 {
             mask = rest;
         }
         result
+    } else if kept >= 62 {
+        if kept == 64 {
+            return value;
+        }
+        // Remove the highest dropped bit first, so the lower ones stay put.
+        // With nothing left to drop a step keeps every bit, and each step
+        // shifts a zero in at the top.
+        let mut value = value;
+        let mut dropped = !mask;
+        for _ in 0..2 {
+            let below = if dropped == 0 {
+                u64::MAX
+            } else {
+                (1 << dropped.ilog2()) - 1
+            };
+            value = (value & below) | ((value >> 1) & !below);
+            dropped &= below;
+        }
+        value
+    } else {
+        compress_bytes(value, mask)
     }
+}
+
+/// `b` in every byte of a `u64`
+#[cfg(any(test, not(all(target_arch = "x86_64", target_feature = "bmi2"))))]
+const fn repeat_byte(b: u8) -> u64 {
+    b as u64 * 0x0101_0101_0101_0101
+}
+
+/// [`compress`] in constant time, a byte at a time and all bytes at once.
+///
+/// Within a byte each kept bit moves down by the number of dropped bits
+/// below it. Written in binary, that distance is at most 7, so three rounds
+/// move by 1, 2 and 4 the bits whose distance has that bit set (the parallel
+/// suffix network, Hacker's Delight 7-4); shifts are masked to stay within
+/// the byte. Byte `j` then lands at the sum of the kept counts of bytes
+/// `0..j`, all eight sums from one multiply by `0x0101..01`.
+#[cfg(any(test, not(all(target_arch = "x86_64", target_feature = "bmi2"))))]
+#[inline]
+fn compress_bytes(value: u64, mask: u64) -> u64 {
+    let mut x = value & mask;
+    let mut zeros = !mask;
+    let mut n = 1;
+    while n < 8 {
+        // The move mask of this round: the parity of the dropped bits
+        // below each bit, in strides of `n`
+        let mut parity = zeros;
+        let mut len = n;
+        while len < 8 {
+            parity ^= (parity << len) & repeat_byte(0xFF << len);
+            len <<= 1;
+        }
+        let q = x & parity;
+        x ^= q ^ ((q >> n) & repeat_byte(0xFF >> n));
+        zeros &= !parity;
+        zeros ^= (zeros >> n) & repeat_byte(0xFF >> n);
+        n <<= 1;
+    }
+    let c = mask - ((mask >> 1) & repeat_byte(0x55));
+    let c = (c & repeat_byte(0x33)) + ((c >> 2) & repeat_byte(0x33));
+    let kept = (c + (c >> 4)) & repeat_byte(0x0F);
+    let below = kept.wrapping_mul(repeat_byte(1)) << 8;
+    let mut result = 0;
+    for j in 0..8 {
+        result |= ((x >> (8 * j)) & 0xFF) << ((below >> (8 * j)) & 0xFF);
+    }
+    result
 }
 
 /// Parallel bit deposit: scatter the lowest `mask.count_ones()` bits of
@@ -1016,18 +1109,18 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::{RngExt, SeedableRng};
 
+    /// Reference for [`compress`]: gather the `mask`-selected bits of `value`
+    /// into contiguous low bits, least-significant first
+    fn compress_reference(value: u64, mask: u64) -> u64 {
+        (0..64)
+            .filter(|&i| (mask >> i) & 1 == 1)
+            .enumerate()
+            .map(|(dest, i)| ((value >> i) & 1) << dest)
+            .sum()
+    }
+
     #[test]
     fn test_compress() {
-        // Reference: gather the `mask`-selected bits of `value` into
-        // contiguous low bits, least-significant first
-        fn reference(value: u64, mask: u64) -> u64 {
-            (0..64)
-                .filter(|&i| (mask >> i) & 1 == 1)
-                .enumerate()
-                .map(|(dest, i)| ((value >> i) & 1) << dest)
-                .sum()
-        }
-
         assert_eq!(compress(0b1010, 0b1111), 0b1010);
         assert_eq!(compress(0b1010, 0b1010), 0b11);
         assert_eq!(compress(0b1010, 0b0101), 0);
@@ -1042,9 +1135,62 @@ mod tests {
             let (value, mask): (u64, u64) = rng.random();
             assert_eq!(
                 compress(value, mask),
-                reference(value, mask),
+                compress_reference(value, mask),
                 "value={value:#x} mask={mask:#x}"
             );
+        }
+    }
+
+    #[test]
+    fn test_compress_portable() {
+        // Every path of the fallback, whatever this build compiles
+        // `compress` to: uniform random masks alone have about 32 kept bits
+        // and would only reach `compress_bytes`
+        let check = |value: u64, mask: u64| {
+            let want = compress_reference(value, mask);
+            let kept = mask.count_ones();
+            assert_eq!(
+                compress_portable(value, mask),
+                want,
+                "value={value:#x} mask={mask:#x} kept={kept}"
+            );
+        };
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Every mask with at most two kept or at most two dropped bits
+        let value: u64 = rng.random();
+        check(value, 0);
+        check(value, u64::MAX);
+        for i in 0..64 {
+            check(value, 1 << i);
+            check(value, !(1 << i));
+            for j in i + 1..64 {
+                let two = (1 << i) | (1 << j);
+                check(value, two);
+                check(value, !two);
+            }
+        }
+
+        // Random masks at every density: ANDing random words thins them out,
+        // ORing fills them in
+        for _ in 0..4096 {
+            let value: u64 = rng.random();
+            let mut sparse = u64::MAX;
+            let mut dense = 0;
+            for _ in 0..8 {
+                let word: u64 = rng.random();
+                sparse &= word;
+                dense |= word;
+                check(value, sparse);
+                check(value, dense);
+            }
+            // every popcount from 0 to 64
+            let kept = rng.random_range(0..=64);
+            let mut mask = 0_u64;
+            while mask.count_ones() < kept {
+                mask |= 1 << rng.random_range(0..64);
+            }
+            check(value, mask);
         }
     }
 
