@@ -226,6 +226,8 @@ pub struct ParquetMetaDataPushDecoder {
     column_index_policy: PageIndexPolicy,
     /// policy for loading OffsetIndex (part of the PageIndex)
     offset_index_policy: PageIndexPolicy,
+    /// Index span awaiting bytes, invalidated by policy changes.
+    pending_page_index_range: Option<Range<u64>>,
     /// Underlying buffers
     buffers: crate::util::push_buffers::PushBuffers,
     /// Encryption API
@@ -250,6 +252,7 @@ impl ParquetMetaDataPushDecoder {
             state: DecodeState::ReadingFooter,
             column_index_policy: PageIndexPolicy::Optional,
             offset_index_policy: PageIndexPolicy::Optional,
+            pending_page_index_range: None,
             buffers: crate::util::push_buffers::PushBuffers::new(file_len),
             metadata_parser: MetadataParser::new(),
         })
@@ -285,18 +288,21 @@ impl ParquetMetaDataPushDecoder {
     pub fn with_page_index_policy(mut self, page_index_policy: PageIndexPolicy) -> Self {
         self.column_index_policy = page_index_policy;
         self.offset_index_policy = page_index_policy;
+        self.pending_page_index_range = None;
         self
     }
 
     /// Set the policy for reading the ColumnIndex (part of the PageIndex)
     pub fn with_column_index_policy(mut self, column_index_policy: PageIndexPolicy) -> Self {
         self.column_index_policy = column_index_policy;
+        self.pending_page_index_range = None;
         self
     }
 
     /// Set the policy for reading the OffsetIndex (part of the PageIndex)
     pub fn with_offset_index_policy(mut self, offset_index_policy: PageIndexPolicy) -> Self {
         self.offset_index_policy = offset_index_policy;
+        self.pending_page_index_range = None;
         self
     }
 
@@ -406,13 +412,14 @@ impl ParquetMetaDataPushDecoder {
                 }
 
                 DecodeState::ReadingPageIndex(mut metadata) => {
-                    // First determine if any page indexes are needed based on
-                    // the specified policies
-                    let range = range_for_page_index(
-                        &metadata,
-                        self.column_index_policy,
-                        self.offset_index_policy,
-                    );
+                    // Retain the range only while waiting, so decoding or errors clear it.
+                    let range = self.pending_page_index_range.take().or_else(|| {
+                        range_for_page_index(
+                            &metadata,
+                            self.column_index_policy,
+                            self.offset_index_policy,
+                        )
+                    });
 
                     let Some(page_index_range) = range else {
                         self.state = DecodeState::Finished;
@@ -420,6 +427,7 @@ impl ParquetMetaDataPushDecoder {
                     };
 
                     if !self.buffers.has_range(&page_index_range) {
+                        self.pending_page_index_range = Some(page_index_range.clone());
                         self.state = DecodeState::ReadingPageIndex(metadata);
                         return Ok(needs_range(page_index_range));
                     }
@@ -490,6 +498,10 @@ pub fn range_for_page_index(
     column_index_policy: PageIndexPolicy,
     offset_index_policy: PageIndexPolicy,
 ) -> Option<Range<u64>> {
+    if column_index_policy == PageIndexPolicy::Skip && offset_index_policy == PageIndexPolicy::Skip
+    {
+        return None;
+    }
     let mut range = None;
     for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
         if column_index_policy != PageIndexPolicy::Skip {
@@ -612,10 +624,22 @@ mod tests {
 
         // expect the second request to read the offset indexes
         let ranges = expect_needs_data(metadata_decoder.try_decode());
+        for _ in 0..3 {
+            assert_eq!(
+                metadata_decoder.pending_page_index_range,
+                Some(ranges[0].clone())
+            );
+            assert_eq!(expect_needs_data(metadata_decoder.try_decode()), ranges);
+        }
+        push_ranges_to_metadata_decoder(&mut metadata_decoder, ranges.clone());
+        metadata_decoder.clear_all_ranges();
+        assert_eq!(metadata_decoder.buffers.buffered_bytes(), 0);
+        assert_eq!(expect_needs_data(metadata_decoder.try_decode()), ranges);
         push_ranges_to_metadata_decoder(&mut metadata_decoder, ranges);
 
         // expect the third request to read the actual data
         let metadata = expect_data(metadata_decoder.try_decode());
+        assert!(metadata_decoder.pending_page_index_range.is_none());
         expect_finished(metadata_decoder.try_decode());
 
         assert_eq!(metadata.num_row_groups(), 2);
@@ -649,6 +673,68 @@ mod tests {
         assert_eq!(metadata.row_group(0).num_rows(), 200);
         assert_eq!(metadata.row_group(1).num_rows(), 200);
         assert!(metadata.page_index().is_none()); // of course, we did not read the page index
+    }
+
+    /// Each setter invalidates pending work, including narrower, wider and Skip policies.
+    #[test]
+    fn test_metadata_decoder_pending_range_policy_changes() {
+        let metadata = test_metadata_without_indexes();
+        let setters: [fn(ParquetMetaDataPushDecoder, PageIndexPolicy) -> ParquetMetaDataPushDecoder;
+            3] = [
+            ParquetMetaDataPushDecoder::with_page_index_policy,
+            ParquetMetaDataPushDecoder::with_column_index_policy,
+            ParquetMetaDataPushDecoder::with_offset_index_policy,
+        ];
+        for (column_policy, offset_policy) in [
+            (PageIndexPolicy::Optional, PageIndexPolicy::Optional),
+            (PageIndexPolicy::Skip, PageIndexPolicy::Optional),
+            (PageIndexPolicy::Optional, PageIndexPolicy::Skip),
+        ] {
+            for setter in setters {
+                for policy in [
+                    PageIndexPolicy::Skip,
+                    PageIndexPolicy::Optional,
+                    PageIndexPolicy::Required,
+                ] {
+                    let make_decoder = || {
+                        ParquetMetaDataPushDecoder::try_new_with_metadata(
+                            test_file_len(),
+                            metadata.clone(),
+                        )
+                        .unwrap()
+                        .with_column_index_policy(column_policy)
+                        .with_offset_index_policy(offset_policy)
+                    };
+                    let mut decoder = make_decoder();
+                    expect_needs_data(decoder.try_decode());
+                    assert!(decoder.pending_page_index_range.is_some());
+                    decoder = setter(decoder, policy);
+                    assert!(decoder.pending_page_index_range.is_none());
+                    let mut reference = setter(make_decoder(), policy);
+                    push_ranges_to_metadata_decoder(&mut reference, vec![test_file_range()]);
+                    let expected = expect_data(reference.try_decode());
+                    if let Some(range) = range_for_page_index(
+                        &metadata,
+                        decoder.column_index_policy,
+                        decoder.offset_index_policy,
+                    ) {
+                        assert_eq!(expect_needs_data(decoder.try_decode()), vec![range.clone()]);
+                        push_ranges_to_metadata_decoder(&mut decoder, vec![range]);
+                    }
+                    assert_eq!(expect_data(decoder.try_decode()), expected);
+                    assert!(decoder.pending_page_index_range.is_none());
+                }
+            }
+        }
+    }
+
+    /// Decode only the generated fixture's footer, leaving indexes for an upgrade.
+    fn test_metadata_without_indexes() -> ParquetMetaData {
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(test_file_len())
+            .unwrap()
+            .with_page_index_policy(PageIndexPolicy::Skip);
+        push_ranges_to_metadata_decoder(&mut decoder, vec![test_file_range()]);
+        expect_data(decoder.try_decode())
     }
 
     static TEST_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
