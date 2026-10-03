@@ -14306,6 +14306,28 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_list_to_list_view_null_in_non_nullable_field() {
+        // i32::MAX does not fit in Int16, so a safe cast turns it into a null
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>([Some(vec![
+            Some(1),
+            Some(i32::MAX),
+        ])]);
+        let field = Arc::new(Field::new_list_field(DataType::Int16, false));
+        for (target_type, array_name) in [
+            (DataType::ListView(field.clone()), "ListViewArray"),
+            (DataType::LargeListView(field), "LargeListViewArray"),
+        ] {
+            let err = cast(&list, &target_type).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Invalid argument error: Non-nullable field of {array_name} \"item\" cannot contain nulls"
+                )
+            );
+        }
+    }
+
+    #[test]
     fn test_cast_large_list_view_to_large_list() {
         let list_view =
             LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
