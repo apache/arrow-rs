@@ -843,6 +843,12 @@ impl<'a> MutableArrayData<'a> {
             ));
         }
 
+        if len == 0 {
+            return Ok(());
+        }
+
+        (self.extend_nulls)(&mut self.data, len)?;
+
         self.data.len += len;
         let bit_len = bit_util::ceil(self.data.len, 8);
         let nulls = self.data.null_buffer();
@@ -850,7 +856,6 @@ impl<'a> MutableArrayData<'a> {
             .try_resize(bit_len, 0)
             .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         self.data.null_count += len;
-        (self.extend_nulls)(&mut self.data, len)?;
         Ok(())
     }
 
@@ -1017,6 +1022,34 @@ mod test {
         let mut mutable = MutableArrayData::new(vec![&array], true, 3);
         mutable.try_extend_nulls(1).unwrap();
         assert_eq!(mutable.len(), 1);
+    }
+
+    #[test]
+    fn test_try_extend_nulls_empty_union() {
+        use arrow_schema::{UnionFields, UnionMode};
+
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let mut builder = ArrayData::builder(DataType::Union(UnionFields::empty(), mode))
+                .len(0)
+                .add_buffer(Buffer::from_vec(Vec::<i8>::new()));
+
+            if mode == UnionMode::Dense {
+                builder = builder.add_buffer(Buffer::from_vec(Vec::<i32>::new()));
+            }
+
+            let source = builder.build().unwrap();
+            let mut mutable = MutableArrayData::new(vec![&source], true, 0);
+
+            mutable.try_extend_nulls(0).unwrap();
+            assert_eq!(mutable.len(), 0);
+
+            let err = mutable.try_extend_nulls(1).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Invalid argument error: Cannot extend a union with no fields with nulls"
+            );
+            assert_eq!(mutable.len(), 0);
+        }
     }
 
     #[test]

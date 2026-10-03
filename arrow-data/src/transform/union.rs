@@ -77,11 +77,11 @@ pub(super) fn extend_nulls_dense(
     let DataType::Union(fields, _) = &mutable.data_type else {
         unreachable!()
     };
-    let first_type_id = fields
-        .iter()
-        .next()
-        .expect("union must have at least one field")
-        .0;
+    let Some(first_type_id) = fields.iter().next().map(|(type_id, _)| type_id) else {
+        return Err(ArrowError::InvalidArgumentError(
+            "Cannot extend a union with no fields with nulls".to_owned(),
+        ));
+    };
 
     // Extend type_ids buffer
     mutable
@@ -104,11 +104,11 @@ pub(super) fn extend_nulls_sparse(
     let DataType::Union(fields, _) = &mutable.data_type else {
         unreachable!()
     };
-    let first_type_id = fields
-        .iter()
-        .next()
-        .expect("union must have at least one field")
-        .0;
+    let Some(first_type_id) = fields.iter().next().map(|(type_id, _)| type_id) else {
+        return Err(ArrowError::InvalidArgumentError(
+            "Cannot extend a union with no fields with nulls".to_owned(),
+        ));
+    };
 
     // Extend type_ids buffer
     mutable
