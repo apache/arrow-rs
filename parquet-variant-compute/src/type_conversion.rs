@@ -20,9 +20,9 @@
 use arrow::array::ArrowNativeTypeOp;
 use arrow::compute::kernels::cast_utils::parse_decimal;
 use arrow::compute::{
-    CastOptions, DecimalCast, cast_num_to_bool, cast_single_string_to_boolean_default, num_cast,
-    rescale_decimal, single_bool_to_numeric, single_decimal_to_float_lossy,
-    single_float_to_decimal,
+    CastOptions, DecimalCast, cast_num_to_bool, cast_single_string_to_boolean_default,
+    float_to_decimal, num_cast, rescale_decimal, single_bool_to_numeric,
+    single_decimal_to_float_lossy,
 };
 use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
@@ -382,7 +382,7 @@ impl_timestamp_from_variant!(
 /// - Decimal variants (`Decimal4/8/16`) use their embedded precision and scale
 ///
 /// The value is rescaled to (`precision`, `scale`) using `rescale_decimal` for integers,
-/// `single_float_to_decimal` for floats, and `parse_decimal` for strings.
+/// `float_to_decimal` for floats, and `parse_decimal` for strings.
 /// returns `None` if it cannot fit the requested precision.
 pub(crate) fn variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
@@ -393,8 +393,6 @@ where
     O: DecimalType,
     O::Native: DecimalCast,
 {
-    let mul = 10_f64.powi(scale as i32);
-
     match variant {
         Variant::Int8(i) => rescale_decimal::<Decimal32Type, O>(
             *i as i32,
@@ -424,8 +422,10 @@ where
             precision,
             scale,
         ),
-        Variant::Float(f) => single_float_to_decimal::<O>(<f64 as From<f32>>::from(*f), mul),
-        Variant::Double(f) => single_float_to_decimal::<O>(*f, mul),
+        Variant::Float(f) => {
+            float_to_decimal::<O>(<f64 as From<f32>>::from(*f), precision, scale).ok()
+        }
+        Variant::Double(f) => float_to_decimal::<O>(*f, precision, scale).ok(),
         Variant::String(v) => parse_decimal::<O>(v, precision, scale).ok(),
         Variant::ShortString(v) => parse_decimal::<O>(v, precision, scale).ok(),
         Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
