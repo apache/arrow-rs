@@ -337,7 +337,21 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_data_page_row_count_limit`]
     pub fn data_page_row_count_limit(&self) -> usize {
-        self.data_page_row_count_limit
+        self.default_column_properties
+            .data_page_row_count_limit()
+            .unwrap_or(DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT)
+    }
+
+    /// Returns data page row count limit for a specific column.
+    ///
+    /// Takes precedence over [`Self::data_page_row_count_limit`].
+    ///
+    /// Note: this is a best effort limit based on the write batch size.
+    pub fn column_data_page_row_count_limit(&self, col: &ColumnPath) -> usize {
+        resolve_data_page_row_count_limit(
+            self.column_override(col),
+            &self.default_column_properties,
+        )
     }
 
     /// Returns configured batch size for writes.
@@ -584,6 +598,7 @@ impl WriterProperties {
             statistics_enabled: resolve_statistics_enabled(column, default),
             write_page_header_statistics: resolve_write_page_header_statistics(column, default),
             data_page_size_limit: resolve_data_page_size_limit(column, default),
+            data_page_row_count_limit: resolve_data_page_row_count_limit(column, default),
             dictionary_page_size_limit: resolve_dictionary_page_size_limit(column, default),
             data_page_v2_compression_ratio_threshold:
                 resolve_data_page_v2_compression_ratio_threshold(column, default),
@@ -745,6 +760,8 @@ impl WriterPropertiesBuilder {
     pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
         assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
         self.data_page_row_count_limit = value;
+        self.default_column_properties
+            .set_data_page_row_count_limit(value);
         self
     }
 
@@ -1292,6 +1309,19 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets data page row count limit for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_data_page_row_count_limit`].
+    ///
+    /// # Panics
+    /// If the value is `0`.
+    pub fn set_column_data_page_row_count_limit(mut self, col: ColumnPath, value: usize) -> Self {
+        assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
+        self.get_mut_props(col)
+            .set_data_page_row_count_limit(value);
+        self
+    }
+
     /// Sets [`EnabledStatistics`] level for a specific column.
     ///
     /// Takes precedence over [`Self::set_statistics_enabled`].
@@ -1658,6 +1688,7 @@ struct ColumnProperties {
     encoding: Option<Encoding>,
     codec: Option<Compression>,
     data_page_size_limit: Option<usize>,
+    data_page_row_count_limit: Option<usize>,
     dictionary_page_size_limit: Option<usize>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
@@ -1694,6 +1725,12 @@ impl ColumnProperties {
     /// Sets data page size limit for this column.
     fn set_data_page_size_limit(&mut self, value: usize) {
         self.data_page_size_limit = Some(value);
+    }
+
+    /// Sets data page row count limit for this column.
+    fn set_data_page_row_count_limit(&mut self, value: usize) {
+        assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
+        self.data_page_row_count_limit = Some(value);
     }
 
     /// Sets whether dictionary encoding is enabled for this column.
@@ -1801,6 +1838,11 @@ impl ColumnProperties {
         self.data_page_size_limit
     }
 
+    /// Returns optional data page row count limit for this column.
+    fn data_page_row_count_limit(&self) -> Option<usize> {
+        self.data_page_row_count_limit
+    }
+
     /// Returns optional statistics level requested for this column. If result is `None`,
     /// then no setting has been provided.
     fn statistics_enabled(&self) -> Option<EnabledStatistics> {
@@ -1854,6 +1896,8 @@ pub(crate) struct ResolvedColumnProperties {
     pub(crate) write_page_header_statistics: bool,
     /// See [`WriterProperties::column_data_page_size_limit`].
     pub(crate) data_page_size_limit: usize,
+    /// See [`WriterProperties::column_data_page_row_count_limit`].
+    pub(crate) data_page_row_count_limit: usize,
     /// See [`WriterProperties::column_dictionary_page_size_limit`].
     pub(crate) dictionary_page_size_limit: usize,
     /// See [`WriterProperties::column_data_page_v2_compression_ratio_threshold`].
@@ -1923,6 +1967,14 @@ fn resolve_data_page_size_limit(
 ) -> usize {
     column_or_default(column, default, ColumnProperties::data_page_size_limit)
         .unwrap_or(DEFAULT_PAGE_SIZE)
+}
+
+fn resolve_data_page_row_count_limit(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> usize {
+    column_or_default(column, default, ColumnProperties::data_page_row_count_limit)
+        .unwrap_or(DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT)
 }
 
 fn resolve_dictionary_page_size_limit(
@@ -2512,6 +2564,31 @@ mod tests {
             props.column_data_page_size_limit(&ColumnPath::from("other")),
             100
         );
+    }
+
+    #[test]
+    fn test_writer_properties_column_data_page_row_count_limit() {
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(100)
+            .set_column_data_page_row_count_limit(ColumnPath::from("col"), 10)
+            .build();
+
+        assert_eq!(props.data_page_row_count_limit(), 100);
+        assert_eq!(
+            props.column_data_page_row_count_limit(&ColumnPath::from("col")),
+            10
+        );
+        assert_eq!(
+            props.column_data_page_row_count_limit(&ColumnPath::from("other")),
+            100
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 data page row count limit")]
+    fn test_writer_properties_panic_on_zero_column_data_page_row_count_limit() {
+        let _ = WriterProperties::builder()
+            .set_column_data_page_row_count_limit(ColumnPath::from("col"), 0);
     }
 
     #[test]
