@@ -81,6 +81,36 @@ fn join_streams_variable(
 
 impl<T: DataType> Decoder<T> for ByteStreamSplitDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
+        let type_size = T::get_type_size();
+        if !data.len().is_multiple_of(type_size) {
+            return Err(general_err!(
+                "Invalid BYTE_STREAM_SPLIT data length {} for values of size {type_size}",
+                data.len()
+            ));
+        }
+
+        // `num_values` is the number of encoded values in `data`. A shorter buffer
+        // cannot satisfy that count (a longer one is not a valid page either).
+        let expected_len = num_values.checked_mul(type_size).ok_or_else(|| {
+            general_err!(
+                "BYTE_STREAM_SPLIT data size overflow for {num_values} values of size {type_size}"
+            )
+        })?;
+        if data.len() > expected_len {
+            return Err(general_err!(
+                "Invalid BYTE_STREAM_SPLIT data length: expected at most {expected_len} bytes for \
+                 {num_values} values of size {type_size}, got {}",
+                data.len()
+            ));
+        }
+        if data.len() < expected_len {
+            return Err(general_err!(
+                "Invalid BYTE_STREAM_SPLIT data length: expected at least {expected_len} bytes for \
+                 {num_values} values of size {type_size}, got {}",
+                data.len()
+            ));
+        }
+
         self.encoded_bytes = data;
         self.total_num_values = num_values;
         self.values_decoded = 0;
