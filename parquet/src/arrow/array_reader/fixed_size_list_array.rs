@@ -27,6 +27,19 @@ use arrow_data::{ArrayData, transform::MutableArrayData};
 use arrow_schema::DataType as ArrowType;
 
 /// Implementation of fixed-size list array reader.
+///
+/// Reconstructs a `FixedSizeList` from a child reader's definition and
+/// repetition levels. See [`ArrayReader`] for how the `def_level` (`D`) and
+/// `rep_level` (`R`) below are interpreted.
+///
+/// The definition-level states are the same as [`ListArrayReader`], except
+/// that:
+///
+/// 1. A *present* row (`d >= D`) contributes exactly `fixed_size` child values.
+/// 2. Empty (`d == D - 1`) and null (`d <= D - 2`) rows contribute no
+///    child values and are null-padded to `fixed_size` on output.
+///
+/// [`ListArrayReader`]: crate::arrow::array_reader::ListArrayReader
 pub struct FixedSizeListArrayReader {
     item_reader: Box<dyn ArrayReader>,
     /// The number of child items in each row of the list array
