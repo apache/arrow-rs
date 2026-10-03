@@ -129,6 +129,16 @@ impl QueuedRowGroups {
         }
     }
 
+    fn row_group_indices(&self) -> Vec<usize> {
+        match self {
+            Self::Global { row_groups, .. } => row_groups.iter().copied().collect(),
+            Self::PerRowGroup(row_groups) => row_groups
+                .iter()
+                .map(|row_group| row_group.row_group_index)
+                .collect(),
+        }
+    }
+
     fn clear(&mut self) {
         match self {
             Self::Global {
@@ -258,16 +268,28 @@ impl RowGroupFrontier {
 
     /// Advance queued row groups until one should be handed to the builder.
     fn next_readable_row_group(&mut self) -> Result<Option<NextRowGroup>, ParquetError> {
+        self.next_readable_row_group_with_skips()
+            .map(|(next_row_group, _)| next_row_group)
+    }
+
+    /// Advance queued row groups, returning occurrences skipped before the
+    /// next readable row group so their retained bytes can be released even
+    /// though they never enter the row-group reader state machine.
+    fn next_readable_row_group_with_skips(
+        &mut self,
+    ) -> Result<(Option<NextRowGroup>, Vec<usize>), ParquetError> {
+        let mut skipped = Vec::new();
         loop {
             let Some(row_group_idx) = self.queued.front() else {
-                return Ok(None);
+                return Ok((None, skipped));
             };
             // A global selection can be exhausted before its row-group queue.
             // Per-row-group selections have no shared cursor to exhaust; empty
             // local selections are discarded by the `selected_rows == 0` path below.
             if self.budget.is_exhausted() || self.queued.global_selection_is_exhausted() {
+                skipped.extend(self.queued.row_group_indices());
                 self.clear_remaining();
-                return Ok(None);
+                return Ok((None, skipped));
             }
 
             let row_count = self.parquet_metadata.row_group_num_rows(row_group_idx)?;
@@ -276,6 +298,7 @@ impl RowGroupFrontier {
                 Some(selection) => {
                     let selected_rows = selection.row_count();
                     if selected_rows == 0 {
+                        skipped.push(row_group_idx);
                         continue;
                     }
                     // An all-rows selection is equivalent to no selection
@@ -296,9 +319,10 @@ impl RowGroupFrontier {
 
             match self.plan_selected_row_group(next_row_group, selected_rows) {
                 QueuedRowGroupDecision::Read(next_row_group) => {
-                    return Ok(Some(next_row_group));
+                    return Ok((Some(next_row_group), skipped));
                 }
                 QueuedRowGroupDecision::Skip { remaining_budget } => {
+                    skipped.push(row_group_idx);
                     self.budget = remaining_budget;
                 }
             }
@@ -408,6 +432,11 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.buffered_bytes()
     }
 
+    #[cfg(test)]
+    pub(crate) fn num_buffers(&self) -> usize {
+        self.row_group_reader_builder.num_buffers()
+    }
+
     /// Clear any staged ranges currently buffered for future decode work
     pub fn clear_all_ranges(&mut self) {
         self.row_group_reader_builder.clear_all_ranges();
@@ -457,7 +486,14 @@ impl RemainingRowGroups {
                 // We are done with the previous row group, seek to the next one
                 // from the frontier, if any.
 
-                match self.frontier.next_readable_row_group()? {
+                let (next_row_group, skipped_row_groups) =
+                    self.frontier.next_readable_row_group_with_skips()?;
+                for row_group_idx in skipped_row_groups {
+                    self.row_group_reader_builder
+                        .release_row_group(row_group_idx);
+                }
+
+                match next_row_group {
                     Some(NextRowGroup {
                         row_group_idx,
                         row_count,
