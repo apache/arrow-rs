@@ -34,6 +34,7 @@ use std::sync::Arc;
 ///
 /// let names = Arc::new(StringArray::from(vec!["one", "two"])) as ArrayRef;
 /// let values = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
+/// // Create struct array with `{name: ..., value: ...}` rows
 /// let array = StructArrayAssembler::new()
 ///     .with_field("name", names, false)
 ///     .with_field("value", values, false)
