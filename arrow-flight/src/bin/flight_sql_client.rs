@@ -17,7 +17,11 @@
 
 //! A command line client for Arrow Flight SQL.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
@@ -36,6 +40,10 @@ use tonic::{
     transport::{Channel, ClientTlsConfig, Endpoint},
 };
 use tracing_log::log::info;
+
+/// Reserved location URI meaning "redeem this ticket on the connection that returned the
+/// `FlightInfo`", rather than on a separate server. An empty string means the same.
+const REUSE_CONNECTION_URI: &str = "arrow-flight-reuse-connection://?";
 
 /// Logging CLI config.
 #[derive(Debug, Parser)]
@@ -101,6 +109,8 @@ struct ClientArgs {
     token: Option<String>,
 
     /// Use TLS.
+    ///
+    /// Endpoint locations must also use TLS, unless reusing this connection.
     ///
     /// If not provided, use cleartext connection.
     #[clap(long)]
@@ -251,7 +261,7 @@ enum Command {
 async fn main() -> Result<()> {
     let args = Args::parse();
     setup_logging(args.logging_args)?;
-    let mut client = setup_client(args.client_args)
+    let mut client = setup_client(&args.client_args)
         .await
         .context("setup client")?;
 
@@ -317,7 +327,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let batches = execute_flight(&mut client, flight_info)
+    let batches = execute_flight(&mut client, &args.client_args, flight_info)
         .await
         .context("read flight data")?;
 
@@ -329,6 +339,7 @@ async fn main() -> Result<()> {
 
 async fn execute_flight(
     client: &mut FlightSqlServiceClient<Channel>,
+    client_args: &ClientArgs,
     info: FlightInfo,
 ) -> Result<Vec<RecordBatch>> {
     let schema = Arc::new(Schema::try_from(info.clone()).context("valid schema")?);
@@ -336,9 +347,35 @@ async fn execute_flight(
     batches.push(RecordBatch::new_empty(schema));
     info!("decoded schema");
 
+    let mut location_clients = HashMap::new();
+
     for endpoint in info.endpoint {
         let Some(ticket) = &endpoint.ticket else {
             bail!("did not get ticket");
+        };
+
+        let location = select_endpoint_location(
+            endpoint
+                .location
+                .iter()
+                .map(|location| location.uri.as_str()),
+            client_args.tls,
+        )?;
+
+        let client = match location {
+            None => &mut *client,
+            Some(uri) => match location_clients.entry(uri.to_owned()) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    let mut endpoint_client = setup_client_for_uri(client_args, uri)
+                        .await
+                        .with_context(|| format!("setup client for endpoint location {uri}"))?;
+                    if let Some(token) = client.token() {
+                        endpoint_client.set_token(token.to_owned());
+                    }
+                    entry.insert(endpoint_client)
+                }
+            },
         };
 
         let mut flight_data = client.do_get(ticket.clone()).await.context("do get")?;
@@ -398,12 +435,73 @@ fn setup_logging(args: LoggingArgs) -> Result<()> {
     Ok(())
 }
 
-async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel>> {
+/// Prefer a separate location, falling back to the original connection when permitted.
+fn select_endpoint_location<'a>(
+    locations: impl IntoIterator<Item = &'a str>,
+    tls: bool,
+) -> Result<Option<&'a str>> {
+    let mut reuse_connection = false;
+    let mut has_locations = false;
+    for uri in locations {
+        has_locations = true;
+        if uri.is_empty() || uri == REUSE_CONNECTION_URI {
+            reuse_connection = true;
+        } else if !tls || uri.starts_with("https://") {
+            // Match the TLS detection policy in setup_client_for_uri.
+            return Ok(Some(uri));
+        }
+    }
+    if tls && has_locations && !reuse_connection {
+        bail!(
+            "--tls requires a secure endpoint location, but only insecure locations were provided"
+        );
+    }
+    Ok(None)
+}
+
+async fn setup_client(args: &ClientArgs) -> Result<FlightSqlServiceClient<Channel>> {
     let port = args.port.unwrap_or(if args.tls { 443 } else { 80 });
 
     let protocol = if args.tls { "https" } else { "http" };
 
-    let mut endpoint = Endpoint::new(format!("{}://{}:{}", protocol, args.host, port))
+    let mut client =
+        setup_client_for_uri(args, &format!("{}://{}:{}", protocol, args.host, port)).await?;
+
+    if let Some(token) = &args.token {
+        client.set_token(token.clone());
+        info!("token set");
+    }
+
+    match (&args.username, &args.password) {
+        (None, None) => {}
+        (Some(username), Some(password)) => {
+            client
+                .handshake(username, password)
+                .await
+                .context("handshake")?;
+            info!("performed handshake");
+        }
+        (Some(_), None) => {
+            bail!("when username is set, you also need to set a password")
+        }
+        (None, Some(_)) => {
+            bail!("when password is set, you also need to set a username")
+        }
+    }
+
+    Ok(client)
+}
+
+/// Connect a client to `uri`, applying the headers and compression settings from `args`.
+/// TLS is used when `uri` has an `https` scheme. Authentication is handled by the caller,
+/// so separate endpoint clients can reuse the original client's token without a handshake.
+async fn setup_client_for_uri(
+    args: &ClientArgs,
+    uri: &str,
+) -> Result<FlightSqlServiceClient<Channel>> {
+    let tls = uri.starts_with("https://");
+
+    let mut endpoint = Endpoint::new(uri.to_owned())
         .context("create endpoint")?
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(20))
@@ -413,7 +511,7 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
         .keep_alive_timeout(Duration::from_secs(20))
         .keep_alive_while_idle(true);
 
-    if args.tls {
+    if tls {
         let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
         if args.key_log {
             tls_config = tls_config.use_key_log();
@@ -427,8 +525,8 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
     let channel = endpoint.connect().await.context("connect to endpoint")?;
 
     let mut client = FlightServiceClient::new(channel);
-    for encoding in args.accept_compression {
-        client = client.accept_compressed(encoding.into());
+    for encoding in &args.accept_compression {
+        client = client.accept_compressed((*encoding).into());
     }
     if let Some(encoding) = args.send_compression {
         client = client.send_compressed(encoding.into());
@@ -436,30 +534,8 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
     let mut client = FlightSqlServiceClient::new_from_inner(client);
     info!("connected");
 
-    for (k, v) in args.headers {
+    for (k, v) in &args.headers {
         client.set_header(k, v);
-    }
-
-    if let Some(token) = args.token {
-        client.set_token(token);
-        info!("token set");
-    }
-
-    match (args.username, args.password) {
-        (None, None) => {}
-        (Some(username), Some(password)) => {
-            client
-                .handshake(&username, &password)
-                .await
-                .context("handshake")?;
-            info!("performed handshake");
-        }
-        (Some(_), None) => {
-            bail!("when username is set, you also need to set a password")
-        }
-        (None, Some(_)) => {
-            bail!("when password is set, you also need to set a username")
-        }
     }
 
     Ok(client)
@@ -494,5 +570,78 @@ fn log_metadata(map: &MetadataMap, what: &'static str) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{REUSE_CONNECTION_URI, select_endpoint_location};
+
+    #[test]
+    fn tls_selects_later_secure_location() {
+        let locations = [
+            REUSE_CONNECTION_URI,
+            "http://insecure:80",
+            "https://secure:443",
+            "https://other:443",
+        ];
+        assert_eq!(
+            select_endpoint_location(locations, true).unwrap(),
+            Some("https://secure:443")
+        );
+    }
+
+    #[test]
+    fn tls_rejects_insecure_only_locations() {
+        let error =
+            select_endpoint_location(["http://insecure:80", "http://other:80"], true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("--tls requires a secure endpoint location")
+        );
+        assert!(error.to_string().contains("only insecure locations"));
+    }
+
+    #[test]
+    fn reuse_falls_back_to_original_connection() {
+        for tls in [false, true] {
+            assert_eq!(select_endpoint_location([], tls).unwrap(), None);
+            assert_eq!(select_endpoint_location([""], tls).unwrap(), None);
+            assert_eq!(
+                select_endpoint_location([REUSE_CONNECTION_URI], tls).unwrap(),
+                None
+            );
+        }
+        for reuse in ["", REUSE_CONNECTION_URI] {
+            for locations in [[reuse, "http://insecure:80"], ["http://insecure:80", reuse]] {
+                assert_eq!(select_endpoint_location(locations, true).unwrap(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn without_tls_selects_first_nonreuse_location() {
+        assert_eq!(
+            select_endpoint_location(
+                [
+                    "",
+                    REUSE_CONNECTION_URI,
+                    "http://first:80",
+                    "https://later:443"
+                ],
+                false,
+            )
+            .unwrap(),
+            Some("http://first:80")
+        );
+        assert_eq!(
+            select_endpoint_location(
+                [REUSE_CONNECTION_URI, "https://first:443", "http://later:80"],
+                false,
+            )
+            .unwrap(),
+            Some("https://first:443")
+        );
     }
 }
