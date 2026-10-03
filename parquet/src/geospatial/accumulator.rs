@@ -388,4 +388,29 @@ mod test {
                 .with_mrange(4.0, 8.0)
         );
     }
+
+    #[cfg(feature = "geospatial")]
+    #[test]
+    fn test_geometry_accumulator_omits_statistics_for_unsupported_wkb_type() {
+        let mut triangle_z = vec![1];
+        triangle_z.extend_from_slice(&1017_u32.to_le_bytes());
+        triangle_z.extend_from_slice(&1_u32.to_le_bytes());
+        triangle_z.extend_from_slice(&4_u32.to_le_bytes());
+        for coordinate in [
+            (10.0_f64, 20.0_f64, 30.0_f64),
+            (11.0, 20.0, 30.0),
+            (10.0, 21.0, 30.0),
+            (10.0, 20.0, 30.0),
+        ] {
+            for value in [coordinate.0, coordinate.1, coordinate.2] {
+                triangle_z.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+
+        let mut accumulator = ParquetGeoStatsAccumulator::default();
+        accumulator.update_wkb(&triangle_z);
+
+        assert!(!accumulator.is_valid());
+        assert!(accumulator.finish().is_none());
+    }
 }
