@@ -28,9 +28,9 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```
-/// use std::sync::Arc;
-/// use arrow_array::builder::StructArrayAssembler;
-/// use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
+/// # use std::sync::Arc;
+/// # use arrow_array::builder::StructArrayAssembler;
+/// # use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
 ///
 /// let names = Arc::new(StringArray::from(vec!["one", "two"])) as ArrayRef;
 /// let values = Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef;
