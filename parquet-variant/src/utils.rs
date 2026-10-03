@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use std::{array::TryFromSliceError, ops::Range, str};
+use std::{array::TryFromSliceError, borrow::Cow, ops::Range, str};
 
 use crate::VariantPathElement;
 use arrow_schema::ArrowError;
@@ -234,7 +234,7 @@ pub(crate) fn parse_path(s: &str) -> Result<Vec<VariantPathElement<'_>>, ArrowEr
 fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize), ArrowError> {
     let start = i + 1; // skip '['
 
-    let mut unescaped = String::new();
+    let mut unescaped = None;
     let mut chars = s[start..].char_indices();
     let mut end = None;
     let mut quote = None;
@@ -243,6 +243,8 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
         match c {
             // Escape: take next char literally
             '\\' => {
+                let unescaped =
+                    unescaped.get_or_insert_with(|| String::from(&s[start..start + offset]));
                 if let Some((_, next)) = chars.next() {
                     unescaped.push(next);
                 }
@@ -262,7 +264,9 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
                 break;
             }
             _ => {
-                unescaped.push(c);
+                if let Some(unescaped) = &mut unescaped {
+                    unescaped.push(c);
+                }
             }
         }
     }
@@ -271,23 +275,39 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
         return Err(ArrowError::ParseError(format!("Unclosed '[' at byte {i}")));
     };
 
-    let element = if let Some(inner) = unescaped
-        .strip_prefix('\'')
-        .and_then(|s| s.strip_suffix('\''))
-        .or_else(|| unescaped.strip_prefix('"')?.strip_suffix('"'))
-    {
+    let value = match unescaped {
+        Some(value) => Cow::Owned(value),
+        None => Cow::Borrowed(&s[start..end]),
+    };
+    let element = parse_bracket_element(value)?;
+
+    Ok((element, end + 1))
+}
+
+fn parse_bracket_element(value: Cow<'_, str>) -> Result<VariantPathElement<'_>, ArrowError> {
+    let quoted = matches!(value.as_bytes(), [b'\'', .., b'\''] | [b'"', .., b'"']);
+
+    if quoted {
         // Quoted field name, e.g., ['field'] or ['123'] or ["123"]
-        VariantPathElement::field(inner.to_string())
-    } else if unescaped == "*" {
+        return Ok(VariantPathElement::field(match value {
+            Cow::Borrowed(value) => Cow::Borrowed(&value[1..value.len() - 1]),
+            Cow::Owned(mut value) => {
+                value.pop();
+                value.remove(0);
+                Cow::Owned(value)
+            }
+        }));
+    }
+
+    let element = if value == "*" {
         VariantPathElement::list_element()
     } else {
-        let Ok(idx) = unescaped.parse() else {
+        let Ok(idx) = value.parse() else {
             return Err(ArrowError::ParseError(format!(
-                "Invalid token in bracket request: `{unescaped}`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
+                "Invalid token in bracket request: `{value}`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
             )));
         };
         VariantPathElement::index(idx)
     };
-
-    Ok((element, end + 1))
+    Ok(element)
 }
