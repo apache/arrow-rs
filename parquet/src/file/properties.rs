@@ -18,6 +18,7 @@
 //! Configuration via [`WriterProperties`] and [`ReaderProperties`]
 use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
+pub use crate::encodings::encoding::DeltaBinaryPackedEncoderOptions;
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptionProperties;
 use crate::errors::{ParquetError, Result};
@@ -485,6 +486,20 @@ impl WriterProperties {
         )
     }
 
+    /// Returns custom delta binary packed encoder options for a specific column.
+    ///
+    /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
+    /// the integer sub-encoders used by `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY`.
+    pub fn delta_binary_packed_encoder_options(
+        &self,
+        col: &ColumnPath,
+    ) -> Option<DeltaBinaryPackedEncoderOptions> {
+        resolve_delta_binary_packed_encoder_options(
+            self.column_override(col),
+            &self.default_column_properties,
+        )
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     ///
     /// This is not configurable.
@@ -588,6 +603,9 @@ impl WriterProperties {
             data_page_v2_compression_ratio_threshold:
                 resolve_data_page_v2_compression_ratio_threshold(column, default),
             bloom_filter_properties: resolve_bloom_filter_properties(column, default).cloned(),
+            delta_binary_packed_encoder_options: resolve_delta_binary_packed_encoder_options(
+                column, default,
+            ),
         }
     }
 
@@ -1064,6 +1082,19 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets the default delta binary packed encoder block layout for all columns.
+    ///
+    /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
+    /// the integer sub-encoders used by `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY`.
+    pub fn set_delta_binary_packed_encoder_options(
+        mut self,
+        value: DeltaBinaryPackedEncoderOptions,
+    ) -> Self {
+        self.default_column_properties
+            .set_delta_binary_packed_encoder_options(value);
+        self
+    }
+
     /// Sets FileEncryptionProperties (defaults to `None`)
     #[cfg(feature = "encryption")]
     pub fn with_file_encryption_properties(
@@ -1353,6 +1384,21 @@ impl WriterPropertiesBuilder {
     ) -> Self {
         self.get_mut_props(col)
             .set_data_page_v2_compression_ratio_threshold(value);
+        self
+    }
+
+    /// Sets the delta binary packed encoder block layout for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_delta_binary_packed_encoder_options`].
+    /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
+    /// the integer sub-encoders used by `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY`.
+    pub fn set_column_delta_binary_packed_encoder_options(
+        mut self,
+        col: ColumnPath,
+        value: DeltaBinaryPackedEncoderOptions,
+    ) -> Self {
+        self.get_mut_props(col)
+            .set_delta_binary_packed_encoder_options(value);
         self
     }
 
@@ -1667,6 +1713,7 @@ struct ColumnProperties {
     /// Whether the bloom filter NDV was explicitly set by the user
     bloom_filter_ndv_is_set: bool,
     data_page_v2_compression_ratio_threshold: Option<f64>,
+    delta_binary_packed_encoder_options: Option<DeltaBinaryPackedEncoderOptions>,
 }
 
 impl ColumnProperties {
@@ -1774,6 +1821,10 @@ impl ColumnProperties {
         self.data_page_v2_compression_ratio_threshold = Some(value);
     }
 
+    fn set_delta_binary_packed_encoder_options(&mut self, value: DeltaBinaryPackedEncoderOptions) {
+        self.delta_binary_packed_encoder_options = Some(value);
+    }
+
     /// Returns optional encoding for this column.
     fn encoding(&self) -> Option<Encoding> {
         self.encoding
@@ -1825,6 +1876,10 @@ impl ColumnProperties {
         self.data_page_v2_compression_ratio_threshold
     }
 
+    fn delta_binary_packed_encoder_options(&self) -> Option<DeltaBinaryPackedEncoderOptions> {
+        self.delta_binary_packed_encoder_options
+    }
+
     /// If bloom filter is enabled and NDV was not explicitly set, resolve it to the
     /// given `default_ndv` (typically derived from `max_row_group_row_count`).
     fn resolve_bloom_filter_ndv(&mut self, default_ndv: u64) {
@@ -1860,6 +1915,8 @@ pub(crate) struct ResolvedColumnProperties {
     pub(crate) data_page_v2_compression_ratio_threshold: f64,
     /// See [`WriterProperties::bloom_filter_properties`].
     pub(crate) bloom_filter_properties: Option<BloomFilterProperties>,
+    /// See [`WriterProperties::delta_binary_packed_encoder_options`].
+    pub(crate) delta_binary_packed_encoder_options: Option<DeltaBinaryPackedEncoderOptions>,
 }
 
 /// Returns the setting read by `get` for `column` if it sets one, otherwise the
@@ -1956,6 +2013,17 @@ fn resolve_bloom_filter_properties<'a>(
     column
         .and_then(ColumnProperties::bloom_filter_properties)
         .or_else(|| default.bloom_filter_properties())
+}
+
+fn resolve_delta_binary_packed_encoder_options(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> Option<DeltaBinaryPackedEncoderOptions> {
+    column_or_default(
+        column,
+        default,
+        ColumnProperties::delta_binary_packed_encoder_options,
+    )
 }
 
 /// Reference counted reader properties.
@@ -2203,6 +2271,43 @@ mod tests {
             props
                 .bloom_filter_properties(&ColumnPath::from("col"))
                 .is_none()
+        );
+        assert!(
+            props
+                .delta_binary_packed_encoder_options(&ColumnPath::from("col"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_writer_properties_delta_binary_packed_encoder_options() {
+        let default = DeltaBinaryPackedEncoderOptions::try_new(256, 4).unwrap();
+        let overridden = DeltaBinaryPackedEncoderOptions::try_new(128, 4).unwrap();
+        let column = ColumnPath::from("column");
+        let props = WriterProperties::builder()
+            .set_delta_binary_packed_encoder_options(default)
+            .set_column_delta_binary_packed_encoder_options(column.clone(), overridden)
+            .build();
+
+        assert_eq!(
+            props.delta_binary_packed_encoder_options(&column),
+            Some(overridden)
+        );
+        assert_eq!(
+            props.delta_binary_packed_encoder_options(&ColumnPath::from("other")),
+            Some(default)
+        );
+        assert_eq!(
+            props
+                .resolve_column_properties(&column)
+                .delta_binary_packed_encoder_options,
+            Some(overridden)
+        );
+
+        let rebuilt = props.into_builder().build();
+        assert_eq!(
+            rebuilt.delta_binary_packed_encoder_options(&column),
+            Some(overridden)
         );
     }
 
