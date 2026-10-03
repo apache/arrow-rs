@@ -786,31 +786,46 @@ impl ArrayData {
                     vec![ArrayData::new_empty(v.as_ref())],
                     true,
                 ),
-                DataType::Union(f, mode) => {
-                    let (id, _) = f.iter().next().unwrap();
-                    let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
-                    let buffers = match mode {
-                        UnionMode::Sparse => vec![ids],
-                        UnionMode::Dense => {
-                            let end_offset = i32::from_usize(len).unwrap();
-                            vec![ids, Buffer::from_iter(0_i32..end_offset)]
-                        }
-                    };
-
-                    let children = f
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, (_, f))| {
-                            if idx == 0 || *mode == UnionMode::Sparse {
-                                Self::new_null(f.data_type(), len)
-                            } else {
-                                Self::new_empty(f.data_type())
+                DataType::Union(f, mode) => match f.iter().next() {
+                    // Every slot carries a type id naming one of the children,
+                    // so an empty union has nothing to put in a slot and can
+                    // only be the empty array.
+                    None => {
+                        assert_eq!(
+                            len, 0,
+                            "cannot construct null data from an empty union of length {len}, a slot has no type id to carry"
+                        );
+                        let buffers = match mode {
+                            UnionMode::Sparse => vec![zeroed(0)],
+                            UnionMode::Dense => vec![zeroed(0), zeroed(0)],
+                        };
+                        (buffers, vec![], false)
+                    }
+                    Some((id, _)) => {
+                        let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
+                        let buffers = match mode {
+                            UnionMode::Sparse => vec![ids],
+                            UnionMode::Dense => {
+                                let end_offset = i32::from_usize(len).unwrap();
+                                vec![ids, Buffer::from_iter(0_i32..end_offset)]
                             }
-                        })
-                        .collect();
+                        };
 
-                    (buffers, children, false)
-                }
+                        let children = f
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, (_, f))| {
+                                if idx == 0 || *mode == UnionMode::Sparse {
+                                    Self::new_null(f.data_type(), len)
+                                } else {
+                                    Self::new_empty(f.data_type())
+                                }
+                            })
+                            .collect();
+
+                        (buffers, children, false)
+                    }
+                },
                 DataType::RunEndEncoded(r, v) => {
                     if len == 0 {
                         // For empty arrays, create zero-length child arrays.
@@ -1209,12 +1224,10 @@ impl ArrayData {
             DataType::List(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i32>(values_data.len)?;
-                Ok(())
             }
             DataType::LargeList(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i64>(values_data.len)?;
-                Ok(())
             }
             DataType::Map(field, _) => {
                 let DataType::Struct(entries_fields) = field.data_type() else {
@@ -1238,17 +1251,14 @@ impl ArrayData {
                 }
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i32>(values_data.len)?;
-                Ok(())
             }
             DataType::ListView(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets_and_sizes::<i32>(values_data.len)?;
-                Ok(())
             }
             DataType::LargeListView(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets_and_sizes::<i64>(values_data.len)?;
-                Ok(())
             }
             DataType::FixedSizeList(field, list_size) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
@@ -1270,8 +1280,6 @@ impl ArrayData {
                         values_data.len, self.len, list_size, self.data_type
                     )));
                 }
-
-                Ok(())
             }
             DataType::Struct(fields) => {
                 self.validate_num_child_data(fields.len())?;
@@ -1292,7 +1300,6 @@ impl ArrayData {
                         )));
                     }
                 }
-                Ok(())
             }
             DataType::RunEndEncoded(run_ends_field, values_field) => {
                 self.validate_num_child_data(2)?;
@@ -1309,7 +1316,6 @@ impl ArrayData {
                         "Found null values in run_ends array. The run_ends array should not have null values.".to_string(),
                     ));
                 }
-                Ok(())
             }
             DataType::Union(fields, mode) => {
                 self.validate_num_child_data(fields.len())?;
@@ -1328,11 +1334,9 @@ impl ArrayData {
                         }
                     }
                 }
-                Ok(())
             }
             DataType::Dictionary(_key_type, value_type) => {
                 self.get_single_valid_child_data(value_type)?;
-                Ok(())
             }
             _ => {
                 // other types do not have child data
@@ -1343,9 +1347,9 @@ impl ArrayData {
                         self.child_data.len()
                     )));
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 
     /// Ensures that this array data has a single child_data with the
@@ -2440,6 +2444,8 @@ pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::UnionFields;
+
     use super::*;
     use crate::ByteView;
     use crate::transform::MutableArrayData;
@@ -3676,5 +3682,24 @@ mod tests {
             ArrayData::try_new(data_type, len, null_bit_buffer, offset, buffers, child_data);
 
         [from_builder_res, from_try_new_res]
+    }
+
+    #[test]
+    fn test_new_null_empty_union() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let data_type = DataType::Union(UnionFields::empty(), mode);
+            let data = ArrayData::new_null(&data_type, 0);
+            data.validate_full()
+                .expect("an empty union of length zero is valid");
+            assert_eq!(data.len(), 0);
+            assert!(data.child_data().is_empty());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot construct null data from an empty union")]
+    fn test_new_null_empty_union_with_slots() {
+        let data_type = DataType::Union(UnionFields::empty(), UnionMode::Dense);
+        let _ = ArrayData::new_null(&data_type, 1);
     }
 }
