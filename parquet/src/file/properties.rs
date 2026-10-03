@@ -243,7 +243,6 @@ enum OffsetIndexSetting {
 /// ```
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
-    data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_row_count: Option<usize>,
     max_row_group_bytes: Option<usize>,
@@ -620,7 +619,6 @@ impl WriterProperties {
 /// See example on [`WriterProperties`]
 #[derive(Debug, Clone)]
 pub struct WriterPropertiesBuilder {
-    data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_row_count: Option<usize>,
     max_row_group_bytes: Option<usize>,
@@ -647,7 +645,6 @@ impl Default for WriterPropertiesBuilder {
     /// Returns default state of the builder.
     fn default() -> Self {
         Self {
-            data_page_row_count_limit: DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
             max_row_group_row_count: Some(DEFAULT_MAX_ROW_GROUP_ROW_COUNT),
             max_row_group_bytes: None,
@@ -705,7 +702,6 @@ impl WriterPropertiesBuilder {
         }
 
         WriterProperties {
-            data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
             max_row_group_row_count: self.max_row_group_row_count,
             max_row_group_bytes: self.max_row_group_bytes,
@@ -759,7 +755,6 @@ impl WriterPropertiesBuilder {
     /// If the value is `0`.
     pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
         assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
-        self.data_page_row_count_limit = value;
         self.default_column_properties
             .set_data_page_row_count_limit(value);
         self
@@ -1425,7 +1420,6 @@ impl WriterPropertiesBuilder {
 impl From<WriterProperties> for WriterPropertiesBuilder {
     fn from(props: WriterProperties) -> Self {
         WriterPropertiesBuilder {
-            data_page_row_count_limit: props.data_page_row_count_limit,
             write_batch_size: props.write_batch_size,
             max_row_group_row_count: props.max_row_group_row_count,
             max_row_group_bytes: props.max_row_group_bytes,
