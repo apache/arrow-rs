@@ -1108,6 +1108,16 @@ impl ToPrimitive for i256 {
         i64::try_from(i256::to_i128(*self)?).ok()
     }
 
+    fn to_f32(&self) -> Option<f32> {
+        let magnitude = self.wrapping_abs();
+        let value = if magnitude.high == 0 {
+            magnitude.low as f32
+        } else {
+            f32::INFINITY
+        };
+        Some(if self.is_negative() { -value } else { value })
+    }
+
     fn to_f64(&self) -> Option<f64> {
         match *self {
             Self::MIN => Some(-2_f64.powi(255)),
@@ -1874,6 +1884,93 @@ mod tests {
             for ir in candidates {
                 test_reference_op(il, ir)
             }
+        }
+    }
+
+    #[test]
+    fn test_i256_to_f32_positive_midpoint() {
+        let value = (1_i128 << 53) + (1_i128 << 29) + 1;
+        assert_eq!(
+            i256::from_i128(value).to_f32().unwrap().to_bits(),
+            (value as f32).to_bits()
+        );
+    }
+
+    #[test]
+    fn test_i256_to_f32_negative_midpoint() {
+        let value = -((1_i128 << 53) + (1_i128 << 29) + 1);
+        assert_eq!(
+            i256::from_i128(value).to_f32().unwrap().to_bits(),
+            (value as f32).to_bits()
+        );
+    }
+
+    #[test]
+    fn test_i256_to_f32_midpoints() {
+        for exponent in 24_u32..=127 {
+            let step = i256::ONE << (exponent - 23);
+            for fraction in [0, 1, 0x7fffff] {
+                let lower = (i256::ONE << exponent) + step * i256::from_i128(i128::from(fraction));
+                let midpoint = lower + (step >> 1_u32);
+                let lower_bits = ((exponent + 127) << 23) | fraction;
+                for offset in [-1, 0, 1] {
+                    let value: i256 = midpoint + i256::from(offset);
+                    let round_up = offset > 0 || (offset == 0 && fraction & 1 == 1);
+                    let expected = lower_bits + u32::from(round_up);
+                    assert_eq!(value.to_f32().unwrap().to_bits(), expected, "{value}");
+                    assert_eq!(
+                        (-value).to_f32().unwrap().to_bits(),
+                        expected | 0x80000000,
+                        "{}",
+                        -value
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_i256_to_f32_extrema() {
+        let largest_finite = (i256::ONE << 128_u32) - (i256::ONE << 104_u32);
+        for (value, expected) in [
+            (i256::ZERO, 0.0),
+            (i256::ONE, 1.0),
+            (i256::MINUS_ONE, -1.0),
+            (largest_finite, f32::MAX),
+            (-largest_finite, -f32::MAX),
+            (i256::ONE << 128_u32, f32::INFINITY),
+            (-(i256::ONE << 128_u32), f32::NEG_INFINITY),
+            (i256::MIN, f32::NEG_INFINITY),
+            (i256::MAX, f32::INFINITY),
+        ] {
+            assert_eq!(
+                value.to_f32().unwrap().to_bits(),
+                expected.to_bits(),
+                "{value}"
+            );
+        }
+        for value in [i128::MIN, i128::MAX] {
+            assert_eq!(
+                i256::from_i128(value).to_f32().unwrap().to_bits(),
+                (value as f32).to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn test_i256_to_f32_full_range() {
+        let mut state = 42_u128;
+        for shift in 0..256_u32 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let low = state;
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let value = i256::from_parts(low, state as i128) >> shift;
+            let expected = value.to_string().parse::<f32>().unwrap();
+            assert_eq!(
+                value.to_f32().unwrap().to_bits(),
+                expected.to_bits(),
+                "{value}"
+            );
         }
     }
 
