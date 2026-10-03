@@ -1042,14 +1042,13 @@ fn decimal_op<T: DecimalType>(
     // https://cwiki.apache.org/confluence/download/attachments/27362075/Hive_Decimal_Precision_Scale_Support.pdf
     let array: PrimitiveArray<T> = match op {
         Op::Add | Op::AddWrapping | Op::Sub | Op::SubWrapping => {
+            let (p1, s1, p2, s2) = (*p1 as i16, *s1 as i16, *p2 as i16, *s2 as i16);
             // max(s1, s2)
-            let result_scale = *s1.max(s2);
+            let result_scale = s1.max(s2);
 
             // max(s1, s2) + max(p1-s1, p2-s2) + 1
             let result_precision =
-                (result_scale.saturating_add((*p1 as i8 - s1).max(*p2 as i8 - s2)) as u8)
-                    .saturating_add(1)
-                    .min(T::MAX_PRECISION);
+                (result_scale + (p1 - s1).max(p2 - s2) + 1).min(T::MAX_PRECISION as i16) as u8;
 
             let l_mul = T::Native::usize_as(10).pow_checked((result_scale - s1) as _)?;
             let r_mul = T::Native::usize_as(10).pow_checked((result_scale - s2) as _)?;
@@ -1082,12 +1081,12 @@ fn decimal_op<T: DecimalType>(
                 }
                 _ => unreachable!(),
             }
-            .with_precision_and_scale(result_precision, result_scale)?
+            .with_precision_and_scale(result_precision, result_scale as i8)?
         }
         Op::Mul | Op::MulWrapping => {
             let result_precision = p1.saturating_add(p2 + 1).min(T::MAX_PRECISION);
-            let result_scale = s1.saturating_add(*s2);
-            if result_scale > T::MAX_SCALE {
+            let result_scale = *s1 as i16 + *s2 as i16;
+            if result_scale > T::MAX_SCALE as i16 {
                 // SQL standard says that if the resulting scale of a multiply operation goes
                 // beyond the maximum, rounding is not acceptable and thus an error occurs
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -1097,6 +1096,14 @@ fn decimal_op<T: DecimalType>(
                     T::MAX_SCALE
                 )));
             }
+            let result_scale = i8::try_from(result_scale).map_err(|_| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Output scale of {} {op} {} would be less than min scale of {}",
+                    l.data_type(),
+                    r.data_type(),
+                    i8::MIN
+                ))
+            })?;
 
             try_op!(l, l_s, r, r_s, l.mul_checked(r))
                 .with_precision_and_scale(result_precision, result_scale)?
@@ -1137,15 +1144,15 @@ fn decimal_op<T: DecimalType>(
         }
 
         Op::Rem => {
+            let (p1, s1, p2, s2) = (*p1 as i16, *s1 as i16, *p2 as i16, *s2 as i16);
             // max(s1, s2)
-            let result_scale = *s1.max(s2);
+            let result_scale = s1.max(s2);
             // min(p1-s1, p2 -s2) + max( s1,s2 )
             let result_precision =
-                (result_scale.saturating_add((*p1 as i8 - s1).min(*p2 as i8 - s2)) as u8)
-                    .min(T::MAX_PRECISION);
+                (result_scale + (p1 - s1).min(p2 - s2)).min(T::MAX_PRECISION as i16) as u8;
 
-            let l_mul = T::Native::usize_as(10).pow_wrapping((result_scale - s1) as _);
-            let r_mul = T::Native::usize_as(10).pow_wrapping((result_scale - s2) as _);
+            let l_mul = T::Native::usize_as(10).pow_checked((result_scale - s1) as _)?;
+            let r_mul = T::Native::usize_as(10).pow_checked((result_scale - s2) as _)?;
 
             try_op!(
                 l,
@@ -1154,7 +1161,7 @@ fn decimal_op<T: DecimalType>(
                 r_s,
                 l.mul_checked(l_mul)?.mod_checked(r.mul_checked(r_mul)?)
             )
-            .with_precision_and_scale(result_precision, result_scale)?
+            .with_precision_and_scale(result_precision, result_scale as i8)?
         }
     };
 
@@ -1532,6 +1539,115 @@ mod tests {
         assert_eq!(err, "Divide by zero error");
         let err = rem(&a, &b).unwrap_err().to_string();
         assert_eq!(err, "Divide by zero error");
+    }
+
+    #[test]
+    fn test_decimal256_add_sub_negative_scale_metadata() {
+        let a = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::MINUS_ONE), None])
+            .with_precision_and_scale(76, -52)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(2), i256::ONE, i256::ONE])
+            .with_precision_and_scale(76, -52)
+            .unwrap();
+        let expected =
+            Decimal256Array::from(vec![Some(i256::from_i128(3)), Some(i256::ZERO), None])
+                .with_precision_and_scale(76, -52)
+                .unwrap();
+        assert_eq!(add(&a, &b).unwrap().as_ref(), &expected);
+
+        let expected =
+            Decimal256Array::from(vec![Some(i256::MINUS_ONE), Some(i256::from_i128(-2)), None])
+                .with_precision_and_scale(76, -52)
+                .unwrap();
+        assert_eq!(sub(&a, &b).unwrap().as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_decimal256_add_sub_minimum_scale() {
+        let a = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(20, i8::MIN)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(2)])
+            .with_precision_and_scale(20, i8::MIN)
+            .unwrap();
+        let expected = Decimal256Array::from(vec![i256::from_i128(3)])
+            .with_precision_and_scale(21, i8::MIN)
+            .unwrap();
+        assert_eq!(add(&a, &b).unwrap().as_ref(), &expected);
+
+        let expected = Decimal256Array::from(vec![i256::MINUS_ONE])
+            .with_precision_and_scale(21, i8::MIN)
+            .unwrap();
+        assert_eq!(sub(&a, &b).unwrap().as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_decimal256_remainder_negative_scale_metadata() {
+        let a = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::MINUS_ONE), None])
+            .with_precision_and_scale(76, -52)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(2), i256::ONE, i256::ONE])
+            .with_precision_and_scale(76, -52)
+            .unwrap();
+        let expected = Decimal256Array::from(vec![Some(i256::ONE), Some(i256::ZERO), None])
+            .with_precision_and_scale(76, -52)
+            .unwrap();
+        assert_eq!(rem(&a, &b).unwrap().as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_decimal256_adjacent_minimum_scales() {
+        let a = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(20, i8::MIN)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(2)])
+            .with_precision_and_scale(20, i8::MIN + 1)
+            .unwrap();
+        let expected = Decimal256Array::from(vec![i256::from_i128(12)])
+            .with_precision_and_scale(22, -127)
+            .unwrap();
+        assert_eq!(add(&a, &b).unwrap().as_ref(), &expected);
+
+        let expected = Decimal256Array::from(vec![i256::from_i128(8)])
+            .with_precision_and_scale(22, -127)
+            .unwrap();
+        assert_eq!(sub(&a, &b).unwrap().as_ref(), &expected);
+
+        let expected = Decimal256Array::from(vec![i256::ZERO])
+            .with_precision_and_scale(20, -127)
+            .unwrap();
+        assert_eq!(rem(&a, &b).unwrap().as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_decimal256_extreme_scale_difference_overflow() {
+        let a = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(20, i8::MIN)
+            .unwrap();
+        let b = Decimal256Array::from(vec![i256::from_i128(2)])
+            .with_precision_and_scale(76, 76)
+            .unwrap();
+        let expected = "Arithmetic overflow: Overflow happened on: 10 ^ 204";
+        assert_eq!(add(&a, &b).unwrap_err().to_string(), expected);
+        assert_eq!(sub(&a, &b).unwrap_err().to_string(), expected);
+        assert_eq!(rem(&a, &b).unwrap_err().to_string(), expected);
+    }
+
+    #[test]
+    fn test_decimal256_multiply_minimum_scale() {
+        let a = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(76, -64)
+            .unwrap();
+        let expected = Decimal256Array::from(vec![i256::ONE])
+            .with_precision_and_scale(76, i8::MIN)
+            .unwrap();
+        assert_eq!(mul(&a, &a).unwrap().as_ref(), &expected);
+
+        let b = a.clone().with_precision_and_scale(76, -65).unwrap();
+        assert_eq!(
+            mul(&a, &b).unwrap_err().to_string(),
+            "Invalid argument error: Output scale of Decimal256(76, -64) * Decimal256(76, -65) would be less than min scale of -128"
+        );
     }
 
     #[test]

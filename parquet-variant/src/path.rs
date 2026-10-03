@@ -322,6 +322,31 @@ mod tests {
             VariantPathElement::field("1"),
         ]);
         assert_eq!(path, expected);
+
+        // an unescaped closing bracket is literal inside a quoted field
+        for input in [r#"["a]b"]"#, "['a]b']"] {
+            let path = VariantPath::try_from(input).unwrap();
+            let expected = VariantPath::from_iter([VariantPathElement::field("a]b")]);
+            assert_eq!(path, expected);
+        }
+
+        // quoted brackets do not consume the following path element
+        let path = VariantPath::try_from(r#"["[0]"][1]"#).unwrap();
+        let expected = VariantPath::from_iter([
+            VariantPathElement::field("[0]"),
+            VariantPathElement::index(1),
+        ]);
+        assert_eq!(path, expected);
+
+        // escaped quotes and an unescaped bracket remain one quoted field
+        let path = VariantPath::try_from(r#"["\"][\""]"#).unwrap();
+        let expected = VariantPath::from_iter([VariantPathElement::field(r#""][""#)]);
+        assert_eq!(path, expected);
+
+        // the existing escaped spelling remains supported
+        let path = VariantPath::try_from(r#"["a\]b"]"#).unwrap();
+        let expected = VariantPath::from_iter([VariantPathElement::field("a]b")]);
+        assert_eq!(path, expected);
     }
 
     #[test]

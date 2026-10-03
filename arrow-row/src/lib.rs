@@ -1502,7 +1502,7 @@ impl<'a> IntoIterator for &'a Rows {
 }
 
 /// An iterator over [`Rows`]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RowsIter<'a> {
     rows: &'a Rows,
     start: usize,
@@ -1527,6 +1527,48 @@ impl<'a> Iterator for RowsIter<'a> {
         let len = self.len();
         (len, Some(len))
     }
+
+    fn count(self) -> usize
+    where
+        Self: Sized,
+    {
+        self.len()
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        // Check if we can advance to the desired offset.
+        // When n is 0 it means we want the next() value
+        // and when n is 1 we want the next().next() value
+        // so adding n to the current offset and not n - 1
+        match self.start.checked_add(n) {
+            // Yes, and still within bounds
+            Some(new_offset) if new_offset < self.end => {
+                self.start = new_offset;
+            }
+
+            // Either overflow or would exceed end
+            _ => {
+                self.start = self.end;
+                return None;
+            }
+        }
+
+        self.next()
+    }
+
+    fn last(mut self) -> Option<Self::Item> {
+        // If already at the end, return None
+        if self.start == self.end {
+            return None;
+        }
+
+        // Go to the one before the last bit
+        self.start = self.end - 1;
+
+        // Return the last bit
+        self.next()
+    }
 }
 
 impl ExactSizeIterator for RowsIter<'_> {
@@ -1547,6 +1589,27 @@ impl DoubleEndedIterator for RowsIter<'_> {
         //          therefore `end - 1` is within range
         let row = unsafe { self.rows.row_unchecked(self.end) };
         Some(row)
+    }
+
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        // Check if we can advance to the desired offset.
+        // When n is 0 it means we want the next_back() value
+        // and when n is 1 we want the next_back().next_back() value
+        // so subtracting n to the current offset and not n - 1
+        match self.end.checked_sub(n) {
+            // Yes, and still within bounds
+            Some(new_offset) if self.start < new_offset => {
+                self.end = new_offset;
+            }
+
+            // Either underflow or would exceed start
+            _ => {
+                self.start = self.end;
+                return None;
+            }
+        }
+
+        self.next_back()
     }
 }
 
@@ -2439,6 +2502,7 @@ unsafe fn decode_column(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_buffer::{Buffer, OffsetBuffer};
@@ -2449,8 +2513,9 @@ mod tests {
     use rand::distr::{Distribution, StandardUniform};
     use rand::prelude::StdRng;
     use rand::{RngExt, SeedableRng};
-
-    use super::*;
+    use std::fmt::Debug;
+    use std::iter::Copied;
+    use std::slice::Iter;
 
     fn all_sort_options() -> [SortOptions; 4] {
         [
@@ -6777,5 +6842,430 @@ mod tests {
 
         assert_eq!(rows_iter.next_back(), None);
         assert_eq!(rows_iter.next(), None);
+    }
+
+    trait SharedBetweenRowsIteratorAndSliceIter<'a>:
+        ExactSizeIterator<Item = Row<'a>> + DoubleEndedIterator<Item = Row<'a>>
+    {
+    }
+    impl<'a, T: ?Sized + ExactSizeIterator<Item = Row<'a>> + DoubleEndedIterator<Item = Row<'a>>>
+        SharedBetweenRowsIteratorAndSliceIter<'a> for T
+    {
+    }
+
+    fn get_rows_iterator_cases() -> impl Iterator<Item = Rows> {
+        let rows_converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
+
+        [0, 1, 6, 8, 100, 164]
+            .map(|len| {
+                let source = (0..).take(len).collect::<Vec<i32>>();
+
+                let source = Int32Array::from(source);
+
+                rows_converter.convert_columns(&[Arc::new(source)]).unwrap()
+            })
+            .into_iter()
+    }
+
+    fn setup_and_assert(
+        setup_iters: impl Fn(&mut dyn SharedBetweenRowsIteratorAndSliceIter),
+        assert_fn: impl Fn(RowsIter, Copied<Iter<Row>>),
+    ) {
+        for rows in get_rows_iterator_cases() {
+            let expected = (0..rows.num_rows())
+                .map(|i| rows.row(i))
+                .collect::<Vec<_>>();
+            let mut expected_iter = expected.iter().copied();
+
+            let mut actual = rows.iter();
+
+            setup_iters(&mut actual);
+            setup_iters(&mut expected_iter);
+
+            assert_fn(actual, expected_iter);
+        }
+    }
+
+    /// Trait representing an operation on a [`RowsIter`]
+    /// that can be compared against a slice iterator
+    trait RowsIteratorOp {
+        /// What the operation returns (e.g. Option<Row> for last, usize for count, etc)
+        type Output<'a>: PartialEq + Debug;
+
+        /// The name of the operation, used for error messages
+        const NAME: &'static str;
+
+        /// Get the value of the operation for the provided iterator
+        /// This will be either a [`RowsIter`] or a slice iterator to make sure they produce the same result
+        fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(iter: T)
+        -> Self::Output<'a>;
+    }
+
+    /// Helper function that will assert that the provided operation
+    /// produces the same result for both [`RowsIter`] and slice iterator
+    /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
+    fn assert_rows_iterator_cases<O: RowsIteratorOp>() {
+        setup_and_assert(
+            |_iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {},
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                iter.next();
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming 1 element from the start (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                iter.next_back();
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming 1 element from the end (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                iter.next();
+                iter.next_back();
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming 1 element from start and end (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                while iter.len() > 1 {
+                    iter.next();
+                }
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming all from the start but 1 (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                while iter.len() > 1 {
+                    iter.next_back();
+                }
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming all from the end but 1 (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                while iter.next().is_some() {}
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming all from the start (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                while iter.next_back().is_some() {}
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming all from the end (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn assert_rows_iterator_count() {
+        struct CountOp;
+
+        impl RowsIteratorOp for CountOp {
+            type Output<'a> = usize;
+            const NAME: &'static str = "count";
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                iter: T,
+            ) -> Self::Output<'a> {
+                iter.count()
+            }
+        }
+
+        assert_rows_iterator_cases::<CountOp>()
+    }
+
+    #[test]
+    fn assert_rows_iterator_last() {
+        struct LastOp;
+
+        impl RowsIteratorOp for LastOp {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = "last";
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                iter: T,
+            ) -> Self::Output<'a> {
+                iter.last()
+            }
+        }
+
+        assert_rows_iterator_cases::<LastOp>()
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_0() {
+        struct NthOp<const BACK: bool>;
+
+        impl<const BACK: bool> RowsIteratorOp for NthOp<BACK> {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = if BACK { "nth_back(0)" } else { "nth(0)" };
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
+                if BACK { iter.nth_back(0) } else { iter.nth(0) }
+            }
+        }
+
+        assert_rows_iterator_cases::<NthOp<false>>();
+        assert_rows_iterator_cases::<NthOp<true>>();
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_1() {
+        struct NthOp<const BACK: bool>;
+
+        impl<const BACK: bool> RowsIteratorOp for NthOp<BACK> {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = if BACK { "nth_back(1)" } else { "nth(1)" };
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
+                if BACK { iter.nth_back(1) } else { iter.nth(1) }
+            }
+        }
+
+        assert_rows_iterator_cases::<NthOp<false>>();
+        assert_rows_iterator_cases::<NthOp<true>>();
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_after_end() {
+        struct NthOp<const BACK: bool>;
+
+        impl<const BACK: bool> RowsIteratorOp for NthOp<BACK> {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = if BACK {
+                "nth_back(iter.len() + 1)"
+            } else {
+                "nth(iter.len() + 1)"
+            };
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
+                if BACK {
+                    iter.nth_back(iter.len() + 1)
+                } else {
+                    iter.nth(iter.len() + 1)
+                }
+            }
+        }
+
+        assert_rows_iterator_cases::<NthOp<false>>();
+        assert_rows_iterator_cases::<NthOp<true>>();
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_len() {
+        struct NthOp<const BACK: bool>;
+
+        impl<const BACK: bool> RowsIteratorOp for NthOp<BACK> {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = if BACK {
+                "nth_back(iter.len())"
+            } else {
+                "nth(iter.len())"
+            };
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
+                if BACK {
+                    iter.nth_back(iter.len())
+                } else {
+                    iter.nth(iter.len())
+                }
+            }
+        }
+
+        assert_rows_iterator_cases::<NthOp<false>>();
+        assert_rows_iterator_cases::<NthOp<true>>();
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_last() {
+        struct NthOp<const BACK: bool>;
+
+        impl<const BACK: bool> RowsIteratorOp for NthOp<BACK> {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = if BACK {
+                "nth_back(iter.len().saturating_sub(1))"
+            } else {
+                "nth(iter.len().saturating_sub(1))"
+            };
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
+                if BACK {
+                    iter.nth_back(iter.len().saturating_sub(1))
+                } else {
+                    iter.nth(iter.len().saturating_sub(1))
+                }
+            }
+        }
+
+        assert_rows_iterator_cases::<NthOp<false>>();
+        assert_rows_iterator_cases::<NthOp<true>>();
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_and_reuse() {
+        setup_and_assert(
+            |_| {},
+            |actual, expected| {
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        #[expect(clippy::iter_nth_zero)]
+                        let actual_val = actual.nth(0);
+                        #[expect(clippy::iter_nth_zero)]
+                        let expected_val = expected.nth(0);
+                        assert_eq!(actual_val, expected_val, "Failed on nth(0)");
+                    }
+                }
+
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        let actual_val = actual.nth(1);
+                        let expected_val = expected.nth(1);
+                        assert_eq!(actual_val, expected_val, "Failed on nth(1)");
+                    }
+                }
+
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        let actual_val = actual.nth(2);
+                        let expected_val = expected.nth(2);
+                        assert_eq!(actual_val, expected_val, "Failed on nth(2)");
+                    }
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_back_and_reuse() {
+        setup_and_assert(
+            |_| {},
+            |actual, expected| {
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        let actual_val = actual.nth_back(0);
+                        let expected_val = expected.nth_back(0);
+                        assert_eq!(actual_val, expected_val, "Failed on nth_back(0)");
+                    }
+                }
+
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        let actual_val = actual.nth_back(1);
+                        let expected_val = expected.nth_back(1);
+                        assert_eq!(actual_val, expected_val, "Failed on nth_back(1)");
+                    }
+                }
+
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        let actual_val = actual.nth_back(2);
+                        let expected_val = expected.nth_back(2);
+                        assert_eq!(actual_val, expected_val, "Failed on nth_back(2)");
+                    }
+                }
+            },
+        );
     }
 }
