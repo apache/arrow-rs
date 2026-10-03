@@ -160,7 +160,6 @@ pub(crate) fn cast_bool_to_numeric<TO>(
 ) -> Result<ArrayRef, ArrowError>
 where
     TO: ArrowPrimitiveType,
-    TO::Native: num_traits::cast::NumCast,
 {
     Ok(Arc::new(bool_to_numeric_cast::<TO>(
         from.as_any().downcast_ref::<BooleanArray>().unwrap(),
@@ -171,20 +170,24 @@ where
 fn bool_to_numeric_cast<T>(from: &BooleanArray, _cast_options: &CastOptions) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
-    T::Native: num_traits::NumCast,
 {
-    let iter = (0..from.len()).map(|i| {
-        if from.is_null(i) {
-            None
+    let to_numeric = |bits: u64, i: usize| {
+        if bits & (1 << i) != 0 {
+            T::Native::ONE
         } else {
-            single_bool_to_numeric::<T::Native>(from.value(i))
+            T::Native::ZERO
         }
-    });
-    // Benefit:
-    //     20% performance improvement
-    // Soundness:
-    //     The iterator is trustedLen because it comes from a Range
-    unsafe { PrimitiveArray::<T>::from_trusted_len_iter(iter) }
+    };
+    // Unpack a 64-bit word at a time: the fixed-size inner loop helps the
+    // compiler vectorize the conversion.
+    let chunks = from.values().bit_chunks();
+    let mut values = Vec::with_capacity(from.len());
+    for bits in &chunks {
+        values.extend((0..64).map(|i| to_numeric(bits, i)));
+    }
+    let bits = chunks.remainder_bits();
+    values.extend((0..chunks.remainder_len()).map(|i| to_numeric(bits, i)));
+    PrimitiveArray::new(values.into(), from.nulls().cloned())
 }
 
 /// Cast single bool value to numeric value.
