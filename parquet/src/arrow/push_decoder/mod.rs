@@ -35,6 +35,7 @@ use bytes::Bytes;
 use reader_builder::{RowGroupReaderBuilder, RowGroupReaderBuilderParts};
 use remaining::{RemainingRowGroups, RemainingRowGroupsParts};
 use scan_plan::RowBudget;
+pub use scan_plan::{PageKind, PlannedRange, ScanPlan};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -534,7 +535,16 @@ impl ParquetPushDecoder {
 
     /// Push data into the decoder for processing
     ///
-    /// This should correspond to the data ranges requested by the decoder
+    /// This should correspond to the data ranges requested by the decoder.
+    ///
+    /// If you fetch data before the decoder requests it, for example with
+    /// [`Self::scan_plan`], keep it in your own cache and push exactly the
+    /// ranges in each [`DecodeResult::NeedsData`]:
+    ///
+    /// * The decoder does not use a requested range that is split over two
+    ///   pushed buffers.
+    /// * The decoder releases a pushed buffer only if its range is equal to a
+    ///   requested range. Other pushed data stays buffered.
     pub fn push_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
@@ -610,6 +620,12 @@ impl ParquetPushDecoder {
     /// based on filtering and other criteria.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         self.state.peek_next_row_group()
+    }
+
+    /// Returns the byte ranges that this decoder may still read, in the order
+    /// that decoding needs them. See [`ScanPlan`].
+    pub fn scan_plan(&self) -> ScanPlan {
+        self.state.scan_plan()
     }
 
     /// Decompose this decoder back into a [`ParquetPushDecoderBuilder`] for the
@@ -905,6 +921,20 @@ impl ParquetDecoderState {
             // would require throwing that work away.
             ParquetDecoderState::DecodingRowGroup { .. } => false,
             ParquetDecoderState::Finished => false,
+        }
+    }
+
+    /// See [`ParquetPushDecoder::scan_plan`].
+    fn scan_plan(&self) -> ScanPlan {
+        match self {
+            ParquetDecoderState::ReadingRowGroup {
+                remaining_row_groups,
+            }
+            | ParquetDecoderState::DecodingRowGroup {
+                remaining_row_groups,
+                ..
+            } => remaining_row_groups.scan_plan(),
+            ParquetDecoderState::Finished => ScanPlan::empty(),
         }
     }
 

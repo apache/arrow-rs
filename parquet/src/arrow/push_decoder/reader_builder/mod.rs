@@ -30,7 +30,9 @@ use crate::arrow::arrow_reader::{
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
-use crate::arrow::push_decoder::scan_plan::{BudgetedReadPlan, RowBudget};
+use crate::arrow::push_decoder::scan_plan::{
+    BudgetedReadPlan, RowBudget, RowGroupFrontier, ScanPlanBuilder,
+};
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
@@ -183,7 +185,7 @@ pub(crate) struct RowGroupReaderBuilder {
 
     /// What each decoding stage fetches. Kept here because the filter is
     /// moved out of the builder while a row group is decoded.
-    stages: StageSchedule,
+    stages: Arc<StageSchedule>,
 }
 
 /// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
@@ -230,7 +232,7 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
-            stages: StageSchedule::new(ProjectionMask::all(), vec![], None),
+            stages: Arc::new(StageSchedule::new(ProjectionMask::all(), vec![], None)),
         };
         let (predicate_projections, cache_projection) = match &builder.filter {
             Some(filter) => (
@@ -243,11 +245,11 @@ impl RowGroupReaderBuilder {
             ),
             None => (vec![], None),
         };
-        builder.stages = StageSchedule::new(
+        builder.stages = Arc::new(StageSchedule::new(
             builder.projection.clone(),
             predicate_projections,
             cache_projection,
-        );
+        ));
         builder
     }
 
@@ -753,6 +755,12 @@ impl RowGroupReaderBuilder {
             }
         };
         Ok(result)
+    }
+
+    /// A [`ScanPlanBuilder`] that plans the same ranges as this builder, for
+    /// the row groups in `frontier`.
+    pub(crate) fn scan_plan_builder(&self, frontier: RowGroupFrontier) -> ScanPlanBuilder {
+        ScanPlanBuilder::new(frontier, self.batch_size, Arc::clone(&self.stages))
     }
 
     /// Which columns should be cached?

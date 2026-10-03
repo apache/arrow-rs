@@ -74,6 +74,19 @@ impl StageSchedule {
         }
     }
 
+    /// Predicate columns whose decoded values are cached for the output.
+    pub(crate) fn cache_projection(&self) -> Option<&ProjectionMask> {
+        self.cache_projection.as_ref()
+    }
+
+    /// Every stage, in decoding order, with what it fetches.
+    pub(crate) fn stages(&self) -> impl Iterator<Item = (Stage, StageFetch<'_>)> + '_ {
+        (0..self.predicate_projections.len())
+            .map(Stage::Predicate)
+            .chain(std::iter::once(Stage::Projection))
+            .map(|stage| (stage, self.fetch(stage)))
+    }
+
     /// What `stage` fetches.
     pub(crate) fn fetch(&self, stage: Stage) -> StageFetch<'_> {
         match stage {
