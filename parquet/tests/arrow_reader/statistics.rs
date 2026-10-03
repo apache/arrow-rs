@@ -20,6 +20,8 @@
 
 use std::default::Default;
 use std::fs::File;
+use std::ops::Deref;
+use std::path::Path;
 use std::sync::Arc;
 
 use super::make_test_file_rg;
@@ -42,7 +44,7 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use half::f16;
 use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+use parquet::arrow::arrow_reader::statistics::{DataPageStatistics, StatisticsConverter};
 use parquet::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
@@ -92,7 +94,7 @@ impl Int64Case {
     }
 
     // Create a parquet file with the specified settings
-    pub fn build(&self) -> ParquetRecordBatchReaderBuilder<File> {
+    pub fn build(&self) -> TestParquetFile {
         let batches = vec![self.make_int64_batches_with_null()];
         build_parquet_file(
             self.row_per_group,
@@ -108,7 +110,7 @@ fn build_parquet_file(
     enable_stats: Option<EnabledStatistics>,
     data_page_row_count_limit: Option<usize>,
     batches: Vec<RecordBatch>,
-) -> ParquetRecordBatchReaderBuilder<File> {
+) -> TestParquetFile {
     let mut output_file = tempfile::Builder::new()
         .prefix("parquert_statistics_test")
         .suffix(".parquet")
@@ -144,9 +146,34 @@ fn build_parquet_file(
 
     let _file_meta = writer.close().unwrap();
 
-    let file = output_file.reopen().unwrap();
-    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
-    ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
+    TestParquetFile::open(output_file.path())
+}
+
+/// A test Parquet file, opened for reading.
+///
+/// Derefs to the reader builder. It also keeps the whole file in memory so
+/// tests can read the stored page index bytes directly.
+struct TestParquetFile {
+    builder: ParquetRecordBatchReaderBuilder<File>,
+    data: Vec<u8>,
+}
+
+impl TestParquetFile {
+    fn open(path: &Path) -> Self {
+        let data = std::fs::read(path).unwrap();
+        let file = File::open(path).unwrap();
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
+        let builder = ArrowReaderBuilder::try_new_with_options(file, options).unwrap();
+        Self { builder, data }
+    }
+}
+
+impl Deref for TestParquetFile {
+    type Target = ParquetRecordBatchReaderBuilder<File>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.builder
+    }
 }
 
 /// Defines what data to create in a parquet file
@@ -160,8 +187,8 @@ struct TestReader {
 
 impl TestReader {
     /// Create a parquet file with the specified data, and return a
-    /// ParquetRecordBatchReaderBuilder opened to that file.
-    async fn build(self) -> ParquetRecordBatchReaderBuilder<File> {
+    /// TestParquetFile opened to that file.
+    async fn build(self) -> TestParquetFile {
         let TestReader {
             scenario,
             row_per_group,
@@ -169,9 +196,7 @@ impl TestReader {
         let file = make_test_file_rg(scenario, row_per_group).await;
 
         // open the file & get the reader
-        let file = file.reopen().unwrap();
-        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
-        ArrowReaderBuilder::try_new_with_options(file, options).unwrap()
+        TestParquetFile::open(file.path())
     }
 }
 
@@ -208,7 +233,7 @@ impl Check {
 /// Defines a test case for statistics extraction
 struct Test<'a> {
     /// The parquet file reader
-    reader: &'a ParquetRecordBatchReaderBuilder<File>,
+    reader: &'a TestParquetFile,
     expected_min: ArrayRef,
     expected_max: ArrayRef,
     expected_null_counts: UInt64Array,
@@ -299,6 +324,29 @@ impl Test<'_> {
                 "{column_name}: Mismatch with expected row counts. \
                 Actual: {row_counts:?}. Expected: {expected_row_counts:?}"
             );
+
+            // Reading straight from the stored column index bytes must give
+            // the same answers as reading from the loaded page index.
+            let nan_counts = converter
+                .data_page_nan_counts(page_index, &row_group_indices)
+                .unwrap();
+            let stats = data_page_statistics_from_file_bytes(reader, &converter);
+            assert_eq!(
+                &stats.mins, &expected_min,
+                "{column_name}: Mismatch with expected data page minimums (from bytes)"
+            );
+            assert_eq!(
+                &stats.maxes, &expected_max,
+                "{column_name}: Mismatch with expected data page maximum (from bytes)"
+            );
+            assert_eq!(
+                &stats.null_counts, &expected_null_counts,
+                "{column_name}: Mismatch with expected data page null counts (from bytes)"
+            );
+            assert_eq!(
+                &stats.nan_counts, &nan_counts,
+                "{column_name}: Mismatch with data page NaN counts (from bytes)"
+            );
         }
 
         if check.row_group() {
@@ -367,6 +415,39 @@ impl Test<'_> {
 
         assert!(converter.is_err());
     }
+}
+
+/// Calls [`StatisticsConverter::data_page_statistics_from_bytes`] with the
+/// column index bytes read from the file itself.
+fn data_page_statistics_from_file_bytes(
+    reader: &TestParquetFile,
+    converter: &StatisticsConverter,
+) -> DataPageStatistics {
+    let metadata = reader.metadata();
+    let column_indexes: Vec<(usize, Option<&[u8]>)> = match converter.parquet_column_index() {
+        Some(column) => metadata
+            .row_groups()
+            .iter()
+            .enumerate()
+            .map(|(row_group_idx, row_group)| {
+                let num_pages = metadata
+                    .page_index_for_row_group(row_group_idx)
+                    .num_data_pages(column)
+                    .unwrap_or(0);
+                let bytes = row_group
+                    .column(column)
+                    .column_index_range()
+                    .map(|range| &reader.data[range.start as usize..range.end as usize]);
+                (num_pages, bytes)
+            })
+            .collect(),
+        // The column is not in the file. The old API gives one null per row
+        // group here, so ask for one page per row group to match it.
+        None => metadata.row_groups().iter().map(|_| (1, None)).collect(),
+    };
+    converter
+        .data_page_statistics_from_bytes(column_indexes)
+        .unwrap()
 }
 
 // TESTS

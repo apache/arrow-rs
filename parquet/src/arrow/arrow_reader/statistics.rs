@@ -50,8 +50,11 @@ use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use half::f16;
 use std::sync::Arc;
 
+mod page_index;
+
 // Convert the bytes array to i32.
 // The endian of the input bytes array must be big-endian.
+#[inline]
 pub(crate) fn from_bytes_to_i32(b: &[u8]) -> i32 {
     // The bytes array are from parquet file and must be the big-endian.
     // The endian is defined by parquet format, and the reference document
@@ -61,18 +64,21 @@ pub(crate) fn from_bytes_to_i32(b: &[u8]) -> i32 {
 
 // Convert the bytes array to i64.
 // The endian of the input bytes array must be big-endian.
+#[inline]
 pub(crate) fn from_bytes_to_i64(b: &[u8]) -> i64 {
     i64::from_be_bytes(sign_extend_be::<8>(b))
 }
 
 // Convert the bytes array to i128.
 // The endian of the input bytes array must be big-endian.
+#[inline]
 pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
     i128::from_be_bytes(sign_extend_be::<16>(b))
 }
 
 // Convert the bytes array to i256.
 // The endian of the input bytes array must be big-endian.
+#[inline]
 pub(crate) fn from_bytes_to_i256(b: &[u8]) -> i256 {
     i256::from_be_bytes(sign_extend_be::<32>(b))
 }
@@ -1438,6 +1444,25 @@ where
     Ok(array)
 }
 
+/// Page statistics for one column, read directly from the stored bytes of
+/// each row group's Parquet `ColumnIndex`.
+///
+#[derive(Debug, Clone)]
+pub struct DataPageStatistics {
+    /// The smallest value in each page, or null if it is not known.
+    /// Same as [`StatisticsConverter::data_page_mins`].
+    pub mins: ArrayRef,
+    /// The largest value in each page, or null if it is not known.
+    /// Same as [`StatisticsConverter::data_page_maxes`].
+    pub maxes: ArrayRef,
+    /// The number of null values in each page, or null if it is not known.
+    /// Same as [`StatisticsConverter::data_page_null_counts`].
+    pub null_counts: UInt64Array,
+    /// The number of NaN values in each page, or null if it is not known.
+    /// Same as [`StatisticsConverter::data_page_nan_counts`].
+    pub nan_counts: UInt64Array,
+}
+
 /// Extracts Parquet statistics as Arrow arrays
 ///
 /// This is used to convert Parquet statistics to Arrow [`ArrayRef`], with
@@ -2003,6 +2028,53 @@ impl<'a> StatisticsConverter<'a> {
             (num_data_pages, column_page_index_per_row_group_per_column)
         });
         nan_counts_page_statistics(iter)
+    }
+
+    /// Decodes per-page min, max, null count and NaN count directly from the
+    /// raw `ColumnIndex` bytes of each row group.
+    ///
+    /// Equivalent to [`Self::data_page_mins`], [`Self::data_page_maxes`],
+    /// [`Self::data_page_null_counts`] and [`Self::data_page_nan_counts`], but
+    /// avoids loading the column index into [`ParquetMetaData`]. Load metadata
+    /// with [`PageIndexPolicy::Skip`] for the column index and read the bytes
+    /// from [`ColumnChunkMetaData::column_index_range`].
+    ///
+    /// `column_indexes` yields one `(num_pages, bytes)` pair per row group.
+    /// Row groups with `None` bytes, or a column missing from the file, produce
+    /// nulls. Returns an error if the bytes are not a valid `ColumnIndex`.
+    ///
+    /// [`ParquetMetaData`]: crate::file::metadata::ParquetMetaData
+    /// [`PageIndexPolicy::Skip`]: crate::file::metadata::PageIndexPolicy::Skip
+    /// [`ColumnChunkMetaData::column_index_range`]: crate::file::metadata::ColumnChunkMetaData::column_index_range
+    pub fn data_page_statistics_from_bytes<'b, I>(
+        &self,
+        column_indexes: I,
+    ) -> Result<DataPageStatistics>
+    where
+        I: IntoIterator<Item = (usize, Option<&'b [u8]>)>,
+    {
+        let data_type = self.arrow_field.data_type();
+        let column_indexes: Vec<_> = column_indexes.into_iter().collect();
+        let num_pages: usize = column_indexes.iter().map(|(n, _)| n).sum();
+
+        let (Some(_), Some(physical_type)) = (self.parquet_column_index, self.physical_type) else {
+            // The column is not in the Parquet file, so nothing is known
+            return Ok(DataPageStatistics {
+                mins: new_null_array(data_type, num_pages),
+                maxes: new_null_array(data_type, num_pages),
+                null_counts: UInt64Array::new_null(num_pages),
+                nan_counts: UInt64Array::new_null(num_pages),
+            });
+        };
+
+        let mut decoder = page_index::ColumnIndexDecoder::new(physical_type, data_type, num_pages);
+        for (num_pages, bytes) in column_indexes {
+            match bytes {
+                Some(bytes) => decoder.append(bytes)?,
+                None => decoder.append_nulls(num_pages),
+            }
+        }
+        decoder.finish()
     }
 
     /// Returns a [`UInt64Array`] with row counts for each data page.
