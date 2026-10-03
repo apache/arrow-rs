@@ -20,10 +20,10 @@ use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
 };
 use arrow_data::MAX_INLINE_VIEW_LEN;
-use arrow_schema::SortOptions;
+use arrow_schema::{ArrowError, SortOptions};
 use builder::make_view;
 
 /// The block size of the variable length encoding
@@ -307,10 +307,14 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     }
 }
 
+/// The most bytes one data buffer of a view array can hold, since a view
+/// addresses its value with a 32 bit offset into that buffer
+const MAX_VIEW_BUFFER_LEN: usize = i32::MAX as usize;
+
 fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
     rows: &mut [&[u8]],
     options: SortOptions,
-) -> BinaryViewArray {
+) -> Result<BinaryViewArray, ArrowError> {
     let len = rows.len();
     let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
@@ -327,6 +331,20 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
             inline_capacity += len;
         }
     }
+
+    // One buffer only reaches as far as a 32 bit offset, so values that do not
+    // all fit it are decoded onto as many buffers as they need
+    if values_capacity - inline_str_max_len > MAX_VIEW_BUFFER_LEN {
+        return decode_binary_view_rolling::<VALIDATE_UTF8>(
+            rows,
+            options,
+            nulls,
+            values_capacity,
+            inline_capacity,
+            MAX_VIEW_BUFFER_LEN,
+        );
+    }
+
     let mut values = MutableBuffer::new(values_capacity);
     let mut view_utf8_validation_buffer = if VALIDATE_UTF8 {
         Vec::with_capacity(inline_capacity)
@@ -373,11 +391,115 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
 
     // SAFETY:
     // Valid by construction above
-    unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()].into(), nulls) }
+    Ok(unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()].into(), nulls) })
+}
+
+/// Decodes rows whose values outgrow one data buffer, rolling onto the next one
+/// as the current buffer runs out of offsets to address them with.
+///
+/// `max_buffer_len` is a parameter so tests can force a roll without decoding
+/// two gigabytes.
+fn decode_binary_view_rolling<const VALIDATE_UTF8: bool>(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+    nulls: Option<NullBuffer>,
+    values_capacity: usize,
+    inline_capacity: usize,
+    max_buffer_len: usize,
+) -> Result<BinaryViewArray, ArrowError> {
+    let len = rows.len();
+    let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
+
+    // Values roll onto another buffer when they do not all fit one, but a single
+    // value has to sit in one buffer for one view to address it
+    let longest = rows
+        .iter()
+        .map(|row| decoded_len(row, options))
+        .max()
+        .unwrap_or(0);
+    if longest > max_buffer_len {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "{longest} byte value too long to decode into a view array, one data buffer addresses at most {max_buffer_len} bytes"
+        )));
+    }
+
+    let mut remaining_long = values_capacity - inline_str_max_len;
+    let mut completed: Vec<Buffer> = Vec::new();
+    let mut block_id = 0_u32;
+    let mut values = MutableBuffer::new(values_capacity.min(max_buffer_len));
+    let mut view_utf8_validation_buffer = if VALIDATE_UTF8 {
+        Vec::with_capacity(inline_capacity)
+    } else {
+        Vec::new()
+    };
+
+    let null_sentinel = null_sentinel(options);
+    let mut views = vec![0_u128; len];
+    for (i, row) in rows.iter_mut().enumerate() {
+        let mut start_offset = values.len();
+        let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
+        let decoded_len = values.len() - start_offset;
+        if row[0] == null_sentinel {
+            debug_assert_eq!(offset, 1);
+            debug_assert_eq!(start_offset, values.len());
+        } else {
+            // A value the current buffer cannot address moves to a fresh one and
+            // every view from here on carries the next block id
+            if decoded_len > inline_str_max_len && start_offset + decoded_len > max_buffer_len {
+                let mut rolled =
+                    MutableBuffer::new(remaining_long.min(max_buffer_len).max(decoded_len));
+                rolled.extend_from_slice(&values[start_offset..]);
+                values.truncate(start_offset);
+                if VALIDATE_UTF8 {
+                    std::str::from_utf8(&values).unwrap();
+                }
+                completed.push(std::mem::replace(&mut values, rolled).into());
+                block_id += 1;
+                start_offset = 0;
+            }
+
+            // Safety: we just appended the data to the end of the buffer
+            let val = unsafe { values.get_unchecked_mut(start_offset..) };
+
+            if options.descending {
+                val.iter_mut().for_each(|o| *o = !*o);
+            }
+
+            views[i] = make_view(val, block_id, start_offset as u32);
+
+            if decoded_len <= inline_str_max_len {
+                if VALIDATE_UTF8 {
+                    view_utf8_validation_buffer.extend_from_slice(val);
+                }
+                values.truncate(start_offset);
+            } else {
+                remaining_long -= decoded_len;
+            }
+        }
+        *row = &row[offset..];
+    }
+
+    if VALIDATE_UTF8 {
+        std::str::from_utf8(&values).unwrap();
+        std::str::from_utf8(&view_utf8_validation_buffer).unwrap();
+    }
+
+    completed.push(values.into());
+
+    // SAFETY:
+    // Valid by construction above
+    Ok(unsafe { BinaryViewArray::new_unchecked(views.into(), completed.into(), nulls) })
 }
 
 /// Decodes a binary view array from `rows` with the provided `options`
-pub fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryViewArray {
+///
+/// Values are spread over as many data buffers as they need. Returns an error if
+/// a single value is longer than `i32::MAX` bytes, the most one data buffer can
+/// address
+pub fn decode_binary_view(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+) -> Result<BinaryViewArray, ArrowError> {
     decode_binary_view_inner::<false>(rows, options)
 }
 
@@ -409,17 +531,21 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
 /// # Safety
 ///
 /// The row must contain valid UTF-8 data
+///
+/// Values are spread over as many data buffers as they need. Returns an error if
+/// a single value is longer than `i32::MAX` bytes, the most one data buffer can
+/// address
 pub unsafe fn decode_string_view(
     rows: &mut [&[u8]],
     options: SortOptions,
     validate_utf8: bool,
-) -> StringViewArray {
+) -> Result<StringViewArray, ArrowError> {
     let view = if validate_utf8 {
-        decode_binary_view_inner::<true>(rows, options)
+        decode_binary_view_inner::<true>(rows, options)?
     } else {
-        decode_binary_view_inner::<false>(rows, options)
+        decode_binary_view_inner::<false>(rows, options)?
     };
-    unsafe { view.to_string_view_unchecked() }
+    Ok(unsafe { view.to_string_view_unchecked() })
 }
 
 pub fn decode_null_value(rows: &mut [&[u8]], options: SortOptions) {
@@ -431,5 +557,111 @@ pub fn decode_null_value(rows: &mut [&[u8]], options: SortOptions) {
         debug_assert_eq!(row[0], sentinel1, "Expected NULL_VALUE_SENTINEL at byte 0");
         debug_assert_eq!(row[1], sentinel2, "Expected NULL_VALUE_SENTINEL at byte 1");
         *row = &row[2..];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RowConverter, SortField};
+    use arrow_array::StringViewArray;
+    use arrow_schema::DataType;
+    use std::sync::Arc;
+
+    fn encode(values: &StringViewArray, options: SortOptions) -> Vec<Vec<u8>> {
+        let field = SortField::new_with_options(DataType::Utf8View, options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter
+            .convert_columns(&[Arc::new(values.clone()) as _])
+            .unwrap();
+        rows.iter().map(|row| row.as_ref().to_vec()).collect()
+    }
+
+    /// Decodes with the rolling path, with a buffer length a test can reach
+    fn decode_rolling(
+        rows: &mut [&[u8]],
+        options: SortOptions,
+        cap: usize,
+    ) -> Result<BinaryViewArray, ArrowError> {
+        let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
+        let nulls = decode_nulls_sentinel(rows, options);
+        let mut values_capacity = inline_str_max_len;
+        let mut inline_capacity = 0;
+        for row in rows.iter() {
+            let len = decoded_len(row, options);
+            if len > inline_str_max_len {
+                values_capacity += len;
+            } else {
+                inline_capacity += len;
+            }
+        }
+        decode_binary_view_rolling::<true>(
+            rows,
+            options,
+            nulls,
+            values_capacity,
+            inline_capacity,
+            cap,
+        )
+    }
+
+    fn roundtrip(values: &StringViewArray, options: SortOptions, cap: usize) -> StringViewArray {
+        let encoded = encode(values, options);
+        let mut rows: Vec<&[u8]> = encoded.iter().map(|row| row.as_slice()).collect();
+        let decoded = decode_rolling(&mut rows, options, cap).unwrap();
+        unsafe { decoded.to_string_view_unchecked() }
+    }
+
+    #[test]
+    fn values_past_the_buffer_length_roll_onto_the_next_buffer() {
+        let values = StringViewArray::from(vec![
+            Some("the quick brown fox jumped"),
+            None,
+            Some("inline"),
+            Some("over the lazy dog and kept going"),
+            Some(""),
+            Some("and a third one longer than inline"),
+        ]);
+
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+                let decoded = roundtrip(&values, options, 40);
+                assert!(
+                    decoded.data_buffers().len() > 1,
+                    "expected a roll, got {} buffer",
+                    decoded.data_buffers().len()
+                );
+                assert_eq!(
+                    decoded.iter().collect::<Vec<_>>(),
+                    values.iter().collect::<Vec<_>>(),
+                    "descending={descending} nulls_first={nulls_first}"
+                );
+
+                let decoded = roundtrip(&values, options, 4096);
+                assert_eq!(decoded.data_buffers().len(), 1);
+                assert_eq!(
+                    decoded.iter().collect::<Vec<_>>(),
+                    values.iter().collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn one_value_longer_than_a_whole_buffer_is_an_error() {
+        let values = StringViewArray::from(vec![Some("a value longer than the cap below")]);
+        let encoded = encode(&values, SortOptions::default());
+        let mut rows: Vec<&[u8]> = encoded.iter().map(|row| row.as_slice()).collect();
+        let err = decode_rolling(&mut rows, SortOptions::default(), 20)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("too long to decode into a view array"),
+            "{err}"
+        );
     }
 }
