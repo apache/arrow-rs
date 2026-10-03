@@ -487,12 +487,12 @@ pub(crate) fn cast_list_to_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
         sizes.push(O::usize_as(size));
     }
     let values = cast_with_options(&values, to_field.data_type(), cast_options)?;
-    let array = GenericListViewArray::<O>::new(
+    let array = GenericListViewArray::<O>::try_new(
         to_field.clone(),
         view_offsets.into(),
         sizes.into(),
         values,
         nulls,
-    );
+    )?;
     Ok(Arc::new(array))
 }
