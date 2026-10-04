@@ -509,10 +509,24 @@ impl FilterPredicate {
     /// because the input `nulls` was `None`, the input had no nulls, or the
     /// filtered result has no nulls. Otherwise returns the filtered
     /// [`NullBuffer`] with its precomputed null count.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the input contains nulls and is shorter than this predicate.
     pub fn filter_nulls(&self, nulls: Option<&NullBuffer>) -> Option<NullBuffer> {
         let nulls = nulls?;
         if nulls.null_count() == 0 {
             return None;
+        }
+
+        assert!(nulls.len() >= self.filter.len());
+        match self.strategy {
+            IterationStrategy::None => return None,
+            IterationStrategy::All => {
+                let nulls = nulls.slice(0, self.count);
+                return (nulls.null_count() != 0).then_some(nulls);
+            }
+            _ => {}
         }
 
         let nulls = filter_bits(nulls.inner(), self);
@@ -1111,6 +1125,80 @@ mod tests {
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
     use rand::rng;
+
+    #[test]
+    fn test_filter_nulls_all() {
+        let predicate = FilterBuilder::new(&BooleanArray::from(vec![true, true])).build();
+        let nulls = NullBuffer::from(vec![true, false]);
+        assert_eq!(predicate.filter_nulls(Some(&nulls)), Some(nulls));
+    }
+
+    #[test]
+    fn test_filter_nulls_none() {
+        let predicate = FilterBuilder::new(&BooleanArray::from(vec![false, false])).build();
+        let nulls = NullBuffer::from(vec![true, false]);
+        assert_eq!(predicate.filter_nulls(Some(&nulls)), None);
+    }
+
+    #[test]
+    fn test_filter_nulls_selection() {
+        // Cover full and partial prefixes, empty selections, and both general
+        // iteration strategies, with and without materializing the selection.
+        let filters = [
+            vec![],
+            vec![true],
+            vec![true, true],
+            vec![true; 6],
+            vec![false; 6],
+            vec![true, false, false, false, false, false],
+            vec![true, true, true, true, true, false],
+        ];
+        for offset in [0, 3, 9] {
+            let mut validity = vec![false; offset];
+            validity.extend([true, false, true, false, true, false]);
+            let nulls = NullBuffer::from(validity).slice(offset, 6);
+            for filter in &filters {
+                let expected: NullBuffer = filter
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, selected)| **selected)
+                    .map(|(i, _)| nulls.is_valid(i))
+                    .collect();
+                let expected = (expected.null_count() != 0).then_some(expected);
+                let filter = BooleanArray::from(filter.clone());
+                for optimize in [false, true] {
+                    let builder = FilterBuilder::new(&filter);
+                    let predicate = if optimize {
+                        builder.optimize()
+                    } else {
+                        builder
+                    }
+                    .build();
+                    assert_eq!(predicate.filter_nulls(Some(&nulls)), expected);
+                    assert_eq!(predicate.filter_nulls(None), None);
+                    assert_eq!(
+                        predicate.filter_nulls(Some(&NullBuffer::new_valid(6))),
+                        None
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_filter_nulls_length_check() {
+        for filter in [vec![true, true], vec![false, false], vec![true, false]] {
+            let predicate = FilterBuilder::new(&BooleanArray::from(filter)).build();
+            let nulls = NullBuffer::new_null(1);
+            assert!(std::panic::catch_unwind(|| predicate.filter_nulls(Some(&nulls))).is_err());
+            // Inputs without nulls continue to short-circuit before checking length.
+            assert_eq!(
+                predicate.filter_nulls(Some(&NullBuffer::new_valid(1))),
+                None
+            );
+            assert_eq!(predicate.filter_nulls(None), None);
+        }
+    }
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {
