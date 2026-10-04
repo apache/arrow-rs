@@ -17,7 +17,7 @@
 
 mod common;
 
-use std::{pin::Pin, sync::Arc};
+use std::{pin::Pin, sync::Arc, time::Duration};
 
 use crate::common::fixture::TestFixture;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
@@ -42,6 +42,7 @@ use assert_cmd::Command;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
 use prost::Message;
+use tokio::{io::AsyncReadExt, net::TcpListener};
 use tonic::{Request, Response, Status, Streaming};
 
 const QUERY: &str = "SELECT * FROM table;";
@@ -107,16 +108,58 @@ async fn test_simple() {
 #[tokio::test]
 async fn test_do_get_endpoint_location() {
     let data_fixture = TestFixture::new(FlightSqlServiceImpl::default().service()).await;
+    for scheme in ["grpc", "grpc+tcp"] {
+        let metadata_server = FlightSqlServiceImpl {
+            do_get_location: Some(format!("{scheme}://{}", data_fixture.addr)),
+            ..Default::default()
+        };
+        let metadata_fixture = TestFixture::new(metadata_server.service()).await;
+
+        run_query_and_assert_table(metadata_fixture.addr, &[]).await;
+
+        metadata_fixture.shutdown_and_wait().await;
+    }
+    data_fixture.shutdown_and_wait().await;
+}
+
+/// A secure advertised location must initiate TLS even without `--tls`.
+#[tokio::test]
+async fn test_do_get_endpoint_location_tls_without_flag() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let metadata_server = FlightSqlServiceImpl {
-        do_get_location: Some(format!("http://{}", data_fixture.addr)),
+        do_get_location: Some(format!("grpc+tls://{}", listener.local_addr().unwrap())),
         ..Default::default()
     };
     let metadata_fixture = TestFixture::new(metadata_server.service()).await;
+    let addr = metadata_fixture.addr;
+    let client = tokio::task::spawn_blocking(move || {
+        flight_sql_client_cmd()
+            .timeout(Duration::from_secs(10))
+            .env_clear()
+            .arg("--host")
+            .arg(addr.ip().to_string())
+            .arg("--port")
+            .arg(addr.port().to_string())
+            .arg("statement-query")
+            .arg(QUERY)
+            .assert()
+            .failure();
+    });
 
-    run_query_and_assert_table(metadata_fixture.addr, &[]).await;
-
+    let mut hello = [0; 6];
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        stream.read_exact(&mut hello).await.unwrap();
+        // Closing before the TLS handshake completes must make the CLI fail.
+    })
+    .await
+    .expect("timed out waiting for ClientHello");
+    client.await.unwrap();
     metadata_fixture.shutdown_and_wait().await;
-    data_fixture.shutdown_and_wait().await;
+
+    assert_eq!(hello[0], 0x16, "expected a TLS handshake record");
+    assert_eq!(hello[1], 0x03, "expected a TLS record version");
+    assert_eq!(hello[5], 0x01, "expected ClientHello");
 }
 
 /// The server advertises the reserved "reuse connection" location ([`REUSE_CONNECTION_URI`])
@@ -149,7 +192,7 @@ async fn test_do_get_endpoint_authentication() {
         };
         let data_fixture = TestFixture::new(data_server.service()).await;
         let metadata_server = FlightSqlServiceImpl {
-            do_get_location: Some(format!("http://{}", data_fixture.addr)),
+            do_get_location: Some(format!("grpc+tcp://{}", data_fixture.addr)),
             auth_token: Some("test-bearer-token"),
             accept_handshake: true,
             ..Default::default()

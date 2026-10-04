@@ -37,7 +37,7 @@ use core::str;
 use futures::TryStreamExt;
 use tonic::{
     metadata::MetadataMap,
-    transport::{Channel, ClientTlsConfig, Endpoint},
+    transport::{Channel, ClientTlsConfig, Endpoint, Uri},
 };
 use tracing_log::log::info;
 
@@ -350,10 +350,6 @@ async fn execute_flight(
     let mut location_clients = HashMap::new();
 
     for endpoint in info.endpoint {
-        let Some(ticket) = &endpoint.ticket else {
-            bail!("did not get ticket");
-        };
-
         let location = select_endpoint_location(
             endpoint
                 .location
@@ -361,6 +357,9 @@ async fn execute_flight(
                 .map(|location| location.uri.as_str()),
             client_args.tls,
         )?;
+        let Some(ticket) = &endpoint.ticket else {
+            bail!("did not get ticket");
+        };
 
         let client = match location {
             None => &mut *client,
@@ -369,7 +368,7 @@ async fn execute_flight(
                 Entry::Vacant(entry) => {
                     let mut endpoint_client = setup_client_for_uri(client_args, uri)
                         .await
-                        .with_context(|| format!("setup client for endpoint location {uri}"))?;
+                        .context("setup client for endpoint location")?;
                     if let Some(token) = client.token() {
                         endpoint_client.set_token(token.to_owned());
                     }
@@ -436,27 +435,92 @@ fn setup_logging(args: LoggingArgs) -> Result<()> {
 }
 
 /// Prefer a separate location, falling back to the original connection when permitted.
+/// HTTP downloads and Unix domain sockets are deliberately unsupported by this CLI.
 fn select_endpoint_location<'a>(
     locations: impl IntoIterator<Item = &'a str>,
     tls: bool,
 ) -> Result<Option<&'a str>> {
     let mut reuse_connection = false;
     let mut has_locations = false;
+    let mut has_insecure_location = false;
     for uri in locations {
         has_locations = true;
         if uri.is_empty() || uri == REUSE_CONNECTION_URI {
             reuse_connection = true;
-        } else if !tls || uri.starts_with("https://") {
-            // Match the TLS detection policy in setup_client_for_uri.
-            return Ok(Some(uri));
+        } else if let Ok(location) = uri.parse::<Uri>() {
+            let Some(scheme) = location.scheme() else {
+                continue;
+            };
+            if scheme != "grpc" && scheme != "grpc+tcp" && scheme != "grpc+tls" {
+                continue;
+            }
+            let Ok(location) = transport_uri(location) else {
+                continue;
+            };
+            if location.scheme_str() == Some("https") || !tls {
+                return Ok(Some(uri));
+            }
+            has_insecure_location = true;
         }
     }
-    if tls && has_locations && !reuse_connection {
+    if has_locations && !reuse_connection {
+        if tls && has_insecure_location {
+            bail!(
+                "--tls requires a secure endpoint location, but no secure or reusable location was provided"
+            );
+        }
         bail!(
-            "--tls requires a secure endpoint location, but only insecure locations were provided"
+            "unsupported endpoint location: expected grpc, grpc+tcp or grpc+tls, or connection reuse"
         );
     }
     Ok(None)
+}
+
+/// Map Flight gRPC schemes at the transport boundary. HTTP(S) is also accepted here
+/// for the initial connection constructed by setup_client, not advertised HTTP downloads.
+fn transport_uri(uri: Uri) -> Result<Uri> {
+    let scheme = uri.scheme().context("transport URI has no scheme")?;
+    let transport_scheme = if scheme == "grpc" || scheme == "grpc+tcp" {
+        "http"
+    } else if scheme == "grpc+tls" {
+        "https"
+    } else if scheme == "http" || scheme == "https" {
+        return Ok(uri);
+    } else {
+        bail!("unsupported transport URI scheme");
+    };
+    // gRPC locations name a server address, not credentials or a download resource.
+    let authority = uri.authority().context("gRPC location has no authority")?;
+    let host = authority.host();
+    if host.is_empty()
+        || authority.as_str().contains('@')
+        || uri.query().is_some()
+        || !matches!(uri.path(), "" | "/")
+    {
+        bail!("invalid gRPC location address");
+    }
+    let suffix = authority
+        .as_str()
+        .strip_prefix(host)
+        .context("invalid gRPC location authority")?;
+    if !suffix.is_empty() {
+        let port = suffix
+            .strip_prefix(':')
+            .context("invalid gRPC location port")?;
+        if port.is_empty()
+            || !port.bytes().all(|byte| byte.is_ascii_digit())
+            || port.parse::<u16>().is_err()
+        {
+            bail!("invalid gRPC location port");
+        }
+    }
+    let mut parts = uri.into_parts();
+    parts.scheme = Some(
+        transport_scheme
+            .parse()
+            .context("invalid transport scheme")?,
+    );
+    Uri::from_parts(parts).context("invalid transport URI")
 }
 
 async fn setup_client(args: &ClientArgs) -> Result<FlightSqlServiceClient<Channel>> {
@@ -493,15 +557,16 @@ async fn setup_client(args: &ClientArgs) -> Result<FlightSqlServiceClient<Channe
 }
 
 /// Connect a client to `uri`, applying the headers and compression settings from `args`.
-/// TLS is used when `uri` has an `https` scheme. Authentication is handled by the caller,
+/// TLS is used for `grpc+tls` or internal `https` URIs. Authentication is handled by the caller,
 /// so separate endpoint clients can reuse the original client's token without a handshake.
 async fn setup_client_for_uri(
     args: &ClientArgs,
     uri: &str,
 ) -> Result<FlightSqlServiceClient<Channel>> {
-    let tls = uri.starts_with("https://");
+    let uri = transport_uri(uri.parse().context("invalid transport URI")?)?;
+    let tls = uri.scheme_str() == Some("https");
 
-    let mut endpoint = Endpoint::new(uri.to_owned())
+    let mut endpoint = Endpoint::new(uri)
         .context("create endpoint")?
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(20))
@@ -575,32 +640,60 @@ fn log_metadata(map: &MetadataMap, what: &'static str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{REUSE_CONNECTION_URI, select_endpoint_location};
+    use super::{
+        ClientArgs, REUSE_CONNECTION_URI, execute_flight, select_endpoint_location, transport_uri,
+    };
+    use arrow_flight::{FlightEndpoint, FlightInfo, sql::client::FlightSqlServiceClient};
+    use arrow_schema::Schema;
+    use clap::Parser;
+    use tonic::transport::Channel;
+
+    #[test]
+    fn flight_schemes_map_to_transport_uris() {
+        for (scheme, transport) in [
+            ("grpc", "http"),
+            ("grpc+tcp", "http"),
+            ("grpc+tls", "https"),
+            ("GRPC+TLS", "https"),
+        ] {
+            let location = format!("{scheme}://[::1]:1234");
+            assert_eq!(
+                transport_uri(location.parse().unwrap())
+                    .unwrap()
+                    .to_string(),
+                format!("{transport}://[::1]:1234/")
+            );
+            assert_eq!(
+                select_endpoint_location([location.as_str()], false).unwrap(),
+                Some(location.as_str())
+            );
+        }
+    }
 
     #[test]
     fn tls_selects_later_secure_location() {
         let locations = [
             REUSE_CONNECTION_URI,
-            "http://insecure:80",
-            "https://secure:443",
-            "https://other:443",
+            "grpc://insecure:80",
+            "grpc+tcp://other:80",
+            "grpc+tls://secure:443",
+            "grpc+tls://other:443",
         ];
         assert_eq!(
             select_endpoint_location(locations, true).unwrap(),
-            Some("https://secure:443")
+            Some("grpc+tls://secure:443")
         );
     }
 
     #[test]
     fn tls_rejects_insecure_only_locations() {
-        let error =
-            select_endpoint_location(["http://insecure:80", "http://other:80"], true).unwrap_err();
+        let error = select_endpoint_location(["grpc://insecure:80", "grpc+tcp://other:80"], true)
+            .unwrap_err();
         assert!(
             error
                 .to_string()
                 .contains("--tls requires a secure endpoint location")
         );
-        assert!(error.to_string().contains("only insecure locations"));
     }
 
     #[test]
@@ -614,7 +707,10 @@ mod tests {
             );
         }
         for reuse in ["", REUSE_CONNECTION_URI] {
-            for locations in [[reuse, "http://insecure:80"], ["http://insecure:80", reuse]] {
+            for locations in [
+                [reuse, "grpc+tcp://insecure:80"],
+                ["grpc+tcp://insecure:80", reuse],
+            ] {
                 assert_eq!(select_endpoint_location(locations, true).unwrap(), None);
             }
         }
@@ -627,21 +723,91 @@ mod tests {
                 [
                     "",
                     REUSE_CONNECTION_URI,
-                    "http://first:80",
-                    "https://later:443"
+                    "grpc+tcp://first:80",
+                    "grpc+tls://later:443"
                 ],
                 false,
             )
             .unwrap(),
-            Some("http://first:80")
+            Some("grpc+tcp://first:80")
         );
         assert_eq!(
             select_endpoint_location(
-                [REUSE_CONNECTION_URI, "https://first:443", "http://later:80"],
+                [
+                    REUSE_CONNECTION_URI,
+                    "grpc+tls://first:443",
+                    "grpc://later:80"
+                ],
                 false,
             )
             .unwrap(),
-            Some("https://first:443")
+            Some("grpc+tls://first:443")
         );
+    }
+
+    #[test]
+    fn unsupported_locations_are_skipped_or_rejected() {
+        for unsupported in [
+            "http://download/data?signature=secret",
+            "https://download/data?signature=secret",
+            "grpc+unix:///tmp/flight.sock",
+            "unknown://server:1234",
+            "grpc+tls-extra://server:1234",
+            "grpc+tcp://invalid host:1234",
+            "/path/grpc+tls://server:1234",
+            "grpc://user:secret@server:1234",
+            "grpc+tls://server:1234?signature=secret",
+            "grpc+tcp://server:1234/download",
+            "grpc://server:",
+            "grpc+tcp://server:not-a-port",
+            "grpc+tls://server:65536",
+            "grpc+tls://[::1]:",
+            "grpc+tls://[::1]:not-a-port",
+            "grpc+tls://[::1]:65536",
+        ] {
+            for tls in [false, true] {
+                let error = select_endpoint_location([unsupported], tls).unwrap_err();
+                assert!(error.to_string().contains("unsupported endpoint location"));
+                assert!(!error.to_string().contains("secret"));
+
+                let supported = "grpc+tls://secure:443";
+                for locations in [[unsupported, supported], [supported, unsupported]] {
+                    assert_eq!(
+                        select_endpoint_location(locations, tls).unwrap(),
+                        Some(supported)
+                    );
+                }
+                for reuse in ["", REUSE_CONNECTION_URI] {
+                    for locations in [[unsupported, reuse], [reuse, unsupported]] {
+                        assert_eq!(select_endpoint_location(locations, tls).unwrap(), None);
+                    }
+                }
+            }
+            for locations in [
+                [unsupported, "grpc+tcp://plain:80"],
+                ["grpc+tcp://plain:80", unsupported],
+            ] {
+                assert_eq!(
+                    select_endpoint_location(locations, false).unwrap(),
+                    Some("grpc+tcp://plain:80")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn http_without_ticket_reports_unsupported_location() {
+        let args = ClientArgs::try_parse_from(["test", "--host", "localhost"]).unwrap();
+        let channel = Channel::from_static("http://localhost:1234").connect_lazy();
+        let mut client = FlightSqlServiceClient::new(channel);
+        let info = FlightInfo::new()
+            .try_with_schema(&Schema::empty())
+            .unwrap()
+            .with_endpoint(
+                FlightEndpoint::new().with_location("https://download/data?signature=secret"),
+            );
+        let error = execute_flight(&mut client, &args, info).await.unwrap_err();
+        assert!(error.to_string().contains("unsupported endpoint location"));
+        assert!(!error.to_string().contains("secret"));
     }
 }
