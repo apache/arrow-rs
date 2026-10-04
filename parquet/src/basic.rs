@@ -455,6 +455,8 @@ enum Encoding {
   ///
   /// Currently specified for FLOAT and DOUBLE.
   ALP = 10;
+  /// Patched Frame of Reference encoding for INT32 and INT64.
+  PFOR = 11;
 }
 );
 
@@ -476,6 +478,7 @@ impl FromStr for Encoding {
             "RLE_DICTIONARY" | "rle_dictionary" => Ok(Encoding::RLE_DICTIONARY),
             "BYTE_STREAM_SPLIT" | "byte_stream_split" => Ok(Encoding::BYTE_STREAM_SPLIT),
             "ALP" | "alp" => Ok(Encoding::ALP),
+            "PFOR" | "pfor" => Ok(Encoding::PFOR),
             _ => Err(general_err!("unknown encoding: {}", s)),
         }
     }
@@ -616,6 +619,7 @@ fn i32_to_encoding(val: i32) -> Encoding {
         8 => Encoding::RLE_DICTIONARY,
         9 => Encoding::BYTE_STREAM_SPLIT,
         10 => Encoding::ALP,
+        11 => Encoding::PFOR,
         _ => panic!("Impossible encoding {val}"),
     }
 }
@@ -1977,6 +1981,7 @@ mod tests {
         assert_eq!(Encoding::DELTA_BYTE_ARRAY.to_string(), "DELTA_BYTE_ARRAY");
         assert_eq!(Encoding::RLE_DICTIONARY.to_string(), "RLE_DICTIONARY");
         assert_eq!(Encoding::ALP.to_string(), "ALP");
+        assert_eq!(Encoding::PFOR.to_string(), "PFOR");
     }
 
     #[test]
@@ -2462,6 +2467,7 @@ mod tests {
             Encoding::RLE_DICTIONARY,
             Encoding::BYTE_STREAM_SPLIT,
             Encoding::ALP,
+            Encoding::PFOR,
         ];
         encodings_roundtrip(encodings.into());
     }

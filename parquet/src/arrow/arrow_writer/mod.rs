@@ -2583,6 +2583,72 @@ mod tests {
     }
 
     #[test]
+    fn arrow_writer_round_trips_pfor_int_columns() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i32", DataType::Int32, false),
+            Field::new("i64", DataType::Int64, true),
+        ]));
+        let i32_values: Vec<i32> = (0..5000).map(|i| 1_000_000 + (i % 17)).collect();
+        let i64_values: Vec<Option<i64>> = (0..5000)
+            .map(|i| (i % 7 != 0).then_some(i * 1_000_003))
+            .collect();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(i32_values)),
+                Arc::new(Int64Array::from(i64_values)),
+            ],
+        )
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PFOR)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer)).unwrap();
+        for column in reader.metadata().row_group(0).columns() {
+            assert!(
+                column
+                    .encodings()
+                    .any(|encoding| encoding == Encoding::PFOR)
+            );
+        }
+        let read = reader
+            .build()
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            arrow::compute::concat_batches(&schema, &read).unwrap(),
+            batch
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "PFOR only supports INT32 and INT64")]
+    fn arrow_writer_rejects_pfor_for_other_types() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Float64,
+            false,
+        )]));
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PFOR)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Float64Array::from(vec![1.0, 2.0]))])
+                .unwrap();
+        writer.write(&batch).unwrap();
+    }
+
+    #[test]
     #[cfg_attr(miri, ignore)] // inline assembly is not supported
     fn arrow_writer_float_nans() {
         let f16_field = Field::new("a", DataType::Float16, false);

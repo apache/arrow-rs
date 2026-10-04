@@ -133,6 +133,9 @@ enum EncodingArgs {
 
     /// Adaptive Lossless floating-Point encoding for FLOAT and DOUBLE.
     Alp,
+
+    /// Patched Frame of Reference encoding for INT32 and INT64.
+    Pfor,
 }
 
 #[expect(deprecated)]
@@ -149,6 +152,7 @@ impl From<EncodingArgs> for Encoding {
             EncodingArgs::RleDictionary => Self::RLE_DICTIONARY,
             EncodingArgs::ByteStreamSplit => Self::BYTE_STREAM_SPLIT,
             EncodingArgs::Alp => Self::ALP,
+            EncodingArgs::Pfor => Self::PFOR,
         }
     }
 }
