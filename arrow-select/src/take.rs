@@ -1027,6 +1027,12 @@ where
 {
     let src_offsets = values.value_offsets();
     let child_data = values.values().to_data();
+    // The number of child values that the rows use, excluding values outside a slice
+    let visible_child_len = (values.offsets().last() - values.offsets().first()).as_usize();
+    // An estimate of the output's child length, from the average length of the rows
+    let estimated_child_len = visible_child_len
+        .checked_div(values.len())
+        .map_or(0, |avg| avg.saturating_mul(indices.len()));
     let nulls = take_nulls::<_, VALIDATE_INDICES>(values.nulls(), indices);
 
     let mut dst_offsets = Vec::with_capacity(indices.len() + 1);
@@ -1040,15 +1046,7 @@ where
         let values_buf = &child_data.buffers()[0];
         let child_buf_offset = child_data.offset() * bytes_per_value;
 
-        let avg_row_len = child_data
-            .len()
-            .checked_div(values.len().max(1))
-            .unwrap_or(0);
-        let mut dst_buf = MutableBuffer::new(
-            avg_row_len
-                .saturating_mul(indices.len())
-                .saturating_mul(bytes_per_value),
-        );
+        let mut dst_buf = MutableBuffer::new(estimated_child_len.saturating_mul(bytes_per_value));
 
         let mut child_len = OffsetType::Native::zero();
 
@@ -1121,13 +1119,11 @@ where
         return GenericListArray::<OffsetType::Native>::try_new(field, offsets, child, nulls);
     }
 
-    let capacity = child_data
-        .len()
-        .checked_div(values.len())
-        .map(|avg| avg * indices.len())
-        .unwrap_or_default();
-    let mut mutable =
-        MutableArrayData::new(vec![&child_data], child_data.null_count() > 0, capacity);
+    let mut mutable = MutableArrayData::new(
+        vec![&child_data],
+        child_data.null_count() > 0,
+        estimated_child_len,
+    );
 
     match nulls.as_ref().filter(|n| n.null_count() > 0) {
         None => {
@@ -3256,6 +3252,38 @@ mod tests {
     #[test]
     fn test_take_sliced_large_list_with_value_nulls() {
         test_take_sliced_list_with_value_nulls_generic::<i64>();
+    }
+
+    #[test]
+    fn test_take_sliced_list_memory_size() {
+        // Takes the same rows from a two-row slice of a large array and from an unsliced
+        // copy of those two rows. The results should be equal and use the same memory.
+        fn check(parent: ArrayRef, unsliced: ArrayRef) {
+            let sliced = parent.slice(500, 2);
+            let indices = UInt32Array::from_iter_values((0..100).map(|i| i % 2));
+            let actual = take(&sliced, &indices, None).unwrap();
+            let expected = take(&unsliced, &indices, None).unwrap();
+            assert_eq!(&actual, &expected);
+            assert_eq!(
+                actual.get_array_memory_size(),
+                expected.get_array_memory_size()
+            );
+        }
+
+        // Lists of 10 values per row
+        let list = |rows: usize, values: ArrayRef| -> ArrayRef {
+            let field = Arc::new(Field::new_list_field(values.data_type().clone(), false));
+            let offsets = OffsetBuffer::from_repeated_length(10, rows);
+            Arc::new(ListArray::new(field, offsets, values, None))
+        };
+        check(
+            list(1000, Arc::new(Int64Array::from(vec![1; 10_000]))),
+            list(2, Arc::new(Int64Array::from(vec![1; 20]))),
+        );
+        check(
+            list(1000, Arc::new(StringArray::from(vec!["a"; 10_000]))),
+            list(2, Arc::new(StringArray::from(vec!["a"; 20]))),
+        );
     }
 
     #[test]

@@ -22,6 +22,7 @@ use arrow::util::bench_util::*;
 
 use arrow::array::*;
 use arrow::compute::filter;
+use arrow::compute::{and, is_not_null};
 use arrow::datatypes::{Field, Float32Type, Int32Type, Int64Type, Schema, UInt8Type};
 
 use arrow_array::types::Decimal128Type;
@@ -113,6 +114,40 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function(
         "filter context i32 w NULLs low selectivity (kept 1/1024)",
         |b| b.iter(|| bench_built_filter(&data_array, &sparse_filter)),
+    );
+
+    let valid = is_not_null(&data_array).unwrap();
+    let valid_filter = FilterBuilder::new(&and(&filter_array, &valid).unwrap())
+        .optimize()
+        .build();
+    let valid_dense_filter = FilterBuilder::new(&and(&dense_filter_array, &valid).unwrap())
+        .optimize()
+        .build();
+    let valid_sparse_filter = FilterBuilder::new(&and(&sparse_filter_array, &valid).unwrap())
+        .optimize()
+        .build();
+    c.bench_function("filter context i32 w NULLs, only valid (kept 1/4)", |b| {
+        b.iter(|| bench_built_filter(&data_array, &valid_filter))
+    });
+    c.bench_function(
+        "filter context i32 w NULLs, only valid high selectivity (kept 1023/2048)",
+        |b| b.iter(|| bench_built_filter(&data_array, &valid_dense_filter)),
+    );
+    c.bench_function(
+        "filter context i32 w NULLs, only valid low selectivity (kept 1/2048)",
+        |b| b.iter(|| bench_built_filter(&data_array, &valid_sparse_filter)),
+    );
+
+    // Nulls only in the last word, so the filters below find a selected null late
+    let data_array: Int32Array = (0..size)
+        .map(|i| (i < size - 64).then_some(i as i32))
+        .collect();
+    c.bench_function("filter context i32 w NULLs at end (kept 1/2)", |b| {
+        b.iter(|| bench_built_filter(&data_array, &filter))
+    });
+    c.bench_function(
+        "filter context i32 w NULLs at end high selectivity (kept 1023/1024)",
+        |b| b.iter(|| bench_built_filter(&data_array, &dense_filter)),
     );
 
     let data_array = create_primitive_array::<UInt8Type>(size, 0.5);
