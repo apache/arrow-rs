@@ -42,9 +42,9 @@ use crate::{
     errors::{ParquetError, Result},
     file::{
         metadata::{
-            ColumnChunkMetaData, ColumnChunkMetaDataBuilder, KeyValue, LevelHistogram,
-            PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions, ParquetPageEncodingStats,
-            RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
+            ColumnChunkMetaData, ColumnChunkMetaDataBuilder, FileMetaData, KeyValue,
+            LevelHistogram, PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions,
+            ParquetPageEncodingStats, RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
         },
         statistics::ValueStatistics,
     },
@@ -757,6 +757,14 @@ pub(crate) fn parquet_metadata_from_bytes(
     buf: &[u8],
     options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ParquetMetaData> {
+    let (file_metadata, row_groups) = file_metadata_and_row_groups_from_bytes(buf, options)?;
+    Ok(ParquetMetaData::new(file_metadata, row_groups))
+}
+
+pub(crate) fn file_metadata_and_row_groups_from_bytes(
+    buf: &[u8],
+    options: Option<&ParquetMetaDataOptions>,
+) -> Result<(FileMetaData, Vec<RowGroupMetaData>)> {
     let mut prot = ThriftSliceInputProtocol::new(buf);
 
     // begin reading the file metadata
@@ -896,7 +904,7 @@ pub(crate) fn parquet_metadata_from_bytes(
     });
 
     #[cfg(not(feature = "encryption"))]
-    let fmd = crate::file::metadata::FileMetaData::new(
+    let fmd = FileMetaData::new(
         version,
         num_rows,
         created_by,
@@ -905,7 +913,7 @@ pub(crate) fn parquet_metadata_from_bytes(
         column_orders,
     );
     #[cfg(feature = "encryption")]
-    let fmd = crate::file::metadata::FileMetaData::new(
+    let fmd = FileMetaData::new(
         version,
         num_rows,
         created_by,
@@ -916,7 +924,7 @@ pub(crate) fn parquet_metadata_from_bytes(
     .with_encryption_algorithm(encryption_algorithm)
     .with_footer_signing_key_metadata(footer_signing_key_metadata.map(|v| v.to_vec()));
 
-    Ok(ParquetMetaData::new(fmd, row_groups))
+    Ok((fmd, row_groups))
 }
 
 /// Ensure [`RowGroupMetaData::ordinal`] is usable after decode without
@@ -1399,7 +1407,7 @@ pub(super) fn serialize_column_meta_data<W: Write>(
 
 // temp struct used for writing
 pub(super) struct FileMeta<'a> {
-    pub(super) file_metadata: &'a crate::file::metadata::FileMetaData,
+    pub(super) file_metadata: &'a FileMetaData,
     pub(super) row_groups: &'a Vec<RowGroupMetaData>,
     // If true, then write the `path_in_schema` field in the ColumnMetaData struct.
     pub(super) write_path_in_schema: bool,
