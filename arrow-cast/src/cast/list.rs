@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::cast::*;
+use arrow_buffer::ScalarBuffer;
 
 /// Converts a non-list array to a list array where every element is a single element
 /// list. `NULL`s in the original array become `[NULL]` (i.e. output list array
@@ -282,13 +283,70 @@ pub(crate) fn cast_list_values<O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list::<O>();
-    let values = cast_with_options(list.values(), to.data_type(), cast_options)?;
+    let (offsets, values) = list_visible_values(list);
+    let values = cast_with_options(&values, to.data_type(), cast_options)?;
     Ok(Arc::new(GenericListArray::<O>::try_new(
         to.clone(),
-        list.offsets().clone(),
+        offsets,
         values,
         list.nulls().cloned(),
     )?))
+}
+
+/// Returns the part of `list.values()` that the rows use, with the offsets
+/// adjusted to start at 0. For a sliced list, this drops the values outside
+/// the slice.
+fn list_visible_values<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+) -> (OffsetBuffer<O>, ArrayRef) {
+    let offsets = list.offsets();
+    let first = offsets.first();
+    let values = list
+        .values()
+        .slice(first.as_usize(), (offsets.last() - first).as_usize());
+    (offsets.clone().subtract(first), values)
+}
+
+/// Returns the values of `list_view` from the lowest offset to the highest end of
+/// its rows, and the offsets of the rows into those values. As rows can be in any
+/// order, these values can include some that no row uses.
+fn list_view_visible_values<O: OffsetSizeTrait>(
+    list_view: &GenericListViewArray<O>,
+) -> (ScalarBuffer<O>, ArrayRef) {
+    let offsets = list_view.offsets();
+    let sizes = list_view.sizes();
+    let values = list_view.values();
+
+    let mut start = usize::MAX;
+    let mut end = 0;
+    for (offset, size) in offsets.iter().zip(sizes.iter()) {
+        if size.as_usize() > 0 {
+            start = start.min(offset.as_usize());
+            end = end.max(offset.as_usize() + size.as_usize());
+        }
+    }
+    if end == 0 {
+        // All rows are empty
+        start = 0;
+    }
+
+    if start == 0 && end == values.len() {
+        return (offsets.clone(), Arc::clone(values));
+    }
+
+    // The offsets of empty rows can be outside the new range, so set them to 0
+    let offsets = offsets
+        .iter()
+        .zip(sizes.iter())
+        .map(|(offset, size)| {
+            if size.as_usize() > 0 {
+                O::usize_as(offset.as_usize() - start)
+            } else {
+                O::usize_as(0)
+            }
+        })
+        .collect();
+    (offsets, values.slice(start, end - start))
 }
 
 /// Casting between list view arrays of same offset size; we cast only the inner type.
@@ -298,10 +356,11 @@ pub(crate) fn cast_list_view_values<O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list_view::<O>();
-    let values = cast_with_options(list.values(), to.data_type(), cast_options)?;
+    let (offsets, values) = list_view_visible_values(list);
+    let values = cast_with_options(&values, to.data_type(), cast_options)?;
     Ok(Arc::new(GenericListViewArray::<O>::try_new(
         to.clone(),
-        list.offsets().clone(),
+        offsets,
         list.sizes().clone(),
         values,
         list.nulls().cloned(),
@@ -315,8 +374,7 @@ pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list::<I>();
-    let values = list.values();
-    let offsets = list.offsets();
+    let (offsets, values) = list_visible_values(list);
     let nulls = list.nulls().cloned();
 
     if offsets.last().as_usize() > O::MAX_OFFSET {
@@ -328,7 +386,7 @@ pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     }
 
     // Recursively cast values
-    let values = cast_with_options(values, field.data_type(), cast_options)?;
+    let values = cast_with_options(&values, field.data_type(), cast_options)?;
     let offsets: Vec<_> = offsets.iter().map(|x| O::usize_as(x.as_usize())).collect();
 
     // Safety: valid offsets and checked for overflow
@@ -409,12 +467,12 @@ pub(crate) fn cast_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let list_view = array.as_list_view::<I>();
+    let (offsets, values) = list_view_visible_values(list_view);
 
     // Recursively cast values
-    let values = cast_with_options(list_view.values(), to_field.data_type(), cast_options)?;
+    let values = cast_with_options(&values, to_field.data_type(), cast_options)?;
 
-    let offsets = list_view
-        .offsets()
+    let offsets = offsets
         .iter()
         .map(|offset| {
             let offset = offset.as_usize();
@@ -459,7 +517,8 @@ pub(crate) fn cast_list_to_list_view<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list::<I>();
-    let (_field, offsets, values, nulls) = list.clone().into_parts();
+    let (offsets, values) = list_visible_values(list);
+    let nulls = list.nulls().cloned();
 
     let len = offsets.len() - 1;
     let mut sizes = Vec::with_capacity(len);
