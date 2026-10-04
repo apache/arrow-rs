@@ -93,6 +93,45 @@ impl BooleanArray {
         Self { values, nulls }
     }
 
+    /// Returns a new array with additional nulls from `nulls` and the existing nulls.
+    ///
+    /// A slot is null in the result if it is null in either mask. Use
+    /// [`Self::with_nulls_unchecked`] to replace the null buffer instead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nulls` has a different length than this array.
+    pub fn with_additional_nulls(self, nulls: Option<NullBuffer>) -> Self {
+        if let Some(nulls) = &nulls {
+            assert_eq!(nulls.len(), self.len(), "Null buffer length mismatch");
+        }
+
+        let nulls = NullBuffer::union(self.nulls.as_ref(), nulls.as_ref());
+
+        Self {
+            values: self.values,
+            nulls,
+        }
+    }
+
+    /// Returns a new array with the same values and exactly the provided null buffer.
+    ///
+    /// Unlike [`Self::with_additional_nulls`], this replaces the existing null buffer without merging it.
+    ///
+    /// # Safety
+    ///
+    /// If `nulls` is `Some`, its length must equal this array's length.
+    pub unsafe fn with_nulls_unchecked(self, nulls: Option<NullBuffer>) -> Self {
+        if let (true, Some(nulls)) = (cfg!(feature = "force_validate"), &nulls) {
+            assert_eq!(nulls.len(), self.len(), "Null buffer length mismatch");
+        }
+
+        Self {
+            values: self.values,
+            nulls,
+        }
+    }
+
     /// Create a new [`BooleanArray`] from the provided values and nulls without validation.
     ///
     /// # Safety
@@ -917,6 +956,46 @@ impl From<BooleanBuffer> for BooleanArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_with_additional_nulls_unions_existing_nulls() {
+        let array = BooleanArray::new(
+            vec![true, false, true, false].into(),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+
+        let array =
+            array.with_additional_nulls(Some(NullBuffer::from(vec![false, true, true, true])));
+
+        assert_eq!(array.null_count(), 2);
+        assert!(array.is_null(0));
+        assert!(array.is_null(1));
+        assert!(!array.is_null(2));
+        assert!(!array.is_null(3));
+    }
+
+    #[test]
+    fn test_with_nulls_unchecked_replaces_existing_nulls() {
+        let array = BooleanArray::new(
+            vec![true, false, true].into(),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let array = unsafe { array.with_nulls_unchecked(None) };
+
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(
+            array.values().iter().collect::<Vec<_>>(),
+            vec![true, false, true]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Null buffer length mismatch")]
+    fn test_with_additional_nulls_checks_length_without_existing_nulls() {
+        let array = BooleanArray::from(vec![true, false, true]);
+        let _ = array.with_additional_nulls(Some(NullBuffer::from(vec![true, true])));
+    }
 
     // Captures the values-buffer identity for a BooleanArray so tests can assert
     // whether an operation reused the original allocation or produced a new one.

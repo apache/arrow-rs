@@ -154,6 +154,51 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         })
     }
 
+    /// Returns a new array with additional nulls from `nulls` and the existing nulls.
+    ///
+    /// A slot is null in the result if it is null in either mask. Use
+    /// [`Self::with_nulls_unchecked`] to replace the null buffer instead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nulls` has a different length than this array.
+    pub fn with_additional_nulls(self, nulls: Option<NullBuffer>) -> Self {
+        if let Some(nulls) = &nulls {
+            assert_eq!(nulls.len(), self.len(), "Null buffer length mismatch");
+        }
+
+        let nulls = NullBuffer::union(self.nulls.as_ref(), nulls.as_ref());
+
+        Self {
+            data_type: self.data_type,
+            value_offsets: self.value_offsets,
+            value_data: self.value_data,
+            nulls,
+        }
+    }
+
+    /// Returns a new array with the same values and exactly the provided null buffer.
+    ///
+    /// Unlike [`Self::with_additional_nulls`], this replaces the existing null buffer without merging it.
+    ///
+    /// # Safety
+    ///
+    /// If `nulls` is `Some`, its length must equal this array's length. Any slots that were null
+    /// in this array but are valid in `nulls` must contain values valid for `T` (for example, valid
+    /// UTF-8 for string arrays).
+    pub unsafe fn with_nulls_unchecked(self, nulls: Option<NullBuffer>) -> Self {
+        if let (true, Some(nulls)) = (cfg!(feature = "force_validate"), &nulls) {
+            assert_eq!(nulls.len(), self.len(), "Null buffer length mismatch");
+        }
+
+        Self {
+            data_type: self.data_type,
+            value_offsets: self.value_offsets,
+            value_data: self.value_data,
+            nulls,
+        }
+    }
+
     /// Create a new [`GenericByteArray`] from the provided parts, without validation
     ///
     /// # Safety
@@ -616,6 +661,42 @@ where
 mod tests {
     use crate::{Array, BinaryArray, StringArray};
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
+
+    #[test]
+    fn with_additional_nulls_unions_existing_nulls() {
+        let array = StringArray::from(vec![Some("hello"), None, Some("world"), Some("!")]);
+
+        let array =
+            array.with_additional_nulls(Some(NullBuffer::from(vec![false, true, true, true])));
+
+        assert_eq!(array.null_count(), 2);
+        assert!(array.is_null(0));
+        assert!(array.is_null(1));
+        assert!(!array.is_null(2));
+        assert!(!array.is_null(3));
+    }
+
+    #[test]
+    fn with_nulls_unchecked_replaces_existing_nulls() {
+        let array = StringArray::new(
+            OffsetBuffer::new(vec![0, 5, 10].into()),
+            Buffer::from(b"helloworld".as_slice()),
+            Some(NullBuffer::new_null(2)),
+        );
+
+        let array = unsafe { array.with_nulls_unchecked(Some(NullBuffer::from(vec![true, true]))) };
+
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(array.value(0), "hello");
+        assert_eq!(array.value(1), "world");
+    }
+
+    #[test]
+    #[should_panic(expected = "Null buffer length mismatch")]
+    fn with_additional_nulls_checks_length_without_existing_nulls() {
+        let array = StringArray::from(vec!["one", "two", "three"]);
+        let _ = array.with_additional_nulls(Some(NullBuffer::from(vec![true, true])));
+    }
 
     /// `from_iter_values` must work with iterators that report no upper size bound,
     /// and must not trust the size hint it does get.

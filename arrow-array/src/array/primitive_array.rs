@@ -647,6 +647,48 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         Self::try_new(values, nulls).unwrap()
     }
 
+    /// Returns a new array with additional nulls from `nulls` and the existing nulls.
+    ///
+    /// A slot is null in the result if it is null in either mask. Use
+    /// [`Self::with_nulls_unchecked`] to replace the null buffer instead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `nulls` has a different length than this array.
+    pub fn with_additional_nulls(self, nulls: Option<NullBuffer>) -> Self {
+        if let Some(nulls) = &nulls {
+            assert_eq!(nulls.len(), self.len(), "Null buffer length mismatch");
+        }
+
+        let nulls = NullBuffer::union(self.nulls.as_ref(), nulls.as_ref());
+
+        Self {
+            data_type: self.data_type,
+            values: self.values,
+            nulls,
+        }
+    }
+
+    /// Returns a new array with the same values and exactly the provided null buffer.
+    ///
+    /// Unlike [`Self::with_additional_nulls`], this replaces the existing null buffer without merging it.
+    ///
+    /// # Safety
+    ///
+    /// If `nulls` is `Some`, its length must equal this array's length. Any slots that were null
+    /// in this array but are valid in `nulls` must contain values that are valid for `T`.
+    pub unsafe fn with_nulls_unchecked(self, nulls: Option<NullBuffer>) -> Self {
+        if let (true, Some(nulls)) = (cfg!(feature = "force_validate"), &nulls) {
+            assert_eq!(nulls.len(), self.len(), "Null buffer length mismatch");
+        }
+
+        Self {
+            data_type: self.data_type,
+            values: self.values,
+            nulls,
+        }
+    }
+
     /// Create a new [`PrimitiveArray`] from the provided values and nulls without validation.
     ///
     /// # Safety
@@ -3015,6 +3057,43 @@ mod tests {
         TimestampNanosecondArray::new(vec![1, 2, 3, 4].into(), None).with_data_type(
             DataType::Timestamp(TimeUnit::Nanosecond, Some("03:00".into())),
         );
+    }
+
+    #[test]
+    fn test_with_additional_nulls_unions_existing_nulls() {
+        let array = Int32Array::new(
+            vec![1, 2, 3, 4].into(),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+        );
+
+        let array =
+            array.with_additional_nulls(Some(NullBuffer::from(vec![false, true, true, true])));
+
+        assert_eq!(array.null_count(), 2);
+        assert!(array.is_null(0));
+        assert!(array.is_null(1));
+        assert!(!array.is_null(2));
+        assert!(!array.is_null(3));
+    }
+
+    #[test]
+    fn test_with_nulls_unchecked_replaces_existing_nulls() {
+        let array = Int32Array::new(
+            vec![1, 2, 3].into(),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        let array = unsafe { array.with_nulls_unchecked(None) };
+
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(array.values(), &[1, 2, 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Null buffer length mismatch")]
+    fn test_with_additional_nulls_checks_length_without_existing_nulls() {
+        let array = Int32Array::from(vec![1, 2, 3]);
+        let _ = array.with_additional_nulls(Some(NullBuffer::from(vec![true, true])));
     }
 
     #[test]
