@@ -511,11 +511,9 @@ impl FilterPredicate {
         // SAFETY: we know that the set of filtered arrays will match the schema of the original
         // record batch
         unsafe {
-            Ok(RecordBatch::new_unchecked(
-                record_batch.schema(),
-                filtered_arrays,
-                self.count,
-            ))
+            let batch =
+                RecordBatch::new_unchecked(record_batch.schema(), filtered_arrays, self.count);
+            Ok(batch.with_custom_metadata(record_batch.custom_metadata().clone()))
         }
     }
 
@@ -2661,5 +2659,20 @@ mod tests {
         let predicate = BooleanArray::from(vec![false; 9]);
         let filter = FilterBuilder::new(&predicate).build();
         filter_native(&values, &filter);
+    }
+
+    #[test]
+    fn test_filter_record_batch_preserves_custom_metadata() {
+        let metadata = Metadata::from([("k", "v")]);
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])
+        .unwrap()
+        .with_custom_metadata(metadata.clone());
+        let predicate = BooleanArray::from(vec![true, false, true]);
+        let filtered = filter_record_batch(&batch, &predicate).unwrap();
+        assert_eq!(filtered.num_rows(), 2);
+        assert_eq!(filtered.custom_metadata(), &metadata);
     }
 }

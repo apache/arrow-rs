@@ -1721,7 +1721,8 @@ pub fn take_record_batch(
                 }
             }
             // Safety: indices were validated by the first take_impl call
-            Ok(unsafe { RecordBatch::new_unchecked(record_batch.schema(), columns, indices.len()) })
+            let batch = unsafe { RecordBatch::new_unchecked(record_batch.schema(), columns, indices.len()) };
+            Ok(batch.with_custom_metadata(record_batch.custom_metadata().clone()))
         },
         d => Err(ArrowError::InvalidArgumentError(format!("Take only supported for integers, got {d:?}")))
     )
@@ -1732,7 +1733,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-    use arrow_schema::{Field, Fields, TimeUnit, UnionFields};
+    use arrow_schema::{Field, Fields, Metadata, TimeUnit, UnionFields};
     use num_traits::ToPrimitive;
 
     fn test_take_decimal_arrays(
@@ -4187,5 +4188,20 @@ mod tests {
         let result = take(&input, &indices, None).unwrap();
 
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_take_record_batch_preserves_custom_metadata() {
+        let metadata = Metadata::from([("k", "v")]);
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])
+        .unwrap()
+        .with_custom_metadata(metadata.clone());
+        let indices = UInt32Array::from(vec![2, 0]);
+        let taken = take_record_batch(&batch, &indices).unwrap();
+        assert_eq!(taken.num_rows(), 2);
+        assert_eq!(taken.custom_metadata(), &metadata);
     }
 }
