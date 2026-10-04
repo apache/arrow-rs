@@ -45,8 +45,8 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
-    ParquetStatisticsPolicy, RowGroupMetaData,
+    ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
+    ParquetMetaDataReader, ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
@@ -593,8 +593,10 @@ pub struct ArrowReaderOptions {
     /// [ARROW_SCHEMA_META_KEY]: crate::arrow::ARROW_SCHEMA_META_KEY
     supplied_schema: Option<SchemaRef>,
 
-    pub(crate) column_index: PageIndexPolicy,
-    pub(crate) offset_index: PageIndexPolicy,
+    column_index: PageIndexPolicy,
+    offset_index: PageIndexPolicy,
+    column_index_mask: ColumnChunkMask,
+    offset_index_mask: ColumnChunkMask,
 
     /// Options to control reading of Parquet metadata
     metadata_options: ParquetMetaDataOptions,
@@ -774,6 +776,47 @@ impl ArrowReaderOptions {
         self
     }
 
+    /// Sets the same [`ColumnChunkMask`] for both page-index structures.
+    pub fn with_page_index_mask(self, mask: ColumnChunkMask) -> Self {
+        self.with_column_index_mask(mask.clone())
+            .with_offset_index_mask(mask)
+    }
+
+    /// Sets the [`ColumnChunkMask`] for the Parquet [ColumnIndex] structure.
+    ///
+    /// The column index can be costly to decode and store, especially when it is needed
+    /// only for a subset of row groups or columns (such as when filtering by a predicate
+    /// on a single column). Providing a [`ColumnChunkMask`] can greatly decrease
+    /// the time needed to decode this metadata.
+    ///
+    /// The mask applies only if the column-index policy is not [`PageIndexPolicy::Skip`]
+    /// (the default), or an underlying reader is configured to preload the index. It is
+    /// honored by loading APIs such as [`ArrowReaderMetadata::load`];
+    /// [`ArrowReaderMetadata::try_new`] does not load or filter page indexes.
+    ///
+    /// [ColumnIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.column_index_mask = mask;
+        self
+    }
+
+    /// Sets the [`ColumnChunkMask`] for the Parquet [OffsetIndex] structure.
+    ///
+    /// The offset index can be costly to decode and store, especially when it is needed
+    /// only for a subset of row groups or columns (such as when projecting a small subset
+    /// of columns). Providing a [`ColumnChunkMask`] can greatly decrease
+    /// the time needed to decode this metadata.
+    ///
+    /// Page pruning also needs the offset index for predicate columns, so callers should
+    /// include those columns in addition to projected columns. The same loading and policy
+    /// qualifications as [`Self::with_column_index_mask`] apply.
+    ///
+    /// [OffsetIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.offset_index_mask = mask;
+        self
+    }
+
     /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
     /// footer will be skipped.
     ///
@@ -924,6 +967,20 @@ impl ArrowReaderOptions {
         self.column_index
     }
 
+    /// Retrieve the currently set [`ColumnChunkMask`] for the offset index.
+    ///
+    /// This can be set via [`with_offset_index_mask`][Self::with_offset_index_mask].
+    pub fn offset_index_mask(&self) -> &ColumnChunkMask {
+        &self.offset_index_mask
+    }
+
+    /// Retrieve the currently set [`ColumnChunkMask`] for the column index.
+    ///
+    /// This can be set via [`with_column_index_mask`][Self::with_column_index_mask].
+    pub fn column_index_mask(&self) -> &ColumnChunkMask {
+        &self.column_index_mask
+    }
+
     /// Retrieve the currently set metadata decoding options.
     pub fn metadata_options(&self) -> &ParquetMetaDataOptions {
         &self.metadata_options
@@ -973,6 +1030,15 @@ impl ParquetMetaDataReader {
                 .with_offset_index_policy(options.offset_index_policy());
         }
 
+        // Preload settings on the underlying reader may enable an index even when the
+        // corresponding options policy is `Skip`, so apply non-default masks independently.
+        if !options.column_index_mask().is_all() {
+            self = self.with_column_index_mask(options.column_index_mask().clone());
+        }
+        if !options.offset_index_mask().is_all() {
+            self = self.with_offset_index_mask(options.offset_index_mask().clone());
+        }
+
         self
     }
 }
@@ -1019,6 +1085,8 @@ impl ArrowReaderMetadata {
         let metadata = ParquetMetaDataReader::new()
             .with_column_index_policy(options.column_index_policy())
             .with_offset_index_policy(options.offset_index_policy())
+            .with_column_index_mask(options.column_index_mask().clone())
+            .with_offset_index_mask(options.offset_index_mask().clone())
             .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
