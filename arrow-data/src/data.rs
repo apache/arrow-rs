@@ -1283,14 +1283,16 @@ impl ArrayData {
                     ))
                 })?;
 
-                let expected_values_len = self.len
+                let len_plus_offset =
+                    checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
+                let expected_values_len = len_plus_offset
                     .checked_mul(list_size)
                     .expect("integer overflow computing expected number of expected values in FixedListSize");
 
                 if values_data.len < expected_values_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Values length {} is less than the length ({}) multiplied by the value size ({}) for {}",
-                        values_data.len, self.len, list_size, self.data_type
+                        "Values length {} is less than the length + offset ({}) multiplied by the value size ({}) for {}",
+                        values_data.len, len_plus_offset, list_size, self.data_type
                     )));
                 }
             }
@@ -1526,14 +1528,12 @@ impl ArrayData {
             DataType::FixedSizeList(field, len) => {
                 let child = &self.child_data[0];
                 if !field.is_nullable() {
-                    match &self.nulls {
-                        Some(nulls) => {
-                            let element_len = *len as usize;
-                            let expanded = nulls.expand(element_len);
-                            self.validate_non_nullable(Some(&expanded), child, child.nulls())?;
-                        }
-                        None => self.validate_non_nullable(None, child, child.nulls())?,
-                    }
+                    let element_len = *len as usize;
+                    let child_nulls = child.nulls().map(|nulls| {
+                        nulls.slice(self.offset * element_len, self.len * element_len)
+                    });
+                    let expanded = self.nulls.as_ref().map(|nulls| nulls.expand(element_len));
+                    self.validate_non_nullable(expanded.as_ref(), child, child_nulls.as_ref())?;
                 }
             }
             DataType::Struct(fields) => {
@@ -2585,6 +2585,88 @@ mod tests {
 
         assert!(build(vec![true, false, true, true]).is_ok());
         assert!(build(vec![true, true, false, true]).is_err());
+    }
+
+    #[test]
+    fn test_fixed_size_list_non_nullable_child_nulls_account_for_parent_offset() {
+        for child_offset in [0, 1] {
+            let child = ArrayData::builder(DataType::Int32)
+                .len(6)
+                .offset(child_offset)
+                .add_buffer(Buffer::from_slice_ref([0i32; 7]))
+                .nulls(Some(NullBuffer::from(vec![
+                    true, true, false, false, true, true,
+                ])))
+                .build()
+                .unwrap();
+            let build = |parent_nulls| {
+                ArrayData::builder(DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Int32, false)),
+                    2,
+                ))
+                .offset(1)
+                .len(2)
+                .nulls(Some(NullBuffer::from(parent_nulls)))
+                .add_child_data(child.clone())
+                .build()
+            };
+
+            // The first visible list contains both child nulls.
+            assert!(build(vec![false, true]).is_ok());
+            assert!(build(vec![true, false]).is_err());
+        }
+    }
+
+    #[test]
+    fn test_fixed_size_list_non_nullable_child_nulls_without_parent_nulls() {
+        let child = ArrayData::builder(DataType::Int32)
+            .len(6)
+            .add_buffer(Buffer::from_slice_ref([0i32; 6]))
+            .nulls(Some(NullBuffer::from(vec![
+                false, false, true, true, false, false,
+            ])))
+            .build()
+            .unwrap();
+        let build = |offset, len, size| {
+            ArrayData::builder(DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Int32, false)),
+                size,
+            ))
+            .offset(offset)
+            .len(len)
+            .add_child_data(child.clone())
+            .build()
+        };
+
+        // Nulls before and after the visible child range are irrelevant.
+        assert!(build(1, 1, 2).is_ok());
+        assert!(build(0, 1, 2).is_err());
+        assert!(build(2, 1, 2).is_err());
+        assert!(build(3, 0, 2).is_ok());
+        assert!(build(1, 2, 0).is_ok());
+    }
+
+    #[test]
+    fn test_fixed_size_list_validation_accounts_for_parent_offset() {
+        for nulls in [None, Some(NullBuffer::new_null(4))] {
+            let child = ArrayData::builder(DataType::Int32)
+                .len(4)
+                .add_buffer(Buffer::from_slice_ref([0i32; 4]))
+                .nulls(nulls)
+                .build()
+                .unwrap();
+            let err = ArrayData::builder(DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Int32, false)),
+                2,
+            ))
+            .offset(1)
+            .len(2)
+            .add_child_data(child)
+            .build()
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("Values length 4 is less than"));
+        }
     }
 
     #[test]
