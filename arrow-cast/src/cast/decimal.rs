@@ -717,7 +717,6 @@ where
 
 pub(crate) fn cast_decimal_to_integer<D, T>(
     array: &dyn Array,
-    base: D::Native,
     scale: i8,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
@@ -729,13 +728,15 @@ where
 {
     let array = array.as_primitive::<D>();
 
-    let div: D::Native = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
-        ArrowError::CastError(format!(
-            "Cannot cast to {:?}. The scale {} causes overflow.",
-            D::PREFIX,
-            scale,
-        ))
-    })?;
+    let div: D::Native = D::Native::usize_as(10)
+        .pow_checked(scale.unsigned_abs() as u32)
+        .map_err(|_| {
+            ArrowError::CastError(format!(
+                "Cannot cast to {:?}. The scale {} causes overflow.",
+                D::PREFIX,
+                scale,
+            ))
+        })?;
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
 
@@ -783,11 +784,8 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array
-                            .value(i)
-                            .div_checked(div)
-                            .ok()
-                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        let v = array.value(i).div_wrapping(div);
+                        let v = <T::Native as NumCast>::from(v);
                         value_builder.append_option(v);
                     }
                 }
@@ -797,7 +795,7 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array.value(i).div_checked(div)?;
+                        let v = array.value(i).div_wrapping(div);
 
                         let value =
                             <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
