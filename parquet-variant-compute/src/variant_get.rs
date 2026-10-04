@@ -25,11 +25,11 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{VariantPath, VariantPathElement};
+use parquet_variant::{Variant, VariantMetadata, VariantPath, VariantPathElement};
 
 use crate::ShreddingState;
-use crate::variant_array::all_null_value_column;
-use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
+use crate::variant_array::{all_null_value_column, binary_array_value};
+use crate::variant_to_arrow::{VariantToArrowRowBuilder, make_variant_to_arrow_row_builder};
 use crate::{VariantArray, VariantType, unshred_variant};
 
 use arrow::array::AsArray;
@@ -191,6 +191,110 @@ pub(crate) fn follow_shredded_path_element(
 /// Follows the given path as far as possible through shredded variant fields. If the path ends on a
 /// shredded field, return it directly. Otherwise, use a row shredder to follow the rest of the path
 /// and extract the requested value on a per-row basis.
+/// Appends `value` to `builder`, or appends null in its place when `value` failed to decode and
+/// [`CastOptions::safe`] asks for errors to become nulls rather than propagate.
+fn append_row(
+    builder: &mut VariantToArrowRowBuilder<'_>,
+    value: Result<Variant<'_, '_>>,
+    cast_options: &CastOptions,
+) -> Result<()> {
+    match value {
+        Ok(value) => {
+            builder.append_value(value)?;
+        }
+        Err(_) if cast_options.safe => builder.append_null()?,
+        Err(e) => return Err(e),
+    }
+    Ok(())
+}
+
+/// Appends every row of `target` to `builder`, asking `target` to decode each row in turn.
+///
+/// This works for any shredding state, at the cost of re-reading the row's metadata dictionary for
+/// every row. See [`append_unshredded_rows`] for the case where that cost can be avoided.
+fn append_rows(
+    target: &VariantArray,
+    builder: &mut VariantToArrowRowBuilder<'_>,
+    cast_options: &CastOptions,
+) -> Result<()> {
+    for i in 0..target.len() {
+        match target.is_null(i) {
+            true => builder.append_null()?,
+            false => append_row(builder, target.try_value(i), cast_options)?,
+        }
+    }
+    Ok(())
+}
+
+/// Decodes row `i` of an unshredded variant column.
+///
+/// `cached_metadata` holds the dictionary decoded for an earlier row, along with the bytes it was
+/// decoded from. Row `i` reuses it when it points at those same bytes, and replaces it otherwise.
+fn unshredded_row_value<'a>(
+    metadata_column: &'a dyn Array,
+    value_column: &'a dyn Array,
+    i: usize,
+    cached_metadata: &mut Option<(&'a [u8], VariantMetadata<'a>)>,
+) -> Result<Variant<'a, 'a>> {
+    let binary_column_error = |name, column: &dyn Array| {
+        ArrowError::InvalidArgumentError(format!(
+            "variant {name} column must be binary-like, got {}",
+            column.data_type()
+        ))
+    };
+
+    let metadata_bytes = binary_array_value(metadata_column, i)
+        .ok_or_else(|| binary_column_error("metadata", metadata_column))?;
+    let value_bytes = binary_array_value(value_column, i)
+        .ok_or_else(|| binary_column_error("value", value_column))?;
+
+    // Comparing the slices by address is enough to recognize a shared dictionary, and unlike
+    // comparing their contents it does not grow with the size of the dictionary. Both slices
+    // borrow from `metadata_column`, so a cached address stays valid and keeps referring to the
+    // same bytes for as long as the cache does.
+    let metadata = match cached_metadata {
+        Some((bytes, metadata)) if std::ptr::eq(*bytes, metadata_bytes) => metadata.clone(),
+        _ => {
+            let metadata = VariantMetadata::try_new(metadata_bytes)?;
+            *cached_metadata = Some((metadata_bytes, metadata.clone()));
+            metadata
+        }
+    };
+
+    Ok(Variant::new_with_metadata(metadata, value_bytes))
+}
+
+/// Appends every row of an unshredded `target` to `builder`, decoding each distinct metadata
+/// dictionary only once instead of once per row.
+///
+/// `target` must have no `typed_value` column, so that every row is served out of `value` and
+/// carries its dictionary in `metadata`.
+fn append_unshredded_rows(
+    target: &VariantArray,
+    builder: &mut VariantToArrowRowBuilder<'_>,
+    cast_options: &CastOptions,
+) -> Result<()> {
+    debug_assert!(target.typed_value_column().is_none());
+
+    let metadata_column = target.metadata_column().as_ref();
+    let value_column = target.value_column().as_ref();
+    let mut cached_metadata = None;
+
+    for i in 0..target.len() {
+        // A row whose `value` is null has nothing to decode. Such a row is technically invalid
+        // when there is no `typed_value` to hold it, but the spec requires readers to read it as
+        // `Variant::Null` -- from which a non-empty path extracts nothing, i.e. a null.
+        if target.is_null(i) || value_column.is_null(i) {
+            builder.append_null()?;
+            continue;
+        }
+
+        let value = unshredded_row_value(metadata_column, value_column, i, &mut cached_metadata);
+        append_row(builder, value, cast_options)?;
+    }
+    Ok(())
+}
+
 fn shredded_get_path(
     input: &VariantArray,
     path: &[VariantPathElement<'_>],
@@ -245,6 +349,7 @@ fn shredded_get_path(
             } else {
                 as_field.map(|f| f.data_type())
             };
+            let has_path = !path.is_empty();
             let mut builder = make_variant_to_arrow_row_builder(
                 target.metadata_column(),
                 path,
@@ -252,21 +357,20 @@ fn shredded_get_path(
                 cast_options,
                 target.len(),
             )?;
-            for i in 0..target.len() {
-                if target.is_null(i) {
-                    builder.append_null()?;
-                } else if !cast_options.safe {
-                    let value = target.try_value(i)?;
-                    builder.append_value(value)?;
-                } else {
-                    let _ = match target.try_value(i) {
-                        Ok(v) => builder.append_value(v)?,
-                        Err(_) => {
-                            builder.append_null()?;
-                            false // add this to make match arms have the same return type
-                        }
-                    };
-                }
+
+            // Walking a path per row means resolving the path's field names against each row's
+            // metadata dictionary, and `VariantPathRowBuilder` only caches that resolution for as
+            // long as consecutive rows share a dictionary. An unshredded column draws every row's
+            // dictionary from one `metadata` buffer, and normally every row of a batch points at
+            // the very same dictionary in it, so decoding each distinct dictionary once -- instead
+            // of once per row -- both saves that decoding and keeps the resolution cache hot.
+            //
+            // Everything else takes the general path, which asks `target` for each row in turn: a
+            // shredded column may serve a row out of `typed_value`, which carries no dictionary to
+            // share, and with no path to walk there is no resolution to keep hot.
+            match has_path && target.typed_value_column().is_none() {
+                true => append_unshredded_rows(&target, &mut builder, cast_options)?,
+                false => append_rows(&target, &mut builder, cast_options)?,
             }
             builder.finish()
         };
@@ -546,9 +650,140 @@ mod test {
     };
     use chrono::DateTime;
     use parquet_variant::{
-        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
-        VariantDecimalType, VariantPath,
+        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8,
+        VariantDecimal16, VariantDecimalType, VariantPath,
     };
+
+    /// Builds an unshredded variant column out of `(metadata, value)` pairs, with `nulls` applied
+    /// at the struct level.
+    fn unshredded_variant_column(rows: Vec<(&[u8], &[u8])>, nulls: Option<NullBuffer>) -> ArrayRef {
+        let metadata: ArrayRef = Arc::new(BinaryArray::from_iter_values(
+            rows.iter().map(|(metadata, _)| *metadata),
+        ));
+        let value: ArrayRef = Arc::new(BinaryArray::from_iter_values(
+            rows.iter().map(|(_, value)| *value),
+        ));
+        Arc::new(StructArray::new(
+            Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, false),
+            ]),
+            vec![metadata, value],
+            nulls,
+        ))
+    }
+
+    /// Builds a single-object variant whose dictionary holds `field_names` in the given order.
+    fn object_bytes(field_names: &[&str], fields: &[(&str, i32)]) -> (Vec<u8>, Vec<u8>) {
+        let mut builder = VariantBuilder::new().with_field_names(field_names.iter().copied());
+        let mut object = builder.new_object();
+        for (name, value) in fields {
+            object.insert(name, *value);
+        }
+        object.finish();
+        builder.finish()
+    }
+
+    /// A field name resolves to a different field id in each metadata dictionary, so the resolution
+    /// cached for one dictionary must not be reused for another.
+    #[test]
+    fn get_path_resolves_field_ids_for_each_metadata_dictionary() {
+        // `target` sits at a different field id in each of these dictionaries, and is absent from
+        // the first one entirely.
+        let (metadata_without_target, value_without_target) =
+            object_bytes(&["other"], &[("other", 5)]);
+        let (metadata_0, value_0) = object_bytes(&["target", "other"], &[("target", 10)]);
+        let (metadata_1, value_1) = object_bytes(&["other", "target"], &[("target", 20)]);
+        // Present in the dictionary, but not a field of this particular object.
+        let (_, value_missing) = object_bytes(&["other", "target"], &[("other", 30)]);
+
+        let input = unshredded_variant_column(
+            vec![
+                (&metadata_without_target, &value_without_target),
+                (&metadata_0, &value_0),
+                (&metadata_1, &value_1),
+                (&metadata_1, &value_missing),
+                // Repeats row 1, but is null at the struct level.
+                (&metadata_0, &value_0),
+                // Repeats row 1 again, to check the cache still resolves after the null.
+                (&metadata_0, &value_0),
+            ],
+            Some(NullBuffer::from(vec![true, true, true, true, false, true])),
+        );
+
+        let options = GetOptions::new_with_path(VariantPath::try_from("target").unwrap())
+            .with_as_type(Some(Arc::new(Field::new("target", DataType::Int32, true))));
+
+        let result = variant_get(&input, options).unwrap();
+        assert_eq!(
+            result.as_primitive::<arrow::datatypes::Int32Type>(),
+            &Int32Array::from(vec![None, Some(10), Some(20), None, None, Some(10)])
+        );
+    }
+
+    /// An unsorted dictionary may hold duplicate entries, so a field id is ambiguous there and the
+    /// path must still be matched by name.
+    #[test]
+    fn get_path_resolves_unsorted_metadata_dictionary() {
+        // Listing the names out of lexical order leaves the dictionary unsorted.
+        let (metadata, value) =
+            object_bytes(&["target", "other"], &[("target", 10), ("other", 20)]);
+        assert!(!Variant::new(&metadata, &value).metadata().is_sorted());
+
+        let input = unshredded_variant_column(vec![(&metadata, &value); 3], None);
+        let options = GetOptions::new_with_path(VariantPath::try_from("target").unwrap())
+            .with_as_type(Some(Arc::new(Field::new("target", DataType::Int32, true))));
+
+        let result = variant_get(&input, options).unwrap();
+        assert_eq!(
+            result.as_primitive::<arrow::datatypes::Int32Type>(),
+            &Int32Array::from(vec![Some(10); 3])
+        );
+    }
+
+    /// Reading a path out of a row whose metadata does not decode is an error when
+    /// `CastOptions::safe` is false, and a null when it is true.
+    #[test]
+    fn get_path_honors_safe_for_undecodable_metadata() {
+        let (metadata, value) = object_bytes(&["target"], &[("target", 10)]);
+        let input = unshredded_variant_column(
+            vec![(metadata.as_slice(), value.as_slice()), (&[], &value)],
+            None,
+        );
+
+        let path = VariantPath::try_from("target").unwrap();
+        let as_type: FieldRef = Arc::new(Field::new("target", DataType::Int32, true));
+
+        let err = variant_get(
+            &input,
+            GetOptions::new_with_path(path.clone())
+                .with_as_type(Some(as_type.clone()))
+                .with_cast_options(CastOptions {
+                    safe: false,
+                    ..Default::default()
+                }),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "expected an invalid argument error, got {err}"
+        );
+
+        let result = variant_get(
+            &input,
+            GetOptions::new_with_path(path)
+                .with_as_type(Some(as_type))
+                .with_cast_options(CastOptions {
+                    safe: true,
+                    ..Default::default()
+                }),
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_primitive::<arrow::datatypes::Int32Type>(),
+            &Int32Array::from(vec![Some(10), None])
+        );
+    }
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
         // Create input array from JSON string
