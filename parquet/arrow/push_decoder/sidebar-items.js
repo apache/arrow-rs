@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ParquetDecoderState"],"fn":["builder_from_remaining"],"mod":["reader_builder","remaining"],"struct":["ParquetPushDecoder","PushBuffers","PushDecoderInput"],"type":["ParquetPushDecoderBuilder"]};

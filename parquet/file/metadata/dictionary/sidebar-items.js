@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["decode_dictionary_page","dictionary_page_crypto_context"]};

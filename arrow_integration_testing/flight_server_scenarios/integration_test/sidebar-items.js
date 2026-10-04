@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["dictionary_from_message","record_batch_from_message","save_uploaded_chunks","scenario_setup","send_app_metadata"],"struct":["FlightServiceImpl","IntegrationDataset"],"type":["Error","Result","TonicStream"]};

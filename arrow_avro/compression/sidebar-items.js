@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CODEC_METADATA_KEY"],"enum":["CompressionCodec"]};

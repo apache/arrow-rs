@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_table_types_schema"],"static":["GET_TABLE_TYPES_SCHEMA"],"struct":["GetTableTypesBuilder"]};

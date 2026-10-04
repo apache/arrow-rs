@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["read_varint","read_varint_array","read_varint_slow","skip_varint","skip_varint_array","skip_varint_slow"],"struct":["VLQDecoder"]};

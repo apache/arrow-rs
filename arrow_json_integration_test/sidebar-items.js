@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Mode"],"fn":["arrow_to_json","json_to_arrow","main","validate"],"struct":["Args"]};

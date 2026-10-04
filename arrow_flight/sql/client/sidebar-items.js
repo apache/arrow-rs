@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ArrowFlightData"],"fn":["arrow_data_from_flight_data"],"struct":["FlightSqlServiceClient","PreparedStatement"]};
