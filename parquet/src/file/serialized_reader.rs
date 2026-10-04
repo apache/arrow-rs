@@ -1154,7 +1154,6 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                 } else {
                     *page_index += 1;
                 }
-                Ok(())
             }
             SerializedPageReaderState::Pages {
                 page_locations,
@@ -1171,10 +1170,9 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *page_index += 1;
                     }
                 }
-
-                Ok(())
             }
         }
+        Ok(())
     }
 
     fn at_record_boundary(&mut self) -> Result<bool> {
