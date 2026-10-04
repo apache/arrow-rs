@@ -203,13 +203,80 @@ mod tests {
     use arrow_array::{Array, ListArray};
     use arrow_schema::Fields;
 
+    #[derive(Default)]
+    struct TestArrayReaderBuilder {
+        values: Vec<i32>,
+        def_levels: Vec<i16>,
+        rep_levels: Vec<i16>,
+        max_def_level: i16,
+        max_rep_level: i16,
+        padding_threshold: Option<i16>,
+    }
+
+    impl TestArrayReaderBuilder {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn with_non_null_i32_values(mut self, values: &[i32]) -> Self {
+            self.values = values.to_vec();
+            self
+        }
+
+        fn with_def_levels(mut self, levels: &[i16]) -> Self {
+            self.def_levels = levels.to_vec();
+            self
+        }
+
+        fn with_rep_levels(mut self, levels: &[i16]) -> Self {
+            self.rep_levels = levels.to_vec();
+            self
+        }
+
+        fn with_max_def_level(mut self, level: i16) -> Self {
+            self.max_def_level = level;
+            self
+        }
+
+        fn with_max_rep_level(mut self, level: i16) -> Self {
+            self.max_rep_level = level;
+            self
+        }
+
+        fn with_padding_threshold(mut self, threshold: i16) -> Self {
+            self.padding_threshold = Some(threshold);
+            self
+        }
+
+        fn build(self) -> Box<dyn ArrayReader> {
+            make_int32_page_reader(
+                &self.values,
+                &self.def_levels,
+                &self.rep_levels,
+                self.max_def_level,
+                self.max_rep_level,
+                self.padding_threshold,
+            )
+        }
+    }
+
     #[test]
     fn test_struct_array_reader() {
-        let array_reader_1 =
-            make_int32_page_reader(&[4], &[0, 1, 2, 3, 1], &[0, 1, 1, 1, 1], 3, 1, None);
+        let array_reader_1 = TestArrayReaderBuilder::new()
+            .with_non_null_i32_values(&[4])
+            .with_def_levels(&[0, 1, 2, 3, 1])
+            .with_rep_levels(&[0, 1, 1, 1, 1])
+            .with_max_def_level(3)
+            .with_max_rep_level(1)
+            .build();
 
-        let array_reader_2 =
-            make_int32_page_reader(&[3], &[0, 1, 3, 1, 2], &[0, 1, 1, 1, 1], 3, 1, None);
+        let array_reader_2 = TestArrayReaderBuilder::new()
+            .with_non_null_i32_values(&[3])
+            .with_def_levels(&[0, 1, 3, 1, 2])
+            .with_rep_levels(&[0, 1, 1, 1, 1])
+            .with_max_def_level(3)
+            .with_max_rep_level(1)
+            .build();
 
         let struct_type = ArrowType::Struct(Fields::from(vec![
             Field::new("f1", ArrowType::Int32, true),
@@ -269,14 +336,14 @@ mod tests {
         )];
         let expected = StructArray::from((struct_fields, validity));
 
-        let reader = make_int32_page_reader(
-            &[1, 2],
-            &[4, 4, 3, 2, 1, 0],
-            &[0, 1, 1, 0, 0, 0],
-            4,
-            1,
-            Some(3),
-        );
+        let reader = TestArrayReaderBuilder::new()
+            .with_non_null_i32_values(&[1, 2])
+            .with_def_levels(&[4, 4, 3, 2, 1, 0])
+            .with_rep_levels(&[0, 1, 1, 0, 0, 0])
+            .with_max_def_level(4)
+            .with_max_rep_level(1)
+            .with_padding_threshold(3)
+            .build();
 
         let list_reader =
             ListArrayReader::<i32>::new(reader, expected_l.data_type().clone(), 3, 1, true, None);
