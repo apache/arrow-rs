@@ -40,6 +40,7 @@ arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-select = { workspace = true}
+bytes = "1.4"
 flatbuffers = { version = "25.2.10", default-features = false }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.14.0", default-features = false, optional = true }
