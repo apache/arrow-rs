@@ -19,16 +19,36 @@ use crate::DecodeResult;
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, RowGroupPlan, RowGroupSelection, RowSelection,
 };
+use crate::arrow::push_decoder::FetchGranularity;
 use crate::arrow::push_decoder::reader_builder::{
-    RowBudget, RowGroupBuildResult, RowGroupReaderBuilder, RowGroupReaderBuilderParts,
+    IncrementalBuildResult, RowBudget, RowGroupBuildResult, RowGroupReaderBuilder,
+    RowGroupReaderBuilderParts,
 };
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
+use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::sync::Arc;
+
+/// The result of [`RemainingRowGroups::try_next_batch_incremental`].
+///
+/// | Layer | Result type | Scope |
+/// |---|---|---|
+/// | `IncrementalRowGroup::try_next` | `IncrementalResult` | one row group |
+/// | [`RowGroupReaderBuilder::try_build_incremental`] | [`IncrementalBuildResult`] | the active row group, and its budget |
+/// | [`RemainingRowGroups::try_next_batch_incremental`] | `IncrementalStep` | all row groups |
+#[derive(Debug)]
+pub(crate) enum IncrementalStep {
+    /// The bytes that the next batch needs.
+    NeedsData(Vec<Range<u64>>),
+    /// The next batch.
+    Batch(RecordBatch),
+    /// No row group is left.
+    Finished,
+}
 
 /// Plan for the next queued row group after row-selection slicing.
 #[derive(Debug)]
@@ -53,7 +73,79 @@ struct NextRowGroup {
 /// Row groups and selections that have not yet been handed to the row-group
 /// reader builder.
 #[derive(Debug, Clone)]
-enum QueuedRowGroups {
+struct QueuedRowGroups {
+    queue: Queue,
+    /// The number of times each row group is in `queue`, so that
+    /// [`Self::contains`] does not scan the queue.
+    counts: HashMap<usize, usize>,
+}
+
+impl QueuedRowGroups {
+    /// Validate and queue a row-group plan for `parquet_metadata`.
+    fn try_new(
+        parquet_metadata: &ParquetMetaData,
+        row_group_plan: RowGroupPlan,
+    ) -> Result<Self, ParquetError> {
+        let queue = Queue::try_new(parquet_metadata, row_group_plan)?;
+        let mut counts = HashMap::new();
+        for row_group_idx in queue.row_group_indices() {
+            *counts.entry(row_group_idx).or_default() += 1;
+        }
+        Ok(Self { queue, counts })
+    }
+
+    /// Convert the remaining queue back into a builder configuration.
+    fn into_plan(self) -> RowGroupPlan {
+        self.queue.into_plan()
+    }
+
+    fn front(&self) -> Option<usize> {
+        self.queue.front()
+    }
+
+    /// The row groups in the queue, in no specific order and without
+    /// duplicates.
+    fn row_groups(&self) -> impl Iterator<Item = usize> + '_ {
+        self.counts.keys().copied()
+    }
+
+    /// Returns `true` if `row_group_idx` is in the queue.
+    fn contains(&self, row_group_idx: usize) -> bool {
+        self.counts.contains_key(&row_group_idx)
+    }
+
+    fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    fn clear(&mut self) {
+        self.queue.clear();
+        self.counts.clear();
+    }
+
+    /// See [`Queue::global_selection_is_exhausted`].
+    fn global_selection_is_exhausted(&self) -> bool {
+        self.queue.global_selection_is_exhausted()
+    }
+
+    /// Remove the front row group and return its local selection.
+    fn pop_front_selection(&mut self, row_count: usize) -> Option<RowSelection> {
+        if let Some(row_group_idx) = self.queue.front() {
+            match self.counts.get_mut(&row_group_idx) {
+                Some(1) => {
+                    self.counts.remove(&row_group_idx);
+                }
+                Some(count) => *count -= 1,
+                None => debug_assert!(false, "row group {row_group_idx} is queued but not counted"),
+            }
+        }
+        self.queue.pop_front_selection(row_count)
+    }
+}
+
+/// The queue of [`QueuedRowGroups`].
+#[derive(Debug, Clone)]
+enum Queue {
     /// One selection cursor spans all queued row groups.
     Global {
         row_groups: VecDeque<usize>,
@@ -63,7 +155,7 @@ enum QueuedRowGroups {
     PerRowGroup(VecDeque<RowGroupSelection>),
 }
 
-impl QueuedRowGroups {
+impl Queue {
     /// Validate and queue a row-group plan for `parquet_metadata`.
     fn try_new(
         parquet_metadata: &ParquetMetaData,
@@ -119,6 +211,17 @@ impl QueuedRowGroups {
             Self::PerRowGroup(row_groups) => row_groups
                 .front()
                 .map(|row_group| row_group.row_group_index),
+        }
+    }
+
+    /// The queued row group indexes, in order.
+    fn row_group_indices(&self) -> Vec<usize> {
+        match self {
+            Self::Global { row_groups, .. } => row_groups.iter().copied().collect(),
+            Self::PerRowGroup(row_groups) => row_groups
+                .iter()
+                .map(|row_group| row_group.row_group_index)
+                .collect(),
         }
     }
 
@@ -435,15 +538,99 @@ impl RemainingRowGroups {
     /// when no row groups remain, or when every remaining row group
     /// would be skipped under the current selection/budget.
     ///
-    /// Cost: one clone of the queued row-group plan and selections per call
-    /// (the frontier is cloned so the real advance logic can run
-    /// non-destructively). For callers that peek once per row-group boundary
+    /// Cost: one clone of the queued row-group plan, selections and
+    /// row-group occurrence counts per call (the frontier is cloned so the
+    /// real advance logic can run non-destructively). For callers that peek once per row-group boundary
     /// this is O(remaining row groups + selectors) per boundary.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         if self.row_group_reader_builder.has_active_row_group() {
             return Ok(None);
         }
         self.frontier.peek_next_row_group()
+    }
+
+    /// Release the buffered bytes that are outside the read column chunks of
+    /// the queued row groups. The decoder does not read these bytes.
+    pub fn release_unread_bytes(&mut self) {
+        self.row_group_reader_builder
+            .release_unread_bytes(self.frontier.queued.row_groups());
+    }
+
+    /// How [`Self::try_next_batch_incremental`] fetches and decodes.
+    pub(crate) fn fetch_granularity(&self) -> FetchGranularity {
+        self.row_group_reader_builder.fetch_granularity()
+    }
+
+    /// See [`RowGroupReaderBuilder::is_incremental`].
+    pub(crate) fn is_incremental(&self) -> bool {
+        self.row_group_reader_builder.is_incremental()
+    }
+
+    /// Returns true if `try_next_reader` started the active row group and
+    /// did not return its reader yet.
+    pub(crate) fn is_building_reader(&self) -> bool {
+        self.row_group_reader_builder.has_active_row_group()
+            && !self.row_group_reader_builder.is_incremental()
+    }
+
+    /// Returns the next batch. Decodes the row groups one batch at a time.
+    /// See [`FetchGranularity::Batch`].
+    pub(crate) fn try_next_batch_incremental(&mut self) -> Result<IncrementalStep, ParquetError> {
+        loop {
+            if !self.row_group_reader_builder.has_active_row_group() {
+                match self.frontier.next_readable_row_group()? {
+                    Some(NextRowGroup {
+                        row_group_idx,
+                        row_count,
+                        selection,
+                        budget,
+                    }) => {
+                        self.row_group_reader_builder.next_row_group(
+                            row_group_idx,
+                            row_count,
+                            selection,
+                            budget,
+                        )?;
+                    }
+                    None => return Ok(IncrementalStep::Finished),
+                }
+            }
+
+            let row_group_idx = self.row_group_reader_builder.active_row_group_idx();
+            match self.row_group_reader_builder.try_build_incremental()? {
+                IncrementalBuildResult::Finished { remaining_budget } => {
+                    self.frontier
+                        .update_budget_after_row_group(remaining_budget);
+                    self.release_row_group(row_group_idx);
+                }
+                IncrementalBuildResult::NeedsData(ranges) => {
+                    return Ok(IncrementalStep::NeedsData(ranges));
+                }
+                IncrementalBuildResult::Batch {
+                    batch,
+                    remaining_budget,
+                } => {
+                    if let Some(remaining_budget) = remaining_budget {
+                        self.frontier
+                            .update_budget_after_row_group(remaining_budget);
+                        self.release_row_group(row_group_idx);
+                    }
+                    return Ok(IncrementalStep::Batch(batch));
+                }
+            }
+        }
+    }
+
+    /// Release the buffered bytes of a row group that is done, unless the
+    /// queue reads it again. The reader of the row group holds its own
+    /// copies of the bytes that it reads.
+    fn release_row_group(&mut self, row_group_idx: Option<usize>) {
+        if let Some(row_group_idx) = row_group_idx
+            && !self.frontier.queued.contains(row_group_idx)
+        {
+            self.row_group_reader_builder
+                .release_row_group(row_group_idx);
+        }
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
@@ -475,10 +662,12 @@ impl RemainingRowGroups {
                 }
             }
 
+            let row_group_idx = self.row_group_reader_builder.active_row_group_idx();
             match self.row_group_reader_builder.try_build()? {
                 RowGroupBuildResult::Finished { remaining_budget } => {
                     self.frontier
                         .update_budget_after_row_group(remaining_budget);
+                    self.release_row_group(row_group_idx);
                     // reader is done, proceed to the next row group
                 }
                 RowGroupBuildResult::NeedsData(ranges) => {
@@ -491,6 +680,7 @@ impl RemainingRowGroups {
                 } => {
                     self.frontier
                         .update_budget_after_row_group(remaining_budget);
+                    self.release_row_group(row_group_idx);
                     // ready to read the row group
                     return Ok(DecodeResult::Data(batch_reader));
                 }
@@ -635,6 +825,89 @@ mod tests {
                 .is_none()
         );
         assert_eq!(exhausted_budget.queued.len(), 0);
+    }
+
+    #[test]
+    fn queued_row_groups_count_repeated_row_groups() {
+        let metadata = test_file_parquet_metadata();
+        let budget = RowBudget::new(None, None);
+
+        // Row group 1 is skipped the first time. A row group stays queued
+        // until its last occurrence is popped.
+        let mut local = RowGroupFrontier::new(
+            Arc::clone(&metadata),
+            RowGroupPlan::PerRowGroup(vec![
+                RowGroupSelection::new(0, None),
+                RowGroupSelection::new(1, Some(RowSelection::from(vec![RowSelector::skip(200)]))),
+                RowGroupSelection::new(0, None),
+                RowGroupSelection::new(1, None),
+            ]),
+            budget,
+            false,
+        )
+        .unwrap();
+        let queued = |frontier: &RowGroupFrontier| {
+            (frontier.queued.contains(0), frontier.queued.contains(1))
+        };
+        assert_eq!(queued(&local), (true, true));
+
+        assert_eq!(
+            local
+                .next_readable_row_group()
+                .unwrap()
+                .unwrap()
+                .row_group_idx,
+            0
+        );
+        assert_eq!(queued(&local), (true, true));
+        // Peeking does not change the counts of the frontier.
+        assert_eq!(local.peek_next_row_group().unwrap(), Some(0));
+        assert_eq!(queued(&local), (true, true));
+
+        // Skips the first occurrence of row group 1.
+        assert_eq!(
+            local
+                .next_readable_row_group()
+                .unwrap()
+                .unwrap()
+                .row_group_idx,
+            0
+        );
+        assert_eq!(queued(&local), (false, true));
+
+        assert_eq!(
+            local
+                .next_readable_row_group()
+                .unwrap()
+                .unwrap()
+                .row_group_idx,
+            1
+        );
+        assert_eq!(queued(&local), (false, false));
+        assert!(local.queued.counts.is_empty());
+        assert!(local.next_readable_row_group().unwrap().is_none());
+
+        // An exhausted limit clears the queue and its counts.
+        let mut global = RowGroupFrontier::new(
+            metadata,
+            global_plan(Some(vec![0, 1, 0]), None),
+            RowBudget::new(None, Some(200)),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            global
+                .next_readable_row_group()
+                .unwrap()
+                .unwrap()
+                .row_group_idx,
+            0
+        );
+        assert_eq!(queued(&global), (true, true));
+        global.update_budget_after_row_group(RowBudget::new(None, Some(0)));
+        assert!(global.next_readable_row_group().unwrap().is_none());
+        assert_eq!(queued(&global), (false, false));
+        assert!(global.queued.counts.is_empty());
     }
 
     #[test]
