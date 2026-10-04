@@ -257,10 +257,16 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 let start = levels.len();
                 let (values_read, levels_read) = decoder.read_def_levels(levels, num_levels)?;
 
-                // Safety: slice iterator has a trusted length
-                unsafe {
-                    nulls
-                        .extend_trusted_len(levels[start..].iter().map(|level| level == max_level));
+                if values_read == levels_read {
+                    // Every level is at `max_level`
+                    nulls.append_n(levels_read, true);
+                } else {
+                    // Safety: slice iterator has a trusted length
+                    unsafe {
+                        nulls.extend_trusted_len(
+                            levels[start..].iter().map(|level| level == max_level),
+                        );
+                    }
                 }
 
                 Ok((values_read, levels_read))

@@ -328,8 +328,7 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
         let levels_read = self.decoder.as_mut().unwrap().read(&mut out[start..])?;
         out.truncate(start + levels_read);
 
-        let iter = out.iter().skip(start);
-        let values_read = iter.filter(|x| **x == self.max_level).count();
+        let values_read = count_levels_eq(&out[start..], self.max_level);
         Ok((values_read, levels_read))
     }
 
@@ -356,7 +355,24 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
     }
 }
 
+/// Returns the number of levels equal to `level`
+///
+/// Summing into a `u16`, over chunks short enough that the sum cannot
+/// overflow, helps the compiler vectorize the count better than summing into
+/// a `usize`.
+fn count_levels_eq(levels: &[i16], level: i16) -> usize {
+    levels
+        .chunks(u16::MAX as usize)
+        .map(|chunk| chunk.iter().map(|&l| u16::from(l == level)).sum::<u16>() as usize)
+        .sum()
+}
+
 pub(crate) const REPETITION_LEVELS_BATCH_SIZE: usize = 1024;
+
+/// The number of repetition levels [`RepetitionLevelDecoderImpl::count_records`]
+/// counts at a time. A read that ends partway through a chunk still counts the
+/// whole chunk, so this is kept small.
+const COUNT_RECORDS_CHUNK_SIZE: usize = 32;
 
 /// An implementation of [`RepetitionLevelDecoder`] for `[i16]`
 pub struct RepetitionLevelDecoderImpl {
@@ -393,12 +409,28 @@ impl RepetitionLevelDecoderImpl {
     ///
     /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
     fn count_records(&self, records_to_read: usize, num_levels: usize) -> (bool, usize, usize) {
-        let mut records_read = 0;
-
         let levels = num_levels.min(self.buffer_len - self.buffer_offset);
-        let buf = self.buffer.iter().skip(self.buffer_offset);
-        for (idx, item) in buf.take(levels).enumerate() {
-            if *item == 0 && (idx != 0 || self.has_partial) {
+        let buf = &self.buffer[self.buffer_offset..self.buffer_offset + levels];
+
+        // Unless a previous call left a record partially read, the first level
+        // starts a record rather than completing one, so skip it
+        let mut scan_start = usize::from(!self.has_partial && !buf.is_empty());
+
+        // Skip over chunks that complete fewer records than are still needed,
+        // counting the 0s in each chunk rather than checking each level
+        let mut records_read = 0;
+        for chunk in buf[scan_start..].chunks(COUNT_RECORDS_CHUNK_SIZE) {
+            let complete = count_levels_eq(chunk, 0);
+            if records_read + complete >= records_to_read {
+                break;
+            }
+            records_read += complete;
+            scan_start += chunk.len();
+        }
+
+        // Find where the last requested record ends, if it ends in `buf`
+        for (idx, item) in buf.iter().enumerate().skip(scan_start) {
+            if *item == 0 {
                 records_read += 1;
 
                 if records_read == records_to_read {
@@ -515,11 +547,35 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
+    fn test_count_levels_eq() {
+        let chunk = u16::MAX as usize;
+        for len in [0, 1, chunk, chunk + 1, 3 * chunk + 7] {
+            assert_eq!(count_levels_eq(&vec![2; len], 2), len);
+
+            let levels: Vec<i16> = (0..len).map(|i| (i % 3) as i16).collect();
+            let expected = levels.iter().filter(|l| **l == 1).count();
+            assert_eq!(count_levels_eq(&levels, 1), expected);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_skip_rep_levels() {
         for _ in 0..10 {
             let mut rng = rng();
             let total_len = 10000_usize;
-            let mut encoded: Vec<i16> = (0..total_len).map(|_| rng.random_range(0..5)).collect();
+            // Records of random lengths, mostly short in some iterations and
+            // mostly long in others
+            let new_record = rng.random_range(0.01..0.5);
+            let mut encoded: Vec<i16> = (0..total_len)
+                .map(|_| {
+                    if rng.random_bool(new_record) {
+                        0
+                    } else {
+                        rng.random_range(1..5)
+                    }
+                })
+                .collect();
             encoded[0] = 0;
             let mut encoder = RleEncoder::new(3, 1024);
             for v in &encoded {
@@ -535,7 +591,9 @@ mod tests {
             let mut remaining_levels = encoded.len();
             loop {
                 let skip = rng.random_bool(0.5);
-                let records = rng.random_range(1..=remaining_records.min(5));
+                // Mix reads of a few records with reads of many records
+                let max_records = if rng.random_bool(0.5) { 5 } else { 500 };
+                let records = rng.random_range(1..=remaining_records.min(max_records));
                 let (records_read, levels_read) = if skip {
                     decoder.skip_rep_levels(records, remaining_levels).unwrap()
                 } else {
