@@ -195,6 +195,7 @@ impl RoundTripTest {
                 Encoding::PLAIN,
                 Encoding::DELTA_BINARY_PACKED,
                 Encoding::BYTE_STREAM_SPLIT,
+                Encoding::PFOR,
             ],
             DataType::Float32 | DataType::Float64 => {
                 vec![Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT, Encoding::ALP]
