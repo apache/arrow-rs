@@ -308,27 +308,34 @@ where
                 values,
                 |values, values_to_read, levels_to_read, def_levels| {
                     let output_slots = if let Some(threshold) = padding_threshold {
-                        let def_levels = def_levels.ok_or_else(|| {
-                            general_err!(
-                                "Definition levels should exist when data is less than levels!"
-                            )
-                        })?;
-                        let all_levels = def_levels.levels().ok_or_else(|| {
-                            general_err!(
-                                "Raw definition levels must be available for selective padding"
-                            )
-                        })?;
-                        let batch_levels = &all_levels[all_levels.len() - levels_to_read..];
                         let bitmap =
                             compact_bitmap.get_or_insert_with(|| BooleanBufferBuilder::new(0));
+                        if values_to_read == levels_to_read {
+                            // Every level is at `max_def`, so each one is a non-null
+                            // child value and no level needs to be filtered out
+                            bitmap.append_n(levels_to_read, true);
+                            levels_to_read
+                        } else {
+                            let def_levels = def_levels.ok_or_else(|| {
+                                general_err!(
+                                    "Definition levels should exist when data is less than levels!"
+                                )
+                            })?;
+                            let all_levels = def_levels.levels().ok_or_else(|| {
+                                general_err!(
+                                    "Raw definition levels must be available for selective padding"
+                                )
+                            })?;
+                            let batch_levels = &all_levels[all_levels.len() - levels_to_read..];
 
-                        definition_levels::build_filtered_validity_bitmap(
-                            batch_levels,
-                            None,
-                            Some(threshold),
-                            max_def,
-                            bitmap,
-                        )
+                            definition_levels::build_filtered_validity_bitmap(
+                                batch_levels,
+                                None,
+                                Some(threshold),
+                                max_def,
+                                bitmap,
+                            )
+                        }
                     } else {
                         levels_to_read
                     };
