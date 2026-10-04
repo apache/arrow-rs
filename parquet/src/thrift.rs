@@ -38,6 +38,42 @@ mod tests {
     };
 
     #[test]
+    fn legacy_statistics_reject_oversized_binary_before_allocation() {
+        use crate::{format::Statistics, thrift::TSerializable};
+        use thrift::{Error, ProtocolErrorKind, protocol::TCompactInputProtocol};
+
+        // Field 1 (max), binary length 100 MiB + 1, and no payload. The length
+        // must be rejected before allocating the claimed buffer or reading it.
+        let bytes = [0x18, 0x81, 0x80, 0x80, 0x32];
+        let mut input = TCompactInputProtocol::new(bytes.as_slice());
+        let error = Statistics::read_from_in_protocol(&mut input).unwrap_err();
+        assert!(
+            matches!(error, Error::Protocol(error) if error.kind == ProtocolErrorKind::SizeLimit)
+        );
+    }
+
+    #[test]
+    fn legacy_statistics_compact_protocol_roundtrip() {
+        use crate::{format::Statistics, thrift::TSerializable};
+        use thrift::protocol::{TCompactInputProtocol, TCompactOutputProtocol};
+
+        let expected = Statistics {
+            min_value: Some(vec![0, 1, 255]),
+            max_value: Some(vec![255, 0, 1]),
+            null_count: Some(7),
+            ..Default::default()
+        };
+        let mut bytes = Vec::new();
+        expected
+            .write_to_out_protocol(&mut TCompactOutputProtocol::new(&mut bytes))
+            .unwrap();
+        let actual =
+            Statistics::read_from_in_protocol(&mut TCompactInputProtocol::new(bytes.as_slice()))
+                .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     pub fn read_boolean_list_field_type() {
         // Boolean collection type encoded as 0x01, as used by this crate when writing.
         // Values encoded as 1 (true) or 2 (false) as in the current version of the thrift
