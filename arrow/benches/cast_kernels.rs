@@ -26,7 +26,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::compute::cast;
+use arrow::compute::{CastOptions, cast, cast_with_options};
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
@@ -701,6 +701,102 @@ fn add_benchmark(c: &mut Criterion) {
         let target_type = DataType::Utf8;
         b.iter(|| cast(&timestamp_micro_utc_array, &target_type).unwrap());
     });
+
+    const ROWS: usize = 8192;
+    let mut bench =
+        |name: &str, input: ArrayRef, target: DataType, overflow: bool, modes: &[bool]| {
+            for &safe in modes {
+                let options = CastOptions {
+                    safe,
+                    ..Default::default()
+                };
+                let result = cast_with_options(input.as_ref(), &target, &options).unwrap();
+                assert_eq!(result.data_type(), &target);
+                assert_eq!(result.len(), ROWS);
+                assert_eq!(
+                    result.null_count(),
+                    if overflow { ROWS } else { input.null_count() }
+                );
+                let mode = if safe { "safe" } else { "strict" };
+                c.bench_function(&format!("{name} {mode}"), |b| {
+                    b.iter(|| {
+                        cast_with_options(
+                            hint::black_box(input.as_ref()),
+                            hint::black_box(&target),
+                            &options,
+                        )
+                        .unwrap()
+                    })
+                });
+            }
+        };
+
+    // Choose fixtures for distinct conversion paths, rather than every type pair.
+    let int32: ArrayRef = Arc::new(create_primitive_array_range::<Int32Type>(
+        ROWS,
+        0.1,
+        -1_000_000..1_000_000,
+    ));
+    let int64: ArrayRef = Arc::new(create_primitive_array_range::<Int64Type>(
+        ROWS,
+        0.1,
+        10..1_000_000,
+    ));
+    let uint64: ArrayRef = Arc::new(create_primitive_array_range::<UInt64Type>(
+        ROWS,
+        0.1,
+        10..1_000_000,
+    ));
+    for (name, input, target) in [
+        (
+            "cast int32 to decimal32(9, 0) 8192 valid",
+            int32,
+            DataType::Decimal32(9, 0),
+        ),
+        (
+            "cast int64 to decimal128(38, 2) 8192 valid",
+            int64.clone(),
+            DataType::Decimal128(38, 2),
+        ),
+    ] {
+        bench(name, input, target, false, &[true, false]);
+    }
+    bench(
+        "cast uint64 to decimal256(76, -1) 8192 scale down",
+        uint64,
+        DataType::Decimal256(76, -1),
+        false,
+        &[true],
+    );
+    bench(
+        "cast int64 to decimal32(9, -20) 8192 all zero",
+        int64,
+        DataType::Decimal32(9, -20),
+        false,
+        &[true],
+    );
+    let overflow: ArrayRef = Arc::new(create_primitive_array_range::<Int32Type>(
+        ROWS,
+        0.1,
+        100_000_000..1_000_000_000,
+    ));
+    bench(
+        "cast int32 to decimal32(8, 0) 8192 precision overflow",
+        overflow,
+        DataType::Decimal32(8, 0),
+        true,
+        &[true],
+    );
+    let wide: ArrayRef = Arc::new(Int64Array::from_iter(
+        (0..ROWS).map(|i| (i % 10 != 0).then_some(5_000_000_000 + i as i64)),
+    ));
+    bench(
+        "cast int64 to decimal32(9, -1) 8192 scale before narrowing",
+        wide,
+        DataType::Decimal32(9, -1),
+        false,
+        &[true],
+    );
 }
 
 criterion_group!(benches, add_benchmark);
