@@ -25,7 +25,7 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{VariantPath, VariantPathElement};
+use parquet_variant::{Variant, VariantPath, VariantPathElement};
 
 use crate::ShreddingState;
 use crate::variant_array::all_null_value_column;
@@ -351,6 +351,13 @@ fn shredded_get_path(
             return shred_basic_variant(target, VariantPath::default(), Some(as_field));
         }
 
+        // A scalar can be perfectly shredded into `typed_value` even when the caller requests a
+        // struct. Recursing over its fields alone would produce a present struct of null fields,
+        // losing the struct cast's safe-null / strict-error behavior. Keep recursive field access,
+        // then mask scalar rows while preserving missing-field sentinels.
+        let typed_value = target.typed_value_column().expect("checked above");
+        let typed_objects = typed_value.as_struct_opt();
+
         let children = fields
             .iter()
             .map(|field| {
@@ -359,10 +366,51 @@ fn shredded_get_path(
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // A null typed object may be either a null Variant or a value kept in the unshredded
+        // fallback column. Classify only those fallback rows; valid `typed_value` rows are known
+        // objects from the shredding schema and do not need to be decoded again.
+        let mut object_validity = Vec::with_capacity(target.len());
+        for index in 0..target.len() {
+            if target.is_null(index) {
+                object_validity.push(false);
+            } else if typed_objects.is_some_and(|objects| objects.is_valid(index)) {
+                object_validity.push(true);
+            } else if typed_value.is_valid(index) {
+                if cast_options.safe {
+                    object_validity.push(false);
+                } else {
+                    let value = target.try_value(index)?;
+                    return Err(ArrowError::CastError(format!(
+                        "Failed to extract struct from variant {value:?}"
+                    )));
+                }
+            } else if target.value_column().is_null(index) {
+                // Both physical columns are null for a missing object field. The enclosing
+                // Variant row remains valid, and its requested struct is an empty/missing-field
+                // object whose children are null.
+                object_validity.push(true);
+            } else {
+                match target.try_value(index) {
+                    Ok(Variant::Object(_)) => object_validity.push(true),
+                    Ok(Variant::Null) => object_validity.push(false),
+                    Ok(_value) if cast_options.safe => object_validity.push(false),
+                    Ok(value) => {
+                        return Err(ArrowError::CastError(format!(
+                            "Failed to extract struct from variant {value:?}"
+                        )));
+                    }
+                    Err(_) if cast_options.safe => object_validity.push(false),
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        let object_nulls = NullBuffer::from(object_validity);
+        let parent_nulls = NullBuffer::union(target.nulls(), Some(&object_nulls));
+
         return Ok(Arc::new(StructArray::try_new(
             fields.clone(),
             children,
-            target.nulls().cloned(),
+            parent_nulls,
         )?));
     }
 
@@ -3614,7 +3662,7 @@ mod test {
 
     #[test]
     fn test_unshredded_struct_safe_cast_and_field_mismatches() {
-        let json_strings = vec![r#"{"a": 1, "b": 2, "extra": 3}"#, "123", "{}"];
+        let json_strings = vec![r#"{"a": 1, "b": 2, "extra": 3}"#, "123", "{}", "null"];
         let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
         let variant_array_ref = ArrayRef::from(json_to_variant(&string_array).unwrap());
 
@@ -3656,6 +3704,77 @@ mod test {
         assert!(!struct_result.is_null(2));
         assert!(field_a.is_null(2));
         assert!(field_b.is_null(2));
+
+        // The same values may be partially shredded into a primitive `typed_value`. Casting the
+        // result as a struct must still distinguish the scalar row from object rows.
+        let variant_array = VariantArray::try_new(&variant_array_ref).unwrap();
+        let shredded = ArrayRef::from(shred_variant(&variant_array, &DataType::Int64).unwrap());
+        let shredded_result = variant_get(
+            &shredded,
+            GetOptions {
+                path: VariantPath::default(),
+                as_type: Some(Arc::new(Field::new(
+                    "result",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("a", DataType::Int32, true),
+                        Field::new("b", DataType::Int32, true),
+                    ])),
+                    true,
+                ))),
+                cast_options: CastOptions::default(),
+            },
+        )
+        .unwrap();
+        let shredded_struct = shredded_result.as_struct();
+        assert!(!shredded_struct.is_null(0));
+        assert!(shredded_struct.is_null(1));
+        assert!(!shredded_struct.is_null(2));
+        assert!(shredded_struct.is_null(3));
+
+        // Object shredding keeps ordinary objects in `typed_value`, while scalar values stay in
+        // the fallback `value` column. Those fallback rows need the same type check.
+        let struct_schema =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int32, true)]));
+        let object_shredded =
+            ArrayRef::from(shred_variant(&variant_array, &struct_schema).unwrap());
+        let object_shredded_result = variant_get(
+            &object_shredded,
+            GetOptions {
+                path: VariantPath::default(),
+                as_type: Some(Arc::new(Field::new("result", struct_schema, true))),
+                cast_options: CastOptions::default(),
+            },
+        )
+        .unwrap();
+        let object_struct = object_shredded_result.as_struct();
+        assert!(!object_struct.is_null(0));
+        assert!(object_struct.is_null(1));
+        assert!(!object_struct.is_null(2));
+        assert!(object_struct.is_null(3));
+    }
+
+    #[test]
+    fn test_shredded_scalar_to_struct_strict_cast_errors() {
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(vec!["42"]));
+        let variant_array = json_to_variant(&string_array).unwrap();
+        let shredded = ArrayRef::from(shred_variant(&variant_array, &DataType::Int64).unwrap());
+        let struct_type =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)]));
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", struct_type, true))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let err = variant_get(&shredded, options).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed to extract struct from variant Int64(42)"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
