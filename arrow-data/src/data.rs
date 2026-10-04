@@ -272,6 +272,19 @@ fn checked_len_plus_offset(
     })
 }
 
+/// Returns the first and last of `offsets`, and the bytes of `values` between
+/// them as a `str`. Returns `None` if the offsets are not valid indexes into
+/// `values` or those bytes are not valid UTF-8.
+fn utf8_span<'a, T: ArrowNativeType>(
+    offsets: &[T],
+    values: &'a [u8],
+) -> Option<(usize, usize, &'a str)> {
+    let first = offsets.first()?.to_usize()?;
+    let last = offsets.last()?.to_usize()?;
+    let values_str = std::str::from_utf8(values.get(first..last)?).ok()?;
+    Some((first, last, values_str))
+}
+
 impl ArrayData {
     /// Create a new ArrayData instance;
     ///
@@ -1696,18 +1709,24 @@ impl ArrayData {
     }
 
     /// Ensures that all strings formed by the offsets in `buffers[0]`
-    /// into `buffers[1]` are valid utf8 sequences
+    /// into `buffers[1]` are valid utf8 sequences. Bytes of `buffers[1]`
+    /// outside the range of the offsets are not checked.
     fn validate_utf8<T>(&self) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<usize> + num_traits::Num + std::fmt::Display,
     {
         let values_buffer = &self.buffer_at(1)?.as_slice();
-        if let Ok(values_str) = std::str::from_utf8(values_buffer) {
-            // Validate Offsets are correct
+        let offsets = self.typed_offsets::<T>()?;
+        if let Some((first, last, values_str)) = utf8_span(offsets, values_buffer) {
             self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
-                if !values_str.is_char_boundary(range.start)
-                    || !values_str.is_char_boundary(range.end)
-                {
+                // `values_str` ends at the last offset. Checking each pair of offsets doesn't
+                // show that `range.end <= last`: a later offset can still be smaller, which
+                // `validate_each_offset` reports when it gets there.
+                if range.end > last {
+                    return Ok(());
+                }
+                let (start, end) = (range.start - first, range.end - first);
+                if !values_str.is_char_boundary(start) || !values_str.is_char_boundary(end) {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "incomplete utf-8 byte sequence from index {string_index}"
                     )));
@@ -1715,7 +1734,7 @@ impl ArrayData {
                 Ok(())
             })
         } else {
-            // find specific offset that failed utf8 validation
+            // Find specific offset that failed utf8 validation
             self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
                 std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
                     ArrowError::InvalidArgumentError(format!(

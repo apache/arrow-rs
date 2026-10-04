@@ -12466,6 +12466,34 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_sliced_binary_with_hidden_invalid_utf8() {
+        // The invalid first value is outside the slice, so it must not fail the cast
+        let values: Vec<&[u8]> = vec![b"\xFF", b"a", b"b", b"c", b"d", b"e", b"f"];
+        let arrays: [ArrayRef; 2] = [
+            Arc::new(BinaryArray::from(values.clone()).slice(1, 6)),
+            Arc::new(LargeBinaryArray::from(values).slice(1, 6)),
+        ];
+        let options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+        let expected = StringArray::from(vec!["a", "b", "c", "d", "e", "f"]);
+        for array in &arrays {
+            for to_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+                let result = cast_with_options(array, &to_type, &options).unwrap();
+                assert_eq!(result.as_ref(), cast(&expected, &to_type).unwrap().as_ref());
+            }
+
+            // A dictionary with fewer keys than half its values takes a separate
+            // path to Utf8View
+            let keys = Int32Array::from(vec![5, 0]);
+            let dict = DictionaryArray::try_new(keys, Arc::clone(array)).unwrap();
+            let result = cast_with_options(&dict, &DataType::Utf8View, &options).unwrap();
+            assert_eq!(result.as_ref(), &StringViewArray::from(vec!["f", "a"]));
+        }
+    }
+
+    #[test]
     fn test_cast_utf8_to_timestamptz() {
         let valid = StringArray::from(vec!["2023-01-01"]);
 
