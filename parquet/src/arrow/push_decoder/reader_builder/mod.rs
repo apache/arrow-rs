@@ -397,6 +397,49 @@ impl RowGroupReaderBuilder {
         !matches!(self.state, Some(RowGroupDecoderState::Finished))
     }
 
+    /// Plan a filter-free row group without moving the decoder or retaining data.
+    /// The frontier has already checked that this group has selected output rows.
+    pub(crate) fn preview_ranges(
+        &self,
+        row_group_idx: usize,
+        row_count: usize,
+        selection: Option<RowSelection>,
+        budget: RowBudget,
+    ) -> (Vec<Range<u64>>, RowBudget) {
+        let plan = ReadPlanBuilder::new(self.batch_size)
+            .with_selection(selection)
+            .with_row_selection_policy(self.row_selection_policy);
+        let BudgetedReadPlan {
+            plan_builder,
+            remaining_budget,
+            ..
+        } = budget.apply_to_plan(plan, row_count);
+        let request =
+            self.projected_data_request(row_group_idx, row_count, plan_builder.selection(), None);
+        (request.needed_ranges(&self.buffers), remaining_budget)
+    }
+
+    /// Both demand and preview use this exact projection/selection range planner.
+    fn projected_data_request(
+        &self,
+        row_group_idx: usize,
+        row_count: usize,
+        selection: Option<&RowSelection>,
+        column_chunks: Option<Vec<Option<Arc<ColumnChunkData>>>>,
+    ) -> DataRequest {
+        DataRequestBuilder::new(
+            row_group_idx,
+            row_count,
+            self.batch_size,
+            &self.metadata,
+            &self.projection,
+        )
+        .with_selection(selection)
+        .with_column_chunks(column_chunks)
+        // Final projection fetch must not expand selection for predicate caches.
+        .build()
+    }
+
     /// Setup this reader to read the next row group
     pub(crate) fn next_row_group(
         &mut self,
@@ -717,18 +760,12 @@ impl RowGroupReaderBuilder {
                     ));
                 }
 
-                let data_request = DataRequestBuilder::new(
+                let data_request = self.projected_data_request(
                     row_group_idx,
                     row_count,
-                    self.batch_size,
-                    &self.metadata,
-                    &self.projection,
-                )
-                .with_selection(plan_builder.selection())
-                .with_column_chunks(column_chunks)
-                // Final projection fetch shouldn't expand selection for cache
-                // so don't call with_cache_projection here
-                .build();
+                    plan_builder.selection(),
+                    column_chunks,
+                );
 
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
 
