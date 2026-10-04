@@ -121,6 +121,8 @@ where
 #[cold]
 #[inline(never)]
 fn decimal_to_f64_rounded_once<D: DecimalType>(x: D::Native, scale: i8, unscaled: f64) -> f64 {
+    // `format_decimal` always writes a decimal literal, so the parse cannot fail.
+    // The fallback is there to keep that from being a panic, not because it runs.
     D::format_decimal(x, u8::MAX, scale)
         .parse::<f64>()
         .unwrap_or_else(|_| unscaled / 10_f64.powi(scale.into()))
@@ -133,6 +135,7 @@ fn decimal_to_f64_rounded_once<D: DecimalType>(x: D::Native, scale: i8, unscaled
 #[cold]
 #[inline(never)]
 fn decimal_to_f32_rounded_once<D: DecimalType>(x: D::Native, scale: i8, unscaled: f64) -> f32 {
+    // Unreachable, as in [`decimal_to_f64_rounded_once`].
     D::format_decimal(x, u8::MAX, scale)
         .parse::<f32>()
         .unwrap_or_else(|_| unscaled as f32 / 10_f32.powi(scale.into()))
