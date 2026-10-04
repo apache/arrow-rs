@@ -677,8 +677,8 @@ impl i256 {
     fn i256_to_f64(input: i256) -> f64 {
         let k = i256::redundant_leading_sign_bits_i256(input);
         let n = input << k; // left-justify (no redundant sign bits)
-        // Set the low bit if any discarded bit is set, so exact f64 midpoints
-        // round to the nearest value instead of to even.
+        // If the retained bits land exactly on a midpoint, set the low bit so
+        // non-zero discarded bits push it just past and it rounds to nearest.
         let sticky = n.low != 0 || (n.high as u64) != 0;
         let n = ((n.high >> 64) as i64) | i64::from(sticky);
         (n as f64) * f64::powi(2.0, 192 - (k as i32)) // convert to f64 and scale it, as we left-shift k bit previous, so we need to scale it by 2^(192-k)
@@ -1345,7 +1345,7 @@ impl Not for i256 {
 mod tests {
     use super::*;
     use num_traits::Signed;
-    use rand::{RngExt, rng};
+    use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1889,16 +1889,10 @@ mod tests {
             (integer as f64).to_bits()
         );
 
-        fn pow2(exponent: u32) -> i256 {
-            if exponent < 128 {
-                i256::from_parts(1u128 << exponent, 0)
-            } else {
-                i256::from_parts(0, 1i128 << (exponent - 128))
-            }
-        }
-
+        let two = i256::from(2);
         for exponent in 53..=254 {
-            let midpoint = pow2(exponent) + (pow2(exponent - 52) >> 1_u8);
+            // Midpoint between the two binary64 neighbours of 2^exponent.
+            let midpoint = two.wrapping_pow(exponent) + two.wrapping_pow(exponent - 53);
             for delta in -2_i64..=2 {
                 for value in [
                     midpoint + i256::from(delta),
@@ -1916,22 +1910,17 @@ mod tests {
     }
 
     #[test]
-    fn test_i256_to_f64_matches_decimal_oracle() {
+    fn test_i256_to_f64_matches_correctly_rounded_parse() {
+        // `to_string().parse::<f64>()` is a correctly rounded decimal-to-binary oracle.
         for value in [i256::MIN, i256::MAX, i256::MINUS_ONE, i256::ZERO, i256::ONE] {
             let expected: f64 = value.to_string().parse().unwrap();
             assert_eq!(value.to_f64().unwrap().to_bits(), expected.to_bits());
         }
 
-        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-        let mut next = || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut rng = StdRng::seed_from_u64(0x9E37_79B9_7F4A_7C15);
         for _ in 0..1_000 {
-            let low = u128::from(next()) | (u128::from(next()) << 64);
-            let high = u128::from(next()) | (u128::from(next()) << 64);
+            let low = u128::from(rng.random::<u64>()) | (u128::from(rng.random::<u64>()) << 64);
+            let high = u128::from(rng.random::<u64>()) | (u128::from(rng.random::<u64>()) << 64);
             let value = i256::from_parts(low, high as i128);
             let expected: f64 = value.to_string().parse().unwrap();
             assert_eq!(value.to_f64().unwrap().to_bits(), expected.to_bits());
