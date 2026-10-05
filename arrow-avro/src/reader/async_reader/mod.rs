@@ -166,6 +166,11 @@ fn make_stream<R: AsyncFileReader + Unpin + Send + 'static>(
                     buffered = buffered.slice(consumed..);
 
                     if let Some(block) = block_decoder.flush() {
+                        if block.sync != state.meta.sync_marker {
+                            Err(ArrowError::ParseError(
+                                "Avro block sync marker does not match file header".into(),
+                            ))?
+                        }
                         // A complete block is ready — decompress and start yielding batches.
                         let block_data = Bytes::from_owner(match &state.meta.codec {
                             Some(c) => c.decompress(&block.data)?,
