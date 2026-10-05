@@ -211,7 +211,7 @@ impl Interleaver {
     ///
     /// # Panics
     ///
-    /// Panics if an array or row index is out of bounds.
+    /// May panic if an array or row index is out of bounds.
     pub fn interleave(
         &self,
         values: &[&dyn Array],
@@ -238,6 +238,85 @@ impl Interleaver {
         }
 
         interleave(values, indices)
+    }
+
+    /// Interleaves rows from multiple [`RecordBatch`] instances using these options.
+    ///
+    /// Calls [`Self::interleave`] for each column and preserves the first batch's
+    /// schema, including metadata. All input schemas must be equal. Compaction
+    /// applies only to top-level byte-view columns, not to views nested in other
+    /// columns. Zero-column batches retain the number of selected rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no batches are supplied, their schemas differ
+    /// (including metadata), or a column cannot be interleaved.
+    ///
+    /// # Panics
+    ///
+    /// May panic if a batch or row index is out of bounds.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow_array::{ArrayRef, RecordBatch, StringViewArray};
+    /// use arrow_select::interleave::Interleaver;
+    ///
+    /// let batch = RecordBatch::try_from_iter([
+    ///     ("name", Arc::new(StringViewArray::from(vec!["a long selected value"])) as ArrayRef)
+    /// ])?;
+    /// let result = Interleaver::new()
+    ///     .with_compact_byte_views(true)
+    ///     .with_preserve_byte_view_sharing(true)
+    ///     .interleave_record_batch(&[&batch], &[(0, 0), (0, 0)])?;
+    /// assert_eq!(result.num_rows(), 2);
+    /// assert_eq!(result.schema(), batch.schema());
+    /// # Ok::<(), arrow_schema::ArrowError>(())
+    /// ```
+    pub fn interleave_record_batch(
+        &self,
+        record_batches: &[&RecordBatch],
+        indices: &[(usize, usize)],
+    ) -> Result<RecordBatch, ArrowError> {
+        let first = record_batches.first().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(
+                "interleave_record_batch requires at least one batch".to_string(),
+            )
+        })?;
+        let schema = first.schema();
+        if record_batches
+            .iter()
+            .skip(1)
+            .any(|batch| batch.schema() != schema)
+        {
+            return Err(ArrowError::InvalidArgumentError(
+                "interleave_record_batch requires identical schemas".to_string(),
+            ));
+        }
+        if schema.fields().is_empty() {
+            // No column kernel will validate indices for zero-column batches.
+            for &(batch, row) in indices {
+                assert!(
+                    row < record_batches[batch].num_rows(),
+                    "row index out of bounds"
+                );
+            }
+        }
+        let columns = (0..schema.fields().len())
+            .map(|i| {
+                let values: Vec<&dyn Array> = record_batches
+                    .iter()
+                    .map(|batch| batch.column(i).as_ref())
+                    .collect();
+                self.interleave(&values, indices)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        RecordBatch::try_new_with_options(
+            schema,
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(indices.len())),
+        )
     }
 
     fn interleave_views_compact<T: ByteViewType>(
@@ -1193,6 +1272,8 @@ fn interleave_fallback_dictionary<K: ArrowDictionaryKeyType>(
 ///
 /// This function will call [`interleave`] on each array of the [`RecordBatch`] instances and assemble a new [`RecordBatch`].
 ///
+/// To configure byte-view compaction, use [`Interleaver::interleave_record_batch`].
+///
 /// # Example
 /// ```
 /// # use std::sync::Arc;
@@ -1278,11 +1359,25 @@ mod tests {
         second.append_value("short");
         second.append_value("fourth selected long string");
         let second = second.finish().slice(1, 3);
-        assert!(first.data_buffers().len() > 1);
-        assert!(second.data_buffers().len() > 1);
+        // Slicing retains every source buffer, including the discarded rows.
+        assert_eq!(first.data_buffers().len(), 4);
+        assert_eq!(second.data_buffers().len(), 3);
+        let source_allocations: Vec<_> = first
+            .data_buffers()
+            .iter()
+            .chain(second.data_buffers().iter())
+            .map(Buffer::data_ptr)
+            .collect();
 
-        let indices = [(1, 2), (0, 1), (0, 2), (1, 1), (0, 0), (1, 2)];
+        let indices = [(1, 2), (0, 1), (0, 2), (1, 1), (0, 0), (1, 2), (1, 0)];
         let ordinary = interleave(&[&first, &second], &indices).unwrap();
+        assert!(
+            ordinary
+                .as_string_view()
+                .data_buffers()
+                .iter()
+                .any(|buffer| source_allocations.contains(&buffer.data_ptr()))
+        );
         for preserve in [false, true] {
             let compact = Interleaver::new()
                 .with_compact_byte_views(true)
@@ -1300,8 +1395,18 @@ mod tests {
                     Some("short"),
                     Some("first selected long string"),
                     Some("fourth selected long string"),
+                    Some("third selected long string"),
                 ]
             );
+            let copies = if preserve { 1 } else { 2 };
+            let selected_payload = first.value(0).len()
+                + first.value(2).len()
+                + second.value(0).len()
+                + copies * second.value(2).len();
+            assert_eq!(compact.data_buffers().len(), 1);
+            assert_eq!(compact.data_buffers()[0].len(), selected_payload);
+            assert_eq!(compact.data_buffers()[0].capacity(), selected_payload);
+            assert!(!source_allocations.contains(&compact.data_buffers()[0].data_ptr()));
             assert_eq!(compact.views()[0] == compact.views()[5], preserve);
         }
     }
@@ -1346,13 +1451,15 @@ mod tests {
             let unselected = "u".repeat(32 * 1024);
             let hidden = "n".repeat(32 * 1024);
             let selected = "selected long string";
-            let input = StringViewArray::from(vec![unselected.as_str(), selected, hidden.as_str()]);
+            let source =
+                StringViewArray::from(vec![unselected.as_str(), selected, hidden.as_str()]);
             let input = StringViewArray::try_new(
-                input.views().clone(),
-                input.data_buffers().clone(),
+                source.views().clone(),
+                source.data_buffers().clone(),
                 Some(NullBuffer::from(vec![true, true, false])),
             )
             .unwrap();
+            drop(source);
             let compact = Interleaver::new()
                 .with_compact_byte_views(true)
                 .with_preserve_byte_view_sharing(preserve)
@@ -1367,23 +1474,20 @@ mod tests {
                 copies * selected.len()
             );
             assert_eq!(compact.views()[1], 0);
+            assert_eq!(
+                compact.iter().collect::<Vec<_>>(),
+                vec![Some(selected), None, Some(selected)]
+            );
+            // Shared buffers also survive dropping input; compare live allocations instead.
             for output in compact.data_buffers().iter() {
                 for source in input.data_buffers().iter() {
-                    assert_ne!(
-                        output.as_ptr() as usize - output.ptr_offset(),
-                        source.as_ptr() as usize - source.ptr_offset()
-                    );
+                    assert_ne!(output.data_ptr(), source.data_ptr());
                 }
             }
             assert_ne!(compact.views().as_ptr(), input.views().as_ptr());
             assert_ne!(
                 compact.nulls().unwrap().buffer().as_ptr(),
                 input.nulls().unwrap().buffer().as_ptr()
-            );
-            drop(input);
-            assert_eq!(
-                compact.iter().collect::<Vec<_>>(),
-                vec![Some(selected), None, Some(selected)]
             );
         }
     }
@@ -1702,6 +1806,193 @@ mod tests {
                 .as_ptr(),
             pointer
         );
+        let batch = RecordBatch::try_from_iter([("nested", Arc::new(input) as ArrayRef)]).unwrap();
+        for preserve in [false, true] {
+            let output = Interleaver::new()
+                .with_compact_byte_views(true)
+                .with_preserve_byte_view_sharing(preserve)
+                .interleave_record_batch(&[&batch], &[(0, 1)])
+                .unwrap();
+            assert_eq!(output.column(0).as_ref(), ordinary.as_ref());
+            assert_eq!(
+                output
+                    .column(0)
+                    .as_list::<i32>()
+                    .values()
+                    .as_string_view()
+                    .data_buffers()[0]
+                    .as_ptr(),
+                pointer
+            );
+        }
+    }
+
+    #[test]
+    fn test_interleaver_record_batch_options() {
+        use arrow_schema::Schema;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("text", DataType::Utf8View, true)
+                    .with_metadata([("field_key".to_string(), "field_value".to_string())]),
+                Field::new("bytes", DataType::BinaryView, true),
+            ],
+            [("schema_key".to_string(), "schema_value".to_string())],
+        ));
+        let first_value = "first selected long string";
+        let second_value = "second selected long string";
+        let first = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![10, 20])),
+                Arc::new(StringViewArray::from(vec![Some(first_value), None])),
+                Arc::new(BinaryViewArray::from(vec![
+                    Some(first_value.as_bytes()),
+                    None,
+                ])),
+            ],
+        )
+        .unwrap();
+        let second = RecordBatch::try_new(
+            Arc::new(schema.as_ref().clone()),
+            vec![
+                Arc::new(Int32Array::from(vec![30, 40])),
+                Arc::new(StringViewArray::from(vec![Some(second_value), None])),
+                Arc::new(BinaryViewArray::from(vec![
+                    Some(second_value.as_bytes()),
+                    None,
+                ])),
+            ],
+        )
+        .unwrap();
+        let inputs = [&first, &second];
+        let indices = [(1, 0), (0, 1), (0, 0), (1, 0)];
+        let expected = interleave_record_batch(&inputs, &indices).unwrap();
+        for compact in [false, true] {
+            for preserve in [false, true] {
+                let interleaver = Interleaver::new()
+                    .with_compact_byte_views(compact)
+                    .with_preserve_byte_view_sharing(preserve);
+                let output = interleaver
+                    .interleave_record_batch(&inputs, &indices)
+                    .unwrap();
+                assert_eq!(output, expected);
+                assert!(Arc::ptr_eq(&output.schema(), &schema));
+                for column in [1, 2] {
+                    let output_data = output.column(column).to_data();
+                    let payload = &output_data.buffers()[1..];
+                    if compact {
+                        let copies = if preserve { 1 } else { 2 };
+                        let size = first_value.len() + copies * second_value.len();
+                        assert_eq!(payload.len(), 1);
+                        assert_eq!(payload[0].capacity(), size);
+                        for input in inputs {
+                            for source in &input.column(column).to_data().buffers()[1..] {
+                                assert_ne!(payload[0].data_ptr(), source.data_ptr());
+                            }
+                        }
+                    } else {
+                        let expected_data = expected.column(column).to_data();
+                        assert_eq!(
+                            payload.iter().map(Buffer::data_ptr).collect::<Vec<_>>(),
+                            expected_data.buffers()[1..]
+                                .iter()
+                                .map(Buffer::data_ptr)
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                }
+                let empty = interleaver.interleave_record_batch(&inputs, &[]).unwrap();
+                assert_eq!(empty.num_rows(), 0);
+                assert_eq!(empty.schema(), schema);
+            }
+        }
+    }
+
+    #[test]
+    fn test_interleaver_record_batch_schema_errors() {
+        use arrow_schema::Schema;
+
+        let field = Field::new("value", DataType::Utf8View, true);
+        let first = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![field.clone()])),
+            vec![Arc::new(StringViewArray::from(vec!["selected long value"]))],
+        )
+        .unwrap();
+        let mismatches = [
+            Schema::empty(),
+            Schema::new(vec![Field::new("other", DataType::Utf8View, true)]),
+            Schema::new(vec![Field::new("value", DataType::BinaryView, true)]),
+            Schema::new(vec![Field::new("value", DataType::Utf8View, false)]),
+            Schema::new(vec![
+                field
+                    .clone()
+                    .with_metadata([("key".to_string(), "value".to_string())]),
+            ]),
+            Schema::new_with_metadata(vec![field], [("key".to_string(), "value".to_string())]),
+        ];
+        for compact in [false, true] {
+            let interleaver = Interleaver::new().with_compact_byte_views(compact);
+            for indices in [&[][..], &[(0, 0)][..]] {
+                assert!(matches!(
+                    interleaver.interleave_record_batch(&[], indices),
+                    Err(ArrowError::InvalidArgumentError(_))
+                ));
+            }
+            for schema in &mismatches {
+                let other = RecordBatch::new_empty(Arc::new(schema.clone()));
+                for indices in [&[][..], &[(0, 0)][..]] {
+                    assert!(matches!(
+                        interleaver.interleave_record_batch(&[&first, &other], indices),
+                        Err(ArrowError::InvalidArgumentError(_))
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_interleaver_record_batch_zero_columns() {
+        use arrow_schema::Schema;
+
+        let schema = Arc::new(Schema::empty());
+        let first = RecordBatch::try_new_with_options(
+            schema.clone(),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(3)),
+        )
+        .unwrap();
+        let second = RecordBatch::try_new_with_options(
+            schema.clone(),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(2)),
+        )
+        .unwrap();
+        for compact in [false, true] {
+            let interleaver = Interleaver::new().with_compact_byte_views(compact);
+            let output = interleaver
+                .interleave_record_batch(&[&first, &second], &[(1, 1), (0, 2), (0, 0), (1, 1)])
+                .unwrap();
+            assert_eq!(output.num_rows(), 4);
+            assert_eq!(output.num_columns(), 0);
+            assert_eq!(output.schema(), schema);
+            assert_eq!(
+                interleaver
+                    .interleave_record_batch(&[&first], &[])
+                    .unwrap()
+                    .num_rows(),
+                0
+            );
+            for invalid in [(2, 0), (0, 3), (1, 2), (usize::MAX, 0), (0, usize::MAX)] {
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        interleaver.interleave_record_batch(&[&first, &second], &[invalid])
+                    }))
+                    .is_err()
+                );
+            }
+        }
     }
 
     #[test]
