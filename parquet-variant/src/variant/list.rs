@@ -308,6 +308,21 @@ impl<'m, 'v> VariantList<'m, 'v> {
         Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
     }
 
+    /// Returns the original bytes of an element, bounded by its list offsets.
+    ///
+    /// Checks the index and offsets, without interpreting the element bytes.
+    /// Use [`Self::try_get`] for recursive value validation.
+    pub fn element_value_bytes(&self, index: usize) -> Result<&'v [u8], ArrowError> {
+        if index >= self.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "List element index {index} out of bounds for length {}",
+                self.len()
+            )));
+        }
+        let range = self.get_offset(index)? as _..self.get_offset(index + 1)? as _;
+        slice_from_slice_at_offset(self.value, self.first_value_byte as _, range)
+    }
+
     /// Iterates over the values of this list. When working with [unvalidated] input, consider
     /// [`Self::iter_try`] to avoid panics due to invalid data.
     ///
