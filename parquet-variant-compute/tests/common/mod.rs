@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, BinaryViewArray, StructArray};
-use arrow::buffer::NullBuffer;
+use arrow::array::{Array, ArrayRef, BinaryViewArray, Int64Array, ListArray, StructArray};
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::Field;
 use arrow::error::Result;
-use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt};
+use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilder, VariantBuilderExt};
 use parquet_variant_compute::{DecodedVariant, VariantArray, VariantRow, VariantRowDecoder};
 use std::sync::Arc;
 
@@ -54,7 +54,8 @@ pub fn input(metadata: &[u8], value: &[Option<&[u8]>], typed: ArrayRef) -> Varia
     .unwrap()
 }
 
-// A consumer-owned writer: typed integers are narrowed; residual scalars retain their encoding.
+// Narrow typed integers and canonicalize typed NaNs; preserve residual scalars.
+// Rebuild containers with a fresh dictionary.
 pub fn write_row(row: VariantRow<'_>, output: &mut impl VariantBuilderExt) -> Result<()> {
     match row.decode()? {
         DecodedVariant::Null | DecodedVariant::Missing => output.append_null(),
@@ -66,6 +67,21 @@ pub fn write_row(row: VariantRow<'_>, output: &mut impl VariantBuilderExt) -> Re
             value => value,
         }),
         DecodedVariant::Residual { value, .. } => output.append_value(value),
+        DecodedVariant::Object(object) => {
+            let mut object_out = output.try_new_object()?;
+            for field in object.fields() {
+                let (name, row) = field?;
+                write_row(row, &mut ObjectFieldBuilder::new(name, &mut object_out))?;
+            }
+            object_out.finish();
+        }
+        DecodedVariant::List(list) => {
+            let mut list_out = output.try_new_list()?;
+            for row in list.elements() {
+                write_row(row?, &mut list_out)?;
+            }
+            list_out.finish();
+        }
     }
     Ok(())
 }
@@ -79,4 +95,44 @@ pub fn rewrite(array: &VariantArray) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
             Ok(output.finish())
         })
         .collect()
+}
+
+pub fn nested_input(rows: usize, partial: bool) -> VariantArray {
+    let mut residual =
+        VariantBuilder::new().with_field_names(["unused", "z", "r", "a", "child", "items"]);
+    let mut object = residual.new_object();
+    let mut list = object.new_list("r");
+    let mut child = list.new_object();
+    child.insert("child", 2000i64);
+    child.finish();
+    list.finish();
+    object.finish();
+    let (metadata, bytes) = residual.finish();
+    let integers = Arc::new(struct_array(
+        vec![("typed_value", Arc::new(Int64Array::from(vec![1000; rows])))],
+        None,
+    ));
+    let child = Arc::new(struct_array(
+        vec![(
+            "typed_value",
+            Arc::new(struct_array(vec![("child", integers.clone())], None)),
+        )],
+        None,
+    ));
+    let items = ListArray::new(
+        Arc::new(Field::new_list_field(integers.data_type().clone(), true)),
+        OffsetBuffer::new((0..=rows as i32).collect::<Vec<_>>().into()),
+        integers.clone(),
+        None,
+    );
+    let items = Arc::new(struct_array(vec![("typed_value", Arc::new(items))], None));
+    let typed = Arc::new(struct_array(
+        vec![("z", integers), ("a", child), ("items", items)],
+        None,
+    ));
+    input(
+        &metadata,
+        &vec![partial.then_some(bytes.as_slice()); rows],
+        typed,
+    )
 }
