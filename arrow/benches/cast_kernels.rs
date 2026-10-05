@@ -30,7 +30,6 @@ use arrow::compute::cast;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
-use half::f16;
 
 fn build_array<T: ArrowPrimitiveType>(size: usize) -> ArrayRef
 where
@@ -258,31 +257,6 @@ fn cast_array(array: &ArrayRef, to_type: DataType) {
     hint::black_box(cast(hint::black_box(array), hint::black_box(&to_type)).unwrap());
 }
 
-fn build_half_embedding(
-    rows: usize,
-    dims: usize,
-    null_every: Option<usize>,
-) -> (ArrayRef, ArrayRef) {
-    let len = rows * dims;
-    let f32_values = (0..len)
-        .map(|index| ((index.wrapping_mul(2_654_435_761) % 20_001) as f32 - 10_000.0) / 127.0)
-        .collect::<Vec<_>>();
-    let f16_array = Arc::new(Float16Array::from_iter((0..len).map(|index| {
-        let value = f16::from_f32(f32_values[index]);
-        match null_every {
-            Some(step) if index % step == 0 => None,
-            _ => Some(value),
-        }
-    }))) as ArrayRef;
-    let f32_array = Arc::new(Float32Array::from_iter((0..len).map(
-        |index| match null_every {
-            Some(step) if index % step == 0 => None,
-            _ => Some(f32_values[index]),
-        },
-    ))) as ArrayRef;
-    (f16_array, f32_array)
-}
-
 fn add_benchmark(c: &mut Criterion) {
     let i32_array = build_array::<Int32Type>(512);
     let i64_array = build_array::<Int64Type>(512);
@@ -351,19 +325,24 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("cast float64 to float32 512", |b| {
         b.iter(|| cast_array(&f64_array, DataType::Float32))
     });
-    let (f16_embedding, f32_embedding) = build_half_embedding(1024, 768, None);
-    let (f16_embedding_nulls, f32_embedding_nulls) = build_half_embedding(1024, 768, Some(10));
+    let float16_len = 1024 * 768;
+    let f16_array = Arc::new(create_nullable_f16_array(float16_len, 0.0)) as ArrayRef;
+    let f32_wide_array =
+        Arc::new(create_primitive_array::<Float32Type>(float16_len, 0.0)) as ArrayRef;
+    let f16_array_nulls = Arc::new(create_nullable_f16_array(float16_len, 0.1)) as ArrayRef;
+    let f32_wide_array_nulls =
+        Arc::new(create_primitive_array::<Float32Type>(float16_len, 0.1)) as ArrayRef;
     c.bench_function("cast float16 to float32 1024x768", |b| {
-        b.iter(|| cast_array(&f16_embedding, DataType::Float32))
+        b.iter(|| cast_array(&f16_array, DataType::Float32))
     });
     c.bench_function("cast float32 to float16 1024x768", |b| {
-        b.iter(|| cast_array(&f32_embedding, DataType::Float16))
+        b.iter(|| cast_array(&f32_wide_array, DataType::Float16))
     });
     c.bench_function("cast float16 to float32 1024x768 10pct null", |b| {
-        b.iter(|| cast_array(&f16_embedding_nulls, DataType::Float32))
+        b.iter(|| cast_array(&f16_array_nulls, DataType::Float32))
     });
     c.bench_function("cast float32 to float16 1024x768 10pct null", |b| {
-        b.iter(|| cast_array(&f32_embedding_nulls, DataType::Float16))
+        b.iter(|| cast_array(&f32_wide_array_nulls, DataType::Float16))
     });
     c.bench_function("cast float64 to uint64 512", |b| {
         b.iter(|| cast_array(&f64_array, DataType::UInt64))
