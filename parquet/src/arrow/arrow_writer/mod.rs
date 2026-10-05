@@ -1534,7 +1534,7 @@ impl ArrowColumnWriterFactory {
                     out.push(bytes(leaves.next().unwrap())?)
                 }
                 ArrowDataType::FixedSizeBinary(_) => out.push(bytes(leaves.next().unwrap())?),
-                _ => out.push(col(leaves.next().unwrap())?),
+                _ => self.get_arrow_column_writer(value_type, props, leaves, out)?,
             },
             ArrowDataType::RunEndEncoded(_, value_field) => {
                 self.get_arrow_column_writer(value_field.data_type(), props, leaves, out)?
@@ -2106,6 +2106,7 @@ mod tests {
     use arrow::{array::*, buffer::Buffer};
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, OffsetBuffer};
     use arrow_schema::Fields;
+    use arrow_select::concat::concat;
     use half::f16;
     use tempfile::tempfile;
 
@@ -2511,6 +2512,286 @@ mod tests {
         // fixed_length_byte_array to store the decimal value
         let batch_fixed_len_byte_array_decimal = get_decimal_batch(30, 2);
         roundtrip(batch_fixed_len_byte_array_decimal, Some(SMALL_SIZE / 2));
+    }
+
+    fn read_column(file: Vec<u8>) -> ArrayRef {
+        let reader = ParquetRecordBatchReader::try_new(Bytes::from(file), 4096).unwrap();
+        let batches: Vec<RecordBatch> = reader.map(|b| b.unwrap()).collect();
+        let arrays: Vec<&dyn Array> = batches.iter().map(|b| b.column(0).as_ref()).collect();
+        concat(&arrays).unwrap()
+    }
+
+    fn roundtrip_compatible_column(field: Field, col: ArrayRef) -> ArrayRef {
+        let writer_schema = Arc::new(Schema::new(vec![field]));
+        let batch_schema = Arc::new(Schema::new(vec![Field::new(
+            "c",
+            col.data_type().clone(),
+            col.logical_null_count() != 0,
+        )]));
+        let batch = RecordBatch::try_new(batch_schema, vec![col]).unwrap();
+        // Isolate level/value compatibility from Arrow metadata reconstruction,
+        // which is covered separately by the default-reader regression below.
+        let options = ArrowWriterOptions::new().with_skip_arrow_metadata(true);
+        let mut file = vec![];
+        let mut writer =
+            ArrowWriter::try_new_with_options(&mut file, writer_schema, options).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        read_column(file)
+    }
+
+    fn assert_compatible_roundtrip(field: Field, actual: ArrayRef, expected: &ArrayRef) {
+        assert!(!compute_leaves(&field, &actual).unwrap().is_empty());
+        assert_eq!(
+            roundtrip_compatible_column(field, actual).as_ref(),
+            expected.as_ref()
+        );
+    }
+
+    fn run_end_type(value_type: DataType, nullable_values: bool) -> DataType {
+        DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                value_type,
+                nullable_values,
+            )),
+        )
+    }
+
+    fn nullable_int32_list() -> ArrayRef {
+        Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![0_i32, 2, 3].into()),
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])),
+            None,
+        ))
+    }
+
+    #[test]
+    fn arrow_writer_dense_list_under_ree_schema() {
+        let list = nullable_int32_list();
+        // The schema wrapper is physical, not a second logical list node.
+        let field = Field::new("c", run_end_type(list.data_type().clone(), false), false);
+        assert_compatible_roundtrip(field, list.clone(), &list);
+    }
+
+    #[test]
+    fn arrow_writer_dense_list_under_dictionary_schema() {
+        let list = nullable_int32_list();
+        let field = Field::new(
+            "c",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(list.data_type().clone())),
+            false,
+        );
+        assert_compatible_roundtrip(field, list.clone(), &list);
+    }
+
+    #[test]
+    fn arrow_writer_dense_values_under_nested_ree_schema() {
+        let dense: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None, Some(9)]));
+        let field = Field::new(
+            "c",
+            run_end_type(run_end_type(DataType::Int32, true), false),
+            false,
+        );
+        assert_compatible_roundtrip(field, dense.clone(), &dense);
+    }
+
+    #[test]
+    fn arrow_writer_dense_values_under_dictionary_ree_schema() {
+        let dense: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None, Some(9)]));
+        let field = Field::new(
+            "c",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(run_end_type(DataType::Int32, true)),
+            ),
+            false,
+        );
+        assert_compatible_roundtrip(field, dense.clone(), &dense);
+    }
+
+    #[test]
+    fn arrow_writer_dense_values_under_ree_dictionary_schema() {
+        let dense: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None, Some(9)]));
+        // Hoist REE value nullability before peeling the dictionary; the
+        // dense batch contains an actual null despite the required outer field.
+        let field = Field::new(
+            "c",
+            run_end_type(
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+                true,
+            ),
+            false,
+        );
+        assert_compatible_roundtrip(field, dense.clone(), &dense);
+    }
+
+    #[test]
+    fn arrow_writer_dense_struct_under_ree_child_schema() {
+        let dense: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None, Some(9)]));
+        let struct_fields = Fields::from(vec![Field::new("value", DataType::Int32, true)]);
+        let dense_struct: ArrayRef = Arc::new(StructArray::new(struct_fields, vec![dense], None));
+        // A wrapper on a child must not make the enclosing struct incompatible.
+        let field = Field::new(
+            "c",
+            DataType::Struct(Fields::from(vec![Field::new(
+                "value",
+                run_end_type(DataType::Int32, true),
+                false,
+            )])),
+            false,
+        );
+        assert_compatible_roundtrip(field, dense_struct.clone(), &dense_struct);
+    }
+
+    #[test]
+    fn arrow_writer_dense_list_under_ree_child_schema() {
+        let list = nullable_int32_list();
+        let field = Field::new(
+            "c",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                run_end_type(DataType::Int32, true),
+                false,
+            ))),
+            false,
+        );
+        assert_compatible_roundtrip(field, list.clone(), &list);
+    }
+
+    #[test]
+    fn arrow_writer_dense_list_under_dictionary_child_schema() {
+        let list = nullable_int32_list();
+        let field = Field::new(
+            "c",
+            DataType::List(Arc::new(Field::new_list_field(
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+                true,
+            ))),
+            false,
+        );
+        assert_compatible_roundtrip(field, list.clone(), &list);
+    }
+
+    #[test]
+    fn arrow_writer_dictionary_list_under_dense_child_schema() {
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(
+            Int8Array::from(vec![Some(0), None, Some(1)]),
+            Arc::new(Int32Array::from(vec![1, 3])),
+        ));
+        let dict_list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(dict.data_type().clone(), true)),
+            OffsetBuffer::new(vec![0_i32, 2, 3].into()),
+            dict,
+            None,
+        ));
+        let expected = nullable_int32_list();
+        assert_compatible_roundtrip(
+            Field::new("c", expected.data_type().clone(), false),
+            dict_list,
+            &expected,
+        );
+    }
+
+    #[test]
+    fn arrow_writer_dense_map_under_ree_value_schema() {
+        let key_field = Arc::new(Field::new("keys", DataType::Utf8, false));
+        let entries = StructArray::new(
+            Fields::from(vec![
+                key_field.clone(),
+                Arc::new(Field::new("values", DataType::Int32, true)),
+            ]),
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(7), None, Some(9)])),
+            ],
+            None,
+        );
+        let map: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::new(vec![0_i32, 2, 3].into()),
+            entries,
+            None,
+            false,
+        ));
+        // Resolve the value wrapper after walking through the entries struct.
+        let field = Field::new(
+            "c",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        key_field,
+                        Arc::new(Field::new(
+                            "values",
+                            run_end_type(DataType::Int32, true),
+                            false,
+                        )),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            false,
+        );
+        assert_compatible_roundtrip(field, map.clone(), &map);
+    }
+
+    #[test]
+    fn arrow_writer_nested_dictionary_metadata_roundtrips_with_default_reader() {
+        let dense: ArrayRef = Arc::new(StructArray::new(
+            Fields::from(vec![Field::new("item", DataType::Int32, true)]),
+            vec![Arc::new(Int32Array::from(vec![Some(7), None, Some(9)]))],
+            None,
+        ));
+        let field = Field::new(
+            "value",
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(dense.data_type().clone()),
+            ),
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            "description".to_string(),
+            "nested dictionary".to_string(),
+        )]));
+        let writer_schema = Arc::new(Schema::new(vec![field.clone()]));
+        let expected_schema = Arc::new(Schema::new(vec![
+            field.with_data_type(dense.data_type().clone()),
+        ]));
+        let batch = RecordBatch::try_new(expected_schema.clone(), vec![dense]).unwrap();
+
+        // Keep Arrow metadata enabled: ignoring it would hide the original
+        // reader-initialization failure caused by the nested dictionary hint.
+        let mut file = vec![];
+        let mut writer = ArrowWriter::try_new(&mut file, writer_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(file)).unwrap();
+        assert!(
+            builder
+                .metadata()
+                .file_metadata()
+                .key_value_metadata()
+                .unwrap()
+                .iter()
+                .any(|kv| kv.key == ARROW_SCHEMA_META_KEY)
+        );
+        assert_eq!(builder.schema(), &expected_schema);
+        let decoded = builder
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(decoded, vec![batch]);
     }
 
     #[test]
