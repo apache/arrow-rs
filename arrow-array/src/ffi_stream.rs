@@ -440,7 +440,13 @@ unsafe fn producer_error(stream_ptr: *mut FFI_ArrowArrayStream) -> Option<String
 fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef> {
     let mut schema = FFI_ArrowSchema::empty();
 
-    let ret_code = unsafe { (*stream_ptr).get_schema.unwrap()(stream_ptr, &raw mut schema) };
+    let Some(get_schema) = (unsafe { (*stream_ptr).get_schema }) else {
+        return Err(ArrowError::CDataInterface(
+            "input stream does not provide the required get_schema callback".to_string(),
+        ));
+    };
+
+    let ret_code = unsafe { get_schema(stream_ptr, &raw mut schema) };
 
     if ret_code == 0 {
         let schema = Schema::try_from(&schema)?;
@@ -493,8 +499,13 @@ impl Iterator for ArrowArrayStreamReader {
     fn next(&mut self) -> Option<Self::Item> {
         let mut array = FFI_ArrowArray::empty();
 
-        let ret_code =
-            unsafe { self.stream.get_next.unwrap()(&raw mut self.stream, &raw mut array) };
+        let Some(get_next) = self.stream.get_next else {
+            return Some(Err(ArrowError::CDataInterface(
+                "input stream does not provide the required get_next callback".to_string(),
+            )));
+        };
+
+        let ret_code = unsafe { get_next(&raw mut self.stream, &raw mut array) };
 
         if ret_code == 0 {
             // The end of stream has been reached
@@ -811,6 +822,46 @@ mod tests {
                 "C Data interface error: Cannot get next batch from input stream. Error code: {EIO}"
             )
         );
+    }
+
+    #[test]
+    fn test_import_stream_without_get_schema_callback() {
+        // The C Stream Interface requires get_schema for an unreleased stream.
+        let stream = unsafe {
+            FFI_ArrowArrayStream::new_unchecked(
+                None,
+                Some(failing_get_next),
+                None,
+                Some(mark_released),
+                std::ptr::null_mut(),
+            )
+        };
+
+        let err = ArrowArrayStreamReader::try_new(stream).unwrap_err();
+        assert!(matches!(err, ArrowError::CDataInterface(_)));
+        assert!(err.to_string().contains("get_schema"));
+    }
+
+    #[test]
+    fn test_import_stream_without_get_next_callback() {
+        // The C Stream Interface requires get_next for an unreleased stream.
+        let stream = unsafe {
+            FFI_ArrowArrayStream::new_unchecked(
+                Some(working_get_schema),
+                None,
+                None,
+                Some(mark_released),
+                std::ptr::null_mut(),
+            )
+        };
+
+        let err = ArrowArrayStreamReader::try_new(stream)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err();
+        assert!(matches!(err, ArrowError::CDataInterface(_)));
+        assert!(err.to_string().contains("get_next"));
     }
 
     // A consumer wraps the release callback with its own, then chains back to
