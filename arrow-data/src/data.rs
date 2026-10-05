@@ -272,6 +272,19 @@ fn checked_len_plus_offset(
     })
 }
 
+/// Returns the first and last of `offsets`, and the bytes of `values` between
+/// them as a `str`. Returns `None` if the offsets are not valid indexes into
+/// `values` or those bytes are not valid UTF-8.
+fn utf8_span<'a, T: ArrowNativeType>(
+    offsets: &[T],
+    values: &'a [u8],
+) -> Option<(usize, usize, &'a str)> {
+    let first = offsets.first()?.to_usize()?;
+    let last = offsets.last()?.to_usize()?;
+    let values_str = std::str::from_utf8(values.get(first..last)?).ok()?;
+    Some((first, last, values_str))
+}
+
 impl ArrayData {
     /// Create a new ArrayData instance;
     ///
@@ -333,21 +346,6 @@ impl ArrayData {
         buffers: Vec<Buffer>,
         child_data: Vec<ArrayData>,
     ) -> Result<Self, ArrowError> {
-        // we must check the length of `null_bit_buffer` first
-        // because we use this buffer to calculate `null_count`
-        // in `ArrayDataBuilder::build`.
-        if let Some(null_bit_buffer) = null_bit_buffer.as_ref() {
-            let len_plus_offset = checked_len_plus_offset(&data_type, len, offset)?;
-            let needed_len = bit_util::ceil(len_plus_offset, 8);
-            if null_bit_buffer.len() < needed_len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "null_bit_buffer size too small. got {} needed {}",
-                    null_bit_buffer.len(),
-                    needed_len
-                )));
-            }
-        }
-
         let builder = Self::inner_new_builder(
             data_type,
             len,
@@ -801,31 +799,46 @@ impl ArrayData {
                     vec![ArrayData::new_empty(v.as_ref())],
                     true,
                 ),
-                DataType::Union(f, mode) => {
-                    let (id, _) = f.iter().next().unwrap();
-                    let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
-                    let buffers = match mode {
-                        UnionMode::Sparse => vec![ids],
-                        UnionMode::Dense => {
-                            let end_offset = i32::from_usize(len).unwrap();
-                            vec![ids, Buffer::from_iter(0_i32..end_offset)]
-                        }
-                    };
-
-                    let children = f
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, (_, f))| {
-                            if idx == 0 || *mode == UnionMode::Sparse {
-                                Self::new_null(f.data_type(), len)
-                            } else {
-                                Self::new_empty(f.data_type())
+                DataType::Union(f, mode) => match f.iter().next() {
+                    // Every slot carries a type id naming one of the children,
+                    // so an empty union has nothing to put in a slot and can
+                    // only be the empty array.
+                    None => {
+                        assert_eq!(
+                            len, 0,
+                            "cannot construct null data from an empty union of length {len}, a slot has no type id to carry"
+                        );
+                        let buffers = match mode {
+                            UnionMode::Sparse => vec![zeroed(0)],
+                            UnionMode::Dense => vec![zeroed(0), zeroed(0)],
+                        };
+                        (buffers, vec![], false)
+                    }
+                    Some((id, _)) => {
+                        let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
+                        let buffers = match mode {
+                            UnionMode::Sparse => vec![ids],
+                            UnionMode::Dense => {
+                                let end_offset = i32::from_usize(len).unwrap();
+                                vec![ids, Buffer::from_iter(0_i32..end_offset)]
                             }
-                        })
-                        .collect();
+                        };
 
-                    (buffers, children, false)
-                }
+                        let children = f
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, (_, f))| {
+                                if idx == 0 || *mode == UnionMode::Sparse {
+                                    Self::new_null(f.data_type(), len)
+                                } else {
+                                    Self::new_empty(f.data_type())
+                                }
+                            })
+                            .collect();
+
+                        (buffers, children, false)
+                    }
+                },
                 DataType::RunEndEncoded(r, v) => {
                     if len == 0 {
                         // For empty arrays, create zero-length child arrays.
@@ -1224,12 +1237,10 @@ impl ArrayData {
             DataType::List(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i32>(values_data.len)?;
-                Ok(())
             }
             DataType::LargeList(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i64>(values_data.len)?;
-                Ok(())
             }
             DataType::Map(field, _) => {
                 let DataType::Struct(entries_fields) = field.data_type() else {
@@ -1253,17 +1264,14 @@ impl ArrayData {
                 }
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i32>(values_data.len)?;
-                Ok(())
             }
             DataType::ListView(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets_and_sizes::<i32>(values_data.len)?;
-                Ok(())
             }
             DataType::LargeListView(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets_and_sizes::<i64>(values_data.len)?;
-                Ok(())
             }
             DataType::FixedSizeList(field, list_size) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
@@ -1275,18 +1283,18 @@ impl ArrayData {
                     ))
                 })?;
 
-                let expected_values_len = self.len
+                let len_plus_offset =
+                    checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
+                let expected_values_len = len_plus_offset
                     .checked_mul(list_size)
                     .expect("integer overflow computing expected number of expected values in FixedListSize");
 
                 if values_data.len < expected_values_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Values length {} is less than the length ({}) multiplied by the value size ({}) for {}",
-                        values_data.len, self.len, list_size, self.data_type
+                        "Values length {} is less than the length + offset ({}) multiplied by the value size ({}) for {}",
+                        values_data.len, len_plus_offset, list_size, self.data_type
                     )));
                 }
-
-                Ok(())
             }
             DataType::Struct(fields) => {
                 self.validate_num_child_data(fields.len())?;
@@ -1307,7 +1315,6 @@ impl ArrayData {
                         )));
                     }
                 }
-                Ok(())
             }
             DataType::RunEndEncoded(run_ends_field, values_field) => {
                 self.validate_num_child_data(2)?;
@@ -1324,7 +1331,6 @@ impl ArrayData {
                         "Found null values in run_ends array. The run_ends array should not have null values.".to_string(),
                     ));
                 }
-                Ok(())
             }
             DataType::Union(fields, mode) => {
                 self.validate_num_child_data(fields.len())?;
@@ -1343,11 +1349,9 @@ impl ArrayData {
                         }
                     }
                 }
-                Ok(())
             }
             DataType::Dictionary(_key_type, value_type) => {
                 self.get_single_valid_child_data(value_type)?;
-                Ok(())
             }
             _ => {
                 // other types do not have child data
@@ -1358,9 +1362,9 @@ impl ArrayData {
                         self.child_data.len()
                     )));
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 
     /// Ensures that this array data has a single child_data with the
@@ -1524,14 +1528,12 @@ impl ArrayData {
             DataType::FixedSizeList(field, len) => {
                 let child = &self.child_data[0];
                 if !field.is_nullable() {
-                    match &self.nulls {
-                        Some(nulls) => {
-                            let element_len = *len as usize;
-                            let expanded = nulls.expand(element_len);
-                            self.validate_non_nullable(Some(&expanded), child, child.nulls())?;
-                        }
-                        None => self.validate_non_nullable(None, child, child.nulls())?,
-                    }
+                    let element_len = *len as usize;
+                    let child_nulls = child.nulls().map(|nulls| {
+                        nulls.slice(self.offset * element_len, self.len * element_len)
+                    });
+                    let expanded = self.nulls.as_ref().map(|nulls| nulls.expand(element_len));
+                    self.validate_non_nullable(expanded.as_ref(), child, child_nulls.as_ref())?;
                 }
             }
             DataType::Struct(fields) => {
@@ -1707,18 +1709,24 @@ impl ArrayData {
     }
 
     /// Ensures that all strings formed by the offsets in `buffers[0]`
-    /// into `buffers[1]` are valid utf8 sequences
+    /// into `buffers[1]` are valid utf8 sequences. Bytes of `buffers[1]`
+    /// outside the range of the offsets are not checked.
     fn validate_utf8<T>(&self) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<usize> + num_traits::Num + std::fmt::Display,
     {
         let values_buffer = &self.buffer_at(1)?.as_slice();
-        if let Ok(values_str) = std::str::from_utf8(values_buffer) {
-            // Validate Offsets are correct
+        let offsets = self.typed_offsets::<T>()?;
+        if let Some((first, last, values_str)) = utf8_span(offsets, values_buffer) {
             self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
-                if !values_str.is_char_boundary(range.start)
-                    || !values_str.is_char_boundary(range.end)
-                {
+                // `values_str` ends at the last offset. Checking each pair of offsets doesn't
+                // show that `range.end <= last`: a later offset can still be smaller, which
+                // `validate_each_offset` reports when it gets there.
+                if range.end > last {
+                    return Ok(());
+                }
+                let (start, end) = (range.start - first, range.end - first);
+                if !values_str.is_char_boundary(start) || !values_str.is_char_boundary(end) {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "incomplete utf-8 byte sequence from index {string_index}"
                     )));
@@ -1726,7 +1734,7 @@ impl ArrayData {
                 Ok(())
             })
         } else {
-            // find specific offset that failed utf8 validation
+            // Find specific offset that failed utf8 validation
             self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
                 std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
                     ArrowError::InvalidArgumentError(format!(
@@ -2331,6 +2339,21 @@ impl ArrayDataBuilder {
             skip_validation,
         } = self;
 
+        // SAFETY: `skip_validation` is only set to true using `unsafe` APIs.
+        let validate = !skip_validation.get() || cfg!(feature = "force_validate");
+        if validate && let Some(buffer) = null_bit_buffer.as_ref() {
+            // Check before constructing the BooleanBuffer, which would otherwise panic.
+            let len_plus_offset = checked_len_plus_offset(&data_type, len, offset)?;
+            let needed_len = bit_util::ceil(len_plus_offset, 8);
+            if buffer.len() < needed_len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "null_bit_buffer size too small. got {} needed {}",
+                    buffer.len(),
+                    needed_len
+                )));
+            }
+        }
+
         let nulls = nulls
             .or_else(|| {
                 let buffer = null_bit_buffer?;
@@ -2358,8 +2381,7 @@ impl ArrayDataBuilder {
             data.align_buffers();
         }
 
-        // SAFETY: `skip_validation` is only set to true using `unsafe` APIs
-        if !skip_validation.get() || cfg!(feature = "force_validate") {
+        if validate {
             data.validate_data()?;
         }
         Ok(data)
@@ -2441,6 +2463,8 @@ pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::UnionFields;
+
     use super::*;
     use crate::ByteView;
     use crate::transform::MutableArrayData;
@@ -2561,6 +2585,88 @@ mod tests {
 
         assert!(build(vec![true, false, true, true]).is_ok());
         assert!(build(vec![true, true, false, true]).is_err());
+    }
+
+    #[test]
+    fn test_fixed_size_list_non_nullable_child_nulls_account_for_parent_offset() {
+        for child_offset in [0, 1] {
+            let child = ArrayData::builder(DataType::Int32)
+                .len(6)
+                .offset(child_offset)
+                .add_buffer(Buffer::from_slice_ref([0i32; 7]))
+                .nulls(Some(NullBuffer::from(vec![
+                    true, true, false, false, true, true,
+                ])))
+                .build()
+                .unwrap();
+            let build = |parent_nulls| {
+                ArrayData::builder(DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Int32, false)),
+                    2,
+                ))
+                .offset(1)
+                .len(2)
+                .nulls(Some(NullBuffer::from(parent_nulls)))
+                .add_child_data(child.clone())
+                .build()
+            };
+
+            // The first visible list contains both child nulls.
+            assert!(build(vec![false, true]).is_ok());
+            assert!(build(vec![true, false]).is_err());
+        }
+    }
+
+    #[test]
+    fn test_fixed_size_list_non_nullable_child_nulls_without_parent_nulls() {
+        let child = ArrayData::builder(DataType::Int32)
+            .len(6)
+            .add_buffer(Buffer::from_slice_ref([0i32; 6]))
+            .nulls(Some(NullBuffer::from(vec![
+                false, false, true, true, false, false,
+            ])))
+            .build()
+            .unwrap();
+        let build = |offset, len, size| {
+            ArrayData::builder(DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Int32, false)),
+                size,
+            ))
+            .offset(offset)
+            .len(len)
+            .add_child_data(child.clone())
+            .build()
+        };
+
+        // Nulls before and after the visible child range are irrelevant.
+        assert!(build(1, 1, 2).is_ok());
+        assert!(build(0, 1, 2).is_err());
+        assert!(build(2, 1, 2).is_err());
+        assert!(build(3, 0, 2).is_ok());
+        assert!(build(1, 2, 0).is_ok());
+    }
+
+    #[test]
+    fn test_fixed_size_list_validation_accounts_for_parent_offset() {
+        for nulls in [None, Some(NullBuffer::new_null(4))] {
+            let child = ArrayData::builder(DataType::Int32)
+                .len(4)
+                .add_buffer(Buffer::from_slice_ref([0i32; 4]))
+                .nulls(nulls)
+                .build()
+                .unwrap();
+            let err = ArrayData::builder(DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Int32, false)),
+                2,
+            ))
+            .offset(1)
+            .len(2)
+            .add_child_data(child)
+            .build()
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("Values length 4 is less than"));
+        }
     }
 
     #[test]
@@ -2955,6 +3061,59 @@ mod tests {
     }
 
     #[test]
+    fn test_builder_rejects_short_null_bit_buffer() {
+        for (len, offset) in [(8000, 0), (8, 1)] {
+            let err = ArrayData::builder(DataType::Int32)
+                .len(len)
+                .offset(offset)
+                .add_buffer(make_i32_buffer(len + offset))
+                .null_bit_buffer(Some(Buffer::from([0_u8])))
+                .build()
+                .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Invalid argument error: null_bit_buffer size too small. got 1 needed {}",
+                    bit_util::ceil(len + offset, 8)
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn test_builder_null_bit_buffer_length_overflow() {
+        let err = ArrayData::builder(DataType::Int32)
+            .len(usize::MAX)
+            .offset(1)
+            .null_bit_buffer(Some(Buffer::default()))
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Invalid argument error: Length {} with offset 1 overflows usize for Int32",
+                usize::MAX
+            )
+        );
+    }
+
+    #[test]
+    fn test_builder_accepts_valid_null_bit_buffer() {
+        for (len, offset) in [(8, 0), (7, 1)] {
+            let data = ArrayData::builder(DataType::Int32)
+                .len(len)
+                .offset(offset)
+                .add_buffer(make_i32_buffer(len + offset))
+                .null_bit_buffer(Some(Buffer::from([0_u8])))
+                .build()
+                .unwrap();
+            assert_eq!(data.len(), len);
+            assert_eq!(data.offset(), offset);
+            assert_eq!(data.null_count(), len);
+        }
+    }
+
+    #[test]
     fn test_count_nulls() {
         let buffer = Buffer::from([0b00010110, 0b10011111]);
         let buffer = NullBuffer::new(BooleanBuffer::new(buffer, 0, 16));
@@ -3124,8 +3283,16 @@ mod tests {
     #[cfg(not(feature = "force_validate"))]
     fn test_validate_values_rejects_a_non_integer_run_end() {
         let data_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         let run_end_encoded = unsafe {
             ArrayData::builder(data_type)
@@ -3616,5 +3783,24 @@ mod tests {
             ArrayData::try_new(data_type, len, null_bit_buffer, offset, buffers, child_data);
 
         [from_builder_res, from_try_new_res]
+    }
+
+    #[test]
+    fn test_new_null_empty_union() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let data_type = DataType::Union(UnionFields::empty(), mode);
+            let data = ArrayData::new_null(&data_type, 0);
+            data.validate_full()
+                .expect("an empty union of length zero is valid");
+            assert_eq!(data.len(), 0);
+            assert!(data.child_data().is_empty());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot construct null data from an empty union")]
+    fn test_new_null_empty_union_with_slots() {
+        let data_type = DataType::Union(UnionFields::empty(), UnionMode::Dense);
+        let _ = ArrayData::new_null(&data_type, 1);
     }
 }

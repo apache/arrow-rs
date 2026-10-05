@@ -1271,8 +1271,12 @@ mod tests {
     fn test_null_runs() {
         for r in [DataType::Int16, DataType::Int32, DataType::Int64] {
             let data_type = DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends", r, false)),
-                Arc::new(Field::new("values", DataType::Utf8, true)),
+                Arc::new(Field::new(Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME, r, false)),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Utf8,
+                    true,
+                )),
             );
 
             let array = new_null_array(&data_type, 4);

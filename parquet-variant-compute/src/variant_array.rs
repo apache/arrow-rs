@@ -179,6 +179,31 @@ impl ExtensionType for VariantType {
 /// See the examples below from converting between `VariantArray` and
 /// `StructArray`.
 ///
+/// # Example: collecting optional values
+///
+/// `VariantArray` can collect optional values that convert into [`Variant`].
+/// `None` creates a null row, while `Some(Variant::Null)` creates a valid row
+/// whose value is `Variant::Null`.
+///
+/// ```
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::VariantArray;
+/// let values = [Some(42_i64), None, Some(-1_i64)];
+/// let array: VariantArray = values.into_iter().collect();
+///
+/// assert_eq!(array.value(0), Variant::Int64(42));
+/// assert!(array.is_null(1));
+/// ```
+///
+/// For an all-null array, specify the type when no `Some` value can infer it:
+///
+/// ```
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::VariantArray;
+/// let null_rows = VariantArray::from_iter(vec![None::<Variant>; 3]);
+/// assert!(null_rows.is_null(0));
+/// ```
+///
 /// [`VariantArrayBuilder`]: crate::VariantArrayBuilder
 ///
 /// # Documentation
@@ -200,12 +225,9 @@ impl ExtensionType for VariantType {
 /// ```
 /// # use arrow::array::StructArray;
 /// # use arrow_schema::{Schema, Field, DataType};
-/// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantType};
+/// # use parquet_variant_compute::{VariantArray, VariantType};
 /// # fn get_variant_array() -> VariantArray {
-/// #   let mut builder = VariantArrayBuilder::new(10);
-/// #   builder.append_variant(Variant::from("such wow"));
-/// #   builder.build()
+/// #   VariantArray::from_iter([Some("such wow")])
 /// # }
 /// # fn get_schema() -> Schema {
 /// #   Schema::new(vec![
@@ -228,12 +250,9 @@ impl ExtensionType for VariantType {
 ///
 /// ```
 /// # use arrow_schema::{Schema, Field, DataType};
-/// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantType};
+/// # use parquet_variant_compute::{VariantArray, VariantType};
 /// # fn get_variant_array() -> VariantArray {
-/// #   let mut builder = VariantArrayBuilder::new(10);
-/// #   builder.append_variant(Variant::from("such wow"));
-/// #   builder.build()
+/// #   VariantArray::from_iter([Some("such wow")])
 /// # }
 /// let variant_array = get_variant_array();
 /// // First field is an integer id, second field is a variant
@@ -248,12 +267,9 @@ impl ExtensionType for VariantType {
 ///
 /// ```
 /// # use arrow_schema::{Schema, Field, DataType};
-/// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantType};
+/// # use parquet_variant_compute::{VariantArray, VariantType};
 /// # fn get_variant_array() -> VariantArray {
-/// #   let mut builder = VariantArrayBuilder::new(10);
-/// #   builder.append_variant(Variant::from("such wow"));
-/// #   builder.build()
+/// #   VariantArray::from_iter([Some("such wow")])
 /// # }
 /// # let variant_array = get_variant_array();
 /// // The DataType of a VariantArray varies depending on how it is shredded
@@ -271,12 +287,9 @@ impl ExtensionType for VariantType {
 ///
 /// ```
 /// # use arrow::array::StructArray;
-/// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::VariantArrayBuilder;
+/// # use parquet_variant_compute::VariantArray;
 /// // Create Variant Array
-/// let mut builder = VariantArrayBuilder::new(10);
-/// builder.append_variant(Variant::from("such wow"));
-/// let variant_array = builder.build();
+/// let variant_array = VariantArray::from_iter([Some("such wow")]);
 /// // convert to StructArray
 /// let struct_array: StructArray = variant_array.into();
 /// ```
@@ -286,11 +299,9 @@ impl ExtensionType for VariantType {
 /// ```
 /// # use arrow::array::StructArray;
 /// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray};
+/// # use parquet_variant_compute::VariantArray;
 /// # fn get_struct_array() -> StructArray {
-/// #   let mut builder = VariantArrayBuilder::new(10);
-/// #   builder.append_variant(Variant::from("such wow"));
-/// #   builder.build().into()
+/// #   VariantArray::from_iter([Some("such wow")]).into()
 /// # }
 /// let struct_array: StructArray = get_struct_array();
 /// // try and create a VariantArray from it
@@ -331,7 +342,8 @@ impl VariantArray {
     ///    binary_view
     ///
     /// 3. An optional field named `typed_value` which can be any primitive type
-    ///    or be a list, large_list, list_view or struct
+    ///    or be a list, large_list, fixed_size_list, list_view or struct. Fixed-size lists are
+    ///    normalized to variable-length lists on read.
     ///
     pub fn try_new(inner: &dyn Array) -> Result<Self> {
         // Canonicalize shredded typed_value fields (e.g. decimal narrowing)
@@ -614,9 +626,9 @@ impl From<VariantArray> for ArrayRef {
     }
 }
 
-impl<'m, 'v> FromIterator<Option<Variant<'m, 'v>>> for VariantArray {
-    fn from_iter<T: IntoIterator<Item = Option<Variant<'m, 'v>>>>(iter: T) -> Self {
-        let iter = iter.into_iter();
+impl<'m, 'v, V: Into<Variant<'m, 'v>>> FromIterator<Option<V>> for VariantArray {
+    fn from_iter<T: IntoIterator<Item = Option<V>>>(iter: T) -> Self {
+        let iter = iter.into_iter().map(|value| value.map(Into::into));
 
         let mut b = VariantArrayBuilder::new(iter.size_hint().0);
         b.extend(iter);
@@ -1298,7 +1310,15 @@ fn canonicalize_and_verify_data_type_impl(
 
         // UUID maps to 16-byte fixed-size binary; no other width is allowed
         FixedSizeBinary(16) => borrow!(),
-        FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
+        FixedSizeBinary(_) => fail!(),
+
+        // FixedSizeList is an Arrow-specific distinction. Normalize it to List on read so
+        // Variant data written by older arrow-rs versions remains readable without treating
+        // FixedSizeList as a supported shredding target.
+        FixedSizeList(field, _) => match canonicalize_and_verify_field(field)? {
+            Cow::Borrowed(_) => Cow::Owned(DataType::List(field.clone())),
+            Cow::Owned(new_field) => Cow::Owned(DataType::List(new_field)),
+        },
 
         // List-like containers and struct are allowed, maps and unions are not
         List(field) => match canonicalize_and_verify_field(field)? {
@@ -1407,9 +1427,9 @@ mod test {
     use super::*;
     use arrow::array::{
         BinaryArray, BinaryDictionaryBuilder, BinaryRunBuilder, BinaryViewArray, Decimal32Array,
-        Decimal64Array, Decimal128Array, FixedSizeBinaryArray, Int8Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray, ListViewArray,
-        StringArray, Time64MicrosecondArray,
+        Decimal64Array, Decimal128Array, FixedSizeBinaryArray, FixedSizeListArray, Int8Array,
+        Int32Array, Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray, ListArray,
+        ListViewArray, StringArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
@@ -1926,6 +1946,33 @@ mod test {
     }
 
     #[test]
+    fn variant_array_try_new_normalizes_fixed_size_list_typed_value() {
+        let element_values: ArrayRef =
+            ShreddedVariantFieldArray::perfectly_shredded(Arc::new(Int64Array::from(vec![
+                1, 2, 3, 4,
+            ])))
+            .into();
+        let item_field = Arc::new(Field::new("item", element_values.data_type().clone(), true));
+        let typed_value: ArrayRef = Arc::new(FixedSizeListArray::new(
+            item_field.clone(),
+            2,
+            element_values,
+            None,
+        ));
+        let input = make_variant_struct_with_typed_value(typed_value);
+
+        let variant_array = VariantArray::try_new(&input).unwrap();
+        assert_eq!(
+            variant_array.typed_value_column().unwrap().data_type(),
+            &DataType::List(item_field),
+        );
+
+        let unshredded = crate::unshred_variant(&variant_array).unwrap();
+        assert!(unshredded.typed_value_column().is_none());
+        assert_eq!(unshredded.len(), 2);
+    }
+
+    #[test]
     fn test_try_value_out_of_bounds() {
         let mut b = VariantArrayBuilder::new(2);
         b.append_variant(Variant::from(1_i8));
@@ -1972,15 +2019,7 @@ mod test {
 
     #[test]
     fn test_variant_array_iter_double_ended() {
-        let mut b = VariantArrayBuilder::new(5);
-
-        b.append_variant(Variant::from(0_i32));
-        b.append_null();
-        b.append_variant(Variant::from(2_i32));
-        b.append_null();
-        b.append_variant(Variant::from(4_i32));
-
-        let array = b.build();
+        let array = VariantArray::from_iter([Some(0_i32), None, Some(2_i32), None, Some(4_i32)]);
         let mut iter = array.iter();
 
         assert_eq!(iter.next(), Some(Some(Variant::from(0_i32))));
@@ -1996,15 +2035,7 @@ mod test {
 
     #[test]
     fn test_variant_array_iter_reverse() {
-        let mut b = VariantArrayBuilder::new(5);
-
-        b.append_variant(Variant::from("a"));
-        b.append_null();
-        b.append_variant(Variant::from("aaa"));
-        b.append_null();
-        b.append_variant(Variant::from("aaaaa"));
-
-        let array = b.build();
+        let array = VariantArray::from_iter([Some("a"), None, Some("aaa"), None, Some("aaaaa")]);
 
         let result: Vec<_> = array.iter().rev().collect();
         assert_eq!(
@@ -2044,6 +2075,56 @@ mod test {
         assert_eq!(variant_array.value(2), Variant::BooleanFalse);
 
         assert!(variant_array.is_null(3));
+    }
+
+    #[test]
+    fn test_from_option_into_variants_into_variant_array() {
+        // Items that convert cleanly to `Variant` can be collected directly,
+        // without wrapping them in `Some(Variant::from(..))` first
+        let v = vec![Some(42_i64), None, Some(-1_i64)];
+
+        let variant_array = VariantArray::from_iter(v);
+
+        assert_eq!(variant_array.len(), 3);
+
+        assert!(!variant_array.is_null(0));
+        assert_eq!(variant_array.value(0), Variant::Int64(42));
+
+        assert!(variant_array.is_null(1));
+
+        assert!(!variant_array.is_null(2));
+        assert_eq!(variant_array.value(2), Variant::Int64(-1));
+    }
+
+    #[test]
+    fn test_from_option_str_into_variant_array() {
+        let v = vec![
+            Some("hello"),
+            None,
+            Some(
+                "hello world this is much longer than the maximum short string length of sixty three bytes",
+            ),
+        ];
+
+        let variant_array: VariantArray = v.into_iter().collect();
+
+        assert_eq!(variant_array.len(), 3);
+
+        assert!(!variant_array.is_null(0));
+        assert_eq!(
+            variant_array.value(0),
+            Variant::ShortString(ShortString::try_new("hello").unwrap())
+        );
+
+        assert!(variant_array.is_null(1));
+
+        assert!(!variant_array.is_null(2));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::String(
+                "hello world this is much longer than the maximum short string length of sixty three bytes"
+            )
+        );
     }
 
     #[test]
