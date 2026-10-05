@@ -454,7 +454,7 @@ where
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
         match self.decoder.as_mut().expect("decoder set") {
-            MaybeDictionaryDecoder::Fallback(decoder) => decoder.skip::<V>(num_values, None),
+            MaybeDictionaryDecoder::Fallback(decoder) => decoder.skip(num_values, None),
             MaybeDictionaryDecoder::Dict {
                 decoder,
                 max_remaining_values,

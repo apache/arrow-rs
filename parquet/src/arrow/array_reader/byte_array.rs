@@ -35,6 +35,7 @@ use arrow_buffer::i256;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
@@ -180,9 +181,74 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
 
 /// A [`ColumnValueDecoder`] for variable length byte arrays
 struct ByteArrayColumnValueDecoder<I: OffsetSizeTrait> {
-    dict: Option<OffsetBuffer<I>>,
+    dict: Option<ByteArrayDictionary>,
     decoder: Option<ByteArrayDecoder>,
     validate_utf8: bool,
+    phantom: PhantomData<I>,
+}
+
+/// A dictionary page containing offsets into its original, plain-encoded bytes.
+///
+/// Keeping the page as [`Bytes`] avoids copying every dictionary value before knowing which
+/// values are referenced by the data pages.
+pub(crate) struct ByteArrayDictionary {
+    buf: Bytes,
+    offsets: Vec<usize>,
+}
+
+impl ByteArrayDictionary {
+    fn new(buf: Bytes, num_values: usize) -> Result<Self> {
+        if buf.is_empty() {
+            return Ok(Self {
+                buf,
+                offsets: Vec::new(),
+            });
+        }
+
+        let mut offsets = Vec::with_capacity(num_values);
+        let mut offset = 0;
+        let buf_slice = buf.as_ref();
+
+        for _ in 0..num_values {
+            if offset == buf_slice.len() {
+                break;
+            }
+            if offset + 4 > buf_slice.len() {
+                return Err(ParquetError::EOF("eof decoding byte array".into()));
+            }
+
+            offsets.push(offset);
+            let len_bytes: [u8; 4] = buf_slice[offset..offset + 4].try_into().unwrap();
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            let start_offset = offset + 4;
+            let end_offset = start_offset
+                .checked_add(len)
+                .ok_or_else(|| ParquetError::EOF("eof decoding byte array".into()))?;
+            if end_offset > buf_slice.len() {
+                return Err(ParquetError::EOF("eof decoding byte array".into()));
+            }
+            offset = end_offset;
+        }
+
+        Ok(Self { buf, offsets })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.offsets.is_empty()
+    }
+
+    fn value(&self, index: usize) -> Result<&[u8]> {
+        let offset = *self.offsets.get(index).ok_or_else(|| {
+            general_err!(
+                "dictionary key beyond bounds of dictionary: 0..{}",
+                self.offsets.len()
+            )
+        })?;
+        let len_bytes: [u8; 4] = self.buf[offset..offset + 4].try_into().unwrap();
+        let len = u32::from_le_bytes(len_bytes) as usize;
+        let start_offset = offset + 4;
+        Ok(&self.buf[start_offset..start_offset + len])
+    }
 }
 
 impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
@@ -194,6 +260,7 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             dict: None,
             decoder: None,
             validate_utf8,
+            phantom: PhantomData,
         }
     }
 
@@ -214,15 +281,7 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             ));
         }
 
-        let mut buffer = OffsetBuffer::with_capacity(0);
-        let mut decoder = ByteArrayDecoderPlain::new(
-            buf,
-            num_values as usize,
-            Some(num_values as usize),
-            self.validate_utf8,
-        );
-        decoder.read(&mut buffer, usize::MAX)?;
-        self.dict = Some(buffer);
+        self.dict = Some(ByteArrayDictionary::new(buf, num_values as usize)?);
         Ok(())
     }
 
@@ -286,7 +345,7 @@ impl ByteArrayDecoder {
                 validate_utf8,
             )),
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => ByteArrayDecoder::Dictionary(
-                ByteArrayDecoderDictionary::new(data, num_levels, num_values)?,
+                ByteArrayDecoderDictionary::new(data, num_levels, num_values, validate_utf8)?,
             ),
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
                 ByteArrayDecoderDeltaLength::new(data, validate_utf8)?,
@@ -310,7 +369,7 @@ impl ByteArrayDecoder {
         &mut self,
         out: &mut OffsetBuffer<I>,
         len: usize,
-        dict: Option<&OffsetBuffer<I>>,
+        dict: Option<&ByteArrayDictionary>,
     ) -> Result<usize> {
         match self {
             ByteArrayDecoder::Plain(d) => d.read(out, len),
@@ -326,11 +385,7 @@ impl ByteArrayDecoder {
     }
 
     /// Skip `len` values
-    pub fn skip<I: OffsetSizeTrait>(
-        &mut self,
-        len: usize,
-        dict: Option<&OffsetBuffer<I>>,
-    ) -> Result<usize> {
+    pub fn skip(&mut self, len: usize, dict: Option<&ByteArrayDictionary>) -> Result<usize> {
         match self {
             ByteArrayDecoder::Plain(d) => d.skip(len),
             ByteArrayDecoder::Dictionary(d) => {
@@ -576,19 +631,26 @@ impl ByteArrayDecoderDelta {
 /// Decoder from [`Encoding::RLE_DICTIONARY`] to [`OffsetBuffer`]
 pub struct ByteArrayDecoderDictionary {
     decoder: DictIndexDecoder,
+    validate_utf8: bool,
 }
 
 impl ByteArrayDecoderDictionary {
-    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Result<Self> {
+    fn new(
+        data: Bytes,
+        num_levels: usize,
+        num_values: Option<usize>,
+        validate_utf8: bool,
+    ) -> Result<Self> {
         Ok(Self {
             decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
+            validate_utf8,
         })
     }
 
     fn read<I: OffsetSizeTrait>(
         &mut self,
         output: &mut OffsetBuffer<I>,
-        dict: &OffsetBuffer<I>,
+        dict: &ByteArrayDictionary,
         len: usize,
     ) -> Result<usize> {
         // All data must be NULL
@@ -596,19 +658,23 @@ impl ByteArrayDecoderDictionary {
             return Ok(0);
         }
 
-        // Pre-reserve offsets capacity to avoid per-chunk reallocation
+        let initial_values_length = output.values.len();
         output.offsets.reserve(len);
 
-        self.decoder.read(len, |keys| {
-            output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice())
-        })
+        let read = self.decoder.read(len, |keys| {
+            for key in keys {
+                output.try_push(dict.value(*key as usize)?, self.validate_utf8)?;
+            }
+            Ok(())
+        })?;
+
+        if self.validate_utf8 {
+            output.check_valid_utf8(initial_values_length)?;
+        }
+        Ok(read)
     }
 
-    fn skip<I: OffsetSizeTrait>(
-        &mut self,
-        dict: &OffsetBuffer<I>,
-        to_skip: usize,
-    ) -> Result<usize> {
+    fn skip(&mut self, dict: &ByteArrayDictionary, to_skip: usize) -> Result<usize> {
         // All data must be NULL
         if dict.is_empty() {
             return Ok(0);
@@ -681,6 +747,57 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn test_byte_array_dictionary_retains_encoded_page() {
+        let (_, encoded_dictionary) = byte_array_all_encodings(vec!["hello", "world"]);
+        let retained_page = encoded_dictionary.clone();
+
+        let column_desc = utf8_column();
+        let mut decoder = ByteArrayColumnValueDecoder::<i32>::new(&column_desc);
+        decoder
+            .set_dict(encoded_dictionary, 2, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+
+        let dictionary = decoder.dict.as_ref().unwrap();
+        assert_eq!(retained_page.as_ptr(), dictionary.buf.as_ptr());
+    }
+
+    #[test]
+    fn test_byte_array_dictionary_validates_referenced_utf8_values() {
+        let (pages, encoded_dictionary) = byte_array_all_encodings(vec!["hello", "world"]);
+        let encoded_indices = pages
+            .into_iter()
+            .find(|(encoding, _)| *encoding == Encoding::RLE_DICTIONARY)
+            .unwrap()
+            .1;
+
+        let mut encoded_dictionary = encoded_dictionary.to_vec();
+        let invalid_value = encoded_dictionary
+            .windows(5)
+            .position(|window| window == b"world")
+            .unwrap();
+        encoded_dictionary[invalid_value] = 0xff;
+
+        let column_desc = utf8_column();
+        let mut decoder = ByteArrayColumnValueDecoder::<i32>::new(&column_desc);
+        decoder
+            .set_dict(
+                Bytes::from(encoded_dictionary),
+                2,
+                Encoding::RLE_DICTIONARY,
+                false,
+            )
+            .unwrap();
+        decoder
+            .set_data(Encoding::RLE_DICTIONARY, encoded_indices, 2, Some(2))
+            .unwrap();
+
+        let mut output = OffsetBuffer::<i32>::with_capacity(0);
+        assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
+        assert_eq!(output.values.as_slice(), b"hello");
+        assert!(decoder.read(&mut output, 1).is_err());
     }
 
     #[test]
