@@ -143,15 +143,14 @@ pub fn partition(columns: &[ArrayRef]) -> Result<Partitions, ArrowError> {
     }
 
     let acc = find_boundaries(&columns[0])?;
-    let acc = columns
-        .iter()
-        .skip(1)
-        .try_fold(acc, |mut acc, c| find_boundaries(c.as_ref()).map(|b| {
+    let acc = columns.iter().skip(1).try_fold(acc, |mut acc, c| {
+        find_boundaries(c.as_ref()).map(|b| {
             // Do OrAssign to try to reuse the existing buffer if possible
             acc |= &b;
 
             acc
-        }))?;
+        })
+    })?;
 
     Ok(Partitions(Some(acc)))
 }
