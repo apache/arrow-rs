@@ -44,8 +44,8 @@ mod ranges;
 mod selector;
 
 use algebra::{
-    and_then_mask, and_then_row_selections, and_then_selectors_with_mask, intersect_masks,
-    intersect_row_selections, union_masks, union_row_selections,
+    and_then_mask, and_then_row_selections, and_then_selectors_with_mask, combine_mixed_selection,
+    intersect_masks, intersect_row_selections, union_masks, union_row_selections,
 };
 pub use boolean::MaskRunIter;
 use boolean::{
@@ -547,6 +547,10 @@ impl RowSelection {
     }
 
     /// Compute the intersection of two [`RowSelection`]
+    ///
+    /// Nonempty mixed inputs return a mask-backed result.
+    /// If only one input is empty, the result keeps the other's representation.
+    ///
     /// For example:
     /// self:      NNYYYYNNYYNYN
     /// other:     NYNNNNNNY
@@ -560,16 +564,18 @@ impl RowSelection {
             (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
                 intersect_row_selections(l, r)
             }
-            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                intersect_row_selections(l, &r.borrowed_selectors())
-            }
-            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                intersect_row_selections(&l.borrowed_selectors(), r)
+            (RowSelectionInner::Selectors(selectors), RowSelectionInner::Mask(mask))
+            | (RowSelectionInner::Mask(mask), RowSelectionInner::Selectors(selectors)) => {
+                combine_mixed_selection(selectors, mask, intersect_masks)
             }
         }
     }
 
     /// Compute the union of two [`RowSelection`]
+    ///
+    /// Nonempty mixed inputs return a mask-backed result.
+    /// If only one input is empty, the result keeps the other's representation.
+    ///
     /// For example:
     /// self:      NNYYYYNNYYNYN
     /// other:     NYNNNNNNN
@@ -583,11 +589,9 @@ impl RowSelection {
             (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
                 union_row_selections(l, r)
             }
-            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                union_row_selections(l, &r.borrowed_selectors())
-            }
-            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                union_row_selections(&l.borrowed_selectors(), r)
+            (RowSelectionInner::Selectors(selectors), RowSelectionInner::Mask(mask))
+            | (RowSelectionInner::Mask(mask), RowSelectionInner::Selectors(selectors)) => {
+                combine_mixed_selection(selectors, mask, union_masks)
             }
         }
     }
