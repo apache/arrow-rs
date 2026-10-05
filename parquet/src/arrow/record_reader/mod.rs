@@ -845,7 +845,7 @@ mod tests {
         // lists and null elements. Every page boundary falls in the middle of a
         // byte of the child validity bitmap, and the last page crosses into its
         // third byte.
-        let pages: [(&[i16], &[i16], &[i32]); 5] = [
+        let pages: &[(&[i16], &[i16], &[i32])] = &[
             // [1, 2, 3], [4, 5]
             (&[3, 3, 3, 3, 3], &[0, 1, 1, 0, 1], &[1, 2, 3, 4, 5]),
             // null, [6, null], [], [null, 7, 8]
@@ -867,32 +867,28 @@ mod tests {
         let num_records = 11;
         let num_levels = 22;
 
+        let page_vec = pages
+            .iter()
+            .map(|(def_levels, rep_levels, values)| {
+                let mut pb = DataPageBuilderImpl::new(desc.clone(), def_levels.len() as u32, true);
+                pb.add_rep_levels(1, rep_levels);
+                pb.add_def_levels(3, def_levels);
+                pb.add_values::<Int32Type>(Encoding::PLAIN, values);
+                pb.consume()
+            })
+            .collect::<Vec<_>>();
+
         // Read all records in one batch, then one record per batch
         for batch_size in [num_records, 1] {
-            let page_vec = pages
-                .iter()
-                .map(|(def_levels, rep_levels, values)| {
-                    let mut pb =
-                        DataPageBuilderImpl::new(desc.clone(), def_levels.len() as u32, true);
-                    pb.add_rep_levels(1, rep_levels);
-                    pb.add_def_levels(3, def_levels);
-                    pb.add_values::<Int32Type>(Encoding::PLAIN, values);
-                    pb.consume()
-                })
-                .collect::<Vec<_>>();
-
             let mut record_reader =
                 RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
             record_reader.set_padding_threshold(2);
             record_reader
-                .set_page_reader(Box::new(InMemoryPageReader::new(page_vec)))
+                .set_page_reader(Box::new(InMemoryPageReader::new(page_vec.clone())))
                 .unwrap();
 
-            let mut records_read = 0;
-            while records_read < num_records {
-                let read = record_reader.read_records(batch_size).unwrap();
-                assert!(read > 0, "batch_size {batch_size}: ran out of records");
-                records_read += read;
+            for _ in 0..num_records / batch_size {
+                assert_eq!(record_reader.read_records(batch_size).unwrap(), batch_size);
             }
             assert_eq!(record_reader.num_records(), num_records);
             assert_eq!(record_reader.num_values(), num_levels);
