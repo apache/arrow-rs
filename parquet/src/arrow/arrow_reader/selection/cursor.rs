@@ -72,9 +72,7 @@ impl RowSelectionPolicy {
             (RowSelectionStrategy::Mask, true) | (RowSelectionStrategy::Selectors, false) => {
                 selection
             }
-            (RowSelectionStrategy::Mask, false) => {
-                RowSelection::from_boolean_buffer(selection.into_boolean_buffer())
-            }
+            (RowSelectionStrategy::Mask, false) => selection.force_mask(),
             (RowSelectionStrategy::Selectors, true) => {
                 RowSelection::from(Vec::<RowSelector>::from(selection))
             }
