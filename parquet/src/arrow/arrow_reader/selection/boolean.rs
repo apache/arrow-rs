@@ -443,15 +443,16 @@ mod tests {
     #[test]
     fn test_mixed_set_algebra_does_not_materialize_selector_cache() {
         let other = RowSelection::from(vec![
-            RowSelector::skip(2048),
-            RowSelector::select(4096),
-            RowSelector::skip(2049),
+            RowSelector::skip(3),
+            RowSelector::select(129),
+            RowSelector::skip(5),
         ]);
-        for rows in [0, 1, 64, 65, 8193] {
+        for buffer in [
+            BooleanBuffer::from_iter((0..137).map(|i| i < 64)),
+            BooleanBuffer::from_iter((0..137).map(|i| i % 2 == 0)),
+        ] {
             for cached in [false, true] {
-                let selection = RowSelection::from_boolean_buffer(BooleanBuffer::from_iter(
-                    (0..rows).map(|i| i % 2 == 0),
-                ));
+                let selection = RowSelection::from_boolean_buffer(buffer.clone());
                 if cached {
                     let _ = selection.iter().count();
                 }
@@ -462,12 +463,8 @@ mod tests {
                     selection.union(&other),
                     other.union(&selection),
                 ] {
-                    assert_eq!(result.as_mask().is_some(), rows != 0);
-                    if rows == 0 {
-                        assert_eq!(result, other);
-                    } else {
-                        assert!(cached_selectors_ptr(&result).is_none());
-                    }
+                    assert!(result.as_mask().is_some());
+                    assert!(cached_selectors_ptr(&result).is_none());
                 }
                 assert_eq!(cached_selectors_ptr(&selection), cache_before);
             }

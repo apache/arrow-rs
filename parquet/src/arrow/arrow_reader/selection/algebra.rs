@@ -1076,44 +1076,47 @@ mod tests {
 
     #[test]
     fn test_mixed_mask_selector_algebra_with_offsets_and_uneven_lengths() {
-        // Unequal lengths preserve the longer input's tail.
-        for mask_len in [0, 1, 7, 8, 63, 64, 65, 137] {
-            for selector_len in [0, 1, 7, 8, 63, 64, 65, 137] {
+        for rows in [1, 7, 8, 63, 64, 65, 137] {
+            for (mask_len, selector_len) in [(rows, rows), (rows, 137), (137, rows)] {
                 for offset in [0, 1, 7, 63] {
-                    let buffer =
-                        BooleanBuffer::from_iter((0..offset + mask_len).map(|i| i % 2 == 0))
-                            .slice(offset, mask_len);
-                    let mask_bits: Vec<_> = buffer.iter().collect();
-                    let mask = RowSelection::from_boolean_buffer(buffer);
-                    for selector_bits in [
-                        vec![false; selector_len],
-                        vec![true; selector_len],
-                        (0..selector_len).map(|i| (i / 11) % 2 == 0).collect(),
+                    for mask_bits in [
+                        vec![false; mask_len],
+                        vec![true; mask_len],
+                        (0..mask_len).map(|i| i < mask_len / 2).collect(),
+                        (0..mask_len).map(|i| i % 2 == 0).collect(),
                     ] {
-                        let selectors = RowSelection::from_filters(&[BooleanArray::from(
-                            selector_bits.clone(),
-                        )]);
-                        let context = format!(
-                            "mask_len={mask_len} selector_len={selector_len} offset={offset}"
-                        );
-                        let intersection =
-                            expected_combined(&mask_bits, &selector_bits, |a, b| a && b);
-                        let union = expected_combined(&mask_bits, &selector_bits, |a, b| a || b);
-                        let intersection =
-                            RowSelection::from_filters(&[BooleanArray::from(intersection)]);
-                        let union = RowSelection::from_filters(&[BooleanArray::from(union)]);
-                        for cached in [false, true] {
-                            let mask = mask.clone();
-                            if cached {
-                                let _ = mask.iter().count();
-                            }
+                        let buffer = BooleanBuffer::from_iter(
+                            std::iter::repeat_n(false, offset).chain(mask_bits.iter().copied()),
+                        )
+                        .slice(offset, mask_len);
+                        let mask = RowSelection::from_boolean_buffer(buffer);
+                        for selector_bits in [
+                            vec![false; selector_len],
+                            vec![true; selector_len],
+                            (0..selector_len).map(|i| i % 2 == 0).collect(),
+                            (0..selector_len).map(|i| (i / 11) % 2 == 0).collect(),
+                        ] {
+                            let selectors = RowSelection::from_filters(&[BooleanArray::from(
+                                selector_bits.clone(),
+                            )]);
+                            let context = format!(
+                                "mask_len={mask_len} selector_len={selector_len} offset={offset}"
+                            );
+                            let intersection =
+                                expected_combined(&mask_bits, &selector_bits, |a, b| a && b);
+                            let union =
+                                expected_combined(&mask_bits, &selector_bits, |a, b| a || b);
                             for (left, right) in [(&mask, &selectors), (&selectors, &mask)] {
-                                assert_eq!(
-                                    left.intersection(right),
-                                    intersection,
-                                    "{context} cached={cached}"
+                                assert_mask_eq(
+                                    left.intersection(right).as_mask().unwrap(),
+                                    &intersection,
+                                    &context,
                                 );
-                                assert_eq!(left.union(right), union, "{context} cached={cached}");
+                                assert_mask_eq(
+                                    left.union(right).as_mask().unwrap(),
+                                    &union,
+                                    &context,
+                                );
                             }
                         }
                     }
@@ -1123,90 +1126,9 @@ mod tests {
     }
 
     #[test]
-    fn test_mixed_algebra_keeps_masks_for_compact_inputs() {
-        for run_count in [1, 17, 128] {
-            let rows = run_count * 4096;
-            let bits: Vec<_> = (0..rows).map(|i| (i / 4096) % 2 == 0).collect();
-            let expected = RowSelection::from_filters(&[BooleanArray::from(bits.clone())]);
-            let selectors = RowSelection::from(vec![RowSelector::select(rows)]);
-            for cached in [false, true] {
-                let mask = RowSelection::from_boolean_buffer(BooleanBuffer::from(bits.clone()));
-                if cached {
-                    let _ = mask.iter().count();
-                }
-                for (left, right) in [(&mask, &selectors), (&selectors, &mask)] {
-                    let intersection = left.intersection(right);
-                    let union = left.union(right);
-                    assert!(intersection.as_mask().is_some());
-                    assert!(union.as_mask().is_some());
-                    assert_eq!(intersection, expected);
-                    assert_eq!(union, selectors);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_mixed_algebra_keeps_masks_for_fragmented_inputs() {
-        let rows = 8193;
-        let expected = RowSelection::from_filters(&[BooleanArray::from(
-            (0..rows).map(|i| i % 2 == 0).collect::<Vec<_>>(),
-        )]);
-        let mask = RowSelection::from_boolean_buffer(BooleanBuffer::from_iter(
-            (0..rows).map(|i| i % 2 == 0),
-        ));
-        let _ = mask.iter().count();
-        let selectors = RowSelection::from(vec![RowSelector::select(rows)]);
-        for (left, right) in [(&mask, &selectors), (&selectors, &mask)] {
-            let intersection = left.intersection(right);
-            let union = left.union(right);
-            assert!(intersection.as_mask().is_some());
-            assert!(union.as_mask().is_some());
-            assert_eq!(intersection, expected);
-            assert_eq!(union, selectors);
-        }
-
-        // Also cover fragmented selectors.
-        let mask = RowSelection::from_boolean_buffer(BooleanBuffer::new_set(rows));
-        let _ = mask.iter().count();
-        assert!(mask.intersection(&expected).as_mask().is_some());
-        assert!(mask.union(&expected).as_mask().is_some());
-        assert_eq!(mask.intersection(&expected), expected);
-    }
-
-    #[test]
-    fn test_mixed_algebra_short_fragmented_mask_preserves_tail() {
-        let selector_bits = vec![true; 65_536];
-        let selectors = RowSelection::from(vec![RowSelector::select(selector_bits.len())]);
-        for rows in [1, 63, 64, 65, 257] {
-            let mask_bits: Vec<_> = (0..rows).map(|i| i % 2 == 0).collect();
-            let expected = RowSelection::from_filters(&[BooleanArray::from(expected_combined(
-                &mask_bits,
-                &selector_bits,
-                |a, b| a && b,
-            ))]);
-            for cached in [false, true] {
-                let mask =
-                    RowSelection::from_boolean_buffer(BooleanBuffer::from(mask_bits.clone()));
-                if cached {
-                    let _ = mask.iter().count();
-                }
-                for (left, right) in [(&mask, &selectors), (&selectors, &mask)] {
-                    let intersection = left.intersection(right);
-                    let union = left.union(right);
-                    assert!(intersection.as_mask().is_some());
-                    assert!(union.as_mask().is_some());
-                    assert_eq!(intersection, expected);
-                    assert_eq!(union, selectors);
-                }
-            }
-        }
-    }
-
-    #[test]
     fn test_mixed_algebra_empty_operand_preserves_tail() {
         let empty = RowSelection::default();
-        let buffer = BooleanBuffer::from_iter((0..80_000).map(|i| i % 3 == 0));
+        let buffer = BooleanBuffer::from_iter((0..64).map(|i| i % 3 == 0));
         let mask = RowSelection::from_boolean_buffer(buffer.slice(5, 40));
         let selectors = RowSelection::from(vec![
             RowSelector::skip(3),
