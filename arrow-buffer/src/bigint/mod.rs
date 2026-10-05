@@ -1890,8 +1890,11 @@ mod tests {
         );
 
         let two = i256::from(2);
+        // Binary64 has a 53-bit significand: inside [2^e, 2^(e+1)) adjacent values
+        // are 2^(e-52) apart, so the exact tie is 2^(e-53) above 2^e. Ties are where
+        // #11314 rounded the wrong way. Start at 53 (below that the midpoint is not
+        // an integer) and stop at 254 (2^255 overflows i256).
         for exponent in 53..=254 {
-            // Midpoint between the two binary64 neighbours of 2^exponent.
             let midpoint = two.wrapping_pow(exponent) + two.wrapping_pow(exponent - 53);
             for delta in -2_i64..=2 {
                 for value in [
@@ -1910,14 +1913,14 @@ mod tests {
     }
 
     #[test]
-    fn test_i256_to_f64_matches_correctly_rounded_parse() {
+    fn test_i256_to_f64_fuzz() {
         // `to_string().parse::<f64>()` is a correctly rounded decimal-to-binary oracle.
         for value in [i256::MIN, i256::MAX, i256::MINUS_ONE, i256::ZERO, i256::ONE] {
             let expected: f64 = value.to_string().parse().unwrap();
             assert_eq!(value.to_f64().unwrap().to_bits(), expected.to_bits());
         }
 
-        let mut rng = StdRng::seed_from_u64(0x9E37_79B9_7F4A_7C15);
+        let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..1_000 {
             let low = u128::from(rng.random::<u64>()) | (u128::from(rng.random::<u64>()) << 64);
             let high = u128::from(rng.random::<u64>()) | (u128::from(rng.random::<u64>()) << 64);
