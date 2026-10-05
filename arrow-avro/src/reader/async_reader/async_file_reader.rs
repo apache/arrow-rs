@@ -49,9 +49,12 @@ use tokio_util::io::ReaderStream;
 /// use arrow_avro::reader::AsyncFileReader;
 /// use bytes::Bytes;
 /// use futures::FutureExt;
+/// use futures::StreamExt;
+/// use futures::TryStreamExt;
 /// use futures::future::BoxFuture;
+/// use futures::stream::BoxStream;
 /// use object_store::path::Path;
-/// use object_store::{ObjectStore, ObjectStoreExt};
+/// use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt};
 ///
 /// #[derive(Clone, Debug)]
 /// struct ObjectStoreReader {
