@@ -230,10 +230,6 @@ impl TreeBuilder {
                     path.push(String::from(key_value_type.name()));
 
                     let key_type = &key_value_type.get_fields()[0];
-                    assert!(
-                        key_type.is_primitive(),
-                        "Map key type is expected to be a primitive type, but found {key_type:?}"
-                    );
                     let key_reader = self.reader_tree(
                         key_type.clone(),
                         path,
@@ -1888,6 +1884,115 @@ mod tests {
             let cols = row.into_columns();
             assert_eq!(cols[1].1, cols[2].1);
         }
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn test_compound_map_key() {
+        use crate::arrow::ArrowWriter;
+        use arrow_array::builder::{Int32Builder, ListBuilder};
+        use arrow_array::{
+            Array, ArrayRef, Int32Array, MapArray, RecordBatch, StringArray, StructArray,
+        };
+        use arrow_buffer::OffsetBuffer;
+        use arrow_schema::{DataType, Field as ArrowField, Fields};
+
+        let map_array = |keys: ArrayRef, offsets: Vec<i32>, values: Vec<i32>| {
+            let entries = StructArray::from(vec![
+                (
+                    Arc::new(ArrowField::new("key", keys.data_type().clone(), false)),
+                    keys,
+                ),
+                (
+                    Arc::new(ArrowField::new("value", DataType::Int32, true)),
+                    Arc::new(Int32Array::from(values)) as ArrayRef,
+                ),
+            ]);
+            let entries_field = ArrowField::new("key_value", entries.data_type().clone(), false);
+            let map = MapArray::try_new(
+                Arc::new(entries_field),
+                OffsetBuffer::new(offsets.into()),
+                entries,
+                None,
+                false,
+            )
+            .unwrap();
+            Arc::new(map) as ArrayRef
+        };
+
+        // struct keys: [{(1, "a") -> 10, (2, "b") -> 20}, {}, {(3, "c") -> 30}]
+        let struct_keys = StructArray::new(
+            Fields::from(vec![
+                ArrowField::new("id", DataType::Int32, false),
+                ArrowField::new("name", DataType::Utf8, false),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+            None,
+        );
+        let struct_map = map_array(Arc::new(struct_keys), vec![0, 2, 2, 3], vec![10, 20, 30]);
+
+        // list keys: [{[1, 2] -> 10, [3] -> 20}, {}, {[] -> 30}]
+        let mut list_keys = ListBuilder::new(Int32Builder::new());
+        list_keys.append_value([Some(1), Some(2)]);
+        list_keys.append_value([Some(3)]);
+        list_keys.append_value([]);
+        let list_map = map_array(
+            Arc::new(list_keys.finish()),
+            vec![0, 2, 2, 3],
+            vec![10, 20, 30],
+        );
+
+        let batch =
+            RecordBatch::try_from_iter([("struct_map", struct_map), ("list_map", list_map)])
+                .unwrap();
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(Bytes::from(buffer)).unwrap();
+        let rows: Vec<Row> = reader
+            .get_row_iter(None)
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+
+        let key = |id: i32, name: &str| {
+            group![
+                ("id".to_string(), Field::Int(id)),
+                ("name".to_string(), Field::Str(name.to_string()))
+            ]
+        };
+        let expected_rows = vec![
+            row![
+                (
+                    "struct_map".to_string(),
+                    map![(key(1, "a"), Field::Int(10)), (key(2, "b"), Field::Int(20))]
+                ),
+                (
+                    "list_map".to_string(),
+                    map![
+                        (list![Field::Int(1), Field::Int(2)], Field::Int(10)),
+                        (list![Field::Int(3)], Field::Int(20))
+                    ]
+                ),
+            ],
+            row![
+                ("struct_map".to_string(), map![]),
+                ("list_map".to_string(), map![]),
+            ],
+            row![
+                (
+                    "struct_map".to_string(),
+                    map![(key(3, "c"), Field::Int(30))]
+                ),
+                ("list_map".to_string(), map![(list![], Field::Int(30))]),
+            ],
+        ];
+        assert_eq!(rows, expected_rows);
     }
 
     fn test_file_reader_rows(file_name: &str, schema: Option<Type>) -> Result<Vec<Row>> {

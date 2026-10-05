@@ -47,16 +47,15 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
 
     let nulls = NullBuffer::union(left.nulls(), right.nulls());
 
-    let left_offsets = left.value_offsets();
-    let right_offsets = right.value_offsets();
+    let left_offsets = left.offsets();
+    let right_offsets = right.offsets();
 
     let left_values = left.value_data();
     let right_values = right.value_data();
 
     let mut output_values = Vec::with_capacity(
-        left_values.len() + right_values.len()
-            - left_offsets[0].as_usize()
-            - right_offsets[0].as_usize(),
+        (left_offsets.last() - left_offsets.first()).as_usize()
+            + (right_offsets.last() - right_offsets.first()).as_usize(),
     );
 
     let mut output_offsets = Vec::with_capacity(left_offsets.len());
@@ -154,10 +153,9 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         .collect::<Vec<_>>();
 
     let mut output_values = Vec::with_capacity(
-        data_values
+        arrays
             .iter()
-            .zip(offsets.iter_mut())
-            .map(|(data, offset)| data.len() - offset.peek().unwrap().as_usize())
+            .map(|array| (array.offsets().last() - array.offsets().first()).as_usize())
             .sum(),
     );
 
@@ -279,23 +277,23 @@ where
         let null_buffer = NullBuffer::union(left.nulls(), right.nulls());
 
         // Compute the required data buffer size, excluding any elements that are null
-        // or are small enough to be stored inline.
-        let data_size = match &null_buffer {
+        // or are small enough to be stored inline. Both lengths are `u32`, and a
+        // pair of them can sum past that, so the addition is done in `usize`.
+        let inline_max = MAX_INLINE_VIEW_LEN as usize;
+        let data_size: usize = match &null_buffer {
             None => left
                 .lengths()
                 .zip(right.lengths())
-                .map(|(l, r)| l + r)
-                .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-                .map(|len| len as usize)
+                .map(|(l, r)| l as usize + r as usize)
+                .filter(|len| *len > inline_max)
                 .sum(),
             Some(nb) => left
                 .lengths()
                 .zip(right.lengths())
                 .zip(nb.iter())
                 .filter(|((_, _), not_null)| *not_null)
-                .map(|((l, r), _)| l + r)
-                .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-                .map(|len| len as usize)
+                .map(|((l, r), _)| l as usize + r as usize)
+                .filter(|len| *len > inline_max)
                 .sum(),
         };
 
@@ -606,6 +604,20 @@ mod tests {
         let expected = [None, Some("bazfar")].into_iter().collect::<StringArray>();
 
         assert_eq!(output.as_string(), &expected);
+    }
+
+    #[test]
+    fn test_concat_slice_capacity() {
+        let left = StringArray::from(vec!["hello"; 8]).slice(2, 3);
+        let right = StringArray::from(vec![" world"; 8]).slice(4, 3);
+
+        let pair = concat_elements_utf8(&left, &right).unwrap();
+        assert_eq!(pair, StringArray::from(vec!["hello world"; 3]));
+        assert_eq!(pair.values().capacity(), 33);
+
+        let many = concat_elements_utf8_many(&[&left, &right, &left]).unwrap();
+        assert_eq!(many, StringArray::from(vec!["hello worldhello"; 3]));
+        assert_eq!(many.values().capacity(), 48);
     }
 
     #[test]
