@@ -350,14 +350,17 @@ where
 
     // When array is [Large]StringArray, we will check whether `offset` is at a valid char boundary.
     let check_char_boundary = {
-        |offset: T::Offset| {
+        let first = array.offsets().first().as_usize();
+        let last = array.offsets().last().as_usize();
+        move |offset: T::Offset| {
             if !matches!(T::DATA_TYPE, DataType::Utf8 | DataType::LargeUtf8) {
                 return Ok(offset);
             }
-            // Safety: a StringArray must contain valid UTF8 data
-            let data_str = unsafe { std::str::from_utf8_unchecked(data) };
+            // Safety: in a StringArray, the bytes between the first and last offsets
+            // are valid UTF-8. The bytes outside that range need not be.
+            let data_str = unsafe { std::str::from_utf8_unchecked(&data[first..last]) };
             let offset_usize = offset.as_usize();
-            if data_str.is_char_boundary(offset_usize) {
+            if data_str.is_char_boundary(offset_usize - first) {
                 Ok(offset)
             } else {
                 Err(ArrowError::ComputeError(format!(
@@ -1127,6 +1130,15 @@ mod tests {
         let array = StringArray::from(vec![Some("E=mc²"), Some("ascii")]);
         let err = substring(&array, 0, Some(5)).unwrap_err().to_string();
         assert!(err.contains("invalid utf-8 boundary"));
+    }
+
+    #[test]
+    fn check_invalid_bytes_outside_offsets() {
+        // The values buffer holds invalid UTF-8 before and after the visible values
+        let values = Buffer::from_slice_ref(b"\xFFab\x80");
+        let array = StringArray::new(OffsetBuffer::new(vec![1, 3].into()), values, None);
+        let result = substring(&array, 0, Some(5)).unwrap();
+        assert_eq!(result.as_string::<i32>(), &StringArray::from(vec!["ab"]));
     }
 
     #[test]

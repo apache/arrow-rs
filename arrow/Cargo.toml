@@ -19,7 +19,6 @@
 name = "arrow"
 version = { workspace = true }
 description = "Rust implementation of Apache Arrow"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }

@@ -52,6 +52,8 @@ pub(crate) static END_SAVEPOINT: &str = "EndSavepoint";
 pub(crate) static CANCEL_QUERY: &str = "CancelQuery";
 
 /// Implements FlightSqlService to handle the flight sql protocol
+// `async_trait` marks the boxed futures returned by provided methods `#[must_use]`
+#[expect(clippy::double_must_use)]
 #[tonic::async_trait]
 pub trait FlightSqlService: Sync + Send + Sized + 'static {
     /// When impl FlightSqlService, you can always set FlightService to Self
