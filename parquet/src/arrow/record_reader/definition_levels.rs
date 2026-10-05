@@ -18,6 +18,7 @@
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::Buffer;
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
+use arrow_buffer::bit_util::compress;
 use bytes::Bytes;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
@@ -145,10 +146,10 @@ pub(crate) fn build_filtered_validity_bitmap(
     value_level: i16,
     bitmap: &mut BooleanBufferBuilder,
 ) -> usize {
+    const CHUNKS: usize = u64::BITS as usize;
     // Fast path: no filtering — every def level produces a bit.
     if include_threshold.is_none() && rep_filter.is_none() {
-        let chunks = def_levels.chunks_exact(u64::BITS as usize);
-        let remainder = chunks.remainder();
+        let (chunks, remainder) = def_levels.as_chunks::<CHUNKS>();
         for chunk in chunks {
             let mut word: u64 = 0;
             for (i, &d) in chunk.iter().enumerate() {
@@ -164,10 +165,10 @@ pub(crate) fn build_filtered_validity_bitmap(
 
     // Filtered path: build include mask + value mask per chunk, compress.
     let mut item_count: usize = 0;
-    let chunks = def_levels.chunks_exact(u64::BITS as usize);
-    let remainder_offset = def_levels.len() - chunks.remainder().len();
+    let (chunks, remainder) = def_levels.as_chunks::<CHUNKS>();
+    let remainder_offset = def_levels.len() - remainder.len();
 
-    for (chunk_idx, chunk) in chunks.enumerate() {
+    for (chunk_idx, chunk) in chunks.iter().enumerate() {
         let base = chunk_idx * u64::BITS as usize;
         let mut include_mask: u64 = 0;
         let mut value_mask: u64 = 0;
@@ -202,8 +203,6 @@ pub(crate) fn build_filtered_validity_bitmap(
 
     item_count
 }
-
-use crate::util::bit_util::compress;
 
 enum MaybePacked {
     Packed(PackedDecoder),

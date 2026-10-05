@@ -32,7 +32,6 @@ use std::sync::Arc;
 
 use flatbuffers::FlatBufferBuilder;
 
-use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
@@ -469,14 +468,17 @@ impl IpcWriteOptions {
         write_legacy_ipc_format: bool,
         metadata_version: crate::MetadataVersion,
     ) -> Result<Self, ArrowError> {
-        let is_alignment_valid =
-            alignment == 8 || alignment == 16 || alignment == 32 || alignment == 64;
-        if !is_alignment_valid {
-            return Err(ArrowError::InvalidArgumentError(
-                "Alignment should be 8, 16, 32, or 64.".to_string(),
-            ));
-        }
-        let alignment: u8 = u8::try_from(alignment).expect("range already checked");
+        let alignment: u8 = match alignment {
+            8 => 8,
+            16 => 16,
+            32 => 32,
+            64 => 64,
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Alignment should be 8, 16, 32, or 64.".to_string(),
+                ));
+            }
+        };
         match metadata_version {
             crate::MetadataVersion::V1
             | crate::MetadataVersion::V2
@@ -1277,6 +1279,11 @@ pub(crate) fn unslice_run_array(arr: ArrayData) -> Result<ArrayData, ArrowError>
 fn into_zero_offset_run_array<R: RunEndIndexType>(
     run_array: RunArray<R>,
 ) -> Result<RunArray<R>, ArrowError> {
+    // Empty slices have no physical runs, regardless of their offset.
+    if run_array.is_empty() {
+        return Ok(ArrayData::new_empty(run_array.data_type()).into());
+    }
+
     let run_ends = run_array.run_ends();
     if run_ends.offset() == 0 && run_ends.max_value() == run_ends.len() {
         return Ok(run_array);
@@ -1292,17 +1299,18 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 
     // build new run_ends array by subtracting offset from run ends.
     let offset = R::Native::usize_as(run_ends.offset());
-    let mut builder = BufferBuilder::<R::Native>::new(physical_length);
+    let mut run_ends_values = Vec::<R::Native>::with_capacity(physical_length);
     for run_end_value in &run_ends.values()[start_physical_index..end_physical_index] {
-        builder.append(run_end_value.sub_wrapping(offset));
+        run_ends_values.push(run_end_value.sub_wrapping(offset));
     }
-    builder.append(R::Native::from_usize(run_array.len()).unwrap());
+    run_ends_values.push(R::Native::from_usize(run_array.len()).unwrap());
+    let offset_buffer = Buffer::from_vec(run_ends_values);
     let new_run_ends = unsafe {
         // Safety:
         // The function builds a valid run_ends array and hence need not be validated.
         ArrayDataBuilder::new(R::DATA_TYPE)
             .len(physical_length)
-            .add_buffer(builder.finish())
+            .add_buffer(offset_buffer)
             .build_unchecked()
     };
 
@@ -1546,11 +1554,11 @@ fn compare_dictionaries(old: &ArrayData, new: &ArrayData) -> DictionaryCompariso
     let existing_len = old.len();
     let new_len = new.len();
     if existing_len == new_len {
-        if *old == *new {
-            return DictionaryComparison::Equal;
+        return if *old == *new {
+            DictionaryComparison::Equal
         } else {
-            return DictionaryComparison::NotEqual;
-        }
+            DictionaryComparison::NotEqual
+        };
     }
 
     // Can't be a delta if the new is shorter than the existing
@@ -3669,7 +3677,7 @@ mod tests {
         ensure_roundtrip(Arc::new(ls.finish()));
     }
 
-    /// Read/write a record batch to a File and Stream and ensure it is the same at the outout
+    /// Read/write a record batch to a File and Stream and ensure it is the same at the output
     fn ensure_roundtrip(array: ArrayRef) {
         let num_rows = array.len();
         let orig_batch = RecordBatch::try_from_iter(vec![("a", array)]).unwrap();
@@ -3759,6 +3767,56 @@ mod tests {
         let data = serialize_stream(&batch);
         let batch2 = deserialize_stream(data);
         assert_eq!(batch, batch2);
+    }
+
+    fn assert_empty_run_array_roundtrip<R: RunEndIndexType>() {
+        let run_ends = PrimitiveArray::<R>::from_iter_values(
+            [2, 5]
+                .into_iter()
+                .map(|v| R::Native::from_usize(v).unwrap()),
+        );
+        let values = Int32Array::from(vec![10, 20]);
+        let array = RunArray::<R>::try_new(&run_ends, &values).unwrap();
+        let empty = RunArray::<R>::from(ArrayData::new_empty(array.data_type()));
+
+        for source in [&array, &empty] {
+            for offset in 0..=source.len() {
+                let sliced = source.slice(offset, 0);
+                let batch = RecordBatch::try_from_iter(vec![("run", Arc::new(sliced) as ArrayRef)])
+                    .unwrap();
+                for decoded in [
+                    deserialize_stream(serialize_stream(&batch)),
+                    deserialize_file(serialize_file(&batch)),
+                ] {
+                    assert_eq!(decoded, batch);
+                    let data = decoded.column(0).to_data();
+                    data.validate_full().unwrap();
+                    assert_eq!(data.offset(), 0);
+                    assert!(data.child_data().iter().all(ArrayData::is_empty));
+                }
+
+                let normalized = into_zero_offset_run_array(source.slice(offset, 0)).unwrap();
+                normalized.to_data().validate_full().unwrap();
+                assert_eq!(normalized.offset(), 0);
+                assert!(normalized.run_ends().values().is_empty());
+                assert!(normalized.values().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn test_empty_run_array_roundtrip_i16() {
+        assert_empty_run_array_roundtrip::<Int16Type>();
+    }
+
+    #[test]
+    fn test_empty_run_array_roundtrip_i32() {
+        assert_empty_run_array_roundtrip::<Int32Type>();
+    }
+
+    #[test]
+    fn test_empty_run_array_roundtrip_i64() {
+        assert_empty_run_array_roundtrip::<Int64Type>();
     }
 
     #[test]

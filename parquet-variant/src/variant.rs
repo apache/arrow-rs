@@ -20,7 +20,7 @@ pub use self::list::VariantList;
 pub use self::metadata::{EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES, VariantMetadata};
 pub use self::object::VariantObject;
 
-// Publically export types used in the API
+// Publicly export types used in the API
 pub use half::f16;
 pub use uuid::Uuid;
 
@@ -1568,6 +1568,7 @@ impl<'m, 'v> Variant<'m, 'v> {
             .try_fold(self.clone(), |output, element| match element {
                 VariantPathElement::Field { name } => output.get_object_field(name),
                 VariantPathElement::Index { index } => output.get_list_element(*index),
+                VariantPathElement::ListElement => None,
             })
     }
 }

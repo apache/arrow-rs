@@ -26,6 +26,7 @@ use arrow_array::types::{
     ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
 };
 use arrow_array::*;
+use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, NullBuffer, OffsetBuffer, RunEndBuffer, ScalarBuffer, bit_util,
 };
@@ -180,6 +181,9 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// In contrast to this function, it is then the responsibility of the caller
 /// to use [FilterBuilder::optimize] if appropriate.
 ///
+/// If the number of rows that `predicate` selects is already known,
+/// [`FilterBuilder::with_count`] avoids counting them again.
+///
 /// # See also
 /// * [`FilterBuilder`] for more control over the filtering process.
 /// * [`filter_record_batch`] to filter a [`RecordBatch`]
@@ -222,6 +226,9 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
 /// calling [FilterPredicate::filter_record_batch].
 /// In contrast to this function, it is then the responsibility of the caller
 /// to use [FilterBuilder::optimize] if appropriate.
+///
+/// If the number of rows that `predicate` selects is already known,
+/// [`FilterBuilder::with_count`] avoids counting them again.
 pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
@@ -247,33 +254,62 @@ pub fn filter_record_batch(
 #[derive(Debug)]
 pub struct FilterBuilder {
     filter: BooleanArray,
-    count: usize,
-    strategy: IterationStrategy,
+    /// The number of rows `filter` selects, if provided by [`Self::with_count`]
+    count: Option<usize>,
+    optimize: bool,
 }
 
 impl FilterBuilder {
     /// Create a new [`FilterBuilder`] that can be used to construct a [`FilterPredicate`]
     pub fn new(filter: &BooleanArray) -> Self {
-        Self::new_with_count(filter, filter.true_count())
-    }
-
-    pub(crate) fn new_with_count(filter: &BooleanArray, count: usize) -> Self {
         let filter = match filter.null_count() {
             0 => filter.clone(),
             _ => prep_null_mask_filter(filter),
         };
 
-        let strategy = IterationStrategy::default_strategy(filter.len(), count);
-
         Self {
             filter,
-            count,
-            strategy,
+            count: None,
+            optimize: false,
         }
     }
 
-    /// Compute an optimized representation of the provided `filter` mask that can be
-    /// applied to an array more quickly.
+    /// Set the number of rows that the filter selects, so that [`Self::build`]
+    /// does not have to count them.
+    ///
+    /// Callers that build a mask row by row, or derive it from a validity
+    /// buffer with a cached null count, often already hold this number.
+    ///
+    /// # Safety
+    ///
+    /// `count` must equal [`BooleanArray::true_count`] of the filter passed to
+    /// [`Self::new`]: the number of `true` values that are not null.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{BooleanArray, Int32Array};
+    /// # use arrow_select::filter::FilterBuilder;
+    /// let values = Int32Array::from(vec![1, 2, 3, 4]);
+    /// let mask = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+    /// // The null is not selected, so the mask selects two rows.
+    /// // SAFETY: the count matches the mask.
+    /// let predicate = unsafe { FilterBuilder::new(&mask).with_count(2) }.build();
+    /// assert_eq!(predicate.count(), 2);
+    /// let filtered = predicate.filter(&values).unwrap();
+    /// assert_eq!(filtered.as_ref(), &Int32Array::from(vec![1, 3]));
+    /// ```
+    pub unsafe fn with_count(mut self, count: usize) -> Self {
+        debug_assert_eq!(
+            count,
+            self.filter.true_count(),
+            "count must match the number of rows the filter selects"
+        );
+        self.count = Some(count);
+        self
+    }
+
+    /// Compute an optimized representation of the provided `filter` mask in
+    /// [`Self::build`], so that it can be applied to an array more quickly.
     ///
     /// When filtering multiple arrays (e.g. a [`RecordBatch`] or a
     /// [`StructArray`] with multiple fields), optimizing the filter can provide
@@ -283,17 +319,7 @@ impl FilterBuilder {
     /// than the original mask, so it is often faster to filter a single array,
     /// without filter optimization.
     pub fn optimize(mut self) -> Self {
-        match self.strategy {
-            IterationStrategy::SlicesIterator => {
-                let slices = SlicesIterator::new(&self.filter).collect();
-                self.strategy = IterationStrategy::Slices(slices)
-            }
-            IterationStrategy::IndexIterator => {
-                let indices = IndexIterator::new(&self.filter, self.count).collect();
-                self.strategy = IterationStrategy::Indices(indices)
-            }
-            _ => {}
-        }
+        self.optimize = true;
         self
     }
 
@@ -315,10 +341,26 @@ impl FilterBuilder {
 
     /// Construct the final `FilterPredicate`
     pub fn build(self) -> FilterPredicate {
+        let count = self.count.unwrap_or_else(|| self.filter.true_count());
+        let mut strategy = IterationStrategy::default_strategy(self.filter.len(), count);
+        if self.optimize {
+            match strategy {
+                IterationStrategy::SlicesIterator => {
+                    let slices = SlicesIterator::new(&self.filter).collect();
+                    strategy = IterationStrategy::Slices(slices)
+                }
+                IterationStrategy::IndexIterator => {
+                    let indices = IndexIterator::new(&self.filter, count).collect();
+                    strategy = IterationStrategy::Indices(indices)
+                }
+                _ => {}
+            }
+        }
+
         FilterPredicate {
             filter: self.filter,
-            count: self.count,
-            strategy: self.strategy,
+            count,
+            strategy,
         }
     }
 }
@@ -482,6 +524,11 @@ impl FilterPredicate {
         self.count
     }
 
+    /// Length of the filter mask, including rows that are not selected
+    pub(crate) fn filter_len(&self) -> usize {
+        self.filter.len()
+    }
+
     /// Return a [`FilterSelection`] for iterating over the rows selected by
     /// this [`FilterPredicate`].
     pub(crate) fn selection(&self) -> FilterSelection<'_> {
@@ -509,10 +556,24 @@ impl FilterPredicate {
     /// because the input `nulls` was `None`, the input had no nulls, or the
     /// filtered result has no nulls. Otherwise returns the filtered
     /// [`NullBuffer`] with its precomputed null count.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the input contains nulls and is shorter than this predicate.
     pub fn filter_nulls(&self, nulls: Option<&NullBuffer>) -> Option<NullBuffer> {
         let nulls = nulls?;
         if nulls.null_count() == 0 {
             return None;
+        }
+
+        assert!(nulls.len() >= self.filter.len());
+        match self.strategy {
+            IterationStrategy::None => return None,
+            IterationStrategy::All => {
+                let nulls = nulls.slice(0, self.count);
+                return (nulls.null_count() != 0).then_some(nulls);
+            }
+            _ => {}
         }
 
         let nulls = filter_bits(nulls.inner(), self);
@@ -676,8 +737,27 @@ where
     RunArray::try_new(&run_ends, &values)
 }
 
-/// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
+/// Filter the packed bitmask `buffer` with `predicate`, choosing between the
+/// strategy-based and compress-based kernels by filter density
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
+    // Compressing scans the whole mask a word at a time, so it loses to the
+    // slices strategies once fewer than one bit per word is dropped, and to
+    // precomputed `Indices` once fewer than one bit per word is kept. The lazy
+    // `IndexIterator` scans the mask anyway, so it never beats compressing
+    let len = predicate.filter.len();
+    let count = predicate.count;
+    let dense = count >= len - len / 64;
+    let sparse_indices =
+        count <= len / 64 && matches!(predicate.strategy, IterationStrategy::Indices(_));
+    if !dense && !sparse_indices {
+        return filter_bits_compress(buffer, predicate);
+    }
+    filter_bits_strategy(buffer, predicate)
+}
+
+/// Filter the packed bitmask `buffer` with `predicate` using its
+/// [`IterationStrategy`]
+fn filter_bits_strategy(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
     let offset = buffer.offset();
     assert!(buffer.len() >= predicate.filter.len());
@@ -717,6 +797,86 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
+}
+
+/// Filter the packed bitmask `buffer` with `predicate` by extracting the kept
+/// bits of each 64-bit word with [`bit_util::compress`] (`pext`)
+///
+/// Not inlined: within `filter_array` the packing state spills to the stack
+#[inline(never)]
+fn filter_bits_compress(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
+    /// Packs the bits extracted from successive words into the low `filled`
+    /// bits of `current`; once complete it is written at `idx` and restarts
+    /// from the bits that did not fit
+    struct Packer {
+        ptr: *mut u64,
+        idx: usize,
+        current: u64,
+        filled: u32,
+    }
+
+    impl Packer {
+        #[inline(always)]
+        fn push(&mut self, values: u64, mask: u64) {
+            let bits = bit_util::compress(values, mask);
+            self.current |= bits << self.filled;
+            let total = self.filled + mask.count_ones();
+            if total < 64 {
+                self.filled = total;
+            } else {
+                // SAFETY: `count` is the number of set bits in the filter, so
+                // at most `count / 64` words are ever completed and the
+                // buffer holds `count / 64 + 1`
+                unsafe { self.ptr.add(self.idx).write(self.current) };
+                self.idx += 1;
+                // `bits >> (64 - filled)`, written so that `filled == 0`
+                // shifts everything out
+                self.current = (bits >> 1) >> (63 - self.filled);
+                self.filled = total - 64;
+            }
+        }
+    }
+
+    assert!(buffer.len() >= predicate.filter.len());
+    let mask_chunks = predicate.filter.values().bit_chunks();
+    let value_chunks = BitChunks::new(buffer.values(), buffer.offset(), predicate.filter.len());
+    // `count` is the filter's set bit count, which the buffer size and the
+    // raw writes below rely on, and both chunk views cover
+    // `predicate.filter.len()` bits, so indexing `value_chunks` by the
+    // position in `mask_chunks` stays in bounds
+    debug_assert_eq!(predicate.count, predicate.filter.true_count());
+    debug_assert_eq!(mask_chunks.chunk_len(), value_chunks.chunk_len());
+
+    // One word beyond the complete ones for the trailing partial word
+    let mut out: Vec<u64> = Vec::with_capacity(predicate.count / 64 + 1);
+    let mut packer = Packer {
+        ptr: out.as_mut_ptr(),
+        idx: 0,
+        current: 0,
+        filled: 0,
+    };
+
+    for (index, mask) in mask_chunks.iter().enumerate() {
+        // Words with no kept bits are skipped before the corresponding values
+        // are read, so only the mask is touched for them
+        if mask == 0 {
+            continue;
+        }
+        packer.push(value_chunks.chunk(index), mask);
+    }
+    packer.push(value_chunks.remainder_bits(), mask_chunks.remainder_bits());
+
+    // The trailing partial word; its bits above `filled` are zero
+    // SAFETY: `idx <= count / 64`, so this and every word below it is
+    // within the buffer and written
+    debug_assert!(packer.idx < out.capacity());
+    unsafe {
+        packer.ptr.add(packer.idx).write(packer.current);
+        out.set_len(packer.idx + 1);
+    }
+    let mut out = MutableBuffer::from(out);
+    out.truncate(bit_util::ceil(predicate.count, 8));
+    out.into()
 }
 
 /// `filter` implementation for boolean buffers
@@ -943,6 +1103,37 @@ fn filter_byte_view<T: ByteViewType>(
     unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) }
 }
 
+/// Copies fixed-size binary elements at `indices` from `values` into a new `MutableBuffer`.
+/// Uses raw pointer writes and `with_capacity` to avoid zero-initialization and per-call overhead.
+#[inline(always)]
+fn copy_fsb_indices(
+    values: &[u8],
+    value_length: usize,
+    indices: impl Iterator<Item = usize>,
+    count: usize,
+) -> MutableBuffer {
+    let total = count * value_length;
+    let mut buffer = MutableBuffer::with_capacity(total);
+    let dst_base = buffer.as_mut_ptr();
+    let mut write_offset = 0usize;
+    for idx in indices {
+        let src_start = idx * value_length;
+        // SAFETY: `idx` is derived from the filter predicate so it is a valid array index;
+        // we allocated `count * value_length` bytes and advance by `value_length` per step.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                values.as_ptr().add(src_start),
+                dst_base.add(write_offset),
+                value_length,
+            );
+        }
+        write_offset += value_length;
+    }
+    // SAFETY: we wrote exactly `count * value_length` bytes into the buffer.
+    unsafe { buffer.set_len(total) };
+    buffer
+}
+
 fn filter_fixed_size_binary(
     array: &FixedSizeBinaryArray,
     predicate: &FilterPredicate,
@@ -969,30 +1160,30 @@ fn filter_fixed_size_binary(
             }
             buffer
         }
-        IterationStrategy::IndexIterator => {
-            let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| {
-                &values[calculate_offset_from_index(x)..calculate_offset_from_index(x + 1)]
-            });
-
-            let mut buffer = MutableBuffer::new(predicate.count * value_length);
-            iter.for_each(|item| buffer.extend_from_slice(item));
-            buffer
-        }
-        IterationStrategy::Indices(indices) => {
-            let iter = indices.iter().map(|x| {
-                &values[calculate_offset_from_index(*x)..calculate_offset_from_index(*x + 1)]
-            });
-
-            let mut buffer = MutableBuffer::new(predicate.count * value_length);
-            iter.for_each(|item| buffer.extend_from_slice(item));
-            buffer
-        }
+        IterationStrategy::IndexIterator => copy_fsb_indices(
+            values,
+            value_length,
+            IndexIterator::new(&predicate.filter, predicate.count),
+            predicate.count,
+        ),
+        IterationStrategy::Indices(indices) => copy_fsb_indices(
+            values,
+            value_length,
+            indices.iter().copied(),
+            predicate.count,
+        ),
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
 
     let nulls = predicate.filter_nulls(array.nulls());
 
-    FixedSizeBinaryArray::new(array.value_length(), buffer.into(), nulls)
+    FixedSizeBinaryArray::try_new_with_len(
+        array.value_length(),
+        buffer.into(),
+        nulls,
+        predicate.count,
+    )
+    .unwrap()
 }
 
 /// `filter` implementation for dictionaries
@@ -1086,6 +1277,80 @@ mod tests {
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
     use rand::rng;
+
+    #[test]
+    fn test_filter_nulls_all() {
+        let predicate = FilterBuilder::new(&BooleanArray::from(vec![true, true])).build();
+        let nulls = NullBuffer::from(vec![true, false]);
+        assert_eq!(predicate.filter_nulls(Some(&nulls)), Some(nulls));
+    }
+
+    #[test]
+    fn test_filter_nulls_none() {
+        let predicate = FilterBuilder::new(&BooleanArray::from(vec![false, false])).build();
+        let nulls = NullBuffer::from(vec![true, false]);
+        assert_eq!(predicate.filter_nulls(Some(&nulls)), None);
+    }
+
+    #[test]
+    fn test_filter_nulls_selection() {
+        // Cover full and partial prefixes, empty selections, and both general
+        // iteration strategies, with and without materializing the selection.
+        let filters = [
+            vec![],
+            vec![true],
+            vec![true, true],
+            vec![true; 6],
+            vec![false; 6],
+            vec![true, false, false, false, false, false],
+            vec![true, true, true, true, true, false],
+        ];
+        for offset in [0, 3, 9] {
+            let mut validity = vec![false; offset];
+            validity.extend([true, false, true, false, true, false]);
+            let nulls = NullBuffer::from(validity).slice(offset, 6);
+            for filter in &filters {
+                let expected: NullBuffer = filter
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, selected)| **selected)
+                    .map(|(i, _)| nulls.is_valid(i))
+                    .collect();
+                let expected = (expected.null_count() != 0).then_some(expected);
+                let filter = BooleanArray::from(filter.clone());
+                for optimize in [false, true] {
+                    let builder = FilterBuilder::new(&filter);
+                    let predicate = if optimize {
+                        builder.optimize()
+                    } else {
+                        builder
+                    }
+                    .build();
+                    assert_eq!(predicate.filter_nulls(Some(&nulls)), expected);
+                    assert_eq!(predicate.filter_nulls(None), None);
+                    assert_eq!(
+                        predicate.filter_nulls(Some(&NullBuffer::new_valid(6))),
+                        None
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_filter_nulls_length_check() {
+        for filter in [vec![true, true], vec![false, false], vec![true, false]] {
+            let predicate = FilterBuilder::new(&BooleanArray::from(filter)).build();
+            let nulls = NullBuffer::new_null(1);
+            assert!(std::panic::catch_unwind(|| predicate.filter_nulls(Some(&nulls))).is_err());
+            // Inputs without nulls continue to short-circuit before checking length.
+            assert_eq!(
+                predicate.filter_nulls(Some(&NullBuffer::new_valid(1))),
+                None
+            );
+            assert_eq!(predicate.filter_nulls(None), None);
+        }
+    }
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {
@@ -1641,6 +1906,83 @@ mod tests {
         test_case_filter_sliced_list_view::<i64>();
     }
 
+    /// Tests [`filter_bits_compress`] and [`filter_bits_strategy`] on the
+    /// same inputs against a naive bit-by-bit filter, verifying both pathways
+    /// produce the same output. Both are called directly rather than through
+    /// [`filter_bits`], whose dispatch depends on the filter density, so both
+    /// get coverage on every input
+    #[test]
+    fn test_filter_bits() {
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Lengths exercising partial words, exact word multiples, and the
+        // carry logic across flushed words
+        let lens = [0, 1, 7, 63, 64, 65, 127, 128, 200, 1024, 4099];
+        // Densities covering empty, sparse, balanced, dense and full masks
+        let densities = [0.0, 0.01, 0.5, 0.9, 1.0];
+        // Bit offsets of the value buffer, including non byte-aligned ones
+        let offsets = [0, 3, 8, 67];
+        // Bit offsets of the filter, so the mask words are read unaligned too
+        let filter_offsets = [0, 5];
+
+        for len in lens {
+            for density in densities {
+                for offset in offsets {
+                    for filter_offset in filter_offsets {
+                        let values: BooleanBuffer =
+                            (0..len + offset).map(|_| rng.random_bool(0.5)).collect();
+                        let values = values.slice(offset, len);
+                        let filter: BooleanArray = (0..len + filter_offset)
+                            .map(|_| Some(rng.random_bool(density)))
+                            .collect();
+                        let filter = filter.slice(filter_offset, len);
+
+                        let expected: BooleanBuffer = values
+                            .iter()
+                            .zip(filter.values().iter())
+                            .filter_map(|(value, keep)| keep.then_some(value))
+                            .collect();
+
+                        // Lazy and precomputed strategies dispatch differently
+                        let predicates = [
+                            FilterBuilder::new(&filter).build(),
+                            FilterBuilder::new(&filter).optimize().build(),
+                        ];
+                        for predicate in &predicates {
+                            let case = format!(
+                                "{:?}: len={len} density={density} offset={offset} filter_offset={filter_offset}",
+                                predicate.strategy
+                            );
+
+                            let compressed = filter_bits_compress(&values, predicate);
+                            let compressed = BooleanBuffer::new(compressed, 0, predicate.count);
+                            assert_eq!(compressed, expected, "compress {case}");
+
+                            // `filter_bits` is never reached with the `All` /
+                            // `None` strategies, they are short-circuited by
+                            // the callers
+                            if matches!(
+                                predicate.strategy,
+                                IterationStrategy::All | IterationStrategy::None
+                            ) {
+                                continue;
+                            }
+
+                            let strategy = filter_bits_strategy(&values, predicate);
+                            let strategy = BooleanBuffer::new(strategy, 0, predicate.count);
+                            assert_eq!(strategy, expected, "strategy {case}");
+
+                            // Also cover the dispatch between the two pathways
+                            let dispatched = filter_bits(&values, predicate);
+                            let dispatched = BooleanBuffer::new(dispatched, 0, predicate.count);
+                            assert_eq!(dispatched, expected, "dispatch {case}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_slice_iterator_bits() {
         let filter_values = (0..64).map(|i| i == 1).collect::<Vec<bool>>();
@@ -1817,7 +2159,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_test_slices_iterator() {
         let mut rng = rng();
 
@@ -1889,7 +2231,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_filter() {
         let mut rng = rng();
 
@@ -2079,6 +2421,22 @@ mod tests {
             &[6, 7],
             list.as_any().downcast_ref::<Int32Array>().unwrap().values()
         );
+    }
+
+    #[test]
+    fn test_filter_zero_width_fixed_size_binary() {
+        // value_length=0 with no nulls: row count cannot be inferred from the empty
+        // buffer, so filter must preserve it explicitly.
+        let array = FixedSizeBinaryArray::try_new_with_len(
+            0,
+            Buffer::from_slice_ref(&[] as &[u8]),
+            None,
+            3,
+        )
+        .unwrap();
+        let filter_array = BooleanArray::from(vec![true, false, true]);
+        let result = filter(&array, &filter_array).unwrap();
+        assert_eq!(result.len(), 2);
     }
 
     fn test_filter_union_array(array: UnionArray) {

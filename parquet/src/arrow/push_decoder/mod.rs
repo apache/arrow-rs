@@ -320,6 +320,11 @@ impl ParquetPushDecoderBuilder {
             max_predicate_cache_size,
         } = self;
 
+        // Evaluate eligible same-projection predicates as one predicate.
+        let filter = filter.map(|filter| {
+            filter.fuse_same_projection(parquet_metadata.file_metadata().schema_descr())
+        });
+
         let has_predicates = filter
             .as_ref()
             .is_some_and(|filter| !filter.predicates.is_empty());
@@ -972,7 +977,7 @@ mod test {
     };
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::errors::ParquetError;
-    use crate::file::metadata::ParquetMetaDataPushDecoder;
+    use crate::file::metadata::{PageIndexPolicy, ParquetMetaDataPushDecoder};
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::{gt, lt};
     use arrow_array::cast::AsArray;
@@ -1142,6 +1147,74 @@ mod test {
         assert_eq!(batch2, expected2);
 
         expect_finished(decoder.try_decode());
+    }
+
+    /// Push only the pages needed for each batch of a row group rather than
+    /// the entire row group, and check whether the decoder can produce that
+    /// batch before the rest of the row group's pages have been pushed.
+    #[test]
+    fn test_decoder_first_pages_only() {
+        let metadata = test_file_parquet_metadata_with_offset_index();
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(Arc::clone(&metadata))
+            .unwrap()
+            // Each data page has 100 rows, so a batch of 100 rows needs only
+            // the first data page of each column
+            .with_batch_size(100)
+            .build()
+            .unwrap();
+
+        // Row group 0: the decoder asks for the entire column chunk of each
+        // of the three columns "a", "b", and "c"
+        let ranges = expect_needs_data(decoder.try_decode());
+        assert_eq!(ranges, vec![4..1860, 1860..3716, 3716..11062]);
+
+        // Compute the ranges that cover only the first data page of each
+        // column (and the dictionary page which precedes it)
+        let page_index = metadata.page_index_for_row_group(0);
+        let row_group = metadata.row_group(0);
+        let mut first_page_ranges = vec![];
+        let mut second_page_ranges = vec![];
+        for (idx, column) in row_group.columns().iter().enumerate() {
+            let (start, len) = column.byte_range();
+            let locations = page_index.page_locations(idx).unwrap();
+            assert_eq!(locations.len(), 2, "expected 2 data pages per column chunk");
+            let second_page_start = locations[1].offset as u64;
+            first_page_ranges.push(start..second_page_start);
+            second_page_ranges.push(second_page_start..start + len);
+        }
+        // Note the first range for each column includes the dictionary page
+        assert_eq!(first_page_ranges, vec![4..1734, 1860..3590, 3716..10936]);
+        assert_eq!(
+            second_page_ranges,
+            vec![1734..1860, 3590..3716, 10936..11062]
+        );
+
+        // Push only the first page of each column. This is all the data
+        // needed to decode the first batch of 100 rows.
+        push_ranges_to_decoder(&mut decoder, first_page_ranges);
+
+        // Note will likely change as part of
+        // <https://github.com/apache/arrow-rs/issues/6946>
+
+        // decoder still reports it needs the (complete) ranges
+        // it originally asked for, and does not produce a batch.
+        let ranges = expect_needs_data(decoder.try_decode());
+        assert_eq!(ranges, vec![4..1860, 1860..3716, 3716..11062]);
+
+        // Pushing the second pages as separate ranges does not help either:
+        // the decoder does not coalesce adjacent pushed ranges, so a requested
+        // range is only satisfied by a single pushed buffer that covers it.
+        push_ranges_to_decoder(&mut decoder, second_page_ranges);
+        let ranges = expect_needs_data(decoder.try_decode());
+        assert_eq!(ranges, vec![4..1860, 1860..3716, 3716..11062]);
+
+        // Only once the exact ranges originally requested are pushed does the
+        // decoder produce batches.
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let batch = expect_data(decoder.try_decode());
+        assert_eq!(batch, TEST_BATCH.slice(0, 100));
+        let batch = expect_data(decoder.try_decode());
+        assert_eq!(batch, TEST_BATCH.slice(100, 100));
     }
 
     /// Decode multiple columns "a" and "b", expect that the decoder requests
@@ -1368,6 +1441,105 @@ mod test {
         assert_eq!(batch2, expected2);
 
         expect_finished(decoder.try_decode());
+    }
+
+    /// Consecutive filters on the same projection share one decode stream.
+    #[test]
+    fn test_decoder_same_projection_filters() {
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let projection_a = ProjectionMask::columns(&schema_descr, ["a"]);
+
+        let row_filter_gt = ArrowPredicateFn::new(projection_a.clone(), |batch: RecordBatch| {
+            let column = batch.column(0).as_primitive::<Int64Type>();
+            gt(column, &Int64Array::new_scalar(175))
+        });
+        let row_filter_lt = ArrowPredicateFn::new(projection_a, |batch: RecordBatch| {
+            let column = batch.column(0).as_primitive::<Int64Type>();
+            assert!(column.iter().flatten().all(|value| value > 175));
+            lt(column, &Int64Array::new_scalar(190))
+        });
+
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_filter(RowFilter::new(vec![
+                Box::new(row_filter_gt),
+                Box::new(row_filter_lt),
+            ]))
+            .with_batch_size(50)
+            .build()
+            .unwrap();
+
+        // One filter-column request, followed by the selected output page.
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let batch = expect_data(decoder.try_decode());
+        let expected = TEST_BATCH.slice(176, 14).project(&[2]).unwrap();
+        assert_eq!(batch, expected);
+
+        // Row group 1 is rejected by the fused predicates, so no output-column
+        // request is made.
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+        expect_finished(decoder.try_decode());
+    }
+
+    /// Fused same-projection filters honour the output limit: evaluation
+    /// stops once enough rows survive the whole group.
+    #[test]
+    fn test_decoder_same_projection_filters_with_limit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let builder =
+            ParquetPushDecoderBuilder::try_new_decoder(test_file_parquet_metadata()).unwrap();
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+        let projection_a = ProjectionMask::columns(&schema_descr, ["a"]);
+
+        let rows_evaluated = Arc::new(AtomicUsize::new(0));
+        let rows_evaluated_for_predicate = Arc::clone(&rows_evaluated);
+        let row_filter_gt =
+            ArrowPredicateFn::new(projection_a.clone(), move |batch: RecordBatch| {
+                rows_evaluated_for_predicate.fetch_add(batch.num_rows(), Ordering::Relaxed);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                gt(column, &Int64Array::new_scalar(175))
+            });
+        let row_filter_lt = ArrowPredicateFn::new(projection_a, |batch: RecordBatch| {
+            let column = batch.column(0).as_primitive::<Int64Type>();
+            lt(column, &Int64Array::new_scalar(190))
+        });
+
+        let mut decoder = builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["c"]))
+            .with_row_filter(RowFilter::new(vec![
+                Box::new(row_filter_gt),
+                Box::new(row_filter_lt),
+            ]))
+            .with_batch_size(10)
+            .with_limit(5)
+            .build()
+            .unwrap();
+
+        // One filter-column request for the fused group, then the output page.
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+
+        let batch = expect_data(decoder.try_decode());
+        let expected = TEST_BATCH.slice(176, 5).project(&[2]).unwrap();
+        assert_eq!(batch, expected);
+
+        // The limit was satisfied by row group 0.
+        expect_finished(decoder.try_decode());
+
+        // Row 181 is the 6th match, so at most the batch holding it (rows
+        // 180..189) is evaluated.
+        let evaluated = rows_evaluated.load(Ordering::Relaxed);
+        assert!(evaluated <= 190, "evaluated {evaluated} rows");
     }
 
     /// Decode with a filter that uses a column that is also projected, and expect
@@ -1832,7 +2004,7 @@ mod test {
         let ranges = expect_needs_data(decoder.try_decode());
         push_ranges_to_decoder(&mut decoder, ranges);
 
-        // expect the first ane only batch to be decoded
+        // expect the first and only batch to be decoded
         let batch1 = expect_data(decoder.try_decode());
         let expected1 = TEST_BATCH.slice(225, 20);
         assert_eq!(batch1, expected1);
@@ -2706,8 +2878,21 @@ mod test {
     }
 
     /// return the metadata for the test file
-    pub fn test_file_parquet_metadata() -> Arc<crate::file::metadata::ParquetMetaData> {
+    pub fn test_file_parquet_metadata() -> Arc<ParquetMetaData> {
         let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(test_file_len()).unwrap();
+        push_ranges_to_metadata_decoder(&mut metadata_decoder, vec![test_file_range()]);
+        let metadata = metadata_decoder.try_decode().unwrap();
+        let DecodeResult::Data(metadata) = metadata else {
+            panic!("Expected metadata to be decoded successfully");
+        };
+        Arc::new(metadata)
+    }
+
+    /// return the metadata for the test file, including the offset index
+    fn test_file_parquet_metadata_with_offset_index() -> Arc<ParquetMetaData> {
+        let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(test_file_len())
+            .unwrap()
+            .with_offset_index_policy(PageIndexPolicy::Required);
         push_ranges_to_metadata_decoder(&mut metadata_decoder, vec![test_file_range()]);
         let metadata = metadata_decoder.try_decode().unwrap();
         let DecodeResult::Data(metadata) = metadata else {

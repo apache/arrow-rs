@@ -605,6 +605,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_mask_backing_fuzz_equivalence() {
         let mut rand = rng();
         for _ in 0..100 {
@@ -724,6 +725,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_boolean_mask_from_selectors_fuzz_equivalence() {
         let mut rand = rng();
         for _ in 0..200 {
@@ -777,6 +779,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_trim_mask_fuzz_equivalence() {
         let mut rand = rng();
         for _ in 0..200 {

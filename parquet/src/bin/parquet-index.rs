@@ -31,6 +31,7 @@
 //! The binary can also be built from the source code and run as follows:
 //! ```
 //! cargo run --features=cli --bin parquet-index XYZ.parquet COLUMN_PATH
+//! ```
 //!
 //! [page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 

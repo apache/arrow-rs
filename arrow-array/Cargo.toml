@@ -19,7 +19,6 @@
 name = "arrow-array"
 version = { workspace = true }
 description = "Array abstractions for Apache Arrow"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = "Apache-2.0 AND MIT"
@@ -69,7 +68,7 @@ all-features = true
 [features]
 async = ["dep:futures"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "dep:libc"]
-force_validate = []
+force_validate = ["arrow-data/force_validate"]
 # Enable memory tracking support
 pool = ["arrow-buffer/pool", "arrow-data/pool"]
 

@@ -288,6 +288,7 @@ pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, Arr
 /// assert_eq!(andn_ab, BooleanArray::from(vec![Some(false), Some(false), None]));
 /// // It's equal to and(left, not(right))
 /// assert_eq!(andn_ab, and(&a, &not(&b).unwrap()).unwrap());
+/// ```
 pub fn and_not(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, |a, b| {
         let buffer = buffer_bin_and_not(a.inner(), a.offset(), b.inner(), b.offset(), a.len());

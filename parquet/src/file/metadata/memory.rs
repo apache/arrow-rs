@@ -21,8 +21,8 @@
 use crate::basic::{BoundaryOrder, ColumnOrder, CompressionCodec, Encoding, PageType};
 use crate::data_type::private::ParquetValueType;
 use crate::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, KeyValue, PageEncodingStats, PageIndex,
-    ParquetPageEncodingStats, RowGroupMetaData, SortingColumn,
+    ColumnChunkMetaData, FileMetaData, KeyValue, PageEncodingStats, ParquetPageEncodingStats,
+    RowGroupMetaData, SortingColumn,
 };
 use crate::file::page_index::column_index::{
     ByteArrayColumnIndex, ColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
@@ -230,12 +230,6 @@ impl HeapSize for Statistics {
             Statistics::ByteArray(value_statistics) => value_statistics.heap_size(),
             Statistics::FixedLenByteArray(value_statistics) => value_statistics.heap_size(),
         }
-    }
-}
-
-impl HeapSize for PageIndex {
-    fn heap_size(&self) -> usize {
-        self.column_indexes.heap_size() + self.offset_indexes.heap_size()
     }
 }
 

@@ -147,7 +147,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         Self::try_new_with_shallow_validation(metadata, value).expect("Invalid variant object")
     }
 
-    /// Attempts to interpet `metadata` and `value` as a variant object.
+    /// Attempts to interpret `metadata` and `value` as a variant object.
     ///
     /// # Validation
     ///
@@ -158,7 +158,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         Self::try_new_with_shallow_validation(metadata, value)?.with_full_validation()
     }
 
-    /// Attempts to interpet `metadata` and `value` as a variant object, performing only basic
+    /// Attempts to interpret `metadata` and `value` as a variant object, performing only basic
     /// (constant-cost) [validation].
     ///
     /// [validation]: Self#Validation

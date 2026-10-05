@@ -186,8 +186,8 @@ use arrow_array::timezone::Tz;
 static REGEX_SET: LazyLock<RegexSet> = LazyLock::new(|| {
     RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?(\d+)$",                   //INTEGER
-        r"^-?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
+        r"^[+-]?(\d+)$",                //INTEGER
+        r"^[+-]?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
         r"^\d{4}-\d\d-\d\d$",           //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
@@ -349,6 +349,98 @@ impl Format {
     pub fn with_truncated_rows(mut self, allow: bool) -> Self {
         self.truncated_rows = allow;
         self
+    }
+
+    /// Infer format settings from the CSV records in `reader`
+    ///
+    /// This currently infers whether the first record is a header. Up to
+    /// `max_records` records after the first record are inspected; if `None`, all
+    /// records are read. Detection is conservative and returns no header when the
+    /// sampled records do not provide type evidence. Returns the updated format
+    /// and the number of records read, including the first header candidate.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use arrow_csv::reader::Format;
+    /// use std::io::Cursor;
+    ///
+    /// let csv = "name,count\nalice,1\nbob,2\n";
+    /// let (format, format_records_read) =
+    ///     Format::default().infer_format(Cursor::new(csv), Some(10))?;
+    /// let (schema, records_read) = format.infer_schema(Cursor::new(csv), None)?;
+    ///
+    /// assert_eq!(schema.field(0).name(), "name");
+    /// assert_eq!(format_records_read, 3);
+    /// assert_eq!(records_read, 2);
+    /// # Ok::<_, arrow_schema::ArrowError>(())
+    /// ```
+    pub fn infer_format<R: Read>(
+        mut self,
+        reader: R,
+        max_records: Option<usize>,
+    ) -> Result<(Self, usize), ArrowError> {
+        let (header, records_read) = self.infer_header(reader, max_records)?;
+        self.header = header;
+        Ok((self, records_read))
+    }
+
+    /// Infer whether the first CSV record is a header
+    ///
+    /// Inspects up to `max_records` records after the first record. Returns `true`
+    /// when a value in the first record is text while the remaining values in the
+    /// same column have a consistent non-text type.
+    fn infer_header<R: Read>(
+        &self,
+        reader: R,
+        max_records: Option<usize>,
+    ) -> Result<(bool, usize), ArrowError> {
+        let mut format = self.clone();
+        format.header = false;
+        let mut csv_reader = format.build_reader(reader);
+
+        let mut first_record = StringRecord::new();
+        if !csv_reader
+            .read_record(&mut first_record)
+            .map_err(map_csv_error)?
+        {
+            return Ok((false, 0));
+        }
+
+        let mut first_types = vec![InferredDataType::default(); first_record.len()];
+        for (value, inferred) in first_record.iter().zip(&mut first_types) {
+            if !self.null_regex.is_null(value) {
+                inferred.update(value);
+            }
+        }
+
+        let mut column_types = vec![InferredDataType::default(); first_record.len()];
+        let mut record = StringRecord::new();
+        let mut records_count = 0;
+        let max_records = max_records.unwrap_or(usize::MAX);
+        while records_count < max_records
+            && csv_reader.read_record(&mut record).map_err(map_csv_error)?
+        {
+            records_count += 1;
+            for (value, inferred) in record.iter().zip(&mut column_types) {
+                if !self.null_regex.is_null(value) {
+                    inferred.update(value);
+                }
+            }
+        }
+
+        let has_header = first_types
+            .iter()
+            .zip(&column_types)
+            .zip(first_record.iter())
+            .any(|((first, rest), value)| {
+                // Numeric-looking values (e.g. +1) are not header evidence, even
+                // when ordinary schema inference conservatively treats them as text.
+                first.get() == DataType::Utf8
+                    && value.parse::<f64>().is_err()
+                    && !matches!(rest.get(), DataType::Utf8 | DataType::Null)
+            });
+        Ok((has_header, records_count + 1))
     }
 
     /// Infer schema of CSV records from the provided `reader`
@@ -1386,6 +1478,31 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use arrow_array::cast::AsArray;
+    use arrow_cast::display::array_value_to_string;
+
+    #[test]
+    fn test_infer_schema_leading_plus_numbers() {
+        for (csv, expected_type) in [
+            ("+1\n2\n-3\n", DataType::Int64),
+            ("+1.5\n2.5\n-3.5\n", DataType::Float64),
+            ("+1e3\n+2.5e-2\n-3E+2\n", DataType::Float64),
+            ("+9223372036854775807\n0\n", DataType::Int64),
+            ("+9223372036854775808\n0\n", DataType::Utf8),
+            ("+-1\n2\n", DataType::Utf8),
+            ("+\n2\n", DataType::Utf8),
+        ] {
+            let (schema, records_read) = Format::default()
+                .infer_schema(Cursor::new(csv), None)
+                .unwrap();
+            assert_eq!(schema.field(0).data_type(), &expected_type, "CSV: {csv:?}");
+            // Inferred numeric types must also be accepted by the CSV decoder.
+            let reader = ReaderBuilder::new(Arc::new(schema))
+                .build(Cursor::new(csv))
+                .unwrap();
+            let rows: usize = reader.map(|batch| batch.unwrap().num_rows()).sum();
+            assert_eq!(rows, records_read, "CSV: {csv:?}");
+        }
+    }
 
     #[test]
     fn test_csv() {
@@ -1459,7 +1576,7 @@ mod tests {
         assert_eq!("53.002666", lat.value_as_string(1));
         assert_eq!("52.412811", lat.value_as_string(2));
         assert_eq!("51.481583", lat.value_as_string(3));
-        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("12.123457", lat.value_as_string(4));
         assert_eq!("50.760000", lat.value_as_string(5));
         assert_eq!("0.123000", lat.value_as_string(6));
         assert_eq!("123.000000", lat.value_as_string(7));
@@ -1485,6 +1602,61 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_reader_decimal_parsing() {
+        // Rounding half away from zero, surrounding whitespace, exponent
+        // notation and negative scales are all accepted
+        let data = " 1.995 ,1.5e2,1234.5,0e0\n-0.005,-1.5E-2,-150,1E+2\n123,+.5,5,-7\n";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Decimal128(10, 2), false),
+            Field::new("b", DataType::Decimal64(18, 2), false),
+            Field::new("c", DataType::Decimal128(10, -2), false),
+            Field::new("d", DataType::Decimal32(9, 0), false),
+        ]));
+        let mut csv = ReaderBuilder::new(schema).build(Cursor::new(data)).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+        let column = |i: usize| {
+            (0..batch.num_rows())
+                .map(|row| array_value_to_string(batch.column(i), row).unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(column(0), ["2.00", "-0.01", "123.00"]);
+        assert_eq!(column(1), ["150.00", "-0.02", "0.50"]);
+        assert_eq!(
+            batch.column(2).as_primitive::<Decimal128Type>().values(),
+            &[12, -2, 0]
+        );
+        assert_eq!(column(3), ["0", "100", "-7"]);
+
+        // Invalid and out-of-range values are errors, never panics
+        for (data, expected) in [
+            ("abc\n", "Invalid decimal format: \"abc\""),
+            ("1.2.3\n", "Invalid decimal format: \"1.2.3\""),
+            (
+                "123456789\n",
+                "\"123456789\" does not fit in Decimal128(5, 2)",
+            ),
+            ("1e99999\n", "does not fit in Decimal128(5, 2)"),
+            (
+                &format!("{}\n", "1".repeat(300)),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                "4825037936439135476.2609835314269495255615E-14\n",
+                "does not fit in Decimal128(5, 2)",
+            ),
+        ] {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "a",
+                DataType::Decimal128(5, 2),
+                false,
+            )]));
+            let mut csv = ReaderBuilder::new(schema).build(Cursor::new(data)).unwrap();
+            let err = csv.next().unwrap().unwrap_err().to_string();
+            assert!(err.contains(expected), "{data:?}: {err}");
+        }
+    }
+
+    #[test]
     fn test_csv_reader_with_decimal_3264() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
@@ -1507,7 +1679,7 @@ mod tests {
         assert_eq!("53.002666", lat.value_as_string(1));
         assert_eq!("52.412811", lat.value_as_string(2));
         assert_eq!("51.481583", lat.value_as_string(3));
-        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("12.123457", lat.value_as_string(4));
         assert_eq!("50.760000", lat.value_as_string(5));
         assert_eq!("0.123000", lat.value_as_string(6));
         assert_eq!("123.000000", lat.value_as_string(7));
@@ -1552,6 +1724,110 @@ mod tests {
         let batch = csv.next().unwrap().unwrap();
         assert_eq!(74, batch.num_rows());
         assert_eq!(3, batch.num_columns());
+    }
+
+    #[test]
+    fn test_infer_format_with_typed_columns() {
+        let csv = "name,count,active\nalice,1,true\nbob,2,false\n";
+
+        let (format, format_records_read) = Format::default()
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "name");
+        assert_eq!(schema.field(1).name(), "count");
+        assert_eq!(schema.field(2).name(), "active");
+        assert_eq!(format_records_read, 3);
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_without_header() {
+        let csv = "1,true\n2,false\n";
+
+        let (format, format_records_read) = Format::default()
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "column_1");
+        assert_eq!(schema.field(1).name(), "column_2");
+        assert_eq!(format_records_read, 2);
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_returns_no_header_when_ambiguous() {
+        for csv in ["name,count\n", "alice,london\nbob,paris\n"] {
+            let (format, _) = Format::default()
+                .infer_format(Cursor::new(csv), None)
+                .unwrap();
+            let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
+            assert_eq!(schema.field(0).name(), "column_1", "CSV: {csv:?}");
+        }
+
+        let (format, format_records_read) = Format::default()
+            .infer_format(Cursor::new(""), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(""), None).unwrap();
+        assert!(schema.fields().is_empty());
+        assert_eq!(format_records_read, 0);
+        assert_eq!(records_read, 0);
+    }
+
+    #[test]
+    fn test_infer_format_honors_format_options() {
+        let csv = "name;count\nalice;1\nbob;2\n";
+        let (format, _) = Format::default()
+            .with_delimiter(b';')
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "name");
+        assert_eq!(schema.field(1).name(), "count");
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_respects_max_records() {
+        let csv = "name,count\nalice,1\nbob,unknown\n";
+        let infer = |max_records| {
+            let (format, records_read) = Format::default()
+                .infer_format(Cursor::new(csv), max_records)
+                .unwrap();
+            let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
+            (schema.field(0).name().clone(), records_read)
+        };
+
+        assert_eq!(infer(Some(1)), ("name".to_string(), 2));
+        assert_eq!(infer(None), ("column_1".to_string(), 3));
+        assert_eq!(infer(Some(0)), ("column_1".to_string(), 1));
+    }
+
+    #[test]
+    fn test_infer_format_numeric_text_is_not_header() {
+        for csv in [
+            "+1\n2\n3\n",
+            "+1.5\n2.5\n3.5\n",
+            "+1e3\n2e3\n3e3\n",
+            "9223372036854775808\n2\n3\n",
+        ] {
+            let (format, records_read) = Format::default()
+                .infer_format(Cursor::new(csv), None)
+                .unwrap();
+            let (schema, schema_records_read) =
+                format.infer_schema(Cursor::new(csv), None).unwrap();
+            let (ordinary_schema, _) = Format::default()
+                .infer_schema(Cursor::new(csv), None)
+                .unwrap();
+
+            assert_eq!(schema.field(0).name(), "column_1", "CSV: {csv:?}");
+            assert_eq!(schema, ordinary_schema, "CSV: {csv:?}");
+            assert_eq!(records_read, 3);
+            assert_eq!(schema_records_read, 3);
+        }
     }
 
     #[test]

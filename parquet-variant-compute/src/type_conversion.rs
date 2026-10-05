@@ -18,10 +18,11 @@
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
 use arrow::array::ArrowNativeTypeOp;
+use arrow::compute::kernels::cast_utils::parse_decimal;
 use arrow::compute::{
     CastOptions, DecimalCast, cast_num_to_bool, cast_single_string_to_boolean_default, num_cast,
-    parse_string_to_decimal_native, rescale_decimal, single_bool_to_numeric,
-    single_decimal_to_float_lossy, single_float_to_decimal,
+    rescale_decimal, single_bool_to_numeric, single_decimal_to_float_lossy,
+    single_float_to_decimal,
 };
 use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
@@ -33,16 +34,25 @@ use half::f16;
 use num_traits::NumCast;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
+/// Controls the conversions allowed when extracting a typed value from a variant.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum VariantCastMode {
+    /// Use the conversions permitted by the variant shredding specification.
+    Shred,
+    /// Allow casts when extracting a value with `variant_get`.
+    Get,
+}
+
 /// Extension trait for Arrow primitive types that can extract their native value from a Variant
 pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
-    fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native>;
+    fn from_variant(variant: &Variant<'_, '_>, cast_mode: VariantCastMode) -> Option<Self::Native>;
 }
 
 /// Extension trait for Arrow timestamp types that can extract their native value from a Variant
 /// We can't use [`PrimitiveFromVariant`] directly because we need _two_ implementations for each
 /// timestamp type -- the `NTZ` param here.
 pub(crate) trait TimestampFromVariant<const NTZ: bool>: ArrowTimestampType {
-    fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native>;
+    fn from_variant(variant: &Variant<'_, '_>, cast_mode: VariantCastMode) -> Option<Self::Native>;
 }
 
 /// Cast a single `Variant` value with safe/strict semantics.
@@ -70,10 +80,10 @@ pub(crate) fn variant_cast_with_options<'a, 'm, 'v, T>(
 macro_rules! impl_primitive_from_variant {
     ($arrow_type:ty, $shred_fun:expr, $get_method:ident $(, $cast_fn:expr)?) => {
         impl PrimitiveFromVariant for $arrow_type {
-            fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native> {
-                let value = match shred {
-                    true => $shred_fun(variant),
-                    false => $get_method(variant),
+            fn from_variant(variant: &Variant<'_, '_>, cast_mode: VariantCastMode) -> Option<Self::Native> {
+                let value = match cast_mode {
+                    VariantCastMode::Shred => $shred_fun(variant),
+                    VariantCastMode::Get => $get_method(variant),
                 };
                 $( let value = value.and_then($cast_fn); )?
                 value
@@ -85,10 +95,13 @@ macro_rules! impl_primitive_from_variant {
 macro_rules! impl_timestamp_from_variant {
     ($timestamp_type:ty, $shred_fun:expr, $variant_method:expr, ntz=$ntz:ident, $cast_fn:expr $(,)?) => {
         impl TimestampFromVariant<{ $ntz }> for $timestamp_type {
-            fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native> {
-                let value = match shred {
-                    true => ($shred_fun)(variant),
-                    false => $variant_method(variant),
+            fn from_variant(
+                variant: &Variant<'_, '_>,
+                cast_mode: VariantCastMode,
+            ) -> Option<Self::Native> {
+                let value = match cast_mode {
+                    VariantCastMode::Shred => ($shred_fun)(variant),
+                    VariantCastMode::Get => $variant_method(variant),
                 };
 
                 value.and_then($cast_fn)
@@ -369,7 +382,7 @@ impl_timestamp_from_variant!(
 /// - Decimal variants (`Decimal4/8/16`) use their embedded precision and scale
 ///
 /// The value is rescaled to (`precision`, `scale`) using `rescale_decimal` for integers,
-/// `single_float_to_decimal` for floats, and `parse_string_to_decimal_native` for strings.
+/// `single_float_to_decimal` for floats, and `parse_decimal` for strings.
 /// returns `None` if it cannot fit the requested precision.
 pub(crate) fn variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
@@ -413,12 +426,8 @@ where
         ),
         Variant::Float(f) => single_float_to_decimal::<O>(<f64 as From<f32>>::from(*f), mul),
         Variant::Double(f) => single_float_to_decimal::<O>(*f, mul),
-        // arrow-cast only support cast string to decimal with scale >=0 for now
-        // Please see `cast_string_to_decimal` in arrow-cast/src/cast/decimal.rs for more detail
-        Variant::String(v) if scale >= 0 => parse_string_to_decimal_native::<O>(v, scale as _).ok(),
-        Variant::ShortString(v) if scale >= 0 => {
-            parse_string_to_decimal_native::<O>(v, scale as _).ok()
-        }
+        Variant::String(v) => parse_decimal::<O>(v, precision, scale).ok(),
+        Variant::ShortString(v) => parse_decimal::<O>(v, precision, scale).ok(),
         Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
             d.integer(),
             VariantDecimal4::MAX_PRECISION,
@@ -688,8 +697,11 @@ impl ShredDecimalVariant for Decimal256Type {
     }
 }
 
-pub(crate) fn variant_to_boolean(variant: &Variant<'_, '_>, shred: bool) -> Option<bool> {
-    if shred {
+pub(crate) fn variant_to_boolean(
+    variant: &Variant<'_, '_>,
+    cast_mode: VariantCastMode,
+) -> Option<bool> {
+    if matches!(cast_mode, VariantCastMode::Shred) {
         return variant.as_boolean();
     }
 

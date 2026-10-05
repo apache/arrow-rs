@@ -24,6 +24,7 @@
 //! Inspired by the arrow-go implementation: <https://github.com/apache/arrow-go/pull/455/files>
 
 use arrow::util::test_util::parquet_test_data;
+use arrow::{array::BinaryArray, record_batch::RecordBatch};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet_variant::{Variant, VariantMetadata};
 use parquet_variant_compute::{VariantArray, unshred_variant};
@@ -420,4 +421,62 @@ static ALL_CASES: LazyLock<Result<Vec<VariantTestCase>>> = LazyLock::new(|| {
 // return a reference to the static ALL_CASES, or panic if loading failed
 fn all_cases() -> &'static [VariantTestCase] {
     ALL_CASES.as_ref().unwrap()
+}
+
+#[test]
+fn test_variant_validation_files() {
+    const TEST_CASES: &[(&str, bool)] = &[
+        ("duplicate_field_offsets.parquet", true),
+        ("field_id_out_of_range.parquet", false),
+        ("int_overflow_in_bounds_check.parquet", false),
+        ("malformed_child_inside_well_formed_parent.parquet", false),
+        ("negative_dictionary_size.parquet", false),
+        ("out_of_range_child_offset.parquet", false),
+        ("out_of_range_dictionary_size.parquet", false),
+        ("out_of_range_element_count.parquet", false),
+        ("over_deep_nested_children.parquet", false),
+        ("oversized_primitive_size.parquet", false),
+        ("short_string_length_exceeds_buffer.parquet", false),
+        ("truncated_primitive_size.parquet", false),
+        ("unknown_primitive_type.parquet", false),
+        ("variant_version_2_header.parquet", false),
+    ];
+
+    let test_dir = PathBuf::from(parquet_test_data())
+        .join("..")
+        .join("bad_data")
+        .join("variants");
+    for (filename, expected_valid) in TEST_CASES {
+        let path = test_dir.join(filename);
+        let file = fs::File::open(&path).unwrap();
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        assert!(reader.next().is_none());
+        assert_eq!(
+            variant_is_valid(&batch, filename),
+            *expected_valid,
+            "unexpected validation result for {filename}"
+        );
+    }
+}
+
+fn variant_is_valid(batch: &RecordBatch, filename: &str) -> bool {
+    assert_eq!(batch.num_rows(), 1, "unexpected row count in {filename}");
+    let metadata = batch
+        .column_by_name("metadata")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
+    let value = batch
+        .column_by_name("value")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
+
+    Variant::try_new(metadata.value(0), value.value(0)).is_ok()
 }
