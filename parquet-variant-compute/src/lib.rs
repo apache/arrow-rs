@@ -56,6 +56,7 @@ mod unshred_variant;
 mod variant_array;
 mod variant_array_builder;
 mod variant_get;
+mod variant_scalar;
 mod variant_to_arrow;
 
 pub use variant_array::{ShreddingState, VariantArray, VariantArrayIter, VariantType};
