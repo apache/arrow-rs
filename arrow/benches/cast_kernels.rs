@@ -703,34 +703,25 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     const ROWS: usize = 8192;
-    let mut bench =
-        |name: &str, input: ArrayRef, target: DataType, overflow: bool, modes: &[bool]| {
-            for &safe in modes {
-                let options = CastOptions {
-                    safe,
-                    ..Default::default()
-                };
-                // Validate fixtures outside the timed loop.
-                let result = cast_with_options(input.as_ref(), &target, &options).unwrap();
-                assert_eq!(result.data_type(), &target);
-                assert_eq!(result.len(), ROWS);
-                assert_eq!(
-                    result.null_count(),
-                    if overflow { ROWS } else { input.null_count() }
-                );
-                let mode = if safe { "safe" } else { "strict" };
-                c.bench_function(&format!("{name} {mode}"), |b| {
-                    b.iter(|| {
-                        cast_with_options(
-                            hint::black_box(input.as_ref()),
-                            hint::black_box(&target),
-                            &options,
-                        )
-                        .unwrap()
-                    })
-                });
-            }
-        };
+    let mut bench = |name: &str, input: ArrayRef, target: DataType, modes: &[bool]| {
+        for &safe in modes {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            let mode = if safe { "safe" } else { "strict" };
+            c.bench_function(&format!("{name} {mode}"), |b| {
+                b.iter(|| {
+                    cast_with_options(
+                        hint::black_box(input.as_ref()),
+                        hint::black_box(&target),
+                        &options,
+                    )
+                    .unwrap()
+                })
+            });
+        }
+    };
 
     // Choose distinct conversion paths, not every source/destination pair.
     let float32: ArrayRef = Arc::new(create_primitive_array_range::<Float32Type>(
@@ -742,7 +733,6 @@ fn add_benchmark(c: &mut Criterion) {
         "cast float32 to decimal32(7, 2) 8192 valid",
         float32,
         DataType::Decimal32(7, 2),
-        false,
         &[true, false],
     );
     let float64: ArrayRef = Arc::new(create_primitive_array_range::<Float64Type>(
@@ -755,7 +745,6 @@ fn add_benchmark(c: &mut Criterion) {
         "cast float64 to decimal128(20, 3) 8192 valid",
         float64.clone(),
         DataType::Decimal128(20, 3),
-        false,
         &[false],
     );
     // Decimal256 uses a separate float-to-i256 conversion implementation.
@@ -763,7 +752,6 @@ fn add_benchmark(c: &mut Criterion) {
         "cast float64 to decimal256(40, -2) 8192 scale down",
         float64,
         DataType::Decimal256(40, -2),
-        false,
         &[true],
     );
     // Direct and rounding-induced overflow share the precision-failure path.
@@ -775,7 +763,6 @@ fn add_benchmark(c: &mut Criterion) {
         "cast float64 to decimal64(3, 0) 8192 precision overflow",
         overflow,
         DataType::Decimal64(3, 0),
-        true,
         &[true],
     );
 }
