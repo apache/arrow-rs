@@ -15,6 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
+development-process:
+  - changed-files:
+    - any-glob-to-any-file:
+      - ".github/**/*"
+      - ".config/**/*"
+      - "dev/**/*"
+
 arrow-core:
   - changed-files:
     - any-glob-to-any-file:
