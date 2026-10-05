@@ -22,11 +22,11 @@
 //! Use this module to serialize Arrow `RecordBatch` values into Avro. Two output
 //! formats are supported:
 //!
-//! * **[`AvroWriter`](crate::writer::AvroWriter)** — writes an **Object Container File (OCF)**: a self‑describing
+//! * **[`AvroWriter`]** — writes an **Object Container File (OCF)**: a self‑describing
 //!   file with header (schema JSON + metadata), optional compression, data blocks, and
 //!   sync markers. See Avro 1.11.1 “Object Container Files.”
 //!   <https://avro.apache.org/docs/1.11.1/specification/#object-container-files>
-//! * **[`AvroStreamWriter`](crate::writer::AvroStreamWriter)** — writes a **Single Object Encoding (SOE) Stream** (“datum” bytes) without
+//! * **[`AvroStreamWriter`]** — writes a **Single Object Encoding (SOE) Stream** (“datum” bytes) without
 //!   any container framing. This is useful when the schema is known out‑of‑band (i.e.,
 //!   via a registry) and you want minimal overhead.
 //!
