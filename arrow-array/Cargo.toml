@@ -19,7 +19,6 @@
 name = "arrow-array"
 version = { workspace = true }
 description = "Array abstractions for Apache Arrow"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = "Apache-2.0 AND MIT"

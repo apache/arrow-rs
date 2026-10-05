@@ -19,7 +19,6 @@
 name = "arrow-integration-testing"
 description = "Binaries used in the Arrow integration tests (NOT PUBLISHED TO crates.io)"
 version = { workspace = true }
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
