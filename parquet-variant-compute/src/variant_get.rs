@@ -538,7 +538,6 @@ mod test {
     use arrow::compute::{CastOptions, cast};
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
-    use arrow::util::display::FormatOptions;
     use arrow_schema::ArrowError;
     use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
     use arrow_schema::{
@@ -1676,7 +1675,7 @@ mod test {
             .with_as_type(Some(FieldRef::from(field)))
             .with_cast_options(CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             });
 
         let result = variant_get(&array, options);
@@ -4573,7 +4572,7 @@ mod test {
         // With strict casting, non-object rows are an error
         let options = map_get_options(&data_type).with_cast_options(CastOptions {
             safe: false,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         });
         let err = variant_get(&variant_array, options).unwrap_err();
         assert!(
