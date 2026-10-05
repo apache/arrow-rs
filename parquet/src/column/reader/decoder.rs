@@ -424,20 +424,24 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
     fn skip_def_levels(&mut self, num_levels: usize) -> Result<(usize, usize)> {
         let mut level_skip = 0;
         let mut value_skip = 0;
-        let mut buf: Vec<i16> = vec![];
+        let mut buf = Vec::with_capacity(SKIP_BUFFER_SIZE);
         while level_skip < num_levels {
             let remaining_levels = num_levels - level_skip;
 
             let to_read = remaining_levels.min(SKIP_BUFFER_SIZE);
             buf.resize(to_read, 0);
-            let (values_read, levels_read) = self.read_def_levels(&mut buf, to_read)?;
+            // Decode into the scratch buffer instead of appending to it.
+            let levels_read = self.decoder.as_mut().unwrap().read(&mut buf)?;
             if levels_read == 0 {
                 // Reached end of page
                 break;
             }
 
             level_skip += levels_read;
-            value_skip += values_read;
+            value_skip += buf[..levels_read]
+                .iter()
+                .filter(|&&level| level == self.max_level)
+                .count();
         }
 
         Ok((value_skip, level_skip))
@@ -646,6 +650,85 @@ mod tests {
             assert_eq!(actual_encoding, encoding);
             assert_eq!(actual.as_ptr(), data.as_ptr());
             assert_eq!(actual, data);
+        }
+    }
+
+    #[test]
+    #[expect(deprecated, reason = "Cover legacy BIT_PACKED definition levels")]
+    fn test_skip_def_levels() {
+        use crate::util::bit_util::BitWriter;
+
+        // A multiple of eight avoids ambiguous padding in the final packed run.
+        let num_levels = 2 * SKIP_BUFFER_SIZE + 8;
+        for max_level in [1, 3] {
+            let bit_width = num_required_bits(max_level as u64);
+            for levels in [
+                vec![0; num_levels],
+                vec![max_level; num_levels],
+                (0..num_levels)
+                    .map(|i| (i % (max_level as usize + 1)) as i16)
+                    .collect(),
+            ] {
+                for encoding in [Encoding::RLE, Encoding::BIT_PACKED] {
+                    let data = match encoding {
+                        Encoding::RLE => {
+                            let mut encoder = RleEncoder::new(bit_width, 1024);
+                            for &level in &levels {
+                                encoder.put(level as u64);
+                            }
+                            Bytes::from(encoder.consume())
+                        }
+                        Encoding::BIT_PACKED => {
+                            let mut encoder = BitWriter::new(num_levels);
+                            for &level in &levels {
+                                encoder.put_value(level as u64, bit_width as usize);
+                            }
+                            Bytes::from(encoder.consume())
+                        }
+                        _ => unreachable!(),
+                    };
+                    for requested in [
+                        0,
+                        1,
+                        SKIP_BUFFER_SIZE - 1,
+                        SKIP_BUFFER_SIZE,
+                        SKIP_BUFFER_SIZE + 1,
+                        num_levels,
+                        num_levels + 17,
+                        usize::MAX,
+                    ] {
+                        let mut decoder = DefinitionLevelDecoderImpl::new(max_level);
+                        decoder.set_data(encoding, data.clone()).unwrap();
+                        let expected_levels = requested.min(num_levels);
+                        let expected_values = levels[..expected_levels]
+                            .iter()
+                            .filter(|&&level| level == max_level)
+                            .count();
+                        assert_eq!(
+                            decoder.skip_def_levels(requested).unwrap(),
+                            (expected_values, expected_levels),
+                            "{encoding}, max_level={max_level}, requested={requested}"
+                        );
+
+                        let mut remaining = vec![];
+                        let expected_remaining = &levels[expected_levels..];
+                        assert_eq!(
+                            decoder
+                                .read_def_levels(&mut remaining, expected_remaining.len())
+                                .unwrap(),
+                            (
+                                expected_remaining
+                                    .iter()
+                                    .filter(|&&level| level == max_level)
+                                    .count(),
+                                expected_remaining.len(),
+                            )
+                        );
+                        assert_eq!(remaining, expected_remaining);
+                        assert_eq!(decoder.skip_def_levels(1).unwrap(), (0, 0));
+                    }
+                }
+            }
         }
     }
 
