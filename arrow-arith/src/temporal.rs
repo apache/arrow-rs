@@ -184,6 +184,10 @@ where
 /// Returns an [`Int32Array`] unless input was a dictionary type, in which case returns
 /// the dictionary but with this function applied onto its values.
 ///
+/// Null inputs produce null outputs. A timestamp outside the supported calendar
+/// range also produces null, except that for timestamps without a timezone the
+/// time parts (`Hour` through `Nanosecond`) are defined for every value.
+///
 /// If array passed in is not of the above listed types (or is a dictionary array where the
 /// values array isn't of the above listed types), then this function will return an error.
 ///
@@ -415,6 +419,62 @@ impl ExtractDatePartExt for PrimitiveArray<Date64Type> {
     }
 }
 
+/// Number of ticks in one second for timestamps of type `T`.
+const fn units_per_second<T: ArrowTimestampType>() -> i64 {
+    match T::UNIT {
+        TimeUnit::Second => 1,
+        TimeUnit::Millisecond => MILLISECONDS,
+        TimeUnit::Microsecond => MICROSECONDS,
+        TimeUnit::Nanosecond => NANOSECONDS,
+    }
+}
+
+/// Extracts a time-of-day part from a timestamp array without a timezone using
+/// integer arithmetic. Returns `None` for parts that require a calendar
+/// conversion.
+///
+/// `div_euclid` rounds toward negative infinity and `rem_euclid` yields a
+/// nonnegative remainder, so pre-epoch values produce in-range components:
+/// -1 ms is 1969-12-31 23:59:59.999, whose second is 59 and millisecond is 999.
+fn timestamp_time_part<T: ArrowTimestampType>(
+    array: &PrimitiveArray<T>,
+    part: DatePart,
+) -> Option<Int32Array> {
+    Some(match part {
+        DatePart::Hour => {
+            array.unary(|v| v.div_euclid(units_per_second::<T>() * 3_600).rem_euclid(24) as i32)
+        }
+        DatePart::Minute => {
+            array.unary(|v| v.div_euclid(units_per_second::<T>() * 60).rem_euclid(60) as i32)
+        }
+        DatePart::Second => {
+            array.unary(|v| v.div_euclid(units_per_second::<T>()).rem_euclid(60) as i32)
+        }
+        DatePart::Millisecond => {
+            array.unary(|v| subsecond(v, units_per_second::<T>(), MILLISECONDS))
+        }
+        DatePart::Microsecond => {
+            array.unary(|v| subsecond(v, units_per_second::<T>(), MICROSECONDS))
+        }
+        DatePart::Nanosecond => array.unary(|v| subsecond(v, units_per_second::<T>(), NANOSECONDS)),
+        _ => return None,
+    })
+}
+
+/// Fractional second of `v`, counted in `units` per second, rescaled to `target`
+/// per second. Both scales divide one second evenly, so the conversion is exact
+/// when scaling up and truncating when scaling down.
+#[inline]
+fn subsecond(v: i64, units: i64, target: i64) -> i32 {
+    let fraction = v.rem_euclid(units);
+    let scaled = if target >= units {
+        fraction * (target / units)
+    } else {
+        fraction / (units / target)
+    };
+    scaled as i32
+}
+
 impl ExtractDatePartExt for PrimitiveArray<TimestampSecondType> {
     fn date_part(&self, part: DatePart) -> Result<Int32Array, ArrowError> {
         // TimestampSecond only encodes number of seconds, so these will always be 0
@@ -428,6 +488,8 @@ impl ExtractDatePartExt for PrimitiveArray<TimestampSecondType> {
                         .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
                         .map(map_func)
                 })
+            } else if let Some(array) = timestamp_time_part(self, part) {
+                array
             } else {
                 let map_func = get_date_time_part_extract_fn(part);
                 self.unary_opt(|d| timestamp_s_to_datetime(d).map(map_func))
@@ -445,6 +507,8 @@ impl ExtractDatePartExt for PrimitiveArray<TimestampMillisecondType> {
                     .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
                     .map(map_func)
             })
+        } else if let Some(array) = timestamp_time_part(self, part) {
+            array
         } else {
             let map_func = get_date_time_part_extract_fn(part);
             self.unary_opt(|d| timestamp_ms_to_datetime(d).map(map_func))
@@ -462,6 +526,8 @@ impl ExtractDatePartExt for PrimitiveArray<TimestampMicrosecondType> {
                     .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
                     .map(map_func)
             })
+        } else if let Some(array) = timestamp_time_part(self, part) {
+            array
         } else {
             let map_func = get_date_time_part_extract_fn(part);
             self.unary_opt(|d| timestamp_us_to_datetime(d).map(map_func))
@@ -479,6 +545,8 @@ impl ExtractDatePartExt for PrimitiveArray<TimestampNanosecondType> {
                     .map(|c| Utc.from_utc_datetime(&c).with_timezone(&tz))
                     .map(map_func)
             })
+        } else if let Some(array) = timestamp_time_part(self, part) {
+            array
         } else {
             let map_func = get_date_time_part_extract_fn(part);
             self.unary_opt(|d| timestamp_ns_to_datetime(d).map(map_func))
@@ -752,6 +820,9 @@ impl<T: Datelike> ChronoDateExt for T {
 mod tests {
     use super::*;
 
+    use arrow_array::temporal_conversions::as_datetime;
+    use chrono::NaiveDate;
+
     /// Used to integrate new [`date_part()`] method with deprecated shims such as
     /// [`hour()`] and [`week()`].
     fn date_part_primitive<T: ArrowTemporalType>(
@@ -760,6 +831,119 @@ mod tests {
     ) -> Result<Int32Array, ArrowError> {
         let array = date_part(array, part)?;
         Ok(array.as_primitive::<Int32Type>().to_owned())
+    }
+
+    /// Time-of-day parts of a timestamp.
+    const TIME_PARTS: [DatePart; 6] = [
+        DatePart::Hour,
+        DatePart::Minute,
+        DatePart::Second,
+        DatePart::Millisecond,
+        DatePart::Microsecond,
+        DatePart::Nanosecond,
+    ];
+
+    /// Checks time part extraction against the calendar conversion for values within
+    /// its supported range. Covers component boundaries, negative timestamps, nulls
+    /// and slices, plus timezone dispatch and invalid timezone metadata.
+    fn check_timestamp_time_parts<T: ArrowTimestampType>(units_per_second: i64) {
+        let mut values = vec![i64::MIN, i64::MAX];
+        for boundary in [1_000, 1_000_000] {
+            for delta in [-1, 0, 1] {
+                values.extend([boundary + delta, -boundary + delta]);
+            }
+        }
+        for base in [0, 60, 3_600, 86_400] {
+            for delta in [-1, 0, 1] {
+                for seconds in [base + delta, -base + delta] {
+                    for fraction in [-1, 0, 1, units_per_second - 1] {
+                        let value = i128::from(seconds) * i128::from(units_per_second)
+                            + i128::from(fraction);
+                        if let Ok(value) = i64::try_from(value) {
+                            values.push(value);
+                        }
+                    }
+                }
+            }
+        }
+        // Sample both the full i64 domain and dates near the epoch: most full-range
+        // second and millisecond timestamps are outside the supported calendar range.
+        let mut seed = 42_u64;
+        for _ in 0..256 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            values.push(seed as i64);
+            let seconds = (seed % 4_000_000_000) as i64 - 2_000_000_000;
+            values.push(seconds * units_per_second + (seed % units_per_second as u64) as i64);
+        }
+        // The calendar conversion provides expected values only within its range.
+        // Behavior at the i64 extremes is checked separately.
+        values.retain(|&v| as_datetime::<T>(v).is_some());
+        let no_nulls = PrimitiveArray::<T>::new(values.clone().into(), None);
+        let mixed = PrimitiveArray::<T>::from_iter(
+            values
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| (i % 5 != 0).then_some(v)),
+        );
+        for array in [no_nulls, mixed.slice(1, mixed.len() - 2)] {
+            for part in TIME_PARTS {
+                let map_func = get_date_time_part_extract_fn(part);
+                let expected: Int32Array = array.unary_opt(|v| as_datetime::<T>(v).map(map_func));
+                let actual = date_part(&array, part).unwrap();
+                assert_eq!(
+                    actual.as_primitive::<Int32Type>(),
+                    &expected,
+                    "{} {part}",
+                    T::DATA_TYPE
+                );
+            }
+        }
+
+        // An offset that changes both hour and minute checks that timezone metadata
+        // still routes through the calendar conversion.
+        let zoned = PrimitiveArray::<T>::from_iter_values([0]).with_timezone("+05:45");
+        for (part, expected) in [(DatePart::Hour, 5), (DatePart::Minute, 45)] {
+            assert_eq!(
+                date_part_primitive(&zoned, part).unwrap(),
+                Int32Array::from(vec![expected])
+            );
+        }
+        let invalid = PrimitiveArray::<T>::from_iter_values([0]).with_timezone("invalid timezone");
+        assert!(date_part(&invalid, DatePart::Second).is_err());
+    }
+
+    #[test]
+    fn test_timestamp_time_parts_match_chrono() {
+        check_timestamp_time_parts::<TimestampSecondType>(1);
+        check_timestamp_time_parts::<TimestampMillisecondType>(MILLISECONDS);
+        check_timestamp_time_parts::<TimestampMicrosecondType>(MICROSECONDS);
+        check_timestamp_time_parts::<TimestampNanosecondType>(NANOSECONDS);
+    }
+
+    #[test]
+    fn test_timestamp_time_parts_extremes() {
+        /// `(hour, minute, second, nanosecond)` expected at `i64::MIN` and `i64::MAX`.
+        fn check<T: ArrowTimestampType>(min: (u32, u32, u32, u32), max: (u32, u32, u32, u32)) {
+            let time = |(h, m, s, ns)| NaiveDate::default().and_hms_nano_opt(h, m, s, ns).unwrap();
+            let expected = [Some(time(min)), None, Some(time(max))];
+            let array = PrimitiveArray::<T>::from_iter([Some(i64::MIN), None, Some(i64::MAX)]);
+            for part in TIME_PARTS {
+                let map_func = get_date_time_part_extract_fn(part);
+                assert_eq!(
+                    date_part_primitive(&array, part).unwrap(),
+                    Int32Array::from_iter(expected.iter().map(|t| t.map(map_func))),
+                    "{} {part}",
+                    T::DATA_TYPE
+                );
+            }
+        }
+
+        // These values lie outside the supported calendar range for these units, so
+        // the expectations cannot be derived from the calendar conversion. Nanosecond
+        // extremes are within range and are covered by the comparison against it.
+        check::<TimestampSecondType>((8, 29, 52, 0), (15, 30, 7, 0));
+        check::<TimestampMillisecondType>((16, 47, 4, 192_000_000), (7, 12, 55, 807_000_000));
+        check::<TimestampMicrosecondType>((19, 59, 5, 224_192_000), (4, 0, 54, 775_807_000));
     }
 
     #[test]
