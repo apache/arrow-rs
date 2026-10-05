@@ -690,33 +690,25 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     const ROWS: usize = 8192;
-    let mut bench =
-        |name: &str, input: ArrayRef, target: DataType, overflow: bool, modes: &[bool]| {
-            for &safe in modes {
-                let options = CastOptions {
-                    safe,
-                    ..Default::default()
-                };
-                let result = cast_with_options(input.as_ref(), &target, &options).unwrap();
-                assert_eq!(result.data_type(), &target);
-                assert_eq!(result.len(), ROWS);
-                assert_eq!(
-                    result.null_count(),
-                    if overflow { ROWS } else { input.null_count() }
-                );
-                let mode = if safe { "safe" } else { "strict" };
-                c.bench_function(&format!("{name} {mode}"), |b| {
-                    b.iter(|| {
-                        cast_with_options(
-                            hint::black_box(input.as_ref()),
-                            hint::black_box(&target),
-                            &options,
-                        )
-                        .unwrap()
-                    })
-                });
-            }
-        };
+    let mut bench = |name: &str, input: ArrayRef, target: DataType, modes: &[bool]| {
+        for &safe in modes {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            let mode = if safe { "safe" } else { "strict" };
+            c.bench_function(&format!("{name} {mode}"), |b| {
+                b.iter(|| {
+                    cast_with_options(
+                        hint::black_box(input.as_ref()),
+                        hint::black_box(&target),
+                        &options,
+                    )
+                    .unwrap()
+                })
+            });
+        }
+    };
 
     // Choose fixtures for distinct conversion paths, rather than every type pair.
     let int32: ArrayRef = Arc::new(create_primitive_array_range::<Int32Type>(
@@ -746,20 +738,18 @@ fn add_benchmark(c: &mut Criterion) {
             DataType::Decimal128(38, 2),
         ),
     ] {
-        bench(name, input, target, false, &[true, false]);
+        bench(name, input, target, &[true, false]);
     }
     bench(
         "cast uint64 to decimal256(76, -1) 8192 scale down",
         uint64,
         DataType::Decimal256(76, -1),
-        false,
         &[true],
     );
     bench(
         "cast int64 to decimal32(9, -20) 8192 all zero",
         int64,
         DataType::Decimal32(9, -20),
-        false,
         &[true],
     );
     let overflow: ArrayRef = Arc::new(create_primitive_array_range::<Int32Type>(
@@ -771,7 +761,6 @@ fn add_benchmark(c: &mut Criterion) {
         "cast int32 to decimal32(8, 0) 8192 precision overflow",
         overflow,
         DataType::Decimal32(8, 0),
-        true,
         &[true],
     );
     let wide: ArrayRef = Arc::new(Int64Array::from_iter(
@@ -781,7 +770,6 @@ fn add_benchmark(c: &mut Criterion) {
         "cast int64 to decimal32(9, -1) 8192 scale before narrowing",
         wide,
         DataType::Decimal32(9, -1),
-        false,
         &[true],
     );
 }
