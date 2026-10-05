@@ -138,13 +138,13 @@ impl StructArray {
             )));
         }
 
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect number of nulls for StructArray, expected {len} got {}",
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect number of nulls for StructArray, expected {len} got {}",
+                n.len(),
+            )));
         }
 
         for (f, a) in fields.iter().zip(&arrays) {
@@ -166,17 +166,15 @@ impl StructArray {
                 )));
             }
 
-            if !f.is_nullable() {
-                if let Some(a) = a.logical_nulls() {
-                    if !nulls.as_ref().map(|n| n.contains(&a)).unwrap_or_default()
-                        && a.null_count() > 0
-                    {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "Found unmasked nulls for non-nullable StructArray field {:?}",
-                            f.name()
-                        )));
-                    }
-                }
+            if !f.is_nullable()
+                && let Some(a) = a.logical_nulls()
+                && nulls.as_ref().is_none_or(|n| !n.contains(&a))
+                && a.null_count() > 0
+            {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Found unmasked nulls for non-nullable StructArray field {:?}",
+                    f.name()
+                )));
             }
         }
 
@@ -274,14 +272,16 @@ impl StructArray {
 
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (Fields, Vec<ArrayRef>, Option<NullBuffer>) {
-        let f = match self.data_type {
-            DataType::Struct(f) => f,
-            _ => unreachable!(),
+        let DataType::Struct(f) = self.data_type else {
+            unreachable!()
         };
         (f, self.fields, self.nulls)
     }
 
     /// Returns the field at `pos`.
+    ///
+    /// # Panics
+    /// Panics if `pos` is out of bounds
     pub fn column(&self, pos: usize) -> &ArrayRef {
         &self.fields[pos]
     }
@@ -341,6 +341,9 @@ impl StructArray {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.len()`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,
@@ -389,9 +392,8 @@ impl StructArray {
     pub fn flatten(&self) -> (Fields, Vec<ArrayRef>) {
         let schema_fields = self.fields();
 
-        let struct_nulls = match &self.nulls {
-            Some(n) => n,
-            None => return (schema_fields.clone(), self.fields.clone()),
+        let Some(struct_nulls) = &self.nulls else {
+            return (schema_fields.clone(), self.fields.clone());
         };
 
         let new_fields: Fields = schema_fields
@@ -569,7 +571,7 @@ impl std::fmt::Debug for StructArray {
         writeln!(f, "StructArray")?;
         writeln!(f, "-- validity:")?;
         writeln!(f, "[")?;
-        print_long_array(self, f, |_array, _index, f| write!(f, "valid"))?;
+        print_long_array(self, f, &mut |_index, f| write!(f, "valid"))?;
         writeln!(f, "]\n[")?;
         for (child_index, name) in self.column_names().iter().enumerate() {
             let column = self.column(child_index);
@@ -628,7 +630,10 @@ impl Index<&str> for StructArray {
 mod tests {
     use super::*;
 
-    use crate::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray};
+    use crate::{
+        BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+        cast::AsArray, types::Int32Type,
+    };
     use arrow_buffer::ToByteSlice;
 
     #[test]
@@ -731,22 +736,152 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed: end <= self.len()")]
+    fn test_struct_array_data_slice() {
+        // Slicing a struct's `ArrayData` and rebuilding an array from it has to
+        // apply the offset to the children exactly once (#7595, #7750).
+        let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(x.clone())],
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        )
+        .into_data();
+        let sliced = struct_array.slice(1, 4);
+
+        let arr = make_array(sliced);
+        assert_eq!(
+            arr.as_struct().column(0).as_primitive::<Int32Type>(),
+            &x.slice(1, 4)
+        );
+
+        // A struct whose top-level `ArrayData` carries a non-zero offset over
+        // full-length children is how the C++ implementation of Arrow (and the
+        // C data interface) represents a sliced struct: the offset/length live
+        // on the struct, not on the children. arrow-rs must decode it to the
+        // same logical array its own `StructArray::slice` produces.
+        let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
+        let y = Int32Array::from(vec![Some(5), Some(6), None, Some(8), Some(9), Some(10)]);
+        let struct_array = StructArray::new(
+            Fields::from(vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("y", DataType::Int32, true),
+            ]),
+            vec![Arc::new(x), Arc::new(y)],
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        );
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new(
+                "inner",
+                struct_array.data_type().clone(),
+                true,
+            )]),
+            vec![Arc::new(struct_array)],
+            Some(NullBuffer::from(vec![true, false, true, true, true, true])),
+        );
+
+        let cpp_sliced_array = make_array(
+            struct_array
+                .to_data()
+                .into_builder()
+                .offset(1)
+                .len(4)
+                .nulls(Some(NullBuffer::from(vec![false, true, true, true])))
+                .build()
+                .unwrap(),
+        );
+
+        assert_eq!(cpp_sliced_array.as_struct(), &struct_array.slice(1, 4));
+    }
+
+    #[test]
+    fn test_make_array_sliced_struct_data() {
+        // Exact reproducer from #7750: `make_array` on a sliced struct's
+        // `ArrayData`.
+        let strings: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("joe"),
+            None,
+            None,
+            Some("mark"),
+            Some("doe"),
+        ]));
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+        ]));
+
+        let array = StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
+            .unwrap()
+            .into_data()
+            .slice(1, 3);
+
+        let arr = make_array(array);
+        let expected = StructArray::try_from(vec![("f1", strings), ("f2", ints)])
+            .unwrap()
+            .slice(1, 3);
+        assert_eq!(arr.as_struct(), &expected);
+    }
+
+    #[test]
+    fn test_slice_struct_data_with_existing_offset() {
+        // Slicing a struct whose `ArrayData` already carries a non-zero offset
+        // over full-length children, which is how the C data interface hands us
+        // a sliced struct. The cumulative offset has to end up on the children
+        // only: anything left on the parent gets applied a second time by
+        // `From<ArrayData> for StructArray`.
+        let x = Int32Array::from(vec![Some(0), Some(1), Some(2), Some(3), None, Some(5)]);
+        let struct_array = StructArray::new(
+            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
+            vec![Arc::new(x.clone())],
+            Some(NullBuffer::from(vec![true, true, true, false, true, true])),
+        );
+
+        let offset_data = struct_array
+            .to_data()
+            .into_builder()
+            .offset(1)
+            .len(5)
+            .nulls(Some(NullBuffer::from(vec![true, true, false, true, true])))
+            .build()
+            .unwrap();
+
+        let sliced = offset_data.slice(1, 3);
+        // The cumulative offset (1 + 1) lands on the child; the parent's own
+        // offset is reset to 0 so nothing re-applies it.
+        assert_eq!(sliced.offset(), 0);
+        assert_eq!(sliced.len(), 3);
+        assert_eq!(sliced.child_data()[0].offset(), 2);
+        assert_eq!(sliced.child_data()[0].len(), 3);
+
+        let arr = make_array(sliced);
+        assert_eq!(
+            arr.as_struct().column(0).as_primitive::<Int32Type>(),
+            &x.slice(2, 3)
+        );
+        assert_eq!(arr.as_struct(), &struct_array.slice(2, 3));
+    }
+
+    #[test]
     fn test_struct_array_from_data_with_offset_and_length_error() {
         let int_arr = Int32Array::from(vec![1, 2, 3, 4, 5]);
         let int_field = Field::new("x", DataType::Int32, false);
         let struct_nulls = NullBuffer::new(BooleanBuffer::from(vec![true, true, false]));
         let int_data = int_arr.to_data();
         // If parent offset is 3 and len is 3 then child must have 6 items
-        let struct_data =
-            ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
-                .len(3)
-                .offset(3)
-                .nulls(Some(struct_nulls))
-                .add_child_data(int_data)
-                .build()
-                .unwrap();
-        let _ = StructArray::from(struct_data);
+        let err = ArrayData::builder(DataType::Struct(Fields::from(vec![int_field.clone()])))
+            .len(3)
+            .offset(3)
+            .nulls(Some(struct_nulls))
+            .add_child_data(int_data)
+            .build()
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains(
+            "child array #0 for field x has length smaller than expected for struct array (5 < 6)"
+        ));
     }
 
     /// validates that struct can be accessed using `column_name` as index i.e. `struct_array["column_name"]`.
@@ -1025,7 +1160,7 @@ mod tests {
 
     #[test]
     fn test_struct_array_fmt_debug() {
-        let arr: StructArray = StructArray::new(
+        let arr = StructArray::new(
             vec![Arc::new(Field::new("c", DataType::Int32, true))].into(),
             vec![Arc::new(Int32Array::from((0..30).collect::<Vec<_>>())) as ArrayRef],
             Some(NullBuffer::new(BooleanBuffer::from(

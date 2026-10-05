@@ -17,9 +17,6 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
-use std::sync::Arc;
-extern crate arrow;
 use arrow::compute::kernels::sort::{SortColumn, lexsort};
 use arrow::util::bench_util::*;
 use arrow::{
@@ -27,8 +24,10 @@ use arrow::{
     datatypes::{Float64Type, UInt8Type},
 };
 use arrow_ord::partition::partition;
+use criterion::Criterion;
 use rand::distr::{Distribution, StandardUniform};
 use std::hint;
+use std::sync::Arc;
 
 fn create_array<T: ArrowPrimitiveType>(size: usize, with_nulls: bool) -> ArrayRef
 where

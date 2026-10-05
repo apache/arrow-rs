@@ -211,9 +211,11 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
 
     /// Returns an object builder that can be used to append a new (nested) object to this object.
     ///
-    /// Panics if the proposed key was a duplicate
-    ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the proposed key was a duplicate
     pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b, ObjectState<'b>> {
         self.try_new_object(key).unwrap()
     }
@@ -233,9 +235,11 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
 
     /// Returns a list builder that can be used to append a new (nested) list to this object.
     ///
-    /// Panics if the proposed key was a duplicate
-    ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the proposed key was a duplicate
     pub fn new_list<'b>(&'b mut self, key: &str) -> ListBuilder<'b, ObjectState<'b>> {
         self.try_new_list(key).unwrap()
     }
@@ -324,14 +328,14 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
     }
 }
 
-impl<'a, 'm, 'v, S, K, V> Extend<(K, V)> for ObjectBuilder<'a, S>
+impl<'m, 'v, S, K, V> Extend<(K, V)> for ObjectBuilder<'_, S>
 where
     S: BuilderSpecificState,
     K: AsRef<str>,
     V: Into<Variant<'m, 'v>>,
 {
     fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
-        for (key, value) in iter.into_iter() {
+        for (key, value) in iter {
             self.insert(key.as_ref(), value);
         }
     }
@@ -533,6 +537,68 @@ mod tests {
         assert_eq!(obj.get("name"), Some(Variant::from("Alice")));
         assert_eq!(obj.get("age"), Some(Variant::Int8(30)));
         assert_eq!(obj.get("active"), Some(Variant::from(true)));
+    }
+
+    /// A dictionary that is not marked sorted may legally hold the same string at more than one
+    /// field id. A field name must still resolve to a single id, or an object builder sharing that
+    /// dictionary would emit two fields with the same name.
+    ///
+    /// Metadata dictionary `["a", "a"]`, unsorted:
+    const DUPLICATE_ENTRY_METADATA: &[u8] = &[
+        0b0000_0001, // header: offset_size_minus_one=0, sorted=0, version=1
+        2,           // dictionary_size
+        0x00,
+        0x01,
+        0x02,
+        b'a',
+        b'a',
+    ];
+
+    #[test]
+    fn test_read_only_metadata_builder_duplicate_dictionary_entries_are_detected() {
+        let metadata = VariantMetadata::try_new(DUPLICATE_ENTRY_METADATA).unwrap();
+        assert!(!metadata.is_sorted());
+
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
+        let mut value_builder = ValueBuilder::new();
+        let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
+        let mut obj = ObjectBuilder::new(state, true);
+
+        // Both dictionary entries name "a", so inserting both must be reported as a duplicate
+        // field name rather than producing an object with two fields named "a".
+        obj.insert(metadata.get(0).unwrap(), 1i8);
+        let err = obj
+            .try_insert(metadata.get(1).unwrap(), 2i8)
+            .expect_err("duplicate field name should be rejected");
+        assert!(
+            err.to_string().contains("Duplicate field name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_read_only_metadata_builder_duplicate_dictionary_entries_build_valid_object() {
+        let metadata = VariantMetadata::try_new(DUPLICATE_ENTRY_METADATA).unwrap();
+
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
+        let mut value_builder = ValueBuilder::new();
+        {
+            let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
+            let mut obj = ObjectBuilder::new(state, false);
+
+            // A name borrowed from the dictionary and an owned copy of that same name must resolve
+            // to the same field id, so that the last write wins instead of both being emitted.
+            obj.insert(metadata.get(1).unwrap(), 1i8);
+            let owned = String::from("a");
+            obj.insert(owned.as_str(), 2i8);
+            obj.finish();
+        }
+
+        let value = value_builder.into_inner();
+        let variant = Variant::try_new(DUPLICATE_ENTRY_METADATA, &value).unwrap();
+        let obj = variant.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert_eq!(obj.get("a"), Some(Variant::Int8(2)));
     }
 
     // matthew
@@ -754,7 +820,7 @@ mod tests {
 
         let (metadata, value) = builder.finish();
 
-        // note, object fields are now sorted lexigraphically by field name
+        // note, object fields are now sorted lexicographically by field name
         /*
          {
             "a": false,

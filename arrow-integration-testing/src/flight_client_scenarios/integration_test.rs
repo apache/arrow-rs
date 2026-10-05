@@ -286,7 +286,7 @@ async fn receive_schema_flight_data(resp: &mut Streaming<FlightData>) -> Option<
     let ipc_schema: ipc::Schema = message
         .header_as_schema()
         .expect("Unable to read IPC message as schema");
-    let schema = ipc::convert::fb_to_schema(ipc_schema);
+    let schema = ipc::convert::try_fb_to_schema(ipc_schema).unwrap();
 
     Some(schema)
 }

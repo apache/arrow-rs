@@ -31,10 +31,12 @@ use std::sync::Arc;
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
 mod byte_view;
+mod fixed_size_binary;
 mod generic;
 mod primitive;
 
 use byte_view::InProgressByteViewArray;
+use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
@@ -236,6 +238,10 @@ impl BatchCoalescer {
     /// This is semantically equivalent of calling [`Self::push_batch`]
     /// with the results from [`crate::filter::filter_record_batch`]
     ///
+    /// If the number of rows that `filter` selects is already known,
+    /// [`Self::push_batch_with_filter_builder`] with
+    /// [`FilterBuilder::with_count`] avoids counting them again.
+    ///
     /// # Example
     /// ```
     /// # use arrow_array::{record_batch, BooleanArray};
@@ -248,7 +254,7 @@ impl BatchCoalescer {
     /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
     /// coalescer.push_batch_with_filter(batch1, &filter);
     /// coalescer.push_batch_with_filter(batch2, &filter);
-    /// // finsh and retrieve the created batch
+    /// // finish and retrieve the created batch
     /// coalescer.finish_buffered_batch().unwrap();
     /// let completed_batch = coalescer.next_completed_batch().unwrap();
     /// // filtered out 2 and 5:
@@ -260,7 +266,45 @@ impl BatchCoalescer {
         batch: RecordBatch,
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        self.push_batch_with_filtered_columns(batch, filter)
+        self.push_batch_with_filter_builder(batch, FilterBuilder::new(filter))
+    }
+
+    /// Push a batch into the Coalescer after applying the filter described by
+    /// `filter_builder`.
+    ///
+    /// This is [`Self::push_batch_with_filter`] for a [`FilterBuilder`] the
+    /// caller has already created. For example, callers that already know how
+    /// many rows the filter selects can provide that number with
+    /// [`FilterBuilder::with_count`] so that it is not counted again.
+    ///
+    /// Callers do not need to call [`FilterBuilder::optimize`]: like
+    /// [`Self::push_batch_with_filter`], this optimizes the filter when `batch`
+    /// has more than one column, or one column for which
+    /// [`FilterBuilder::is_optimize_beneficial`] returns true. A filter the
+    /// caller already optimized stays optimized.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{record_batch, BooleanArray};
+    /// # use arrow_select::coalesce::BatchCoalescer;
+    /// # use arrow_select::filter::FilterBuilder;
+    /// let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+    /// let filter = BooleanArray::from(vec![true, false, true]);
+    /// // SAFETY: the filter selects two rows
+    /// let filter_builder = unsafe { FilterBuilder::new(&filter).with_count(2) };
+    /// let mut coalescer = BatchCoalescer::new(batch.schema(), 1000);
+    /// coalescer.push_batch_with_filter_builder(batch, filter_builder).unwrap();
+    /// coalescer.finish_buffered_batch().unwrap();
+    /// let expected_batch = record_batch!(("a", Int32, [1, 3])).unwrap();
+    /// assert_eq!(coalescer.next_completed_batch().unwrap(), expected_batch);
+    /// ```
+    pub fn push_batch_with_filter_builder(
+        &mut self,
+        batch: RecordBatch,
+        filter_builder: FilterBuilder,
+    ) -> Result<(), ArrowError> {
+        let predicate = Self::filter_predicate_for_batch(&batch, filter_builder);
+        self.push_batch_with_filtered_columns(batch, &predicate)
     }
 
     /// Push a batch into the Coalescer after applying a set of indices
@@ -280,7 +324,7 @@ impl BatchCoalescer {
     /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
     /// coalescer.push_batch(batch1);
     /// coalescer.push_batch_with_indices(batch2, &indices);
-    /// // finsh and retrieve the created batch
+    /// // finish and retrieve the created batch
     /// coalescer.finish_buffered_batch().unwrap();
     /// let completed_batch = coalescer.next_completed_batch().unwrap();
     /// let expected_batch = record_batch!(("a", Int32, [0, 0, 0, 1, 1, 1, 4, 4, 5])).unwrap();
@@ -316,7 +360,7 @@ impl BatchCoalescer {
     /// let mut coalescer = BatchCoalescer::new(batch1.schema(), 1000);
     /// coalescer.push_batch(batch1);
     /// coalescer.push_batch(batch2);
-    /// // finsh and retrieve the created batch
+    /// // finish and retrieve the created batch
     /// coalescer.finish_buffered_batch().unwrap();
     /// let completed_batch = coalescer.next_completed_batch().unwrap();
     /// let expected_batch = record_batch!(("a", Int32, [1, 2, 3, 4, 5, 6])).unwrap();
@@ -449,30 +493,30 @@ impl BatchCoalescer {
         }
 
         // Large batch optimization: bypass coalescing for oversized batches
-        if let Some(limit) = self.biggest_coalesce_batch_size {
-            if batch_size > limit {
-                // Case 1: No buffered data - emit large batch directly
-                // Example: [] + [1200] → output [1200], buffer []
-                if self.buffered_rows == 0 {
-                    self.completed.push_back(batch);
-                    return Ok(());
-                }
-
-                // Case 2: Buffer too large - flush then emit to avoid oversized merge
-                // Example: [850] + [1200] → output [850], then output [1200]
-                // This prevents creating batches much larger than both target_batch_size
-                // and biggest_coalesce_batch_size, which could cause memory issues
-                if self.buffered_rows > limit {
-                    self.finish_buffered_batch()?;
-                    self.completed.push_back(batch);
-                    return Ok(());
-                }
-
-                // Case 3: Small buffer - proceed with normal coalescing
-                // Example: [300] + [1200] → split and merge normally
-                // This ensures small batches still get properly coalesced
-                // while allowing some controlled growth beyond the limit
+        if let Some(limit) = self.biggest_coalesce_batch_size
+            && batch_size > limit
+        {
+            // Case 1: No buffered data - emit large batch directly
+            // Example: [] + [1200] → output [1200], buffer []
+            if self.buffered_rows == 0 {
+                self.completed.push_back(batch);
+                return Ok(());
             }
+
+            // Case 2: Buffer too large - flush then emit to avoid oversized merge
+            // Example: [850] + [1200] → output [850], then output [1200]
+            // This prevents creating batches much larger than both target_batch_size
+            // and biggest_coalesce_batch_size, which could cause memory issues
+            if self.buffered_rows > limit {
+                self.finish_buffered_batch()?;
+                self.completed.push_back(batch);
+                return Ok(());
+            }
+
+            // Case 3: Small buffer - proceed with normal coalescing
+            // Example: [300] + [1200] → split and merge normally
+            // This ensures small batches still get properly coalesced
+            // while allowing some controlled growth beyond the limit
         }
 
         let (_schema, arrays, mut num_rows) = batch.into_parts();
@@ -500,7 +544,7 @@ impl BatchCoalescer {
             debug_assert!(remaining_rows > 0);
 
             // Copy remaining_rows from each array
-            for in_progress in self.in_progress_arrays.iter_mut() {
+            for in_progress in &mut self.in_progress_arrays {
                 in_progress.copy_rows(offset, remaining_rows)?;
             }
 
@@ -514,7 +558,7 @@ impl BatchCoalescer {
         // Add any the remaining rows to the buffer
         self.buffered_rows += num_rows;
         if num_rows > 0 {
-            for in_progress in self.in_progress_arrays.iter_mut() {
+            for in_progress in &mut self.in_progress_arrays {
                 in_progress.copy_rows(offset, num_rows)?;
             }
         }
@@ -525,7 +569,7 @@ impl BatchCoalescer {
         }
 
         // clear in progress sources (to allow the memory to be freed)
-        for in_progress in self.in_progress_arrays.iter_mut() {
+        for in_progress in &mut self.in_progress_arrays {
             in_progress.set_source(None);
         }
 
@@ -583,15 +627,29 @@ impl BatchCoalescer {
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.completed.pop_front()
     }
+
+    /// Returns the number of bytes used by this data structure.
+    pub fn size(&self) -> usize {
+        self.in_progress_arrays.capacity() * size_of::<Box<dyn InProgressArray>>()
+            + self
+                .in_progress_arrays
+                .iter()
+                .map(|array| array.size())
+                .sum::<usize>()
+            + self.completed.capacity() * size_of::<RecordBatch>()
+            + self
+                .completed
+                .iter()
+                .map(|batch| batch.get_array_memory_size())
+                .sum::<usize>()
+    }
 }
 
 impl BatchCoalescer {
     fn filter_predicate_for_batch(
         batch: &RecordBatch,
-        filter: &BooleanArray,
-        selected_count: usize,
+        mut filter_builder: FilterBuilder,
     ) -> FilterPredicate {
-        let mut filter_builder = FilterBuilder::new_with_count(filter, selected_count);
         if batch.num_columns() > 1
             || (batch.num_columns() > 0
                 && FilterBuilder::is_optimize_beneficial(batch.schema_ref().field(0).data_type()))
@@ -604,20 +662,19 @@ impl BatchCoalescer {
     fn push_batch_with_filtered_columns(
         &mut self,
         batch: RecordBatch,
-        filter: &BooleanArray,
+        predicate: &FilterPredicate,
     ) -> Result<(), ArrowError> {
-        let filter_len = filter.len();
+        let filter_len = predicate.filter_len();
+        let selected_count = predicate.count();
         let batch_num_rows = batch.num_rows();
         let batch_num_columns = batch.num_columns();
 
         if filter_len > batch_num_rows {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Filter predicate of length {} is larger than target array of length {}",
-                filter_len, batch_num_rows
+                "Filter predicate of length {filter_len} is larger than target array of length {batch_num_rows}"
             )));
         }
 
-        let selected_count = filter.true_count();
         if selected_count == 0 {
             return Ok(());
         }
@@ -645,16 +702,14 @@ impl BatchCoalescer {
 
         if should_materialize_filter {
             // Use materialized filtering when sparse per-column copying is unavailable.
-            let predicate = Self::filter_predicate_for_batch(&batch, filter, selected_count);
             let filtered_batch = predicate.filter_record_batch(&batch)?;
             return self.push_batch(filtered_batch);
         }
 
-        let predicate = Self::filter_predicate_for_batch(&batch, filter, selected_count);
         let (_schema, arrays, _num_rows) = batch.into_parts();
 
         for (in_progress, array) in self.in_progress_arrays.iter_mut().zip(arrays) {
-            in_progress.copy_rows_by_filter_from(array, &predicate)?;
+            in_progress.copy_rows_by_filter_from(array, predicate)?;
         }
 
         self.buffered_rows += selected_count;
@@ -684,6 +739,9 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
         }
+        DataType::FixedSizeBinary(size) => {
+            Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
+        }
         _ => Box::new(GenericInProgressArray::new()),
     }
 }
@@ -691,9 +749,9 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
 /// Incrementally builds up arrays
 ///
 /// [`GenericInProgressArray`] is the default implementation that buffers
-/// arrays and uses other kernels concatenates them when finished.
+/// arrays, uses other kernels, and concatenates them when finished.
 ///
-/// Some types have specialized implementations for this array types (e.g.,
+/// Some types have specialized, faster implementations (e.g.,
 /// [`StringViewArray`], etc.).
 ///
 /// [`StringViewArray`]: arrow_array::StringViewArray
@@ -706,17 +764,24 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
 
     /// Copy rows from the current source array into the in-progress array
     ///
-    /// The source array is set by [`Self::set_source`].
+    /// Note: The source array is set by [`Self::set_source`].
     ///
     /// Return an error if the source array is not set
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError>;
 
     /// Copy rows selected by `filter` from the current source array.
+    ///
+    /// The default implementation calls [`Self::copy_rows_by_selection`]
     fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
         self.copy_rows_by_selection(filter.selection())
     }
 
-    /// Copy rows selected by `filter` from `source`.
+    /// Copy rows selected by a [`FilterPredicate`] from `source`.
+    ///
+    /// Unlike the other copy methods, the source array is passed in directly,
+    /// which allows implementations more flexibility. The default
+    /// implementation simply sets `source` via [`Self::set_source`] and then
+    /// calls [`Self::copy_rows_by_filter`].
     fn copy_rows_by_filter_from(
         &mut self,
         source: ArrayRef,
@@ -729,6 +794,10 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     }
 
     /// Copy rows described by a [`FilterSelection`] from the current source array.
+    ///
+    /// You typically get a [`FilterSelection`] from [`FilterPredicate::selection`].
+    ///
+    /// Note: The source array is set by [`Self::set_source`].
     fn copy_rows_by_selection(&mut self, selection: FilterSelection<'_>) -> Result<(), ArrowError> {
         match selection {
             FilterSelection::None => Ok(()),
@@ -742,6 +811,9 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
 
     /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
+
+    /// Get the number of bytes this array is using
+    fn size(&self) -> usize;
 }
 
 #[cfg(test)]
@@ -754,11 +826,11 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{
         BinaryViewArray, Int32Array, Int64Array, RecordBatchOptions, StringArray, StringViewArray,
-        TimestampNanosecondArray, UInt32Array, UInt64Array, make_array,
+        TimestampNanosecondArray, UInt32Array, UInt64Array, make_array, record_batch,
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use std::ops::Range;
 
     #[test]
@@ -859,6 +931,7 @@ mod tests {
 
     /// Coalesce multiple batches, 80k rows, with a 0.1% selectivity filter
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_coalesce_filtered_001() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 8000,
@@ -882,6 +955,7 @@ mod tests {
 
     /// Coalesce multiple batches, 80k rows, with a 1% selectivity filter
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_coalesce_filtered_01() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 8000,
@@ -905,6 +979,7 @@ mod tests {
 
     /// Coalesce multiple batches, 80k rows, with a 10% selectivity filter
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_coalesce_filtered_10() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 8000,
@@ -928,6 +1003,7 @@ mod tests {
 
     /// Coalesce multiple batches, 8k rows, with a 90% selectivity filter
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_coalesce_filtered_90() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 800,
@@ -951,6 +1027,7 @@ mod tests {
 
     /// Coalesce multiple batches, 8k rows, with mixed filers, including 100%
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_coalesce_filtered_mixed() {
         let mut filter_builder = RandomFilterBuilder {
             num_rows: 800,
@@ -987,6 +1064,29 @@ mod tests {
     }
 
     #[test]
+    fn test_push_batch_with_filter_builder() {
+        let batch = record_batch!(("a", Int32, [1, 2, 3, 4])).unwrap();
+        // The null is not selected, so the filter selects two rows.
+        let filter = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
+        let expected = record_batch!(("a", Int32, [1, 4])).unwrap();
+
+        // SAFETY: the count matches the filter.
+        let with_count = unsafe { FilterBuilder::new(&filter).with_count(2) };
+        // The coalescer does not optimize a single primitive column itself, so
+        // this covers a predicate that only the caller optimized.
+        let optimized = FilterBuilder::new(&filter).optimize();
+        for filter_builder in [with_count, optimized] {
+            let mut coalescer = BatchCoalescer::new(batch.schema(), 10);
+            coalescer
+                .push_batch_with_filter_builder(batch.clone(), filter_builder)
+                .unwrap();
+            coalescer.finish_buffered_batch().unwrap();
+            assert_eq!(coalescer.next_completed_batch().unwrap(), expected);
+            assert!(coalescer.next_completed_batch().is_none());
+        }
+    }
+
+    #[test]
     fn test_coalesce_non_null() {
         Test::new("coalesce_non_null")
             // 4040 rows of unit32
@@ -997,6 +1097,7 @@ mod tests {
             .run();
     }
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_utf8_split() {
         Test::new("coalesce_utf8")
             // 4040 rows of utf8 strings in total, split into batches of 1024
@@ -1040,6 +1141,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_string_view_batch_large_no_compact() {
         // view with large strings (has buffers) but full --> no need to compact
         let batch = stringview_batch_repeated(1000, [Some("This string is longer than 12 bytes")]);
@@ -1130,6 +1232,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_string_view_mixed() {
         let large_view_batch =
             stringview_batch_repeated(1000, [Some("This string is longer than 12 bytes")]);
@@ -1189,6 +1292,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_string_view_many_small_compact() {
         // 200 rows alternating long (28) and short (≤12) strings.
         // Only the 100 long strings go into data buffers: 100 × 28 = 2800.
@@ -1234,6 +1338,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_string_view_many_small_boundary() {
         // The strings are designed to exactly fit into buffers that are powers of 2 long
         let batch = stringview_batch_repeated(100, [Some("This string is a power of two=32")]);
@@ -1264,6 +1369,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_string_view_large_small() {
         // The strings are 37 bytes long, so each batch has 100 * 28 = 2800 bytes
         let mixed_batch = stringview_batch_repeated(
@@ -1315,6 +1421,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_binary_view() {
         let values: Vec<Option<&[u8]>> = vec![
             Some(b"foo"),
@@ -1674,7 +1781,7 @@ mod tests {
     impl Default for Test {
         fn default() -> Self {
             Self {
-                name: "".to_string(),
+                name: String::new(),
                 input_batches: vec![],
                 filters: vec![],
                 schema: None,
@@ -1983,7 +2090,7 @@ mod tests {
         RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
     }
 
-    /// Return a RecordBatch with a StringArrary with values `value0`, `value1`, ...
+    /// Return a RecordBatch with a StringArray with values `value0`, `value1`, ...
     /// and every third value is `None`.
     fn utf8_batch(range: Range<u32>) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Utf8, true)]));
@@ -2027,7 +2134,7 @@ mod tests {
         let values: Vec<_> = values.into_iter().collect();
         let values_iter = std::iter::repeat(values.iter())
             .flatten()
-            .cloned()
+            .copied()
             .take(num_rows);
 
         let mut builder = StringViewBuilder::with_capacity(100).with_fixed_block_size(8192);
@@ -2138,12 +2245,12 @@ mod tests {
         // Only need to normalize StringViews (as == also tests for memory layout)
         let (schema, mut columns, row_count) = batch.into_parts();
 
-        for column in columns.iter_mut() {
+        for column in &mut columns {
             if let Some(string_view) = column.as_string_view_opt() {
                 // Re-create the StringViewArray to ensure memory layout is
                 // consistent
                 let mut builder = StringViewBuilder::new();
-                for s in string_view.iter() {
+                for s in string_view {
                     builder.append_option(s);
                 }
                 *column = Arc::new(builder.finish());
@@ -2513,8 +2620,7 @@ mod tests {
             assert_eq!(
                 coalescer.get_buffered_rows(),
                 0,
-                "Buffer should be empty before batch {}",
-                i
+                "Buffer should be empty before batch {i}"
             );
 
             coalescer.push_batch(large_batch).unwrap();
@@ -2522,29 +2628,25 @@ mod tests {
             // Each large batch should bypass and produce exactly one output batch
             assert!(
                 coalescer.has_completed_batch(),
-                "Should have completed batch after pushing batch {}",
-                i
+                "Should have completed batch after pushing batch {i}"
             );
 
             let output = coalescer.next_completed_batch().unwrap();
             assert_eq!(
                 output.num_rows(),
                 expected_size,
-                "Batch {} should have bypassed with original size",
-                i
+                "Batch {i} should have bypassed with original size"
             );
 
             // Should be no more batches and buffer should be empty
             assert!(
                 !coalescer.has_completed_batch(),
-                "Should have no more completed batches after batch {}",
-                i
+                "Should have no more completed batches after batch {i}"
             );
             assert_eq!(
                 coalescer.get_buffered_rows(),
                 0,
-                "Buffer should be empty after batch {}",
-                i
+                "Buffer should be empty after batch {i}"
             );
 
             all_outputs.push(output);
@@ -2681,6 +2783,114 @@ mod tests {
         assert!(
             err.contains("Batch has 2 columns but BatchCoalescer expects 0"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_size_grows_with_buffering_and_shrinks_when_draining() {
+        let batch = uint32_batch(0..8);
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 21);
+        let baseline = coalescer.size();
+        assert!(baseline > 0, "size includes container capacities");
+
+        // Buffer rows without completing a batch
+        coalescer.push_batch(batch.clone()).unwrap();
+        assert!(coalescer.next_completed_batch().is_none());
+        let buffered = coalescer.size();
+        assert!(
+            buffered > baseline,
+            "buffering rows should grow size ({buffered} > {baseline})"
+        );
+
+        // Push enough to complete several batches
+        for _ in 0..10 {
+            coalescer.push_batch(batch.clone()).unwrap();
+        }
+        let peak = coalescer.size();
+        assert!(peak > buffered);
+
+        // Draining completed batches must never grow the reported size
+        let mut prev = peak;
+        let mut drained_any = false;
+        while coalescer.next_completed_batch().is_some() {
+            drained_any = true;
+            let now = coalescer.size();
+            assert!(now <= prev, "size grew while draining: {now} > {prev}");
+            prev = now;
+        }
+        assert!(drained_any);
+        assert!(
+            prev < peak,
+            "draining completed batches should release memory"
+        );
+    }
+
+    #[test]
+    fn test_size_string_view_buffers_released_after_drain() {
+        // Long strings spill into external data buffers, exercising the byte-view
+        // size accounting through the real coalescer path (including compaction).
+        let batch = stringview_batch_repeated(
+            1000,
+            [Some("this string is definitely longer than 12 bytes")],
+        );
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 4096);
+        let baseline = coalescer.size();
+
+        for _ in 0..20 {
+            coalescer.push_batch(batch.clone()).unwrap();
+        }
+        let peak = coalescer.size();
+        assert!(
+            peak > baseline,
+            "buffered string view data should grow size ({peak} > {baseline})"
+        );
+
+        coalescer.finish_buffered_batch().unwrap();
+        while coalescer.next_completed_batch().is_some() {}
+
+        // Once fully drained the in-progress byte-view buffers are released.
+        let drained = coalescer.size();
+        assert!(
+            drained < peak,
+            "draining should release buffered data ({drained} < {peak})"
+        );
+    }
+
+    /// Every byte added to the accounting must eventually be removed: running the
+    /// exact same push/finish/drain sequence twice must report identical sizes.
+    /// This catches accounting leaks and drift without hard-coding magic numbers.
+    #[test]
+    fn test_size_accounting_conserved_across_cycles() {
+        // Primitive column: internal capacities stabilize after the first cycle
+        // (unlike byte-view, whose buffer sizer keeps growing), so the readings
+        // are deterministic across cycles.
+        let batch = uint32_batch(0..8);
+        let mut coalescer = BatchCoalescer::new(batch.schema(), 4096);
+
+        let run_cycle = |coalescer: &mut BatchCoalescer| {
+            for _ in 0..20 {
+                coalescer.push_batch(batch.clone()).unwrap();
+            }
+            coalescer.finish_buffered_batch().unwrap();
+            let peak = coalescer.size();
+            while coalescer.next_completed_batch().is_some() {}
+            (peak, coalescer.size())
+        };
+
+        let (peak1, drained1) = run_cycle(&mut coalescer);
+        let (peak2, drained2) = run_cycle(&mut coalescer);
+
+        assert_eq!(
+            peak1, peak2,
+            "identical work must report identical peak size"
+        );
+        assert_eq!(
+            drained1, drained2,
+            "fully-drained size must be stable across cycles (no accounting leak)"
+        );
+        assert!(
+            drained1 < peak1,
+            "draining must release the accounted memory"
         );
     }
 }

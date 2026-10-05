@@ -18,38 +18,14 @@
 # tests for arrow crate
 name: arrow
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  # always trigger
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - .github/**
-      - rust-toolchain.toml
-      - arrow-arith/**
-      - arrow-array/**
-      - arrow-buffer/**
-      - arrow-cast/**
-      - arrow-csv/**
-      - arrow-data/**
-      - arrow-integration-test/**
-      - arrow-ipc/**
-      - arrow-json/**
-      - arrow-avro/**
-      - arrow-ord/**
-      - arrow-row/**
-      - arrow-schema/**
-      - arrow-select/**
-      - arrow-string/**
-      - arrow/**
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
-
   # test the crate
   linux-test:
     name: Test
@@ -73,6 +49,8 @@ jobs:
           cargo test -p arrow-array --all-features
           # Disable feature `force_validate`
           cargo test -p arrow-array --features=ffi
+      - name: Test arrow-cmp
+        run: cargo test -p arrow-cmp --all-features
       - name: Test arrow-select
         run: cargo test -p arrow-select --all-features
       - name: Test arrow-cast
@@ -122,6 +100,16 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
+      - name: Enable all instruction set extensions of the runner CPU
+        # Compile for the CPU of the runner so that code gated on
+        # `cfg(target_feature = ...)`  is built and tested rather than the
+        # portable fallback. The portable fallbacks are tested in debug builds
+        run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-cpu=native" >> $GITHUB_ENV
+      - name: Display runner CPU features
+        # `rustc --print cfg` does not read RUSTFLAGS, so pass
+        # `-C target-cpu=native` explicitly to show the features that
+        # the tests below are actually compiled with
+        run: rustc --print cfg -C target-cpu=native | grep target_feature
       # Note only run the low level crates in release mode
       # which are the most likely to have overflow tests
       - name: Test arrow-buffer
@@ -233,6 +221,14 @@ jobs:
       - name: Clippy arrow-array
         run: |
           mod=arrow-array
+          cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # Dependency checks excluding tests & benches.
+          cargo clippy -p "$mod" -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
+          cargo clippy -p "$mod" --no-default-features -- -D unused_crate_dependencies
+      - name: Clippy arrow-cmp
+        run: |
+          mod=arrow-cmp
           cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
           # Dependency checks excluding tests & benches.
           cargo clippy -p "$mod" -- -D unused_crate_dependencies

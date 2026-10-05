@@ -254,10 +254,7 @@ mod test {
             wkb_array_xy([Some((1.0, 2.0)), Some((11.0, 12.0))]),
             create_array!(
                 Binary,
-                [
-                    "this is not valid wkb".as_bytes(),
-                    &wkb_point_xy(31.0, 32.0)
-                ]
+                [b"this is not valid wkb", &wkb_point_xy(31.0, 32.0)]
             ),
             wkb_array_xy([Some((21.0, 22.0)), None]),
             wkb_array_xy([None, None]),
@@ -437,7 +434,7 @@ mod test {
             // Geometry with default CRS (defaults to OGC:CRS84 per Parquet spec)
             (LogicalType::geometry(None), r#"{"crs":"OGC:CRS84"}"#),
             // Geometry with srid:0 should result in an unset (omitted) CRS
-            (LogicalType::geometry(Some("srid:0".to_string())), r#"{}"#),
+            (LogicalType::geometry(Some("srid:0".to_string())), "{}"),
             // Geometry with custom CRSes (authority:code and partial projjson)
             (
                 LogicalType::geometry(Some("EPSG:4267".to_string())),
@@ -538,7 +535,7 @@ mod test {
         // Test cases: (extension metadata JSON, expected LogicalType)
         let test_cases = [
             // Geometry with no CRS should be GEOMETRY(srid:0)
-            (r#"{}"#, LogicalType::geometry(Some("srid:0".to_string()))),
+            ("{}", LogicalType::geometry(Some("srid:0".to_string()))),
             // Geometry with string CRS
             (
                 r#"{"crs":"EPSG:4267"}"#,

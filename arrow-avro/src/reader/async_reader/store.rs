@@ -23,7 +23,7 @@ use futures::stream::BoxStream;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt};
-use tokio::runtime::Handle;
+use tokio::runtime;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -40,12 +40,18 @@ use std::sync::Arc;
 const STREAM_BUFFER_SIZE: usize = 2;
 
 /// An implementation of an AsyncFileReader using the [`ObjectStore`] API.
+#[deprecated(
+    since = "59.2.0",
+    note = "Implement `AsyncFileReader` directly instead; see the example on the `AsyncFileReader` trait documentation and `arrow-avro/examples/object_store.rs`. Use `SpawnedReader` to perform I/O on a dedicated runtime. See also https://github.com/apache/arrow-rs/issues/10308"
+)]
+#[derive(Clone, Debug)]
 pub struct AvroObjectReader {
     store: Arc<dyn ObjectStore>,
     path: Path,
-    runtime: Option<Handle>,
+    runtime: Option<runtime::Handle>,
 }
 
+#[expect(deprecated)]
 impl AvroObjectReader {
     /// Creates a new [`Self`] from a store implementation and file location.
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
@@ -64,7 +70,11 @@ impl AvroObjectReader {
     /// other issues. For more information see [here].
     ///
     /// [here]: https://www.influxdata.com/blog/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
-    pub fn with_runtime(self, handle: Handle) -> Self {
+    #[deprecated(
+        since = "59.2.0",
+        note = "Wrap the reader in a `SpawnedReader` instead, e.g. `SpawnedReader::new(reader, handle)`. See also https://github.com/apache/arrow-rs/issues/10308"
+    )]
+    pub fn with_runtime(self, handle: runtime::Handle) -> Self {
         Self {
             runtime: Some(handle),
             ..self
@@ -82,7 +92,7 @@ impl AvroObjectReader {
             + Send
             + 'static,
         O: Send + 'static,
-        E: Error + Send + 'static,
+        E: Into<AvroError> + Send + 'static,
     {
         match &self.runtime {
             Some(handle) => {
@@ -95,13 +105,11 @@ impl AvroObjectReader {
                             Err(e) => Err(AvroError::External(Box::new(e))),
                             Ok(p) => std::panic::resume_unwind(p),
                         },
-                        |res| res.map_err(|e| AvroError::General(e.to_string())),
+                        |res| res.map_err(Into::into),
                     )
                     .boxed()
             }
-            None => f(&self.store, &self.path)
-                .map_err(|e| AvroError::General(e.to_string()))
-                .boxed(),
+            None => f(&self.store, &self.path).map_err(Into::into).boxed(),
         }
     }
 
@@ -173,6 +181,7 @@ impl AvroObjectReader {
     }
 }
 
+#[expect(deprecated)]
 impl AsyncFileReader for AvroObjectReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>> {
         self.spawn(|store, path| async move { store.get_range(path, range).await }.boxed())
@@ -204,5 +213,53 @@ impl AsyncFileReader for AvroObjectReader {
         Self: Send,
     {
         self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::memory::InMemory;
+
+    fn find_object_store_error(err: &AvroError) -> Option<&object_store::Error> {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+        while let Some(e) = source {
+            if let Some(os) = e.downcast_ref::<object_store::Error>() {
+                return Some(os);
+            }
+            source = e.source();
+        }
+        None
+    }
+
+    #[tokio::test]
+    async fn test_get_bytes_preserves_object_store_error_source() {
+        let store = Arc::new(InMemory::new());
+        #[expect(deprecated)]
+        let mut reader = AvroObjectReader::new(store, Path::from("missing.avro"));
+        let err = reader.get_bytes(0..10).await.unwrap_err();
+        assert!(
+            matches!(
+                find_object_store_error(&err),
+                Some(object_store::Error::NotFound { .. })
+            ),
+            "expected NotFound in source chain, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_bytes_on_runtime_preserves_object_store_error_source() {
+        let store = Arc::new(InMemory::new());
+        #[expect(deprecated)]
+        let mut reader = AvroObjectReader::new(store, Path::from("missing.avro"))
+            .with_runtime(runtime::Handle::current());
+        let err = reader.get_bytes(0..10).await.unwrap_err();
+        assert!(
+            matches!(
+                find_object_store_error(&err),
+                Some(object_store::Error::NotFound { .. })
+            ),
+            "expected NotFound in source chain, got: {err}"
+        );
     }
 }

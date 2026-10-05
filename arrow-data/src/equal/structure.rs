@@ -28,6 +28,9 @@ fn equal_child_values(
     rhs_start: usize,
     len: usize,
 ) -> bool {
+    let lhs_start = lhs_start + lhs.offset();
+    let rhs_start = rhs_start + rhs.offset();
+
     lhs.child_data()
         .iter()
         .zip(rhs.child_data())

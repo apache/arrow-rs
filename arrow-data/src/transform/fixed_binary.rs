@@ -38,6 +38,8 @@ pub(super) fn extend_nulls(
     let size = get_fixed_size_binary_width(&mutable.data_type);
 
     let values_buffer = &mut mutable.buffer1;
-    values_buffer.extend_zeros(len * size);
+    values_buffer
+        .try_extend_zeros(len * size)
+        .map_err(|e| arrow_schema::ArrowError::MemoryError(e.to_string()))?;
     Ok(())
 }

@@ -17,15 +17,16 @@
 
 //! Defines kernel to extract a substring of an Array
 //! Supported array types:
-//! [GenericStringArray], [GenericBinaryArray], [FixedSizeBinaryArray], [DictionaryArray]
+//! [GenericStringArray], [GenericBinaryArray], [GenericByteViewArray],
+//! [FixedSizeBinaryArray], [DictionaryArray]
 
-use arrow_array::builder::BufferBuilder;
+use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_schema::{ArrowError, DataType};
-use num_traits::Zero;
+use num_traits::{CheckedAdd, Zero};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -80,13 +81,17 @@ pub fn substring(
             let values = substring(dictionary.values(), start, length)?;
             Ok(Arc::new(dictionary.with_values(values)))
         }
-        DataType::LargeBinary => {
-            byte_substring(array.as_binary::<i64>(), start, length.map(|e| e as i64))
-        }
+        DataType::LargeBinary => byte_substring(
+            array.as_binary::<i64>(),
+            start,
+            // ensure we saturate to not wrap around to a negative length
+            length.map(u64_to_i64_saturating),
+        ),
         DataType::Binary => byte_substring(
             array.as_binary::<i32>(),
-            start as i32,
-            length.map(|e| e as i32),
+            // ensure to saturate to avoid wrapping to negative which is a different behaviour
+            i64_to_i32_saturating(start),
+            length.map(u64_to_i32_saturating),
         ),
         DataType::FixedSizeBinary(old_len) => {
             let old_len: usize = (*old_len)
@@ -94,14 +99,20 @@ pub fn substring(
                 .expect("negative FixedSizeBinary value length");
             fixed_size_binary_substring(array.as_fixed_size_binary(), old_len, start, length)
         }
-        DataType::LargeUtf8 => {
-            byte_substring(array.as_string::<i64>(), start, length.map(|e| e as i64))
-        }
+        DataType::LargeUtf8 => byte_substring(
+            array.as_string::<i64>(),
+            start,
+            // ensure we saturate to not wrap around to a negative length
+            length.map(u64_to_i64_saturating),
+        ),
         DataType::Utf8 => byte_substring(
             array.as_string::<i32>(),
-            start as i32,
-            length.map(|e| e as i32),
+            // ensure to saturate to avoid wrapping to negative which is a different behaviour
+            i64_to_i32_saturating(start),
+            length.map(u64_to_i32_saturating),
         ),
+        DataType::Utf8View => string_view_substring(array.as_string_view(), start, length),
+        DataType::BinaryView => binary_view_substring(array.as_binary_view(), start, length),
         _ => Err(ArrowError::ComputeError(format!(
             "substring does not support type {:?}",
             array.data_type()
@@ -169,7 +180,7 @@ fn substring_by_char_impl<OffsetSize: OffsetSizeTrait, F: Fn(&str) -> (usize, us
     max_element_len: Option<usize>,
     bounds: F,
 ) -> GenericStringArray<OffsetSize> {
-    let mut vals = BufferBuilder::<u8>::new({
+    let mut vals = Vec::with_capacity({
         let offsets = array.value_offsets();
         let input_len = (offsets[array.len()] - offsets[0]).to_usize().unwrap();
         match max_element_len {
@@ -177,19 +188,19 @@ fn substring_by_char_impl<OffsetSize: OffsetSizeTrait, F: Fn(&str) -> (usize, us
             None => input_len,
         }
     });
-    let mut new_offsets = BufferBuilder::<OffsetSize>::new(array.len() + 1);
-    new_offsets.append(OffsetSize::zero());
+    let mut new_offsets = Vec::with_capacity(array.len() + 1);
+    new_offsets.push(OffsetSize::zero());
 
     array.iter().for_each(|val| {
         if let Some(val) = val {
             let (start_offset, end_offset) = bounds(val);
-            vals.append_slice(&val.as_bytes()[start_offset..end_offset]);
+            vals.extend_from_slice(&val.as_bytes()[start_offset..end_offset]);
         }
-        new_offsets.append(OffsetSize::from_usize(vals.len()).unwrap());
+        new_offsets.push(OffsetSize::from_usize(vals.len()).unwrap());
     });
 
-    let offsets = OffsetBuffer::new(new_offsets.finish().into());
-    let values = vals.finish();
+    let offsets = OffsetBuffer::new(new_offsets.into());
+    let values = vals.into();
     let nulls = array
         .nulls()
         .map(|n| n.inner().sliced())
@@ -247,6 +258,84 @@ fn utf8_bounds(val: &str, start: i64, length: Option<usize>) -> (usize, usize) {
     (start_offset, end_offset)
 }
 
+/// Byte range of one element, following the same rules as [`byte_substring`].
+fn view_substring_range(
+    original_length: usize,
+    start: i64,
+    substring_length: Option<u64>,
+) -> (usize, usize) {
+    let original_length = original_length as i64;
+    let new_start = match start.cmp(&0) {
+        Ordering::Greater => start.min(original_length),
+        Ordering::Equal => 0,
+        Ordering::Less => (original_length + start).max(0),
+    };
+    let new_end = match substring_length {
+        Some(length) => new_start.saturating_add(length as i64).min(original_length),
+        None => original_length,
+    };
+    (new_start as usize, new_end as usize)
+}
+
+fn string_view_substring(
+    array: &StringViewArray,
+    start: i64,
+    length: Option<u64>,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = StringViewBuilder::with_capacity(array.len());
+
+    for idx in 0..array.len() {
+        if array.is_null(idx) {
+            builder.append_null();
+            continue;
+        }
+        let value = array.value(idx);
+        let (new_start, new_end) = view_substring_range(value.len(), start, length);
+        for offset in [new_start, new_end] {
+            if !value.is_char_boundary(offset) {
+                return Err(ArrowError::ComputeError(format!(
+                    "The offset {offset} is at an invalid utf-8 boundary."
+                )));
+            }
+        }
+        builder.append_value(&value[new_start..new_end]);
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+fn binary_view_substring(
+    array: &BinaryViewArray,
+    start: i64,
+    length: Option<u64>,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = BinaryViewBuilder::with_capacity(array.len());
+
+    for idx in 0..array.len() {
+        if array.is_null(idx) {
+            builder.append_null();
+            continue;
+        }
+        let value = array.value(idx);
+        let (new_start, new_end) = view_substring_range(value.len(), start, length);
+        builder.append_value(&value[new_start..new_end]);
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+
+fn i64_to_i32_saturating(value: i64) -> i32 {
+    value.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
+fn u64_to_i32_saturating(value: u64) -> i32 {
+    value.min(i32::MAX as u64) as i32
+}
+
+fn u64_to_i64_saturating(value: u64) -> i64 {
+    value.min(i64::MAX as u64) as i64
+}
+
 fn byte_substring<T: ByteArrayType>(
     array: &GenericByteArray<T>,
     start: T::Offset,
@@ -261,14 +350,17 @@ where
 
     // When array is [Large]StringArray, we will check whether `offset` is at a valid char boundary.
     let check_char_boundary = {
-        |offset: T::Offset| {
+        let first = array.offsets().first().as_usize();
+        let last = array.offsets().last().as_usize();
+        move |offset: T::Offset| {
             if !matches!(T::DATA_TYPE, DataType::Utf8 | DataType::LargeUtf8) {
                 return Ok(offset);
             }
-            // Safety: a StringArray must contain valid UTF8 data
-            let data_str = unsafe { std::str::from_utf8_unchecked(data) };
+            // Safety: in a StringArray, the bytes between the first and last offsets
+            // are valid UTF-8. The bytes outside that range need not be.
+            let data_str = unsafe { std::str::from_utf8_unchecked(&data[first..last]) };
             let offset_usize = offset.as_usize();
-            if data_str.is_char_boundary(offset_usize) {
+            if data_str.is_char_boundary(offset_usize - first) {
                 Ok(offset)
             } else {
                 Err(ArrowError::ComputeError(format!(
@@ -288,12 +380,21 @@ where
         .windows(2)
         .try_for_each(|pair| -> Result<(), ArrowError> {
             let new_start = match start.cmp(&zero) {
-                Ordering::Greater => check_char_boundary((pair[0] + start).min(pair[1]))?,
+                Ordering::Greater => {
+                    // a saturated start can carry pair[0] + start past the offset
+                    // type. that means past the end of this value, so clamp to the
+                    // end rather than let the add wrap.
+                    let shifted = pair[0].checked_add(&start).unwrap_or(pair[1]);
+                    check_char_boundary(shifted.min(pair[1]))?
+                }
                 Ordering::Equal => pair[0],
                 Ordering::Less => check_char_boundary((pair[1] + start).max(pair[0]))?,
             };
             let new_end = match length {
-                Some(length) => check_char_boundary((length + new_start).min(pair[1]))?,
+                Some(length) => {
+                    let end = length.checked_add(&new_start).unwrap_or(pair[1]);
+                    check_char_boundary(end.min(pair[1]))?
+                }
                 None => pair[1],
             };
             len_so_far += new_end - new_start;
@@ -312,7 +413,11 @@ where
             let end = end.as_usize();
             &data[start..end]
         })
-        .for_each(|slice| new_values.extend_from_slice(slice));
+        .try_for_each(|slice| {
+            new_values
+                .try_extend_from_slice(slice)
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))
+        })?;
 
     let offsets = OffsetBuffer::new(new_offsets.into());
     let values = new_values.into();
@@ -357,7 +462,11 @@ fn fixed_size_binary_substring(
             let offset = idx * array.value_size();
             (offset + new_start, offset + new_start + new_len)
         })
-        .for_each(|(start, end)| new_values.extend_from_slice(&data[start..end]));
+        .try_for_each(|(start, end)| {
+            new_values
+                .try_extend_from_slice(&data[start..end])
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))
+        })?;
 
     let mut nulls = array
         .nulls()
@@ -444,7 +553,7 @@ mod tests {
 
     fn with_nulls_generic_binary<O: OffsetSizeTrait>() {
         let input = vec![
-            Some("hello".as_bytes()),
+            Some(b"hello".as_slice()),
             None,
             Some(&[0xf8, 0xf9, 0xff, 0xfa]),
         ];
@@ -485,11 +594,11 @@ mod tests {
     }
 
     fn without_nulls_generic_binary<O: OffsetSizeTrait>() {
-        let input = vec!["hello".as_bytes(), b"", &[0xf8, 0xf9, 0xff, 0xfa]];
+        let input = vec![b"hello".as_slice(), b"", &[0xf8, 0xf9, 0xff, 0xfa]];
         // empty array is always identical
         let base_case = gen_test_cases!(
-            vec!["".as_bytes(), b"", b""],
-            (2, Some(1), vec!["".as_bytes(), b"", b""])
+            vec![b"".as_slice(), b"", b""],
+            (2, Some(1), vec![b"".as_slice(), b"", b""])
         );
         let cases = gen_test_cases!(
             input,
@@ -576,7 +685,7 @@ mod tests {
 
     #[test]
     fn with_nulls_fixed_size_binary() {
-        let input = vec![Some("cat".as_bytes()), None, Some(&[0xf8, 0xf9, 0xff])];
+        let input = vec![Some(b"cat".as_slice()), None, Some(&[0xf8, 0xf9, 0xff])];
         // all-nulls array is always identical
         let base_case =
             gen_test_cases!(vec![None, None, None], (3, Some(2), vec![None, None, None]));
@@ -613,11 +722,11 @@ mod tests {
 
     #[test]
     fn without_nulls_fixed_size_binary() {
-        let input = vec!["cat".as_bytes(), b"dog", &[0xf8, 0xf9, 0xff]];
+        let input = vec![b"cat".as_slice(), b"dog", &[0xf8, 0xf9, 0xff]];
         // empty array is always identical
         let base_case = gen_test_cases!(
-            vec!["".as_bytes(), &[], &[]],
-            (1, Some(2), vec!["".as_bytes(), &[], &[]])
+            vec![b"".as_slice(), &[], &[]],
+            (1, Some(2), vec![b"".as_slice(), &[], &[]])
         );
         let cases = gen_test_cases!(
             input,
@@ -1024,6 +1133,15 @@ mod tests {
     }
 
     #[test]
+    fn check_invalid_bytes_outside_offsets() {
+        // The values buffer holds invalid UTF-8 before and after the visible values
+        let values = Buffer::from_slice_ref(b"\xFFab\x80");
+        let array = StringArray::new(OffsetBuffer::new(vec![1, 3].into()), values, None);
+        let result = substring(&array, 0, Some(5)).unwrap();
+        assert_eq!(result.as_string::<i32>(), &StringArray::from(vec!["ab"]));
+    }
+
+    #[test]
     fn non_utf8_bytes() {
         // non-utf8 bytes
         let bytes: &[u8] = &[0xE4, 0xBD, 0xA0, 0xE5, 0xA5, 0xBD, 0xE8, 0xAF, 0xAD];
@@ -1034,5 +1152,180 @@ mod tests {
         let expected_bytes: &[u8] = &[0xE4, 0xBD, 0xA0, 0xE5, 0xA5];
         let expected = BinaryArray::from(vec![Some(expected_bytes)]);
         assert_eq!(expected, *actual);
+    }
+
+    #[test]
+    fn string_view_matches_utf8() {
+        let values = vec![
+            Some("hello world"),
+            Some(""),
+            None,
+            Some("a"),
+            Some("this one is definitely longer than twelve bytes"),
+        ];
+        let utf8 = StringArray::from(values.clone());
+        let view = StringViewArray::from(values);
+
+        for (start, length) in [
+            (0, None),
+            (0, Some(0)),
+            (0, Some(5)),
+            (0, Some(1000)),
+            (1, Some(3)),
+            (5, None),
+            (100, Some(2)),
+            (100, None),
+            (-3, None),
+            (-3, Some(2)),
+            (-100, Some(4)),
+            (-100, None),
+        ] {
+            let expected = substring(&utf8, start, length).unwrap();
+            let expected = expected.as_string::<i32>();
+            let actual = substring(&view, start, length).unwrap();
+            let actual = actual.as_string_view();
+            assert_eq!(
+                expected.iter().collect::<Vec<_>>(),
+                actual.iter().collect::<Vec<_>>(),
+                "start={start} length={length:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn binary_view_matches_binary() {
+        let values: Vec<Option<&[u8]>> = vec![
+            Some(b"hello world"),
+            Some(b""),
+            None,
+            Some(b"abc"),
+            Some(b"this one is definitely longer than twelve bytes"),
+        ];
+        let binary = BinaryArray::from(values.clone());
+        let view = BinaryViewArray::from(values);
+
+        for (start, length) in [
+            (0, None),
+            (0, Some(5)),
+            (2, Some(3)),
+            (-3, None),
+            (100, Some(2)),
+        ] {
+            let expected = substring(&binary, start, length).unwrap();
+            let expected = expected.as_binary::<i32>();
+            let actual = substring(&view, start, length).unwrap();
+            let actual = actual.as_binary_view();
+            assert_eq!(
+                expected.iter().collect::<Vec<_>>(),
+                actual.iter().collect::<Vec<_>>(),
+                "start={start} length={length:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn string_view_slices_on_a_multi_byte_boundary() {
+        // "é" and "ö" are two bytes, the CJK chars three, so 0/3/6 are the offsets that land
+        // on a char boundary in both values.
+        let values = vec![Some("héllo wörld"), Some("日本語"), None];
+        let utf8 = StringArray::from(values.clone());
+        let view = StringViewArray::from(values);
+
+        for (start, length) in [
+            (0, Some(3)),
+            (3, Some(3)),
+            (0, Some(6)),
+            (3, None),
+            (-3, None),
+            (-6, None),
+        ] {
+            let expected = substring(&utf8, start, length).unwrap();
+            let expected = expected.as_string::<i32>();
+            let actual = substring(&view, start, length).unwrap();
+            let actual = actual.as_string_view();
+            assert_eq!(
+                expected.iter().collect::<Vec<_>>(),
+                actual.iter().collect::<Vec<_>>(),
+                "start={start} length={length:?}"
+            );
+        }
+
+        let actual = substring(&view, 0, Some(3)).unwrap();
+        let actual = actual.as_string_view();
+        assert_eq!(actual.value(0), "hé");
+        assert_eq!(actual.value(1), "日");
+    }
+
+    #[test]
+    fn string_view_rejects_an_invalid_char_boundary() {
+        let view = StringViewArray::from(vec![Some("E=mc²")]);
+        let err = substring(&view, 0, Some(5)).unwrap_err().to_string();
+        assert!(err.contains("invalid utf-8 boundary"), "{err}");
+    }
+
+    #[test]
+    fn dictionary_of_string_view() {
+        let view = StringViewArray::from(vec![Some("hello world"), Some("bye")]);
+        let dict = DictionaryArray::new(Int32Array::from(vec![0, 1, 0]), Arc::new(view));
+
+        let actual = substring(&dict, 0, Some(3)).unwrap();
+        let actual = actual.as_any_dictionary();
+
+        let values = actual.values().as_string_view();
+        assert_eq!(
+            values.iter().collect::<Vec<_>>(),
+            vec![Some("hel"), Some("bye")]
+        );
+    }
+
+    #[test]
+    fn out_of_range_start_and_length_match_the_64_bit_arms() {
+        // use 64 bit offset versions as expected behaviour for extreme start & length values
+        // which should saturate and not wrap
+        let values = vec![Some("hello"), Some("world"), None];
+        let utf8 = StringArray::from(values.clone());
+        let large = LargeStringArray::from(values.clone());
+        let binary = BinaryArray::from_iter(values.iter().map(|v| v.map(|s| s.as_bytes())));
+        let large_binary =
+            LargeBinaryArray::from_iter(values.iter().map(|v| v.map(|s| s.as_bytes())));
+
+        // starts and lengths that do not survive a cast to i32
+        let starts: [i64; 4] = [1 << 31, (1 << 31) + 5, 1 << 32, i64::MAX];
+        let lengths: [Option<u64>; 3] = [None, Some(1 << 31), Some(u64::MAX)];
+
+        for start in starts {
+            for length in lengths {
+                let narrow = substring(&utf8, start, length).unwrap();
+                let wide = substring(&large, start, length).unwrap();
+                assert_eq!(
+                    narrow.as_string::<i32>().iter().collect::<Vec<_>>(),
+                    wide.as_string::<i64>().iter().collect::<Vec<_>>(),
+                    "Utf8 and LargeUtf8 disagree at start {start}, length {length:?}"
+                );
+
+                let narrow = substring(&binary, start, length).unwrap();
+                let wide = substring(&large_binary, start, length).unwrap();
+                assert_eq!(
+                    narrow.as_binary::<i32>().iter().collect::<Vec<_>>(),
+                    wide.as_binary::<i64>().iter().collect::<Vec<_>>(),
+                    "Binary and LargeBinary disagree at start {start}, length {length:?}"
+                );
+            }
+        }
+
+        // and the answer itself is the sensible one: skipping more characters
+        // than the value holds leaves nothing behind.
+        let out = substring(&utf8, 1 << 31, None).unwrap();
+        assert_eq!(
+            out.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some(""), Some(""), None]
+        );
+
+        // starts that already fit are untouched
+        let out = substring(&utf8, 3, None).unwrap();
+        assert_eq!(
+            out.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("lo"), Some("ld"), None]
+        );
     }
 }

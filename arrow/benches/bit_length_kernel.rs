@@ -19,8 +19,6 @@
 extern crate criterion;
 use criterion::Criterion;
 
-extern crate arrow;
-
 use arrow::{array::*, compute::kernels::length::bit_length};
 use std::hint;
 

@@ -33,7 +33,7 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
     let iter = unaligned
         .prefix()
         .into_iter()
-        .chain(unaligned.chunks().iter().cloned())
+        .chain(unaligned.chunks().iter().copied())
         .chain(unaligned.suffix());
 
     iter.rev().flat_map(move |chunk| {

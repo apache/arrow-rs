@@ -19,7 +19,145 @@
 
 use crate::bit_chunk_iterator::BitChunks;
 
+/// Parallel bit extract: for each set bit in `mask`, extract the
+/// corresponding bit from `value` and pack them contiguously into the low
+/// bits of the return value.
+///
+/// Equivalent to the x86 BMI2 `PEXT` instruction. When compiled with the
+/// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
+/// this lowers to the hardware `pext` instruction; otherwise it falls back
+/// to a portable scalar loop.
+///
+/// # Functional Example
+///
+/// Using 8 bits for brevity (the function operates on all 64). Each
+/// set bit in `mask` selects the bit at the same position in `value`; the
+/// selected bits are then shifted down so they are contiguous in the low
+/// bits of the result, in their original order:
+///
+/// ```text
+/// bit:     7 6 5 4 3 2 1 0
+/// value:   a b c d e f g h
+/// mask:    0 1 1 0 1 1 0 1      set bits select b, c, e, f and h
+///            | |   | |   |
+///            v v   v v   v      copy the relevant bits into result
+/// result:  0 0 0 b c e f h
+/// ```
+///
+/// # Code Example
+///
+/// ```
+/// # use arrow_buffer::bit_util::compress;
+/// assert_eq!(compress(0b1011_0100, 0b0110_1101), 0b0000_1010);
+/// ```
+//
+// Replace with `value.compress(mask)` when `uint_gather_scatter_bits` is
+// stabilised: <https://github.com/rust-lang/rust/issues/149069>
+#[inline]
+pub fn compress(value: u64, mask: u64) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    {
+        // SAFETY: the `bmi2` target feature is statically enabled for this
+        // build, so the `pext` instruction is guaranteed to be available.
+        unsafe { std::arch::x86_64::_pext_u64(value, mask) }
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        let mut mask = mask;
+        let mut result = 0_u64;
+        let mut dest_bit = 1_u64;
+        while mask != 0 {
+            // Clear the lowest set bit; the loop-carried dependency is only
+            // this two-operation chain, everything else hangs off it
+            let rest = mask & (mask - 1);
+            let lowest = mask ^ rest;
+            let keep = ((value & lowest) != 0) as u64;
+            result |= dest_bit & keep.wrapping_neg();
+            dest_bit <<= 1;
+            mask = rest;
+        }
+        result
+    }
+}
+
+/// Parallel bit deposit: scatter the lowest `mask.count_ones()` bits of
+/// `value` into the set positions of `mask`, preserving their order.
+/// All other bits in the result are zero; excess input bits are ignored.
+///
+/// This is the inverse of [`compress`] on the selected bits:
+/// `expand(compress(value, mask), mask) == value & mask`.
+///
+/// Equivalent to the x86 BMI2 `PDEP` instruction. When compiled with the
+/// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
+/// this lowers to the hardware `pdep` instruction; otherwise it falls back
+/// to a portable scalar loop that visits whichever is fewer: unset or set
+/// bits in `mask`.
+///
+/// # Functional Example
+///
+/// Using 8 bits for brevity (the function operates on all 64). The low bits
+/// of `value` are scattered into the set positions of `mask`:
+///
+/// ```text
+/// bit:     7 6 5 4 3 2 1 0
+/// value:   0 0 0 b c e f h
+/// mask:    0 1 1 0 1 1 0 1
+/// result:  0 b c 0 e f 0 h
+/// ```
+///
+/// # Code Example
+///
+/// ```
+/// # use arrow_buffer::bit_util::{compress, expand};
+/// assert_eq!(expand(0b0000_1010, 0b0110_1101), 0b0010_0100);
+/// let value = 0b1011_0100;
+/// let mask = 0b0110_1101;
+/// assert_eq!(expand(compress(value, mask), mask), value & mask);
+/// ```
+#[inline]
+pub fn expand(value: u64, mask: u64) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    {
+        // SAFETY: the `bmi2` target feature is statically enabled for this
+        // build, so the `pdep` instruction is guaranteed to be available.
+        unsafe { std::arch::x86_64::_pdep_u64(value, mask) }
+    }
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        let mut value = value;
+        if value == 0 {
+            return 0;
+        }
+
+        let mut zeros = !mask;
+        if zeros.count_ones() <= 32 {
+            // Insert zeros from low to high; excess input bits shift out.
+            while zeros != 0 {
+                let lower = (1_u64 << zeros.trailing_zeros()) - 1;
+                value = (value & lower) | ((value & !lower) << 1);
+                zeros &= zeros - 1;
+            }
+            value
+        } else {
+            let mut output = 0;
+            let mut ones = mask;
+            while ones != 0 {
+                output |= (value & 1) << ones.trailing_zeros();
+                value >>= 1;
+                ones &= ones - 1;
+            }
+            output
+        }
+    }
+}
+
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
+///
+/// # Panics
+///
+/// Panics if rounding `num` up overflows `usize`
 #[inline]
 pub fn round_upto_multiple_of_64(num: usize) -> usize {
     num.checked_next_multiple_of(64)
@@ -28,6 +166,10 @@ pub fn round_upto_multiple_of_64(num: usize) -> usize {
 
 /// Returns the nearest multiple of `factor` that is `>=` than `num`. Here `factor` must
 /// be a power of 2.
+///
+/// # Panics
+///
+/// Panics if rounding `num` up overflows `usize`
 pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
     debug_assert!(factor > 0 && factor.is_power_of_two());
     num.checked_add(factor - 1)
@@ -36,6 +178,10 @@ pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
 }
 
 /// Returns whether bit at position `i` in `data` is set or not
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn get_bit(data: &[u8], i: usize) -> bool {
     data[i / 8] & (1 << (i % 8)) != 0
@@ -53,6 +199,10 @@ pub unsafe fn get_bit_raw(data: *const u8, i: usize) -> bool {
 }
 
 /// Sets bit at position `i` for `data` to 1
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn set_bit(data: &mut [u8], i: usize) {
     data[i / 8] |= 1 << (i % 8);
@@ -72,6 +222,10 @@ pub unsafe fn set_bit_raw(data: *mut u8, i: usize) {
 }
 
 /// Sets bit at position `i` for `data` to 0
+///
+/// # Panics
+///
+/// Panics if `i / 8 >= data.len()`
 #[inline]
 pub fn unset_bit(data: &mut [u8], i: usize) {
     data[i / 8] &= !(1 << (i % 8));
@@ -168,6 +322,10 @@ pub(crate) fn read_up_to_byte_from_offset(
 /// * `len_in_bits` - Number of bits to process
 /// * `op` - Binary operation to apply (e.g., `|a, b| a & b`). Applied a word at a time
 ///
+/// Only the bits in `left_offset_in_bits..left_offset_in_bits + len_in_bits` are
+/// modified. Bits of `left` outside that range are left unchanged, including the
+/// bits sharing a byte with either end of the range.
+///
 /// # Example: Modify entire buffer
 /// ```
 /// # use arrow_buffer::MutableBuffer;
@@ -235,7 +393,7 @@ pub fn apply_bitwise_binary_op<F>(
             let right_byte_offset = right_offset_in_bits / 8;
 
             // Read the same amount of bits from the right buffer
-            let right_first_byte: u8 = crate::util::bit_util::read_up_to_byte_from_offset(
+            let right_first_byte = crate::util::bit_util::read_up_to_byte_from_offset(
                 &right.as_ref()[right_byte_offset..],
                 bits_to_next_byte,
                 // Right bit offset
@@ -247,6 +405,7 @@ pub fn apply_bitwise_binary_op<F>(
                 // Hope it gets inlined
                 &mut |left| op(left, right_first_byte as u64),
                 left_offset_in_bits,
+                bits_to_next_byte,
             );
         }
 
@@ -279,6 +438,10 @@ pub fn apply_bitwise_binary_op<F>(
 /// * `offset_in_bits` - Starting bit offset for the current buffer
 /// * `len_in_bits` - Number of bits to process
 /// * `op` - Unary operation to apply (e.g., `|a| !a`). Applied a word at a time
+///
+/// Only the bits in `offset_in_bits..offset_in_bits + len_in_bits` are modified.
+/// Bits outside that range are left unchanged, including the bits sharing a byte
+/// with either end of the range.
 ///
 /// # Example: Modify entire buffer
 /// ```
@@ -325,7 +488,7 @@ pub fn apply_bitwise_unary_op<F>(
     if is_mutable_buffer_byte_aligned {
         byte_aligned_bitwise_unary_op_helper(buffer, offset_in_bits, len_in_bits, op);
     } else {
-        align_to_byte(buffer, &mut op, offset_in_bits);
+        align_to_byte(buffer, &mut op, offset_in_bits, len_in_bits);
 
         // If we are not byte aligned we will read the first few bits
         let bits_to_next_byte = 8 - left_bit_offset;
@@ -449,12 +612,22 @@ fn byte_aligned_bitwise_unary_op_helper<F>(
 /// * `op` - Unary operation to apply
 /// * `buffer` - The mutable buffer to modify
 /// * `offset_in_bits` - Starting bit offset (not byte-aligned)
-fn align_to_byte<F>(buffer: &mut [u8], op: &mut F, offset_in_bits: usize)
-where
+/// * `remaining_len_in_bits` - Number of bits still to process starting at `offset_in_bits`.
+///   When this is smaller than the number of bits left in the byte, the trailing bits of
+///   the byte are left untouched.
+fn align_to_byte<F>(
+    buffer: &mut [u8],
+    op: &mut F,
+    offset_in_bits: usize,
+    remaining_len_in_bits: usize,
+) where
     F: FnMut(u64) -> u64,
 {
     let byte_offset = offset_in_bits / 8;
     let bit_offset = offset_in_bits % 8;
+
+    // Byte aligned offsets must take the byte aligned path instead
+    debug_assert_ne!(bit_offset, 0, "offset_in_bits must not be byte aligned");
 
     // 1. read the first byte from the buffer
     let first_byte: u8 = buffer[byte_offset];
@@ -468,12 +641,16 @@ where
     // 4. Shift back the result to the original position
     let result_first_byte = result_first_byte << bit_offset;
 
-    // 5. Mask the bits that are outside the relevant bits in the byte
-    //    so the bits until bit_offset are 1 and the rest are 0
-    let mask_for_first_bit_offset = (1 << bit_offset) - 1;
+    // 5. Mask in only the bits the caller asked to process, i.e. the bits in
+    //    `bit_offset..bit_offset + bits_in_this_byte`. The request may end before the
+    //    byte boundary, in which case the trailing bits must be preserved as well.
+    //
+    //    `bit_offset` is in `1..=7` per the assert above, so `bits_in_this_byte` is at
+    //    most 7 and `bits_in_this_byte + bit_offset <= 8`, keeping the mask within a `u8`.
+    let bits_in_this_byte = (8 - bit_offset).min(remaining_len_in_bits);
+    let write_mask = ((1u8 << bits_in_this_byte) - 1) << bit_offset;
 
-    let result_first_byte =
-        (first_byte & mask_for_first_bit_offset) | (result_first_byte & !mask_for_first_bit_offset);
+    let result_first_byte = (first_byte & !write_mask) | (result_first_byte & write_mask);
 
     // 6. write back the result to the buffer
     buffer[byte_offset] = result_first_byte;
@@ -531,7 +708,11 @@ impl<'a> U64UnalignedSlice<'a> {
         assert!(u64_len_in_bytes <= left_buffer_mut.len());
         let (bytes_for_u64, remainder) = left_buffer_mut.split_at_mut(u64_len_in_bytes);
 
-        let ptr = bytes_for_u64.as_mut_ptr() as *mut u64;
+        #[expect(
+            clippy::cast_ptr_alignment,
+            reason = "`U64UnalignedSlice` only reads and writes through the unaligned methods"
+        )]
+        let ptr = bytes_for_u64.as_mut_ptr().cast::<u64>();
 
         let this = Self {
             ptr,
@@ -621,6 +802,8 @@ impl<'a> U64UnalignedSlice<'a> {
         // make the last pointer invalid, we handle the first element outside the loop
         // and then advance the pointer at the start of the loop
         // making sure that the iterator is not empty
+        // Safety: `self.len > 0` (checked above) and the pointer has not been advanced yet,
+        // so it is valid for reads and writes.
         unsafe {
             // I hope the function get inlined and the compiler remove the dead right parameter
             self.apply_bin_op(0, &mut |left, _| map(left));
@@ -719,7 +902,9 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
             // Unwrap as we already validated the slice is not empty
             .unwrap();
 
-        let current = *current as u64;
+        // Shift the boundary byte to the position it occupies within `rem`, otherwise
+        // its bits would be compared against the wrong end of the mask below
+        let current = (*current as u64) << ((start_remainder_mut_slice.len() - 1) * 8);
 
         // Mask where the bits that are inside the remainder are 1
         // and the bits outside the remainder are 0
@@ -740,7 +925,7 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
 
     // Write back the result to the mutable slice
     {
-        let remainder_bytes = self::ceil(remainder_len, 8);
+        let remainder_bytes = start_remainder_mut_slice.len();
 
         // we are counting starting from the least significant bit, so to_le_bytes should be correct
         let rem = &rem.to_le_bytes()[0..remainder_bytes];
@@ -749,6 +934,9 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
         // without calling `to_byte_slice` for each element,
         // which is correct for all ArrowNativeType implementations including u64.
         let src = rem.as_ptr();
+        // Safety: `rem` has length `remainder_bytes`, `start_remainder_mut_slice` has length
+        // `remainder_bytes`, and the two slices are non-overlapping (rem is derived from a
+        // local `to_le_bytes()` call; start_remainder_mut_slice is the caller's mutable buffer).
         unsafe {
             std::ptr::copy_nonoverlapping(
                 src,
@@ -784,7 +972,7 @@ fn get_remainder_bits(remainder: &[u8], remainder_len: usize) -> u64 {
         .iter()
         .enumerate()
         .fold(0_u64, |acc, (index, &byte)| {
-            acc | (byte as u64) << (index * 8)
+            acc | ((byte as u64) << (index * 8))
         });
 
     bits & ((1 << remainder_len) - 1)
@@ -826,7 +1014,85 @@ mod tests {
     use crate::bit_iterator::BitIterator;
     use crate::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer};
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
+
+    #[test]
+    fn test_compress() {
+        // Reference: gather the `mask`-selected bits of `value` into
+        // contiguous low bits, least-significant first
+        fn reference(value: u64, mask: u64) -> u64 {
+            (0..64)
+                .filter(|&i| (mask >> i) & 1 == 1)
+                .enumerate()
+                .map(|(dest, i)| ((value >> i) & 1) << dest)
+                .sum()
+        }
+
+        assert_eq!(compress(0b1010, 0b1111), 0b1010);
+        assert_eq!(compress(0b1010, 0b1010), 0b11);
+        assert_eq!(compress(0b1010, 0b0101), 0);
+        assert_eq!(compress(u64::MAX, 0), 0);
+        assert_eq!(compress(0, u64::MAX), 0);
+        assert_eq!(compress(u64::MAX, u64::MAX), u64::MAX);
+
+        // On a `bmi2` build this validates the hardware `pext` path,
+        // otherwise the portable fallback
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..1024 {
+            let (value, mask): (u64, u64) = rng.random();
+            assert_eq!(
+                compress(value, mask),
+                reference(value, mask),
+                "value={value:#x} mask={mask:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_expand() {
+        fn reference(values: u64, mask: u64) -> u64 {
+            let mut expected = 0;
+            let mut input_idx = 0;
+            for output_idx in 0..64 {
+                if mask & (1 << output_idx) != 0 {
+                    expected |= ((values >> input_idx) & 1) << output_idx;
+                    input_idx += 1;
+                }
+            }
+            expected
+        }
+
+        assert_eq!(expand(0b1010, 0b1111), 0b1010);
+        assert_eq!(expand(0b11, 0b1010), 0b1010);
+        assert_eq!(expand(u64::MAX, 0), 0);
+        assert_eq!(expand(0, u64::MAX), 0);
+        assert_eq!(expand(0, 0x5555_5555_5555_5555), 0);
+        assert_eq!(expand(u64::MAX, u64::MAX), u64::MAX);
+
+        let mut rng = StdRng::seed_from_u64(0x2b7e_1516_28ae_d2a6);
+
+        // Masks with at most one unset bit or at most one set bit
+        for bit in 0..64 {
+            for mask in [u64::MAX, !(1 << bit), 1 << bit, 0] {
+                for _ in 0..16 {
+                    let values = rng.random::<u64>();
+                    assert_eq!(expand(values, mask), reference(values, mask), "{mask:#x}");
+                }
+            }
+        }
+
+        // Masks across the full density range, exercising the hardware `pdep`
+        // path on a `bmi2` build or both portable loops otherwise.
+        for _ in 0..20_000 {
+            let density = rng.random_range(0.0..=1.0);
+            let mask = (0..64).fold(0_u64, |mask, bit| {
+                mask | ((rng.random_bool(density) as u64) << bit)
+            });
+            let values = rng.random::<u64>();
+            assert_eq!(expand(compress(values, mask), mask), values & mask);
+            assert_eq!(expand(values, mask), reference(values, mask), "{mask:#x}");
+        }
+    }
 
     #[test]
     fn test_round_upto_multiple_of_64() {
@@ -1105,6 +1371,8 @@ mod tests {
             .map(|(l, r)| expected_op(*l, *r))
             .collect();
 
+        let before = left_buffer.as_slice().to_vec();
+
         apply_bitwise_binary_op(
             left_buffer.as_slice_mut(),
             left_offset_in_bits,
@@ -1119,9 +1387,40 @@ mod tests {
 
         assert_eq!(
             result, expected,
-            "Failed with left_offset={}, right_offset={}, len={}",
-            left_offset_in_bits, right_offset_in_bits, len_in_bits
+            "Failed with left_offset={left_offset_in_bits}, right_offset={right_offset_in_bits}, len={len_in_bits}"
         );
+
+        assert_bits_outside_range_preserved(
+            &before,
+            left_buffer.as_slice(),
+            left_offset_in_bits,
+            len_in_bits,
+            &format!(
+                "left_offset={left_offset_in_bits}, right_offset={right_offset_in_bits}, len={len_in_bits}"
+            ),
+        );
+    }
+
+    /// Asserts that every bit outside `offset_in_bits..offset_in_bits + len_in_bits`
+    /// is identical in `before` and `after`.
+    fn assert_bits_outside_range_preserved(
+        before: &[u8],
+        after: &[u8],
+        offset_in_bits: usize,
+        len_in_bits: usize,
+        context: &str,
+    ) {
+        assert_eq!(before.len(), after.len());
+        for i in 0..before.len() * 8 {
+            if i >= offset_in_bits && i < offset_in_bits + len_in_bits {
+                continue;
+            }
+            assert_eq!(
+                get_bit(before, i),
+                get_bit(after, i),
+                "bit {i} outside the requested range was modified ({context})"
+            );
+        }
     }
 
     /// Verifies that a unary operation applied to a buffer using u64 chunks
@@ -1146,6 +1445,8 @@ mod tests {
             .map(|b| expected_op(*b))
             .collect();
 
+        let before = buffer.as_slice().to_vec();
+
         apply_bitwise_unary_op(buffer.as_slice_mut(), offset_in_bits, len_in_bits, op);
 
         let result: Vec<bool> =
@@ -1153,8 +1454,15 @@ mod tests {
 
         assert_eq!(
             result, expected,
-            "Failed with offset={}, len={}",
-            offset_in_bits, len_in_bits
+            "Failed with offset={offset_in_bits}, len={len_in_bits}"
+        );
+
+        assert_bits_outside_range_preserved(
+            &before,
+            buffer.as_slice(),
+            offset_in_bits,
+            len_in_bits,
+            &format!("offset={offset_in_bits}, len={len_in_bits}"),
         );
     }
 
@@ -1421,6 +1729,66 @@ mod tests {
             left_offset_in_bits,
             right_offset_in_bits,
             len_in_bits,
+        );
+    }
+
+    /// Ranges that start and end inside the same non-byte-aligned byte must not
+    /// touch the trailing bits of that byte.
+    #[test]
+    fn test_ops_ending_inside_the_first_partial_byte() {
+        let (left, right) = create_test_data(32);
+        for offset in 1..8 {
+            // Inclusive so the range ending exactly on the byte boundary is covered too
+            for len in 1..=(8 - offset) {
+                test_all_binary_ops(&left, &right, offset, offset, len);
+                test_all_binary_ops(&left, &right, offset, (offset + 3) % 8, len);
+                test_mutable_buffer_unary_op_helper(&left, offset, len, |a| !a, |a| !a);
+            }
+        }
+    }
+
+    #[test]
+    fn test_and_within_first_partial_byte_preserves_trailing_bits() {
+        let mut left = vec![0b11111111u8, 0b11111111u8];
+        let right = vec![0b00000000u8, 0b00000000u8];
+        // AND a single bit at bit offset 1: only bit 1 may be cleared
+        apply_bitwise_binary_op(&mut left, 1, &right, 0, 1, |a, b| a & b);
+        assert_eq!(left, vec![0b11111101u8, 0b11111111u8]);
+    }
+
+    #[test]
+    fn test_not_within_first_partial_byte_preserves_trailing_bits() {
+        let mut buffer = vec![0b00000000u8];
+        // NOT two bits at bit offset 3: only bits 3 and 4 may be flipped
+        apply_bitwise_unary_op(&mut buffer, 3, 2, |a| !a);
+        assert_eq!(buffer, vec![0b00011000u8]);
+    }
+
+    /// When the remainder spans more than one byte, the byte holding the end of the
+    /// range is the *last* byte of the remainder, not the first. Its bits above the
+    /// remainder must survive.
+    #[test]
+    fn test_or_with_multi_byte_remainder_preserves_boundary_bits() {
+        let mut left = vec![0b00000000u8, 0b00000000u8, 0b11110000u8];
+        let right = vec![0b11111111u8, 0b11111111u8, 0b11111111u8];
+        // OR over 20 bits: bits 20..24 of `left` are outside the range and must stay set
+        apply_bitwise_binary_op(&mut left, 0, &right, 0, 20, |a, b| a | b);
+        assert_eq!(
+            left,
+            vec![0b11111111u8, 0b11111111u8, 0b11111111u8],
+            "the boundary byte lost its out-of-range bits"
+        );
+    }
+
+    #[test]
+    fn test_not_with_multi_byte_remainder_preserves_boundary_bits() {
+        let mut buffer = vec![0b00000000u8, 0b00000000u8, 0b11111111u8];
+        // NOT over 20 bits: only bits 16..20 of the last byte may be flipped
+        apply_bitwise_unary_op(&mut buffer, 0, 20, |a| !a);
+        assert_eq!(
+            buffer,
+            vec![0b11111111u8, 0b11111111u8, 0b11110000u8],
+            "the boundary byte lost its out-of-range bits"
         );
     }
 

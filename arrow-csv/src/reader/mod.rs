@@ -186,8 +186,8 @@ use arrow_array::timezone::Tz;
 static REGEX_SET: LazyLock<RegexSet> = LazyLock::new(|| {
     RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?(\d+)$",                   //INTEGER
-        r"^-?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
+        r"^[+-]?(\d+)$",                //INTEGER
+        r"^[+-]?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
         r"^\d{4}-\d\d-\d\d$",           //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
@@ -351,6 +351,98 @@ impl Format {
         self
     }
 
+    /// Infer format settings from the CSV records in `reader`
+    ///
+    /// This currently infers whether the first record is a header. Up to
+    /// `max_records` records after the first record are inspected; if `None`, all
+    /// records are read. Detection is conservative and returns no header when the
+    /// sampled records do not provide type evidence. Returns the updated format
+    /// and the number of records read, including the first header candidate.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use arrow_csv::reader::Format;
+    /// use std::io::Cursor;
+    ///
+    /// let csv = "name,count\nalice,1\nbob,2\n";
+    /// let (format, format_records_read) =
+    ///     Format::default().infer_format(Cursor::new(csv), Some(10))?;
+    /// let (schema, records_read) = format.infer_schema(Cursor::new(csv), None)?;
+    ///
+    /// assert_eq!(schema.field(0).name(), "name");
+    /// assert_eq!(format_records_read, 3);
+    /// assert_eq!(records_read, 2);
+    /// # Ok::<_, arrow_schema::ArrowError>(())
+    /// ```
+    pub fn infer_format<R: Read>(
+        mut self,
+        reader: R,
+        max_records: Option<usize>,
+    ) -> Result<(Self, usize), ArrowError> {
+        let (header, records_read) = self.infer_header(reader, max_records)?;
+        self.header = header;
+        Ok((self, records_read))
+    }
+
+    /// Infer whether the first CSV record is a header
+    ///
+    /// Inspects up to `max_records` records after the first record. Returns `true`
+    /// when a value in the first record is text while the remaining values in the
+    /// same column have a consistent non-text type.
+    fn infer_header<R: Read>(
+        &self,
+        reader: R,
+        max_records: Option<usize>,
+    ) -> Result<(bool, usize), ArrowError> {
+        let mut format = self.clone();
+        format.header = false;
+        let mut csv_reader = format.build_reader(reader);
+
+        let mut first_record = StringRecord::new();
+        if !csv_reader
+            .read_record(&mut first_record)
+            .map_err(map_csv_error)?
+        {
+            return Ok((false, 0));
+        }
+
+        let mut first_types = vec![InferredDataType::default(); first_record.len()];
+        for (value, inferred) in first_record.iter().zip(&mut first_types) {
+            if !self.null_regex.is_null(value) {
+                inferred.update(value);
+            }
+        }
+
+        let mut column_types = vec![InferredDataType::default(); first_record.len()];
+        let mut record = StringRecord::new();
+        let mut records_count = 0;
+        let max_records = max_records.unwrap_or(usize::MAX);
+        while records_count < max_records
+            && csv_reader.read_record(&mut record).map_err(map_csv_error)?
+        {
+            records_count += 1;
+            for (value, inferred) in record.iter().zip(&mut column_types) {
+                if !self.null_regex.is_null(value) {
+                    inferred.update(value);
+                }
+            }
+        }
+
+        let has_header = first_types
+            .iter()
+            .zip(&column_types)
+            .zip(first_record.iter())
+            .any(|((first, rest), value)| {
+                // Numeric-looking values (e.g. +1) are not header evidence, even
+                // when ordinary schema inference conservatively treats them as text.
+                first.get() == DataType::Utf8
+                    && value.parse::<f64>().is_err()
+                    && !matches!(rest.get(), DataType::Utf8 | DataType::Null)
+            });
+        Ok((has_header, records_count + 1))
+    }
+
     /// Infer schema of CSV records from the provided `reader`
     ///
     /// If `max_records` is `None`, all records will be read, otherwise up to `max_records`
@@ -393,10 +485,10 @@ impl Format {
             // Note since we may be looking at a sample of the data, we make the safe assumption that
             // they could be nullable
             for (i, column_type) in column_types.iter_mut().enumerate().take(header_length) {
-                if let Some(string) = record.get(i) {
-                    if !self.null_regex.is_null(string) {
-                        column_type.update(string)
-                    }
+                if let Some(string) = record.get(i)
+                    && !self.null_regex.is_null(string)
+                {
+                    column_type.update(string)
                 }
             }
         }
@@ -472,7 +564,7 @@ pub fn infer_schema_from_files(
         ..Default::default()
     };
 
-    for fname in files.iter() {
+    for fname in files {
         let f = File::open(fname)?;
         let (schema, records_read) = format.infer_schema(f, Some(records_to_read))?;
         if records_read == 0 {
@@ -506,6 +598,8 @@ pub struct BufReader<R> {
     reader: R,
     /// The decoder
     decoder: Decoder,
+    /// Schema of the record batches produced by this reader
+    schema: SchemaRef,
 }
 
 impl<R> fmt::Debug for BufReader<R>
@@ -519,18 +613,51 @@ where
     }
 }
 
+impl<R> BufReader<R> {
+    /// The number of rows padded because they had fewer fields than the schema
+    ///
+    /// Always 0 unless [`ReaderBuilder::with_truncated_rows`] was set to `true`.
+    ///
+    /// The count is cumulative over the lifetime of this reader, so reading it
+    /// between batches yields a running total of the rows read so far, and reading it
+    /// once the reader is exhausted yields the total for the whole input. Rows that
+    /// are skipped rather than read into a batch, such as a header row or rows before
+    /// the start bound, do not contribute.
+    ///
+    /// A padded row is indistinguishable from a row with genuinely empty trailing
+    /// fields once it has been read, so this counter is the only way to tell the two
+    /// apart.
+    ///
+    /// ```
+    /// # use std::io::Cursor;
+    /// # use std::sync::Arc;
+    /// # use arrow_csv::ReaderBuilder;
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// #
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, true),
+    ///     Field::new("b", DataType::Int32, true),
+    /// ]));
+    ///
+    /// let mut reader = ReaderBuilder::new(schema)
+    ///     .with_truncated_rows(true)
+    ///     .build(Cursor::new("1,2\n3\n"))
+    ///     .unwrap();
+    ///
+    /// let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+    /// assert_eq!(batches[0].num_rows(), 2);
+    /// assert_eq!(reader.truncated_row_count(), 1);
+    /// ```
+    pub fn truncated_row_count(&self) -> usize {
+        self.decoder.truncated_row_count()
+    }
+}
+
 impl<R: Read> Reader<R> {
     /// Returns the schema of the reader, useful for getting the schema without reading
     /// record batches
     pub fn schema(&self) -> SchemaRef {
-        match &self.decoder.projection {
-            Some(projection) => {
-                let fields = self.decoder.schema.fields();
-                let projected = projection.iter().map(|i| fields[*i].clone());
-                Arc::new(Schema::new(projected.collect::<Fields>()))
-            }
-            None => self.decoder.schema.clone(),
-        }
+        self.schema.clone()
     }
 }
 
@@ -564,7 +691,7 @@ impl<R: BufRead> Iterator for BufReader<R> {
 
 impl<R: BufRead> RecordBatchReader for BufReader<R> {
     fn schema(&self) -> SchemaRef {
-        self.decoder.schema.clone()
+        self.schema.clone()
     }
 }
 
@@ -690,8 +817,7 @@ impl Decoder {
         let rows = self.record_decoder.flush()?;
         let batch = parse(
             &rows,
-            self.schema.fields(),
-            Some(self.schema.metadata.clone()),
+            &self.schema,
             self.projection.as_ref(),
             self.line_number,
             &self.null_regex,
@@ -703,6 +829,23 @@ impl Decoder {
     /// Returns the number of records that can be read before requiring a call to [`Self::flush`]
     pub fn capacity(&self) -> usize {
         self.batch_size - self.record_decoder.len()
+    }
+
+    /// The number of rows padded because they had fewer fields than the schema
+    ///
+    /// Always 0 unless [`ReaderBuilder::with_truncated_rows`] was set to `true`.
+    ///
+    /// The count is cumulative over the lifetime of this decoder and is not reset by
+    /// [`Self::flush`], so reading it between batches yields a running total of the
+    /// rows decoded so far, and reading it once the input is exhausted yields the
+    /// total for the whole stream. Rows that are skipped rather than decoded into a
+    /// batch, such as a header row or rows before the start bound, do not contribute.
+    ///
+    /// A padded row is indistinguishable from a row with genuinely empty trailing
+    /// fields once it has been decoded, so this counter is the only way to tell the
+    /// two apart.
+    pub fn truncated_row_count(&self) -> usize {
+        self.record_decoder.truncated_row_count()
     }
 }
 
@@ -727,16 +870,17 @@ fn validate_header(rows: &StringRecords<'_>, fields: &Fields) -> Result<(), Arro
 /// Parses a slice of [`StringRecords`] into a [RecordBatch]
 fn parse(
     rows: &StringRecords<'_>,
-    fields: &Fields,
-    metadata: Option<std::collections::HashMap<String, String>>,
+    schema: &Schema,
     projection: Option<&Vec<usize>>,
     line_number: usize,
     null_regex: &NullRegex,
 ) -> Result<RecordBatch, ArrowError> {
+    let fields = schema.fields();
     let projection: Vec<usize> = match projection {
         Some(v) => v.clone(),
         None => fields.iter().enumerate().map(|(i, _)| i).collect(),
     };
+    let projected_schema = Arc::new(schema.project(&projection)?);
 
     let arrays: Result<Vec<ArrayRef>, _> = projection
         .iter()
@@ -965,22 +1109,13 @@ fn parse(
         })
         .collect();
 
-    let projected_fields: Fields = projection.iter().map(|i| fields[*i].clone()).collect();
-
-    let projected_schema = Arc::new(match metadata {
-        None => Schema::new(projected_fields),
-        Some(metadata) => Schema::new_with_metadata(projected_fields, metadata),
-    });
-
-    arrays.and_then(|arr| {
-        RecordBatch::try_new_with_options(
-            projected_schema,
-            arr,
-            &RecordBatchOptions::new()
-                .with_match_field_names(true)
-                .with_row_count(Some(rows.len())),
-        )
-    })
+    RecordBatch::try_new_with_options(
+        projected_schema,
+        arrays?,
+        &RecordBatchOptions::new()
+            .with_match_field_names(true)
+            .with_row_count(Some(rows.len())),
+    )
 }
 
 fn parse_bool(string: &str) -> Option<bool> {
@@ -1293,9 +1428,15 @@ impl ReaderBuilder {
 
     /// Create a new `BufReader` from a buffered reader
     pub fn build_buffered<R: BufRead>(self, reader: R) -> Result<BufReader<R>, ArrowError> {
+        let schema = match &self.projection {
+            Some(projection) => Arc::new(self.schema.project(projection)?),
+            None => self.schema.clone(),
+        };
+
         Ok(BufReader {
             reader,
             decoder: self.build_decoder(),
+            schema,
         })
     }
 
@@ -1337,6 +1478,31 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use arrow_array::cast::AsArray;
+    use arrow_cast::display::array_value_to_string;
+
+    #[test]
+    fn test_infer_schema_leading_plus_numbers() {
+        for (csv, expected_type) in [
+            ("+1\n2\n-3\n", DataType::Int64),
+            ("+1.5\n2.5\n-3.5\n", DataType::Float64),
+            ("+1e3\n+2.5e-2\n-3E+2\n", DataType::Float64),
+            ("+9223372036854775807\n0\n", DataType::Int64),
+            ("+9223372036854775808\n0\n", DataType::Utf8),
+            ("+-1\n2\n", DataType::Utf8),
+            ("+\n2\n", DataType::Utf8),
+        ] {
+            let (schema, records_read) = Format::default()
+                .infer_schema(Cursor::new(csv), None)
+                .unwrap();
+            assert_eq!(schema.field(0).data_type(), &expected_type, "CSV: {csv:?}");
+            // Inferred numeric types must also be accepted by the CSV decoder.
+            let reader = ReaderBuilder::new(Arc::new(schema))
+                .build(Cursor::new(csv))
+                .unwrap();
+            let rows: usize = reader.map(|batch| batch.unwrap().num_rows()).sum();
+            assert_eq!(rows, records_read, "CSV: {csv:?}");
+        }
+    }
 
     #[test]
     fn test_csv() {
@@ -1384,7 +1550,7 @@ mod tests {
         assert_eq!(37, batch.num_rows());
         assert_eq!(3, batch.num_columns());
 
-        assert_eq!(&metadata, batch.schema().metadata());
+        assert_eq!(batch.schema().metadata(), &metadata);
     }
 
     #[test]
@@ -1410,7 +1576,7 @@ mod tests {
         assert_eq!("53.002666", lat.value_as_string(1));
         assert_eq!("52.412811", lat.value_as_string(2));
         assert_eq!("51.481583", lat.value_as_string(3));
-        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("12.123457", lat.value_as_string(4));
         assert_eq!("50.760000", lat.value_as_string(5));
         assert_eq!("0.123000", lat.value_as_string(6));
         assert_eq!("123.000000", lat.value_as_string(7));
@@ -1436,6 +1602,61 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_reader_decimal_parsing() {
+        // Rounding half away from zero, surrounding whitespace, exponent
+        // notation and negative scales are all accepted
+        let data = " 1.995 ,1.5e2,1234.5,0e0\n-0.005,-1.5E-2,-150,1E+2\n123,+.5,5,-7\n";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Decimal128(10, 2), false),
+            Field::new("b", DataType::Decimal64(18, 2), false),
+            Field::new("c", DataType::Decimal128(10, -2), false),
+            Field::new("d", DataType::Decimal32(9, 0), false),
+        ]));
+        let mut csv = ReaderBuilder::new(schema).build(Cursor::new(data)).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+        let column = |i: usize| {
+            (0..batch.num_rows())
+                .map(|row| array_value_to_string(batch.column(i), row).unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(column(0), ["2.00", "-0.01", "123.00"]);
+        assert_eq!(column(1), ["150.00", "-0.02", "0.50"]);
+        assert_eq!(
+            batch.column(2).as_primitive::<Decimal128Type>().values(),
+            &[12, -2, 0]
+        );
+        assert_eq!(column(3), ["0", "100", "-7"]);
+
+        // Invalid and out-of-range values are errors, never panics
+        for (data, expected) in [
+            ("abc\n", "Invalid decimal format: \"abc\""),
+            ("1.2.3\n", "Invalid decimal format: \"1.2.3\""),
+            (
+                "123456789\n",
+                "\"123456789\" does not fit in Decimal128(5, 2)",
+            ),
+            ("1e99999\n", "does not fit in Decimal128(5, 2)"),
+            (
+                &format!("{}\n", "1".repeat(300)),
+                "does not fit in Decimal128(5, 2)",
+            ),
+            (
+                "4825037936439135476.2609835314269495255615E-14\n",
+                "does not fit in Decimal128(5, 2)",
+            ),
+        ] {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "a",
+                DataType::Decimal128(5, 2),
+                false,
+            )]));
+            let mut csv = ReaderBuilder::new(schema).build(Cursor::new(data)).unwrap();
+            let err = csv.next().unwrap().unwrap_err().to_string();
+            assert!(err.contains(expected), "{data:?}: {err}");
+        }
+    }
+
+    #[test]
     fn test_csv_reader_with_decimal_3264() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
@@ -1458,7 +1679,7 @@ mod tests {
         assert_eq!("53.002666", lat.value_as_string(1));
         assert_eq!("52.412811", lat.value_as_string(2));
         assert_eq!("51.481583", lat.value_as_string(3));
-        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("12.123457", lat.value_as_string(4));
         assert_eq!("50.760000", lat.value_as_string(5));
         assert_eq!("0.123000", lat.value_as_string(6));
         assert_eq!("123.000000", lat.value_as_string(7));
@@ -1506,6 +1727,111 @@ mod tests {
     }
 
     #[test]
+    fn test_infer_format_with_typed_columns() {
+        let csv = "name,count,active\nalice,1,true\nbob,2,false\n";
+
+        let (format, format_records_read) = Format::default()
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "name");
+        assert_eq!(schema.field(1).name(), "count");
+        assert_eq!(schema.field(2).name(), "active");
+        assert_eq!(format_records_read, 3);
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_without_header() {
+        let csv = "1,true\n2,false\n";
+
+        let (format, format_records_read) = Format::default()
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "column_1");
+        assert_eq!(schema.field(1).name(), "column_2");
+        assert_eq!(format_records_read, 2);
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_returns_no_header_when_ambiguous() {
+        for csv in ["name,count\n", "alice,london\nbob,paris\n"] {
+            let (format, _) = Format::default()
+                .infer_format(Cursor::new(csv), None)
+                .unwrap();
+            let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
+            assert_eq!(schema.field(0).name(), "column_1", "CSV: {csv:?}");
+        }
+
+        let (format, format_records_read) = Format::default()
+            .infer_format(Cursor::new(""), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(""), None).unwrap();
+        assert!(schema.fields().is_empty());
+        assert_eq!(format_records_read, 0);
+        assert_eq!(records_read, 0);
+    }
+
+    #[test]
+    fn test_infer_format_honors_format_options() {
+        let csv = "name;count\nalice;1\nbob;2\n";
+        let (format, _) = Format::default()
+            .with_delimiter(b';')
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+
+        assert_eq!(schema.field(0).name(), "name");
+        assert_eq!(schema.field(1).name(), "count");
+        assert_eq!(records_read, 2);
+    }
+
+    #[test]
+    fn test_infer_format_respects_max_records() {
+        let csv = "name,count\nalice,1\nbob,unknown\n";
+        let infer = |max_records| {
+            let (format, records_read) = Format::default()
+                .infer_format(Cursor::new(csv), max_records)
+                .unwrap();
+            let (schema, _) = format.infer_schema(Cursor::new(csv), None).unwrap();
+            (schema.field(0).name().clone(), records_read)
+        };
+
+        assert_eq!(infer(Some(1)), ("name".to_string(), 2));
+        assert_eq!(infer(None), ("column_1".to_string(), 3));
+        assert_eq!(infer(Some(0)), ("column_1".to_string(), 1));
+    }
+
+    #[test]
+    fn test_infer_format_numeric_text_is_not_header() {
+        for csv in [
+            "+1\n2\n3\n",
+            "+1.5\n2.5\n3.5\n",
+            "+1e3\n2e3\n3e3\n",
+            "9223372036854775808\n2\n3\n",
+        ] {
+            let (format, records_read) = Format::default()
+                .infer_format(Cursor::new(csv), None)
+                .unwrap();
+            let (schema, schema_records_read) =
+                format.infer_schema(Cursor::new(csv), None).unwrap();
+            let (ordinary_schema, _) = Format::default()
+                .infer_schema(Cursor::new(csv), None)
+                .unwrap();
+
+            assert_eq!(schema.field(0).name(), "column_1", "CSV: {csv:?}");
+            assert_eq!(schema, ordinary_schema, "CSV: {csv:?}");
+            assert_eq!(records_read, 3);
+            assert_eq!(schema_records_read, 3);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_csv_with_schema_inference() {
         let mut file = File::open("test/data/uk_cities_with_headers.csv").unwrap();
 
@@ -1547,6 +1873,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_csv_with_schema_inference_no_headers() {
         let mut file = File::open("test/data/uk_cities.csv").unwrap();
 
@@ -1586,6 +1913,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_csv_builder_with_bounds() {
         let mut file = File::open("test/data/uk_cities.csv").unwrap();
 
@@ -1638,6 +1966,73 @@ mod tests {
         assert_eq!(projected_schema, batch.schema());
         assert_eq!(37, batch.num_rows());
         assert_eq!(2, batch.num_columns());
+    }
+
+    #[test]
+    fn test_csv_record_batch_reader_schema() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let cases = [
+            None,
+            Some(vec![]),
+            Some(vec![1]),
+            Some(vec![1, 0]),
+            Some(vec![1, 1]),
+        ];
+        for projection in cases {
+            let builder = ReaderBuilder::new(schema.clone());
+            let builder = match projection {
+                Some(projection) => builder.with_projection(projection),
+                None => builder,
+            };
+            let mut reader = builder.build(Cursor::new(b"1,2\n")).unwrap();
+
+            let reader_schema = RecordBatchReader::schema(&reader);
+            let batch = reader.next().unwrap().unwrap();
+
+            assert_eq!(reader_schema, batch.schema());
+        }
+    }
+
+    #[test]
+    fn test_csv_reader_rejects_invalid_projection() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let result = ReaderBuilder::new(schema)
+            .with_projection(vec![2])
+            .build(Cursor::new(b"1,2\n"));
+
+        assert!(matches!(
+            result,
+            Err(ArrowError::SchemaError(message))
+                if message == "project index 2 out of bounds, max field 2"
+        ));
+    }
+
+    #[test]
+    fn test_csv_decoder_rejects_invalid_projection() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let mut decoder = ReaderBuilder::new(schema)
+            .with_projection(vec![2])
+            .build_decoder();
+
+        decoder.decode(b"1,2\n").unwrap();
+        let result = decoder.flush();
+
+        assert!(matches!(
+            result,
+            Err(ArrowError::SchemaError(message))
+                if message == "project index 2 out of bounds, max field 2"
+        ));
     }
 
     #[test]
@@ -1758,6 +2153,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_init_nulls_with_inference() {
         let format = Format::default().with_header(true).with_delimiter(b',');
 
@@ -1818,6 +2214,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_nulls_with_inference() {
         let mut file = File::open("test/data/various_types.csv").unwrap();
         let format = Format::default().with_header(true).with_delimiter(b'|');
@@ -1876,6 +2273,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_custom_nulls_with_inference() {
         let mut file = File::open("test/data/custom_null_test.csv").unwrap();
 
@@ -1912,6 +2310,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_scientific_notation_with_inference() {
         let mut file = File::open("test/data/scientific_notation_test.csv").unwrap();
         let format = Format::default().with_header(false).with_delimiter(b',');
@@ -1993,6 +2392,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_infer_field_schema() {
         assert_eq!(infer_field_schema("A"), DataType::Utf8);
         assert_eq!(infer_field_schema("\"123\""), DataType::Utf8);
@@ -2136,6 +2536,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_infer_schema_from_multiple_files() {
         let mut csv1 = NamedTempFile::new().unwrap();
         let mut csv2 = NamedTempFile::new().unwrap();
@@ -2551,7 +2952,7 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(match batches {
-            Err(ArrowError::CsvError(e)) => e.to_string().contains("incorrect number of fields"),
+            Err(ArrowError::CsvError(e)) => e.contains("incorrect number of fields"),
             _ => false,
         });
     }
@@ -2626,6 +3027,143 @@ mod tests {
         assert!(dob.is_null(5));
     }
 
+    /// Schema used by the `truncated_row_count` tests below
+    fn truncated_row_count_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("age", DataType::Int32, true),
+            Field::new("city", DataType::Utf8, true),
+        ]))
+    }
+
+    #[test]
+    fn test_truncated_row_count_counts_padded_rows() {
+        let data = "name,age,city\nAlice,25,Rome\nBob,30\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(reader.truncated_row_count(), 1);
+    }
+
+    #[test]
+    fn test_truncated_row_count_ignores_empty_trailing_field() {
+        // "Carol,35," has all three fields, the last one just happens to be empty, so it
+        // parses to the same null as a padded row would. The count must not be inferred
+        // from the nulls in the batch
+        let data = "name,age,city\nAlice,25,Rome\nCarol,35,\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 2);
+        assert!(batch.column(2).is_null(1));
+        assert_eq!(reader.truncated_row_count(), 0);
+    }
+
+    #[test]
+    fn test_truncated_row_count_clean_file() {
+        let data = "name,age,city\nAlice,25,Rome\nBob,30,Milan\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(reader.truncated_row_count(), 0);
+    }
+
+    #[test]
+    fn test_truncated_row_count_without_truncated_rows() {
+        let data = "name,age,city\nAlice,25,Rome\nBob,30\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(false)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        // The short row is an error rather than something to count
+        let err = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap_err();
+        assert!(
+            err.to_string().contains("incorrect number of fields"),
+            "{err}"
+        );
+        assert_eq!(reader.truncated_row_count(), 0);
+    }
+
+    #[test]
+    fn test_truncated_row_count_accumulates_across_batches() {
+        // Six short rows read two at a time
+        let data = "name,age,city\nn0,0\nn1,1\nn2,2\nn3,3\nn4,4\nn5,5\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .with_batch_size(2)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let mut running = vec![];
+        while let Some(batch) = reader.next().transpose().unwrap() {
+            assert_eq!(batch.num_rows(), 2);
+            running.push(reader.truncated_row_count());
+        }
+
+        // A running total, not a per batch count
+        assert_eq!(running, vec![2, 4, 6]);
+        assert_eq!(reader.truncated_row_count(), 6);
+    }
+
+    #[test]
+    fn test_truncated_row_count_excludes_skipped_rows() {
+        // The header is one field short of the schema, so skipping it pads it. Skipped
+        // rows never reach a batch and must not be counted
+        let data = "name,age\nAlice,25,Rome\nBob,30,Milan\n";
+
+        let mut reader = ReaderBuilder::new(truncated_row_count_schema())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(reader.truncated_row_count(), 0);
+    }
+
+    #[test]
+    fn test_truncated_row_count_on_decoder() {
+        let data = "1,2\n3\n";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let mut decoder = ReaderBuilder::new(schema)
+            .with_truncated_rows(true)
+            .build_decoder();
+
+        assert_eq!(decoder.truncated_row_count(), 0);
+        let decoded = decoder.decode(data.as_bytes()).unwrap();
+        assert_eq!(decoded, data.len());
+        decoder.flush().unwrap().unwrap();
+        assert_eq!(decoder.truncated_row_count(), 1);
+    }
+
     #[test]
     fn test_truncated_rows_not_nullable_error() {
         let data = "a,b,c\n1,2,3\n4,5";
@@ -2643,13 +3181,13 @@ mod tests {
 
         let batches = reader.collect::<Result<Vec<_>, _>>();
         assert!(match batches {
-            Err(ArrowError::InvalidArgumentError(e)) =>
-                e.to_string().contains("contains null values"),
+            Err(ArrowError::InvalidArgumentError(e)) => e.contains("contains null values"),
             _ => false,
         });
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_buffered() {
         let tests = [
             ("test/data/uk_cities.csv", false, 37),
@@ -2810,6 +3348,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_inference() {
         let cases: &[(&[&str], DataType)] = &[
             (&[], DataType::Null),
@@ -2878,6 +3417,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_record_length_mismatch() {
         let csv = "\
         a,b,c\n\
@@ -2993,6 +3533,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_float_precision() {
         let data = [
             "f16,f32,f64",

@@ -35,7 +35,7 @@ use parquet::{
         ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask,
         arrow_reader::{
             ArrowPredicateFn, ArrowReaderOptions, RowFilter, RowSelection, RowSelectionPolicy,
-            RowSelector,
+            RowSelector, metrics::ArrowReaderMetrics,
         },
     },
     file::{
@@ -166,6 +166,78 @@ async fn test_row_filter_full_page_skip_is_handled_async() {
                 );
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn test_cached_mask_reads_sparse_pages_without_error() {
+    let values = (0..60).collect::<Vec<i64>>();
+    let data = make_two_column_i64_file(&values, 20);
+
+    for policy in [
+        RowSelectionPolicy::Auto { threshold: 32 },
+        RowSelectionPolicy::Mask,
+    ] {
+        let metrics = ArrowReaderMetrics::enabled();
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data.clone()),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+        )
+        .await
+        .unwrap();
+        let schema = builder.parquet_schema().clone();
+        let projection = ProjectionMask::leaves(&schema, [0]);
+        let page_first_rows = builder
+            .metadata()
+            .page_index()
+            .unwrap()
+            .page_locations(0, 0)
+            .unwrap()
+            .iter()
+            .map(|page| page.first_row_index)
+            .collect::<Vec<_>>();
+        assert_eq!(page_first_rows, vec![0, 20, 40]);
+
+        let predicate = ArrowPredicateFn::new(projection.clone(), |batch: RecordBatch| {
+            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+        });
+        // Extending the first mask chunk to the 20-row page boundary would make
+        // the 8-row cache batch at rows 16..24 cross into the unloaded middle page.
+        let stream = builder
+            .with_projection(projection)
+            .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+            .with_row_selection(RowSelection::from(vec![
+                RowSelector::select(1),
+                RowSelector::skip(39),
+                RowSelector::select(1),
+            ]))
+            .with_batch_size(8)
+            .with_max_predicate_cache_size(1024)
+            .with_row_selection_policy(policy)
+            .with_metrics(metrics.clone())
+            .build()
+            .unwrap();
+
+        let output_schema = stream.schema().clone();
+        let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+        let output = concat_batches(&output_schema, &batches).unwrap();
+        assert_eq!(
+            output
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[0, 40],
+            "policy={policy:?}"
+        );
+        assert!(
+            metrics
+                .records_read_from_cache()
+                .expect("metrics are enabled")
+                > 0,
+            "predicate cache was not exercised for policy={policy:?}"
+        );
     }
 }
 
@@ -311,11 +383,18 @@ async fn test_mask_nested_projection_with_different_page_boundaries() {
     )
     .await
     .unwrap();
-    let page_first_rows = builder.metadata().offset_index().unwrap()[0]
-        .iter()
-        .map(|column| {
-            column
-                .page_locations()
+    let num_columns = builder
+        .metadata()
+        .file_metadata()
+        .schema_descr()
+        .num_columns();
+    let page_index = builder.metadata().page_index().unwrap();
+    let page_first_rows = (0..num_columns)
+        .into_iter()
+        .map(|idx| {
+            page_index
+                .page_locations(0, idx)
+                .unwrap()
                 .iter()
                 .map(|page| page.first_row_index)
                 .collect::<Vec<_>>()
@@ -708,7 +787,7 @@ async fn test_predicate_pushdown_with_skipped_pages() {
         PageIndexPolicy::Optional,
         PageIndexPolicy::Required,
     ] {
-        println!("Testing with page index policy: {:?}", policy);
+        println!("Testing with page index policy: {policy:?}");
         let reader = TestReader::new(buffer.clone());
         let options = ArrowReaderOptions::default().with_page_index_policy(policy);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(reader, options)
@@ -804,7 +883,7 @@ async fn test_multi_predicate_auto_mask_with_sparse_pages() {
     // filter_col: 0 for first and last 100 rows, 1 for middle 100 rows
     // value_col: just row index
     let filter_values: Vec<i32> = (0..num_rows as i32)
-        .map(|i| if (100..200).contains(&i) { 1 } else { 0 })
+        .map(|i| i32::from((100..200).contains(&i)))
         .collect();
     let value_values: Vec<i32> = (0..num_rows as i32).collect();
 
@@ -888,4 +967,71 @@ async fn test_multi_predicate_auto_mask_with_sparse_pages() {
     // That's even-indexed rows in [0,100) with value<250 → rows 0,2,4,...,98 (50 rows)
     // Plus even-indexed rows in [200,250) with value<250 → rows 200,202,...,248 (25 rows)
     assert_eq!(batch.num_rows(), 75);
+}
+
+/// Regression test: a Mask cursor built directly from a `BooleanBuffer`
+/// (rather than from `Vec<RowSelector>`) must also stay within loaded row
+/// ranges when page pruning leaves sparse column data.
+///
+/// The buffer is a non-byte-aligned `BooleanBuffer::slice(...)` so the direct
+/// `BooleanBuffer -> MaskCursor` path is exercised with a bit offset. The
+/// selection keeps only the first and last of 12 rows (2 rows per page), so
+/// the four middle pages are never fetched. Without loaded-range propagation
+/// in `new_mask_from_buffer`, decoding would cross the unloaded pages and fail
+/// with an invalid sparse-page offset.
+#[tokio::test]
+async fn test_mask_from_boolean_buffer_slice_with_sparse_pages() {
+    use arrow_buffer::BooleanBuffer;
+
+    let num_rows = 12;
+    let values = (0..num_rows).collect::<Vec<i64>>();
+    let data = make_two_column_i64_file(&values, 2);
+
+    // 5 padding bits force the sliced mask to start mid-byte.
+    let mut bits = vec![true; 5];
+    bits.push(true); // row 0 selected
+    bits.extend(std::iter::repeat_n(false, 10)); // rows 1..=10 skipped
+    bits.push(true); // row 11 selected
+    bits.extend([false, true, false]); // trailing padding outside the slice
+    let mask = BooleanBuffer::from(bits).slice(5, num_rows as usize);
+
+    for policy in [
+        RowSelectionPolicy::Mask,
+        RowSelectionPolicy::Auto { threshold: 32 },
+    ] {
+        let stream = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data.clone()),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+        )
+        .await
+        .unwrap()
+        .with_row_selection(RowSelection::from_boolean_buffer(mask.clone()))
+        .with_batch_size(num_rows as usize)
+        .with_row_selection_policy(policy)
+        .build()
+        .unwrap();
+
+        let schema = stream.schema().clone();
+        let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2],
+            "policy={policy:?}"
+        );
+
+        let batch = concat_batches(&schema, &batches).unwrap();
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[0, 11],
+            "policy={policy:?}"
+        );
+    }
 }

@@ -34,13 +34,16 @@ use std::task::{Context, Poll};
 
 mod async_file_reader;
 mod builder;
+mod spawn;
 
 pub use async_file_reader::AsyncFileReader;
 pub use builder::{ReaderBuilder, read_header_info};
+pub use spawn::SpawnedReader;
 
 #[cfg(feature = "object_store")]
 mod store;
 
+#[expect(deprecated)]
 #[cfg(feature = "object_store")]
 pub use store::AvroObjectReader;
 
@@ -369,7 +372,7 @@ impl<R: AsyncFileReader + Unpin + 'static> Stream for AsyncAvroFileReader<R> {
     }
 }
 
-#[cfg(all(test, feature = "object_store"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::codec::Tz;
@@ -380,7 +383,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::*;
-    use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+    use arrow_schema::{DataType, Field, Metadata, Schema, SchemaRef, TimeUnit};
     use futures::future::BoxFuture;
     use futures::{FutureExt, StreamExt, TryStreamExt};
     use object_store::local::LocalFileSystem;
@@ -389,10 +392,74 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    /// An [`AsyncFileReader`] reading via an [`ObjectStore`], mirroring the
+    /// example on the [`AsyncFileReader`] trait documentation
+    #[derive(Clone, Debug)]
+    struct ObjectStoreReader {
+        store: Arc<dyn ObjectStore>,
+        path: Path,
+    }
+
+    impl ObjectStoreReader {
+        fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
+            Self { store, path }
+        }
+    }
+
+    impl AsyncFileReader for ObjectStoreReader {
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, AvroError>> {
+            async move {
+                self.store
+                    .get_range(&self.path, range)
+                    .await
+                    .map_err(|e| AvroError::General(e.to_string()))
+            }
+            .boxed()
+        }
+
+        fn get_stream(
+            &mut self,
+            range: Range<u64>,
+        ) -> BoxFuture<
+            '_,
+            Result<futures::stream::BoxStream<'_, Result<Bytes, AvroError>>, AvroError>,
+        > {
+            async move {
+                let options = object_store::GetOptions {
+                    range: Some(object_store::GetRange::Bounded(range)),
+                    ..Default::default()
+                };
+                let get_result = self
+                    .store
+                    .get_opts(&self.path, options)
+                    .await
+                    .map_err(|e| AvroError::General(e.to_string()))?;
+                Ok(get_result
+                    .into_stream()
+                    .map_err(|e| AvroError::General(e.to_string()))
+                    .boxed())
+            }
+            .boxed()
+        }
+
+        fn get_byte_ranges(
+            &mut self,
+            ranges: Vec<Range<u64>>,
+        ) -> BoxFuture<'_, Result<Vec<Bytes>, AvroError>> {
+            async move {
+                self.store
+                    .get_ranges(&self.path, &ranges)
+                    .await
+                    .map_err(|e| AvroError::General(e.to_string()))
+            }
+            .boxed()
+        }
+    }
+
     fn arrow_test_data(file: &str) -> String {
         let base =
             std::env::var("ARROW_TEST_DATA").unwrap_or_else(|_| "../testing/data".to_string());
-        format!("{}/{}", base, file)
+        format!("{base}/{file}")
     }
 
     fn get_alltypes_schema() -> SchemaRef {
@@ -784,7 +851,7 @@ mod tests {
 
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let mut builder = AsyncAvroFileReader::builder(file_reader, file_size, batch_size);
 
         if let Some(s) = schema {
@@ -912,6 +979,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_block_sync_marker_mismatch_errors() {
+        use tempfile::tempdir;
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let mut bytes = std::fs::read(&file).unwrap();
+        // The file ends with the final block's 16-byte sync marker.
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xFF;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("corrupt_sync.avro");
+        std::fs::write(&path, bytes).unwrap();
+        let schema = get_alltypes_schema();
+        let err = read_async_file(path.to_str().unwrap(), 1024, None, Some(schema), None)
+            .await
+            .expect_err("corrupted block sync marker should fail the read");
+        assert!(err.to_string().contains("sync marker"), "{err}");
+    }
+
+    #[tokio::test]
     async fn test_range_no_sync_marker() {
         // Small range unlikely to contain sync marker
         let file = arrow_test_data("avro/alltypes_plain.avro");
@@ -1036,7 +1121,7 @@ mod tests {
 
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema();
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
         let reader = AsyncAvroFileReader::builder(
@@ -1064,7 +1149,7 @@ mod tests {
 
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema();
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1)
@@ -1094,8 +1179,7 @@ mod tests {
             assert_eq!(
                 batch.num_rows(),
                 batch_size.min(8),
-                "Failed with batch_size={}",
-                batch_size
+                "Failed with batch_size={batch_size}"
             );
         }
     }
@@ -1127,7 +1211,7 @@ mod tests {
 
         let file_size = store.head(&location).await.unwrap().size;
 
-        let mut file_reader = AvroObjectReader::new(store, location);
+        let mut file_reader = ObjectStoreReader::new(store, location);
 
         let header_info = read_header_info(&mut file_reader, file_size, None)
             .await
@@ -1220,7 +1304,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file_path).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 2)
             .try_build()
             .await
@@ -1511,11 +1595,11 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let expected_schema = get_alltypes_schema()
             .as_ref()
             .clone()
-            .with_metadata(Default::default());
+            .with_metadata(Metadata::default());
 
         // Build reader without providing reader schema - should use writer schema from file
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
@@ -1538,11 +1622,11 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema()
             .project(&[0, 1, 7])
             .unwrap()
-            .with_metadata(Default::default());
+            .with_metadata(Metadata::default());
         let reader_schema = AvroSchema::try_from(&schema).unwrap();
         let expected_schema = schema.clone();
 
@@ -1568,14 +1652,14 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         // The schema produced by the reader should match the expected schema,
         // attaching Avro type name metadata to fields of record and list types.
         let expected_schema = get_nested_records_schema()
             .as_ref()
             .clone()
-            .with_metadata(Default::default());
+            .with_metadata(Metadata::default());
 
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
             .try_build()
@@ -1598,7 +1682,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema();
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
 
@@ -1625,7 +1709,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema();
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
 
@@ -1651,7 +1735,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
         let schema = get_alltypes_schema_with_tz("UTC");
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
 
@@ -1688,7 +1772,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
             .with_utf8_view(true)
@@ -1719,7 +1803,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
             .with_utf8_view(false)
@@ -1750,7 +1834,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         // Without strict mode, this should succeed
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
@@ -1773,7 +1857,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         // With strict mode, this should fail because of ['T', 'null'] unions
         let result = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
@@ -1786,8 +1870,7 @@ mod tests {
             Err(err) => {
                 assert!(
                     err.to_string().contains("disallowed in strict_mode"),
-                    "Expected strict_mode error, got: {}",
-                    err
+                    "Expected strict_mode error, got: {err}"
                 );
             }
         }
@@ -1802,7 +1885,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         // With strict mode, properly ordered unions should still work
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 1024)
@@ -1824,7 +1907,7 @@ mod tests {
         let location = Path::from_filesystem_path(&file).unwrap();
         let file_size = store.head(&location).await.unwrap().size;
 
-        let file_reader = AvroObjectReader::new(store, location);
+        let file_reader = ObjectStoreReader::new(store, location);
 
         let reader = AsyncAvroFileReader::builder(file_reader, file_size, 2)
             .with_header_size_hint(128)

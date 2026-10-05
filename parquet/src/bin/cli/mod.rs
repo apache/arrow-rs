@@ -28,8 +28,7 @@ pub fn parse_column_path(path: &str) -> Result<Vec<String>, String> {
                 '.' | '\\' => current.push(c),
                 _ => {
                     return Err(format!(
-                        "Invalid escape sequence \\{c} in column path {}",
-                        path
+                        "Invalid escape sequence \\{c} in column path {path}"
                     ));
                 }
             }
@@ -49,8 +48,7 @@ pub fn parse_column_path(path: &str) -> Result<Vec<String>, String> {
 
     if escaped {
         return Err(format!(
-            "Column path {} ends with an incomplete escape sequence",
-            path
+            "Column path {path} ends with an incomplete escape sequence"
         ));
     }
 

@@ -21,9 +21,7 @@ extern crate criterion;
 use criterion::Criterion;
 use std::ops::Range;
 
-use rand::Rng;
-
-extern crate arrow;
+use rand::RngExt;
 
 use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
@@ -214,7 +212,7 @@ fn add_benchmark(c: &mut Criterion) {
         bench_values(
             c,
             &format!("interleave dict_distinct {len}"),
-            100,
+            len,
             &[&dict, &sparse_dict],
         );
     }
