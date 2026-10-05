@@ -800,6 +800,49 @@ fn add_benchmark(c: &mut Criterion) {
         DataType::Decimal32(9, -1),
         &[true],
     );
+
+    // Choose distinct conversion paths, not every source/destination pair.
+    let float32: ArrayRef = Arc::new(create_primitive_array_range::<Float32Type>(
+        ROWS,
+        0.1,
+        -9999.0..9999.0,
+    ));
+    bench(
+        "cast float32 to decimal32(7, 2) 8192 valid",
+        float32,
+        DataType::Decimal32(7, 2),
+        &[true, false],
+    );
+    let float64: ArrayRef = Arc::new(create_primitive_array_range::<Float64Type>(
+        ROWS,
+        0.1,
+        -9999.0..9999.0,
+    ));
+    // Safe Float64 -> Decimal128 and non-finite inputs are already covered above.
+    bench(
+        "cast float64 to decimal128(20, 3) 8192 valid",
+        float64.clone(),
+        DataType::Decimal128(20, 3),
+        &[false],
+    );
+    // Decimal256 uses a separate float-to-i256 conversion implementation.
+    bench(
+        "cast float64 to decimal256(40, -2) 8192 scale down",
+        float64,
+        DataType::Decimal256(40, -2),
+        &[true],
+    );
+    // Direct and rounding-induced overflow share the precision-failure path.
+    // The existing non-finite benchmark already covers native conversion failure.
+    let samples = [1000.0, -1000.0, 999.75, -999.75];
+    let mut builder = Float64Builder::with_capacity(ROWS);
+    let overflow = build_array_with_samples!(builder, ROWS, 0.1, samples);
+    bench(
+        "cast float64 to decimal64(3, 0) 8192 precision overflow",
+        overflow,
+        DataType::Decimal64(3, 0),
+        &[true],
+    );
 }
 
 criterion_group!(benches, add_benchmark);
