@@ -825,6 +825,104 @@ mod tests {
     }
 
     #[test]
+    fn test_selective_padding_alternating_null_pages() {
+        let message_type = "
+        message test_schema {
+          OPTIONAL GROUP my_list (LIST) {
+            REPEATED GROUP list {
+              OPTIONAL INT32 element;
+            }
+          }
+        }
+        ";
+
+        let desc = parse_message_type(message_type)
+            .map(|t| SchemaDescriptor::new(Arc::new(t)))
+            .map(|s| s.column(0))
+            .unwrap();
+
+        // Pages with no nulls alternate with pages that have null lists, empty
+        // lists and null elements. Every page boundary falls in the middle of a
+        // byte of the child validity bitmap, and the last page crosses into its
+        // third byte.
+        let pages: [(&[i16], &[i16], &[i32]); 5] = [
+            // [1, 2, 3], [4, 5]
+            (&[3, 3, 3, 3, 3], &[0, 1, 1, 0, 1], &[1, 2, 3, 4, 5]),
+            // null, [6, null], [], [null, 7, 8]
+            (&[0, 3, 2, 1, 2, 3, 3], &[0, 0, 1, 0, 0, 1, 1], &[6, 7, 8]),
+            // [9], [10, 11]
+            (&[3, 3, 3], &[0, 0, 1], &[9, 10, 11]),
+            // [12, null], null
+            (&[3, 2, 0], &[0, 1, 0], &[12]),
+            // [13, 14, 15, 16]
+            (&[3, 3, 3, 3], &[0, 1, 1, 1], &[13, 14, 15, 16]),
+        ];
+        let expected_valid = [
+            true, true, true, true, true, true, false, false, true, true, true, true, true, true,
+            false, true, true, true, true,
+        ];
+        let expected_values = [
+            1, 2, 3, 4, 5, 6, 0, 0, 7, 8, 9, 10, 11, 12, 0, 13, 14, 15, 16,
+        ];
+        let num_records = 11;
+        let num_levels = 22;
+
+        // Read all records in one batch, then one record per batch
+        for batch_size in [num_records, 1] {
+            let page_vec = pages
+                .iter()
+                .map(|(def_levels, rep_levels, values)| {
+                    let mut pb =
+                        DataPageBuilderImpl::new(desc.clone(), def_levels.len() as u32, true);
+                    pb.add_rep_levels(1, rep_levels);
+                    pb.add_def_levels(3, def_levels);
+                    pb.add_values::<Int32Type>(Encoding::PLAIN, values);
+                    pb.consume()
+                })
+                .collect::<Vec<_>>();
+
+            let mut record_reader =
+                RecordReader::<Int32Type>::new(desc.clone(), DEFAULT_BATCH_SIZE);
+            record_reader.set_padding_threshold(2);
+            record_reader
+                .set_page_reader(Box::new(InMemoryPageReader::new(page_vec)))
+                .unwrap();
+
+            let mut records_read = 0;
+            while records_read < num_records {
+                let read = record_reader.read_records(batch_size).unwrap();
+                assert!(read > 0, "batch_size {batch_size}: ran out of records");
+                records_read += read;
+            }
+            assert_eq!(record_reader.num_records(), num_records);
+            assert_eq!(record_reader.num_values(), num_levels);
+            assert_eq!(record_reader.values_written(), expected_values.len());
+
+            assert_eq!(
+                record_reader.consume_compact_bitmap(),
+                Some(Buffer::from_iter(expected_valid)),
+                "batch_size {batch_size}"
+            );
+
+            // Only compare the valid values
+            let actual = record_reader.consume_record_data();
+            assert_eq!(
+                actual.len(),
+                expected_values.len(),
+                "batch_size {batch_size}"
+            );
+            for (i, valid) in expected_valid.iter().enumerate() {
+                if *valid {
+                    assert_eq!(
+                        actual[i], expected_values[i],
+                        "batch_size {batch_size}, index {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_read_more_than_one_batch() {
         // Construct column schema
         let message_type = "
