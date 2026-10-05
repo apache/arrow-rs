@@ -204,7 +204,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     ///
     /// * `offsets.len() - 1 != nulls.len()`
     /// * `offsets.last() > values.len()`
-    /// * `!field.is_nullable() && values.is_nullable()`
+    /// * `!field.is_nullable() && values.logical_null_count() != 0`
     /// * `field.data_type() != values.data_type()`
     pub fn try_new(
         field: FieldRef,
@@ -232,7 +232,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
                 n.len(),
             )));
         }
-        if !field.is_nullable() && values.is_nullable() {
+        if !field.is_nullable() && values.logical_null_count() != 0 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Non-nullable field of {}ListArray {:?} cannot contain nulls",
                 OffsetSize::PREFIX,
@@ -1351,6 +1351,35 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Max offset of 5 exceeds length of values 2"
         );
+    }
+
+    #[test]
+    fn test_try_new_non_nullable_field_dictionary_values() {
+        let keys = Int8Array::new(vec![0i8, 1].into(), Some(NullBuffer::new_valid(2)));
+        let values = StringArray::from(vec!["x", "y"]);
+        let dict = Int8DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
+        let field = Arc::new(Field::new("element", dict.data_type().clone(), false));
+        ListArray::try_new(
+            field,
+            OffsetBuffer::new(vec![0, 2].into()),
+            Arc::new(dict),
+            None,
+        )
+        .unwrap();
+
+        let keys = Int8Array::from(vec![Some(0i8), None]);
+        let values = StringArray::from(vec!["x", "y"]);
+        let dict = Int8DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
+        let field = Arc::new(Field::new("element", dict.data_type().clone(), false));
+        let err = ListArray::try_new(
+            field,
+            OffsetBuffer::new(vec![0, 2].into()),
+            Arc::new(dict),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("cannot contain nulls"));
     }
 
     #[test]
