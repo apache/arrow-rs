@@ -32,6 +32,7 @@ use arrow_buffer::ScalarBuffer;
 use arrow_select::interleave::interleave;
 use std::hint;
 use std::sync::Arc;
+use std::time::Duration;
 
 fn do_bench(
     c: &mut Criterion,
@@ -245,5 +246,13 @@ fn add_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, add_benchmark, bench_byte_view_compaction);
-criterion_main!(benches);
+criterion_group!(benches, add_benchmark);
+criterion_group! {
+    name = byte_view_benches;
+    config = Criterion::default()
+        .sample_size(20)
+        .warm_up_time(Duration::from_millis(100))
+        .measurement_time(Duration::from_millis(300));
+    targets = bench_byte_view_compaction
+}
+criterion_main!(benches, byte_view_benches);
