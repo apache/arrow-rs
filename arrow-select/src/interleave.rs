@@ -81,7 +81,23 @@ pub fn interleave(
     values: &[&dyn Array],
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
-    let data_type = validate_interleave_inputs(values)?;
+    if values.is_empty() {
+        return Err(ArrowError::InvalidArgumentError(
+            "interleave requires input of at least one array".to_string(),
+        ));
+    }
+    let data_type = values[0].data_type();
+
+    for array in values.iter().skip(1) {
+        if array.data_type() != data_type {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "It is not possible to interleave arrays of different data types ({} and {})",
+                data_type,
+                array.data_type()
+            )));
+        }
+    }
+
     if indices.is_empty() {
         return Ok(new_empty_array(data_type));
     }
@@ -504,6 +520,7 @@ struct Interleave<'a, T> {
 }
 
 impl<'a, T: Array + 'static> Interleave<'a, T> {
+    #[inline]
     fn new(values: &[&'a dyn Array], indices: &'a [(usize, usize)]) -> Self {
         let mut has_nulls = false;
         let arrays: Vec<&T> = values
