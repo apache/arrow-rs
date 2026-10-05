@@ -580,6 +580,15 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         Self::new_builder(AsyncReader(input), metadata)
     }
 
+    /// Consume this builder and return its underlying async reader.
+    ///
+    /// The reader retains any state established by metadata or bloom filter reads.
+    /// This method performs no I/O and discards the builder's configuration and
+    /// metadata. To reuse that metadata, clone it before consuming the builder.
+    pub fn into_inner(self) -> T {
+        self.input.0
+    }
+
     /// Read bloom filter for a column in a row group
     ///
     /// Returns `None` if the column does not have a bloom filter
@@ -1065,6 +1074,55 @@ mod tests {
                 metadata_reader.parse_and_finish(&self.data).unwrap(),
             ));
             futures::future::ready(Ok(self.metadata.clone().unwrap().clone())).boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_builder_into_inner_preserves_reader_after_bloom_filter() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let mut data = Vec::new();
+        let properties = WriterProperties::builder()
+            .set_bloom_filter_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut data, schema, Some(properties)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Cover recovery after metadata alone and after additional bloom I/O.
+        for read_bloom_filter in [false, true] {
+            let reader = TestReader::new(Bytes::from(data.clone()));
+            let requests = Arc::clone(&reader.requests);
+            let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
+            let metadata = Arc::clone(builder.metadata());
+            if read_bloom_filter {
+                let bloom = builder
+                    .get_row_group_column_bloom_filter(0, 0)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(bloom.check(&2_i32));
+            }
+
+            let reader = builder.into_inner();
+            assert!(Arc::ptr_eq(reader.metadata.as_ref().unwrap(), &metadata));
+            assert!(Arc::ptr_eq(&reader.requests, &requests));
+            assert_eq!(
+                requests.lock().unwrap().len(),
+                usize::from(read_bloom_filter)
+            );
+
+            let metadata = ArrowReaderMetadata::try_new(metadata, Default::default()).unwrap();
+            let stream = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata)
+                .build()
+                .unwrap();
+            let batches: Vec<_> = stream.try_collect().await.unwrap();
+            assert_eq!(batches, vec![batch.clone()]);
+            assert!(requests.lock().unwrap().len() > usize::from(read_bloom_filter));
         }
     }
 
