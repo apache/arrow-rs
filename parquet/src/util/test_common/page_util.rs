@@ -49,6 +49,7 @@ pub trait DataPageBuilder {
 pub struct DataPageBuilderImpl {
     encoding: Option<Encoding>,
     num_values: u32,
+    num_nulls: u32,
     buffer: Vec<u8>,
     rep_levels_byte_len: u32,
     def_levels_byte_len: u32,
@@ -64,6 +65,7 @@ impl DataPageBuilderImpl {
         DataPageBuilderImpl {
             encoding: None,
             num_values,
+            num_nulls: 0,
             buffer: vec![],
             rep_levels_byte_len: 0,
             def_levels_byte_len: 0,
@@ -102,6 +104,11 @@ impl DataPageBuilder for DataPageBuilderImpl {
 
     fn add_def_levels(&mut self, max_levels: i16, def_levels: &[i16]) {
         self.num_values = def_levels.len() as u32;
+        // Nulls and nested placeholders have no physical value in the data section.
+        self.num_nulls = def_levels
+            .iter()
+            .filter(|&&level| level < max_levels)
+            .count() as u32;
         self.def_levels_byte_len = self.add_levels(max_levels, def_levels);
     }
 
@@ -146,8 +153,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
                 buf: Bytes::from(self.buffer),
                 num_values: self.num_values,
                 encoding: self.encoding.unwrap(),
-                num_nulls: 0, /* set to dummy value - don't need this when reading
-                               * data page */
+                num_nulls: self.num_nulls,
                 num_rows: self.num_values, /* num_rows only needs in skip_records, now we not support skip REPEATED field,
                                             * so we can assume num_values == num_rows */
                 def_levels_byte_len: self.def_levels_byte_len,
@@ -257,3 +263,76 @@ impl<I: Iterator<Item = Vec<Page>>> Iterator for InMemoryPageIterator<I> {
 
 #[cfg(feature = "arrow")]
 impl<I: Iterator<Item = Vec<Page>> + Send> PageIterator for InMemoryPageIterator<I> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::basic::Type;
+    use crate::data_type::{FixedLenByteArray, FixedLenByteArrayType};
+    use crate::encodings::rle::RleEncoder;
+
+    #[test]
+    fn test_data_page_null_counts() {
+        for (max_def_level, def_levels, rep_levels, expected_nulls) in [
+            (0, vec![0; 3], vec![0; 3], 0),
+            (1, vec![1; 3], vec![0; 3], 0),
+            (1, vec![1, 0, 1], vec![0; 3], 1),
+            (1, vec![0; 3], vec![0; 3], 3),
+            // Null parents, empty lists, null elements and repeated physical values.
+            (3, vec![0, 1, 2, 3, 3], vec![0, 0, 0, 0, 1], 3),
+            (1, vec![], vec![], 0),
+        ] {
+            let max_rep_level = i16::from(rep_levels.contains(&1));
+            let desc = Arc::new(ColumnDescriptor::new(
+                Arc::new(
+                    SchemaType::primitive_type_builder("fixed", Type::FIXED_LEN_BYTE_ARRAY)
+                        .with_length(2)
+                        .build()
+                        .unwrap(),
+                ),
+                max_def_level,
+                max_rep_level,
+                ColumnPath::from("fixed"),
+            ));
+            let num_levels = def_levels.len() as u32;
+            let num_values = num_levels - expected_nulls;
+            let values = vec![FixedLenByteArray::from(vec![1, 2]); num_values as usize];
+
+            for datapage_v2 in [false, true] {
+                for dictionary in [false, true] {
+                    let mut builder =
+                        DataPageBuilderImpl::new(desc.clone(), num_values, datapage_v2);
+                    builder.add_rep_levels(max_rep_level, &rep_levels);
+                    builder.add_def_levels(max_def_level, &def_levels);
+                    if dictionary {
+                        let mut encoder = RleEncoder::new(1, 64);
+                        for _ in 0..num_values {
+                            encoder.put(0);
+                        }
+                        let mut indices = vec![1];
+                        indices.extend(encoder.consume());
+                        builder.add_indices(indices.into());
+                    } else {
+                        builder.add_values::<FixedLenByteArrayType>(Encoding::PLAIN, &values);
+                    }
+                    match builder.consume() {
+                        Page::DataPageV2 {
+                            num_values,
+                            num_nulls,
+                            ..
+                        } => {
+                            assert!(datapage_v2);
+                            assert_eq!(num_values, num_levels);
+                            assert_eq!(num_nulls, expected_nulls);
+                        }
+                        Page::DataPage { num_values, .. } => {
+                            assert!(!datapage_v2);
+                            assert_eq!(num_values, num_levels);
+                        }
+                        Page::DictionaryPage { .. } => unreachable!(),
+                    }
+                }
+            }
+        }
+    }
+}
