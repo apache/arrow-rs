@@ -20,15 +20,13 @@
 //! This module keeps read-plan tests and helpers shared by the test modules.
 
 mod column_reader;
-mod fixtures;
 mod options;
-mod roundtrip;
 mod row_selection;
 mod schema;
 mod virtual_columns;
 
 use std::cmp::min;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt::Formatter;
 use std::fs::File;
 use std::io::Seek;
@@ -64,19 +62,11 @@ use crate::schema::types::{Type, TypePtr};
 use crate::util::test_common::rand_gen::RandGen;
 use arrow_array::builder::*;
 use arrow_array::cast::AsArray;
-use arrow_array::types::{
-    Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
-    DecimalType, Float16Type, Float32Type, Float64Type, Time32MillisecondType,
-    Time64MicrosecondType,
-};
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, NullBuffer, i256};
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_buffer::{BooleanBuffer, IntervalDayTime};
 use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
-use half::f16;
-use num_traits::PrimInt;
 
 fn row_selection(rows: usize) -> RowSelection {
     RowSelection::from(vec![RowSelector::select(rows)])

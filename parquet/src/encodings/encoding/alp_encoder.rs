@@ -383,12 +383,16 @@ fn encode_vector<F: AlpFloat>(
     // width means every value equals the frame of reference, so nothing is
     // stored.
     if bit_width > 0 {
-        let mut writer = BitWriter::new_from_buf(std::mem::take(out));
-        for &encoded_value in encoded.iter() {
+        // The encoded values are dead after choosing the frame and bit width.
+        // Reuse their allocation for deltas; signed BitPacking preserves the
+        // underlying two's-complement bit patterns.
+        for encoded_value in encoded.iter_mut() {
             let delta =
-                F::Exact::reinterpret_from_signed(encoded_value).wrapping_sub(frame_of_reference);
-            writer.put_value(delta.to_u64(), bit_width as usize);
+                F::Exact::reinterpret_from_signed(*encoded_value).wrapping_sub(frame_of_reference);
+            *encoded_value = delta.reinterpret_as_signed();
         }
+        let mut writer = BitWriter::new_from_buf(std::mem::take(out));
+        writer.put_batch(encoded, bit_width as usize);
         // Pads to a byte boundary, giving exactly the ceil(n * bit_width / 8)
         // bytes the decoder derives from the metadata.
         *out = writer.consume();
