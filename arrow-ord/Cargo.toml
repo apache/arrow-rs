@@ -19,7 +19,6 @@
 name = "arrow-ord"
 version = { workspace = true }
 description = "Ordering kernels for arrow arrays"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
