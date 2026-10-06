@@ -312,6 +312,8 @@ impl ParquetMetaDataPushDecoder {
         self
     }
 
+    // TODO: deprecate the following as part of https://github.com/apache/arrow-rs/issues/11395
+
     /// Select the row groups and columns for which both page index structures are read.
     pub fn with_page_index_mask(mut self, mask: ColumnChunkMask) -> Self {
         self.column_index_mask = mask.clone();

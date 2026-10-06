@@ -244,6 +244,8 @@ impl AsyncFileReader for ParquetObjectReader {
                     .with_column_index_policy(options.column_index_policy())
                     .with_offset_index_policy(options.offset_index_policy());
             }
+            // TODO: https://github.com/apache/arrow-rs/issues/11395 may deprecate this API. Decide
+            // at that time if masks should be added to ParquetObjectReader.
             if let Some(options) = options {
                 if !options.column_index_mask().is_all() {
                     metadata = metadata.with_column_index_mask(options.column_index_mask().clone());

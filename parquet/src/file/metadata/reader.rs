@@ -91,6 +91,10 @@ pub struct ParquetMetaDataReader {
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
+// TODO: https://github.com/apache/arrow-rs/issues/11395 is tracking unifying PageIndexPolicy
+// with the ColumnChunkMask to reduce the dizzying number of APIs that exist to control reading
+// the page indexes.
+
 /// Describes the policy for reading page indexes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PageIndexPolicy {
@@ -346,6 +350,8 @@ impl ParquetMetaDataReader {
         self.offset_index = policy;
         self
     }
+
+    // TODO: deprecate the following as part of https://github.com/apache/arrow-rs/issues/11395
 
     /// Selects the row groups and leaf columns for which both page index structures are read.
     ///
