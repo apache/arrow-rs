@@ -22,7 +22,7 @@ use crate::{
     int_size,
 };
 use arrow_schema::ArrowError;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, map::Entry};
 
 fn object_header<const LARGE_BIT: u8, const ID_SIZE: u8, const OFFSET_SIZE: u8>() -> u8 {
     (LARGE_BIT << (BASIC_TYPE_BITS + 4))
@@ -346,12 +346,16 @@ where
 pub struct ObjectState<'a> {
     fields: &'a mut IndexMap<u32, usize>,
     saved_fields_size: usize,
+    replaced_field: Option<(u32, usize)>,
 }
 
 // `ObjectBuilder::finish()` eagerly updates the field offsets, which we should rollback on failure.
 impl BuilderSpecificState for ObjectState<'_> {
     fn rollback(&mut self) {
         self.fields.truncate(self.saved_fields_size);
+        if let Some((field_id, offset)) = self.replaced_field {
+            self.fields.insert(field_id, offset);
+        }
     }
 }
 
@@ -377,15 +381,25 @@ impl<'a> ParentState<'a, ObjectState<'a>> {
         let saved_metadata_builder_dict_size = metadata_builder.num_field_names();
         let field_id = metadata_builder.try_upsert_field_name(field_name)?;
         let field_start = saved_value_builder_offset - saved_parent_value_builder_offset;
-        if fields.insert(field_id, field_start).is_some() && validate_unique_fields {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Duplicate field name: {field_name}"
-            )));
-        }
+        let replaced_field = match fields.entry(field_id) {
+            Entry::Occupied(mut field) => {
+                if validate_unique_fields {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Duplicate field name: {field_name}"
+                    )));
+                }
+                Some((field_id, field.insert(field_start)))
+            }
+            Entry::Vacant(field) => {
+                field.insert(field_start);
+                None
+            }
+        };
 
         let builder_state = ObjectState {
             fields,
             saved_fields_size,
+            replaced_field,
         };
         Ok(Self {
             saved_metadata_builder_dict_size,
@@ -976,5 +990,47 @@ mod tests {
 
         valid_obj.finish();
         list.finish();
+    }
+
+    #[test]
+    fn test_object_can_continue_after_duplicate_field_error() {
+        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
+        let mut object = builder.new_object();
+        object.try_insert("a", 1).unwrap();
+
+        let error = object.try_insert("a", 2).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: Duplicate field name: a"
+        );
+
+        object.try_insert("b", 3).unwrap();
+        object.finish();
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        assert_eq!(variant.get_object_field("a"), Some(Variant::Int32(1)));
+        assert_eq!(variant.get_object_field("b"), Some(Variant::Int32(3)));
+    }
+
+    #[test]
+    fn test_failed_overwrite_preserves_previous_field() {
+        let mut source = VariantBuilder::new();
+        source.new_list().with_value(1i8).finish();
+        let (metadata, mut value) = source.finish();
+        let child_header = value.len() - 2;
+        value[child_header] = 0xff;
+        let invalid = Variant::new(&metadata, &value);
+
+        let mut builder = VariantBuilder::new();
+        let mut object = builder.new_object();
+        object.try_insert("a", 1i32).unwrap();
+        assert!(object.try_insert("a", invalid).is_err());
+        object.try_insert("b", 2i32).unwrap();
+        object.finish();
+
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        assert_eq!(variant.get_object_field("a"), Some(Variant::Int32(1)));
+        assert_eq!(variant.get_object_field("b"), Some(Variant::Int32(2)));
     }
 }
