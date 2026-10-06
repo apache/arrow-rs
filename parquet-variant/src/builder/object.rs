@@ -22,7 +22,7 @@ use crate::{
     int_size,
 };
 use arrow_schema::ArrowError;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, map::Entry};
 
 fn object_header<const LARGE_BIT: u8, const ID_SIZE: u8, const OFFSET_SIZE: u8>() -> u8 {
     (LARGE_BIT << (BASIC_TYPE_BITS + 4))
@@ -380,15 +380,21 @@ impl<'a> ParentState<'a, ObjectState<'a>> {
         let saved_fields_size = fields.len();
         let saved_metadata_builder_dict_size = metadata_builder.num_field_names();
         let field_id = metadata_builder.try_upsert_field_name(field_name)?;
-        if validate_unique_fields && fields.contains_key(&field_id) {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Duplicate field name: {field_name}"
-            )));
-        }
         let field_start = saved_value_builder_offset - saved_parent_value_builder_offset;
-        let replaced_field = fields
-            .insert(field_id, field_start)
-            .map(|offset| (field_id, offset));
+        let replaced_field = match fields.entry(field_id) {
+            Entry::Occupied(mut field) => {
+                if validate_unique_fields {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Duplicate field name: {field_name}"
+                    )));
+                }
+                Some((field_id, field.insert(field_start)))
+            }
+            Entry::Vacant(field) => {
+                field.insert(field_start);
+                None
+            }
+        };
 
         let builder_state = ObjectState {
             fields,
