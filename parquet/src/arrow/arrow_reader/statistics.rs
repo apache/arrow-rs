@@ -102,11 +102,11 @@ fn int96_statistics(min: &Int96, max: &Int96, unit: &TimeUnit) -> Option<(i64, i
             TimeUnit::Microsecond => 1_000,
             TimeUnit::Nanosecond => 1,
         };
-        // Match Int96's signed Julian day and round sub-day values down, even
-        // before the epoch. i128 also handles the partially representable day
-        // containing i64::MIN without overflowing an intermediate product.
-        let days = i128::from(words[2] as i32) - 2_440_588;
-        let timestamp = days * i128::from(NANOS_PER_DAY / divisor) + i128::from(nanos / divisor);
+        // Canonical INT96 values fit in seconds. Reuse the reader's signed-day
+        // conversion, then scale in i128 so a valid i64::MIN is not rejected
+        // before adding the fractional second.
+        let timestamp = i128::from(value.to_seconds()) * i128::from(1_000_000_000 / divisor)
+            + i128::from((nanos % 1_000_000_000) / divisor);
         i64::try_from(timestamp).ok()
     };
     Some((convert(min)?, convert(max)?))
@@ -383,6 +383,58 @@ make_decimal_stats_iterator!(
     from_bytes_to_i256
 );
 
+/// Extract timestamp bounds from INT64 or non-deprecated INT96 statistics.
+macro_rules! make_timestamp_stats_iterator {
+    ($iterator_type:ident, $func:ident, $bound:tt) => {
+        struct $iterator_type<'a, I>
+        where
+            I: Iterator<Item = Option<&'a ParquetStatistics>>,
+        {
+            iter: I,
+            unit: TimeUnit,
+        }
+
+        impl<'a, I> $iterator_type<'a, I>
+        where
+            I: Iterator<Item = Option<&'a ParquetStatistics>>,
+        {
+            fn new(iter: I, unit: TimeUnit) -> Self {
+                Self { iter, unit }
+            }
+        }
+
+        impl<'a, I> Iterator for $iterator_type<'a, I>
+        where
+            I: Iterator<Item = Option<&'a ParquetStatistics>>,
+        {
+            type Item = Option<i64>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.iter.next().map(|statistics| {
+                    let statistics = statistics?;
+                    match statistics {
+                        ParquetStatistics::Int64(values) => values.$func().copied(),
+                        // Deprecated min/max fields use signed comparison, not
+                        // the timestamp order advertised by the file footer.
+                        ParquetStatistics::Int96(values) if !statistics.is_min_max_deprecated() => {
+                            int96_statistics(values.min_opt()?, values.max_opt()?, &self.unit)
+                                .map(|bounds| bounds.$bound)
+                        }
+                        _ => None,
+                    }
+                })
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                self.iter.size_hint()
+            }
+        }
+    };
+}
+
+make_timestamp_stats_iterator!(MinTimestampStatsIterator, min_opt, 0);
+make_timestamp_stats_iterator!(MaxTimestampStatsIterator, max_opt, 1);
+
 /// Special macro to combine the statistics iterators for min and max.
 /// This is used to avoid repeating the same code for min and max statistics extractions
 ///
@@ -398,7 +450,7 @@ macro_rules! get_statistics {
             MinBooleanStatsIterator,
             MinInt32StatsIterator,
             MinInt64StatsIterator,
-            true,
+            MinTimestampStatsIterator,
             MinFloatStatsIterator,
             MinDoubleStatsIterator,
             MinByteArrayStatsIterator,
@@ -418,7 +470,7 @@ macro_rules! get_statistics {
             MaxBooleanStatsIterator,
             MaxInt32StatsIterator,
             MaxInt64StatsIterator,
-            false,
+            MaxTimestampStatsIterator,
             MaxFloatStatsIterator,
             MaxDoubleStatsIterator,
             MaxByteArrayStatsIterator,
@@ -437,7 +489,7 @@ macro_rules! get_statistics {
         $boolean_iter: ident,
         $int32_iter: ident,
         $int64_iter: ident,
-        $is_min: expr,
+        $timestamp_iter: ident,
         $float_iter: ident,
         $double_iter: ident,
         $byte_array_iter: ident,
@@ -504,23 +556,7 @@ macro_rules! get_statistics {
             DataType::Date64 if $physical_type == Some(PhysicalType::INT64) => Ok(Arc::new(Date64Array::from_iter(
                 $int64_iter::new($iterator).map(|x| x.copied()),))),
             DataType::Timestamp(unit, timezone) =>{
-                let iter = $iterator.map(|statistics| {
-                    let statistics = statistics?;
-                    match statistics {
-                        ParquetStatistics::Int64(values) => {
-                            if $is_min { values.min_opt() } else { values.max_opt() }.copied()
-                        }
-                        // Deprecated min/max fields use signed comparison, not
-                        // the timestamp order advertised by the file footer.
-                        ParquetStatistics::Int96(values) if !statistics.is_min_max_deprecated() => {
-                            let (min, max) = int96_statistics(
-                                values.min_opt()?, values.max_opt()?, unit,
-                            )?;
-                            Some(if $is_min { min } else { max })
-                        }
-                        _ => None,
-                    }
-                });
+                let iter = $timestamp_iter::new($iterator, *unit);
                 Ok(match unit {
                     TimeUnit::Second => Arc::new(TimestampSecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
                     TimeUnit::Millisecond => Arc::new(TimestampMillisecondArray::from_iter(iter).with_timezone_opt(timezone.clone())),
