@@ -39,7 +39,9 @@ pub(crate) use budget::{BudgetedReadPlan, RowBudget};
 pub(crate) use frontier::{NextRowGroup, RowGroupFrontier};
 
 /// One item of a [`ScanPlan`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Two items are equal if their public fields are equal.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct PlannedRange {
     /// Byte range in the file.
@@ -56,6 +58,27 @@ pub struct PlannedRange {
     /// One past the last planned row that this range serves.
     pub(crate) last_row: u64,
 }
+
+/// Compares the public fields only. `first_row` and `last_row` count from
+/// the start of a plan, so they differ between two plans of the same decoder.
+impl PartialEq for PlannedRange {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            range,
+            row_group,
+            column,
+            kind,
+            first_row: _,
+            last_row: _,
+        } = self;
+        *range == other.range
+            && *row_group == other.row_group
+            && *column == other.column
+            && *kind == other.kind
+    }
+}
+
+impl Eq for PlannedRange {}
 
 impl PlannedRange {
     /// Number of bytes in this range.

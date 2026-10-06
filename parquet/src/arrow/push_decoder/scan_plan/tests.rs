@@ -866,6 +866,13 @@ fn plan_at_boundary_is_rebuilt_decoder_plan() {
     assert_eq!(plan[0].first_row, 0);
     let decoder = decoder.into_builder().unwrap().build().unwrap();
     assert_eq!(decoder.scan_plan().collect::<Vec<_>>(), plan);
+
+    // A plan of the whole scan has equal ranges for row group 1. Their rows
+    // count from row group 0, and equality does not compare rows.
+    let whole_scan = builder().build().unwrap().scan_plan();
+    let row_group_1: Vec<_> = whole_scan.filter(|p| p.row_group == 1).collect();
+    assert_eq!(row_group_1[0].first_row, 200);
+    assert_eq!(row_group_1, plan);
 }
 
 #[test]
