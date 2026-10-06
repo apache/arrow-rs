@@ -18,7 +18,7 @@
 //! Round-trip tests for Arrow data written to Parquet.
 
 use super::roundtrip_helpers::{
-    RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip_opts, values_required,
+    RoundTripTest, SMALL_SIZE, required_and_optional, roundtrip, values_required,
 };
 
 use std::collections::HashMap;
@@ -60,32 +60,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::basic::Type as PhysicalType;
 use parquet::errors::Result;
-use parquet::file::properties::{WriterProperties, WriterVersion};
-
-// Write the batch to parquet and read it back out, ensuring
-// that what comes out is the same as what was written in
-fn roundtrip(expected_batch: RecordBatch, max_row_group_size: Option<usize>) -> Vec<Bytes> {
-    let mut files = vec![];
-    for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
-        let mut props = WriterProperties::builder().set_writer_version(version);
-
-        if let Some(size) = max_row_group_size {
-            props = props.set_max_row_group_row_count(Some(size))
-        }
-
-        let props = props.build();
-        files.push(roundtrip_opts(&expected_batch, props))
-    }
-    files
-}
-
-impl RoundTripTest {
-    /// Set the schema
-    fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.schema = Some(schema);
-        self
-    }
-}
+use parquet::file::properties::WriterProperties;
 
 #[test]
 #[cfg_attr(miri, ignore)] // Takes too long
