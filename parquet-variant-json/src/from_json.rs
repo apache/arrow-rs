@@ -19,7 +19,10 @@
 
 use arrow_schema::ArrowError;
 use memchr::memchr2;
-use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt};
+use parquet_variant::{
+    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
+    VariantDecimal16,
+};
 use serde_json::{Number, Value};
 use std::borrow::Cow;
 
@@ -31,7 +34,9 @@ const MAX_JSON_DEPTH: usize = 128;
 /// The resulting `value` and `metadata` buffers can be
 /// extracted using `builder.finish()`
 ///
-/// Integers use the smallest fitting integer encoding; other numbers use `Double`.
+/// Integers use the smallest fitting integer encoding. Fixed-point numbers use the smallest
+/// fitting Variant decimal encoding, while exponent notation and values outside the Variant
+/// decimal range use `Double`.
 ///
 /// # Arguments
 /// * `json` - The JSON string to parse as Variant.
@@ -103,11 +108,17 @@ fn variant_from_i64(i: i64) -> Variant<'static, 'static> {
 }
 
 fn variant_from_number_text(value: &str) -> Result<Variant<'static, 'static>, ArrowError> {
-    if value != "-0"
-        && !value.contains(['.', 'e', 'E'])
+    if value == "-0" {
+        return Ok((-0.0_f64).into());
+    }
+    if !value.contains(['.', 'e', 'E'])
         && let Ok(integer) = value.parse::<i64>()
     {
         return Ok(variant_from_i64(integer));
+    }
+
+    if let Some(decimal) = decimal_from_json_number(value) {
+        return Ok(decimal);
     }
 
     let number: Number = serde_json::from_str(value).map_err(|error| {
@@ -136,6 +147,61 @@ fn first_json_control(bytes: &[u8]) -> Option<usize> {
         .iter()
         .position(|byte| *byte < 0x20)
         .map(|position| remainder_start + position)
+}
+
+/// Converts a fixed-point JSON lexeme or an integer wider than `i64` without rounding.
+/// Exponent notation remains a floating-point value.
+fn decimal_from_json_number(value: &str) -> Option<Variant<'static, 'static>> {
+    if value.contains(['e', 'E']) {
+        return None;
+    }
+
+    let (negative, unsigned) = value
+        .strip_prefix('-')
+        .map_or((false, value), |value| (true, value));
+    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    let scale = u8::try_from(fraction.len()).ok()?;
+    let coefficient =
+        whole
+            .bytes()
+            .chain(fraction.bytes())
+            .try_fold(0_i128, |coefficient, digit| {
+                coefficient
+                    .checked_mul(10)?
+                    .checked_add(i128::from(digit - b'0'))
+            })?;
+    let coefficient = if negative {
+        coefficient.checked_neg()?
+    } else {
+        coefficient
+    };
+
+    const DECIMAL4_MAX: i128 = 10_i128.pow(VariantDecimal4::MAX_PRECISION as u32) - 1;
+    const DECIMAL8_MAX: i128 = 10_i128.pow(VariantDecimal8::MAX_PRECISION as u32) - 1;
+    const DECIMAL16_MAX: i128 = 10_i128.pow(VariantDecimal16::MAX_PRECISION as u32) - 1;
+
+    if scale <= VariantDecimal4::MAX_PRECISION
+        && (-DECIMAL4_MAX..=DECIMAL4_MAX).contains(&coefficient)
+    {
+        return VariantDecimal4::try_new(i32::try_from(coefficient).ok()?, scale)
+            .ok()
+            .map(Variant::from);
+    }
+    if scale <= VariantDecimal8::MAX_PRECISION
+        && (-DECIMAL8_MAX..=DECIMAL8_MAX).contains(&coefficient)
+    {
+        return VariantDecimal8::try_new(i64::try_from(coefficient).ok()?, scale)
+            .ok()
+            .map(Variant::from);
+    }
+    if scale <= VariantDecimal16::MAX_PRECISION
+        && (-DECIMAL16_MAX..=DECIMAL16_MAX).contains(&coefficient)
+    {
+        return VariantDecimal16::try_new(coefficient, scale)
+            .ok()
+            .map(Variant::from);
+    }
+    None
 }
 
 struct JsonParser<'a> {
@@ -441,7 +507,9 @@ impl<'a> JsonParser<'a> {
 
 /// Appends an already parsed [`Value`] to a Variant builder.
 ///
-/// Non-integer [`Number`] values use `Double`.
+/// Unlike [`JsonToVariant::append_json`], this function cannot recover the original numeric
+/// lexeme. Non-integer [`Number`] values therefore use `Double`; use the string API when exact
+/// fixed-point decimal semantics are required.
 pub fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
     match json {
         Value::Null => builder.try_append_value(Variant::Null)?,
@@ -599,7 +667,6 @@ mod test {
         Ok(())
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_basic() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -609,7 +676,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_large_positive() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -619,7 +685,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_large_negative() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -629,7 +694,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_small_positive() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -639,7 +703,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_tiny_positive() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -649,7 +712,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal4_small_negative() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -659,7 +721,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal8_positive() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -669,7 +730,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal8_negative() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -679,7 +739,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal8_high_precision() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -689,7 +748,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal8_large_with_scale() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -699,7 +757,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal8_large_negative_with_scale() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -709,7 +766,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal16_large_integer() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -719,7 +775,6 @@ mod test {
         .run()
     }
 
-    #[ignore]
     #[test]
     fn test_json_to_variant_decimal16_high_precision() -> Result<(), ArrowError> {
         JsonToVariantTest {
@@ -730,10 +785,63 @@ mod test {
     }
 
     #[test]
+    fn test_json_to_variant_decimal16_29_digit_value() -> Result<(), ArrowError> {
+        JsonToVariantTest {
+            json: "79228162514264337593543950335",
+            expected: Variant::from(VariantDecimal16::try_new(79228162514264337593543950335, 0)?),
+        }
+        .run()
+    }
+
+    #[test]
+    fn test_json_to_variant_decimal16_scale_28() -> Result<(), ArrowError> {
+        JsonToVariantTest {
+            json: "7.9228162514264337593543950335",
+            expected: Variant::from(VariantDecimal16::try_new(
+                79228162514264337593543950335,
+                28,
+            )?),
+        }
+        .run()
+    }
+
+    #[test]
+    fn test_json_to_variant_nested_decimals() -> Result<(), ArrowError> {
+        let mut variant_builder = VariantBuilder::new();
+        let mut object_builder = variant_builder.new_object();
+        object_builder.insert("large", VariantDecimal16::try_new(9999999999999999999, 0)?);
+        let mut list_builder = object_builder.new_list("values");
+        list_builder.append_value(VariantDecimal4::try_new(123, 2)?);
+        list_builder.append_value(VariantDecimal8::try_new(9999999990, 1)?);
+        list_builder.append_value(1.5e2_f64);
+        list_builder.finish();
+        object_builder.finish();
+        let (metadata, value) = variant_builder.finish();
+
+        JsonToVariantTest {
+            json: r#"{"large":9999999999999999999,"values":[1.23,999999999.0,1.5e2]}"#,
+            expected: Variant::try_new(&metadata, &value)?,
+        }
+        .run()
+    }
+
+    #[test]
     fn test_json_to_variant_double_precision() -> Result<(), ArrowError> {
         JsonToVariantTest {
             json: "0.100000000000000000000000000000000000000",
             expected: Variant::Double(0.1_f64),
+        }
+        .run()
+    }
+
+    #[test]
+    fn test_json_to_variant_decimal16_max_precision_and_scale() -> Result<(), ArrowError> {
+        JsonToVariantTest {
+            json: "0.99999999999999999999999999999999999999",
+            expected: Variant::from(VariantDecimal16::try_new(
+                99999999999999999999999999999999999999,
+                38,
+            )?),
         }
         .run()
     }
@@ -757,11 +865,14 @@ mod test {
     }
 
     #[test]
-    fn test_json_to_variant_preserves_existing_number_kinds() -> Result<(), ArrowError> {
+    fn test_json_to_variant_numeric_dispatch() -> Result<(), ArrowError> {
         for (json, expected) in [
             ("-0", Variant::Double(-0.0)),
-            ("1.23", Variant::Double(1.23)),
-            ("18446744073709551615", Variant::Double(2_f64.powi(64))),
+            ("1.23", Variant::from(VariantDecimal4::try_new(123, 2)?)),
+            (
+                "18446744073709551615",
+                Variant::from(VariantDecimal16::try_new(18446744073709551615_i128, 0)?),
+            ),
         ] {
             JsonToVariantTest { json, expected }.run()?;
         }
@@ -1173,6 +1284,27 @@ mod test {
             let actual = Variant::try_new(&metadata, &value)?.to_json_value()?;
             assert_eq!(actual, expected, "mismatch for {json}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_string_and_value_apis_document_numeric_difference() -> Result<(), ArrowError> {
+        let mut text_builder = VariantBuilder::new();
+        text_builder.append_json("1.23")?;
+        let (text_metadata, text_value) = text_builder.finish();
+        assert_eq!(
+            Variant::try_new(&text_metadata, &text_value)?,
+            Variant::from(VariantDecimal4::try_new(123, 2)?)
+        );
+
+        let parsed: Value = serde_json::from_str("1.23").unwrap();
+        let mut value_builder = VariantBuilder::new();
+        append_json(&parsed, &mut value_builder)?;
+        let (value_metadata, value_value) = value_builder.finish();
+        assert_eq!(
+            Variant::try_new(&value_metadata, &value_value)?,
+            Variant::Double(1.23)
+        );
         Ok(())
     }
 }
