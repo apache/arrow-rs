@@ -405,6 +405,9 @@ impl Planner {
                     },
                 ),
             );
+            // The plan keeps `columns` until the end of the row group. Release
+            // the capacity that a narrow projection does not use.
+            columns.shrink_to_fit();
             for column in &columns {
                 planned_columns[column.column_idx] = true;
             }
