@@ -67,8 +67,7 @@ fn write_parquet(column: StringArray) -> Bytes {
         DataType::Utf8,
         false,
     )]));
-    let batch =
-        RecordBatch::try_new(schema.clone(), vec![Arc::new(column) as ArrayRef]).unwrap();
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(column) as ArrayRef]).unwrap();
 
     let props = WriterProperties::builder()
         .set_dictionary_enabled(true)
@@ -95,14 +94,11 @@ fn bench_batch_size() -> usize {
 
 fn read_as(file_bytes: &Bytes, schema: SchemaRef) -> usize {
     let options = ArrowReaderOptions::new().with_schema(schema);
-    let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
-        file_bytes.clone(),
-        options,
-    )
-    .unwrap()
-    .with_batch_size(bench_batch_size())
-    .build()
-    .unwrap();
+    let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file_bytes.clone(), options)
+        .unwrap()
+        .with_batch_size(bench_batch_size())
+        .build()
+        .unwrap();
     let mut total_rows = 0;
     for maybe_batch in reader {
         let batch = maybe_batch.unwrap();
@@ -140,16 +136,12 @@ fn criterion_benchmark(criterion: &mut Criterion) {
                     });
                 },
             );
-            group.bench_with_input(
-                BenchmarkId::new("Utf8", &param),
-                &param,
-                |bencher, _| {
-                    bencher.iter(|| {
-                        let rows = read_as(&file_bytes, utf8_schema.clone());
-                        assert_eq!(rows, num_rows);
-                    });
-                },
-            );
+            group.bench_with_input(BenchmarkId::new("Utf8", &param), &param, |bencher, _| {
+                bencher.iter(|| {
+                    let rows = read_as(&file_bytes, utf8_schema.clone());
+                    assert_eq!(rows, num_rows);
+                });
+            });
             group.bench_with_input(
                 BenchmarkId::new("Utf8View", &param),
                 &param,
