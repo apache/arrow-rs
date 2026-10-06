@@ -221,17 +221,118 @@ fn compare_dict<K: ArrowDictionaryKeyType>(
     let left = left.as_dictionary::<K>();
     let right = right.as_dictionary::<K>();
 
-    let c_opts = child_opts(opts);
-    let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts)?;
+    let value_opts = child_opts(opts);
+    let left_values = left.values().as_ref();
+    let right_values = right.values().as_ref();
+
+    let cmp_left_vs_left = make_comparator(left_values, left_values, value_opts)?;
+    let cmp_right_vs_right = make_comparator(right_values, right_values, value_opts)?;
+    let cmp_left_vs_right = make_comparator(left_values, right_values, value_opts)?;
+
+    let left_value_count = left_values.len();
+    let right_value_count = right_values.len();
+
+    let mut left_value_order: Vec<u32> = (0..left_value_count as u32).collect();
+    left_value_order.sort_unstable_by(|value_a, value_b| {
+        cmp_left_vs_left(*value_a as usize, *value_b as usize)
+    });
+    let mut right_value_order: Vec<u32> = (0..right_value_count as u32).collect();
+    right_value_order.sort_unstable_by(|value_a, value_b| {
+        cmp_right_vs_right(*value_a as usize, *value_b as usize)
+    });
+
+    let mut left_ranks = vec![0u32; left_value_count];
+    let mut right_ranks = vec![0u32; right_value_count];
+    let mut next_rank: u32 = 0;
+    let mut left_cursor = 0usize;
+    let mut right_cursor = 0usize;
+
+    // Advance over all adjacent entries equal under the same-side comparator so
+    // duplicate values in the values array share a rank.
+    let left_block_end = |start: usize| -> usize {
+        let anchor_value_idx = left_value_order[start] as usize;
+        let mut block_end = start + 1;
+        while block_end < left_value_count
+            && cmp_left_vs_left(left_value_order[block_end] as usize, anchor_value_idx)
+                == Ordering::Equal
+        {
+            block_end += 1;
+        }
+        block_end
+    };
+    let right_block_end = |start: usize| -> usize {
+        let anchor_value_idx = right_value_order[start] as usize;
+        let mut block_end = start + 1;
+        while block_end < right_value_count
+            && cmp_right_vs_right(right_value_order[block_end] as usize, anchor_value_idx)
+                == Ordering::Equal
+        {
+            block_end += 1;
+        }
+        block_end
+    };
+
+    while left_cursor < left_value_count && right_cursor < right_value_count {
+        let left_representative = left_value_order[left_cursor] as usize;
+        let right_representative = right_value_order[right_cursor] as usize;
+        match cmp_left_vs_right(left_representative, right_representative) {
+            Ordering::Less => {
+                let left_end = left_block_end(left_cursor);
+                for position in left_cursor..left_end {
+                    left_ranks[left_value_order[position] as usize] = next_rank;
+                }
+                next_rank += 1;
+                left_cursor = left_end;
+            }
+            Ordering::Greater => {
+                let right_end = right_block_end(right_cursor);
+                for position in right_cursor..right_end {
+                    right_ranks[right_value_order[position] as usize] = next_rank;
+                }
+                next_rank += 1;
+                right_cursor = right_end;
+            }
+            Ordering::Equal => {
+                let left_end = left_block_end(left_cursor);
+                let right_end = right_block_end(right_cursor);
+                for position in left_cursor..left_end {
+                    left_ranks[left_value_order[position] as usize] = next_rank;
+                }
+                for position in right_cursor..right_end {
+                    right_ranks[right_value_order[position] as usize] = next_rank;
+                }
+                next_rank += 1;
+                left_cursor = left_end;
+                right_cursor = right_end;
+            }
+        }
+    }
+    while left_cursor < left_value_count {
+        let left_end = left_block_end(left_cursor);
+        for position in left_cursor..left_end {
+            left_ranks[left_value_order[position] as usize] = next_rank;
+        }
+        next_rank += 1;
+        left_cursor = left_end;
+    }
+    while right_cursor < right_value_count {
+        let right_end = right_block_end(right_cursor);
+        for position in right_cursor..right_end {
+            right_ranks[right_value_order[position] as usize] = next_rank;
+        }
+        next_rank += 1;
+        right_cursor = right_end;
+    }
+
     let left_keys = left.keys().values().clone();
     let right_keys = right.keys().values().clone();
 
-    let f = compare(left, right, opts, move |i, j| {
-        let l = left_keys[i].as_usize();
-        let r = right_keys[j].as_usize();
-        cmp(l, r)
+    let comparator = compare(left, right, opts, move |left_row, right_row| {
+        let left_value_idx = left_keys[left_row].as_usize();
+        let right_value_idx = right_keys[right_row].as_usize();
+        left_ranks[left_value_idx].cmp(&right_ranks[right_value_idx])
     });
-    Ok(f)
+    Ok(comparator)
 }
 
 fn compare_list<O: OffsetSizeTrait>(
@@ -796,6 +897,142 @@ mod tests {
         assert_eq!(Ordering::Less, cmp(0, 0));
         assert_eq!(Ordering::Equal, cmp(0, 3));
         assert_eq!(Ordering::Greater, cmp(1, 3));
+    }
+
+    fn naive_dict_cmp<K: ArrowDictionaryKeyType>(
+        left: &DictionaryArray<K>,
+        right: &DictionaryArray<K>,
+        opts: SortOptions,
+    ) -> DynComparator {
+        let c_opts = child_opts(opts);
+        let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts).unwrap();
+        let left_keys = left.keys().values().clone();
+        let right_keys = right.keys().values().clone();
+        compare(left, right, opts, move |i, j| {
+            cmp(left_keys[i].as_usize(), right_keys[j].as_usize())
+        })
+    }
+
+    fn assert_dict_matches_naive<K: ArrowDictionaryKeyType>(
+        left: &DictionaryArray<K>,
+        right: &DictionaryArray<K>,
+    ) {
+        for opts in [
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ] {
+            let fast = make_comparator(left, right, opts).unwrap();
+            let naive = naive_dict_cmp(left, right, opts);
+            for i in 0..left.len() {
+                for j in 0..right.len() {
+                    assert_eq!(
+                        fast(i, j),
+                        naive(i, j),
+                        "mismatch at ({i}, {j}) with {opts:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_dict_duplicate_values_in_values_array() {
+        let left_values = StringArray::from(vec!["b", "a", "b", "c", "a", "a"]);
+        let left_keys = Int32Array::from(vec![0_i32, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5]);
+        let left = DictionaryArray::<Int32Type>::new(left_keys, Arc::new(left_values));
+
+        let right_values = StringArray::from(vec!["a", "d", "a", "b", "d"]);
+        let right_keys = Int32Array::from(vec![0_i32, 1, 2, 3, 4, 0, 1, 2, 3, 4]);
+        let right = DictionaryArray::<Int32Type>::new(right_keys, Arc::new(right_values));
+
+        assert_dict_matches_naive(&left, &right);
+    }
+
+    #[test]
+    fn test_dict_multi_mapped_keys() {
+        let left_values = StringArray::from(vec!["x", "y", "z"]);
+        let left_keys = Int32Array::from(vec![0_i32, 0, 1, 2, 1, 0, 2, 2, 1, 0]);
+        let left = DictionaryArray::<Int32Type>::new(left_keys, Arc::new(left_values));
+
+        let right_values = StringArray::from(vec!["w", "y", "zz"]);
+        let right_keys = Int32Array::from(vec![1_i32, 1, 2, 0, 0, 2, 1, 0, 2, 1]);
+        let right = DictionaryArray::<Int32Type>::new(right_keys, Arc::new(right_values));
+
+        assert_dict_matches_naive(&left, &right);
+    }
+
+    #[test]
+    fn test_dict_dupes_and_nulls_combined() {
+        let left_values = StringArray::from(vec![Some("a"), Some("a"), None, Some("b")]);
+        let left_keys = Int32Array::from(vec![0_i32, 1, 2, 3, 0, 2, 3, 1]);
+        let left = DictionaryArray::<Int32Type>::new(left_keys, Arc::new(left_values));
+
+        let right_values =
+            StringArray::from(vec![Some("b"), None, Some("a"), Some("a"), Some("c")]);
+        let right_keys = Int32Array::from(vec![0_i32, 1, 2, 3, 4, 2, 3, 1, 0]);
+        let right = DictionaryArray::<Int32Type>::new(right_keys, Arc::new(right_values));
+
+        assert_dict_matches_naive(&left, &right);
+    }
+
+    #[test]
+    fn test_dict_primitive_duplicate_values() {
+        let left_values = Int32Array::from(vec![5, 2, 5, 2, 9, 5]);
+        let left_keys = Int32Array::from(vec![0_i32, 1, 2, 3, 4, 5, 0, 2, 4, 5]);
+        let left = DictionaryArray::<Int32Type>::new(left_keys, Arc::new(left_values));
+
+        let right_values = Int32Array::from(vec![2, 2, 7, 9, 9]);
+        let right_keys = Int32Array::from(vec![0_i32, 1, 2, 3, 4, 1, 0, 2, 4, 3]);
+        let right = DictionaryArray::<Int32Type>::new(right_keys, Arc::new(right_values));
+
+        assert_dict_matches_naive(&left, &right);
+    }
+
+    /// Guards against anyone shortcutting `compare_dict` into a raw-key compare.
+    /// Both sides use the same key sequence `[0, 1]`, so comparing keys as
+    /// integers would report Equal for every row pair. The dereferenced values
+    /// disagree on both rows, so the comparator must return Greater / Less,
+    /// never Equal.
+    #[test]
+    fn test_dict_dereferences_values_not_keys() {
+        let left_values = StringArray::from(vec!["z", "a"]);
+        let left_keys = Int32Array::from(vec![0_i32, 1]);
+        let left = DictionaryArray::<Int32Type>::new(left_keys, Arc::new(left_values));
+
+        let right_values = StringArray::from(vec!["a", "z"]);
+        let right_keys = Int32Array::from(vec![0_i32, 1]);
+        let right = DictionaryArray::<Int32Type>::new(right_keys, Arc::new(right_values));
+
+        let cmp = make_comparator(&left, &right, SortOptions::default()).unwrap();
+
+        assert_eq!(cmp(0, 0), Ordering::Greater, "left[0]='z' vs right[0]='a'");
+        assert_eq!(cmp(1, 1), Ordering::Less, "left[1]='a' vs right[1]='z'");
+        assert_eq!(
+            cmp(0, 1),
+            Ordering::Equal,
+            "left[0]='z' vs right[1]='z' (same value, different keys)"
+        );
+        assert_eq!(
+            cmp(1, 0),
+            Ordering::Equal,
+            "left[1]='a' vs right[0]='a' (same value, different keys)"
+        );
+
+        assert_dict_matches_naive(&left, &right);
     }
 
     #[test]
