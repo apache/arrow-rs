@@ -762,11 +762,8 @@ where
 }
 
 /// Cast a single floating point value to a decimal native with the given multiple.
-/// Returns `None` if the scaled and rounded value does not fit the maximum precision
-/// of the decimal type. The caller must separately validate any smaller target precision.
-///
-/// Unlike earlier versions, this also rejects values that fit the native integer
-/// type but exceed the decimal type's maximum precision.
+/// Returns `None` if the scaled and rounded value does not fit the native integer
+/// type. The caller must separately validate the decimal precision.
 #[deprecated(since = "60.0.0", note = "Use `float_to_decimal` instead")]
 #[inline(always)]
 pub fn single_float_to_decimal<D>(input: f64, mul: f64) -> Option<D::Native>
@@ -774,7 +771,7 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: DecimalCast,
 {
-    float_to_decimal_checked::<D>(input, mul, D::MAX_PRECISION).ok()
+    D::Native::from_f64((mul * input).round())
 }
 
 pub(crate) fn cast_decimal_to_integer<D, T>(
@@ -951,10 +948,20 @@ mod tests {
 
     #[test]
     #[expect(deprecated)]
-    fn test_single_float_to_decimal_max_precision() {
-        // These values fit i32, but exceed Decimal32's maximum precision.
-        for input in [1_000_000_000.0, -1_000_000_000.0, 999_999_999.75] {
-            assert_eq!(single_float_to_decimal::<Decimal32Type>(input, 1.0), None);
+    fn test_single_float_to_decimal_preserves_native_range() {
+        // Deprecation preserves acceptance of values that fit i32 but exceed
+        // Decimal32's maximum precision. The new API checks that precision.
+        for (input, expected) in [
+            (1_000_000_000.0, 1_000_000_000),
+            (-1_000_000_000.0, -1_000_000_000),
+            (999_999_999.75, 1_000_000_000),
+            (-999_999_999.75, -1_000_000_000),
+        ] {
+            assert_eq!(
+                single_float_to_decimal::<Decimal32Type>(input, 1.0),
+                Some(expected)
+            );
+            assert!(float_to_decimal::<Decimal32Type>(input, 9, 0).is_err());
         }
         assert_eq!(
             single_float_to_decimal::<Decimal32Type>(999_999_999.0, 1.0),
