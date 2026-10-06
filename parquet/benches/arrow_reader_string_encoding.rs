@@ -45,8 +45,9 @@ const CARDINALITIES: &[usize] = &[10, 50, 100, 500, 1000, 8192, 16384];
 const ROW_COUNTS: &[usize] = &[1_000_000, 2_000_000, 5_000_000];
 const NULL_FRACTIONS: &[f64] = &[0.0, 0.1, 0.5];
 const NULL_PROB_DENOM: u32 = 1_000_000;
+const BATCH_SIZE: usize = 8192;
 
-fn make_dictionary(cardinality: usize, string_len: usize) -> Vec<String> {
+fn build_value_pool(cardinality: usize, string_len: usize) -> Vec<String> {
     (0..cardinality)
         .map(|idx| format!("{idx:0string_len$}"))
         .collect()
@@ -58,7 +59,7 @@ fn make_string_array(
     null_fraction: f64,
     string_len: usize,
 ) -> StringArray {
-    let dictionary = make_dictionary(cardinality, string_len);
+    let dictionary = build_value_pool(cardinality, string_len);
     debug_assert_eq!(dictionary[0].len(), string_len);
     let mut rng = StdRng::seed_from_u64(
         SEED ^ cardinality as u64 ^ num_rows as u64 ^ null_fraction.to_bits() ^ string_len as u64,
@@ -97,18 +98,11 @@ fn override_schema(data_type: DataType) -> SchemaRef {
     Arc::new(Schema::new(vec![Field::new("value", data_type, true)]))
 }
 
-fn bench_batch_size() -> usize {
-    std::env::var("BENCH_BATCH_SIZE")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(8192)
-}
-
 fn read_as(file_bytes: &Bytes, schema: SchemaRef) -> usize {
     let options = ArrowReaderOptions::new().with_schema(schema);
     let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file_bytes.clone(), options)
         .unwrap()
-        .with_batch_size(bench_batch_size())
+        .with_batch_size(BATCH_SIZE)
         .build()
         .unwrap();
     let mut total_rows = 0;
