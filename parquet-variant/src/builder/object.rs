@@ -381,19 +381,22 @@ impl<'a> ParentState<'a, ObjectState<'a>> {
         let saved_metadata_builder_dict_size = metadata_builder.num_field_names();
         let field_id = metadata_builder.try_upsert_field_name(field_name)?;
         let field_start = saved_value_builder_offset - saved_parent_value_builder_offset;
-        let replaced_field = match fields.entry(field_id) {
-            Entry::Occupied(mut field) => {
-                if validate_unique_fields {
+        let replaced_field = if validate_unique_fields {
+            match fields.entry(field_id) {
+                Entry::Occupied(_) => {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Duplicate field name: {field_name}"
                     )));
                 }
-                Some((field_id, field.insert(field_start)))
+                Entry::Vacant(field) => {
+                    field.insert(field_start);
+                    None
+                }
             }
-            Entry::Vacant(field) => {
-                field.insert(field_start);
-                None
-            }
+        } else {
+            fields
+                .insert(field_id, field_start)
+                .map(|offset| (field_id, offset))
         };
 
         let builder_state = ObjectState {
