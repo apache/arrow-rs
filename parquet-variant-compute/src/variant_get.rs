@@ -5548,11 +5548,12 @@ mod test {
 
     #[test]
     fn get_variant_as_union_with_null_field() {
-        // nulls and unmatched values land in the Null-typed field instead of the first one
+        // The first child is non-nullable, so nulls and unmatched values land in the nullable
+        // Null-typed child instead.
         let fields = UnionFields::try_new(
             vec![0, 1],
             vec![
-                Field::new("int", DataType::Int64, true),
+                Field::new("int", DataType::Int64, false),
                 Field::new("null", DataType::Null, true),
             ],
         )
@@ -5579,6 +5580,31 @@ mod test {
             .unwrap(),
         );
         assert_eq!(&result, &expected);
+    }
+
+    #[test]
+    fn get_variant_as_union_without_nullable_child_errors() {
+        for mode in [UnionMode::Dense, UnionMode::Sparse] {
+            let fields = UnionFields::try_new(
+                vec![0, 1],
+                vec![
+                    Field::new("int", DataType::Int64, false),
+                    Field::new("str", DataType::Utf8, false),
+                ],
+            )
+            .unwrap();
+
+            let mut builder = VariantArrayBuilder::new(2);
+            builder.append_variant(Variant::Int64(1));
+            builder.append_null();
+            let array = ArrayRef::from(builder.build());
+
+            let err = variant_get(&array, union_get_options(&fields, mode)).unwrap_err();
+            assert!(
+                err.to_string().contains("no field can represent nulls"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]
@@ -5692,13 +5718,13 @@ mod test {
     fn get_variant_as_union_no_matching_field() {
         // Like other requested fields, union child nullability does not override safe casting.
         let fields =
-            UnionFields::try_new(vec![0], vec![Field::new("str", DataType::Utf8, false)]).unwrap();
+            UnionFields::try_new(vec![0], vec![Field::new("str", DataType::Utf8, true)]).unwrap();
         let mut builder = VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from("kept"));
         builder.append_variant(Variant::Int8(1));
         let array = ArrayRef::from(builder.build());
 
-        // Safe mode: the Int8 row becomes a null in the first (only) child.
+        // Safe mode: the Int8 row becomes a null in the first (only) nullable child.
         let result = variant_get(&array, union_get_options(&fields, UnionMode::Dense)).unwrap();
         let expected: ArrayRef = Arc::new(
             UnionArray::try_new(

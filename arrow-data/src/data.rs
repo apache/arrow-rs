@@ -801,7 +801,17 @@ impl ArrayData {
                         };
                         (buffers, vec![], false)
                     }
-                    Some((id, _)) => {
+                    Some(_) => {
+                        // A union has no validity bitmap of its own. Represent nulls by
+                        // selecting a child whose field is nullable.
+                        let (nullable_idx, (id, _)) = f
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (_, field))| field.is_nullable())
+                            .expect(
+                                "cannot construct null data from a union with no nullable field",
+                            );
+
                         let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
                         let buffers = match mode {
                             UnionMode::Sparse => vec![ids],
@@ -815,7 +825,7 @@ impl ArrayData {
                             .iter()
                             .enumerate()
                             .map(|(idx, (_, f))| {
-                                if idx == 0 || *mode == UnionMode::Sparse {
+                                if idx == nullable_idx || *mode == UnionMode::Sparse {
                                     Self::new_null(f.data_type(), len)
                                 } else {
                                     Self::new_empty(f.data_type())
