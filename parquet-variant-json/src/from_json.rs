@@ -144,6 +144,19 @@ fn decimal_from_json_number(value: &str) -> Option<Variant<'static, 'static>> {
         .strip_prefix('-')
         .map_or((false, value), |value| (true, value));
     let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    decimal_from_components(negative, whole, fraction).or_else(|| {
+        let trimmed = fraction.trim_end_matches('0');
+        (trimmed.len() != fraction.len())
+            .then(|| decimal_from_components(negative, whole, trimmed))
+            .flatten()
+    })
+}
+
+fn decimal_from_components(
+    negative: bool,
+    whole: &str,
+    fraction: &str,
+) -> Option<Variant<'static, 'static>> {
     let scale = u8::try_from(fraction.len()).ok()?;
     let coefficient =
         whole
@@ -159,6 +172,9 @@ fn decimal_from_json_number(value: &str) -> Option<Variant<'static, 'static>> {
     } else {
         coefficient
     };
+    if negative && coefficient == 0 {
+        return None;
+    }
 
     const DECIMAL4_MAX: i128 = 10_i128.pow(VariantDecimal4::MAX_PRECISION as u32) - 1;
     const DECIMAL8_MAX: i128 = 10_i128.pow(VariantDecimal8::MAX_PRECISION as u32) - 1;
@@ -748,10 +764,18 @@ mod test {
     }
 
     #[test]
-    fn test_json_to_variant_double_precision() -> Result<(), ArrowError> {
+    fn test_json_to_variant_normalizes_out_of_range_trailing_zeros() -> Result<(), ArrowError> {
         JsonToVariantTest {
             json: "0.100000000000000000000000000000000000000",
-            expected: Variant::Double(0.1_f64),
+            expected: Variant::from(VariantDecimal4::try_new(1, 1)?),
+        }
+        .run()?;
+        JsonToVariantTest {
+            json: "12345678901234567890123456789012345678.0",
+            expected: Variant::from(VariantDecimal16::try_new(
+                12345678901234567890123456789012345678_i128,
+                0,
+            )?),
         }
         .run()
     }
@@ -802,15 +826,29 @@ mod test {
     }
 
     #[test]
-    fn test_json_to_variant_preserves_serde_float_bits() -> Result<(), ArrowError> {
-        let json = "0.9999999999999999";
+    fn test_json_to_variant_negative_zero_keeps_sign() -> Result<(), ArrowError> {
+        for json in ["-0", "-0.0", "-0.00"] {
+            let mut builder = VariantBuilder::new();
+            builder.append_json(json)?;
+            let (metadata, value) = builder.finish();
+            let Variant::Double(number) = Variant::try_new(&metadata, &value)? else {
+                panic!("expected Double for {json}")
+            };
+            assert_eq!(number.to_bits(), (-0.0_f64).to_bits(), "{json}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_variant_exponent_preserves_serde_float_bits() -> Result<(), ArrowError> {
+        let json = "0.9999999999999999e0";
         let parsed: Number = serde_json::from_str(json).unwrap();
         let expected = parsed.as_f64().unwrap();
         let mut builder = VariantBuilder::new();
         builder.append_json(json)?;
         let (metadata, value) = builder.finish();
         let Variant::Double(actual) = Variant::try_new(&metadata, &value)? else {
-            panic!("expected a Double")
+            panic!("expected Double")
         };
         assert_eq!(actual.to_bits(), expected.to_bits());
         Ok(())
