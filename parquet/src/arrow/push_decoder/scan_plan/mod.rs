@@ -121,9 +121,11 @@ pub(crate) use super::reader_builder::Stage as ScanStage;
 /// ranges in [`DecodeResult::NeedsData`] from
 /// [`ParquetPushDecoder::try_decode`] are the ranges that it actually needs.
 ///
-/// * The plan contains every range that the decoder can request after
-///   the plan is made. It can contain more, for example ranges that a
-///   [`RowFilter`] makes unnecessary.
+/// * The plan covers every byte that the decoder can request after the
+///   plan is made. It can cover more, for example ranges that a
+///   [`RowFilter`] makes unnecessary. One request can span more than one
+///   planned range: without a row selection, the decoder requests a complete
+///   column chunk, and the plan lists the pages of the column chunk.
 /// * The ranges are generated on demand, as you iterate. The plan does not
 ///   calculate a range until you ask for it.
 /// * The plan comes from the current state of the decoder. To plan the
@@ -139,7 +141,11 @@ pub(crate) use super::reader_builder::Stage as ScanStage;
 /// * There is one range for each page if the column has an offset index,
 ///   and one range for the entire column chunk if not.
 /// * The plan does not change decoding, does no I/O and does not depend
-///   on pushed data. Its state does not grow with the number of pages.
+///   on pushed data.
+/// * Without a row selection, the state of the plan does not grow with the
+///   number of pages. With a row selection, the plan keeps the indexes of
+///   the selected pages of each column chunk in the current decoding stage
+///   of the current row group.
 /// * If the decoder will return an error for a row group, the plan ends
 ///   before that row group. An example is a row selection with more rows
 ///   than the row group.
