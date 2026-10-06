@@ -243,6 +243,13 @@ impl VariantBuilderExt for VariantArrayBuilder {
         self.append_variant(value.into());
     }
 
+    fn try_append_value<'m, 'v>(
+        &mut self,
+        value: impl Into<Variant<'m, 'v>>,
+    ) -> Result<(), ArrowError> {
+        ValueBuilder::try_append_variant(self.parent_state(), value.into())
+    }
+
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
         Ok(ListBuilder::new(self.parent_state(), false))
     }
@@ -481,7 +488,22 @@ fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> Binar
 mod test {
     use super::*;
     use arrow::array::Array;
-    use parquet_variant::{ShortString, Variant};
+    use parquet_variant::{ShortString, Variant, VariantBuilder};
+
+    #[test]
+    fn test_fallible_trait_append_rejects_invalid_nested_value() {
+        let mut source = VariantBuilder::new();
+        source.new_list().with_value(1i8).finish();
+        let (metadata, mut value) = source.finish();
+        // The list header and offsets remain valid, but its child header is invalid.
+        let child_header = value.len() - 2;
+        value[child_header] = 0xff;
+        let invalid = Variant::new(&metadata, &value);
+        assert!(Variant::try_new(&metadata, &value).is_err());
+
+        let mut builder = VariantArrayBuilder::new(1);
+        assert!(VariantBuilderExt::try_append_value(&mut builder, invalid).is_err());
+    }
 
     /// Test that both the metadata and value buffers are non nullable
     #[test]
