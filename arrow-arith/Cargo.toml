@@ -19,7 +19,6 @@
 name = "arrow-arith"
 version = { workspace = true }
 description = "Arrow arithmetic kernels"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -48,6 +47,10 @@ criterion = { workspace = true }
 
 [[bench]]
 name = "decimal_arithmetic"
+harness = false
+
+[[bench]]
+name = "temporal"
 harness = false
 
 [lints]

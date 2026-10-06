@@ -18,16 +18,9 @@
 # workspace wide tests
 name: rust
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -112,7 +105,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
         with:
           tool: cargo-msrv
       - name: Check all packages

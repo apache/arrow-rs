@@ -180,6 +180,55 @@ pub fn variant_get_bench(c: &mut Criterion) {
     });
 }
 
+pub fn variant_get_list_index_bench(c: &mut Criterion) {
+    let mut builder = VariantArrayBuilder::new(8192);
+    for i in 0..8192 {
+        let mut list = builder.new_list();
+        // Alternate empty lists with two-element lists to exercise missing and present indexes.
+        if i % 2 != 0 {
+            list.append_value(Variant::Int64(i));
+            list.append_value(Variant::Int64(i + 1));
+        }
+        list.finish();
+    }
+    let variant_array = builder.build();
+    let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+    let shredded = shred_variant(&variant_array, &list_type).unwrap();
+    let options = GetOptions::new_with_path(VariantPath::from(0));
+
+    let input = ArrayRef::from(variant_array);
+    c.bench_function("variant_get_list_index_unshredded", |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
+    });
+
+    let input = ArrayRef::from(shredded);
+    c.bench_function("variant_get_list_index_shredded", |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
+    });
+}
+
+pub fn variant_get_list_index_all_oob_int64_bench(c: &mut Criterion) {
+    let mut builder = VariantArrayBuilder::new(64);
+    for _ in 0..64 {
+        let mut list = builder.new_list();
+        list.append_value(Variant::Int64(1));
+        list.finish();
+    }
+    let variant_array = builder.build();
+    let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+    let input = ArrayRef::from(shred_variant(&variant_array, &list_type).unwrap());
+    let options = GetOptions::new_with_path(VariantPath::from(9))
+        .with_as_type(Some(Arc::new(Field::new("value", DataType::Int64, true))));
+    let result = variant_get(&input, options.clone()).unwrap();
+    assert_eq!(result.data_type(), &DataType::Int64);
+    assert_eq!(result.len(), 64);
+    assert_eq!(result.null_count(), 64);
+
+    c.bench_function("variant_get_list_index_all_oob_int64_64_rows", |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
+    });
+}
+
 pub fn variant_get_shredded_utf8_bench(c: &mut Criterion) {
     let variant_array = create_shredded_utf8_variant_array(8192);
     let input = ArrayRef::from(variant_array);
@@ -474,6 +523,8 @@ pub fn variant_get_binary_from_string_bench(c: &mut Criterion) {
 criterion_group!(
     benches,
     variant_get_bench,
+    variant_get_list_index_bench,
+    variant_get_list_index_all_oob_int64_bench,
     variant_get_shredded_utf8_bench,
     variant_get_unshredded_object_path_bench,
     shred_variant_partial_object_bench,
