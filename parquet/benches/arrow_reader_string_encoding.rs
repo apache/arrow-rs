@@ -41,32 +41,37 @@ const STRING_LEN: usize = 16;
 const SEED: u64 = 0xC0FFEE_u64;
 const CARDINALITIES: &[usize] = &[10, 50, 100, 500, 1000, 8192, 16384];
 const ROW_COUNTS: &[usize] = &[1_000_000, 2_000_000, 5_000_000];
+const NULL_FRACTIONS: &[f64] = &[0.0, 0.1, 0.5];
 
 fn make_dictionary(cardinality: usize) -> Vec<String> {
     (0..cardinality)
-        .map(|idx| format!("value_{:010}", idx))
+        .map(|idx| format!("value_{idx:010}"))
         .collect()
 }
 
-fn make_string_array(cardinality: usize, num_rows: usize) -> StringArray {
+fn make_string_array(cardinality: usize, num_rows: usize, null_fraction: f64) -> StringArray {
     let dictionary = make_dictionary(cardinality);
     debug_assert_eq!(dictionary[0].len(), STRING_LEN);
-    let mut rng = StdRng::seed_from_u64(SEED ^ cardinality as u64 ^ num_rows as u64);
-    let values: Vec<&str> = (0..num_rows)
+    let mut rng = StdRng::seed_from_u64(
+        SEED ^ cardinality as u64 ^ num_rows as u64 ^ null_fraction.to_bits(),
+    );
+    let values: Vec<Option<&str>> = (0..num_rows)
         .map(|_| {
-            let pick = rng.random_range(0..cardinality);
-            dictionary[pick].as_str()
+            if null_fraction > 0.0
+                && rng.random_range(0..1_000_000) < (null_fraction * 1_000_000.0) as u32
+            {
+                None
+            } else {
+                let pick = rng.random_range(0..cardinality);
+                Some(dictionary[pick].as_str())
+            }
         })
         .collect();
     StringArray::from(values)
 }
 
 fn write_parquet(column: StringArray) -> Bytes {
-    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
-        "value",
-        DataType::Utf8,
-        false,
-    )]));
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(column) as ArrayRef]).unwrap();
 
     let props = WriterProperties::builder()
@@ -82,7 +87,7 @@ fn write_parquet(column: StringArray) -> Bytes {
 }
 
 fn override_schema(data_type: DataType) -> SchemaRef {
-    Arc::new(Schema::new(vec![Field::new("value", data_type, false)]))
+    Arc::new(Schema::new(vec![Field::new("value", data_type, true)]))
 }
 
 fn bench_batch_size() -> usize {
@@ -121,53 +126,55 @@ fn criterion_benchmark(criterion: &mut Criterion) {
 
     for &num_rows in ROW_COUNTS {
         for &cardinality in CARDINALITIES {
-            let column = make_string_array(cardinality, num_rows);
-            let file_bytes = write_parquet(column);
+            for &null_fraction in NULL_FRACTIONS {
+                let column = make_string_array(cardinality, num_rows, null_fraction);
+                let file_bytes = write_parquet(column);
 
-            let mut group = criterion.benchmark_group("RLE_DICTIONARY_read");
-            group.sample_size(10);
-            group.throughput(criterion::Throughput::Elements(num_rows as u64));
+                let mut group = criterion.benchmark_group("RLE_DICTIONARY_read");
+                group.sample_size(10);
+                group.throughput(criterion::Throughput::Elements(num_rows as u64));
 
-            let param = format!("rows={}/card={}", num_rows, cardinality);
+                let param = format!("rows={num_rows}/card={cardinality}/nulls={null_fraction:.2}");
 
-            group.bench_with_input(
-                BenchmarkId::new("Dictionary(Int32,Utf8)", &param),
-                &param,
-                |bencher, _| {
+                group.bench_with_input(
+                    BenchmarkId::new("Dictionary(Int32,Utf8)", &param),
+                    &param,
+                    |bencher, _| {
+                        bencher.iter(|| {
+                            let rows = read_as(&file_bytes, dict_schema.clone());
+                            assert_eq!(rows, num_rows);
+                        });
+                    },
+                );
+                group.bench_with_input(BenchmarkId::new("Utf8", &param), &param, |bencher, _| {
                     bencher.iter(|| {
-                        let rows = read_as(&file_bytes, dict_schema.clone());
+                        let rows = read_as(&file_bytes, utf8_schema.clone());
                         assert_eq!(rows, num_rows);
                     });
-                },
-            );
-            group.bench_with_input(BenchmarkId::new("Utf8", &param), &param, |bencher, _| {
-                bencher.iter(|| {
-                    let rows = read_as(&file_bytes, utf8_schema.clone());
-                    assert_eq!(rows, num_rows);
                 });
-            });
-            group.bench_with_input(
-                BenchmarkId::new("Utf8View", &param),
-                &param,
-                |bencher, _| {
-                    bencher.iter(|| {
-                        let rows = read_as(&file_bytes, utf8_view_schema.clone());
-                        assert_eq!(rows, num_rows);
-                    });
-                },
-            );
-            group.bench_with_input(
-                BenchmarkId::new("Dictionary(Int32,Utf8View)", &param),
-                &param,
-                |bencher, _| {
-                    bencher.iter(|| {
-                        let rows = read_as(&file_bytes, dict_view_schema.clone());
-                        assert_eq!(rows, num_rows);
-                    });
-                },
-            );
+                group.bench_with_input(
+                    BenchmarkId::new("Utf8View", &param),
+                    &param,
+                    |bencher, _| {
+                        bencher.iter(|| {
+                            let rows = read_as(&file_bytes, utf8_view_schema.clone());
+                            assert_eq!(rows, num_rows);
+                        });
+                    },
+                );
+                group.bench_with_input(
+                    BenchmarkId::new("Dictionary(Int32,Utf8View)", &param),
+                    &param,
+                    |bencher, _| {
+                        bencher.iter(|| {
+                            let rows = read_as(&file_bytes, dict_view_schema.clone());
+                            assert_eq!(rows, num_rows);
+                        });
+                    },
+                );
 
-            group.finish();
+                group.finish();
+            }
         }
     }
 }
