@@ -114,13 +114,17 @@ fn criterion_benchmark(criterion: &mut Criterion) {
     ));
     let utf8_schema = override_schema(DataType::Utf8);
     let utf8_view_schema = override_schema(DataType::Utf8View);
+    let dict_view_schema = override_schema(DataType::Dictionary(
+        Box::new(DataType::Int32),
+        Box::new(DataType::Utf8View),
+    ));
 
     for &num_rows in ROW_COUNTS {
         for &cardinality in CARDINALITIES {
             let column = make_string_array(cardinality, num_rows);
             let file_bytes = write_parquet(column);
 
-            let mut group = criterion.benchmark_group("string_encoding_read");
+            let mut group = criterion.benchmark_group("RLE_DICTIONARY_read");
             group.sample_size(10);
             group.throughput(criterion::Throughput::Elements(num_rows as u64));
 
@@ -148,6 +152,16 @@ fn criterion_benchmark(criterion: &mut Criterion) {
                 |bencher, _| {
                     bencher.iter(|| {
                         let rows = read_as(&file_bytes, utf8_view_schema.clone());
+                        assert_eq!(rows, num_rows);
+                    });
+                },
+            );
+            group.bench_with_input(
+                BenchmarkId::new("Dictionary(Int32,Utf8View)", &param),
+                &param,
+                |bencher, _| {
+                    bencher.iter(|| {
+                        let rows = read_as(&file_bytes, dict_view_schema.clone());
                         assert_eq!(rows, num_rows);
                     });
                 },
