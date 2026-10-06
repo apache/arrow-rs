@@ -38,11 +38,11 @@ use futures::{Stream, StreamExt, ready, stream::BoxStream};
 /// several have already been successfully produced.
 ///
 /// # Caveats
-/// All input record batches must have the same schema. The first batch sets the
-/// expected schema unless [`FlightDataEncoderBuilder::with_schema`] supplies it.
-/// A batch with a different schema produces an error and ends the stream.
 ///
-/// 1. When [`DictionaryHandling`] is [`DictionaryHandling::Hydrate`],
+/// 1. All input record batches must have the same schema. The first batch sets the
+///    expected schema unless [`FlightDataEncoderBuilder::with_schema`] supplies it.
+///    A batch with a different schema produces an error and ends the stream.
+/// 2. When [`DictionaryHandling`] is [`DictionaryHandling::Hydrate`],
 ///    [`DictionaryArray`]s are converted to their underlying types prior to
 ///    transport.
 ///    When [`DictionaryHandling`] is [`DictionaryHandling::Resend`], Dictionary [`FlightData`] is sent with every
