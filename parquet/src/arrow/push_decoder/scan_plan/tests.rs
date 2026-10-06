@@ -151,13 +151,33 @@ fn decode_with(
     }
 }
 
-/// Check the documented order of `plan`: in each stage of a row group,
-/// first rows do not decrease, and the ranges of each column chunk are in
-/// file order.
-fn check_order(name: &str, plan: &[PlannedRange]) {
-    for pair in plan.windows(2) {
+/// Collect `plan`, and the decoding stage that reads each of its ranges.
+///
+/// A [`PlannedRange`] does not give its stage, so this reads the stage from
+/// the state of the planner.
+fn collect_with_stages(mut plan: ScanPlan) -> (Vec<PlannedRange>, Vec<ScanStage>) {
+    let mut ranges = vec![];
+    let mut stages = vec![];
+    while let Some(range) = plan.next() {
+        let planner = plan.planner.as_ref().unwrap();
+        let all_stages: Vec<_> = planner.columns.stages.stages().map(|(s, _)| s).collect();
+        // The planner starts the next stage only when it is asked for a range
+        // of it. Thus the stages that it has not started are the stages after
+        // the stage of `range`.
+        let later_stages = planner.current.as_ref().unwrap().stages.len();
+        ranges.push(range);
+        stages.push(all_stages[all_stages.len() - 1 - later_stages]);
+    }
+    (ranges, stages)
+}
+
+/// Check the documented order of `plan`, whose ranges are read by `stages`:
+/// in each stage of a row group, first rows do not decrease, and the ranges
+/// of each column chunk are in file order.
+fn check_order(name: &str, plan: &[PlannedRange], stages: &[ScanStage]) {
+    for (pair, stage) in plan.windows(2).zip(stages.windows(2)) {
         let (a, b) = (&pair[0], &pair[1]);
-        if (a.row_group, a.stage) == (b.row_group, b.stage) {
+        if (a.row_group, stage[0]) == (b.row_group, stage[1]) {
             assert!(a.first_row <= b.first_row, "{name}: {a:?} before {b:?}");
         }
     }
@@ -197,8 +217,8 @@ fn decode_from_plan_in(name: &str, file: &Bytes, builder: impl Fn() -> ParquetPu
     });
 
     let decoder = builder().build().unwrap();
-    let planned: Vec<_> = decoder.scan_plan().collect();
-    check_order(name, &planned);
+    let (planned, stages) = collect_with_stages(decoder.scan_plan());
+    check_order(name, &planned, &stages);
     let mut plan = planned.into_iter().peekable();
     let mut cache: Vec<Range<u64>> = vec![];
     let (actual, buffered) = decode_with(decoder, |decoder, requested| {
@@ -238,7 +258,7 @@ fn check_unfiltered(
     name: &str,
     builder: impl Fn() -> ParquetPushDecoderBuilder,
 ) -> Vec<PlannedRange> {
-    let plan: Vec<_> = builder().build().unwrap().scan_plan().collect();
+    let (plan, stages) = collect_with_stages(builder().build().unwrap().scan_plan());
     let (requested, rows) = demand(builder());
     decode_from_plan(name, &builder);
 
@@ -247,9 +267,8 @@ fn check_unfiltered(
         union(requested),
         "{name}: planned bytes differ from requested bytes"
     );
-    for p in &plan {
-        assert!(!p.conditional, "{name}: {p:?}");
-        assert_eq!(p.stage, ScanStage::Projection, "{name}: {p:?}");
+    for (p, stage) in plan.iter().zip(&stages) {
+        assert_eq!(*stage, ScanStage::Projection, "{name}: {p:?}");
     }
     // Planned rows are output rows: for each column, the data pages tile
     // the output rows in order.
@@ -441,7 +460,7 @@ fn plan_tags_row_filter_stages() {
                 None => builder,
             }
         };
-        let plan: Vec<_> = builder().build().unwrap().scan_plan().collect();
+        let (plan, stages) = collect_with_stages(builder().build().unwrap().scan_plan());
         let (requested, _) = demand(builder());
         assert!(
             covers(&union(plan.iter().map(|p| p.range.clone())), &requested),
@@ -449,29 +468,22 @@ fn plan_tags_row_filter_stages() {
         );
         decode_from_plan(&format!("row filter, limit {limit:?}"), builder);
 
-        for p in &plan {
+        for (p, stage) in plan.iter().zip(&stages) {
             let expected_stage = match p.column {
                 0 => ScanStage::Predicate(0),
                 1 => ScanStage::Predicate(1),
                 _ => ScanStage::Projection,
             };
-            assert_eq!(p.stage, expected_stage, "{p:?}");
-            let expected_conditional = match p.stage {
-                ScanStage::Predicate(0) => limit.is_some() && p.row_group > 0,
-                _ => true,
-            };
-            assert_eq!(
-                p.conditional, expected_conditional,
-                "limit {limit:?}: {p:?}"
-            );
+            assert_eq!(*stage, expected_stage, "limit {limit:?}: {p:?}");
         }
         // Stages are in evaluation order within each row group, and the
         // offset/limit do not remove rows before the predicates run.
         for row_group in 0..2 {
             let stages: Vec<_> = plan
                 .iter()
-                .filter(|p| p.row_group == row_group)
-                .map(|p| p.stage)
+                .zip(&stages)
+                .filter(|(p, _)| p.row_group == row_group)
+                .map(|(_, stage)| *stage)
                 .collect();
             assert!(stages.is_sorted(), "{stages:?}");
         }
@@ -686,15 +698,15 @@ fn plan_for_nested_columns() {
                 }
             };
             let name = format!("nested, limit {limit:?}, cache {cache}");
-            let plan: Vec<_> = builder().build().unwrap().scan_plan().collect();
+            let (plan, stages) = collect_with_stages(builder().build().unwrap().scan_plan());
             let (requested, _) = demand_in(&NESTED_FILE, builder());
             assert!(
                 covers(&union(plan.iter().map(|p| p.range.clone())), &requested),
                 "{name}: requested bytes are not planned"
             );
             // `s.y` is read only for the output.
-            for p in plan.iter().filter(|p| p.column == 3) {
-                assert_eq!(p.stage, ScanStage::Projection, "{name}: {p:?}");
+            for (p, stage) in plan.iter().zip(&stages).filter(|(p, _)| p.column == 3) {
+                assert_eq!(*stage, ScanStage::Projection, "{name}: {p:?}");
             }
             decode_from_plan_in(&name, &NESTED_FILE, builder);
         }

@@ -55,10 +55,6 @@ pub struct PlannedRange {
     pub(crate) first_row: u64,
     /// One past the last planned row that this range serves.
     pub(crate) last_row: u64,
-    /// The decoding stage that first reads this range.
-    pub(crate) stage: ScanStage,
-    /// `true` if a predicate result can make this range unnecessary.
-    pub(crate) conditional: bool,
 }
 
 impl PlannedRange {
@@ -86,7 +82,7 @@ pub enum PageKind {
     ColumnChunk,
 }
 
-/// The decoding stage that first reads a [`PlannedRange`].
+/// A decoding stage of a row group.
 ///
 /// The decoder reads a column once per row group. A column that a predicate
 /// reads is not read again for the output.
@@ -231,10 +227,6 @@ struct Planner {
     active_row_group: Option<NextRowGroup>,
     /// The decoder's projection, predicates and batch size.
     columns: Arc<StageColumns>,
-    /// Whether an output limit is set.
-    has_limit: bool,
-    /// Whether no row group has been planned yet.
-    at_first_row_group: bool,
     /// Planned rows before the next row group.
     next_row: u64,
     /// The row group being planned, if any.
@@ -289,13 +281,10 @@ impl ScanPlanBuilder {
             active_row_group,
             columns,
         } = self;
-        let has_limit = frontier.budget.limit().is_some();
         let planner = Planner {
             frontier,
             active_row_group,
             columns: Arc::new(columns),
-            has_limit,
-            at_first_row_group: true,
             next_row: 0,
             current: None,
             done: false,
@@ -378,9 +367,6 @@ impl Planner {
         let mut planned_columns = vec![false; num_columns];
         let mut stage_plans = vec![];
         for (stage, fetch) in stages.stages() {
-            let conditional = filtered
-                && (stage != ScanStage::Predicate(0)
-                    || (self.has_limit && !self.at_first_row_group));
             // The decoder reuses a column that an earlier stage read.
             // `columns_to_fetch` filters, so it gives no size hint. Reserve
             // for every column to avoid growing the vector one column at a time.
@@ -399,13 +385,8 @@ impl Planner {
             for column in &columns {
                 planned_columns[column.column_idx] = true;
             }
-            stage_plans.push(StagePlan {
-                stage,
-                conditional,
-                columns,
-            });
+            stage_plans.push(StagePlan { stage, columns });
         }
-        self.at_first_row_group = false;
 
         self.current = Some(RowGroupRanges {
             row_group: RowGroupContext {
@@ -462,8 +443,6 @@ impl FusedIterator for ScanPlan {}
 #[derive(Debug, Clone)]
 struct StagePlan {
     stage: ScanStage,
-    /// See [`PlannedRange::conditional`].
-    conditional: bool,
     columns: Vec<StageColumn>,
 }
 
@@ -513,8 +492,6 @@ struct RowGroupContext {
 /// The merge state of one stage.
 #[derive(Debug, Clone)]
 struct StageRanges {
-    stage: ScanStage,
-    conditional: bool,
     cursors: Vec<ColumnCursor>,
     /// The sort key of the next range of each cursor that has one, smallest
     /// first.
@@ -581,9 +558,7 @@ impl RowGroupRanges {
             {
                 let cursor = &mut stage.cursors[cursor_idx];
                 let range = cursor.head.take().expect("heap entries have a head");
-                cursor.head = self
-                    .row_group
-                    .next_data_page(cursor, stage.stage, stage.conditional);
+                cursor.head = self.row_group.next_data_page(cursor);
                 if let Some(head) = &cursor.head {
                     stage.heap.push(Reverse((range_order(head), cursor_idx)));
                 }
@@ -593,10 +568,7 @@ impl RowGroupRanges {
             let cursors: Vec<_> = plan
                 .columns
                 .iter()
-                .map(|column| {
-                    self.row_group
-                        .column_cursor(column, plan.stage, plan.conditional)
-                })
+                .map(|column| self.row_group.column_cursor(column, plan.stage))
                 .collect();
             let heap = cursors
                 .iter()
@@ -606,12 +578,7 @@ impl RowGroupRanges {
                     Some(Reverse((range_order(head), idx)))
                 })
                 .collect();
-            self.stage = Some(StageRanges {
-                stage: plan.stage,
-                conditional: plan.conditional,
-                cursors,
-                heap,
-            });
+            self.stage = Some(StageRanges { cursors, heap });
         }
     }
 }
@@ -623,8 +590,6 @@ impl RowGroupContext {
         range: Range<u64>,
         rows: Range<u64>,
         kind: PageKind,
-        stage: ScanStage,
-        conditional: bool,
     ) -> PlannedRange {
         PlannedRange {
             range,
@@ -633,8 +598,6 @@ impl RowGroupContext {
             row_group: self.row_group_idx,
             column: column_idx,
             kind,
-            stage,
-            conditional,
         }
     }
 
@@ -662,12 +625,7 @@ impl RowGroupContext {
     ///
     /// The ranges are the same bytes that `InMemoryRowGroup::fetch_ranges`
     /// requests, split at page boundaries when page locations are known.
-    fn column_cursor(
-        &self,
-        column: &StageColumn,
-        stage: ScanStage,
-        conditional: bool,
-    ) -> ColumnCursor {
+    fn column_cursor(&self, column: &StageColumn, stage: ScanStage) -> ColumnCursor {
         let StageColumn {
             column_idx,
             ref chunk,
@@ -700,8 +658,6 @@ impl RowGroupContext {
                         range,
                         row_group_rows,
                         PageKind::ColumnChunk,
-                        stage,
-                        conditional,
                     )),
                     pages: PageSet::None,
                     next_page: 0,
@@ -732,27 +688,15 @@ impl RowGroupContext {
                     first.start..last.end
                 }
             };
-            cursor.head = Some(self.entry(
-                column_idx,
-                dictionary,
-                rows,
-                PageKind::Dictionary,
-                stage,
-                conditional,
-            ));
+            cursor.head = Some(self.entry(column_idx, dictionary, rows, PageKind::Dictionary));
         } else {
-            cursor.head = self.next_data_page(&mut cursor, stage, conditional);
+            cursor.head = self.next_data_page(&mut cursor);
         }
         cursor
     }
 
     /// The next data page of `cursor`, if any.
-    fn next_data_page(
-        &self,
-        cursor: &mut ColumnCursor,
-        stage: ScanStage,
-        conditional: bool,
-    ) -> Option<PlannedRange> {
+    fn next_data_page(&self, cursor: &mut ColumnCursor) -> Option<PlannedRange> {
         if cursor.next_page >= cursor.pages.len() {
             return None;
         }
@@ -764,8 +708,6 @@ impl RowGroupContext {
             page_range(&locations[idx]),
             self.page_rows(locations, idx),
             PageKind::Data,
-            stage,
-            conditional,
         ))
     }
 }
