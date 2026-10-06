@@ -803,6 +803,7 @@ fn build_string_list_page_iterator(
 fn build_int32_list_page_iterator(
     column_desc: ColumnDescPtr,
     null_density: f32,
+    min_list_len: usize,
 ) -> impl PageIterator + Clone {
     let max_def_level = column_desc.max_def_level();
     let max_rep_level = column_desc.max_rep_level();
@@ -823,7 +824,7 @@ fn build_int32_list_page_iterator(
                     def_levels.push(0);
                     continue;
                 }
-                let len = rng.random_range(0..MAX_LIST_LEN);
+                let len = rng.random_range(min_list_len..MAX_LIST_LEN);
                 if len == 0 {
                     def_levels.push(1);
                     continue;
@@ -2636,7 +2637,7 @@ fn add_benches(c: &mut Criterion) {
         ("90pct NULLs", 0.9),
         ("99pct NULLs", 0.99),
     ] {
-        let list_data = build_int32_list_page_iterator(int32_list_desc.clone(), null_density);
+        let list_data = build_int32_list_page_iterator(int32_list_desc.clone(), null_density, 0);
         group.bench_function(label, |b| {
             b.iter(|| {
                 let reader = create_int32_list_reader(list_data.clone(), int32_list_desc.clone());
@@ -2645,6 +2646,14 @@ fn add_benches(c: &mut Criterion) {
             assert_eq!(count, EXPECTED_VALUE_COUNT);
         });
     }
+    let list_data = build_int32_list_page_iterator(int32_list_desc.clone(), 0.0, 1);
+    group.bench_function("no NULLs or empty lists", |b| {
+        b.iter(|| {
+            let reader = create_int32_list_reader(list_data.clone(), int32_list_desc.clone());
+            count = bench_array_reader(reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
     group.finish();
 
     let mut group = c.benchmark_group("arrow_array_reader/ListArray/Fixed32List");

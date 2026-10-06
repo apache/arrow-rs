@@ -19,7 +19,6 @@
 name = "arrow-cast"
 version = { workspace = true }
 description = "Cast kernel and utilities for Apache Arrow"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -86,6 +85,10 @@ harness = false
 
 [[bench]]
 name = "format_temporal"
+harness = false
+
+[[bench]]
+name = "cast_timestamp"
 harness = false
 
 [lints]
