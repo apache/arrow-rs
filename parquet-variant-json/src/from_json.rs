@@ -114,15 +114,12 @@ fn variant_from_number_text(value: &str) -> Result<Variant<'static, 'static>, Ar
         });
     }
 
-    let number = value.parse::<f64>().map_err(|error| {
-        ArrowError::InvalidArgumentError(format!("Failed to parse {value} as number: {error}"))
+    let number: Number = serde_json::from_str(value).map_err(|error| {
+        ArrowError::InvalidArgumentError(format!(
+            "Failed to parse {value} as finite number: {error}"
+        ))
     })?;
-    if !number.is_finite() {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Failed to parse {value} as finite number"
-        )));
-    }
-    Ok(number.into())
+    variant_from_number(&number)
 }
 
 struct JsonParser<'a> {
@@ -686,13 +683,25 @@ mod test {
         for (json, expected) in [
             ("-0", Variant::Double(-0.0)),
             ("1.23", Variant::Double(1.23)),
-            (
-                "18446744073709551615",
-                Variant::Double(2_f64.powi(64)),
-            ),
+            ("18446744073709551615", Variant::Double(2_f64.powi(64))),
         ] {
             JsonToVariantTest { json, expected }.run()?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_json_to_variant_preserves_serde_float_bits() -> Result<(), ArrowError> {
+        let json = "0.9999999999999999";
+        let parsed: Number = serde_json::from_str(json).unwrap();
+        let expected = parsed.as_f64().unwrap();
+        let mut builder = VariantBuilder::new();
+        builder.append_json(json)?;
+        let (metadata, value) = builder.finish();
+        let Variant::Double(actual) = Variant::try_new(&metadata, &value)? else {
+            panic!("expected a Double")
+        };
+        assert_eq!(actual.to_bits(), expected.to_bits());
         Ok(())
     }
 
