@@ -261,6 +261,24 @@ impl PushBuffers {
         self.buffers.clear();
         self.max_len = 0;
     }
+
+    /// Panics if `ranges`, `buffers` and `max_len` do not agree, or if the
+    /// buffers are not sorted.
+    #[cfg(test)]
+    #[track_caller]
+    fn assert_invariants(&self) {
+        assert_eq!(self.ranges.len(), self.buffers.len());
+        assert!(
+            self.ranges.is_sorted_by_key(|r| r.start),
+            "not sorted: {:?}",
+            self.ranges
+        );
+        for (range, buffer) in self.ranges.iter().zip(&self.buffers) {
+            assert_eq!(range.end - range.start, buffer.len() as u64);
+        }
+        let max_len = self.ranges.iter().map(|r| r.end - r.start).max();
+        assert_eq!(self.max_len, max_len.unwrap_or(0));
+    }
 }
 
 impl Length for PushBuffers {
@@ -350,20 +368,14 @@ mod tests {
             .unwrap();
     }
 
+    /// Checks the invariants, and that each buffer still has the bytes of its
+    /// range.
     #[track_caller]
-    fn assert_invariants(buffers: &PushBuffers) {
-        assert_eq!(buffers.ranges.len(), buffers.buffers.len());
-        assert!(
-            buffers.ranges.is_sorted_by_key(|r| r.start),
-            "not sorted: {:?}",
-            buffers.ranges
-        );
+    fn assert_valid(buffers: &PushBuffers) {
+        buffers.assert_invariants();
         for (range, buffer) in buffers.ranges.iter().zip(&buffers.buffers) {
             assert_eq!(*buffer, file_bytes(range.clone()));
-            assert!(range.end - range.start <= buffers.max_len);
         }
-        let max_len = buffers.ranges.iter().map(|r| r.end - r.start).max();
-        assert_eq!(buffers.max_len, max_len.unwrap_or(0));
     }
 
     #[test]
@@ -372,7 +384,7 @@ mod tests {
         for range in [50..60, 10..20, 30..40, 0..5, 90..100, 10..15] {
             push(&mut buffers, range);
         }
-        assert_invariants(&buffers);
+        assert_valid(&buffers);
         assert_eq!(
             buffers.ranges,
             vec![0..5, 10..20, 10..15, 30..40, 50..60, 90..100]
@@ -395,7 +407,7 @@ mod tests {
         for range in [0..100, 10..20, 50..60, 55..58] {
             push(&mut buffers, range);
         }
-        assert_invariants(&buffers);
+        assert_valid(&buffers);
         // 55..90 starts in 50..60 and 55..58, but only 0..100 contains it.
         assert_eq!(buffers.get_bytes(55, 35).unwrap(), file_bytes(55..90));
         assert!(buffers.has_range(&(0..100)));
@@ -417,7 +429,7 @@ mod tests {
             push(&mut buffers, range);
         }
         buffers.clear_ranges(&[40..50, 10..15, 5..30]);
-        assert_invariants(&buffers);
+        assert_valid(&buffers);
         assert_eq!(buffers.ranges, vec![0..30, 10..20]);
     }
 
@@ -472,7 +484,7 @@ mod tests {
                         }
                     }
                 }
-                assert_invariants(&buffers);
+                assert_valid(&buffers);
                 let mut actual = buffers.ranges.clone();
                 actual.sort_by_key(|r| (r.start, r.end));
                 model.sort_by_key(|r| (r.start, r.end));
