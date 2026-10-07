@@ -572,6 +572,53 @@ impl i256 {
         self.div_rem(other).map(|(_, v)| v).ok()
     }
 
+    /// Performs wrapping division and remainder, returning `(quotient, remainder)`
+    ///
+    /// This computes both results with one division, while calling
+    /// [`Self::wrapping_div`] and [`Self::wrapping_rem`] divides twice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `other` is zero
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_buffer::i256;
+    /// let (q, r) = i256::from_i128(-7).wrapping_div_rem(i256::from_i128(2));
+    /// assert_eq!((q, r), (i256::from_i128(-3), i256::from_i128(-1)));
+    ///
+    /// let (q, r) = i256::MIN.wrapping_div_rem(i256::MINUS_ONE);
+    /// assert_eq!((q, r), (i256::MIN, i256::ZERO));
+    /// ```
+    #[inline]
+    pub fn wrapping_div_rem(self, other: Self) -> (Self, Self) {
+        match self.div_rem(other) {
+            Ok(v) => v,
+            Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
+            Err(_) => (Self::MIN, Self::ZERO),
+        }
+    }
+
+    /// Performs checked division and remainder, returning `(quotient, remainder)`
+    ///
+    /// Returns `None` if `other` is zero or the quotient overflows
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_buffer::i256;
+    /// let qr = i256::from_i128(-7).checked_div_rem(i256::from_i128(2));
+    /// assert_eq!(qr, Some((i256::from_i128(-3), i256::from_i128(-1))));
+    ///
+    /// assert_eq!(i256::ONE.checked_div_rem(i256::ZERO), None);
+    /// assert_eq!(i256::MIN.checked_div_rem(i256::MINUS_ONE), None);
+    /// ```
+    #[inline]
+    pub fn checked_div_rem(self, other: Self) -> Option<(Self, Self)> {
+        self.div_rem(other).ok()
+    }
+
     /// Performs checked exponentiation
     #[inline]
     pub const fn checked_pow(self, mut exp: u32) -> Option<Self> {
@@ -1491,6 +1538,14 @@ mod tests {
             assert!(il.checked_rem(ir).is_none());
         }
 
+        // Division with remainder
+        if ir != i256::ZERO {
+            test_div_rem(il, ir);
+        } else {
+            // `wrapping_div_rem` panics on division by zero
+            assert!(il.checked_div_rem(ir).is_none());
+        }
+
         // Exponentiation
         for exp in [0, 1, 2, 3, 8, 100] {
             let actual = il.wrapping_pow(exp);
@@ -1619,6 +1674,71 @@ mod tests {
                 test_ops(il, ir)
             }
         }
+    }
+
+    fn test_div_rem(n: i256, d: i256) {
+        let bn = BigInt::from_signed_bytes_le(&n.to_le_bytes());
+        let bd = BigInt::from_signed_bytes_le(&d.to_le_bytes());
+
+        // BigInt produces an integer over i256::MAX for i256::MIN / -1
+        let (q, overflow) = i256::from_bigint_with_overflow(bn.clone() / bd.clone());
+        let (r, _) = i256::from_bigint_with_overflow(bn % bd);
+
+        assert_eq!(n.wrapping_div_rem(d), (q, r), "{n} / {d}");
+        assert_eq!(
+            n.checked_div_rem(d),
+            (!overflow).then_some((q, r)),
+            "{n} / {d}"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn test_div_rem_powers_of_ten() {
+        let dividends = [
+            i256::ZERO,
+            i256::ONE,
+            i256::MIN,
+            i256::MIN + i256::ONE,
+            i256::MAX,
+            i256::from_i128(i128::MIN),
+            i256::from_i128(i128::MAX),
+            i256::from_i128(u64::MAX as i128),
+            i256::from_i128(1 << 64),
+            i256::from_i128((1 << 64) + 1),
+            i256::from_parts(u128::MAX, 0),
+            i256::from_parts(0, 1),
+            i256::from_parts(1, 1),
+        ];
+
+        // 10^76 is the largest power of ten that fits in an i256
+        for k in 0..=76 {
+            let p = i256::from_i128(10).wrapping_pow(k);
+            for d in [p - i256::ONE, p, p + i256::ONE] {
+                if d == i256::ZERO {
+                    continue;
+                }
+                for n in dividends
+                    .into_iter()
+                    .chain([p - i256::ONE, p, p + i256::ONE])
+                {
+                    for (n, d) in [
+                        (n, d),
+                        (n.wrapping_neg(), d),
+                        (n, -d),
+                        (n.wrapping_neg(), -d),
+                    ] {
+                        test_div_rem(n, d);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to divide by zero")]
+    fn test_wrapping_div_rem_zero_panics() {
+        let _ = i256::ONE.wrapping_div_rem(i256::ZERO);
     }
 
     #[test]
