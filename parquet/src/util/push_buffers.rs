@@ -165,19 +165,32 @@ impl PushBuffers {
     /// Returns the index of a buffer that contains all bytes of `start..end`,
     /// if any.
     fn find(&self, start: u64, end: u64) -> Option<usize> {
-        // Ranges can overlap. Thus, the buffer that starts nearest to `start`
-        // is not always the buffer that contains `start..end`:
+        // Common case: the buffers do not overlap. Then only the last buffer
+        // that starts at or before `start` can contain `start..end`:
         //
-        //   buffers:  0..100  ├────────────────────────────────┤
-        //             50..60                   ├───┤
-        //             55..58                     ├┤
-        //   find:     55..90                     ├──────────┤  only 0..100 contains it
+        //   buffers:  0..25    ├─────────┤
+        //             25..50             ├─────────┤
+        //             50..75                       ├─────────┤
+        //             75..100                                ├─────────┤
+        //   find:     55..70                         ├─────┤  only 50..75 can contain it
         //
-        // Scan back from the last buffer that starts at or before `start`.
-        // Stop at the first buffer that starts more than `max_len` bytes
-        // before `end`: it and all buffers before it end before `end`. The
-        // scan is long only if a caller pushes one large buffer and then many
-        // small buffers after its start.
+        // But pushed buffers can overlap. Then a buffer that starts much
+        // earlier can be the one that contains `start..end`:
+        //
+        //   buffers:  0..100   ├───────────────────────────────────────┤
+        //             50..60                       ├───┤
+        //             55..58                         ├┤
+        //   find:     55..90                         ├─────────────┤  only 0..100 contains it
+        //
+        // Thus, scan back from the last buffer that starts at or before
+        // `start`. Without a limit, a lookup that finds nothing scans all
+        // earlier buffers. `max_len` gives the limit: a buffer that starts
+        // more than `max_len` bytes before `end` ends before `end`, and so do
+        // all buffers before it. Stop there.
+        //
+        // In the common case the scan stops after one or two buffers. It is
+        // long only if a caller pushes one large buffer and then many small
+        // buffers after its start.
         let candidates = self.ranges.partition_point(|r| r.start <= start);
         self.ranges[..candidates]
             .iter()
