@@ -91,6 +91,10 @@ pub struct ParquetMetaDataReader {
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
+// TODO: https://github.com/apache/arrow-rs/issues/11395 is tracking unifying PageIndexPolicy
+// with the ColumnChunkMask to reduce the dizzying number of APIs that exist to control reading
+// the page indexes.
+
 /// Describes the policy for reading page indexes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PageIndexPolicy {
@@ -117,13 +121,16 @@ impl From<bool> for PageIndexPolicy {
     }
 }
 
-/// Struct to specify column chunks for which metadata is required.
+/// A cheaply cloneable struct to specify column chunks for which metadata is required.
 ///
 /// Column chunks are identified by row group index and leaf column index (the index of the
 /// column in [`SchemaDescriptor::columns`], not the index of a root or Arrow field). This struct
 /// allows for specifying vertical slices of column chunk data (via [`Self::columns`]),
 /// horizontal slices (via [`Self::row_groups`]), or the intersection of the two
 /// (via [`Self::row_groups_and_columns`]).
+///
+/// Because Parquet collection cannot contain more than [`i32::MAX`] values, user provided indices
+/// outside that range will be discarded.
 ///
 /// At present this is only used to select elements of the [Page Index] for decoding.
 ///
@@ -150,8 +157,11 @@ impl From<bool> for PageIndexPolicy {
 /// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct ColumnChunkMask {
-    // `None` means all, while `Some(empty)` means none. Store u32 because
-    // Parquet/Thrift collections cannot contain more than i32::MAX entries.
+    // `row_groups` and `columns` are optional `u32` slices, with elements
+    // sorted in ascending order (to permit binary searching for member indices).
+    // `None` means all indices are included, while an empty slice means none are.
+    // Indices are stored as `u32` because Parquet/Thrift collections cannot contain
+    // more than i32::MAX entries.
     row_groups: Option<Arc<[u32]>>,
     columns: Option<Arc<[u32]>>,
 }
@@ -203,21 +213,22 @@ impl ColumnChunkMask {
         }
     }
 
-    /// Test if `idx` is in the row group set.
-    pub fn includes_row_group(&self, idx: usize) -> bool {
-        Self::includes_index(self.row_groups.as_ref(), idx)
+    /// Returns whether row group `idx` is selected and within the bounds `[0, num_row_groups)`.
+    pub fn includes_row_group(&self, idx: usize, num_row_groups: usize) -> bool {
+        idx < num_row_groups && Self::includes_index(self.row_groups.as_ref(), idx)
     }
 
-    /// Test if `idx` is in the column set.
-    pub fn includes_column(&self, idx: usize) -> bool {
-        Self::includes_index(self.columns.as_ref(), idx)
+    /// Returns whether column `idx` is selected and within the bounds `[0, num_columns)`.
+    pub fn includes_column(&self, idx: usize, num_columns: usize) -> bool {
+        idx < num_columns && Self::includes_index(self.columns.as_ref(), idx)
     }
 
     fn includes_index(keep: Option<&Arc<[u32]>>, idx: usize) -> bool {
         // return false for out-of-bounds index
-        let Ok(idx) = u32::try_from(idx) else {
+        let Ok(idx) = i32::try_from(idx) else {
             return false;
         };
+        let idx = idx as u32;
         keep.is_none_or(|keep| keep.binary_search(&idx).is_ok())
     }
 
@@ -244,18 +255,30 @@ impl ColumnChunkMask {
         self.columns.clone()
     }
 
+    /// Returns `true` when either configured axis is empty (and thus would select no column chunks).
+    ///
+    /// This does not consider the dimensions of a particular Parquet file, so may return `false`
+    /// when [`Self::column_indices`] or [`Self::row_group_indices`] returns an empty iterator due
+    /// to all elements exceeding the provided upper bound.
+    pub fn is_none(&self) -> bool {
+        self.row_groups.as_ref().is_some_and(|i| i.is_empty())
+            || self.columns.as_ref().is_some_and(|i| i.is_empty())
+    }
+
     /// Creates a mask selecting the leaf columns in an Arrow projection.
     #[cfg(feature = "arrow")]
     pub fn from_projection(projection: &ProjectionMask, schema: &SchemaDescriptor) -> Self {
         Self::columns((0..schema.num_columns()).filter(|&i| projection.leaf_included(i)))
     }
 
-    /// Returns an iterator over the row group indices selected by this mask
+    /// Returns an iterator over the row group indices selected by this mask. If the mask is `all`
+    /// then all indices in the range `[0, num_row_groups)` are returned.
     pub fn row_group_indices(&self, num_row_groups: usize) -> impl Iterator<Item = usize> + '_ {
         Self::axis_indices(self.row_groups.as_deref(), num_row_groups)
     }
 
-    /// Returns an iterator over the column indices selected by this mask
+    /// Returns an iterator over the column indices selected by this mask. If the mask is `all`
+    /// then all indices in the range `[0, num_columns)` are returned.
     pub fn column_indices(&self, num_columns: usize) -> impl Iterator<Item = usize> + '_ {
         Self::axis_indices(self.columns.as_deref(), num_columns)
     }
@@ -270,11 +293,14 @@ impl ColumnChunkMask {
         }
     }
 
+    // Used during initialization, this helper takes an iterator over `usize` elements,
+    // discards out-of-range values and then sorts.
     fn iter_to_set(indices: impl IntoIterator<Item = usize>) -> Option<Arc<[u32]>> {
         Some(
             indices
                 .into_iter()
-                .filter_map(|i| u32::try_from(i).ok())
+                .filter_map(|i| i32::try_from(i).ok()) // remove out-of-bounds values
+                .map(|i| i as u32) // store as u32. safe because 0 <= i <= i32::MAX
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>()
@@ -342,6 +368,8 @@ impl ParquetMetaDataReader {
         self.offset_index = policy;
         self
     }
+
+    // TODO: deprecate the following as part of https://github.com/apache/arrow-rs/issues/11395
 
     /// Selects the row groups and leaf columns for which both page index structures are read.
     ///
@@ -1324,18 +1352,19 @@ mod tests {
     #[test]
     fn test_chunk_mask() {
         let mask = ColumnChunkMask::row_groups_and_columns([0], [1]);
-        assert!(mask.includes_row_group(0));
-        assert!(!mask.includes_row_group(1));
-        assert!(!mask.includes_column(0));
-        assert!(mask.includes_column(1));
+        assert!(mask.includes_row_group(0, 1));
+        assert!(!mask.includes_row_group(1, 1));
+        assert!(!mask.includes_column(0, 2));
+        assert!(mask.includes_column(1, 2));
 
         let mask = ColumnChunkMask::columns([]);
-        assert!(!mask.includes_column(0));
-        assert_eq!(mask.selected_columns(), Some([].as_slice()));
+        assert!(!mask.includes_column(0, 3));
+        assert_eq!(mask.column_indices(3).count(), 0);
 
         let all = ColumnChunkMask::all();
         assert!(all.is_all());
-        assert!(all.includes_column(u32::MAX as usize));
+        assert!(all.includes_column(2, 3));
+        assert!(!all.includes_column(3, 3));
 
         assert_eq!(all.row_group_indices(3).collect::<Vec<_>>(), [0, 1, 2]);
         assert_eq!(all.column_indices(2).collect::<Vec<_>>(), [0, 1]);

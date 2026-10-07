@@ -776,6 +776,8 @@ impl ArrowReaderOptions {
         self
     }
 
+    // TODO: deprecate the following as part of https://github.com/apache/arrow-rs/issues/11395
+
     /// Sets the same [`ColumnChunkMask`] for both page-index structures.
     pub fn with_page_index_mask(self, mask: ColumnChunkMask) -> Self {
         self.with_column_index_mask(mask.clone())
@@ -967,6 +969,8 @@ impl ArrowReaderOptions {
         self.column_index
     }
 
+    // TODO: deprecate the following as part of https://github.com/apache/arrow-rs/issues/11395
+
     /// Retrieve the currently set [`ColumnChunkMask`] for the offset index.
     ///
     /// This can be set via [`with_offset_index_mask`][Self::with_offset_index_mask].
@@ -1032,6 +1036,9 @@ impl ParquetMetaDataReader {
 
         // Preload settings on the underlying reader may enable an index even when the
         // corresponding options policy is `Skip`, so apply non-default masks independently.
+        //
+        // TODO: https://github.com/apache/arrow-rs/issues/11395 may deprecate this API. Decide
+        // at that time if masks should be added to ParquetObjectReader.
         if !options.column_index_mask().is_all() {
             self = self.with_column_index_mask(options.column_index_mask().clone());
         }

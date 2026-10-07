@@ -745,7 +745,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         let (src_offset, src_length, write_offset) = self.begin_appended_column(&close)?;
 
         let mut read = read.take(src_length as _);
-        let write_length = std::io::copy(&mut read, &mut self.buf)?;
+        let write_length = std::io::copy(&mut read, &mut *self.buf)?;
 
         if src_length as u64 != write_length {
             return Err(general_err!(
@@ -1064,7 +1064,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
                 page_encryptor.encrypt_page_header(&header, sink)?;
             }
             None => {
-                let mut protocol = ThriftCompactOutputProtocol::new(&mut self.sink);
+                let mut protocol = ThriftCompactOutputProtocol::new(&mut *self.sink);
                 header.write_thrift(&mut protocol)?;
             }
         }

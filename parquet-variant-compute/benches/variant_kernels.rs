@@ -19,6 +19,7 @@ use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, Int32Array, StringArray, StructArray,
 };
 use arrow::buffer::Buffer;
+use arrow::compute::CastOptions;
 use arrow_schema::{DataType, Field, FieldRef, Fields};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
@@ -177,6 +178,55 @@ pub fn variant_get_bench(c: &mut Criterion) {
 
     c.bench_function("variant_get_primitive", |b| {
         b.iter(|| variant_get(&input.clone(), options.clone()))
+    });
+}
+
+pub fn variant_get_list_index_bench(c: &mut Criterion) {
+    let mut builder = VariantArrayBuilder::new(8192);
+    for i in 0..8192 {
+        let mut list = builder.new_list();
+        // Alternate empty lists with two-element lists to exercise missing and present indexes.
+        if i % 2 != 0 {
+            list.append_value(Variant::Int64(i));
+            list.append_value(Variant::Int64(i + 1));
+        }
+        list.finish();
+    }
+    let variant_array = builder.build();
+    let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+    let shredded = shred_variant(&variant_array, &list_type).unwrap();
+    let options = GetOptions::new_with_path(VariantPath::from(0));
+
+    let input = ArrayRef::from(variant_array);
+    c.bench_function("variant_get_list_index_unshredded", |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
+    });
+
+    let input = ArrayRef::from(shredded);
+    c.bench_function("variant_get_list_index_shredded", |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
+    });
+}
+
+pub fn variant_get_list_index_all_oob_int64_bench(c: &mut Criterion) {
+    let mut builder = VariantArrayBuilder::new(64);
+    for _ in 0..64 {
+        let mut list = builder.new_list();
+        list.append_value(Variant::Int64(1));
+        list.finish();
+    }
+    let variant_array = builder.build();
+    let list_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+    let input = ArrayRef::from(shred_variant(&variant_array, &list_type).unwrap());
+    let options = GetOptions::new_with_path(VariantPath::from(9))
+        .with_as_type(Some(Arc::new(Field::new("value", DataType::Int64, true))));
+    let result = variant_get(&input, options.clone()).unwrap();
+    assert_eq!(result.data_type(), &DataType::Int64);
+    assert_eq!(result.len(), 64);
+    assert_eq!(result.null_count(), 64);
+
+    c.bench_function("variant_get_list_index_all_oob_int64_64_rows", |b| {
+        b.iter(|| variant_get(&input, options.clone()).unwrap())
     });
 }
 
@@ -471,9 +521,155 @@ pub fn variant_get_binary_from_string_bench(c: &mut Criterion) {
     );
 }
 
+pub fn variant_get_decimal_from_int_bench(c: &mut Criterion) {
+    let int32 = |rng: &mut StdRng| Variant::Int32(rng.random_range(-1_000_000..1_000_000));
+    let int64 = |rng: &mut StdRng| Variant::Int64(rng.random_range(-1_000_000..1_000_000));
+    bench_variant_get_decimal(
+        c,
+        "int32_to_decimal32(9,0)_valid",
+        int32,
+        DataType::Decimal32(9, 0),
+        &[true, false],
+    );
+    bench_variant_get_decimal(
+        c,
+        "int64_to_decimal128(38,2)_scale_up",
+        int64,
+        DataType::Decimal128(38, 2),
+        &[true, false],
+    );
+    bench_variant_get_decimal(
+        c,
+        "int64_to_decimal256(76,-1)_scale_down",
+        int64,
+        DataType::Decimal256(76, -1),
+        &[true],
+    );
+    bench_variant_get_decimal(
+        c,
+        "int64_to_decimal32(9,-20)_all_zero",
+        int64,
+        DataType::Decimal32(9, -20),
+        &[true],
+    );
+
+    let wide = |rng: &mut StdRng| Variant::Int64(rng.random_range(5_000_000_000..5_000_100_000));
+    bench_variant_get_decimal(
+        c,
+        "int64_to_decimal32(9,-1)_scale_before_narrowing",
+        wide,
+        DataType::Decimal32(9, -1),
+        &[true],
+    );
+    let overflow = |rng: &mut StdRng| Variant::Int32(rng.random_range(100_000_000..1_000_000_000));
+    bench_variant_get_decimal(
+        c,
+        "int32_to_decimal32(8,0)_precision_overflow",
+        overflow,
+        DataType::Decimal32(8, 0),
+        &[true],
+    );
+}
+
+pub fn variant_get_decimal_from_float_bench(c: &mut Criterion) {
+    let float = |rng: &mut StdRng| Variant::Float(rng.random_range(-9999.0..9999.0));
+    let double = |rng: &mut StdRng| Variant::Double(rng.random_range(-9999.0..9999.0));
+    bench_variant_get_decimal(
+        c,
+        "float_to_decimal32(7,2)_valid",
+        float,
+        DataType::Decimal32(7, 2),
+        &[true, false],
+    );
+    bench_variant_get_decimal(
+        c,
+        "double_to_decimal128(20,3)_valid",
+        double,
+        DataType::Decimal128(20, 3),
+        &[true, false],
+    );
+    bench_variant_get_decimal(
+        c,
+        "double_to_decimal256(40,-2)_scale_down",
+        double,
+        DataType::Decimal256(40, -2),
+        &[true],
+    );
+
+    // Include direct and rounding-induced precision overflow for both source types.
+    // Before #11302 these return out-of-precision values instead of nulls. Keep
+    // the fixture usable on both revisions so the cost of the fix can be measured.
+    let samples = [1000.0, -1000.0, 999.75, -999.75];
+    bench_variant_get_decimal(
+        c,
+        "float_to_decimal64(3,0)_precision_overflow",
+        |rng| Variant::Float(samples[rng.random_range(0..samples.len())] as f32),
+        DataType::Decimal64(3, 0),
+        &[true],
+    );
+    bench_variant_get_decimal(
+        c,
+        "double_to_decimal64(3,0)_precision_overflow",
+        |rng| Variant::Double(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal64(3, 0),
+        &[true],
+    );
+
+    let samples = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+    bench_variant_get_decimal(
+        c,
+        "double_to_decimal128(20,3)_non_finite",
+        |rng| Variant::Double(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal128(20, 3),
+        &[true],
+    );
+}
+
+fn bench_variant_get_decimal(
+    c: &mut Criterion,
+    name: &str,
+    value: impl Fn(&mut StdRng) -> Variant<'static, 'static>,
+    target: DataType,
+    modes: &[bool],
+) {
+    for &safe in modes {
+        let options = GetOptions::new()
+            .with_as_type(Some(Arc::new(Field::new(
+                "typed_value",
+                target.clone(),
+                true,
+            ))))
+            .with_cast_options(CastOptions {
+                safe,
+                ..Default::default()
+            });
+        let mode = if safe { "safe" } else { "strict" };
+        bench_variant_get(
+            c,
+            &format!("variant_get_decimal_{name}_8192_{mode}"),
+            |rng, array_size| {
+                // Unshredded input exercises Variant's scalar conversion. Keep
+                // the requested numeric type and make every tenth row null.
+                let mut builder = VariantArrayBuilder::new(array_size);
+                for i in 0..array_size {
+                    if i % 10 == 0 {
+                        builder.append_null();
+                    } else {
+                        builder.append_variant(value(rng));
+                    }
+                }
+                builder.build()
+            },
+            options,
+        );
+    }
+}
+
 criterion_group!(
     benches,
     variant_get_bench,
+    variant_get_list_index_bench,
+    variant_get_list_index_all_oob_int64_bench,
     variant_get_shredded_utf8_bench,
     variant_get_unshredded_object_path_bench,
     shred_variant_partial_object_bench,
@@ -492,6 +688,8 @@ criterion_group!(
     variant_get_utf8_from_list_bench,
     variant_get_utf8_from_map_in_list_bench,
     variant_get_binary_from_string_bench,
+    variant_get_decimal_from_int_bench,
+    variant_get_decimal_from_float_bench,
 );
 
 criterion_main!(benches);

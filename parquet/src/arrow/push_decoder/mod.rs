@@ -20,6 +20,7 @@
 
 mod reader_builder;
 mod remaining;
+mod scan_plan;
 
 use crate::DecodeResult;
 pub use crate::arrow::arrow_reader::RowGroupSelection;
@@ -31,8 +32,9 @@ use crate::file::metadata::ParquetMetaData;
 pub use crate::util::push_buffers::PushBuffers;
 use arrow_array::RecordBatch;
 use bytes::Bytes;
-use reader_builder::{RowBudget, RowGroupReaderBuilder, RowGroupReaderBuilderParts};
+use reader_builder::{RowGroupReaderBuilder, RowGroupReaderBuilderParts};
 use remaining::{RemainingRowGroups, RemainingRowGroupsParts};
+use scan_plan::RowBudget;
 use std::ops::Range;
 use std::sync::Arc;
 
