@@ -16,13 +16,12 @@
 // under the License.
 
 //! Benchmark comparing reading the SAME dictionary-encoded parquet string column
-//! back as three different Arrow logical types:
+//! back as two different Arrow logical types:
 //!   1. `Dictionary(Int32, Utf8)`
-//!   2. `Utf8`
-//!   3. `Utf8View`
+//!   2. `Utf8View`
 //!
-//! Sweeps cardinality in {10, 50, 100, 500, 1000, 8192} and row count
-//! in {1M, 2M, 5M}, writing a dictionary-encoded parquet file in-memory
+//! Sweeps cardinality in {10, 100, 1000, 20_000} and row count
+//! in {1M, 5M}, writing a dictionary-encoded parquet file in-memory
 //! and measuring only the read time via `ArrowReaderOptions::with_schema`.
 
 use std::sync::Arc;
