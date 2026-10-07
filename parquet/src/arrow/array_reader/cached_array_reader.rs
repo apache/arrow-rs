@@ -614,6 +614,8 @@ mod tests {
         // After first consume_batch, batch 0 should still be in cache
         // (current_batch_id = 3/3 = 1, cleanup only happens if current_batch_id > 1)
         assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_some());
+        // Nothing was removed, so the watermark has not moved
+        assert_eq!(consumer_reader.cleaned_up_to, 0);
 
         // Read second batch (positions 3-5, batch 1)
         let read2 = consumer_reader.read_records(3).unwrap();
@@ -626,6 +628,8 @@ mod tests {
         // (current_batch_id = 6/3 = 2, cleanup removes batches 0..(2-1) = 0..1, so removes batch 0)
         assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_none());
         assert!(cache.read().unwrap().get(0, BatchID { val: 1 }).is_some());
+        // Watermark records that batch 0 is gone
+        assert_eq!(consumer_reader.cleaned_up_to, 1);
 
         // Read third batch (positions 6-8, batch 2)
         let read3 = consumer_reader.read_records(3).unwrap();
@@ -638,6 +642,19 @@ mod tests {
         // (current_batch_id = 9/3 = 3, cleanup removes batches 0..(3-1) = 0..2, so removes batches 0 and 1)
         assert!(cache.read().unwrap().get(0, BatchID { val: 0 }).is_none());
         assert!(cache.read().unwrap().get(0, BatchID { val: 1 }).is_none());
+        assert!(cache.read().unwrap().get(0, BatchID { val: 2 }).is_some());
+        // Watermark advanced by exactly one batch: only batch 1 was newly removed
+        assert_eq!(consumer_reader.cleaned_up_to, 2);
+
+        // Read one more record (position 9, still batch 3) and consume again.
+        // current_batch_id is unchanged, so cleanup has nothing new to remove:
+        // the watermark must stay put and batch 2 must remain cached.
+        let read4 = consumer_reader.read_records(1).unwrap();
+        assert_eq!(read4, 1);
+        assert_eq!(consumer_reader.outer_position, 10);
+        let array4 = consumer_reader.consume_batch().unwrap();
+        assert_eq!(array4.len(), 1);
+        assert_eq!(consumer_reader.cleaned_up_to, 2);
         assert!(cache.read().unwrap().get(0, BatchID { val: 2 }).is_some());
     }
 
@@ -683,6 +700,8 @@ mod tests {
         );
         assert_eq!(consumer.skip_records(9).unwrap(), 9);
         assert_eq!(consumer.read_records(3).unwrap(), 3);
+        // Skipping and reading do not touch the shared cache; only consume does
+        assert_eq!(consumer.cleaned_up_to, 0);
         let array = consumer.consume_batch().unwrap();
         assert_eq!(array.len(), 3);
 
@@ -698,6 +717,8 @@ mod tests {
             );
         }
         assert!(cache.read().unwrap().get(0, BatchID { val: 3 }).is_some());
+        // Watermark jumped over the skipped batches in one step
+        assert_eq!(consumer.cleaned_up_to, 3);
     }
 
     #[test]
