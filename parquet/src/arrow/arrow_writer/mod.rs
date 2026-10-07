@@ -41,7 +41,7 @@ use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
 use crate::column::writer::encoder::ColumnValueEncoder;
 use crate::column::writer::{
-    ColumnCloseResult, ColumnWriter, GenericColumnWriter, get_column_writer,
+    ColumnCloseResult, ColumnWriter, GenericColumnWriter, ValueIndices, get_column_writer,
 };
 use crate::data_type::{ByteArray, FixedLenByteArray};
 use std::collections::HashSet;
@@ -1820,7 +1820,10 @@ fn write_primitive<E: ColumnValueEncoder>(
 ) -> Result<usize> {
     writer.write_batch_internal(
         values,
-        Some(levels.non_null_indices()),
+        Some(ValueIndices {
+            indices: levels.non_null_indices(),
+            ascending: levels.non_null_indices_ascending(),
+        }),
         levels.def_level_data().as_ref(),
         levels.rep_level_data().as_ref(),
         None,

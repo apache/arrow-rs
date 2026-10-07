@@ -28,7 +28,7 @@ use crate::encodings::rle::RleEncoder;
 use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
-use crate::util::interner::{Interner, Storage};
+use crate::util::interner::{FixedWidthInterner, Interner, Storage};
 
 #[derive(Debug)]
 struct KeyStorage<T: DataType> {
@@ -73,6 +73,49 @@ impl<T: DataType> Storage for KeyStorage<T> {
     }
 }
 
+/// The interner of a [`DictEncoder`]: values of 4 and 8 bytes in a table of
+/// the values themselves, others in a table of their hashes
+#[derive(Debug)]
+enum DictInterner<T: DataType> {
+    Bits32(FixedWidthInterner<KeyStorage<T>, u32>),
+    Bits64(FixedWidthInterner<KeyStorage<T>, u64>),
+    Hashed(Interner<KeyStorage<T>>),
+}
+
+impl<T: DataType> DictInterner<T> {
+    fn new(storage: KeyStorage<T>) -> Self {
+        match T::get_physical_type() {
+            Type::INT32 | Type::FLOAT => Self::Bits32(FixedWidthInterner::new(storage)),
+            Type::INT64 | Type::DOUBLE => Self::Bits64(FixedWidthInterner::new(storage)),
+            _ => Self::Hashed(Interner::new(storage)),
+        }
+    }
+
+    fn intern_batch(&mut self, values: &[T::T], keys: &mut Vec<u64>) {
+        match self {
+            Self::Bits32(interner) => interner.intern_batch(values, keys),
+            Self::Bits64(interner) => interner.intern_batch(values, keys),
+            Self::Hashed(interner) => interner.intern_batch(values, keys),
+        }
+    }
+
+    fn storage(&self) -> &KeyStorage<T> {
+        match self {
+            Self::Bits32(interner) => interner.storage(),
+            Self::Bits64(interner) => interner.storage(),
+            Self::Hashed(interner) => interner.storage(),
+        }
+    }
+
+    fn estimated_memory_size(&self) -> usize {
+        match self {
+            Self::Bits32(interner) => interner.estimated_memory_size(),
+            Self::Bits64(interner) => interner.estimated_memory_size(),
+            Self::Hashed(interner) => interner.estimated_memory_size(),
+        }
+    }
+}
+
 /// Dictionary encoder.
 /// The dictionary encoding builds a dictionary of values encountered in a given column.
 /// The dictionary page is written first, before the data pages of the column chunk.
@@ -84,7 +127,7 @@ impl<T: DataType> Storage for KeyStorage<T> {
 /// (max bit width = 32), followed by the values encoded using RLE/Bit packed described
 /// above (with the given bit width).
 pub struct DictEncoder<T: DataType> {
-    interner: Interner<KeyStorage<T>>,
+    interner: DictInterner<T>,
 
     /// The buffered indices
     indices: Vec<u64>,
@@ -100,7 +143,7 @@ impl<T: DataType> DictEncoder<T> {
         };
 
         Self {
-            interner: Interner::new(storage),
+            interner: DictInterner::new(storage),
             indices: vec![],
         }
     }
@@ -396,16 +439,15 @@ mod tests {
 
     #[test]
     fn test_estimated_memory_size_includes_interner_dedup_table() {
-        // The dedup `HashTable` in `Interner` is preallocated with
-        // `DEFAULT_DEDUP_CAPACITY` slots at construction, independent of any
-        // values pushed.
-        let encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        // The dedup table is allocated on first use, and counted from then on
+        let mut encoder = DictEncoder::<Int32Type>::new(make_col_desc::<Int32Type>());
+        encoder.put(&[1, 2, 3]).unwrap();
 
-        let size = encoder.estimated_memory_size();
-
+        let storage = std::mem::size_of_val(encoder.uniques());
+        let indices = encoder.indices.capacity() * std::mem::size_of::<u64>();
         assert!(
-            size > 0,
-            "memory size should include the preallocated dedup hash table"
+            encoder.estimated_memory_size() > storage + indices,
+            "memory size should include the dedup hash table"
         );
     }
 
@@ -460,5 +502,70 @@ mod tests {
             "memory size {size2} should grow from {size1} by allocated uniques capacity \
              (at least {min_uniques_bytes} bytes)"
         );
+    }
+}
+
+/// Times [`DictEncoder::put`] on low cardinality primitive columns, as the
+/// writer calls it, in batches of `DEFAULT_WRITE_BATCH_SIZE`
+///
+/// `cargo test --release -p parquet --lib dict_put_microbench -- --ignored --nocapture`
+#[cfg(test)]
+mod dict_put_microbench {
+    use super::*;
+    use crate::data_type::{DoubleType, Int32Type, Int64Type};
+    use crate::file::properties::DEFAULT_WRITE_BATCH_SIZE;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
+    use rand::prelude::*;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    const VALUES: usize = 4 * 1024 * 1024;
+
+    fn run<T: DataType>(name: &str, distinct: usize, value: impl Fn(u64) -> T::T) {
+        let mut rng = StdRng::seed_from_u64(42);
+        let pool: Vec<T::T> = (0..distinct).map(|_| value(rng.random())).collect();
+        let values: Vec<T::T> = (0..VALUES)
+            .map(|_| pool[rng.random_range(0..distinct)].clone())
+            .collect();
+        let ty = SchemaType::primitive_type_builder("col", T::get_physical_type())
+            .build()
+            .unwrap();
+        let desc = Arc::new(ColumnDescriptor::new(
+            Arc::new(ty),
+            0,
+            0,
+            ColumnPath::new(vec![]),
+        ));
+        let iterations: usize = std::env::var("ITERS").map_or(9, |s| s.parse().unwrap());
+        let mut times = vec![];
+        for _ in 0..iterations {
+            let mut encoder = DictEncoder::<T>::new(desc.clone());
+            let start = Instant::now();
+            for batch in values.chunks(DEFAULT_WRITE_BATCH_SIZE) {
+                encoder.put(batch).unwrap();
+                // Like the writer, the indices are flushed with each data page
+                if encoder.indices.len() >= 128 * 1024 {
+                    encoder.indices.clear();
+                }
+            }
+            times.push(start.elapsed());
+            std::hint::black_box(&encoder);
+        }
+        times.sort();
+        let median = times[times.len() / 2];
+        eprintln!(
+            "{name:>7} distinct {distinct:>6}: {:.2} ns/value",
+            median.as_secs_f64() * 1e9 / VALUES as f64
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn dict_put_microbench() {
+        for distinct in [16, 1024, 65536] {
+            run::<Int32Type>("int32", distinct, |v| v as i32);
+            run::<Int64Type>("int64", distinct, |v| v as i64);
+            run::<DoubleType>("double", distinct, |v| (v >> 11) as f64 / 7.0);
+        }
     }
 }

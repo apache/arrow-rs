@@ -291,7 +291,9 @@ impl LevelInfoBuilder {
                     }
                     DataType::ListView(_) => {
                         let list = array.as_list_view();
-                        let child = Self::try_new(child.as_ref(), ctx, list.values())?;
+                        let mut child = Self::try_new(child.as_ref(), ctx, list.values())?;
+                        // The lists of a list view may be in any order
+                        child.visit_leaves(|leaf| leaf.non_null_indices_ascending = false);
                         let offsets = list.offsets().clone();
                         let sizes = list.sizes().clone();
                         let nulls = list.nulls().cloned();
@@ -299,7 +301,9 @@ impl LevelInfoBuilder {
                     }
                     DataType::LargeListView(_) => {
                         let list = array.as_list_view();
-                        let child = Self::try_new(child.as_ref(), ctx, list.values())?;
+                        let mut child = Self::try_new(child.as_ref(), ctx, list.values())?;
+                        // The lists of a list view may be in any order
+                        child.visit_leaves(|leaf| leaf.non_null_indices_ascending = false);
                         let offsets = list.offsets().clone();
                         let sizes = list.sizes().clone();
                         let nulls = list.nulls().cloned();
@@ -1116,6 +1120,10 @@ pub(crate) struct ArrayLevels {
     /// from the primitive array
     non_null_indices: Vec<usize>,
 
+    /// Whether `non_null_indices` is strictly increasing. It is, unless the
+    /// leaf is below a list view, whose lists may be in any order and overlap.
+    non_null_indices_ascending: bool,
+
     /// The maximum definition level for this leaf column
     max_def_level: i16,
 
@@ -1134,6 +1142,7 @@ impl PartialEq for ArrayLevels {
         self.def_levels == other.def_levels
             && self.rep_levels == other.rep_levels
             && self.non_null_indices == other.non_null_indices
+            && self.non_null_indices_ascending == other.non_null_indices_ascending
             && self.max_def_level == other.max_def_level
             && self.max_rep_level == other.max_rep_level
             && self.array.as_ref() == other.array.as_ref()
@@ -1156,6 +1165,7 @@ impl ArrayLevels {
             def_levels: LevelData::new(max_def_level != 0),
             rep_levels: LevelData::new(max_rep_level != 0),
             non_null_indices: vec![],
+            non_null_indices_ascending: true,
             max_def_level,
             max_rep_level,
             array,
@@ -1177,6 +1187,11 @@ impl ArrayLevels {
 
     pub fn non_null_indices(&self) -> &[usize] {
         &self.non_null_indices
+    }
+
+    /// Whether [`Self::non_null_indices`] is strictly increasing
+    pub(crate) fn non_null_indices_ascending(&self) -> bool {
+        self.non_null_indices_ascending
     }
 
     /// Create a sliced view of this `ArrayLevels` for a CDC chunk.
@@ -1206,6 +1221,7 @@ impl ArrayLevels {
             def_levels,
             rep_levels,
             non_null_indices,
+            non_null_indices_ascending: self.non_null_indices_ascending,
             max_def_level: self.max_def_level,
             max_rep_level: self.max_rep_level,
             array,
@@ -1279,6 +1295,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![2; 10]),
             rep_levels: LevelData::Materialized(vec![0, 2, 2, 1, 2, 2, 2, 0, 1, 2]),
             non_null_indices: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            non_null_indices_ascending: true,
             max_def_level: 2,
             max_rep_level: 2,
             array: Arc::new(primitives),
@@ -1300,6 +1317,7 @@ mod tests {
             def_levels: LevelData::Absent,
             rep_levels: LevelData::Absent,
             non_null_indices: (0..10).collect(),
+            non_null_indices_ascending: true,
             max_def_level: 0,
             max_rep_level: 0,
             array,
@@ -1328,6 +1346,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![1, 0, 1, 1, 0]),
             rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 2, 3],
+            non_null_indices_ascending: true,
             max_def_level: 1,
             max_rep_level: 0,
             array,
@@ -1363,6 +1382,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![1; 5]),
             rep_levels: LevelData::Materialized(vec![0; 5]),
             non_null_indices: (0..5).collect(),
+            non_null_indices_ascending: true,
             max_def_level: 1,
             max_rep_level: 1,
             array: Arc::new(leaf_array),
@@ -1397,6 +1417,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![2, 2, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
             rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1]),
             non_null_indices: (0..11).collect(),
+            non_null_indices_ascending: true,
             max_def_level: 2,
             max_rep_level: 1,
             array: Arc::new(leaf_array),
@@ -1447,6 +1468,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![0, 2, 0, 3, 3, 3, 3, 3, 3, 3]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 1, 1, 1, 0, 1, 1]),
             non_null_indices: (4..11).collect(),
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 1,
             array: Arc::new(leaf),
@@ -1498,6 +1520,7 @@ mod tests {
                 0, 2, 1, 2, 0, 0, 2, 1, 2, 0, 2, 1, 2, 1, 2, 1, 2, 0, 2, 1, 2, 1, 2,
             ]),
             non_null_indices: (0..22).collect(),
+            non_null_indices_ascending: true,
             max_def_level: 5,
             max_rep_level: 2,
             array: Arc::new(leaf),
@@ -1536,6 +1559,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![1; 4]),
             rep_levels: LevelData::Materialized(vec![0; 4]),
             non_null_indices: (0..4).collect(),
+            non_null_indices_ascending: true,
             max_def_level: 1,
             max_rep_level: 1,
             array: Arc::new(leaf),
@@ -1569,6 +1593,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![1, 3, 3, 3, 3, 3, 3, 3]),
             rep_levels: LevelData::Materialized(vec![0, 0, 1, 1, 0, 1, 0, 1]),
             non_null_indices: (0..7).collect(),
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 1,
             array: Arc::new(leaf),
@@ -1622,6 +1647,7 @@ mod tests {
                 0, 0, 1, 2, 1, 0, 2, 2, 1, 2, 2, 2, 0, 1, 2, 2, 2, 2,
             ]),
             non_null_indices: (0..15).collect(),
+            non_null_indices_ascending: true,
             max_def_level: 5,
             max_rep_level: 2,
             array: Arc::new(leaf),
@@ -1663,6 +1689,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![3, 2, 3, 1, 0, 3]),
             rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 2, 5],
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 0,
             array: leaf,
@@ -1703,6 +1730,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![0, 3, 3, 3]),
             rep_levels: LevelData::Materialized(vec![0, 0, 1, 1]),
             non_null_indices: vec![3, 4, 5],
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 1,
             array: Arc::new(a_values),
@@ -1796,6 +1824,7 @@ mod tests {
             def_levels: LevelData::Absent,
             rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 1, 2, 3, 4],
+            non_null_indices_ascending: true,
             max_def_level: 0,
             max_rep_level: 0,
             array: Arc::new(a),
@@ -1811,6 +1840,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![1, 0, 0, 1, 1]),
             rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 3, 4],
+            non_null_indices_ascending: true,
             max_def_level: 1,
             max_rep_level: 0,
             array: Arc::new(b),
@@ -1826,6 +1856,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![1, 1, 1, 2, 1]),
             rep_levels: LevelData::Absent,
             non_null_indices: vec![3],
+            non_null_indices_ascending: true,
             max_def_level: 2,
             max_rep_level: 0,
             array: Arc::new(d),
@@ -1841,6 +1872,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![3, 2, 3, 2, 3]),
             rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 2, 4],
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 0,
             array: Arc::new(f),
@@ -1953,6 +1985,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![1; 7]),
             rep_levels: LevelData::Materialized(vec![0, 1, 0, 1, 0, 1, 1]),
             non_null_indices: vec![0, 1, 2, 3, 4, 5, 6],
+            non_null_indices_ascending: true,
             max_def_level: 1,
             max_rep_level: 1,
             array: map.keys().clone(),
@@ -1968,6 +2001,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![2, 2, 2, 1, 2, 1, 2]),
             rep_levels: LevelData::Materialized(vec![0, 1, 0, 1, 0, 1, 1]),
             non_null_indices: vec![0, 1, 2, 4, 6],
+            non_null_indices_ascending: true,
             max_def_level: 2,
             max_rep_level: 1,
             array: map.values().clone(),
@@ -2055,6 +2089,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![4, 1, 0, 2, 2, 3, 4]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 1, 0, 0]),
             non_null_indices: vec![0, 4],
+            non_null_indices_ascending: true,
             max_def_level: 4,
             max_rep_level: 1,
             array: values,
@@ -2097,6 +2132,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![4, 4, 3, 2, 0, 4, 4, 0, 1]),
             rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 0, 0, 1, 0, 0]),
             non_null_indices: vec![0, 1, 5, 6],
+            non_null_indices_ascending: true,
             max_def_level: 4,
             max_rep_level: 1,
             array: values,
@@ -2184,6 +2220,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![0, 0, 1, 6, 5, 2, 3, 1]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 2, 0, 1, 0]),
             non_null_indices: vec![1],
+            non_null_indices_ascending: true,
             max_def_level: 6,
             max_rep_level: 2,
             array: a1_values,
@@ -2197,6 +2234,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![0, 0, 1, 3, 2, 4, 1]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 0, 0, 1, 0]),
             non_null_indices: vec![4],
+            non_null_indices_ascending: true,
             max_def_level: 4,
             max_rep_level: 1,
             array: a2_values,
@@ -2237,6 +2275,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![0, 0, 3, 3]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 1]),
             non_null_indices: vec![6, 7],
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 1,
             array: values,
@@ -2389,6 +2428,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![4, 2, 0, 2, 2, 3, 4]),
             rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 1, 0, 1]),
             non_null_indices: vec![0, 7],
+            non_null_indices_ascending: true,
             max_def_level: 4,
             max_rep_level: 1,
             array: values_a,
@@ -2400,6 +2440,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![3, 2, 0, 2, 2, 3, 3]),
             rep_levels: LevelData::Materialized(vec![0, 1, 0, 0, 1, 0, 1]),
             non_null_indices: vec![0, 6, 7],
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 1,
             array: values_b,
@@ -2433,6 +2474,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![1, 0, 1]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0]),
             non_null_indices: vec![],
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 1,
             array: values,
@@ -2470,6 +2512,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0]),
             rep_levels: LevelData::Materialized(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
             non_null_indices: vec![0, 2, 3, 4, 5],
+            non_null_indices_ascending: true,
             max_def_level: 5,
             max_rep_level: 2,
             array: values,
@@ -2503,6 +2546,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![0, 0, 1, 1]),
             rep_levels: LevelData::Absent,
             non_null_indices: vec![2, 3],
+            non_null_indices_ascending: true,
             max_def_level: 1,
             max_rep_level: 0,
             array: Arc::new(dict),
@@ -2543,6 +2587,7 @@ mod tests {
             def_levels: LevelData::Absent,
             rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 1, 2, 3, 4, 5],
+            non_null_indices_ascending: true,
             max_def_level: 0,
             max_rep_level: 0,
             array,
@@ -2577,6 +2622,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![1, 0, 1, 0, 1, 1]),
             rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 2, 4, 5],
+            non_null_indices_ascending: true,
             max_def_level: 1,
             max_rep_level: 0,
             array,
@@ -2631,6 +2677,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![3, 0, 3, 2, 0, 3, 3]),
             rep_levels: LevelData::Materialized(vec![0, 0, 0, 1, 0, 0, 1]),
             non_null_indices: vec![0, 3, 8, 9],
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 1,
             array,
@@ -2677,6 +2724,7 @@ mod tests {
             def_levels: LevelData::Materialized(vec![1, 0, 0, 1]),
             rep_levels: LevelData::Absent,
             non_null_indices: vec![0, 3],
+            non_null_indices_ascending: true,
             max_def_level: 1,
             max_rep_level: 0,
             array,
@@ -2715,6 +2763,7 @@ mod tests {
             def_levels: LevelData::Uniform { value: 0, count: 4 },
             rep_levels: LevelData::Uniform { value: 0, count: 4 },
             non_null_indices: vec![],
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 1,
             array: values,
@@ -2744,6 +2793,7 @@ mod tests {
             def_levels: LevelData::Uniform { value: 0, count: 3 },
             rep_levels: LevelData::Uniform { value: 0, count: 3 },
             non_null_indices: vec![],
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 1,
             array: values,
@@ -2774,6 +2824,7 @@ mod tests {
             def_levels: LevelData::Uniform { value: 0, count: 4 },
             rep_levels: LevelData::Absent,
             non_null_indices: vec![],
+            non_null_indices_ascending: true,
             max_def_level: 2,
             max_rep_level: 0,
             array: leaf,
@@ -2808,6 +2859,7 @@ mod tests {
             def_levels: LevelData::Uniform { value: 0, count: 3 },
             rep_levels: LevelData::Absent,
             non_null_indices: vec![],
+            non_null_indices_ascending: true,
             max_def_level: 3,
             max_rep_level: 0,
             array: leaf,
@@ -2842,6 +2894,7 @@ mod tests {
                 def_levels: LevelData::Uniform { value: 0, count: 2 },
                 rep_levels: LevelData::Absent,
                 non_null_indices: vec![],
+                non_null_indices_ascending: true,
                 max_def_level: 2,
                 max_rep_level: 0,
                 array: leaf,
