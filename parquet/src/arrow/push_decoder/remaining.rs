@@ -124,6 +124,11 @@ impl RemainingRowGroups {
         self.row_group_reader_builder.buffered_bytes()
     }
 
+    #[cfg(test)]
+    pub(crate) fn num_buffers(&self) -> usize {
+        self.row_group_reader_builder.num_buffers()
+    }
+
     /// Clear any staged ranges currently buffered for future decode work
     pub fn clear_all_ranges(&mut self) {
         self.row_group_reader_builder.clear_all_ranges();
@@ -173,7 +178,14 @@ impl RemainingRowGroups {
                 // We are done with the previous row group, seek to the next one
                 // from the frontier, if any.
 
-                match self.frontier.next_readable_row_group()? {
+                let (next_row_group, skipped_row_groups) =
+                    self.frontier.next_readable_row_group_with_skips()?;
+                for row_group_idx in skipped_row_groups {
+                    self.row_group_reader_builder
+                        .release_row_group(row_group_idx);
+                }
+
+                match next_row_group {
                     Some(NextRowGroup {
                         row_group_idx,
                         row_count,
