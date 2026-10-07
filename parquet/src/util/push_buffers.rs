@@ -379,32 +379,11 @@ mod tests {
     }
 
     #[test]
-    fn out_of_order_pushes_are_sorted() {
-        let mut buffers = PushBuffers::new(1000);
-        for range in [50..60, 10..20, 30..40, 0..5, 90..100, 10..15] {
-            push(&mut buffers, range);
-        }
-        assert_valid(&buffers);
-        assert_eq!(
-            buffers.ranges,
-            vec![0..5, 10..20, 10..15, 30..40, 50..60, 90..100]
-        );
-        assert!(buffers.has_range(&(12..18)));
-        assert!(buffers.has_range(&(30..40)));
-        assert!(!buffers.has_range(&(18..22)));
-        assert!(!buffers.has_range(&(60..61)));
-        assert_eq!(buffers.get_bytes(52, 4).unwrap(), file_bytes(52..56));
-        assert!(matches!(
-            buffers.get_bytes(40, 20),
-            Err(ParquetError::NeedMoreDataRange(r)) if r == (40..60)
-        ));
-    }
-
-    #[test]
     fn overlapping_pushes_find_the_containing_buffer() {
         let mut buffers = PushBuffers::new(1000);
         // Small buffers inside a large one start closer to most offsets.
-        for range in [0..100, 10..20, 50..60, 55..58] {
+        // The pushes are not in file order: `assert_valid` checks the sort.
+        for range in [50..60, 0..100, 55..58, 10..20] {
             push(&mut buffers, range);
         }
         assert_valid(&buffers);
@@ -413,6 +392,10 @@ mod tests {
         assert!(buffers.has_range(&(0..100)));
         assert!(buffers.has_range(&(99..100)));
         assert!(!buffers.has_range(&(99..101)));
+        assert!(matches!(
+            buffers.get_bytes(90, 20),
+            Err(ParquetError::NeedMoreDataRange(r)) if r == (90..110)
+        ));
 
         // `Read` finds the same buffer.
         let mut reader = buffers.get_read(56).unwrap();
