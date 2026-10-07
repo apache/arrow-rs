@@ -1312,8 +1312,7 @@ impl WriterPropertiesBuilder {
     /// If the value is `0`.
     pub fn set_column_data_page_row_count_limit(mut self, col: ColumnPath, value: usize) -> Self {
         assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
-        self.get_mut_props(col)
-            .set_data_page_row_count_limit(value);
+        self.get_mut_props(col).set_data_page_row_count_limit(value);
         self
     }
 
