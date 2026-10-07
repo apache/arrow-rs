@@ -147,7 +147,7 @@ struct Slot<B> {
     /// The bits of the value
     bits: B,
     /// Index of the value in the dictionary
-    key: u32,
+    key: u64,
 }
 
 /// An [`Interner`] for values of 4 or 8 bytes, such as integers and floats
@@ -186,13 +186,13 @@ impl<S: Storage<Key = u64>, B: Bits> FixedWidthInterner<S, B> {
         let start = keys.len();
         keys.resize(start + values.len(), 0);
         for (value, key) in values.iter().zip(&mut keys[start..]) {
-            *key = self.intern(value, B::from_bytes(value.as_bytes())).into();
+            *key = self.intern(value, B::from_bytes(value.as_bytes()));
         }
     }
 
     /// Returns the key of `value` with `bits`, inserting it if absent
     #[inline]
-    fn intern(&mut self, value: &S::Value, bits: B) -> u32 {
+    fn intern(&mut self, value: &S::Value, bits: B) -> u64 {
         let hash = self.state.hash_one(bits);
         match self.dedup.find(hash, |slot| slot.bits == bits) {
             Some(slot) => slot.key,
@@ -205,8 +205,8 @@ impl<S: Storage<Key = u64>, B: Bits> FixedWidthInterner<S, B> {
     /// Out of line, so the lookup loop needs no registers for it
     #[cold]
     #[inline(never)]
-    fn insert(&mut self, value: &S::Value, bits: B, hash: u64) -> u32 {
-        let key = u32::try_from(self.storage.push(value)).expect("too many dictionary values");
+    fn insert(&mut self, value: &S::Value, bits: B, hash: u64) -> u64 {
+        let key = self.storage.push(value);
         let state = &self.state;
         self.dedup
             .insert_unique(hash, Slot { bits, key }, |slot| state.hash_one(slot.bits));
