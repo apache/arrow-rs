@@ -83,7 +83,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                         column_metadata,
                         row_group_idx,
                         column_idx,
-                        &mut self.buf,
+                        &mut *self.buf,
                     )?;
                     let end_offset = self.buf.bytes_written();
                     // set offset and index for offset index
@@ -117,7 +117,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
                         column_metadata,
                         row_group_idx,
                         column_idx,
-                        &mut self.buf,
+                        &mut *self.buf,
                     )? {
                         let end_offset = self.buf.bytes_written();
                         // set offset and index for offset index
@@ -216,7 +216,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // Write file metadata
         let start_pos = self.buf.bytes_written();
         self.object_writer
-            .write_file_metadata(&file_meta, &mut self.buf)?;
+            .write_file_metadata(&file_meta, &mut *self.buf)?;
         let end_pos = self.buf.bytes_written();
 
         // Write footer

@@ -520,8 +520,6 @@ impl IntervalTrait for WraparoundInterval {
 
 #[cfg(test)]
 mod test {
-    use core::f64;
-
     use super::*;
 
     fn test_empty<T: IntervalTrait>(empty: T) {
