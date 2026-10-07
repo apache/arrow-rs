@@ -314,7 +314,9 @@ dependencies = [
  "arrow-array",
  "arrow-buffer",
  "arrow-schema",
+ "criterion",
  "half",
+ "rand 0.10.3",
 ]
 
 [[package]]
