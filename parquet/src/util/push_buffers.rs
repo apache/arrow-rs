@@ -437,7 +437,7 @@ mod tests {
     /// scanned in full for each lookup.
     #[test]
     #[cfg(feature = "arrow")]
-    fn matches_a_linear_scan() {
+    fn fuzz_matches_a_linear_scan() {
         use rand::rngs::StdRng;
         use rand::{RngExt, SeedableRng};
 
