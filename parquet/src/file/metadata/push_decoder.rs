@@ -510,103 +510,9 @@ impl ParquetMetaDataPushDecoder {
     ///    [`Self::with_column_index_mask`] or [`Self::with_offset_index_mask`]
     ///
     /// When the data can be accessed through a [`ChunkReader`], prefer
-    /// [`ParquetMetaDataReader::read_page_index`] (or `read_page_index_async` for asynchronous
+    /// [`ParquetMetaDataReader::read_page_index`] (or
+    /// [`ParquetMetaDataReader::read_page_index_async`] for asynchronous
     /// I/O), which handles the decoder state machine and I/O requests.
-    ///
-    /// # Example
-    ///
-    /// This example shows how to first read the footer metadata without the
-    /// page index, and then later selectively decode only a subset of the
-    /// page indexes (column index for column 0, offset index for columns 0, 1,
-    /// and 4).
-    ///
-    #[cfg_attr(
-        feature = "arrow",
-        doc = r#"
-```rust
-# use std::ops::Range;
-# use bytes::Bytes;
-# use arrow_array::record_batch;
-# use parquet::DecodeResult;
-# use parquet::arrow::ArrowWriter;
-# use parquet::errors::ParquetError;
-# use parquet::file::metadata::{
-#     ParquetMetaData, ParquetMetaDataPushDecoder, PageIndexPolicy, ColumnChunkMask
-# };
-#
-# fn selective_page_index_decode() -> Result<(), ParquetError> {
-# let file_bytes = {
-#   let mut buffer = vec![0];
-#   let batch = record_batch!(
-#       ("col0", Int32, [1, 2, 3]),
-#       ("col1", Int32, [4, 5, 6]),
-#       ("col2", Int32, [7, 8, 9]),
-#       ("col3", Int32, [10, 11, 12]),
-#       ("col4", Int32, [13, 14, 15])
-#   ).unwrap();
-#   let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
-#   writer.write(&batch).unwrap();
-#   writer.close().unwrap();
-#   Bytes::from(buffer)
-# };
-# // mimic IO by returning a function that returns the bytes for a given range
-# let get_range = |range: &Range<u64>| -> Bytes {
-#    let start = range.start as usize;
-#    let end = range.end as usize;
-#    file_bytes.slice(start..end)
-# };
-# let file_len = file_bytes.len() as u64;
-#
-// Step 1: Read footer metadata without page indexes
-let mut decoder = ParquetMetaDataPushDecoder::try_new(file_len)
-    .unwrap()
-    .with_page_index_policy(PageIndexPolicy::Skip);
-
-// Decode the metadata (without page indexes)
-let metadata = loop {
-    match decoder.try_decode() {
-        Ok(DecodeResult::Data(metadata)) => break metadata,
-        Ok(DecodeResult::NeedsData(ranges)) => {
-            let data = ranges.iter().map(|range| get_range(range)).collect();
-            decoder.push_ranges(ranges, data).unwrap();
-        }
-        Ok(DecodeResult::Finished) => unreachable!(),
-        Err(e) => return Err(e),
-    }
-};
-
-// At this point, we have the metadata but no page indexes
-assert!(metadata.page_index().is_none());
-
-// Step 2: Later, selectively decode a subset of the page indexes
-// Create a new decoder initialized with the previously decoded metadata
-let mut decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_len, metadata)
-    .unwrap()
-    // Request column index for column 0 only
-    .with_column_index_mask(ColumnChunkMask::columns([0]))
-    // Request offset index for columns 0, 1, and 4
-    .with_offset_index_mask(ColumnChunkMask::columns([0, 1, 4]));
-
-// Decode the selected page indexes
-let page_index = loop {
-    match decoder.try_decode_page_index() {
-        Ok(DecodeResult::Data(page_index)) => break page_index,
-        Ok(DecodeResult::NeedsData(ranges)) => {
-            let data = ranges.iter().map(|range| get_range(range)).collect();
-            decoder.push_ranges(ranges, data).unwrap();
-        }
-        Ok(DecodeResult::Finished) => unreachable!(),
-        Err(e) => return Err(e),
-    }
-};
-
-// The returned PageIndex contains only the requested subset
-assert!(page_index.is_some());
-# Ok(())
-# }
-```
-"#
-    )]
     ///
     /// # Returns
     ///
@@ -619,6 +525,9 @@ assert!(page_index.is_some());
     /// * `Ok(DecodeResult::Finished)` - The decoder has finished and no more
     ///   data can be decoded
     /// * `Err(_)` - An error occurred during decoding
+    ///
+    /// [`ParquetMetaDataReader::read_page_index`]: crate::file::metadata::ParquetMetaDataReader::read_page_index
+    /// [`ParquetMetaDataReader::read_page_index_async`]: crate::file::metadata::ParquetMetaDataReader::read_page_index_async
     pub fn try_decode_page_index(&mut self) -> Result<DecodeResult<Option<PageIndex>>> {
         // stripped down state machine copied from try_decode. need to be in the
         // `ReadingPageIndex` state initially or this will error.
