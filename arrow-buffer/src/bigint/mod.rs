@@ -677,7 +677,10 @@ impl i256 {
     fn i256_to_f64(input: i256) -> f64 {
         let k = i256::redundant_leading_sign_bits_i256(input);
         let n = input << k; // left-justify (no redundant sign bits)
-        let n = (n.high >> 64) as i64; // throw away the lower 192 bits
+        // If the retained bits land exactly on a midpoint, set the low bit so
+        // non-zero discarded bits push it just past and it rounds to nearest.
+        let sticky = n.low != 0 || (n.high as u64) != 0;
+        let n = ((n.high >> 64) as i64) | i64::from(sticky);
         (n as f64) * f64::powi(2.0, 192 - (k as i32)) // convert to f64 and scale it, as we left-shift k bit previous, so we need to scale it by 2^(192-k)
     }
 
@@ -1342,7 +1345,7 @@ impl Not for i256 {
 mod tests {
     use super::*;
     use num_traits::Signed;
-    use rand::{RngExt, rng};
+    use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1874,6 +1877,56 @@ mod tests {
             for ir in candidates {
                 test_reference_op(il, ir)
             }
+        }
+    }
+
+    #[test]
+    fn test_i256_to_f64_midpoint_rounding() {
+        // Regression test for #11314: the value is one above the binary64 midpoint.
+        let integer = (1_i128 << 63) + 1024 + 1;
+        assert_eq!(
+            i256::from_i128(integer).to_f64().unwrap().to_bits(),
+            (integer as f64).to_bits()
+        );
+
+        let two = i256::from(2);
+        // Binary64 has a 53-bit significand: inside [2^e, 2^(e+1)) adjacent values
+        // are 2^(e-52) apart, so the exact tie is 2^(e-53) above 2^e. Ties are where
+        // #11314 rounded the wrong way. Start at 53 (below that the midpoint is not
+        // an integer) and stop at 254 (2^255 overflows i256).
+        for exponent in 53..=254 {
+            let midpoint = two.wrapping_pow(exponent) + two.wrapping_pow(exponent - 53);
+            for delta in -2_i64..=2 {
+                for value in [
+                    midpoint + i256::from(delta),
+                    -(midpoint + i256::from(delta)),
+                ] {
+                    let expected: f64 = value.to_string().parse().unwrap();
+                    assert_eq!(
+                        value.to_f64().unwrap().to_bits(),
+                        expected.to_bits(),
+                        "i256 {value} should round to nearest"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_i256_to_f64_fuzz() {
+        // `to_string().parse::<f64>()` is a correctly rounded decimal-to-binary oracle.
+        for value in [i256::MIN, i256::MAX, i256::MINUS_ONE, i256::ZERO, i256::ONE] {
+            let expected: f64 = value.to_string().parse().unwrap();
+            assert_eq!(value.to_f64().unwrap().to_bits(), expected.to_bits());
+        }
+
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..1_000 {
+            let low = u128::from(rng.random::<u64>()) | (u128::from(rng.random::<u64>()) << 64);
+            let high = u128::from(rng.random::<u64>()) | (u128::from(rng.random::<u64>()) << 64);
+            let value = i256::from_parts(low, high as i128);
+            let expected: f64 = value.to_string().parse().unwrap();
+            assert_eq!(value.to_f64().unwrap().to_bits(), expected.to_bits());
         }
     }
 

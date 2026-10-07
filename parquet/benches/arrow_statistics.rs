@@ -18,7 +18,7 @@
 //! Benchmarks of benchmark for extracting arrow statistics from parquet
 
 use arrow::array::{ArrayRef, DictionaryArray, Float64Array, StringArray, UInt64Array};
-use arrow_array::{Int32Array, Int64Array, RecordBatch};
+use arrow_array::{Decimal128Array, Int32Array, Int64Array, RecordBatch, StringViewArray};
 use arrow_schema::{
     DataType::{self, *},
     Field, Schema,
@@ -26,7 +26,11 @@ use arrow_schema::{
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use parquet::{
     arrow::arrow_reader::ArrowReaderOptions,
-    file::{metadata::PageIndexPolicy, properties::WriterProperties},
+    file::{
+        metadata::{PageIndexPolicy, page_index::PageIndexBuilder},
+        page_index::index_reader::decode_column_index,
+        properties::WriterProperties,
+    },
 };
 use parquet::{
     arrow::{ArrowWriter, arrow_reader::ArrowReaderBuilder},
@@ -253,5 +257,128 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, criterion_benchmark);
+/// Makes one column with `rows` values, where every 7th value is null.
+fn make_page_index_column(data_type: &DataType, rows: usize) -> ArrayRef {
+    let valid = |i: usize| !i.is_multiple_of(7);
+    match data_type {
+        Int64 => Arc::new(Int64Array::from_iter(
+            (0..rows).map(|i| valid(i).then_some(i as i64 * 3)),
+        )),
+        Utf8 => Arc::new(StringArray::from_iter(
+            (0..rows).map(|i| valid(i).then(|| format!("value-{i:08}"))),
+        )),
+        Utf8View => Arc::new(StringViewArray::from_iter(
+            (0..rows).map(|i| valid(i).then(|| format!("value-{i:08}"))),
+        )),
+        Decimal128(precision, scale) => Arc::new(
+            Decimal128Array::from_iter((0..rows).map(|i| valid(i).then_some(i as i128 * 1001)))
+                .with_precision_and_scale(*precision, *scale)
+                .unwrap(),
+        ),
+        _ => unimplemented!("{data_type}"),
+    }
+}
+
+/// Writes a file with many small data pages and returns its bytes.
+fn create_page_index_file(
+    data_type: &DataType,
+    row_groups: usize,
+    rows_per_group: usize,
+) -> Vec<u8> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        data_type.clone(),
+        true,
+    )]));
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(rows_per_group))
+        .set_data_page_row_count_limit(10)
+        .set_write_batch_size(10)
+        .set_statistics_enabled(EnabledStatistics::Page)
+        .build();
+    let mut buffer = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
+    let column = make_page_index_column(data_type, row_groups * rows_per_group);
+    let batch = RecordBatch::try_new(schema, vec![column]).unwrap();
+    // The page row limit is only checked between writes, so write in small slices
+    for offset in (0..batch.num_rows()).step_by(10) {
+        writer.write(&batch.slice(offset, 10)).unwrap();
+    }
+    writer.close().unwrap();
+    buffer
+}
+
+/// Measures getting page statistics from the stored column index bytes by
+/// building `ColumnIndexMetaData` and converting it to Arrow arrays.
+fn page_index_benchmark(c: &mut Criterion) {
+    let row_groups = 20;
+    let data_types = [Int64, Utf8, Utf8View, Decimal128(20, 2)];
+    // 10 rows per page, so 100 or 500 pages per row group: 2000 or 10000 pages
+    let rows_per_group_options = [1000, 5000];
+
+    for (data_type, rows_per_group) in data_types
+        .iter()
+        .flat_map(|t| rows_per_group_options.map(|rows| (t.clone(), rows)))
+    {
+        let data = bytes::Bytes::from(create_page_index_file(
+            &data_type,
+            row_groups,
+            rows_per_group,
+        ));
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
+        let reader = ArrowReaderBuilder::try_new_with_options(data.clone(), options).unwrap();
+        let metadata = reader.metadata().clone();
+        let converter =
+            StatisticsConverter::try_new("col", reader.schema(), reader.parquet_schema()).unwrap();
+        let column = converter.parquet_column_index().unwrap();
+        let physical_type = reader.parquet_schema().column(column).physical_type();
+
+        // (number of pages, stored column index bytes) for each row group
+        let column_indexes: Vec<(usize, &[u8])> = metadata
+            .row_groups()
+            .iter()
+            .enumerate()
+            .map(|(rg, row_group)| {
+                let range = row_group.column(column).column_index_range().unwrap();
+                let num_pages = metadata
+                    .page_index_for_row_group(rg)
+                    .num_data_pages(column)
+                    .unwrap();
+                (num_pages, &data[range.start as usize..range.end as usize])
+            })
+            .collect();
+        let row_group_indices: Vec<usize> = (0..row_groups).collect();
+        let num_columns = reader.parquet_schema().num_columns();
+
+        let mut group = c.benchmark_group(format!(
+            "Decode page index statistics for {data_type} ({} pages)",
+            column_indexes.iter().map(|(n, _)| n).sum::<usize>()
+        ));
+        group.bench_function("full page index", |b| {
+            b.iter(|| {
+                let mut builder = PageIndexBuilder::new(row_groups, num_columns);
+                for (rg, (_, bytes)) in column_indexes.iter().enumerate() {
+                    let index = decode_column_index(bytes, physical_type).unwrap();
+                    builder.put_column_index(index, rg, column);
+                }
+                let page_index = builder.build();
+                let _ = converter
+                    .data_page_mins(&page_index, &row_group_indices)
+                    .unwrap();
+                let _ = converter
+                    .data_page_maxes(&page_index, &row_group_indices)
+                    .unwrap();
+                let _ = converter
+                    .data_page_null_counts(&page_index, &row_group_indices)
+                    .unwrap();
+                let _ = converter
+                    .data_page_nan_counts(&page_index, &row_group_indices)
+                    .unwrap();
+            })
+        });
+        group.finish();
+    }
+}
+
+criterion_group!(benches, criterion_benchmark, page_index_benchmark);
 criterion_main!(benches);
