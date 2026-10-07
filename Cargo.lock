@@ -212,6 +212,7 @@ dependencies = [
  "chrono",
  "criterion",
  "num-traits",
+ "rand 0.10.3",
 ]
 
 [[package]]

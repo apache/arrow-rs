@@ -44,6 +44,7 @@ num-traits = { version = "0.2.19", default-features = false, features = ["std"] 
 
 [dev-dependencies]
 criterion = { workspace = true }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng"] }
 
 [[bench]]
 name = "decimal_arithmetic"
@@ -51,6 +52,10 @@ harness = false
 
 [[bench]]
 name = "temporal"
+harness = false
+
+[[bench]]
+name = "integer_division"
 harness = false
 
 [lints]
