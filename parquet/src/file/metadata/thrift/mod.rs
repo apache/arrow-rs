@@ -821,7 +821,7 @@ pub(crate) fn parquet_metadata_from_bytes(
                 // check for list of struct
                 validate_list_type(ElementType::Struct, &list_ident)?;
                 let size = list_ident.size as usize;
-                // Validate list size. See crate::parquet_thrift::read_thrift_vec
+                // Validate list size.
                 check_list_size(prot.remaining_bytes(), size)?;
                 let mut rg_vec = Vec::with_capacity(size);
 
