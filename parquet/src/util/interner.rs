@@ -122,15 +122,22 @@ fn hash_bytes(state: &ahash::RandomState, bytes: &[u8]) -> u64 {
 }
 
 /// The bits of a fixed width value of 4 or 8 bytes, for [`FixedWidthInterner`]
-pub trait Bits: Copy + Eq + std::hash::Hash + std::fmt::Debug {
+pub trait Bits: Copy + Eq + std::fmt::Debug {
     /// Reads the bits from the bytes of a value of this width
     fn from_bytes(bytes: &[u8]) -> Self;
+
+    fn to_u64(self) -> u64;
 }
 
 impl Bits for u32 {
     #[inline(always)]
     fn from_bytes(bytes: &[u8]) -> Self {
         Self::from_ne_bytes(bytes.try_into().unwrap())
+    }
+
+    #[inline(always)]
+    fn to_u64(self) -> u64 {
+        self.into()
     }
 }
 
@@ -139,6 +146,24 @@ impl Bits for u64 {
     fn from_bytes(bytes: &[u8]) -> Self {
         Self::from_ne_bytes(bytes.try_into().unwrap())
     }
+
+    #[inline(always)]
+    fn to_u64(self) -> u64 {
+        self
+    }
+}
+
+/// Returns the hash of the bits of a fixed width value, as Arrow C++ hashes
+/// integers (`ScalarHelper::ComputeHash`, from apache/arrow#3005)
+///
+/// Multiplying by the prime, one of xxHash's chosen for its bit dispersion,
+/// mixes the low bits into the high bits; byte swapping, a single instruction,
+/// then moves the mixed high bits to the low bits, from which the hash table
+/// takes a value's bucket.
+#[inline(always)]
+fn hash_bits<B: Bits>(bits: B) -> u64 {
+    const PRIME: u64 = 11400714785074694791;
+    bits.to_u64().wrapping_mul(PRIME).swap_bytes()
 }
 
 /// An entry of [`FixedWidthInterner`]'s hash table
@@ -161,8 +186,6 @@ struct Slot<B> {
 /// value.
 #[derive(Debug)]
 pub struct FixedWidthInterner<S: Storage<Key = u64>, B: Bits> {
-    state: ahash::RandomState,
-
     dedup: HashTable<Slot<B>>,
 
     storage: S,
@@ -172,7 +195,6 @@ impl<S: Storage<Key = u64>, B: Bits> FixedWidthInterner<S, B> {
     /// Create a new `FixedWidthInterner` with the provided storage
     pub fn new(storage: S) -> Self {
         Self {
-            state: Default::default(),
             dedup: HashTable::new(),
             storage,
         }
@@ -193,7 +215,7 @@ impl<S: Storage<Key = u64>, B: Bits> FixedWidthInterner<S, B> {
     /// Returns the key of `value` with `bits`, inserting it if absent
     #[inline]
     fn intern(&mut self, value: &S::Value, bits: B) -> u64 {
-        let hash = self.state.hash_one(bits);
+        let hash = hash_bits(bits);
         match self.dedup.find(hash, |slot| slot.bits == bits) {
             Some(slot) => slot.key,
             None => self.insert(value, bits, hash),
@@ -207,9 +229,8 @@ impl<S: Storage<Key = u64>, B: Bits> FixedWidthInterner<S, B> {
     #[inline(never)]
     fn insert(&mut self, value: &S::Value, bits: B, hash: u64) -> u64 {
         let key = self.storage.push(value);
-        let state = &self.state;
         self.dedup
-            .insert_unique(hash, Slot { bits, key }, |slot| state.hash_one(slot.bits));
+            .insert_unique(hash, Slot { bits, key }, |slot| hash_bits(slot.bits));
         key
     }
 
