@@ -58,12 +58,13 @@ pub struct PushBuffers {
     /// The buffers of data that can be used to decode the Parquet file, in the
     /// same order as `ranges`
     buffers: Vec<Bytes>,
-    /// The maximum length of the ranges in `ranges`. A buffer that starts
-    /// more than `max_len` bytes before an offset does not contain that
-    /// offset. A stale value that is too large is still correct, it only makes
-    /// lookups scan more buffers. Thus methods that remove buffers only need
-    /// to update it for performance, so that a removed large buffer does not
-    /// make later lookups scan all buffers.
+    /// The length of the longest range in `ranges`.
+    ///
+    /// This keeps lookups fast in the common case: buffers that do not
+    /// overlap and have similar lengths. Pushed ranges can overlap, so a
+    /// lookup cannot stop at the nearest buffer. `max_len` tells the lookup
+    /// when no earlier buffer can reach the requested range, so it checks one
+    /// or two buffers, not all of them. See [`Self::find`].
     max_len: u64,
 }
 
@@ -227,6 +228,10 @@ impl PushBuffers {
     }
 
     /// Set `max_len` to the maximum length of the remaining ranges.
+    ///
+    /// A `max_len` that is too large is still correct, lookups only scan
+    /// further. This update is for performance: a large buffer that was
+    /// removed must not slow down later lookups.
     #[cfg(feature = "arrow")]
     fn update_max_len(&mut self) {
         self.max_len = self
