@@ -347,449 +347,98 @@ impl FallbackEncoder {
     }
 }
 
-/// Values of at most this many bytes are packed into their tag, see
-/// [`ValueHasher::tag`]
-const PACKED_LEN: usize = 7;
-
-/// Set in the tag of every value longer than [`PACKED_LEN`]. The top byte of a
-/// packed tag is the length of the value plus one, so the two never collide.
-const HASHED: u64 = 0xFF << 56;
+/// Values of at most this many bytes are stored inline in their [`Entry`]
+const INLINE_LEN: usize = 7;
 
 /// An entry of [`ByteArrayInterner`]'s hash table
 #[derive(Debug, Clone, Copy)]
-struct Slot {
-    /// Tag of the value (see [`ValueHasher::tag`]): growing the table hashes
-    /// the tags, never the values, and a probe only compares values whose tag
-    /// matches
-    tag: u64,
+struct Entry {
+    /// Hash of the value, so growing the table never hashes values again, and
+    /// a probe only compares values whose hash matches
+    hash: u64,
+    /// The value, if short enough to store inline, or where it is in the
+    /// dictionary page
+    value: InlineOrOffset,
     /// Index of the value in the dictionary
-    key: u32,
-    /// Offset of the value in the dictionary page, for values longer than
-    /// [`PACKED_LEN`]; the tag of a shorter value identifies it exactly
-    offset: u32,
+    key: u64,
 }
 
-/// Returns the low 64 bits of the 128 bit product of `a` and `b` XOR-ed with
-/// its high 64 bits
-#[inline(always)]
-fn folded_multiply(a: u64, b: u64) -> u64 {
-    let product = u128::from(a) * u128::from(b);
-    (product as u64) ^ ((product >> 64) as u64)
-}
-
-/// Reads the 8 bytes of `value` starting at `start`
-#[inline(always)]
-fn read_u64(value: &[u8], start: usize) -> u64 {
-    u64::from_le_bytes(value[start..start + 8].try_into().unwrap())
-}
-
-/// [`read_u64`] without the bounds check, for offsets the compiler cannot
-/// prove in bounds, such as those of [`middle_reads`]
+/// A value of at most [`INLINE_LEN`] bytes stored inline, compared without
+/// reading the dictionary page, or the offset of a longer value in the
+/// dictionary page
 ///
-/// # Safety
+/// The format of the `u64` is:
 ///
-/// `start + 8 <= value.len()`
-#[inline(always)]
-unsafe fn read_u64_unchecked(value: &[u8], start: usize) -> u64 {
-    debug_assert!(start + 8 <= value.len());
-    // SAFETY: in bounds, as guaranteed by the caller
-    u64::from_le(unsafe { value.as_ptr().add(start).cast::<u64>().read_unaligned() })
-}
+/// ```text
+///   +--------------------+------------+-----------------+-----------------------+
+///   | inline flag (1bit) | 0 (4 bits) | length (3 bits) | value bytes (56 bits) |
+///   +--------------------+------------+-----------------+-----------------------+
+///   | inline flag (1bit) | offset in the dictionary page (63 bits)              |
+///   +--------------------+------------------------------------------------------+
+/// ```
+///
+/// `inline flag`: 1 for an inline value and 0 for an offset, so an inline value
+/// never equals an offset. The length is needed as values of different lengths
+/// can have the same bytes as an integer, such as `"\0a"` and `"a"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InlineOrOffset(u64);
 
-/// Returns the offsets of four 8 byte reads that together cover a value of
-/// 8 to 32 bytes: `0`, the two returned, and `len - 8`
-///
-/// The reads overlap for values shorter than 32 bytes, so one sequence of
-/// instructions handles every length in the range, with no branch on the
-/// length to mispredict when a column's value lengths vary.
-#[inline(always)]
-fn middle_reads(len: usize) -> (usize, usize) {
-    debug_assert!((8..=32).contains(&len));
-    let first = (len - 8).min(8);
-    (first, len.saturating_sub(16).max(first))
-}
+impl InlineOrOffset {
+    const INLINE_FLAG: u64 = 1 << 63;
 
-/// Compares two values of the same length, in the interner longer than
-/// [`PACKED_LEN`]
-///
-/// Up to 32 bytes the values are compared with four overlapping reads, see
-/// [`middle_reads`], which avoids calling `memcmp`: its dispatch on the length
-/// mispredicts when a column's value lengths vary, and every lookup that ends
-/// in a hit pays for it.
-#[inline(always)]
-fn eq_same_len(a: &[u8], b: &[u8]) -> bool {
-    debug_assert_eq!(a.len(), b.len());
-    let len = a.len();
-    if (8..=32).contains(&len) {
-        let (first, second) = middle_reads(len);
-        // SAFETY: the reads of `middle_reads` are within `len`
-        let diff = |i: usize| unsafe { read_u64_unchecked(a, i) ^ read_u64_unchecked(b, i) };
-        diff(0) | diff(first) | diff(second) | diff(len - 8) == 0
-    } else if len > 32 {
-        // Inline rather than `memcmp`: a call in the lookup loop forces every
-        // value live across it into a callee saved register or onto the stack.
-        // 64 bytes per branch, with the last 64 or fewer read from the end.
-        let read = |v: &[u8], i: usize| u128::from_ne_bytes(v[i..i + 16].try_into().unwrap());
-        let diff_32 = |i: usize| (read(a, i) ^ read(b, i)) | (read(a, i + 16) ^ read(b, i + 16));
-        let mut i = 0;
-        while i + 64 < len {
-            if diff_32(i) | diff_32(i + 32) != 0 {
-                return false;
-            }
-            i += 64;
-        }
-        let head = if len - i > 32 { diff_32(i) } else { 0 };
-        head | diff_32(len - 32) == 0
-    } else {
-        a.iter().zip(b).all(|(a, b)| a == b)
+    /// A value of at most [`INLINE_LEN`] bytes, stored inline
+    #[inline]
+    fn new_inline(value: &[u8]) -> Self {
+        debug_assert!(value.len() <= INLINE_LEN);
+        let bytes = value.iter().fold(0, |acc, &x| (acc << 8) | x as u64);
+        Self(Self::INLINE_FLAG | ((value.len() as u64) << 56) | bytes)
+    }
+
+    /// The offset of a value in the dictionary page
+    #[inline]
+    fn new_offset(offset: usize) -> Self {
+        let offset = offset as u64;
+        debug_assert!(offset < Self::INLINE_FLAG);
+        Self(offset)
+    }
+
+    #[inline]
+    fn is_inline(&self) -> bool {
+        self.0 & Self::INLINE_FLAG != 0
+    }
+
+    /// The offset in the dictionary page of a value not stored inline
+    #[inline]
+    fn offset(&self) -> usize {
+        debug_assert!(!self.is_inline());
+        self.0 as usize
     }
 }
 
 /// Interns byte array values for [`DictEncoder`], writing each distinct value
 /// to the PLAIN encoded dictionary page as it is first seen.
 ///
-/// * Values are hashed in a separate pass before any is looked up, so a
-///   lookup starts from a hash already in memory, with a hash built for the
-///   lengths of the values (see [`ValueHasher`])
-/// * A value of up to [`PACKED_LEN`] bytes is packed into its tag, which its
-///   hash identifies exactly, so a matching hash needs no comparison of the
-///   values. A longer value is compared with the dictionary page only once
-///   its tag matches.
-/// * Each entry keeps its value's tag, which the table hashes with `state`,
-///   so growing the table never reads values again
+/// Modeled on DataFusion's `ArrowBytesMap`:
+///
+/// * Each entry keeps the hash of its value, so growing the table never hashes
+///   values again, and a probe only compares values whose hash matches
+/// * A value of up to [`INLINE_LEN`] bytes is stored inline in its entry and
+///   compared there; a longer value is compared with the dictionary page
+/// * The values of a batch are all hashed before any is looked up, so a
+///   lookup starts from a hash already in memory
 /// * The insert path is out of line, so the lookup loop needs no registers for
 ///   it
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct ByteArrayInterner {
-    hasher: ValueHasher,
-
-    /// Hashes the tags for the table
     state: ahash::RandomState,
 
-    map: HashTable<Slot>,
+    map: HashTable<Entry>,
 
     /// Encoded dictionary page: each value prefixed by its length as a `u32`
     page: Vec<u8>,
 
     /// Number of distinct values
     num_values: usize,
-}
-
-impl Default for ByteArrayInterner {
-    fn default() -> Self {
-        let state = ahash::RandomState::new();
-        Self {
-            hasher: ValueHasher::new(|i| state.hash_one(i)),
-            state,
-            map: HashTable::new(),
-            page: vec![],
-            num_values: 0,
-        }
-    }
-}
-
-/// The tag of values longer than [`PACKED_LEN`] from the CPU's AES
-/// instructions, where available, detected at runtime: an AES round mixes 16
-/// bytes at once, in place of two 64 bit multiplies per 16 bytes
-///
-/// The hash is the same sequence of rounds on every architecture, built from
-/// the primitives of [`arch`]. The rounds differ between architectures in
-/// where the round key is applied, so the hashes differ too, which is fine as
-/// they never leave the interner.
-#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-mod aes_hash {
-    use super::{HASHED, middle_reads, read_u64_unchecked};
-    use arch::*;
-
-    /// AES on aarch64: `aese` XORs the round key in, then substitutes the
-    /// bytes and shifts the rows; `aesmc` mixes the columns
-    #[cfg(target_arch = "aarch64")]
-    mod arch {
-        use std::arch::aarch64::*;
-
-        pub(super) type Block = uint8x16_t;
-
-        pub(super) fn is_available() -> bool {
-            std::arch::is_aarch64_feature_detected!("aes")
-        }
-
-        /// One AES round of `state` with `data`
-        #[target_feature(enable = "aes")]
-        #[inline]
-        pub(super) fn round(state: Block, data: Block) -> Block {
-            vaesmcq_u8(vaeseq_u8(state, data))
-        }
-
-        #[target_feature(enable = "aes")]
-        #[inline]
-        pub(super) fn xor(a: Block, b: Block) -> Block {
-            veorq_u8(a, b)
-        }
-
-        /// `low` in the low 8 bytes, `high` in the high 8
-        #[target_feature(enable = "aes")]
-        #[inline]
-        pub(super) fn pair(low: u64, high: u64) -> Block {
-            vreinterpretq_u8_u64(vcombine_u64(vcreate_u64(low), vcreate_u64(high)))
-        }
-
-        /// The first 16 bytes of `bytes`
-        #[target_feature(enable = "aes")]
-        #[inline]
-        pub(super) fn load(bytes: &[u8]) -> Block {
-            let bytes = &bytes[..16];
-            // SAFETY: `bytes` is 16 bytes
-            unsafe { vld1q_u8(bytes.as_ptr()) }
-        }
-
-        /// The low 8 bytes XOR-ed with the high 8
-        #[target_feature(enable = "aes")]
-        #[inline]
-        pub(super) fn fold(block: Block) -> u64 {
-            let block = vreinterpretq_u64_u8(block);
-            vgetq_lane_u64::<0>(block) ^ vgetq_lane_u64::<1>(block)
-        }
-    }
-
-    /// AES-NI on x86_64: `aesenc` shifts the rows, substitutes the bytes and
-    /// mixes the columns, then XORs the round key in
-    #[cfg(target_arch = "x86_64")]
-    mod arch {
-        use std::arch::x86_64::*;
-
-        pub(super) type Block = __m128i;
-
-        pub(super) fn is_available() -> bool {
-            std::arch::is_x86_feature_detected!("aes")
-        }
-
-        /// One AES round of `state` with `data`
-        #[target_feature(enable = "aes")]
-        #[inline]
-        pub(super) fn round(state: Block, data: Block) -> Block {
-            _mm_aesenc_si128(state, data)
-        }
-
-        #[target_feature(enable = "aes")]
-        #[inline]
-        pub(super) fn xor(a: Block, b: Block) -> Block {
-            _mm_xor_si128(a, b)
-        }
-
-        /// `low` in the low 8 bytes, `high` in the high 8
-        #[target_feature(enable = "aes")]
-        #[inline]
-        pub(super) fn pair(low: u64, high: u64) -> Block {
-            _mm_set_epi64x(high as i64, low as i64)
-        }
-
-        /// The first 16 bytes of `bytes`
-        #[target_feature(enable = "aes")]
-        #[inline]
-        pub(super) fn load(bytes: &[u8]) -> Block {
-            let bytes = &bytes[..16];
-            // SAFETY: `bytes` is 16 bytes, and the load needs no alignment
-            unsafe { _mm_loadu_si128(bytes.as_ptr().cast()) }
-        }
-
-        /// The low 8 bytes XOR-ed with the high 8
-        #[target_feature(enable = "aes")]
-        #[inline]
-        pub(super) fn fold(block: Block) -> u64 {
-            let high = _mm_unpackhi_epi64(block, block);
-            (_mm_cvtsi128_si64(block) ^ _mm_cvtsi128_si64(high)) as u64
-        }
-    }
-
-    /// Returns whether the CPU supports the AES instructions
-    pub(super) fn is_available() -> bool {
-        arch::is_available()
-    }
-
-    /// The seeds as round keys
-    pub(super) struct Keys([Block; 3]);
-
-    impl Keys {
-        #[target_feature(enable = "aes")]
-        pub(super) fn new(seeds: &[u64; 4]) -> Self {
-            let [k0, k1, k2, k3] = *seeds;
-            Self([pair(k0, k1), pair(k2, k3), pair(k1 ^ k2, k0 ^ k3)])
-        }
-    }
-
-    /// Returns the tag of `value`, longer than [`super::PACKED_LEN`]: a hash of
-    /// it with [`HASHED`] set
-    #[target_feature(enable = "aes")]
-    #[inline]
-    pub(super) fn tag(keys: &Keys, value: &[u8]) -> u64 {
-        let [k0, k1, k2] = keys.0;
-        let len = value.len();
-        let len_key = xor(k1, pair(len as u64, len as u64));
-        let state = if len <= 32 {
-            let (first, second) = middle_reads(len);
-            // SAFETY: the reads of `middle_reads` are within `len`
-            let read = |i: usize| unsafe { read_u64_unchecked(value, i) };
-            let head = pair(read(0), read(first));
-            let tail = pair(read(second), read(len - 8));
-            round(round(round(k0, head), k2), xor(tail, len_key))
-        } else {
-            // Four independent rounds per 64 bytes
-            let mut lanes = [xor(k0, len_key), k0, k1, k2];
-            let mut rest = value;
-            while rest.len() > 64 {
-                for (i, lane) in lanes.iter_mut().enumerate() {
-                    *lane = round(*lane, load(&rest[16 * i..]));
-                }
-                rest = &rest[64..];
-            }
-            // The 1 to 64 bytes left are covered by up to 32 from their start
-            // and the last 32 of the value
-            if rest.len() > 32 {
-                lanes[2] = round(lanes[2], load(rest));
-                lanes[3] = round(lanes[3], load(&rest[16..]));
-            }
-            lanes[0] = round(lanes[0], load(&value[len - 32..]));
-            lanes[1] = round(lanes[1], load(&value[len - 16..]));
-            let state = round(round(lanes[0], lanes[1]), k2);
-            round(round(state, xor(lanes[2], lanes[3])), k1)
-        };
-        fold(state) | HASHED
-    }
-}
-
-/// No AES hash on this architecture
-#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
-mod aes_hash {
-    pub(super) fn is_available() -> bool {
-        false
-    }
-}
-
-/// Writes the tag of each of `values`, from `tag`, to `tags`, returning the
-/// total length of the values in bytes
-#[inline(always)]
-fn tag_all_with<V: AsRef<[u8]>>(
-    values: impl Iterator<Item = V>,
-    tags: &mut [u64],
-    tag: impl Fn(&[u8]) -> u64,
-) -> usize {
-    let mut total_len = 0;
-    for (value, out) in values.zip(tags) {
-        let value = value.as_ref();
-        total_len += value.len();
-        *out = tag(value);
-    }
-    total_len
-}
-
-/// Computes the tags of values for [`ByteArrayInterner`]
-#[derive(Debug, Clone, Copy)]
-struct ValueHasher {
-    /// Seeds of the hash of values longer than [`PACKED_LEN`]
-    seeds: [u64; 4],
-
-    /// Whether to hash values longer than [`PACKED_LEN`] with the CPU's AES
-    /// instructions, see [`aes_hash`], detected at runtime. Fixed for the
-    /// life of the interner, as the table stores the tags.
-    aes: bool,
-}
-
-impl ValueHasher {
-    fn new(random: impl Fn(u64) -> u64) -> Self {
-        Self {
-            seeds: [random(0), random(1), random(2), random(3)],
-            aes: aes_hash::is_available(),
-        }
-    }
-
-    /// Writes the tag of each of `values` to `tags`, returning the total
-    /// length of the values in bytes
-    fn tag_all<V: AsRef<[u8]>>(&self, values: impl Iterator<Item = V>, tags: &mut [u64]) -> usize {
-        #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-        if self.aes {
-            // SAFETY: `aes` is only set when the CPU supports AES
-            return unsafe { self.tag_all_aes(values, tags) };
-        }
-        tag_all_with(values, tags, |value| self.tag(value))
-    }
-
-    /// [`Self::tag_all`] with [`aes_hash::tag`]
-    ///
-    /// # Safety
-    ///
-    /// The CPU must support AES
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    #[target_feature(enable = "aes")]
-    unsafe fn tag_all_aes<V: AsRef<[u8]>>(
-        &self,
-        values: impl Iterator<Item = V>,
-        tags: &mut [u64],
-    ) -> usize {
-        let keys = aes_hash::Keys::new(&self.seeds);
-        tag_all_with(values, tags, |value| match value.len() <= PACKED_LEN {
-            true => self.tag(value),
-            false => aes_hash::tag(&keys, value),
-        })
-    }
-
-    /// Returns the 64 bit tag of `value`
-    ///
-    /// A value of up to [`PACKED_LEN`] bytes is packed into its tag with its
-    /// length, so equal tags mean equal values. A longer value's tag is a hash
-    /// of it with [`HASHED`] set.
-    #[inline(always)]
-    fn tag(&self, value: &[u8]) -> u64 {
-        let len = value.len();
-        if len <= PACKED_LEN {
-            // The value's bytes, little endian, read with overlapping loads
-            let bytes = if len >= 4 {
-                let head = u32::from_le_bytes(value[..4].try_into().unwrap());
-                let tail = u32::from_le_bytes(value[len - 4..].try_into().unwrap());
-                u64::from(head) | (u64::from(tail) << (8 * (len - 4)))
-            } else if len > 0 {
-                let byte = |i: usize| u64::from(value[i]) << (8 * i);
-                byte(0) | byte(len / 2) | byte(len - 1)
-            } else {
-                0
-            };
-            return bytes | ((len as u64 + 1) << 56);
-        }
-        let [k0, k1, k2, k3] = self.seeds;
-        let len_mix = k1 ^ len as u64;
-        let hash = if len <= 32 {
-            let (first, second) = middle_reads(len);
-            // SAFETY: the reads of `middle_reads` are within `len`
-            let read = |i: usize| unsafe { read_u64_unchecked(value, i) };
-            let outer = folded_multiply(read(0) ^ k0, read(len - 8) ^ len_mix);
-            let inner = folded_multiply(read(first) ^ k2, read(second) ^ k3);
-            outer ^ inner
-        } else {
-            // Four independent multiplies per 64 bytes, rather than one chain
-            // of dependent multiplies through the whole value
-            let mut lanes = [len_mix, k0, k2, k3];
-            let mut fold = |lane: usize, chunk: &[u8], seed: u64| {
-                lanes[lane] =
-                    folded_multiply(read_u64(chunk, 0) ^ seed, read_u64(chunk, 8) ^ lanes[lane]);
-            };
-            let mut rest = value;
-            while rest.len() > 64 {
-                for lane in 0..4 {
-                    fold(lane, &rest[16 * lane..], k0);
-                }
-                rest = &rest[64..];
-            }
-            // The 1 to 64 bytes left are covered by up to 32 from their start
-            // and the last 32 of the value
-            if rest.len() > 32 {
-                fold(2, rest, k2);
-                fold(3, &rest[16..], k3);
-            }
-            fold(0, &value[len - 32..], k1);
-            fold(1, &value[len - 16..], k2);
-            folded_multiply(lanes[0] ^ lanes[2], lanes[1] ^ lanes[3])
-        };
-        hash | HASHED
-    }
 }
 
 impl ByteArrayInterner {
@@ -806,15 +455,7 @@ impl ByteArrayInterner {
         T: ArrayAccessor + Copy,
         T::Item: AsRef<[u8]>,
     {
-        let len = values.len();
-        let values = indices.map(move |idx| {
-            // A plain check rather than the one in `value`: its panic message
-            // formats the index, which keeps the index alive across the loop
-            // and costs a stack spill per value
-            assert!(idx < len, "index out of bounds");
-            // SAFETY: checked above
-            unsafe { values.value_unchecked(idx) }
-        });
+        let values = indices.map(move |idx| values.value(idx));
         self.intern_hashed(values, keys) as i64
     }
 
@@ -827,14 +468,14 @@ impl ByteArrayInterner {
         self.intern_hashed(values, keys);
     }
 
-    /// Computes the tags of all of `values` first, then looks each up by its
-    /// tag, returning their total length in bytes
+    /// Hashes all of `values` first, then looks each up with its hash,
+    /// returning their total length in bytes
     ///
-    /// The tags are written where the keys go, and replaced by the keys: the
+    /// The hashes are written where the keys go, and replaced by the keys: the
     /// fewer values live across the lookup loop, which calls the insert path,
     /// the fewer the loop keeps on the stack. Both passes are plain loops in
-    /// this function, so the hasher's seeds and the running total stay in
-    /// registers rather than being reloaded around every store of a key.
+    /// this function, so the running total stays in a register rather than
+    /// being reloaded around every store of a key.
     fn intern_hashed<V: AsRef<[u8]>>(
         &mut self,
         values: impl ExactSizeIterator<Item = V> + Clone,
@@ -843,45 +484,51 @@ impl ByteArrayInterner {
         let start = keys.len();
         keys.resize(start + values.len(), 0);
         let keys = &mut keys[start..];
-        let total_len = self.hasher.tag_all(values.clone(), keys);
+        let mut total_len = 0;
+        for (value, hash) in values.clone().zip(keys.iter_mut()) {
+            let value = value.as_ref();
+            total_len += value.len();
+            *hash = self.state.hash_one(value);
+        }
         for (value, key) in values.zip(keys.iter_mut()) {
-            *key = self.intern(value.as_ref(), *key) as u64;
+            *key = self.intern(value.as_ref(), *key);
         }
         total_len
     }
 
-    /// Returns the key of `value` with `tag`, inserting it if absent
+    /// Returns the key of `value` with `hash`, inserting it if absent
     #[inline]
-    fn intern(&mut self, value: &[u8], tag: u64) -> u32 {
-        let hash = self.state.hash_one(tag);
-        let found = if value.len() <= PACKED_LEN {
-            // The tag of a value this short identifies it
-            self.map.find(hash, |slot| slot.tag == tag)
+    fn intern(&mut self, value: &[u8], hash: u64) -> u64 {
+        let found = if value.len() <= INLINE_LEN {
+            let inline = InlineOrOffset::new_inline(value);
+            self.map
+                .find(hash, |entry| entry.hash == hash && entry.value == inline)
         } else {
-            self.map.find(hash, |slot| {
-                slot.tag == tag && self.is_at(slot.offset, value)
+            self.map.find(hash, |entry| {
+                entry.hash == hash
+                    && !entry.value.is_inline()
+                    && self.is_at(entry.value.offset(), value)
             })
         };
         match found {
-            Some(slot) => slot.key,
-            None => self.insert(value, tag, hash),
+            Some(entry) => entry.key,
+            None => self.insert(value, hash),
         }
     }
 
     /// Returns whether `value` is in the dictionary page at `offset`
     #[inline(always)]
-    fn is_at(&self, offset: u32, value: &[u8]) -> bool {
-        let offset = offset as usize;
+    fn is_at(&self, offset: usize, value: &[u8]) -> bool {
         // SAFETY: every value in the page is preceded by its length
         let stored_len = unsafe { self.page.get_unchecked(offset - 4..offset) };
-        // Rarely false, as the tags matched, so the branch predicts well and
+        // Rarely false, as the hashes matched, so the branch predicts well and
         // the comparison's reads issue before the length is known
         if u32::from_le_bytes(stored_len.try_into().unwrap()) as usize != value.len() {
             return false;
         }
         // SAFETY: the value at `offset` has the length just checked
         let existing = unsafe { self.page.get_unchecked(offset..offset + value.len()) };
-        eq_same_len(existing, value)
+        existing == value
     }
 
     /// Appends `value`, absent from the dictionary, to it
@@ -890,20 +537,24 @@ impl ByteArrayInterner {
     /// registers that only the insert path needs.
     #[cold]
     #[inline(never)]
-    fn insert(&mut self, value: &[u8], tag: u64, hash: u64) -> u32 {
-        let key = u32::try_from(self.num_values).expect("too many dictionary values");
-        let len = u32::try_from(value.len()).expect("byte array value too large");
+    fn insert(&mut self, value: &[u8], hash: u64) -> u64 {
+        let key = self.num_values as u64;
 
         self.page.reserve(4 + value.len());
-        self.page.extend_from_slice(&len.to_le_bytes());
-        let offset = u32::try_from(self.page.len()).expect("dictionary page too large");
+        self.page.extend_from_slice((value.len() as u32).as_bytes());
+        let offset = self.page.len();
         self.page.extend_from_slice(value);
         self.num_values += 1;
 
-        let slot = Slot { tag, key, offset };
-        let state = &self.state;
-        self.map
-            .insert_unique(hash, slot, |slot| state.hash_one(slot.tag));
+        let entry = Entry {
+            hash,
+            value: match value.len() <= INLINE_LEN {
+                true => InlineOrOffset::new_inline(value),
+                false => InlineOrOffset::new_offset(offset),
+            },
+            key,
+        };
+        self.map.insert_unique(hash, entry, |entry| entry.hash);
         key
     }
 
@@ -1613,12 +1264,6 @@ mod tests {
 
     #[test]
     fn test_byte_array_interner() {
-        // With the AES hash, where the CPU supports it, and without
-        check_byte_array_interner(aes_hash::is_available());
-        check_byte_array_interner(false);
-    }
-
-    fn check_byte_array_interner(aes: bool) {
         let mut rng = StdRng::seed_from_u64(42);
         // Short values that pack to the same integer, and longer ones
         let mut pool: Vec<Vec<u8>> = vec![
@@ -1642,7 +1287,6 @@ mod tests {
         pool.extend((0..300).map(|_| random_value(&mut rng)));
 
         let mut interner = ByteArrayInterner::default();
-        interner.hasher.aes = aes;
         let mut expected_keys = std::collections::HashMap::new();
         let mut expected_values = vec![];
         for _ in 0..20 {
@@ -1790,23 +1434,6 @@ mod tests {
                         .iter()
                         .all(|page| page.4.is_some() && page.5.is_some())
                 );
-            }
-        }
-    }
-
-    #[test]
-    fn test_eq_same_len() {
-        let mut rng = StdRng::seed_from_u64(42);
-        for len in 0..80 {
-            for _ in 0..200 {
-                let a: Vec<u8> = (0..len).map(|_| rng.random_range(0..3)).collect();
-                let mut b = a.clone();
-                // Differ in at most one byte, anywhere
-                if len > 0 && rng.random_bool(0.7) {
-                    let i = rng.random_range(0..len);
-                    b[i] = b[i].wrapping_add(rng.random_range(1..3));
-                }
-                assert_eq!(eq_same_len(&a, &b), a == b, "{a:?} {b:?}");
             }
         }
     }
