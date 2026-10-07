@@ -746,6 +746,7 @@ pub(crate) fn range_for_page_index(
 mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
+    use crate::file::metadata::page_index::PageIndexProvider;
     use crate::file::properties::WriterProperties;
     use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringViewArray};
     use bytes::Bytes;
@@ -795,6 +796,66 @@ mod tests {
 
         assert!(all.start <= masked.start && masked.end <= all.end);
         assert!(masked.end - masked.start < all.end - all.start);
+    }
+
+    #[test]
+    fn test_page_index_decoder_incremental() {
+        let metadata = test_metadata_without_page_index();
+        let mut decoder =
+            ParquetMetaDataPushDecoder::try_new_with_metadata(test_file_len(), metadata)
+                .unwrap()
+                .with_column_index_policy(PageIndexPolicy::Required)
+                .with_offset_index_policy(PageIndexPolicy::Required)
+                .with_column_index_mask(ColumnChunkMask::row_groups_and_columns([1], [0, 2]))
+                .with_offset_index_mask(ColumnChunkMask::row_groups_and_columns([0], [1]));
+
+        let ranges = expect_needs_data(decoder.try_decode_page_index());
+        assert_eq!(ranges.len(), 1);
+        push_ranges_to_metadata_decoder(&mut decoder, ranges);
+
+        let page_index = expect_data(decoder.try_decode_page_index()).unwrap();
+        expect_finished(decoder.try_decode_page_index());
+
+        for row_group_idx in 0..2 {
+            for column_idx in 0..3 {
+                assert_eq!(
+                    page_index.column_index(row_group_idx, column_idx).is_some(),
+                    row_group_idx == 1 && matches!(column_idx, 0 | 2)
+                );
+                assert_eq!(
+                    page_index.offset_index(row_group_idx, column_idx).is_some(),
+                    row_group_idx == 0 && column_idx == 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_page_index_decoder_no_indexes_requested() {
+        let metadata = test_metadata_without_page_index();
+        let mut decoder =
+            ParquetMetaDataPushDecoder::try_new_with_metadata(test_file_len(), metadata)
+                .unwrap()
+                .with_page_index_policy(PageIndexPolicy::Skip);
+
+        assert!(expect_data(decoder.try_decode_page_index()).is_none());
+        expect_finished(decoder.try_decode_page_index());
+
+        let metadata = test_metadata_without_page_index();
+        let mut decoder =
+            ParquetMetaDataPushDecoder::try_new_with_metadata(test_file_len(), metadata)
+                .unwrap()
+                .with_page_index_mask(ColumnChunkMask::none());
+
+        assert!(expect_data(decoder.try_decode_page_index()).is_none());
+        expect_finished(decoder.try_decode_page_index());
+    }
+
+    #[test]
+    fn test_page_index_decoder_requires_metadata() {
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(test_file_len()).unwrap();
+        let err = decoder.try_decode_page_index().unwrap_err();
+        assert!(err.to_string().contains("invalid state"));
     }
 
     /// It is possible to feed some, but not all, of the footer into the metadata decoder
@@ -986,6 +1047,16 @@ mod tests {
             .map(|range| test_file_slice(range.clone()))
             .collect::<Vec<_>>();
         metadata_decoder.push_ranges(ranges, data).unwrap();
+    }
+
+    fn test_metadata_without_page_index() -> ParquetMetaData {
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(test_file_len())
+            .unwrap()
+            .with_page_index_policy(PageIndexPolicy::Skip);
+        push_ranges_to_metadata_decoder(&mut decoder, vec![test_file_range()]);
+        let metadata = expect_data(decoder.try_decode());
+        assert!(metadata.page_index().is_none());
+        metadata
     }
 
     /// Expect that the [`DecodeResult`] is a [`DecodeResult::Data`] and return the corresponding element
