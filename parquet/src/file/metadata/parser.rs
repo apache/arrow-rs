@@ -20,12 +20,12 @@
 //! These functions parse thrift-encoded metadata from a byte slice
 //! into the corresponding Rust structures
 
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::page_index::{PageIndexBuilder, PageIndexProvider};
+use crate::file::metadata::page_index::{PageIndex, PageIndexBuilder, PageIndexProvider};
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{
     ColumnChunkMask, ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
@@ -235,10 +235,10 @@ pub(crate) fn decode_metadata(
     parquet_metadata_from_bytes(buf, options)
 }
 
-/// Parses page indexes from the provided bytes and replaces those in the metadata.
+/// Parses page indexes from the provided bytes.
 ///
 /// Arguments
-/// * `metadata` - The ParquetMetaData whose page index will be replaced.
+/// * `metadata` - The footer metadata describing the page index locations.
 /// * `column_index_policy` - The policy for handling column index parsing (e.g.,
 ///   Required, Optional, Skip).
 /// * `offset_index_policy` - The policy for handling offset index parsing (e.g.,
@@ -250,14 +250,14 @@ pub(crate) fn decode_metadata(
 /// * `bytes` - The byte slice containing the page index data.
 /// * `start_offset` - The offset where `bytes` begin in the file.
 pub(crate) fn parse_page_index(
-    metadata: &mut ParquetMetaData,
+    metadata: &ParquetMetaData,
     column_index_policy: PageIndexPolicy,
     offset_index_policy: PageIndexPolicy,
     column_index_mask: &ColumnChunkMask,
     offset_index_mask: &ColumnChunkMask,
     bytes: &Bytes,
     start_offset: u64,
-) -> Result<()> {
+) -> Result<Option<PageIndex>> {
     let num_row_groups = metadata.num_row_groups();
     let num_columns = metadata.file_metadata().schema_descr().num_columns();
     let mut builder = PageIndexBuilder::default();
@@ -285,17 +285,12 @@ pub(crate) fn parse_page_index(
         )?;
     }
 
-    // Always replace the page index, even if both policies are Skip.
-    // This ensures that repeated calls to read_page_indexes replace the existing index
-    // rather than preserving it.
     let page_index = builder.build();
     if page_index.has_column_indexes() || page_index.has_offset_indexes() {
-        metadata.set_page_index(Some(Arc::new(page_index)));
+        Ok(Some(page_index))
     } else {
-        // If no indexes were read, clear the page index
-        metadata.set_page_index(None);
+        Ok(None)
     }
-    Ok(())
 }
 
 fn parse_column_index(
