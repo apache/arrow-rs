@@ -40,6 +40,7 @@ use arrow_array::{
 };
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_schema::DataType;
+use hashbrown::HashTable;
 use std::cmp::Ordering;
 use std::ops::Range;
 
@@ -354,22 +355,17 @@ const PACKED_LEN: usize = 7;
 /// packed tag is the length of the value plus one, so the two never collide.
 const HASHED: u64 = 0xFF << 56;
 
-/// The hash of an empty [`Slot`]: tags are never zero and the multiplier is
-/// odd, so no value hashes to zero
-const EMPTY: u64 = 0;
-
-/// Initial number of slots of [`ByteArrayInterner`]
-const MIN_SLOTS: usize = 16;
-
-/// A slot of [`ByteArrayInterner`]'s hash table
-#[derive(Debug, Clone, Copy, Default)]
+/// An entry of [`ByteArrayInterner`]'s hash table
+#[derive(Debug, Clone, Copy)]
 struct Slot {
-    /// [`EMPTY`], or the hash of the value in this slot
-    hash: u64,
+    /// Tag of the value (see [`ValueHasher::tag`]): growing the table hashes
+    /// the tags, never the values, and a probe only compares values whose tag
+    /// matches
+    tag: u64,
     /// Index of the value in the dictionary
     key: u32,
     /// Offset of the value in the dictionary page, for values longer than
-    /// [`PACKED_LEN`]; the hash of a shorter value identifies it exactly
+    /// [`PACKED_LEN`]; the tag of a shorter value identifies it exactly
     offset: u32,
 }
 
@@ -452,35 +448,25 @@ fn eq_same_len(a: &[u8], b: &[u8]) -> bool {
 /// Interns byte array values for [`DictEncoder`], writing each distinct value
 /// to the PLAIN encoded dictionary page as it is first seen.
 ///
-/// A dictionary lookup is a chain of dependent instructions, and lookups only
-/// overlap when the instructions of more than one fit in the CPU's
-/// out-of-order window, so this is a hash table built for few instructions
-/// and a short chain per lookup:
-///
 /// * Values are hashed in a separate pass before any is looked up, so a
-///   lookup starts from a hash already in memory
-/// * The hash of a value is its 64 bit tag (see [`ValueHasher::tag`]) times a random
-///   odd multiplier; its top bits are the value's slot, so finding the slot is
-///   a single shift
-/// * Open addressing with linear probing, at most half full: a lookup usually
-///   ends at its first slot, with no control bytes to match first
-/// * A value of up to [`PACKED_LEN`] bytes is packed into its tag, which is
-///   then compared instead of the value. A longer value is compared with the
-///   dictionary page only once its hash matches.
-/// * Growing the table moves the stored hashes, without hashing values again
+///   lookup starts from a hash already in memory, with a hash built for the
+///   lengths of the values (see [`ValueHasher`])
+/// * A value of up to [`PACKED_LEN`] bytes is packed into its tag, which its
+///   hash identifies exactly, so a matching hash needs no comparison of the
+///   values. A longer value is compared with the dictionary page only once
+///   its tag matches.
+/// * Each entry keeps its value's tag, which the table hashes with `state`,
+///   so growing the table never reads values again
 /// * The insert path is out of line, so the lookup loop needs no registers for
 ///   it
 #[derive(Debug)]
 struct ByteArrayInterner {
     hasher: ValueHasher,
 
-    /// Hash table: a power of two number of slots, then one more that is
-    /// always empty, so the slot after any value's own is in bounds; or none
-    /// before first use
-    slots: Vec<Slot>,
+    /// Hashes the tags for the table
+    state: ahash::RandomState,
 
-    /// The slot of a value is its hash shifted right by this
-    shift: u32,
+    map: HashTable<Slot>,
 
     /// Encoded dictionary page: each value prefixed by its length as a `u32`
     page: Vec<u8>,
@@ -492,11 +478,10 @@ struct ByteArrayInterner {
 impl Default for ByteArrayInterner {
     fn default() -> Self {
         let state = ahash::RandomState::new();
-        let random = |i: u64| state.hash_one(i);
         Self {
-            hasher: ValueHasher::new(random),
-            slots: vec![],
-            shift: u64::BITS,
+            hasher: ValueHasher::new(|i| state.hash_one(i)),
+            state,
+            map: HashTable::new(),
             page: vec![],
             num_values: 0,
         }
@@ -680,18 +665,32 @@ mod aes_hash {
     }
 }
 
-/// Hashes values for [`ByteArrayInterner`]
+/// Writes the tag of each of `values`, from `tag`, to `tags`, returning the
+/// total length of the values in bytes
+#[inline(always)]
+fn tag_all_with<V: AsRef<[u8]>>(
+    values: impl Iterator<Item = V>,
+    tags: &mut [u64],
+    tag: impl Fn(&[u8]) -> u64,
+) -> usize {
+    let mut total_len = 0;
+    for (value, out) in values.zip(tags) {
+        let value = value.as_ref();
+        total_len += value.len();
+        *out = tag(value);
+    }
+    total_len
+}
+
+/// Computes the tags of values for [`ByteArrayInterner`]
 #[derive(Debug, Clone, Copy)]
 struct ValueHasher {
     /// Seeds of the hash of values longer than [`PACKED_LEN`]
     seeds: [u64; 4],
 
-    /// Odd multiplier from a value's tag to its hash
-    multiplier: u64,
-
     /// Whether to hash values longer than [`PACKED_LEN`] with the CPU's AES
     /// instructions, see [`aes_hash`], detected at runtime. Fixed for the
-    /// life of the interner, as the table stores the hashes.
+    /// life of the interner, as the table stores the tags.
     aes: bool,
 }
 
@@ -699,68 +698,41 @@ impl ValueHasher {
     fn new(random: impl Fn(u64) -> u64) -> Self {
         Self {
             seeds: [random(0), random(1), random(2), random(3)],
-            multiplier: random(4) | 1,
             aes: aes_hash::is_available(),
         }
     }
 
-    /// Writes the hash of each of `values` to `hashes`, returning the total
+    /// Writes the tag of each of `values` to `tags`, returning the total
     /// length of the values in bytes
-    fn hash_all<V: AsRef<[u8]>>(
-        &self,
-        values: impl Iterator<Item = V>,
-        hashes: &mut [u64],
-    ) -> usize {
+    fn tag_all<V: AsRef<[u8]>>(&self, values: impl Iterator<Item = V>, tags: &mut [u64]) -> usize {
         #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
         if self.aes {
             // SAFETY: `aes` is only set when the CPU supports AES
-            return unsafe { self.hash_all_aes(values, hashes) };
+            return unsafe { self.tag_all_aes(values, tags) };
         }
-        self.hash_all_with(values, hashes, |value| self.tag(value))
+        tag_all_with(values, tags, |value| self.tag(value))
     }
 
-    /// [`Self::hash_all`] with [`aes_hash::tag`]
+    /// [`Self::tag_all`] with [`aes_hash::tag`]
     ///
     /// # Safety
     ///
     /// The CPU must support AES
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     #[target_feature(enable = "aes")]
-    unsafe fn hash_all_aes<V: AsRef<[u8]>>(
+    unsafe fn tag_all_aes<V: AsRef<[u8]>>(
         &self,
         values: impl Iterator<Item = V>,
-        hashes: &mut [u64],
+        tags: &mut [u64],
     ) -> usize {
         let keys = aes_hash::Keys::new(&self.seeds);
-        self.hash_all_with(values, hashes, |value| match value.len() <= PACKED_LEN {
+        tag_all_with(values, tags, |value| match value.len() <= PACKED_LEN {
             true => self.tag(value),
             false => aes_hash::tag(&keys, value),
         })
     }
 
-    /// Writes the hash of each of `values` to `hashes`, returning the total
-    /// length of the values in bytes
-    ///
-    /// A value's hash is its tag, from `tag`, times an odd multiplier: a
-    /// bijection, so the hashes of two values are equal if and only if their
-    /// tags are, and never [`EMPTY`]
-    #[inline(always)]
-    fn hash_all_with<V: AsRef<[u8]>>(
-        &self,
-        values: impl Iterator<Item = V>,
-        hashes: &mut [u64],
-        tag: impl Fn(&[u8]) -> u64,
-    ) -> usize {
-        let mut total_len = 0;
-        for (value, hash) in values.zip(hashes) {
-            let value = value.as_ref();
-            total_len += value.len();
-            *hash = tag(value).wrapping_mul(self.multiplier);
-        }
-        total_len
-    }
-
-    /// Returns the 64 bit tag of `value`, never zero
+    /// Returns the 64 bit tag of `value`
     ///
     /// A value of up to [`PACKED_LEN`] bytes is packed into its tag with its
     /// length, so equal tags mean equal values. A longer value's tag is a hash
@@ -855,10 +827,10 @@ impl ByteArrayInterner {
         self.intern_hashed(values, keys);
     }
 
-    /// Hashes all of `values` first, then looks each up with its hash,
-    /// returning their total length in bytes
+    /// Computes the tags of all of `values` first, then looks each up by its
+    /// tag, returning their total length in bytes
     ///
-    /// The hashes are written where the keys go, and replaced by the keys: the
+    /// The tags are written where the keys go, and replaced by the keys: the
     /// fewer values live across the lookup loop, which calls the insert path,
     /// the fewer the loop keeps on the stack. Both passes are plain loops in
     /// this function, so the hasher's seeds and the running total stay in
@@ -871,58 +843,28 @@ impl ByteArrayInterner {
         let start = keys.len();
         keys.resize(start + values.len(), 0);
         let keys = &mut keys[start..];
-        let total_len = self.hasher.hash_all(values.clone(), keys);
-        if self.slots.is_empty() {
-            self.grow();
-        }
+        let total_len = self.hasher.tag_all(values.clone(), keys);
         for (value, key) in values.zip(keys.iter_mut()) {
             *key = self.intern(value.as_ref(), *key) as u64;
         }
         total_len
     }
 
-    /// Returns the key of `value` with `hash`, inserting it if absent
-    ///
-    /// Looks in the value's slot and the next with no branch between them:
-    /// with linear probing a value is often in the slot after its own, and a
-    /// branch on which mispredicts. Anything else is left to [`Self::probe`].
-    #[inline(always)]
-    fn intern(&mut self, value: &[u8], hash: u64) -> u32 {
-        let pos = (hash >> self.shift) as usize;
-        // SAFETY: `pos` is less than the power of two number of slots, which
-        // the always empty slot follows
-        let (first, second) = unsafe {
-            let slots = &self.slots;
-            (*slots.get_unchecked(pos), *slots.get_unchecked(pos + 1))
+    /// Returns the key of `value` with `tag`, inserting it if absent
+    #[inline]
+    fn intern(&mut self, value: &[u8], tag: u64) -> u32 {
+        let hash = self.state.hash_one(tag);
+        let found = if value.len() <= PACKED_LEN {
+            // The tag of a value this short identifies it
+            self.map.find(hash, |slot| slot.tag == tag)
+        } else {
+            self.map.find(hash, |slot| {
+                slot.tag == tag && self.is_at(slot.offset, value)
+            })
         };
-        let in_first = first.hash == hash;
-        let found = in_first | (second.hash == hash);
-        let slot = std::hint::select_unpredictable(in_first, first, second);
-        if found && (value.len() <= PACKED_LEN || self.is_at(slot.offset, value)) {
-            return slot.key;
-        }
-        self.probe(value, hash, pos)
-    }
-
-    /// Returns the power of two number of slots, less one
-    fn mask(&self) -> usize {
-        self.slots.len() - 2
-    }
-
-    /// [`Self::intern`] for a value in neither its slot nor the next, or absent
-    #[cold]
-    #[inline(never)]
-    fn probe(&mut self, value: &[u8], hash: u64, mut pos: usize) -> u32 {
-        let mask = self.mask();
-        loop {
-            let slot = self.slots[pos];
-            if slot.hash == hash && (value.len() <= PACKED_LEN || self.is_at(slot.offset, value)) {
-                return slot.key;
-            }
-            if slot.hash == EMPTY {
-                return self.insert(value, hash, pos);
-            }
-            pos = (pos + 1) & mask;
+        match found {
+            Some(slot) => slot.key,
+            None => self.insert(value, tag, hash),
         }
     }
 
@@ -932,7 +874,7 @@ impl ByteArrayInterner {
         let offset = offset as usize;
         // SAFETY: every value in the page is preceded by its length
         let stored_len = unsafe { self.page.get_unchecked(offset - 4..offset) };
-        // Rarely false, as the hashes matched, so the branch predicts well and
+        // Rarely false, as the tags matched, so the branch predicts well and
         // the comparison's reads issue before the length is known
         if u32::from_le_bytes(stored_len.try_into().unwrap()) as usize != value.len() {
             return false;
@@ -942,8 +884,13 @@ impl ByteArrayInterner {
         eq_same_len(existing, value)
     }
 
-    /// Appends `value` to the dictionary, in the empty slot at `pos`
-    fn insert(&mut self, value: &[u8], hash: u64, pos: usize) -> u32 {
+    /// Appends `value`, absent from the dictionary, to it
+    ///
+    /// Out of line: inlined, its code made every lookup pay for setting up
+    /// registers that only the insert path needs.
+    #[cold]
+    #[inline(never)]
+    fn insert(&mut self, value: &[u8], tag: u64, hash: u64) -> u32 {
         let key = u32::try_from(self.num_values).expect("too many dictionary values");
         let len = u32::try_from(value.len()).expect("byte array value too large");
 
@@ -953,36 +900,11 @@ impl ByteArrayInterner {
         self.page.extend_from_slice(value);
         self.num_values += 1;
 
-        let slot = Slot { hash, key, offset };
-        // At most half full, so probe sequences stay short
-        if self.num_values * 2 > self.mask() + 1 {
-            self.grow();
-            self.place(slot);
-        } else {
-            self.slots[pos] = slot;
-        }
+        let slot = Slot { tag, key, offset };
+        let state = &self.state;
+        self.map
+            .insert_unique(hash, slot, |slot| state.hash_one(slot.tag));
         key
-    }
-
-    /// Doubles the number of slots, moving every value to its new slot
-    #[cold]
-    fn grow(&mut self) {
-        let len = (self.slots.len().saturating_sub(1) * 2).max(MIN_SLOTS);
-        let old = std::mem::replace(&mut self.slots, vec![Slot::default(); len + 1]);
-        self.shift = u64::BITS - len.trailing_zeros();
-        for slot in old.into_iter().filter(|slot| slot.hash != EMPTY) {
-            self.place(slot);
-        }
-    }
-
-    /// Puts `slot` in the first empty slot from its position
-    fn place(&mut self, slot: Slot) {
-        let mask = self.mask();
-        let mut pos = (slot.hash >> self.shift) as usize;
-        while self.slots[pos].hash != EMPTY {
-            pos = (pos + 1) & mask;
-        }
-        self.slots[pos] = slot;
     }
 
     /// Returns the distinct values in dictionary order
@@ -997,7 +919,7 @@ impl ByteArrayInterner {
     }
 
     fn estimated_memory_size(&self) -> usize {
-        self.page.capacity() + self.slots.capacity() * std::mem::size_of::<Slot>()
+        self.page.capacity() + self.map.allocation_size()
     }
 }
 
