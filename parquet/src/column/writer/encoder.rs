@@ -226,7 +226,7 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             if let Some(accumulator) = self.geo_stats_accumulator.as_deref_mut() {
                 update_geo_stats_accumulator(accumulator, slice.iter());
             } else if let Some((min, max, nan_count)) =
-                get_min_max(self.descr.get_basic_info(), slice.iter())
+                T::T::min_max(self.descr.get_basic_info(), slice)
             {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
@@ -461,7 +461,10 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 // value which then becomes the new min/max. After this, only non-NaN values are
 // evaluated. If all values are NaN, then the min/max NaNs as determined by
 // IEEE 754 total order are returned.
-fn get_min_max<'a, T, I>(basic_type_info: &BasicTypeInfo, mut iter: I) -> Option<(T, T, u64)>
+pub(crate) fn get_min_max<'a, T, I>(
+    basic_type_info: &BasicTypeInfo,
+    mut iter: I,
+) -> Option<(T, T, u64)>
 where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,

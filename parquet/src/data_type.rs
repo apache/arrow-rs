@@ -698,7 +698,10 @@ pub(crate) mod private {
 
     use super::{ParquetError, Result, SliceAsBytes};
     use crate::basic::Type;
+    use crate::column::writer::encoder::get_min_max;
+    use crate::column::writer::min_max::{min_max_f32, min_max_f64, min_max_i32, min_max_i64};
     use crate::file::metadata::HeapSize;
+    use crate::schema::types::BasicTypeInfo;
 
     /// Sealed trait to start to remove specialisation from implementations
     ///
@@ -768,6 +771,12 @@ pub(crate) mod private {
                 .map(|x| x as u64)
         }
 
+        /// Return the min, max and NaN count of `values` for column statistics,
+        /// or `None` if `values` is empty
+        fn min_max(basic_type_info: &BasicTypeInfo, values: &[Self]) -> Option<(Self, Self, u64)> {
+            get_min_max(basic_type_info, values.iter())
+        }
+
         /// Return the value as an Any to allow for downcasts without transmutation
         fn as_any(&self) -> &dyn std::any::Any;
 
@@ -835,7 +844,7 @@ pub(crate) mod private {
     }
 
     macro_rules! impl_from_raw {
-        ($ty: ty, $physical_ty: expr, $self: ident => $as_i64: block) => {
+        ($ty: ty, $physical_ty: expr, $self: ident => $as_i64: block, ($info: ident, $values: ident) => $min_max: block) => {
             impl ParquetValueType for $ty {
                 const PHYSICAL_TYPE: Type = $physical_ty;
 
@@ -908,6 +917,11 @@ pub(crate) mod private {
                 }
 
                 #[inline]
+                fn min_max($info: &BasicTypeInfo, $values: &[Self]) -> Option<(Self, Self, u64)> {
+                    $min_max
+                }
+
+                #[inline]
                 fn as_any(&self) -> &dyn std::any::Any {
                     self
                 }
@@ -920,10 +934,23 @@ pub(crate) mod private {
         }
     }
 
-    impl_from_raw!(i32, Type::INT32, self => { Ok(*self as i64) });
-    impl_from_raw!(i64, Type::INT64, self => { Ok(*self) });
-    impl_from_raw!(f32, Type::FLOAT, self => { Err(general_err!("Type cannot be converted to i64")) });
-    impl_from_raw!(f64, Type::DOUBLE, self => { Err(general_err!("Type cannot be converted to i64")) });
+    impl_from_raw!(
+        i32, Type::INT32, self => { Ok(*self as i64) },
+        (info, values) => { min_max_i32(info, values).map(|(min, max)| (min, max, 0)) }
+    );
+    impl_from_raw!(
+        i64, Type::INT64, self => { Ok(*self) },
+        (info, values) => { min_max_i64(info, values).map(|(min, max)| (min, max, 0)) }
+    );
+    // The float kernels return `None` for all NaN input, which the scalar path handles
+    impl_from_raw!(
+        f32, Type::FLOAT, self => { Err(general_err!("Type cannot be converted to i64")) },
+        (info, values) => { min_max_f32(values).or_else(|| get_min_max(info, values.iter())) }
+    );
+    impl_from_raw!(
+        f64, Type::DOUBLE, self => { Err(general_err!("Type cannot be converted to i64")) },
+        (info, values) => { min_max_f64(values).or_else(|| get_min_max(info, values.iter())) }
+    );
 
     impl ParquetValueType for super::Int96 {
         const PHYSICAL_TYPE: Type = Type::INT96;

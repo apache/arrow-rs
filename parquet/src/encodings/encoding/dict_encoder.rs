@@ -148,10 +148,6 @@ impl<T: DataType> DictEncoder<T> {
         Ok(encoder.consume().into())
     }
 
-    fn put_one(&mut self, value: &T::T) {
-        self.indices.push(self.interner.intern(value));
-    }
-
     #[inline]
     fn bit_width(&self) -> u8 {
         num_required_bits(self.num_entries().saturating_sub(1) as u64)
@@ -160,10 +156,7 @@ impl<T: DataType> DictEncoder<T> {
 
 impl<T: DataType> Encoder<T> for DictEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
-        self.indices.reserve(values.len());
-        for i in values {
-            self.put_one(i)
-        }
+        self.interner.intern_batch(values, &mut self.indices);
         Ok(())
     }
 

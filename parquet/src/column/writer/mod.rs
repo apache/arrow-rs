@@ -53,6 +53,7 @@ use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 
 mod byte_budget_chunker;
 pub(crate) mod encoder;
+pub(crate) mod min_max;
 
 use byte_budget_chunker::{ByteBudgetChunker, SubBatchStrategy};
 
@@ -1125,7 +1126,13 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         match value_indices {
             Some(indices) => {
                 let indices = &indices[values_offset..values_offset + values_to_write];
-                self.encoder.write_gather(values, indices)?;
+                // A mini-batch without nulls has a contiguous range of indices,
+                // which the encoder can take as a range instead of gathering
+                // each value through its index
+                match contiguous_range(indices) {
+                    Some(range) => self.encoder.write(values, range.start, range.len())?,
+                    None => self.encoder.write_gather(values, indices)?,
+                }
             }
             None => self.encoder.write(values, values_offset, values_to_write)?,
         }
@@ -1845,6 +1852,16 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 }
 
+/// Returns the range `indices` covers if it is contiguous
+///
+/// `indices` must be strictly increasing, as the positions of the non-null
+/// values are, so they are contiguous exactly when they span their length.
+fn contiguous_range(indices: &[usize]) -> Option<std::ops::Range<usize>> {
+    debug_assert!(indices.windows(2).all(|w| w[0] < w[1]));
+    let (first, last) = (*indices.first()?, *indices.last()?);
+    (last - first + 1 == indices.len()).then_some(first..last + 1)
+}
+
 fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut Option<T>) {
     match min {
         None => *min = Some(val.clone()),
@@ -2127,6 +2144,15 @@ mod tests {
     use crate::util::test_common::rand_gen::random_numbers_range;
 
     use super::*;
+
+    #[test]
+    fn test_contiguous_range() {
+        assert_eq!(contiguous_range(&[]), None);
+        assert_eq!(contiguous_range(&[7]), Some(7..8));
+        assert_eq!(contiguous_range(&[3, 4, 5]), Some(3..6));
+        assert_eq!(contiguous_range(&[3, 4, 6]), None);
+        assert_eq!(contiguous_range(&[0, 2]), None);
+    }
 
     #[test]
     fn test_column_writer_inconsistent_def_rep_length() {
