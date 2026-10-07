@@ -270,6 +270,11 @@ required-features = ["arrow", "async"]
 harness = false
 
 [[bench]]
+name = "arrow_reader_string_encoding"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "arrow_reader_predicate_fusion"
 required-features = ["arrow", "async", "snap"]
 harness = false
