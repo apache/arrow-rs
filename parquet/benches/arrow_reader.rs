@@ -986,6 +986,28 @@ fn bench_array_reader_skip(mut array_reader: Box<dyn ArrayReader>) -> usize {
     total_count
 }
 
+/// Alternately skips and reads `run_len` records, as when reading a row
+/// selection made of short runs, and emits a batch every `BATCH_SIZE` records read
+fn bench_array_reader_runs(mut array_reader: Box<dyn ArrayReader>, run_len: usize) -> usize {
+    let mut total_count = 0;
+    let mut batch_count = 0;
+    loop {
+        let skipped = array_reader.skip_records(run_len).unwrap();
+        let read = array_reader.read_records(run_len).unwrap();
+        total_count += skipped + read;
+        batch_count += read;
+        if batch_count >= BATCH_SIZE {
+            array_reader.consume_batch().unwrap();
+            batch_count = 0;
+        }
+        if read < run_len {
+            break;
+        }
+    }
+    array_reader.consume_batch().unwrap();
+    total_count
+}
+
 fn create_primitive_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
@@ -2654,6 +2676,17 @@ fn add_benches(c: &mut Criterion) {
         });
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
+    let list_data = build_int32_list_page_iterator(int32_list_desc.clone(), 0.0, 0);
+    for run_len in [1, 32] {
+        let label = format!("no NULLs, skip and read in runs of {run_len}");
+        group.bench_function(label, |b| {
+            b.iter(|| {
+                let reader = create_int32_list_reader(list_data.clone(), int32_list_desc.clone());
+                count = bench_array_reader_runs(reader, run_len);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        });
+    }
     group.finish();
 
     let mut group = c.benchmark_group("arrow_array_reader/ListArray/Fixed32List");
