@@ -21,7 +21,7 @@ use arrow::array::{
 use arrow::buffer::Buffer;
 use arrow_schema::{DataType, Field, FieldRef, Fields};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use parquet_variant::{
     EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantBuilderExt, VariantDecimal8,
     VariantPath, VariantPathElement,
@@ -41,58 +41,6 @@ use std::sync::Arc;
 const VARIANT_GET_UNSHREDDED_OBJECT_ROWS: usize = 262_144;
 const VARIANT_ARRAY_BUILD_ROWS: usize = 262_144;
 const SHRED_VARIANT_OBJECT_ROWS: usize = 8_192;
-
-fn benchmark_json_to_variant_inputs(c: &mut Criterion) {
-    let large_array = format!(
-        "[{}]",
-        (0..1024)
-            .map(|number| number.to_string())
-            .collect::<Vec<_>>()
-            .join(",")
-    );
-    let large_string = format!(r#"{{"payload":"{}","id":42}}"#, "x".repeat(8192));
-    let duplicate_large = format!(r#"{{"a":"{}","a":0}}"#, "x".repeat(100_000));
-    let inputs = [
-        (
-            "integers",
-            r#"{"id":123456789,"values":[1,2,3,4,5],"active":true}"#,
-        ),
-        (
-            "decimals",
-            r#"{"small":1.23,"medium":999999999.0,"large":0.9999999999999999999}"#,
-        ),
-        (
-            "strings",
-            r#"{"first":"alpha","second":"beta","third":"gamma"}"#,
-        ),
-        (
-            "escaped_strings",
-            r#"{"line":"one\ntwo","quote":"\"value\"","unicode":"\u2764"}"#,
-        ),
-        (
-            "nested",
-            r#"{"outer":[{"id":1,"values":[1.25,2.50]},{"id":2,"values":[3.75,4.00]}]}"#,
-        ),
-        ("large_array_1024", large_array.as_str()),
-        ("large_string_8k", large_string.as_str()),
-        ("duplicate_key_100k", duplicate_large.as_str()),
-    ];
-
-    let mut group = c.benchmark_group("json_to_variant_inputs");
-    for (name, json) in inputs {
-        let rows = (1_048_576 / json.len()).clamp(1, 8_192);
-        let input: ArrayRef = Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
-            json, rows,
-        )));
-        group.throughput(Throughput::Bytes(
-            u64::try_from(rows * json.len()).expect("input size fits in u64"),
-        ));
-        group.bench_with_input(BenchmarkId::from_parameter(name), &input, |b, input| {
-            b.iter(|| std::hint::black_box(json_to_variant(std::hint::black_box(input)).unwrap()));
-        });
-    }
-    group.finish();
-}
 
 fn variant_array_builder_build_bench(c: &mut Criterion) {
     c.bench_function("variant_array_builder_build_262k_small_values", |b| {
@@ -215,6 +163,42 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
             let _ = json_to_variant(&array_ref).unwrap();
         });
     });
+
+    let large_array = format!(
+        "[{}]",
+        (0..1024)
+            .map(|number| number.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let large_string = format!(r#"{{"payload":"{}","id":42}}"#, "x".repeat(8192));
+    let duplicate_large = format!(r#"{{"a":"{}","a":0}}"#, "x".repeat(100_000));
+    for (name, json) in [
+        ("int32", r#"{"id":123456789}"#),
+        (
+            "fixed_point_decimals",
+            r#"{"small":1.23,"medium":999999999.0,"large":0.9999999999999999999}"#,
+        ),
+        (
+            "escaped_strings",
+            r#"{"line":"one\ntwo","quote":"\"value\"","unicode":"\u2764"}"#,
+        ),
+        ("large_array_1024", large_array.as_str()),
+        ("large_string_8k", large_string.as_str()),
+        ("duplicate_key_100k", duplicate_large.as_str()),
+    ] {
+        let rows = (1_048_576 / json.len()).clamp(1, 8_000);
+        let array_ref: ArrayRef = Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+            json, rows,
+        )));
+        let id = format!(
+            "batch_json_string_to_variant {name} ({} bytes per document, {rows} rows)",
+            json.len()
+        );
+        c.bench_function(&id, |b| {
+            b.iter(|| std::hint::black_box(json_to_variant(&array_ref).unwrap()));
+        });
+    }
 }
 
 pub fn variant_get_bench(c: &mut Criterion) {
@@ -582,7 +566,6 @@ criterion_group!(
     shred_variant_partial_object_bench,
     shred_variant_unmatched_object_bench,
     variant_array_builder_build_bench,
-    benchmark_json_to_variant_inputs,
     benchmark_batch_json_string_to_variant,
     variant_get_utf8_from_unshredded_string_bench,
     variant_get_binary_from_unshredded_binary_bench,
