@@ -404,15 +404,6 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// column index information
     fn skip_next_page(&mut self) -> Result<()>;
 
-    /// Decodes and returns a dictionary page this reader has previously
-    /// skipped past, if any.
-    ///
-    /// [`Self::skip_next_page`] may skip a dictionary page without decoding
-    /// it, since skipping rows never needs dictionary contents. If decoding
-    /// later reaches a dictionary-encoded data page, the reader is asked for
-    /// the dictionary through this method, which pays the deferred
-    /// decompression exactly once. A chunk skipped end to end never pays it.
-    ///
     /// Returns whether skipped dictionary pages can later be recovered with
     /// [`Self::take_deferred_dictionary`].
     ///
@@ -423,7 +414,14 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
         false
     }
 
-    /// Returns and removes a previously skipped dictionary page, if any.
+    /// Decodes and returns a dictionary page this reader has previously
+    /// skipped past, if any, removing it from the reader.
+    ///
+    /// [`Self::skip_next_page`] may skip a dictionary page without decoding
+    /// it, since skipping rows never needs dictionary contents. If decoding
+    /// later reaches a dictionary-encoded data page, the reader is asked for
+    /// the dictionary through this method, which pays the deferred
+    /// decompression exactly once. A chunk skipped end to end never pays it.
     ///
     /// The default implementation returns `Ok(None)`, meaning the reader
     /// never defers.
