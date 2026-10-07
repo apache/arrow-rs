@@ -2042,6 +2042,15 @@ impl<'a> StatisticsConverter<'a> {
         let mut nulls = NullBufferBuilder::new(0);
         for rg_idx in row_group_indices {
             let Some(offset_index) = page_index.offset_index(*rg_idx, parquet_index) else {
+                // A partial page index may contain the ColumnIndex but not the OffsetIndex.
+                // Preserve page-wise alignment with data_page_{mins,maxes,null_counts} by
+                // emitting one null row count for every page known from the ColumnIndex.
+                let num_pages = page_index
+                    .column_index(*rg_idx, parquet_index)
+                    .map(|index| index.num_pages() as usize)
+                    .unwrap_or(0);
+                row_counts.resize(row_counts.len() + num_pages, 0);
+                nulls.append_n_nulls(num_pages);
                 continue;
             };
             let page_locations = offset_index.page_locations();

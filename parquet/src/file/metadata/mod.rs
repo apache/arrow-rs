@@ -49,6 +49,9 @@
 //! Please see [`external_metadata.rs`]
 //!
 //! [`external_metadata.rs`]: https://github.com/apache/arrow-rs/tree/master/parquet/examples/external_metadata.rs
+//!
+#[cfg(feature = "arrow")]
+mod dictionary;
 mod footer_tail;
 mod memory;
 mod options;
@@ -92,7 +95,7 @@ use crate::{
 pub use footer_tail::FooterTail;
 pub use options::{ParquetMetaDataOptions, ParquetStatisticsPolicy};
 pub use push_decoder::ParquetMetaDataPushDecoder;
-pub use reader::{PageIndexPolicy, ParquetMetaDataReader};
+pub use reader::{ColumnChunkMask, PageIndexPolicy, ParquetMetaDataReader};
 use std::io::Write;
 use std::ops::Range;
 use std::sync::Arc;
