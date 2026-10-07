@@ -237,16 +237,6 @@ impl ColumnChunkMask {
         self.row_groups.is_none() && self.columns.is_none()
     }
 
-    /// Returns selected row groups, or `None` when all row groups are selected.
-    pub fn selected_row_groups(&self) -> Option<&[u32]> {
-        self.row_groups.as_deref()
-    }
-
-    /// Returns selected leaf columns, or `None` when all columns are selected.
-    pub fn selected_columns(&self) -> Option<&[u32]> {
-        self.columns.as_deref()
-    }
-
     pub(crate) fn selected_row_groups_shared(&self) -> Option<Arc<[u32]>> {
         self.row_groups.clone()
     }
