@@ -2132,7 +2132,6 @@ pub(crate) mod tests {
         w.write_field_begin(FieldType::List, 4, 3).unwrap();
         w.write_list_begin(ElementType::Struct, 1024).unwrap();
         w.write_struct_end().unwrap();
-        drop(w);
 
         let err = parquet_metadata_from_bytes(&buf, None)
             .expect_err("over-declared row-group count must be rejected")
