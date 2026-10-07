@@ -574,15 +574,11 @@ impl i256 {
 
     /// Performs wrapping division and remainder, returning `(quotient, remainder)`
     ///
-    /// This computes both results with one division, while calling
-    /// [`Self::wrapping_div`] and [`Self::wrapping_rem`] divides twice.
-    ///
     /// # Panics
     ///
     /// Panics if `other` is zero
     ///
     /// # Example
-    ///
     /// ```
     /// # use arrow_buffer::i256;
     /// let (q, r) = i256::from_i128(-7).wrapping_div_rem(i256::from_i128(2));
@@ -605,7 +601,6 @@ impl i256 {
     /// Returns `None` if `other` is zero or the quotient overflows
     ///
     /// # Example
-    ///
     /// ```
     /// # use arrow_buffer::i256;
     /// let qr = i256::from_i128(-7).checked_div_rem(i256::from_i128(2));
