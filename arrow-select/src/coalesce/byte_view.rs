@@ -487,6 +487,85 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         Ok(())
     }
 
+    fn copy_rows_by_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &[u32],
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        self.ensure_capacity();
+        let typed = source.as_byte_view::<B>();
+
+        if let Some(src_nulls) = typed.nulls() {
+            for &idx in indices {
+                self.nulls.append(src_nulls.is_valid(idx as usize));
+            }
+        } else {
+            self.nulls.append_n_non_nulls(indices.len());
+        }
+
+        let src_views = typed.views();
+        let src_buffers = typed.data_buffers();
+
+        // Inline-only fast path: no data buffers to track, just scatter views.
+        if src_buffers.is_empty() {
+            let current_len = self.views.len();
+            self.views.reserve(indices.len());
+            unsafe {
+                let base = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
+                let src = src_views.as_ptr();
+                for (i, &idx) in indices.iter().enumerate() {
+                    base.add(i).write(*src.add(idx as usize));
+                }
+                self.views.set_len(current_len + indices.len());
+            }
+            return Ok(());
+        }
+
+        // Buffer-reuse path: append source buffers once, remap each view's buffer_index.
+        if let Some(buffer) = self.current.take() {
+            let buffer: Buffer = buffer.into();
+            self.completed_buffers_size += buffer.capacity();
+            self.completed.push(buffer);
+        }
+
+        if self.size_of_completed_buffers_from_current_source == 0 {
+            let buffers_size = src_buffers.iter().map(|b| b.capacity()).sum::<usize>();
+            self.size_of_completed_buffers_from_current_source += buffers_size;
+        }
+
+        let starting_buffer: u32 = self
+            .completed
+            .len()
+            .try_into()
+            .expect("too many buffers");
+        self.completed.extend_from_slice(src_buffers);
+
+        self.views.reserve(indices.len());
+        if starting_buffer == 0 {
+            // Views already reference buffer indices 0..src_buffers.len() — copy verbatim.
+            for &idx in indices {
+                self.views
+                    .push(unsafe { *src_views.get_unchecked(idx as usize) });
+            }
+        } else {
+            // For non-inline views (length > MAX_INLINE_VIEW_LEN) we need to bump
+            // buffer_index (bits [64, 96)) by `starting_buffer`. Avoid the ByteView
+            // round-trip: do it with raw u128 arithmetic.
+            let bump = (starting_buffer as u128) << 64;
+            for &idx in indices {
+                let raw = unsafe { *src_views.get_unchecked(idx as usize) };
+                // Low 32 bits are the length.
+                let len = raw as u32;
+                let adjusted = if len > MAX_INLINE_VIEW_LEN { raw + bump } else { raw };
+                self.views.push(adjusted);
+            }
+        }
+        Ok(())
+    }
+
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         self.finish_current();
         assert!(self.current.is_none());
