@@ -39,11 +39,11 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 /// Lengths chosen to exercise both the inlined Utf8View path (<= 12 bytes) and
 /// the out-of-line buffer path (> 12 bytes).
-const STRING_LENS: &[usize] = &[8, 16, 24];
+const STRING_LENS: &[usize] = &[8, 24];
 const SEED: u64 = 0xC0FFEE_u64;
-const CARDINALITIES: &[usize] = &[10, 50, 100, 500, 1000, 8192, 16384];
-const ROW_COUNTS: &[usize] = &[1_000_000, 2_000_000, 5_000_000];
-const NULL_FRACTIONS: &[f64] = &[0.0, 0.1, 0.5];
+const CARDINALITIES: &[usize] = &[10, 100, 1000, 20_000];
+const ROW_COUNTS: &[usize] = &[1_000_000, 5_000_000];
+const NULL_FRACTIONS: &[f64] = &[0.0, 0.5];
 const NULL_PROB_DENOM: u32 = 1_000_000;
 const BATCH_SIZE: usize = 8192;
 
@@ -118,12 +118,7 @@ fn criterion_benchmark(criterion: &mut Criterion) {
         Box::new(DataType::Int32),
         Box::new(DataType::Utf8),
     ));
-    let utf8_schema = override_schema(DataType::Utf8);
     let utf8_view_schema = override_schema(DataType::Utf8View);
-    let dict_view_schema = override_schema(DataType::Dictionary(
-        Box::new(DataType::Int32),
-        Box::new(DataType::Utf8View),
-    ));
 
     for &num_rows in ROW_COUNTS {
         for &cardinality in CARDINALITIES {
@@ -152,31 +147,11 @@ fn criterion_benchmark(criterion: &mut Criterion) {
                         },
                     );
                     group.bench_with_input(
-                        BenchmarkId::new("Utf8", &param),
-                        &param,
-                        |bencher, _| {
-                            bencher.iter(|| {
-                                let rows = read_as(&file_bytes, utf8_schema.clone());
-                                assert_eq!(rows, num_rows);
-                            });
-                        },
-                    );
-                    group.bench_with_input(
                         BenchmarkId::new("Utf8View", &param),
                         &param,
                         |bencher, _| {
                             bencher.iter(|| {
                                 let rows = read_as(&file_bytes, utf8_view_schema.clone());
-                                assert_eq!(rows, num_rows);
-                            });
-                        },
-                    );
-                    group.bench_with_input(
-                        BenchmarkId::new("Dictionary(Int32,Utf8View)", &param),
-                        &param,
-                        |bencher, _| {
-                            bencher.iter(|| {
-                                let rows = read_as(&file_bytes, dict_view_schema.clone());
                                 assert_eq!(rows, num_rows);
                             });
                         },
