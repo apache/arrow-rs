@@ -534,16 +534,14 @@ impl i256 {
 
     /// Performs wrapping division
     ///
+    /// Use [`Self::wrapping_div_rem`] if you also need the remainder.
+    ///
     /// # Panics
     ///
     /// Panics if `other` is zero
     #[inline]
     pub fn wrapping_div(self, other: Self) -> Self {
-        match self.div_rem(other) {
-            Ok((v, _)) => v,
-            Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
-            Err(_) => Self::MIN,
-        }
+        self.wrapping_div_rem(other).0
     }
 
     /// Performs checked division
@@ -554,16 +552,14 @@ impl i256 {
 
     /// Performs wrapping remainder
     ///
+    /// Use [`Self::wrapping_div_rem`] if you also need the quotient.
+    ///
     /// # Panics
     ///
     /// Panics if `other` is zero
     #[inline]
     pub fn wrapping_rem(self, other: Self) -> Self {
-        match self.div_rem(other) {
-            Ok((_, v)) => v,
-            Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
-            Err(_) => Self::ZERO,
-        }
+        self.wrapping_div_rem(other).1
     }
 
     /// Performs checked remainder
@@ -573,6 +569,12 @@ impl i256 {
     }
 
     /// Performs wrapping division and remainder, returning `(quotient, remainder)`
+    ///
+    /// This computes both results with one division, while calling
+    /// [`Self::wrapping_div`] and [`Self::wrapping_rem`] divides twice.
+    ///
+    /// The quotient is truncated toward zero, and the remainder has the sign of
+    /// `self`. `i256::MIN / -1` wraps to `(i256::MIN, 0)`.
     ///
     /// # Panics
     ///
@@ -592,13 +594,20 @@ impl i256 {
         match self.div_rem(other) {
             Ok(v) => v,
             Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
-            Err(_) => (Self::MIN, Self::ZERO),
+            Err(DivRemError::DivideOverflow) => (Self::MIN, Self::ZERO),
         }
     }
 
     /// Performs checked division and remainder, returning `(quotient, remainder)`
     ///
-    /// Returns `None` if `other` is zero or the quotient overflows
+    /// This computes both results with one division, while calling
+    /// [`Self::checked_div`] and [`Self::checked_rem`] divides twice.
+    ///
+    /// The quotient is truncated toward zero, and the remainder has the sign of
+    /// `self`.
+    ///
+    /// Returns `None` if `other` is zero or the quotient overflows, which happens
+    /// only for `i256::MIN / -1`
     ///
     /// # Example
     /// ```
@@ -1496,50 +1505,8 @@ mod tests {
             ),
         }
 
-        // Division
-        if ir != i256::ZERO {
-            let actual = il.wrapping_div(ir);
-            let expected = bl.clone() / br.clone();
-            let checked = il.checked_div(ir);
-
-            if ir == i256::MINUS_ONE && il == i256::MIN {
-                // BigInt produces an integer over i256::MAX
-                assert_eq!(actual, i256::MIN);
-                assert!(checked.is_none());
-            } else {
-                assert_eq!(actual.to_string(), expected.to_string());
-                assert_eq!(checked.unwrap().to_string(), expected.to_string());
-            }
-        } else {
-            // `wrapping_div` panics on division by zero
-            assert!(il.checked_div(ir).is_none());
-        }
-
-        // Remainder
-        if ir != i256::ZERO {
-            let actual = il.wrapping_rem(ir);
-            let expected = bl.clone() % br.clone();
-            let checked = il.checked_rem(ir);
-
-            assert_eq!(actual.to_string(), expected.to_string(), "{il} % {ir}");
-
-            if ir == i256::MINUS_ONE && il == i256::MIN {
-                assert!(checked.is_none());
-            } else {
-                assert_eq!(checked.unwrap().to_string(), expected.to_string());
-            }
-        } else {
-            // `wrapping_rem` panics on division by zero
-            assert!(il.checked_rem(ir).is_none());
-        }
-
-        // Division with remainder
-        if ir != i256::ZERO {
-            test_div_rem(il, ir);
-        } else {
-            // `wrapping_div_rem` panics on division by zero
-            assert!(il.checked_div_rem(ir).is_none());
-        }
+        // Division and remainder
+        test_div_rem(il, ir);
 
         // Exponentiation
         for exp in [0, 1, 2, 3, 8, 100] {
@@ -1672,6 +1639,14 @@ mod tests {
     }
 
     fn test_div_rem(n: i256, d: i256) {
+        if d == i256::ZERO {
+            // The wrapping methods panic on division by zero
+            assert_eq!(n.checked_div(d), None);
+            assert_eq!(n.checked_rem(d), None);
+            assert_eq!(n.checked_div_rem(d), None);
+            return;
+        }
+
         let bn = BigInt::from_signed_bytes_le(&n.to_le_bytes());
         let bd = BigInt::from_signed_bytes_le(&d.to_le_bytes());
 
@@ -1679,7 +1654,11 @@ mod tests {
         let (q, overflow) = i256::from_bigint_with_overflow(bn.clone() / bd.clone());
         let (r, _) = i256::from_bigint_with_overflow(bn % bd);
 
+        assert_eq!(n.wrapping_div(d), q, "{n} / {d}");
+        assert_eq!(n.wrapping_rem(d), r, "{n} % {d}");
         assert_eq!(n.wrapping_div_rem(d), (q, r), "{n} / {d}");
+        assert_eq!(n.checked_div(d), (!overflow).then_some(q), "{n} / {d}");
+        assert_eq!(n.checked_rem(d), (!overflow).then_some(r), "{n} % {d}");
         assert_eq!(
             n.checked_div_rem(d),
             (!overflow).then_some((q, r)),
@@ -1694,7 +1673,6 @@ mod tests {
             i256::ZERO,
             i256::ONE,
             i256::MIN,
-            i256::MIN + i256::ONE,
             i256::MAX,
             i256::from_i128(i128::MIN),
             i256::from_i128(i128::MAX),
@@ -1710,9 +1688,6 @@ mod tests {
         for k in 0..=76 {
             let p = i256::from_i128(10).wrapping_pow(k);
             for d in [p - i256::ONE, p, p + i256::ONE] {
-                if d == i256::ZERO {
-                    continue;
-                }
                 for n in dividends
                     .into_iter()
                     .chain([p - i256::ONE, p, p + i256::ONE])
