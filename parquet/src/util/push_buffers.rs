@@ -217,7 +217,12 @@ impl PushBuffers {
         self
     }
 
-    /// Return the total of all buffered ranges
+    /// Return the total length of all buffered ranges.
+    ///
+    /// This counts the bytes that the decoder can still read, not the
+    /// allocated memory. [`Self::release_ranges`] keeps the remaining parts of
+    /// a buffer as slices of the pushed [`Bytes`], and the allocation of a
+    /// pushed [`Bytes`] is freed only after all of its parts are released.
     #[cfg(feature = "arrow")]
     pub(crate) fn buffered_bytes(&self) -> u64 {
         self.buffered_bytes
@@ -242,7 +247,11 @@ impl PushBuffers {
         }
         self.ranges = ranges;
         self.buffers = buffers;
-        self.buffered_bytes = self.ranges.iter().map(|r| r.end - r.start).sum();
+        self.buffered_bytes = self
+            .ranges
+            .iter()
+            .map(|r| r.end.saturating_sub(r.start))
+            .sum();
         self.update_max_len();
     }
 
@@ -256,7 +265,7 @@ impl PushBuffers {
         self.max_len = self
             .ranges
             .iter()
-            .map(|r| r.end - r.start)
+            .map(|r| r.end.saturating_sub(r.start))
             .max()
             .unwrap_or(0);
     }
@@ -264,13 +273,14 @@ impl PushBuffers {
     /// Remove all buffered bytes in `ranges`.
     ///
     /// A buffer that overlaps a range is trimmed or split, and the parts
-    /// outside the range are kept. The kept parts are zero-copy slices. Thus,
-    /// the allocator frees the memory of a pushed [`Bytes`] only after all of
-    /// its parts are removed.
+    /// outside the range are kept. The kept parts are zero-copy slices, which
+    /// record the bytes that the decoder can still read. Thus, the allocator
+    /// frees the memory of a pushed [`Bytes`] only after all of its parts are
+    /// removed.
     ///
-    /// If the buffers are sorted by start, they stay sorted. The order of
-    /// buffers with the same start is not specified. If no buffer overlaps
-    /// `ranges`, the buffers do not change.
+    /// The buffers stay sorted by start, which lookups require (see
+    /// [`Self::find`]). If no buffer overlaps `ranges`, the buffers do not
+    /// change.
     #[cfg(feature = "arrow")]
     pub(crate) fn release_ranges(&mut self, ranges: &[Range<u64>]) {
         let release = merge_ranges(ranges);
@@ -403,9 +413,13 @@ impl PushBuffers {
             self.ranges
         );
         for (range, buffer) in self.ranges.iter().zip(&self.buffers) {
-            assert_eq!(range.end - range.start, buffer.len() as u64);
+            assert_eq!(range.end.saturating_sub(range.start), buffer.len() as u64);
         }
-        let max_len = self.ranges.iter().map(|r| r.end - r.start).max();
+        let max_len = self
+            .ranges
+            .iter()
+            .map(|r| r.end.saturating_sub(r.start))
+            .max();
         assert_eq!(self.max_len, max_len.unwrap_or(0));
     }
 }
@@ -483,6 +497,14 @@ mod tests {
     #[cfg(feature = "arrow")]
     fn release(buffers: &mut PushBuffers, range: Range<u64>) {
         buffers.release_ranges(std::slice::from_ref(&range));
+        buffers.assert_invariants();
+    }
+
+    /// The buffered ranges and their data.
+    #[cfg(feature = "arrow")]
+    fn buffered_parts(buffers: &PushBuffers) -> Vec<(Range<u64>, Bytes)> {
+        let ranges = buffers.ranges.iter().cloned();
+        ranges.zip(buffers.buffers.iter().cloned()).collect()
     }
 
     #[test]
@@ -498,10 +520,9 @@ mod tests {
 
         release(&mut buffers, 90..95);
         release(&mut buffers, 10..20);
-        assert_eq!(buffers.ranges, vec![20..24, 0..10]);
+        assert_eq!(buffers.ranges, vec![0..10, 20..24]);
         assert_eq!(buffers.buffered_bytes(), 14);
 
-        // A release that overlaps a buffer sorts the buffers.
         release(&mut buffers, 22..24);
         assert_eq!(buffers.ranges, vec![0..10, 20..22]);
         assert_eq!(buffers.buffered_bytes(), 12);
@@ -558,7 +579,12 @@ mod tests {
             buffers.push_range(range, data).unwrap();
         }
         buffers.release_ranges(&[40..50, 10..15]);
-        assert_eq!(buffers.ranges, vec![0..10, 15..20, 15..30]);
+        buffers.assert_invariants();
+        assert_eq!(buffers.buffered_bytes(), 10 + 5 + 15);
+        assert!(buffers.has_range(&(0..10)));
+        assert!(buffers.has_range(&(15..30)));
+        assert!(!buffers.has_range(&(10..15)));
+        assert!(!buffers.has_range(&(40..50)));
     }
 
     #[test]
@@ -586,17 +612,22 @@ mod tests {
         assert_eq!(buffers.buffered_bytes(), 0);
     }
 
-    /// Parts of overlapping buffers stay sorted by start.
+    /// Lookups stay correct when the kept parts of overlapping buffers
+    /// interleave.
     #[test]
     #[cfg(feature = "arrow")]
-    fn retain_ranges_keeps_the_buffers_sorted() {
+    fn retain_ranges_with_overlapping_buffers() {
         let mut buffers = PushBuffers::new(100);
         for range in [0..100, 3..70] {
             let data = Bytes::from(vec![0u8; (range.end - range.start) as usize]);
             buffers.push_range(range, data).unwrap();
         }
         buffers.retain_ranges(&[0..5, 50..60]);
-        assert_eq!(buffers.ranges, vec![0..5, 3..5, 50..60, 50..60]);
+        buffers.assert_invariants();
+        assert_eq!(buffers.buffered_bytes(), 5 + 2 + 10 + 10);
+        assert!(buffers.has_range(&(0..5)));
+        assert!(buffers.has_range(&(50..60)));
+        assert!(!buffers.has_range(&(5..50)));
     }
 
     #[test]
@@ -761,7 +792,7 @@ mod tests {
     ) -> Vec<(Range<u64>, Bytes)> {
         let release = merge_ranges(release);
         let mut parts = vec![];
-        for (range, buffer) in buffers.iter() {
+        for (range, buffer) in &buffered_parts(buffers) {
             let mut start = range.start;
             let mut keep = |part: Range<u64>| {
                 let offset = |pos: u64| (pos - range.start) as usize;
@@ -838,27 +869,21 @@ mod tests {
                         start..start + rng.random_range(0..15u64)
                     })
                     .collect();
-                let overlaps = buffers.iter().any(|(range, _)| {
+                let overlaps = buffers.ranges.iter().any(|range| {
                     !range.is_empty()
                         && release
                             .iter()
                             .any(|r| !r.is_empty() && r.start < range.end && r.end > range.start)
                 });
-                let before: Vec<_> = buffers
-                    .iter()
-                    .map(|(r, b)| (r.clone(), b.clone()))
-                    .collect();
+                let before = buffered_parts(&buffers);
                 let expected = release_by_rebuild(&buffers, &release);
 
                 buffers.release_ranges(&release);
-                let actual: Vec<_> = buffers
-                    .iter()
-                    .map(|(r, b)| (r.clone(), b.clone()))
-                    .collect();
+                buffers.assert_invariants();
+                let actual = buffered_parts(&buffers);
                 if overlaps {
-                    // The buffers are sorted by start. The order of buffers
-                    // with the same start is not specified.
-                    assert!(actual.is_sorted_by_key(|(range, _)| range.start));
+                    // The order of buffers with the same start is not
+                    // specified.
                     let by_range = |mut parts: Vec<(Range<u64>, Bytes)>| {
                         parts.sort_by_key(|(range, _)| (range.start, range.end));
                         parts
