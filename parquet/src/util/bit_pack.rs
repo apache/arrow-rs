@@ -91,8 +91,143 @@ macro_rules! unpack {
 
 unpack!(unpack8, u8, 1, 8);
 unpack!(unpack16, u16, 2, 16);
-unpack!(unpack32, u32, 4, 32);
+
+mod unpack32 {
+    unpack_impl!(u32, 4, 32);
+}
+
+/// Unpack packed `input` into `output` with a bit width of `num_bits`
+///
+/// On x86_64 with AVX2, bit widths 1..=24 use a hand-vectorised path
+/// (gather + variable shift + mask). All other bit widths — and all
+/// non-x86_64 targets — fall through to the autovectorised scalar
+/// implementation. Bit widths 1..=24 cover dictionaries up to ~16M
+/// entries, which is the whole range we care about for low-cardinality
+/// parquet dictionary reads.
+pub fn unpack32(input: &[u8], output: &mut [u32; 32], num_bits: usize) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if (1..=24).contains(&num_bits) && x86::avx2_supported() {
+            // SAFETY: AVX2 availability confirmed above.
+            unsafe {
+                seq_macro::seq!(i in 1..=24 {
+                    if i == num_bits {
+                        return x86::unpack32_avx2::<i>(input, output);
+                    }
+                });
+            }
+        }
+    }
+
+    seq_macro::seq!(i in 0..=32 {
+        if i == num_bits {
+            return unpack32::unpack::<i>(input, output);
+        }
+    });
+    unreachable!("invalid num_bits {}", num_bits);
+}
+
 unpack!(unpack64, u64, 8, 64);
+
+#[cfg(target_arch = "x86_64")]
+mod x86 {
+    use std::arch::x86_64::*;
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    /// Cached result of `is_x86_feature_detected!("avx2")`.
+    /// 2 = unknown, 1 = yes, 0 = no.
+    static AVX2_CACHED: AtomicU8 = AtomicU8::new(2);
+
+    pub(super) fn avx2_supported() -> bool {
+        match AVX2_CACHED.load(Ordering::Relaxed) {
+            1 => true,
+            0 => false,
+            _ => {
+                let v = std::arch::is_x86_feature_detected!("avx2");
+                AVX2_CACHED.store(v as u8, Ordering::Relaxed);
+                v
+            }
+        }
+    }
+
+    /// AVX2 bit-unpack for 32 x u32 outputs at bit widths 1..=24.
+    ///
+    /// Treats `input` as a sequence of little-endian u32 words (matching the
+    /// scalar implementation). For each group of 8 output lanes we gather
+    /// the containing lo-word per lane, variable-shift right, and OR in the
+    /// hi-word only for lanes that straddle a 32-bit boundary. The hi gather
+    /// is masked so non-straddling lanes don't touch (potentially OOB) memory.
+    ///
+    /// NB: `vpgatherdd` has notoriously poor throughput on recent Intel
+    /// (Skylake-X onward even worse post-mitigations); benchmark before
+    /// shipping. May regress vs. the autovectorised scalar on some CPUs.
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn unpack32_avx2<const NUM_BITS: usize>(
+        input: &[u8],
+        output: &mut [u32; 32],
+    ) {
+        debug_assert!((1..=24).contains(&NUM_BITS));
+        debug_assert!(input.len() >= NUM_BITS * 4);
+
+        unsafe {
+            let mask_val: u32 = (1u32 << NUM_BITS) - 1;
+            let vmask = _mm256_set1_epi32(mask_val as i32);
+            let base = input.as_ptr() as *const i32;
+
+            for group in 0..4usize {
+                let mut offs = [0i32; 8];
+                let mut shs = [0i32; 8];
+                let mut hi_m = [0i32; 8];
+                let mut any_hi = false;
+                for lane in 0..8usize {
+                    let bit = (group * 8 + lane) * NUM_BITS;
+                    offs[lane] = (bit >> 5) as i32;
+                    let s = (bit & 31) as i32;
+                    shs[lane] = s;
+                    if (s as usize) + NUM_BITS > 32 {
+                        hi_m[lane] = i32::MIN;
+                        any_hi = true;
+                    }
+                }
+
+                let voffsets = _mm256_setr_epi32(
+                    offs[0], offs[1], offs[2], offs[3], offs[4], offs[5], offs[6], offs[7],
+                );
+                let vshifts = _mm256_setr_epi32(
+                    shs[0], shs[1], shs[2], shs[3], shs[4], shs[5], shs[6], shs[7],
+                );
+
+                let lo = _mm256_i32gather_epi32::<4>(base, voffsets);
+                let lo_shifted = _mm256_srlv_epi32(lo, vshifts);
+
+                let combined = if any_hi {
+                    let voffsets_hi = _mm256_add_epi32(voffsets, _mm256_set1_epi32(1));
+                    let shifts_hi = _mm256_sub_epi32(_mm256_set1_epi32(32), vshifts);
+                    let vhi_mask = _mm256_setr_epi32(
+                        hi_m[0], hi_m[1], hi_m[2], hi_m[3], hi_m[4], hi_m[5], hi_m[6],
+                        hi_m[7],
+                    );
+                    // Masked gather: non-straddling lanes skip the load (no fault
+                    // even if the offset is OOB per Intel manual).
+                    let hi = _mm256_mask_i32gather_epi32::<4>(
+                        _mm256_setzero_si256(),
+                        base,
+                        voffsets_hi,
+                        vhi_mask,
+                    );
+                    let hi_shifted = _mm256_sllv_epi32(hi, shifts_hi);
+                    _mm256_or_si256(lo_shifted, hi_shifted)
+                } else {
+                    lo_shifted
+                };
+
+                let masked = _mm256_and_si256(combined, vmask);
+                let out_ptr = output.as_mut_ptr().add(group * 8) as *mut __m256i;
+                _mm256_storeu_si256(out_ptr, masked);
+            }
+        }
+    }
+}
 
 /// Macro that generates a pack function taking the number of bits as a const generic
 macro_rules! pack_impl {
@@ -276,6 +411,35 @@ mod tests {
                 "num_bits = {i}"
             );
             assert!(output[8 * i..].iter().all(|&b| b == 0), "num_bits = {i}");
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn test_unpack32_avx2_matches_scalar() {
+        use crate::util::test_common::rand_gen::random_numbers;
+        if !std::arch::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        for num_bits in 1..=24 {
+            for _ in 0..16 {
+                let input: Vec<u8> = random_numbers(num_bits * 4);
+                let mut avx_out = [0u32; 32];
+                let mut scalar_out = [0u32; 32];
+                unsafe {
+                    seq_macro::seq!(i in 1..=24 {
+                        if i == num_bits {
+                            super::x86::unpack32_avx2::<i>(&input, &mut avx_out);
+                        }
+                    });
+                }
+                seq_macro::seq!(i in 0..=32 {
+                    if i == num_bits {
+                        super::unpack32::unpack::<i>(&input, &mut scalar_out);
+                    }
+                });
+                assert_eq!(avx_out, scalar_out, "mismatch at num_bits={num_bits}");
+            }
         }
     }
 
