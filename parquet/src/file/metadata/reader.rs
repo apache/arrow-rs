@@ -266,6 +266,23 @@ impl ColumnChunkMask {
         Self::axis_indices(self.columns.as_deref(), num_columns)
     }
 
+    /// Returns an iterator over the `(row_group_index, column_index)` coordinates selected by
+    /// this mask.
+    ///
+    /// Coordinates are returned in row-major order and are bounded by `num_row_groups` and
+    /// `num_columns`.
+    pub fn column_chunk_indices(
+        &self,
+        num_row_groups: usize,
+        num_columns: usize,
+    ) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.row_group_indices(num_row_groups)
+            .flat_map(move |row_group_idx| {
+                self.column_indices(num_columns)
+                    .map(move |column_idx| (row_group_idx, column_idx))
+            })
+    }
+
     fn axis_indices(axis: Option<&[u32]>, len: usize) -> AxisIndices<'_> {
         match axis {
             None => AxisIndices::All(0..len),
@@ -1456,6 +1473,17 @@ mod tests {
         let sparse = ColumnChunkMask::row_groups_and_columns([0, 2, 4], [1, 3, 5]);
         assert_eq!(sparse.row_group_indices(3).collect::<Vec<_>>(), [0, 2]);
         assert_eq!(sparse.column_indices(4).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(
+            sparse.column_chunk_indices(3, 4).collect::<Vec<_>>(),
+            [(0, 1), (0, 3), (2, 1), (2, 3)]
+        );
+        assert_eq!(
+            all.column_chunk_indices(2, 3).collect::<Vec<_>>(),
+            [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)]
+        );
+        assert_eq!(none.column_chunk_indices(3, 3).count(), 0);
+        assert_eq!(sparse.column_chunk_indices(0, 4).count(), 0);
+        assert_eq!(sparse.column_chunk_indices(3, 0).count(), 0);
     }
 }
 
