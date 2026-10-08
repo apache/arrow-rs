@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Incrementally caching page indexes with [`ParquetMetaDataPushDecoder`].
+//! Incrementally caching page indexes with [`ParquetMetaDataReader`].
 //!
 //! This example keeps footer metadata and decoded page indexes in separate caches. For each
 //! query it:
 //!
 //! 1. Finds the requested column chunks that are absent from the page-index cache
-//! 2. Uses [`ParquetMetaDataPushDecoder::try_decode_page_index`] to request and decode those misses
+//! 2. Uses [`ParquetMetaDataReader::read_page_index`] to request and decode those misses
 //! 3. Moves the decoded entries into the cache
 //! 4. Builds a query-specific [`PageIndex`] from shared cache entries
 //!
@@ -29,19 +29,17 @@
 //! freshness information in its keys.
 
 use std::collections::{BTreeSet, HashMap};
-use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
-use parquet::DecodeResult;
 use parquet::arrow::ArrowWriter;
-use parquet::errors::{ParquetError, Result};
+use parquet::errors::Result;
 use parquet::file::metadata::page_index::{PageIndex, PageIndexBuilder, PageIndexProvider};
 use parquet::file::metadata::{
-    ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder,
+    ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
 };
 use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
@@ -58,7 +56,7 @@ struct PageIndexCache {
 
 impl PageIndexCache {
     /// Returns a page index containing exactly the entries requested for one query, loading any
-    /// cache misses through `ParquetMetaDataPushDecoder` first.
+    /// cache misses through `ParquetMetaDataReader` first.
     fn page_index_for_query(
         &mut self,
         metadata: &ParquetMetaData,
@@ -90,16 +88,13 @@ impl PageIndexCache {
             // sets. Those additional entries are useful cache population and are retained below.
             let column_miss_mask = covering_mask(&missing_column_indexes);
             let offset_miss_mask = covering_mask(&missing_offset_indexes);
-            let mut decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(
-                file_bytes.len() as u64,
-                metadata.clone(),
-            )?
-            .with_column_index_policy(PageIndexPolicy::Optional)
-            .with_offset_index_policy(PageIndexPolicy::Optional)
-            .with_column_index_mask(column_miss_mask)
-            .with_offset_index_mask(offset_miss_mask);
+            let reader = ParquetMetaDataReader::new_with_metadata(metadata.clone())
+                .with_column_index_policy(PageIndexPolicy::Optional)
+                .with_offset_index_policy(PageIndexPolicy::Optional)
+                .with_column_index_mask(column_miss_mask)
+                .with_offset_index_mask(offset_miss_mask);
 
-            if let Some(page_index) = decode_page_index(&mut decoder, file_bytes)? {
+            if let Some(page_index) = reader.read_page_index(file_bytes)? {
                 let (column_indexes, offset_indexes) = page_index.into_index_entries();
                 self.column_indexes.extend(column_indexes);
                 self.offset_indexes.extend(offset_indexes);
@@ -141,55 +136,11 @@ fn covering_mask(chunks: &[ColumnChunk]) -> ColumnChunkMask {
     )
 }
 
-/// Drives the page-index-only decoder by supplying exactly the byte ranges it requests.
-fn decode_page_index(
-    decoder: &mut ParquetMetaDataPushDecoder,
-    file_bytes: &Bytes,
-) -> Result<Option<PageIndex>> {
-    loop {
-        match decoder.try_decode_page_index()? {
-            DecodeResult::Data(page_index) => return Ok(page_index),
-            DecodeResult::NeedsData(ranges) => {
-                let data = ranges
-                    .iter()
-                    .map(|range| bytes_for_range(file_bytes, range))
-                    .collect();
-                decoder.push_ranges(ranges, data)?;
-            }
-            DecodeResult::Finished => {
-                return Err(ParquetError::General(
-                    "page-index decoder finished without producing an index".to_string(),
-                ));
-            }
-        }
-    }
-}
-
 /// Reads and caches footer metadata without decoding page indexes.
 fn decode_footer(file_bytes: &Bytes) -> Result<ParquetMetaData> {
-    let mut decoder = ParquetMetaDataPushDecoder::try_new(file_bytes.len() as u64)?
-        .with_page_index_policy(PageIndexPolicy::Skip);
-    loop {
-        match decoder.try_decode()? {
-            DecodeResult::Data(metadata) => return Ok(metadata),
-            DecodeResult::NeedsData(ranges) => {
-                let data = ranges
-                    .iter()
-                    .map(|range| bytes_for_range(file_bytes, range))
-                    .collect();
-                decoder.push_ranges(ranges, data)?;
-            }
-            DecodeResult::Finished => {
-                return Err(ParquetError::General(
-                    "metadata decoder finished without producing metadata".to_string(),
-                ));
-            }
-        }
-    }
-}
-
-fn bytes_for_range(file_bytes: &Bytes, range: &Range<u64>) -> Bytes {
-    file_bytes.slice(range.start as usize..range.end as usize)
+    ParquetMetaDataReader::new()
+        .with_page_index_policy(PageIndexPolicy::Skip)
+        .parse_and_finish(file_bytes)
 }
 
 fn main() -> Result<()> {
