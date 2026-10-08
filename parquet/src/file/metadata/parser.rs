@@ -263,7 +263,7 @@ pub(crate) fn parse_page_index(
     let mut builder = PageIndexBuilder::default();
 
     if column_index_policy != PageIndexPolicy::Skip {
-        builder.allocate_column_indexes(num_row_groups, num_columns);
+        builder.try_allocate_column_indexes(num_row_groups, num_columns)?;
         parse_column_index(
             metadata,
             column_index_policy,
@@ -274,7 +274,7 @@ pub(crate) fn parse_page_index(
         )?;
     }
     if offset_index_policy != PageIndexPolicy::Skip {
-        builder.allocate_offset_indexes(num_row_groups, num_columns);
+        builder.try_allocate_offset_indexes(num_row_groups, num_columns)?;
         parse_offset_index(
             metadata,
             offset_index_policy,
@@ -312,7 +312,11 @@ fn parse_column_index(
                 let idx_bytes = get_index_bytes(bytes, start_offset, r)?;
                 let idx =
                     inner::parse_single_column_index(idx_bytes, metadata, col, rg_idx, col_idx)?;
-                page_index_builder.put_column_index(idx, rg_idx, col_idx);
+                if !page_index_builder.try_put_column_index(idx, rg_idx, col_idx) {
+                    return Err(general_err!(
+                        "column index coordinate out of bounds: row group {rg_idx}, column {col_idx}"
+                    ));
+                }
             }
         }
     }
@@ -339,7 +343,11 @@ fn parse_offset_index(
                 let idx_bytes = get_index_bytes(bytes, start_offset, r)?;
                 let idx =
                     inner::parse_single_offset_index(idx_bytes, metadata, col, rg_idx, col_idx)?;
-                page_index_builder.put_offset_index(idx, rg_idx, col_idx);
+                if !page_index_builder.try_put_offset_index(idx, rg_idx, col_idx) {
+                    return Err(general_err!(
+                        "offset index coordinate out of bounds: row group {rg_idx}, column {col_idx}"
+                    ));
+                }
             } else if offset_index_policy == PageIndexPolicy::Required {
                 return Err(general_err!("missing offset index"));
             }

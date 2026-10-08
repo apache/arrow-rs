@@ -1970,7 +1970,7 @@ mod tests {
             .await
             .unwrap();
 
-        let page_index = PageIndex::new(None, Some(vec![]));
+        let page_index = PageIndex::try_new(None, Some(vec![])).unwrap();
         metadata.set_page_index(Some(Arc::new(page_index)));
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
