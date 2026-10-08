@@ -18,6 +18,12 @@
 #[macro_use]
 extern crate criterion;
 
+// Use MIMALLOC_PURGE_DELAY=-1 to retain freed pages for reuse when comparing
+// benchmark execution orders. Set it before starting the benchmark executable.
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static BENCH_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use arrow_array::builder::StringDictionaryBuilder;
 use criterion::{Bencher, Criterion, Throughput};
 use parquet::arrow::ArrowWriter;
