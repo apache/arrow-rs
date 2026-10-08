@@ -505,33 +505,6 @@ fn bench_extend_metadata_builder(c: &mut Criterion) {
     });
 }
 
-fn bench_object_insert_unique_fields(c: &mut Criterion) {
-    let keys: Vec<_> = (0..128).map(|index| format!("field_{index}")).collect();
-    let mut group = c.benchmark_group("object_insert_unique_fields");
-    group.throughput(Throughput::Elements(keys.len() as u64));
-
-    for validate_unique_fields in [false, true] {
-        let name = if validate_unique_fields {
-            "validated"
-        } else {
-            "unvalidated"
-        };
-        group.bench_function(name, |b| {
-            b.iter(|| {
-                let mut builder =
-                    VariantBuilder::new().with_validate_unique_fields(validate_unique_fields);
-                let mut object = builder.new_object();
-                for key in &keys {
-                    object.insert(hint::black_box(key), hint::black_box(42_i32));
-                }
-                object.finish();
-                hint::black_box(builder.finish());
-            });
-        });
-    }
-    group.finish();
-}
-
 criterion_group!(
     benches,
     bench_object_field_names_reverse_order,
@@ -543,8 +516,7 @@ criterion_group!(
     bench_object_list_partially_same_schema,
     bench_validation_validated_vs_unvalidated,
     bench_iteration_performance,
-    bench_extend_metadata_builder,
-    bench_object_insert_unique_fields
+    bench_extend_metadata_builder
 );
 
 criterion_main!(benches);
