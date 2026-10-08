@@ -15,14 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Integer divisors for dividing many values by the same divisor
-
 macro_rules! unsigned_divisor {
     ($name:ident, $t:ty, $wide:ty) => {
         #[doc = concat!("A `", stringify!($t), "` divisor with a precomputed multiplier, for dividing many values by it")]
         ///
-        /// Division by a divisor that is only known at run time needs a divide instruction
-        /// or a library call. This type computes a multiplier once, with the method in
+        /// Division by a divisor that is only known at run time needs a divide instruction.
+        /// This type computes a multiplier once, with the method in
         /// figure 4.1 of [Granlund and Montgomery (1994)](https://gmplib.org/~tege/divcnst-pldi94.pdf),
         /// so that each division is a high multiply, two shifts, an addition and a subtraction.
         /// A divisor that is a power of two uses a shift and a mask instead.
@@ -138,8 +136,8 @@ macro_rules! signed_divisor {
             #[inline]
             pub fn div_rem(&self, n: $t) -> ($t, $t) {
                 let (q, r) = self.magnitude.div_rem(n.unsigned_abs());
-                // `(x ^ sign) - sign` negates `x` when `sign` is -1. Unlike an `if`, LLVM
-                // doesn't turn it into a select that it computes the division on both sides of.
+                // `(x ^ sign) - sign` negates `x` when `sign` is -1. Written with `if`, LLVM
+                // computes the division for both `n` and `-n` and selects one.
                 // `q as $t` wraps only for `MIN / 1` and `MIN / -1`, where it gives `MIN` like
                 // `wrapping_div`.
                 let n_sign = n >> (<$t>::BITS - 1);
