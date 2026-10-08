@@ -18,6 +18,8 @@
 use crate::errors::ParquetError;
 use crate::file::reader::{ChunkReader, Length};
 use bytes::Bytes;
+use std::cmp::Ordering;
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Range;
 
@@ -54,10 +56,13 @@ pub struct PushBuffers {
     file_len: u64,
     /// The ranges of data that are available for decoding (not adjusted for
     /// offset), sorted by `start`
-    ranges: Vec<Range<u64>>,
+    ///
+    /// A `VecDeque`, because a scan pushes buffers at the end and releases
+    /// them at the start. Both are then `O(1)` for each buffer.
+    ranges: VecDeque<Range<u64>>,
     /// The buffers of data that can be used to decode the Parquet file, in the
     /// same order as `ranges`
-    buffers: Vec<Bytes>,
+    buffers: VecDeque<Bytes>,
     /// The length of the longest range in `ranges`.
     ///
     /// This keeps lookups fast in the common case: buffers that do not
@@ -66,6 +71,11 @@ pub struct PushBuffers {
     /// when no earlier buffer can reach the requested range, so it checks one
     /// or two buffers, not all of them. See [`Self::find`].
     max_len: u64,
+    /// The number of ranges in `ranges` with the length `max_len`. `max_len`
+    /// can decrease only when this count goes to zero. Thus, a release does
+    /// not scan all ranges to update `max_len` while other ranges of that
+    /// length remain.
+    max_len_count: usize,
     /// The sum of the lengths of `ranges`, kept up to date so that
     /// [`Self::buffered_bytes`] does not scan all ranges.
     buffered_bytes: u64,
@@ -109,9 +119,10 @@ impl PushBuffers {
         Self {
             offset: 0,
             file_len,
-            ranges: Vec::new(),
-            buffers: Vec::new(),
+            ranges: VecDeque::new(),
+            buffers: VecDeque::new(),
             max_len: 0,
+            max_len_count: 0,
             buffered_bytes: 0,
             empty: 0,
         }
@@ -160,7 +171,11 @@ impl PushBuffers {
         // Insert after all buffers that start at or before `range.start`.
         // Thus, ranges pushed in file order go at the end.
         let idx = self.ranges.partition_point(|r| r.start <= range.start);
-        self.max_len = self.max_len.max(expected);
+        match expected.cmp(&self.max_len) {
+            Ordering::Greater => (self.max_len, self.max_len_count) = (expected, 1),
+            Ordering::Equal => self.max_len_count += 1,
+            Ordering::Less => {}
+        }
         self.buffered_bytes += expected;
         self.empty += usize::from(expected == 0);
         self.ranges.insert(idx, range);
@@ -203,8 +218,8 @@ impl PushBuffers {
         // long only if a caller pushes one large buffer and then many small
         // buffers after its start.
         let candidates = self.ranges.partition_point(|r| r.start <= start);
-        self.ranges[..candidates]
-            .iter()
+        self.ranges
+            .range(..candidates)
             .enumerate()
             .rev()
             .take_while(|(_, r)| r.start.saturating_add(self.max_len) >= end)
@@ -246,8 +261,9 @@ impl PushBuffers {
         let mut remove = vec![];
         for clear in ranges_to_clear {
             let first = self.ranges.partition_point(|r| r.start < clear.start);
-            let same_start = self.ranges[first..]
-                .iter()
+            let same_start = self
+                .ranges
+                .range(first..)
                 .take_while(|r| r.start == clear.start);
             remove.extend(
                 same_start
@@ -266,7 +282,6 @@ impl PushBuffers {
         // Move the kept buffers in `first..=last` to the start of that span,
         // in order, then remove the rest of the span. The buffers outside the
         // span are not visited.
-        let mut removed_longest = false;
         let mut kept = first;
         let mut remove = remove.into_iter().peekable();
         for idx in first..=last {
@@ -274,7 +289,9 @@ impl PushBuffers {
                 let len = self.ranges[idx].end.saturating_sub(self.ranges[idx].start);
                 self.buffered_bytes -= len;
                 self.empty -= usize::from(len == 0);
-                removed_longest |= len == self.max_len;
+                if len == self.max_len {
+                    self.max_len_count -= 1;
+                }
             } else {
                 self.ranges.swap(kept, idx);
                 self.buffers.swap(kept, idx);
@@ -283,25 +300,28 @@ impl PushBuffers {
         }
         self.ranges.drain(kept..=last);
         self.buffers.drain(kept..=last);
-        // `max_len` can change only if a buffer of that length was removed.
-        if removed_longest {
+        // `max_len` changes only when no buffer of that length remains.
+        if self.max_len_count == 0 {
             self.update_max_len();
         }
     }
 
-    /// Set `max_len` to the maximum length of the remaining ranges.
+    /// Set `max_len` to the maximum length of the remaining ranges, and
+    /// `max_len_count` to the number of ranges of that length.
     ///
     /// A `max_len` that is too large is still correct, lookups only scan
     /// further. This update is for performance: a large buffer that was
     /// removed must not slow down later lookups.
     #[cfg(feature = "arrow")]
     fn update_max_len(&mut self) {
-        self.max_len = self
-            .ranges
-            .iter()
-            .map(|r| r.end.saturating_sub(r.start))
-            .max()
-            .unwrap_or(0);
+        (self.max_len, self.max_len_count) = (0, 0);
+        for len in self.ranges.iter().map(|r| r.end.saturating_sub(r.start)) {
+            match len.cmp(&self.max_len) {
+                Ordering::Greater => (self.max_len, self.max_len_count) = (len, 1),
+                Ordering::Equal => self.max_len_count += 1,
+                Ordering::Less => {}
+            }
+        }
     }
 
     /// Remove all buffered bytes in `ranges`.
@@ -365,11 +385,13 @@ impl PushBuffers {
         // empty, and is removed below.
         let mut split = vec![];
         let mut emptied = false;
-        let mut longest = false;
         for idx in overlapping {
             let (range, buffer) = (&mut self.ranges[idx], &mut self.buffers[idx]);
             let whole = range.clone();
-            longest |= whole.end - whole.start == self.max_len;
+            // Each kept part is shorter than `whole`.
+            if whole.end - whole.start == self.max_len {
+                self.max_len_count -= 1;
+            }
             let offset = |pos: u64| (pos - whole.start) as usize;
             // The parts of `whole` between the released ranges.
             let first = release.partition_point(|r| r.end <= whole.start);
@@ -412,9 +434,9 @@ impl PushBuffers {
             // Remove the released buffers. As before, this also removes empty
             // buffers that were pushed. The released buffers are all in
             // `first..=last`, so look at all buffers only if empty buffers
-            // were pushed. The buffers after the removed ones still move down
-            // (one `memmove` for each `drain`), which is much cheaper than a
-            // visit of each buffer.
+            // were pushed. `drain` moves the buffers on the shorter side of
+            // the removed ones, so a release at the start or at the end of
+            // the buffers moves none.
             let span = match self.empty {
                 0 => first..last + 1,
                 _ => 0..self.ranges.len(),
@@ -437,21 +459,18 @@ impl PushBuffers {
         // for the split parts, which are appended. Splits are rare, so sort
         // all buffers then. The sort is stable.
         if !split.is_empty() {
-            for (range, buffer) in split {
-                self.ranges.push(range);
-                self.buffers.push(buffer);
-            }
             let mut parts: Vec<_> = std::mem::take(&mut self.ranges)
                 .into_iter()
                 .zip(std::mem::take(&mut self.buffers))
+                .chain(split)
                 .collect();
             parts.sort_by_key(|(range, _)| range.start);
             (self.ranges, self.buffers) = parts.into_iter().unzip();
         }
-        // `max_len` can change only if a buffer of that length was trimmed.
-        // Only then pay for the pass over all buffers, which keeps `max_len`
-        // exact (see `update_max_len`).
-        if longest {
+        // `max_len` changes only when no buffer of that length remains. Only
+        // then pay for the pass over all buffers, which keeps `max_len` exact
+        // (see `update_max_len`).
+        if self.max_len_count == 0 {
             self.update_max_len();
         }
     }
@@ -477,6 +496,7 @@ impl PushBuffers {
         self.ranges.clear();
         self.buffers.clear();
         self.max_len = 0;
+        self.max_len_count = 0;
         self.buffered_bytes = 0;
         self.empty = 0;
     }
@@ -488,7 +508,7 @@ impl PushBuffers {
     fn assert_invariants(&self) {
         assert_eq!(self.ranges.len(), self.buffers.len());
         assert!(
-            self.ranges.is_sorted_by_key(|r| r.start),
+            self.ranges.iter().is_sorted_by_key(|r| r.start),
             "not sorted: {:?}",
             self.ranges
         );
@@ -500,7 +520,13 @@ impl PushBuffers {
             .iter()
             .map(|r| r.end.saturating_sub(r.start))
             .max();
-        assert_eq!(self.max_len, max_len.unwrap_or(0));
+        let max_len = max_len.unwrap_or(0);
+        assert_eq!(self.max_len, max_len);
+        let is_longest = |r: &&Range<u64>| r.end.saturating_sub(r.start) == max_len;
+        assert_eq!(
+            self.max_len_count,
+            self.ranges.iter().filter(is_longest).count()
+        );
         let empty = self.ranges.iter().filter(|r| r.is_empty()).count();
         assert_eq!(self.empty, empty);
     }
@@ -866,7 +892,7 @@ mod tests {
                     }
                 }
                 assert_valid(&buffers);
-                let mut actual = buffers.ranges.clone();
+                let mut actual = Vec::from(buffers.ranges.clone());
                 actual.sort_by_key(|r| (r.start, r.end));
                 model.sort_by_key(|r| (r.start, r.end));
                 assert_eq!(actual, model, "seed {seed}");
