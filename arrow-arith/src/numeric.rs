@@ -1116,7 +1116,10 @@ fn decimal_op<T: DecimalType>(
             let mul_pow = result_scale - s1 + s2;
 
             // p1 - s1 + s2 + result_scale
-            let result_precision = (mul_pow.saturating_add(*p1 as i8) as u8).min(T::MAX_PRECISION);
+            // Precision must be positive and at least the output scale.
+            let result_precision = (mul_pow as i16 + *p1 as i16)
+                .clamp(result_scale.max(1) as i16, T::MAX_PRECISION as i16)
+                as u8;
 
             let (l_mul, r_mul) = match mul_pow.cmp(&0) {
                 Ordering::Greater => (
@@ -1648,6 +1651,72 @@ mod tests {
             mul(&a, &b).unwrap_err().to_string(),
             "Invalid argument error: Output scale of Decimal256(76, -64) * Decimal256(76, -65) would be less than min scale of -128"
         );
+    }
+
+    #[test]
+    fn test_decimal_div_precision_at_least_scale() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            let a: PrimitiveArray<T> = [Some(1), Some(-1), Some(0), None]
+                .into_iter()
+                .map(|v| v.map(T::Native::from))
+                .collect();
+            let a = a.with_precision_and_scale(1, 1).unwrap();
+            for (scale, coefficient) in [(0, 10000), (-1, 1000), (-4, 1), (-5, 0), (-6, 0)] {
+                let b = PrimitiveArray::<T>::from_iter_values(
+                    [1, 1, 1, 0].into_iter().map(T::Native::from),
+                )
+                .with_precision_and_scale(1, scale)
+                .unwrap();
+                let expected: PrimitiveArray<T> =
+                    [Some(coefficient), Some(-coefficient), Some(0), None]
+                        .into_iter()
+                        .map(|v| v.map(T::Native::from))
+                        .collect();
+                let expected = expected.with_precision_and_scale(5, 5).unwrap();
+                assert_eq!(div(&a, &b).unwrap().as_ref(), &expected);
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_decimal_div_precision_at_least_one() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            for scale in [-4, -5] {
+                let a: PrimitiveArray<T> = [Some(1), Some(-1), Some(0), None]
+                    .into_iter()
+                    .map(|v| v.map(T::Native::from))
+                    .collect();
+                let a = a.with_precision_and_scale(1, scale).unwrap();
+                for (divisor_scale, coefficient) in [(-4, 1), (-5, 0), (-6, 0)] {
+                    let b = PrimitiveArray::<T>::from_iter_values(
+                        [1, 1, 1, 0].into_iter().map(T::Native::from),
+                    )
+                    .with_precision_and_scale(1, divisor_scale)
+                    .unwrap();
+                    let expected: PrimitiveArray<T> =
+                        [Some(coefficient), Some(-coefficient), Some(0), None]
+                            .into_iter()
+                            .map(|v| v.map(T::Native::from))
+                            .collect();
+                    let expected = expected.with_precision_and_scale(1, scale + 4).unwrap();
+                    assert_eq!(div(&a, &b).unwrap().as_ref(), &expected);
+                }
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
     }
 
     #[test]
