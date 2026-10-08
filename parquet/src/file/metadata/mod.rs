@@ -332,17 +332,46 @@ impl PartialEq for ParquetMetaData {
 ///   .add_row_group(last_row_group)
 ///   .build();
 /// ```
-pub struct ParquetMetaDataBuilder(ParquetMetaData);
+pub struct ParquetMetaDataBuilder {
+    /// File level metadata
+    file_metadata: Arc<FileMetaData>,
+    /// Row group metadata
+    row_groups: Arc<Vec<RowGroupMetaData>>,
+    /// Page level index for each page in each column chunk
+    page_index: Option<Arc<dyn PageIndexProvider>>,
+    /// Optional file decryptor
+    #[cfg(feature = "encryption")]
+    file_decryptor: Option<Box<FileDecryptor>>,
+}
 
 impl ParquetMetaDataBuilder {
     /// Create a new builder from a file metadata, with no row groups
     pub fn new(file_meta_data: FileMetaData) -> Self {
-        Self(ParquetMetaData::new(file_meta_data, vec![]))
+        Self {
+            file_metadata: Arc::new(file_meta_data),
+            row_groups: Arc::new(vec![]),
+            page_index: None,
+            #[cfg(feature = "encryption")]
+            file_decryptor: None,
+        }
     }
 
     /// Create a new builder from an existing ParquetMetaData
     pub fn new_from_metadata(metadata: ParquetMetaData) -> Self {
-        Self(metadata)
+        let ParquetMetaData {
+            file_metadata,
+            row_groups,
+            page_index,
+            #[cfg(feature = "encryption")]
+            file_decryptor,
+        } = metadata;
+        Self {
+            file_metadata,
+            row_groups,
+            page_index,
+            #[cfg(feature = "encryption")]
+            file_decryptor,
+        }
     }
 
     /// Adds a row group to the metadata
@@ -374,7 +403,7 @@ impl ParquetMetaDataBuilder {
 
     /// Return a reference to the current row groups
     pub fn row_groups(&self) -> &[RowGroupMetaData] {
-        &self.0.row_groups
+        &self.row_groups
     }
 
     /// Sets the [`PageIndexProvider`]
@@ -386,18 +415,18 @@ impl ParquetMetaDataBuilder {
     ///
     /// [`custom_page_index.rs`]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/custom_page_index.rs
     pub fn set_page_index(mut self, page_index: Option<Arc<dyn PageIndexProvider>>) -> Self {
-        self.0.page_index = page_index;
+        self.page_index = page_index;
         self
     }
 
     /// Returns the current [`PageIndexProvider`] from the builder, replacing it with `None`
     pub fn take_page_index(&mut self) -> Option<Arc<dyn PageIndexProvider>> {
-        std::mem::take(&mut self.0.page_index)
+        std::mem::take(&mut self.page_index)
     }
 
     /// Return a reference to the current [`PageIndexProvider`], if any
     pub fn page_index(&self) -> Option<&dyn PageIndexProvider> {
-        self.0.page_index.as_ref().map(|arc| arc.as_ref())
+        self.page_index.as_ref().map(|arc| arc.as_ref())
     }
 
     /// Sets the file decryptor needed to decrypt this metadata.
@@ -409,14 +438,19 @@ impl ParquetMetaDataBuilder {
 
     /// Creates a new ParquetMetaData from the builder
     pub fn build(self) -> ParquetMetaData {
-        let Self(metadata) = self;
-        metadata
+        ParquetMetaData {
+            file_metadata: self.file_metadata,
+            row_groups: self.row_groups,
+            page_index: self.page_index,
+            #[cfg(feature = "encryption")]
+            file_decryptor: self.file_decryptor,
+        }
     }
 }
 
 impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     fn from(meta_data: ParquetMetaData) -> Self {
-        Self(meta_data)
+        Self::new_from_metadata(meta_data)
     }
 }
 
@@ -2127,9 +2161,9 @@ mod tests {
 
         // Size with page index (includes Arc overhead plus PageIndex heap size)
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3328;
+        let bigger_expected_size = 3360;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3496;
+        let bigger_expected_size = 3528;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
@@ -2323,5 +2357,37 @@ mod tests {
         assert!(page_index.offset_index(0, 0).is_some());
         assert!(page_index.column_index(0, 1).is_some());
         assert!(page_index.offset_index(0, 1).is_some());
+    }
+
+    #[test]
+    fn test_page_index_builder_reuses_shared_index() {
+        let mut col_idx_builder = ColumnIndexBuilder::new(Type::INT32);
+        col_idx_builder.append(false, vec![1, 0, 0, 0], vec![100, 0, 0, 0], 10, None);
+        let col_idx = Arc::new(col_idx_builder.build().unwrap());
+
+        let mut builder = PageIndexBuilder::new(2, 2);
+        // Insert out of order to verify the immutable representation sorts its entries.
+        builder.put_column_index_shared(Arc::clone(&col_idx), 1, 0);
+        builder.put_column_index_shared(Arc::clone(&col_idx), 0, 1);
+        // Preserve the existing behavior of ignoring coordinates outside the declared shape.
+        builder.put_column_index_shared(Arc::clone(&col_idx), 2, 0);
+        let page_index = builder.build();
+
+        assert!(std::ptr::eq(
+            page_index.column_index(0, 1).unwrap(),
+            Arc::as_ref(&col_idx)
+        ));
+        assert!(page_index.column_index(0, 0).is_none());
+        assert!(page_index.column_index(2, 0).is_none());
+
+        let (mut column_indexes, mut offset_indexes) = page_index.into_index_entries();
+        let (coordinate, extracted) = column_indexes.next().unwrap();
+        assert_eq!(coordinate, (0, 1));
+        assert!(Arc::ptr_eq(&extracted, &col_idx));
+        let (coordinate, extracted) = column_indexes.next().unwrap();
+        assert_eq!(coordinate, (1, 0));
+        assert!(Arc::ptr_eq(&extracted, &col_idx));
+        assert!(column_indexes.next().is_none());
+        assert!(offset_indexes.next().is_none());
     }
 }
