@@ -18,6 +18,7 @@
 //! Module for parsing JSON strings as Variant
 
 use arrow_schema::ArrowError;
+use memchr::memchr2;
 use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt};
 use serde_json::{Number, Value};
 use std::borrow::Cow;
@@ -81,20 +82,23 @@ impl<T: VariantBuilderExt> JsonToVariant for T {
 
 fn variant_from_number<'m, 'v>(n: &Number) -> Result<Variant<'m, 'v>, ArrowError> {
     if let Some(i) = n.as_i64() {
-        // Find minimum Integer width to fit
-        if i as i8 as i64 == i {
-            Ok((i as i8).into())
-        } else if i as i16 as i64 == i {
-            Ok((i as i16).into())
-        } else if i as i32 as i64 == i {
-            Ok((i as i32).into())
-        } else {
-            Ok(i.into())
-        }
+        Ok(variant_from_i64(i))
     } else {
         n.as_f64().map(Variant::from).ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!("Failed to parse {n} as number"))
         })
+    }
+}
+
+fn variant_from_i64(i: i64) -> Variant<'static, 'static> {
+    if i as i8 as i64 == i {
+        (i as i8).into()
+    } else if i as i16 as i64 == i {
+        (i as i16).into()
+    } else if i as i32 as i64 == i {
+        (i as i32).into()
+    } else {
+        i.into()
     }
 }
 
@@ -103,15 +107,7 @@ fn variant_from_number_text(value: &str) -> Result<Variant<'static, 'static>, Ar
         && !value.contains(['.', 'e', 'E'])
         && let Ok(integer) = value.parse::<i64>()
     {
-        return Ok(if integer as i8 as i64 == integer {
-            (integer as i8).into()
-        } else if integer as i16 as i64 == integer {
-            (integer as i16).into()
-        } else if integer as i32 as i64 == integer {
-            (integer as i32).into()
-        } else {
-            integer.into()
-        });
+        return Ok(variant_from_i64(integer));
     }
 
     let number: Number = serde_json::from_str(value).map_err(|error| {
@@ -120,6 +116,26 @@ fn variant_from_number_text(value: &str) -> Result<Variant<'static, 'static>, Ar
         ))
     })?;
     variant_from_number(&number)
+}
+
+fn first_json_control(bytes: &[u8]) -> Option<usize> {
+    const SUB: u64 = 0x2020_2020_2020_2020;
+    const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    let remainder_start = chunks.len() * 8;
+    for (chunk_index, chunk) in chunks.iter().enumerate() {
+        let word = u64::from_ne_bytes(*chunk);
+        // The word test may overreport a hit; locate and confirm the control byte.
+        if word.wrapping_sub(SUB) & !word & HIGH_BITS != 0
+            && let Some(position) = chunk.iter().position(|byte| *byte < 0x20)
+        {
+            return Some(chunk_index * 8 + position);
+        }
+    }
+    remainder
+        .iter()
+        .position(|byte| *byte < 0x20)
+        .map(|position| remainder_start + position)
 }
 
 struct JsonParser<'a> {
@@ -178,8 +194,14 @@ impl<'a> JsonParser<'a> {
             Some(b'[') => self.parse_array(builder, depth)?,
             Some(b'{') => self.parse_object(builder, depth)?,
             Some(b'-' | b'0'..=b'9') => {
-                let number = self.parse_number()?;
-                let number = variant_from_number_text(number)?;
+                let (number_text, integer) = self.parse_number()?;
+                let number = if number_text != "-0"
+                    && let Some(integer) = integer
+                {
+                    variant_from_i64(integer)
+                } else {
+                    variant_from_number_text(number_text)?
+                };
                 self.ensure_root_end(depth)?;
                 builder.try_append_value(number)?;
             }
@@ -259,6 +281,16 @@ impl<'a> JsonParser<'a> {
         let mut escaped = false;
 
         while let Some(byte) = self.peek() {
+            if self.offset - content_start >= 32 && byte != b'"' && byte != b'\\' {
+                let remaining = &self.bytes[self.offset..];
+                let scanned = memchr2(b'"', b'\\', remaining).unwrap_or(remaining.len());
+                if let Some(control_at) = first_json_control(&remaining[..scanned]) {
+                    self.offset += control_at;
+                    return self.error("unescaped control character in string");
+                }
+                self.offset += scanned;
+                continue;
+            }
             match byte {
                 b'"' => {
                     let content_end = self.offset;
@@ -290,15 +322,24 @@ impl<'a> JsonParser<'a> {
         self.error("unterminated string")
     }
 
-    fn parse_number(&mut self) -> Result<&'a str, ArrowError> {
+    fn parse_number(&mut self) -> Result<(&'a str, Option<i64>), ArrowError> {
         let start = self.offset;
-        self.consume(b'-');
+        let negative = self.consume(b'-');
+        let mut integer = Some(0_i64);
 
         match self.peek() {
             Some(b'0') => self.offset += 1,
             Some(b'1'..=b'9') => {
-                self.offset += 1;
-                while matches!(self.peek(), Some(b'0'..=b'9')) {
+                while let Some(digit @ b'0'..=b'9') = self.peek() {
+                    if let Some(value) = integer {
+                        integer = value.checked_mul(10).and_then(|value| {
+                            if negative {
+                                value.checked_sub(i64::from(digit - b'0'))
+                            } else {
+                                value.checked_add(i64::from(digit - b'0'))
+                            }
+                        });
+                    }
                     self.offset += 1;
                 }
             }
@@ -306,6 +347,7 @@ impl<'a> JsonParser<'a> {
         }
 
         if self.consume(b'.') {
+            integer = None;
             let fraction_start = self.offset;
             while matches!(self.peek(), Some(b'0'..=b'9')) {
                 self.offset += 1;
@@ -316,6 +358,7 @@ impl<'a> JsonParser<'a> {
         }
 
         if matches!(self.peek(), Some(b'e' | b'E')) {
+            integer = None;
             self.offset += 1;
             if matches!(self.peek(), Some(b'+' | b'-')) {
                 self.offset += 1;
@@ -329,9 +372,11 @@ impl<'a> JsonParser<'a> {
             }
         }
 
-        self.input
+        let text = self
+            .input
             .get(start..self.offset)
-            .ok_or_else(|| self.format_error("invalid number boundary"))
+            .ok_or_else(|| self.format_error("invalid number boundary"))?;
+        Ok((text, integer))
     }
 
     fn parse_literal(&mut self, literal: &[u8]) -> Result<(), ArrowError> {
@@ -433,6 +478,28 @@ mod test {
         ShortString, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8, VariantDecimal16,
     };
 
+    #[test]
+    fn test_first_json_control_across_word_boundaries() {
+        let mut bytes = [b'x'; 64];
+        for position in 0..bytes.len() {
+            for control in 0..0x20 {
+                bytes[position] = control;
+                assert_eq!(first_json_control(&bytes), Some(position));
+                bytes[position] = b'x';
+            }
+        }
+        bytes[7] = 0x80;
+        bytes[8] = 0xff;
+        assert_eq!(first_json_control(&bytes), None);
+    }
+
+    #[test]
+    fn test_long_json_string_rejects_unescaped_control() {
+        let mut builder = VariantBuilder::new();
+        let json = format!("\"{}\u{001f}\"", "x".repeat(64));
+        assert!(builder.append_json(&json).is_err());
+    }
+
     struct JsonToVariantTest<'a> {
         json: &'a str,
         expected: Variant<'a, 'a>,
@@ -519,6 +586,17 @@ mod test {
             expected: Variant::Int64(92842754201389),
         }
         .run()
+    }
+
+    #[test]
+    fn test_json_to_variant_int64_boundaries() -> Result<(), ArrowError> {
+        for (json, expected) in [
+            ("-9223372036854775808", Variant::Int64(i64::MIN)),
+            ("9223372036854775807", Variant::Int64(i64::MAX)),
+        ] {
+            JsonToVariantTest { json, expected }.run()?;
+        }
+        Ok(())
     }
 
     #[ignore]
