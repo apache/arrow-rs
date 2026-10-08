@@ -416,16 +416,22 @@ where
 
                 match out.as_keys(dict) {
                     Some(keys) => {
-                        // Happy path - can just copy keys
-                        // Keys will be validated on conversion to arrow
-
+                        // Happy path: decode directly into the vec's spare capacity to skip the zero-fill.
                         // TODO: Push vec into decoder (#5177)
                         let start = keys.len();
-                        keys.resize(start + len, K::default());
-                        let len = decoder.get_batch(&mut keys[start..])?;
-                        keys.truncate(start + len);
-                        *max_remaining_values -= len;
-                        Ok(len)
+                        keys.reserve(len);
+                        let decoded_len = {
+                            let spare = keys.spare_capacity_mut();
+                            // SAFETY: `MaybeUninit<K>` matches `K`'s layout; `get_batch` is write-only.
+                            let dst: &mut [K] = unsafe {
+                                std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<K>(), len)
+                            };
+                            decoder.get_batch(dst)?
+                        };
+                        // SAFETY: `get_batch` initialised the first `decoded_len` spare slots.
+                        unsafe { keys.set_len(start + decoded_len) };
+                        *max_remaining_values -= decoded_len;
+                        Ok(decoded_len)
                     }
                     None => {
                         // Sad path - need to recompute dictionary
