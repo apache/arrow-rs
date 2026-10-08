@@ -15,5 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod list;
-mod map;
+//! Row-group scheduling for the push decoder: which row groups to read next,
+//! and how the offset/limit budget carries across them.
+
+mod budget;
+mod frontier;
+
+pub(crate) use budget::{BudgetedReadPlan, RowBudget};
+pub(crate) use frontier::{NextRowGroup, RowGroupFrontier};

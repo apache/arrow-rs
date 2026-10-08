@@ -18,6 +18,7 @@
 //! Configuration via [`WriterProperties`] and [`ReaderProperties`]
 use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
+pub use crate::encodings::encoding::DeltaBinaryPackedEncoderOptions;
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptionProperties;
 use crate::errors::{ParquetError, Result};
@@ -243,7 +244,6 @@ enum OffsetIndexSetting {
 /// ```
 #[derive(Debug, Clone)]
 pub struct WriterProperties {
-    data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_row_count: Option<usize>,
     max_row_group_bytes: Option<usize>,
@@ -337,7 +337,21 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::set_data_page_row_count_limit`]
     pub fn data_page_row_count_limit(&self) -> usize {
-        self.data_page_row_count_limit
+        self.default_column_properties
+            .data_page_row_count_limit()
+            .unwrap_or(DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT)
+    }
+
+    /// Returns data page row count limit for a specific column.
+    ///
+    /// Takes precedence over [`Self::data_page_row_count_limit`].
+    ///
+    /// Note: this is a best effort limit based on the write batch size.
+    pub fn column_data_page_row_count_limit(&self, col: &ColumnPath) -> usize {
+        resolve_data_page_row_count_limit(
+            self.column_override(col),
+            &self.default_column_properties,
+        )
     }
 
     /// Returns configured batch size for writes.
@@ -485,6 +499,20 @@ impl WriterProperties {
         )
     }
 
+    /// Returns custom delta binary packed encoder options for a specific column.
+    ///
+    /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
+    /// the integer sub-encoders used by `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY`.
+    pub fn delta_binary_packed_encoder_options(
+        &self,
+        col: &ColumnPath,
+    ) -> Option<DeltaBinaryPackedEncoderOptions> {
+        resolve_delta_binary_packed_encoder_options(
+            self.column_override(col),
+            &self.default_column_properties,
+        )
+    }
+
     /// Returns encoding for a data page, when dictionary encoding is enabled.
     ///
     /// This is not configurable.
@@ -584,10 +612,14 @@ impl WriterProperties {
             statistics_enabled: resolve_statistics_enabled(column, default),
             write_page_header_statistics: resolve_write_page_header_statistics(column, default),
             data_page_size_limit: resolve_data_page_size_limit(column, default),
+            data_page_row_count_limit: resolve_data_page_row_count_limit(column, default),
             dictionary_page_size_limit: resolve_dictionary_page_size_limit(column, default),
             data_page_v2_compression_ratio_threshold:
                 resolve_data_page_v2_compression_ratio_threshold(column, default),
             bloom_filter_properties: resolve_bloom_filter_properties(column, default).cloned(),
+            delta_binary_packed_encoder_options: resolve_delta_binary_packed_encoder_options(
+                column, default,
+            ),
         }
     }
 
@@ -605,7 +637,6 @@ impl WriterProperties {
 /// See example on [`WriterProperties`]
 #[derive(Debug, Clone)]
 pub struct WriterPropertiesBuilder {
-    data_page_row_count_limit: usize,
     write_batch_size: usize,
     max_row_group_row_count: Option<usize>,
     max_row_group_bytes: Option<usize>,
@@ -632,7 +663,6 @@ impl Default for WriterPropertiesBuilder {
     /// Returns default state of the builder.
     fn default() -> Self {
         Self {
-            data_page_row_count_limit: DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
             write_batch_size: DEFAULT_WRITE_BATCH_SIZE,
             max_row_group_row_count: Some(DEFAULT_MAX_ROW_GROUP_ROW_COUNT),
             max_row_group_bytes: None,
@@ -690,7 +720,6 @@ impl WriterPropertiesBuilder {
         }
 
         WriterProperties {
-            data_page_row_count_limit: self.data_page_row_count_limit,
             write_batch_size: self.write_batch_size,
             max_row_group_row_count: self.max_row_group_row_count,
             max_row_group_bytes: self.max_row_group_bytes,
@@ -744,7 +773,8 @@ impl WriterPropertiesBuilder {
     /// If the value is `0`.
     pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
         assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
-        self.data_page_row_count_limit = value;
+        self.default_column_properties
+            .set_data_page_row_count_limit(value);
         self
     }
 
@@ -1064,6 +1094,19 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets the default delta binary packed encoder block layout for all columns.
+    ///
+    /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
+    /// the integer sub-encoders used by `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY`.
+    pub fn set_delta_binary_packed_encoder_options(
+        mut self,
+        value: DeltaBinaryPackedEncoderOptions,
+    ) -> Self {
+        self.default_column_properties
+            .set_delta_binary_packed_encoder_options(value);
+        self
+    }
+
     /// Sets FileEncryptionProperties (defaults to `None`)
     #[cfg(feature = "encryption")]
     pub fn with_file_encryption_properties(
@@ -1292,6 +1335,18 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets data page row count limit for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_data_page_row_count_limit`].
+    ///
+    /// # Panics
+    /// If the value is `0`.
+    pub fn set_column_data_page_row_count_limit(mut self, col: ColumnPath, value: usize) -> Self {
+        assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
+        self.get_mut_props(col).set_data_page_row_count_limit(value);
+        self
+    }
+
     /// Sets [`EnabledStatistics`] level for a specific column.
     ///
     /// Takes precedence over [`Self::set_statistics_enabled`].
@@ -1356,6 +1411,21 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets the delta binary packed encoder block layout for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_delta_binary_packed_encoder_options`].
+    /// See [`DeltaBinaryPackedEncoderOptions`] for layout trade-offs. These options also apply to
+    /// the integer sub-encoders used by `DELTA_LENGTH_BYTE_ARRAY` and `DELTA_BYTE_ARRAY`.
+    pub fn set_column_delta_binary_packed_encoder_options(
+        mut self,
+        col: ColumnPath,
+        value: DeltaBinaryPackedEncoderOptions,
+    ) -> Self {
+        self.get_mut_props(col)
+            .set_delta_binary_packed_encoder_options(value);
+        self
+    }
+
     /// Deprecated alias for [`Self::set_column_bloom_filter_max_ndv`].
     #[deprecated(
         since = "59.0.0",
@@ -1395,7 +1465,6 @@ impl WriterPropertiesBuilder {
 impl From<WriterProperties> for WriterPropertiesBuilder {
     fn from(props: WriterProperties) -> Self {
         WriterPropertiesBuilder {
-            data_page_row_count_limit: props.data_page_row_count_limit,
             write_batch_size: props.write_batch_size,
             max_row_group_row_count: props.max_row_group_row_count,
             max_row_group_bytes: props.max_row_group_bytes,
@@ -1658,6 +1727,7 @@ struct ColumnProperties {
     encoding: Option<Encoding>,
     codec: Option<Compression>,
     data_page_size_limit: Option<usize>,
+    data_page_row_count_limit: Option<usize>,
     dictionary_page_size_limit: Option<usize>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
@@ -1667,6 +1737,7 @@ struct ColumnProperties {
     /// Whether the bloom filter NDV was explicitly set by the user
     bloom_filter_ndv_is_set: bool,
     data_page_v2_compression_ratio_threshold: Option<f64>,
+    delta_binary_packed_encoder_options: Option<DeltaBinaryPackedEncoderOptions>,
 }
 
 impl ColumnProperties {
@@ -1694,6 +1765,12 @@ impl ColumnProperties {
     /// Sets data page size limit for this column.
     fn set_data_page_size_limit(&mut self, value: usize) {
         self.data_page_size_limit = Some(value);
+    }
+
+    /// Sets data page row count limit for this column.
+    fn set_data_page_row_count_limit(&mut self, value: usize) {
+        assert_ne!(value, 0, "Cannot have a 0 data page row count limit");
+        self.data_page_row_count_limit = Some(value);
     }
 
     /// Sets whether dictionary encoding is enabled for this column.
@@ -1774,6 +1851,10 @@ impl ColumnProperties {
         self.data_page_v2_compression_ratio_threshold = Some(value);
     }
 
+    fn set_delta_binary_packed_encoder_options(&mut self, value: DeltaBinaryPackedEncoderOptions) {
+        self.delta_binary_packed_encoder_options = Some(value);
+    }
+
     /// Returns optional encoding for this column.
     fn encoding(&self) -> Option<Encoding> {
         self.encoding
@@ -1801,6 +1882,11 @@ impl ColumnProperties {
         self.data_page_size_limit
     }
 
+    /// Returns optional data page row count limit for this column.
+    fn data_page_row_count_limit(&self) -> Option<usize> {
+        self.data_page_row_count_limit
+    }
+
     /// Returns optional statistics level requested for this column. If result is `None`,
     /// then no setting has been provided.
     fn statistics_enabled(&self) -> Option<EnabledStatistics> {
@@ -1823,6 +1909,10 @@ impl ColumnProperties {
     /// Returns optional Data Page v2 compression ratio threshold for this column.
     fn data_page_v2_compression_ratio_threshold(&self) -> Option<f64> {
         self.data_page_v2_compression_ratio_threshold
+    }
+
+    fn delta_binary_packed_encoder_options(&self) -> Option<DeltaBinaryPackedEncoderOptions> {
+        self.delta_binary_packed_encoder_options
     }
 
     /// If bloom filter is enabled and NDV was not explicitly set, resolve it to the
@@ -1854,12 +1944,16 @@ pub(crate) struct ResolvedColumnProperties {
     pub(crate) write_page_header_statistics: bool,
     /// See [`WriterProperties::column_data_page_size_limit`].
     pub(crate) data_page_size_limit: usize,
+    /// See [`WriterProperties::column_data_page_row_count_limit`].
+    pub(crate) data_page_row_count_limit: usize,
     /// See [`WriterProperties::column_dictionary_page_size_limit`].
     pub(crate) dictionary_page_size_limit: usize,
     /// See [`WriterProperties::column_data_page_v2_compression_ratio_threshold`].
     pub(crate) data_page_v2_compression_ratio_threshold: f64,
     /// See [`WriterProperties::bloom_filter_properties`].
     pub(crate) bloom_filter_properties: Option<BloomFilterProperties>,
+    /// See [`WriterProperties::delta_binary_packed_encoder_options`].
+    pub(crate) delta_binary_packed_encoder_options: Option<DeltaBinaryPackedEncoderOptions>,
 }
 
 /// Returns the setting read by `get` for `column` if it sets one, otherwise the
@@ -1925,6 +2019,14 @@ fn resolve_data_page_size_limit(
         .unwrap_or(DEFAULT_PAGE_SIZE)
 }
 
+fn resolve_data_page_row_count_limit(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> usize {
+    column_or_default(column, default, ColumnProperties::data_page_row_count_limit)
+        .unwrap_or(DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT)
+}
+
 fn resolve_dictionary_page_size_limit(
     column: Option<&ColumnProperties>,
     default: &ColumnProperties,
@@ -1956,6 +2058,17 @@ fn resolve_bloom_filter_properties<'a>(
     column
         .and_then(ColumnProperties::bloom_filter_properties)
         .or_else(|| default.bloom_filter_properties())
+}
+
+fn resolve_delta_binary_packed_encoder_options(
+    column: Option<&ColumnProperties>,
+    default: &ColumnProperties,
+) -> Option<DeltaBinaryPackedEncoderOptions> {
+    column_or_default(
+        column,
+        default,
+        ColumnProperties::delta_binary_packed_encoder_options,
+    )
 }
 
 /// Reference counted reader properties.
@@ -2203,6 +2316,43 @@ mod tests {
             props
                 .bloom_filter_properties(&ColumnPath::from("col"))
                 .is_none()
+        );
+        assert!(
+            props
+                .delta_binary_packed_encoder_options(&ColumnPath::from("col"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_writer_properties_delta_binary_packed_encoder_options() {
+        let default = DeltaBinaryPackedEncoderOptions::try_new(256, 4).unwrap();
+        let overridden = DeltaBinaryPackedEncoderOptions::try_new(128, 4).unwrap();
+        let column = ColumnPath::from("column");
+        let props = WriterProperties::builder()
+            .set_delta_binary_packed_encoder_options(default)
+            .set_column_delta_binary_packed_encoder_options(column.clone(), overridden)
+            .build();
+
+        assert_eq!(
+            props.delta_binary_packed_encoder_options(&column),
+            Some(overridden)
+        );
+        assert_eq!(
+            props.delta_binary_packed_encoder_options(&ColumnPath::from("other")),
+            Some(default)
+        );
+        assert_eq!(
+            props
+                .resolve_column_properties(&column)
+                .delta_binary_packed_encoder_options,
+            Some(overridden)
+        );
+
+        let rebuilt = props.into_builder().build();
+        assert_eq!(
+            rebuilt.delta_binary_packed_encoder_options(&column),
+            Some(overridden)
         );
     }
 
@@ -2512,6 +2662,31 @@ mod tests {
             props.column_data_page_size_limit(&ColumnPath::from("other")),
             100
         );
+    }
+
+    #[test]
+    fn test_writer_properties_column_data_page_row_count_limit() {
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(100)
+            .set_column_data_page_row_count_limit(ColumnPath::from("col"), 10)
+            .build();
+
+        assert_eq!(props.data_page_row_count_limit(), 100);
+        assert_eq!(
+            props.column_data_page_row_count_limit(&ColumnPath::from("col")),
+            10
+        );
+        assert_eq!(
+            props.column_data_page_row_count_limit(&ColumnPath::from("other")),
+            100
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot have a 0 data page row count limit")]
+    fn test_writer_properties_panic_on_zero_column_data_page_row_count_limit() {
+        let _ = WriterProperties::builder()
+            .set_column_data_page_row_count_limit(ColumnPath::from("col"), 0);
     }
 
     #[test]
