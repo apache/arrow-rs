@@ -144,6 +144,48 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
     Ok(Arc::new(array))
 }
 
+/// Concatenates the child values and the validity bitmaps, without the per-array
+/// [`ArrayData`](arrow_data::ArrayData) that [`concat_fallback`] builds: with many short arrays
+/// that is most of the cost.
+fn concat_fixed_size_list(
+    arrays: &[&dyn Array],
+    field: &FieldRef,
+    size: i32,
+) -> Result<ArrayRef, ArrowError> {
+    let mut lists: Vec<&FixedSizeListArray> = Vec::with_capacity(arrays.len());
+    let mut values: Vec<&dyn Array> = Vec::with_capacity(arrays.len());
+    let (mut len, mut any_nulls) = (0, false);
+    for a in arrays {
+        let l = a.as_fixed_size_list();
+        len += l.len();
+        any_nulls |= l.null_count() != 0;
+        values.push(l.values().as_ref());
+        lists.push(l);
+    }
+
+    let nulls = any_nulls.then(|| {
+        let mut nulls = BooleanBufferBuilder::new(len);
+        for l in &lists {
+            match l.nulls() {
+                Some(n) => nulls.append_buffer(n.inner()),
+                None => nulls.append_n(l.len(), true),
+            }
+        }
+        NullBuffer::new(nulls.finish())
+    });
+
+    // Equal list types imply equal child types, so skip the check in `concat`.
+    let values = concat_same_type(&values, field.data_type())?;
+
+    Ok(Arc::new(FixedSizeListArray::try_new_with_length(
+        Arc::clone(field),
+        size,
+        values,
+        nulls,
+        len,
+    )?))
+}
+
 fn concat_lists<OffsetSize: OffsetSizeTrait>(
     arrays: &[&dyn Array],
     field: &FieldRef,
@@ -544,6 +586,10 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         return Err(ArrowError::InvalidArgumentError(error_message));
     }
 
+    concat_same_type(arrays, d)
+}
+
+fn concat_same_type(arrays: &[&dyn Array], d: &DataType) -> Result<ArrayRef, ArrowError> {
     downcast_primitive! {
         d => (primitive_concat, arrays),
         DataType::Boolean => concat_boolean(arrays),
@@ -555,6 +601,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         }
         DataType::List(field) => concat_lists::<i32>(arrays, field),
         DataType::LargeList(field) => concat_lists::<i64>(arrays, field),
+        DataType::FixedSizeList(field, size) => concat_fixed_size_list(arrays, field, *size),
         DataType::ListView(field) => concat_list_view::<i32>(arrays, field),
         DataType::LargeListView(field) => concat_list_view::<i64>(arrays, field),
         DataType::Map(field, ordered) => concat_maps(arrays, field, *ordered),
@@ -1083,6 +1130,71 @@ mod tests {
             FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(expected, 2);
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    /// The fixed size list path against `concat_fallback`: slices, arrays with and without
+    /// nulls mixed, nested lists, zero-sized lists and many one-row arrays.
+    #[test]
+    fn test_concat_fixed_size_list_matches_fallback() {
+        let check = |arrays: &[&dyn Array]| {
+            let expected =
+                concat_fallback(arrays, get_capacity(arrays, arrays[0].data_type())).unwrap();
+            let got = concat(arrays).unwrap();
+            assert_eq!(got.as_ref(), expected.as_ref());
+            got.to_data().validate_full().unwrap();
+        };
+
+        let rows = [
+            Some(vec![Some(1), None, Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5), Some(6)]),
+            Some(vec![None, None, None]),
+            None,
+            Some(vec![Some(7), Some(8), Some(9)]),
+        ];
+        let with_nulls = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(rows, 3);
+        let without_nulls = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
+            (0..5).map(|i| Some(vec![Some(i), Some(i + 1), Some(i + 2)])),
+            3,
+        );
+        check(&[&with_nulls, &without_nulls]);
+        check(&[&without_nulls, &without_nulls]);
+        check(&[
+            &with_nulls.slice(1, 4),
+            &without_nulls.slice(2, 2),
+            &with_nulls,
+        ]);
+
+        let one_row: Vec<_> = (0..64).map(|i| with_nulls.slice(i % 6, 1)).collect();
+        let one_row: Vec<&dyn Array> = one_row.iter().map(|a| a as &dyn Array).collect();
+        check(&one_row);
+
+        let nested = FixedSizeListArray::try_new(
+            Arc::new(Field::new_list_field(with_nulls.data_type().clone(), true)),
+            2,
+            Arc::new(with_nulls.slice(0, 6)),
+            Some(NullBuffer::from(vec![true, false, true])),
+        )
+        .unwrap();
+        check(&[&nested, &nested.slice(1, 2)]);
+
+        let zero_sized = FixedSizeListArray::try_new_with_length(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            0,
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Some(NullBuffer::from(vec![true, false, true, true])),
+            4,
+        )
+        .unwrap();
+        let zero_sized_valid = FixedSizeListArray::try_new_with_length(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            0,
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            None,
+            3,
+        )
+        .unwrap();
+        check(&[&zero_sized, &zero_sized_valid, &zero_sized.slice(1, 2)]);
     }
 
     #[test]

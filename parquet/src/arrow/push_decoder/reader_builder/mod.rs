@@ -219,7 +219,25 @@ impl RowGroupReaderBuilder {
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
     ) -> Self {
-        let mut builder = Self {
+        let (predicate_projections, cache_projection) = match &filter {
+            Some(filter) => (
+                filter
+                    .predicates
+                    .iter()
+                    .map(|predicate| predicate.projection().clone())
+                    .collect(),
+                Self::compute_cache_projection_inner(
+                    filter,
+                    &projection,
+                    &metadata,
+                    max_predicate_cache_size,
+                ),
+            ),
+            None => (vec![], None),
+        };
+        let stages =
+            StageSchedule::new(projection.clone(), predicate_projections, cache_projection);
+        Self {
             batch_size,
             projection,
             metadata,
@@ -230,25 +248,8 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
-            stages: StageSchedule::new(ProjectionMask::all(), vec![], None),
-        };
-        let (predicate_projections, cache_projection) = match &builder.filter {
-            Some(filter) => (
-                filter
-                    .predicates
-                    .iter()
-                    .map(|predicate| predicate.projection().clone())
-                    .collect(),
-                builder.compute_cache_projection_inner(filter),
-            ),
-            None => (vec![], None),
-        };
-        builder.stages = StageSchedule::new(
-            builder.projection.clone(),
-            predicate_projections,
-            cache_projection,
-        );
-        builder
+            stages,
+        }
     }
 
     /// Decompose into [`RowGroupReaderBuilderParts`] so the builder can be
@@ -761,28 +762,37 @@ impl RowGroupReaderBuilder {
     /// final projection, excluding any nested columns.
     fn compute_cache_projection(&self, row_group_idx: usize, filter: &RowFilter) -> ProjectionMask {
         let meta = self.metadata.row_group(row_group_idx);
-        match self.compute_cache_projection_inner(filter) {
+        let cache_projection = Self::compute_cache_projection_inner(
+            filter,
+            &self.projection,
+            &self.metadata,
+            self.max_predicate_cache_size,
+        );
+        match cache_projection {
             Some(projection) => projection,
             None => ProjectionMask::none(meta.columns().len()),
         }
     }
 
-    fn compute_cache_projection_inner(&self, filter: &RowFilter) -> Option<ProjectionMask> {
+    /// An associated function, so that [`Self::new`] can call it before the
+    /// builder exists.
+    fn compute_cache_projection_inner(
+        filter: &RowFilter,
+        projection: &ProjectionMask,
+        metadata: &ParquetMetaData,
+        max_predicate_cache_size: usize,
+    ) -> Option<ProjectionMask> {
         // Do not compute the projection mask if the predicate cache is disabled
-        if self.max_predicate_cache_size == 0 {
+        if max_predicate_cache_size == 0 {
             return None;
         }
         let mut cache_projection = filter.predicates.first()?.projection().clone();
         for predicate in &filter.predicates {
             cache_projection.union(predicate.projection());
         }
-        cache_projection.intersect(&self.projection);
-        self.exclude_nested_columns_from_cache(&cache_projection)
-    }
-
-    /// Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
-    fn exclude_nested_columns_from_cache(&self, mask: &ProjectionMask) -> Option<ProjectionMask> {
-        mask.without_nested_types(self.metadata.file_metadata().schema_descr())
+        cache_projection.intersect(projection);
+        // Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
+        cache_projection.without_nested_types(metadata.file_metadata().schema_descr())
     }
 
     /// Get the offset index for the specified row group, if any
