@@ -132,7 +132,7 @@ pub struct ParquetMetaData {
     page_index: Option<Arc<dyn PageIndexProvider>>,
     /// Optional file decryptor
     #[cfg(feature = "encryption")]
-    file_decryptor: Option<Box<FileDecryptor>>,
+    file_decryptor: Option<Arc<FileDecryptor>>,
 }
 
 impl ParquetMetaData {
@@ -338,7 +338,7 @@ pub struct ParquetMetaDataBuilder {
     page_index: Option<Arc<dyn PageIndexProvider>>,
     /// Optional file decryptor
     #[cfg(feature = "encryption")]
-    file_decryptor: Option<Box<FileDecryptor>>,
+    file_decryptor: Option<Arc<FileDecryptor>>,
 }
 
 impl ParquetMetaDataBuilder {
@@ -423,7 +423,7 @@ impl ParquetMetaDataBuilder {
     /// Sets the file decryptor needed to decrypt this metadata.
     #[cfg(feature = "encryption")]
     pub(crate) fn set_file_decryptor(mut self, file_decryptor: Option<FileDecryptor>) -> Self {
-        self.file_decryptor = file_decryptor.map(Box::new);
+        self.file_decryptor = file_decryptor.map(Arc::new);
         self
     }
 
@@ -2227,7 +2227,7 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        let expected_size_with_decryptor = 3104;
+        let expected_size_with_decryptor = 3120;
         assert!(expected_size_with_decryptor > base_expected_size);
 
         assert_eq!(
