@@ -212,6 +212,89 @@ pub(crate) fn normalize_fixed_len_byte_array_data(
     }
 }
 
+/// A value section ready for its ordinary decoder. When `validate_count` is set,
+/// account for its physical values during normal level decoding.
+pub(super) struct PreparedFixedLenByteArrayPage {
+    pub(super) encoding: Encoding,
+    pub(super) data: Bytes,
+    pub(super) validate_count: bool,
+}
+
+/// Prepare V1 FLBA values without teaching the column reader historical layouts.
+/// `definition_levels` contains the maximum level, encoding and encoded levels;
+/// absent levels mean that the page's physical count is already known.
+pub(super) fn prepare_v1_fixed_len_byte_array(
+    data: Bytes,
+    num_levels: usize,
+    type_length: usize,
+    encoding: Encoding,
+    definition_levels: Option<(i16, Encoding, &Bytes)>,
+) -> Result<PreparedFixedLenByteArrayPage> {
+    let Some((max_level, level_encoding, levels)) = definition_levels else {
+        let (encoding, data) =
+            normalize_fixed_len_byte_array_data(data, num_levels, type_length, encoding)?;
+        return Ok(PreparedFixedLenByteArrayPage {
+            encoding,
+            data,
+            validate_count: false,
+        });
+    };
+
+    // This callback is lazy: ordinary nullable pages do not create a second
+    // decoder or traverse their levels before normal reading begins.
+    let count_values = || {
+        let mut counter = DefinitionLevelDecoderImpl::new(max_level);
+        counter.set_data(level_encoding, levels.clone())?;
+        let (values, read) = counter.skip_def_levels(num_levels)?;
+        if read != num_levels {
+            return Err(general_err!(
+                "Invalid FIXED_LEN_BYTE_ARRAY {encoding} data page: \
+                 expected {num_levels} definition levels, got {read}"
+            ));
+        }
+        Ok(values)
+    };
+
+    let mut page = PreparedFixedLenByteArrayPage {
+        encoding,
+        data,
+        validate_count: false,
+    };
+    // Temporary compatibility hook. Removing it leaves the canonical path and
+    // its physical-value validation intact.
+    if super::legacy_fixed_len_byte_array::prepare_v1_page(
+        &mut page,
+        num_levels,
+        type_length,
+        &count_values,
+    )? {
+        return Ok(page);
+    }
+
+    if encoding == Encoding::PLAIN {
+        if num_levels == 0 || type_length == 0 {
+            // Preserve empty-page header validation and avoid a zero-width
+            // byte budget, which cannot establish the physical value count.
+            page.data = normalize_fixed_len_byte_array_payload(
+                page.data,
+                count_values()?,
+                type_length,
+                "PLAIN data page",
+            )?;
+        } else {
+            if !page.data.len().is_multiple_of(type_length) {
+                return Err(general_err!(
+                    "Invalid FIXED_LEN_BYTE_ARRAY PLAIN data page payload length: \
+                     {} bytes is not a multiple of {type_length}",
+                    page.data.len()
+                ));
+            }
+            page.validate_count = true;
+        }
+    }
+    Ok(page)
+}
+
 /// Bucket-based storage for decoder instances keyed by `Encoding`.
 ///
 /// This replaces `HashMap` lookups with direct indexing to avoid hashing overhead in the
@@ -346,8 +429,6 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     }
 }
 
-const SKIP_BUFFER_SIZE: usize = 1024;
-
 enum LevelDecoder {
     Packed(BitReader, u8),
     Rle(RleDecoder),
@@ -422,29 +503,16 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
     }
 
     fn skip_def_levels(&mut self, num_levels: usize) -> Result<(usize, usize)> {
-        let mut level_skip = 0;
-        let mut value_skip = 0;
-        let mut buf = Vec::with_capacity(SKIP_BUFFER_SIZE);
-        while level_skip < num_levels {
-            let remaining_levels = num_levels - level_skip;
-
-            let to_read = remaining_levels.min(SKIP_BUFFER_SIZE);
-            buf.resize(to_read, 0);
-            // Decode into the scratch buffer instead of appending to it.
-            let levels_read = self.decoder.as_mut().unwrap().read(&mut buf)?;
-            if levels_read == 0 {
-                // Reached end of page
-                break;
-            }
-
-            level_skip += levels_read;
-            value_skip += buf[..levels_read]
-                .iter()
-                .filter(|&&level| level == self.max_level)
-                .count();
+        if num_levels == 0 {
+            return Ok((0, 0));
         }
-
-        Ok((value_skip, level_skip))
+        match self.decoder.as_mut().unwrap() {
+            LevelDecoder::Rle(reader) => reader.skip_and_count(num_levels, self.max_level),
+            LevelDecoder::Packed(reader, 1) => Ok(reader.skip_and_count_ones(num_levels)),
+            LevelDecoder::Packed(reader, bit_width) => {
+                Ok(reader.skip_and_count(num_levels, *bit_width as usize, self.max_level))
+            }
+        }
     }
 }
 
@@ -659,8 +727,8 @@ mod tests {
         use crate::util::bit_util::BitWriter;
 
         // A multiple of eight avoids ambiguous padding in the final packed run.
-        let num_levels = 2 * SKIP_BUFFER_SIZE + 8;
-        for max_level in [1, 3] {
+        let num_levels = 2056;
+        for max_level in [1, 2, 3, 7, 255, 32767] {
             let bit_width = num_required_bits(max_level as u64);
             for levels in [
                 vec![0; num_levels],
@@ -690,9 +758,12 @@ mod tests {
                     for requested in [
                         0,
                         1,
-                        SKIP_BUFFER_SIZE - 1,
-                        SKIP_BUFFER_SIZE,
-                        SKIP_BUFFER_SIZE + 1,
+                        63,
+                        64,
+                        65,
+                        1023,
+                        1024,
+                        1025,
                         num_levels,
                         num_levels + 17,
                         usize::MAX,

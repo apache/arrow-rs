@@ -20,28 +20,104 @@
 //!
 //! [arrow-rs #11261]: https://github.com/apache/arrow-rs/issues/11261
 //!
-//! The ordinary decoder checks canonical PLAIN sizes first. Only a size mismatch
-//! or the nonconforming FLBA/DELTA_LENGTH_BYTE_ARRAY combination reaches this
-//! module. Repairs happen once per page; normal value decoding and skipping do
-//! not need to know about the historical representation. Producer strings and
-//! embedded Arrow metadata are never used to select a repair.
+//! The ordinary decoder checks canonical PLAIN sizes before selecting a repair.
+//! A bounded prefix probe can rule out the historical layout, but a match never
+//! authorizes repair without an independent physical count. Repairs happen once
+//! per page; normal value decoding does not need to know the historical layout.
+//! Producer strings and embedded Arrow metadata never select a repair.
 //!
 //! Canonical PLAIN has `N * W` bytes; the historical representation has exactly
 //! `N * (W + 4)` bytes with every little-endian length prefix equal to `W`. These
-//! sizes are disjoint for nonempty pages. Empty canonical pages bypass repair.
+//! sizes are disjoint for nonempty pages with the same independently established
+//! `N`. Without that count, the representations can overlap.
 //!
-//! To retire the mitigation, remove this module and its calls in `decoder`,
-//! reject noncanonical PLAIN sizes, and stop including DELTA_LENGTH_BYTE_ARRAY
-//! in the V1 physical-value-count predicate in `GenericColumnReader`. Preserve
-//! canonical size validation and physical-value counting: these also detect
-//! corruption and are not legacy-only behavior. Remove the legacy fixture tests
-//! separately, without removing the canonical validation tests.
+//! To retire the mitigation, remove this module, the compatibility hook in
+//! `decoder::prepare_v1_fixed_len_byte_array`, and the repair calls in the two
+//! normalization helpers there. Replace noncanonical PLAIN repair with a length
+//! error and reject FLBA/DELTA_LENGTH_BYTE_ARRAY instead of normalizing it.
+//! No changes to the column reader's page setup, read/skip loops, byte-budget
+//! validation or canonical tests are required. Keep physical-value validation:
+//! it detects corruption independently of legacy support. Remove legacy fixture
+//! tests separately.
 
 use bytes::Bytes;
 
+use super::decoder::{PreparedFixedLenByteArrayPage, normalize_fixed_len_byte_array_data};
+use crate::basic::Encoding;
 use crate::data_type::Int32Type;
 use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
+
+/// Handle nullable V1 pages that may need compatibility processing. The caller
+/// supplies a lazy, independent count; only ambiguous PLAIN or degenerate pages
+/// invoke it. Returns `true` if preparation is complete; `false` leaves `page`
+/// unchanged for the caller's ordinary canonical path. Work in place so that
+/// ambiguous but canonical pages do not need additional buffer-reference clones.
+pub(super) fn prepare_v1_page(
+    page: &mut PreparedFixedLenByteArrayPage,
+    num_levels: usize,
+    type_length: usize,
+    count_values: &impl Fn() -> Result<usize>,
+) -> Result<bool> {
+    let (num_values, deferred) = match page.encoding {
+        Encoding::PLAIN
+            if num_levels != 0
+                && type_length != 0
+                && may_be_length_prefixed_plain(&page.data, type_length) =>
+        {
+            // Even all prefixes matching is not permission to repair. The
+            // normalizer must first compare the independently counted canonical size.
+            (count_values()?, false)
+        }
+        Encoding::DELTA_LENGTH_BYTE_ARRAY => {
+            if num_levels == 0 || type_length == 0 {
+                (count_values()?, false)
+            } else {
+                let declared = delta_length_value_count(page.data.clone())?;
+                if declared > num_levels {
+                    return Err(general_err!(
+                        "DELTA_LENGTH_BYTE_ARRAY has more values than levels"
+                    ));
+                }
+                (declared, true)
+            }
+        }
+        _ => return Ok(false),
+    };
+    let (encoding, data) = normalize_fixed_len_byte_array_data(
+        std::mem::take(&mut page.data),
+        num_values,
+        type_length,
+        page.encoding,
+    )?;
+    page.encoding = encoding;
+    page.validate_count = deferred;
+    page.data = data;
+    Ok(true)
+}
+
+/// A negative result rules out the supported historical PLAIN layout. A positive
+/// result only requests an independent count: even every prefix matching could
+/// be an ordinary canonical payload. Bound the probe independently of page size.
+fn may_be_length_prefixed_plain(data: &[u8], type_length: usize) -> bool {
+    let Some(stride) = type_length.checked_add(4) else {
+        return false;
+    };
+    !data.is_empty()
+        && data.len().is_multiple_of(stride)
+        && data
+            .chunks_exact(stride)
+            .take(5)
+            .all(|value| u32::from_le_bytes(value[..4].try_into().unwrap()) as usize == type_length)
+}
+
+/// Read the declared number of lengths, not an independent physical count.
+/// The caller must still check lengths, payload bytes and actual definition levels.
+fn delta_length_value_count(data: Bytes) -> Result<usize> {
+    let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+    decoder.set_data(data, 0)?;
+    Ok(decoder.values_left())
+}
 
 /// Remove BYTE_ARRAY length prefixes from a noncanonical PLAIN FLBA section.
 /// The caller has checked `expected_len = num_values * type_length` for overflow
@@ -146,8 +222,137 @@ mod tests {
     use crate::column::reader::decoder::{
         normalize_fixed_len_byte_array_data, normalize_fixed_len_byte_array_payload,
     };
+    use crate::column::reader::tests::{
+        check_incremental_fixed_len_byte_array_pages, nullable_fixed_page, nullable_fixed_reader,
+    };
     use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
     use rand::{prelude::*, rngs::StdRng};
+
+    #[test]
+    fn ordinary_pages_do_not_request_compatibility_counting() {
+        for encoding in [
+            Encoding::PLAIN,
+            Encoding::RLE_DICTIONARY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ] {
+            let mut page = PreparedFixedLenByteArrayPage {
+                encoding,
+                data: Bytes::from_static(b"abcdefghijkl"),
+                validate_count: false,
+            };
+            assert!(
+                !prepare_v1_page(&mut page, 3, 4, &|| {
+                    panic!("ordinary page must not be pre-scanned")
+                })
+                .unwrap()
+            );
+            assert_eq!(page.encoding, encoding);
+            assert_eq!(page.data.as_ref(), b"abcdefghijkl");
+            assert!(!page.validate_count);
+        }
+    }
+
+    #[test]
+    fn matching_prefixes_require_an_independent_count() {
+        let calls = std::cell::Cell::new(0);
+        let raw = Bytes::from(4_u32.to_le_bytes().repeat(10));
+        let mut page = PreparedFixedLenByteArrayPage {
+            encoding: Encoding::PLAIN,
+            data: raw.clone(),
+            validate_count: false,
+        };
+        assert!(
+            prepare_v1_page(&mut page, 20, 4, &|| {
+                calls.set(calls.get() + 1);
+                Ok(10) // ten present values, not twenty logical levels
+            })
+            .unwrap()
+        );
+        assert_eq!(calls.get(), 1);
+        assert_eq!(page.data, raw);
+        assert_eq!(page.encoding, Encoding::PLAIN);
+        assert!(!page.validate_count);
+
+        // Five matching prefixes do not permit accepting a bad sixth prefix.
+        let mut malformed = 4_u32.to_le_bytes().repeat(12);
+        malformed[40..44].fill(0xff);
+        let mut reader = nullable_fixed_reader(vec![nullable_fixed_page(
+            &[1; 6],
+            Encoding::PLAIN,
+            &malformed,
+        )]);
+        let mut values = vec![];
+        assert!(
+            reader
+                .read_records(1, Some(&mut vec![]), None, &mut values)
+                .is_err()
+        );
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn incremental_delta_length_count_validation() {
+        check_incremental_fixed_len_byte_array_pages(Encoding::DELTA_LENGTH_BYTE_ARRAY, |count| {
+            let mut lengths = DeltaBitPackEncoder::<Int32Type>::new();
+            lengths.put(&vec![4; count]).unwrap();
+            let mut payload = lengths.flush_buffer().unwrap().to_vec();
+            payload.extend_from_slice(&b"abcd".repeat(count));
+            payload
+        });
+
+        for lengths in [vec![], vec![4; 5], vec![3, 5]] {
+            let mut encoder = DeltaBitPackEncoder::<Int32Type>::new();
+            encoder.put(&lengths).unwrap();
+            let mut payload = encoder.flush_buffer().unwrap().to_vec();
+            payload.extend(std::iter::repeat_n(
+                b'x',
+                lengths.iter().sum::<i32>() as usize,
+            ));
+            let def = if lengths.is_empty() {
+                [0; 4]
+            } else {
+                [1, 0, 1, 0]
+            };
+            let mut reader = nullable_fixed_reader(vec![nullable_fixed_page(
+                &def,
+                Encoding::DELTA_LENGTH_BYTE_ARRAY,
+                &payload,
+            )]);
+            let result = reader.read_records(1, Some(&mut vec![]), None, &mut vec![]);
+            if lengths.is_empty() {
+                assert_eq!(result.unwrap(), (1, 0, 1));
+                assert_eq!(reader.skip_records(3).unwrap(), 3);
+            } else {
+                // Invalid declared counts or individual lengths remain eager errors.
+                assert!(result.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn prefix_probe_only_rules_out_legacy() {
+        for width in [0, 1, 2, 3, 4, 16, 32] {
+            for count in [0, 1, 5, 6] {
+                let mut data = vec![];
+                for _ in 0..count {
+                    data.extend_from_slice(&(width as u32).to_le_bytes());
+                    data.extend(std::iter::repeat_n(0x55, width));
+                }
+                assert_eq!(may_be_length_prefixed_plain(&data, width), count != 0);
+                if !data.is_empty() {
+                    let mut truncated = data.clone();
+                    truncated.pop();
+                    assert!(!may_be_length_prefixed_plain(&truncated, width));
+                    data[0] ^= 1;
+                    assert!(!may_be_length_prefixed_plain(&data, width));
+                }
+            }
+        }
+        assert!(!may_be_length_prefixed_plain(&[], usize::MAX));
+        let mut data = 4_u32.to_le_bytes().repeat(12);
+        data[40..44].fill(0xff);
+        assert!(may_be_length_prefixed_plain(&data, 4)); // probe is bounded
+    }
 
     #[test]
     fn length_prefixed_plain() {
