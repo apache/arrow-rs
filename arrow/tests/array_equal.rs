@@ -822,6 +822,22 @@ fn test_test_list_view_array<T: OffsetSizeTrait>() {
     test_equal(&a, &b, true);
 }
 
+fn test_list_view_sizes_and_child_nulls<T: OffsetSizeTrait>() {
+    // Same first elements but different sizes, with a null row
+    let a = create_list_view_array::<T, _, _>([Some(vec![Some(1), Some(2)]), None]);
+    let b = create_list_view_array::<T, _, _>([Some(vec![Some(1), Some(2), Some(3)]), None]);
+    test_equal(&a, &b, false);
+
+    // Child values that differ only in their null masks, without and with a null row
+    let a = create_list_view_array::<T, _, _>([Some(vec![Some(1), Some(0)])]);
+    let b = create_list_view_array::<T, _, _>([Some(vec![Some(1), None])]);
+    test_equal(&a, &b, false);
+
+    let a = create_list_view_array::<T, _, _>([None, Some(vec![Some(1), Some(0)])]);
+    let b = create_list_view_array::<T, _, _>([None, Some(vec![Some(1), None])]);
+    test_equal(&a, &b, false);
+}
+
 // Special test for List<ListView<i32>>.
 // This tests the equal_ranges kernel
 fn test_sliced_list_of_list_view<T: OffsetSizeTrait>() {
@@ -869,6 +885,16 @@ fn test_list_view_array() {
 #[test]
 fn test_large_list_view_array() {
     test_test_list_view_array::<i64>();
+}
+
+#[test]
+fn test_list_view_array_sizes_and_child_nulls() {
+    test_list_view_sizes_and_child_nulls::<i32>();
+}
+
+#[test]
+fn test_large_list_view_array_sizes_and_child_nulls() {
+    test_list_view_sizes_and_child_nulls::<i64>();
 }
 
 #[test]
