@@ -764,4 +764,84 @@ mod tests {
         assert_eq!(dict.data_type(), &dict_type);
         assert_eq!(dict.values().data_type(), &ArrowType::Binary);
     }
+
+    #[test]
+    fn test_key_upper_bound_skip_scan_when_bound_fits_otherwise_scan() {
+        let dict_type =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
+        let dict_5 = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])) as ArrayRef;
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(2))
+            .unwrap()
+            .extend_from_slice(&[0, 1, 2, 3]);
+        assert!(matches!(
+            buffer,
+            DictionaryBuffer::Dict {
+                key_upper_bound: Some(4),
+                ..
+            }
+        ));
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
+            .unwrap();
+        assert_eq!(array.len(), 4);
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(4))
+            .unwrap()
+            .extend_from_slice(&[0, 10]);
+        let err = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("dictionary key beyond bounds"), "{err}");
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, None)
+            .unwrap()
+            .extend_from_slice(&[0, 7]);
+        buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
+            .unwrap_err();
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(2))
+            .unwrap()
+            .extend_from_slice(&[0, 1]);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(4))
+            .unwrap()
+            .extend_from_slice(&[10]);
+        assert!(matches!(
+            buffer,
+            DictionaryBuffer::Dict {
+                key_upper_bound: Some(16),
+                ..
+            }
+        ));
+        buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
+            .unwrap_err();
+    }
+
+    #[test]
+    fn test_recycled_keys_vec_allocation_survives_values_to_dict_transition() {
+        let mut recycled: Vec<i32> = Vec::with_capacity(1024);
+        recycled.extend_from_slice(&[7; 512]);
+        let original_ptr = recycled.as_ptr();
+        let original_cap = recycled.capacity();
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_recycled_keys(recycled);
+        let dict = Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef;
+        let keys = buffer.as_keys_with_bit_width(&dict, Some(1)).unwrap();
+
+        assert_eq!(keys.as_ptr(), original_ptr);
+        assert_eq!(keys.capacity(), original_cap);
+        assert!(keys.is_empty());
+    }
 }
