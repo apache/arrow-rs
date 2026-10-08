@@ -439,52 +439,25 @@ impl ParquetMetaDataPushDecoder {
                     self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
                 }
 
-                DecodeState::ReadingPageIndex(mut metadata) => {
-                    // First determine if any page indexes are needed based on
-                    // the specified policies
-                    let range = range_for_page_index(
-                        &metadata,
-                        self.column_index_policy,
-                        self.offset_index_policy,
-                        &self.column_index_mask,
-                        &self.offset_index_mask,
-                    );
-
-                    let Some(page_index_range) = range else {
-                        // There is nothing to decode because both policies are Skip, the masks
-                        // select nothing, or the file has no index ranges. Clear any previously
-                        // loaded indexes while preserving the compatibility behavior that
-                        // PageIndexPolicy::Required accepts files with no page indexes at all.
-                        metadata.set_page_index(None);
-                        self.state = DecodeState::Finished;
-                        return Ok(DecodeResult::Data(*metadata));
-                    };
-
-                    if !self.buffers.has_range(&page_index_range) {
-                        self.state = DecodeState::ReadingPageIndex(metadata);
-                        return Ok(needs_range(page_index_range));
+                DecodeState::ReadingPageIndex(metadata) => {
+                    match self.try_decode_page_index_for_metadata(metadata)? {
+                        PageIndexDecodeResult::NeedsData(ranges) => {
+                            return Ok(DecodeResult::NeedsData(ranges));
+                        }
+                        PageIndexDecodeResult::Data {
+                            mut metadata,
+                            page_index,
+                        } => {
+                            // Install the newly decoded indexes, or clear any existing indexes if
+                            // none were requested or present in the file.
+                            if let Some(page_index) = page_index {
+                                metadata.set_page_index(Some(Arc::new(page_index)));
+                            } else {
+                                metadata.set_page_index(None);
+                            }
+                            return Ok(DecodeResult::Data(*metadata));
+                        }
                     }
-
-                    let buffer = self.get_bytes(&page_index_range)?;
-                    let offset = page_index_range.start;
-                    let page_index = parse_page_index(
-                        &metadata,
-                        self.column_index_policy,
-                        self.offset_index_policy,
-                        &self.column_index_mask,
-                        &self.offset_index_mask,
-                        &buffer,
-                        offset,
-                    )?;
-                    // install the new page index or clear the old one
-                    if let Some(page_index) = page_index {
-                        metadata.set_page_index(Some(Arc::new(page_index)));
-                    } else {
-                        metadata.set_page_index(None);
-                    }
-
-                    self.state = DecodeState::Finished;
-                    return Ok(DecodeResult::Data(*metadata));
                 }
 
                 DecodeState::Finished => return Ok(DecodeResult::Finished),
@@ -529,51 +502,63 @@ impl ParquetMetaDataPushDecoder {
     /// [`ParquetMetaDataReader::read_page_index`]: crate::file::metadata::ParquetMetaDataReader::read_page_index
     /// [`ParquetMetaDataReader::read_page_index_async`]: crate::file::metadata::ParquetMetaDataReader::read_page_index_async
     pub fn try_decode_page_index(&mut self) -> Result<DecodeResult<Option<PageIndex>>> {
-        // stripped down state machine copied from try_decode. need to be in the
-        // `ReadingPageIndex` state initially or this will error.
         match std::mem::replace(&mut self.state, DecodeState::Intermediate) {
             DecodeState::ReadingPageIndex(metadata) => {
-                // First determine if any page indexes are needed based on
-                // the specified policies
-                let range = range_for_page_index(
-                    &metadata,
-                    self.column_index_policy,
-                    self.offset_index_policy,
-                    &self.column_index_mask,
-                    &self.offset_index_mask,
-                );
-
-                let Some(page_index_range) = range else {
-                    self.state = DecodeState::Finished;
-                    return Ok(DecodeResult::Data(None));
-                };
-
-                if !self.buffers.has_range(&page_index_range) {
-                    self.state = DecodeState::ReadingPageIndex(metadata);
-                    return Ok(needs_range(page_index_range));
-                }
-
-                let buffer = self.get_bytes(&page_index_range)?;
-                let offset = page_index_range.start;
-                let page_index = parse_page_index(
-                    &metadata,
-                    self.column_index_policy,
-                    self.offset_index_policy,
-                    &self.column_index_mask,
-                    &self.offset_index_mask,
-                    &buffer,
-                    offset,
-                )?;
-
-                self.state = DecodeState::Finished;
-                Ok(DecodeResult::Data(page_index))
+                Ok(match self.try_decode_page_index_for_metadata(metadata)? {
+                    PageIndexDecodeResult::NeedsData(ranges) => DecodeResult::NeedsData(ranges),
+                    PageIndexDecodeResult::Data { page_index, .. } => {
+                        DecodeResult::Data(page_index)
+                    }
+                })
             }
-
             DecodeState::Finished => Ok(DecodeResult::Finished),
             _ => Err(general_err!(
                 "ParquetMetaDataPushDecoder: internal error, invalid state"
             )),
         }
+    }
+
+    fn try_decode_page_index_for_metadata(
+        &mut self,
+        metadata: Box<ParquetMetaData>,
+    ) -> Result<PageIndexDecodeResult> {
+        let range = range_for_page_index(
+            &metadata,
+            self.column_index_policy,
+            self.offset_index_policy,
+            &self.column_index_mask,
+            &self.offset_index_mask,
+        );
+
+        let Some(page_index_range) = range else {
+            self.state = DecodeState::Finished;
+            return Ok(PageIndexDecodeResult::Data {
+                metadata,
+                page_index: None,
+            });
+        };
+
+        if !self.buffers.has_range(&page_index_range) {
+            self.state = DecodeState::ReadingPageIndex(metadata);
+            return Ok(PageIndexDecodeResult::NeedsData(vec![page_index_range]));
+        }
+
+        let buffer = self.get_bytes(&page_index_range)?;
+        let page_index = parse_page_index(
+            &metadata,
+            self.column_index_policy,
+            self.offset_index_policy,
+            &self.column_index_mask,
+            &self.offset_index_mask,
+            &buffer,
+            page_index_range.start,
+        )?;
+
+        self.state = DecodeState::Finished;
+        Ok(PageIndexDecodeResult::Data {
+            metadata,
+            page_index,
+        })
     }
 
     /// Returns the bytes for the given range from the internal buffer
@@ -608,6 +593,14 @@ enum DecodeState {
     /// State left during the `try_decode` method so something valid is present.
     /// This state should never be observed.
     Intermediate,
+}
+
+enum PageIndexDecodeResult {
+    NeedsData(Vec<Range<u64>>),
+    Data {
+        metadata: Box<ParquetMetaData>,
+        page_index: Option<PageIndex>,
+    },
 }
 
 /// Returns the byte range needed to read the offset/page indexes, based on the
