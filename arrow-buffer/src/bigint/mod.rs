@@ -1649,14 +1649,20 @@ mod tests {
 
         for _ in 0..1000 {
             let mut l = [0_u8; 32];
-            let len = rng.random_range(0..32);
+            let len = rng.random_range(0..=32);
             l.iter_mut().take(len).for_each(|x| *x = rng.random());
 
             let mut r = [0_u8; 32];
-            let len = rng.random_range(0..32);
+            let len = rng.random_range(0..=32);
             r.iter_mut().take(len).for_each(|x| *x = rng.random());
 
-            test_ops(i256::from_le_bytes(l), i256::from_le_bytes(r))
+            // Random bytes almost never produce a negative value of small magnitude
+            let l = i256::from_le_bytes(l);
+            let r = i256::from_le_bytes(r);
+            let l = if rng.random() { l.wrapping_neg() } else { l };
+            let r = if rng.random() { r.wrapping_neg() } else { r };
+
+            test_ops(l, r)
         }
     }
 
