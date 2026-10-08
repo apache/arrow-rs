@@ -535,20 +535,14 @@ impl ParquetPushDecoder {
     /// Note this can be the entire file or just a part of it. If it is part of the file,
     /// the ranges should correspond to the data ranges requested by the decoder.
     ///
-    /// When the decoder is done with a row group that it reads, it releases
-    /// the pushed bytes of all column chunks of that row group, unless the
-    /// scan reads the row group again. This is also true for bytes that the
-    /// decoder did not request, and for bytes in a buffer that is larger than
-    /// a requested range. The decoder does not release the bytes of row
-    /// groups that it does not read (for example, row groups without selected
-    /// rows, or after the limit). Call [`Self::clear_all_ranges`] to release
-    /// them.
+    /// # Memory Usage
     ///
-    /// Releasing bytes decreases [`Self::buffered_bytes`], but the memory of
-    /// a pushed [`Bytes`] is freed only after all zero-copy slices of it are
-    /// dropped. For example, the footer bytes of a full-file push stay
-    /// buffered, and a reader holds slices of the bytes that it reads. Each
-    /// of these slices keeps the whole pushed allocation alive.
+    /// The decoder releases the pushed bytes that it will not read again (for
+    /// example, the bytes of a row group when it is done with that row group).
+    /// However, it does not release *all* pushed bytes: it keeps the bytes of
+    /// row groups that it does not read (for example, row groups without
+    /// selected rows, or after the limit). Call [`Self::clear_all_ranges`] to
+    /// release them.
     ///
     /// See example in [`ParquetPushDecoderBuilder`]
     pub fn push_range(&mut self, range: Range<u64>, data: Bytes) -> Result<(), ParquetError> {
@@ -690,9 +684,8 @@ impl ParquetPushDecoder {
     /// The decoder's buffered bytes are carried across the rebuild: bytes
     /// already fetched for row groups the new configuration still reads are
     /// not re-requested. [`build`](ParquetPushDecoderBuilder::build) releases
-    /// the bytes that the new configuration does not read: the bytes outside
-    /// the read column chunks of the row groups that it reads (for example,
-    /// the bytes of a row group that the new configuration skips).
+    /// the bytes that the new configuration does not read. See
+    /// [`push_range`](Self::push_range) for more details.
     pub fn into_builder(self) -> Result<ParquetPushDecoderBuilder, ParquetError> {
         self.state.into_builder()
     }

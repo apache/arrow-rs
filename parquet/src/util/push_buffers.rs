@@ -261,8 +261,7 @@ impl PushBuffers {
             .unwrap_or(0);
     }
 
-    /// Remove all buffered bytes in `ranges`, whatever the shape of the
-    /// pushed buffers.
+    /// Remove all buffered bytes in `ranges`.
     ///
     /// A buffer that overlaps a range is trimmed or split, and the parts
     /// outside the range are kept. The kept parts are zero-copy slices. Thus,
@@ -368,8 +367,7 @@ impl PushBuffers {
         self.update_max_len();
     }
 
-    /// Remove all buffered bytes outside `keep`, whatever the shape of the
-    /// pushed buffers.
+    /// Remove all buffered bytes outside `keep`.
     ///
     /// This calls [`Self::release_ranges`] with the complement of `keep`, so
     /// the same rules apply to the kept parts.
@@ -815,7 +813,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "arrow")]
-    fn release_ranges_matches_rebuild() {
+    fn fuzz_release_ranges_matches_rebuild() {
         use rand::{RngExt, SeedableRng, rngs::StdRng};
         let data: Vec<u8> = (0..=255).collect();
         let mut rng = StdRng::seed_from_u64(42);
