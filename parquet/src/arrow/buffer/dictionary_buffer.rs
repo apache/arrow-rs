@@ -38,16 +38,32 @@ use std::sync::Arc;
 /// An array of variable length byte arrays that are potentially dictionary encoded
 /// and can be converted into a corresponding [`ArrayRef`]
 pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
-    Dict { keys: Vec<K>, values: ArrayRef },
-    Values { values: OffsetBuffer<V> },
+    Dict {
+        keys: Vec<K>,
+        values: ArrayRef,
+    },
+    Values {
+        values: OffsetBuffer<V>,
+        /// Recycled keys vec from the previous batch, adopted on transition to `Dict`.
+        recycled_keys: Option<Vec<K>>,
+    },
 }
 
 impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
+    /// `Values` variant seeded with a recycled keys vec; only the allocation is reused.
+    pub fn with_recycled_keys(mut recycled_keys: Vec<K>) -> Self {
+        recycled_keys.clear();
+        Self::Values {
+            values: OffsetBuffer::with_capacity(0),
+            recycled_keys: Some(recycled_keys),
+        }
+    }
+
     #[cfg_attr(not(test), expect(unused))]
     pub fn len(&self) -> usize {
         match self {
             Self::Dict { keys, .. } => keys.len(),
-            Self::Values { values } => values.len(),
+            Self::Values { values, .. } => values.len(),
         }
     }
 
@@ -77,9 +93,13 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     None
                 }
             }
-            Self::Values { values } if values.is_empty() => {
+            Self::Values {
+                values,
+                recycled_keys,
+            } if values.is_empty() => {
+                let keys = recycled_keys.take().unwrap_or_default();
                 *self = Self::Dict {
-                    keys: Default::default(),
+                    keys,
                     values: Arc::clone(dictionary),
                 };
                 match self {
@@ -97,7 +117,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
     /// dictionary encoded representation
     pub fn spill_values(&mut self) -> Result<&mut OffsetBuffer<V>> {
         match self {
-            Self::Values { values } => Ok(values),
+            Self::Values { values, .. } => Ok(values),
             Self::Dict { keys, values } => {
                 let mut spilled = OffsetBuffer::with_capacity(0);
                 let data = values.to_data();
@@ -117,21 +137,26 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     spilled.extend_from_dictionary(keys.as_slice(), dict_offsets, dict_values)?;
                 }
 
-                *self = Self::Values { values: spilled };
+                *self = Self::Values {
+                    values: spilled,
+                    recycled_keys: None,
+                };
                 match self {
-                    Self::Values { values } => Ok(values),
+                    Self::Values { values, .. } => Ok(values),
                     Self::Dict { .. } => unreachable!(),
                 }
             }
         }
     }
 
-    /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
+    /// Converts this into an [`ArrayRef`]. `keys_buffer_sink` receives a clone
+    /// of the keys buffer for next-batch reclamation; pass `&mut None` to skip.
     pub fn into_array(
         self,
         null_buffer: Option<Buffer>,
         data_type: &ArrowType,
         hash_scratch: &mut MutableBuffer,
+        keys_buffer_sink: &mut Option<Buffer>,
     ) -> Result<ArrayRef> {
         assert!(matches!(data_type, ArrowType::Dictionary(_, _)));
 
@@ -172,9 +197,13 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     values
                 };
 
+                let keys_len = keys.len();
+                let keys_buffer = Buffer::from_vec(keys);
+                *keys_buffer_sink = Some(keys_buffer.clone());
+
                 let builder = ArrayDataBuilder::new(data_type.clone())
-                    .len(keys.len())
-                    .add_buffer(Buffer::from_vec(keys))
+                    .len(keys_len)
+                    .add_buffer(keys_buffer)
                     .add_child_data(values.into_data())
                     .null_bit_buffer(null_buffer);
 
@@ -185,7 +214,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
 
                 Ok(make_array(data))
             }
-            Self::Values { values } => {
+            Self::Values { values, .. } => {
                 let (key_type, value_type) = match data_type {
                     ArrowType::Dictionary(k, v) => (k, v.as_ref().clone()),
                     _ => unreachable!(),
@@ -204,6 +233,7 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
     fn with_capacity(capacity: usize) -> Self {
         Self::Values {
             values: OffsetBuffer::with_capacity(capacity),
+            recycled_keys: None,
         }
     }
 
@@ -472,7 +502,12 @@ mod tests {
         let split = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0));
 
         let array = split
-            .into_array(Some(null_buffer), &dict_type, &mut MutableBuffer::new(0))
+            .into_array(
+                Some(null_buffer),
+                &dict_type,
+                &mut MutableBuffer::new(0),
+                &mut None,
+            )
             .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
@@ -507,7 +542,7 @@ mod tests {
             .extend_from_slice(&[0, 1, 0, 1]);
 
         let array = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0))
-            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
@@ -539,7 +574,7 @@ mod tests {
         buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 2, 0]);
 
         let err = buffer
-            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap_err()
             .to_string();
         assert!(
@@ -572,7 +607,7 @@ mod tests {
         }
 
         let array = buffer
-            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap();
         let dict = array
             .as_any()
@@ -599,7 +634,7 @@ mod tests {
                     .unwrap();
             }
             buffer
-                .into_array(None, &dict_type, &mut scratch)
+                .into_array(None, &dict_type, &mut scratch, &mut None)
                 .expect("128 unique strings must fit: last index is 127 = i8::MAX");
         }
 
@@ -612,7 +647,7 @@ mod tests {
                     .unwrap();
             }
             let err = buffer
-                .into_array(None, &dict_type, &mut scratch)
+                .into_array(None, &dict_type, &mut scratch, &mut None)
                 .unwrap_err()
                 .to_string();
             assert!(
@@ -667,7 +702,7 @@ mod tests {
         }
 
         let array = buffer
-            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap();
         let dict = array
             .as_any()
@@ -676,5 +711,21 @@ mod tests {
 
         assert_eq!(dict.data_type(), &dict_type);
         assert_eq!(dict.values().data_type(), &ArrowType::Binary);
+    }
+
+    #[test]
+    fn test_recycled_keys_vec_allocation_survives_values_to_dict_transition() {
+        let mut recycled: Vec<i32> = Vec::with_capacity(1024);
+        recycled.extend_from_slice(&[7; 512]);
+        let original_ptr = recycled.as_ptr();
+        let original_cap = recycled.capacity();
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_recycled_keys(recycled);
+        let dict = Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef;
+        let keys = buffer.as_keys(&dict).unwrap();
+
+        assert_eq!(keys.as_ptr(), original_ptr);
+        assert_eq!(keys.capacity(), original_cap);
+        assert!(keys.is_empty());
     }
 }
