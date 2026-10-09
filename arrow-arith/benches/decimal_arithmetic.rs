@@ -94,30 +94,42 @@ fn random_decimal<T: DecimalType>(
     decimal::<T>(values, scale)
 }
 
-/// Benchmarks dividing values with scale 10 by a scalar with scale 2, for each
-/// pair of value and divisor digit counts in `cases`
-fn benchmark_scalar<T: DecimalType>(c: &mut Criterion, name: &str, cases: [(u32, u32); 4]) {
+/// Benchmarks `div` and `rem` of values with scale `scale` by a scalar, for each pair of value
+/// and divisor digit counts in `div_cases` and `rem_cases`
+///
+/// For `div` the divisor has scale 2, so `div` scales the values by 10^6. For `rem` the divisor
+/// has scale `scale`, because `rem` scales the divisor to the larger scale, which would change
+/// its digit count.
+fn benchmark_scalar<T: DecimalType>(
+    c: &mut Criterion,
+    name: &str,
+    scale: i8,
+    div_cases: &[(u32, u32)],
+    rem_cases: &[(u32, u32)],
+) {
     let mut group = c.benchmark_group(format!("{name}_scalar"));
     group.throughput(Throughput::Elements(SIZE as u64));
-    for (digits, divisor_digits) in cases {
-        let array = random_decimal::<T>(SIZE, digits, 10, 42);
-        let divisor = Scalar::new(random_decimal::<T>(1, divisor_digits, 2, 42));
-        for (op, kernel) in [("div", div as Kernel), ("rem", rem)] {
+    let ops = [
+        ("div", div as Kernel, 2, div_cases),
+        ("rem", rem as Kernel, scale, rem_cases),
+    ];
+    for (op, kernel, divisor_scale, cases) in ops {
+        for &(digits, divisor_digits) in cases {
+            let array = random_decimal::<T>(SIZE, digits, scale, 42);
+            let divisor = Scalar::new(random_decimal::<T>(1, divisor_digits, divisor_scale, 42));
             group.bench_function(
                 format!("{op}_{digits}_digits_by_{divisor_digits}_digits/no_nulls"),
                 |b| b.iter(|| hint::black_box(kernel(&array, &divisor).unwrap())),
             );
         }
-    }
 
-    // `try_unary` visits only the valid values when the array has nulls
-    let (digits, divisor_digits) = cases[0];
-    let array = random_decimal::<T>(SIZE, digits, 10, 42);
-    let nulls = NullBuffer::from_iter((0..SIZE).map(|i| i % 5 != 0));
-    let with_nulls = PrimitiveArray::<T>::new(array.values().clone(), Some(nulls))
-        .with_data_type(array.data_type().clone());
-    let divisor = Scalar::new(random_decimal::<T>(1, divisor_digits, 2, 42));
-    for (op, kernel) in [("div", div as Kernel), ("rem", rem)] {
+        // `try_unary` visits only the valid values when the array has nulls
+        let (digits, divisor_digits) = cases[0];
+        let array = random_decimal::<T>(SIZE, digits, scale, 42);
+        let nulls = NullBuffer::from_iter((0..SIZE).map(|i| i % 5 != 0));
+        let with_nulls = PrimitiveArray::<T>::new(array.values().clone(), Some(nulls))
+            .with_data_type(array.data_type().clone());
+        let divisor = Scalar::new(random_decimal::<T>(1, divisor_digits, divisor_scale, 42));
         group.bench_function(
             format!("{op}_{digits}_digits_by_{divisor_digits}_digits/mixed_nulls"),
             |b| b.iter(|| hint::black_box(kernel(&with_nulls, &divisor).unwrap())),
@@ -125,10 +137,10 @@ fn benchmark_scalar<T: DecimalType>(c: &mut Criterion, name: &str, cases: [(u32,
     }
 
     // Small arrays, where the cost of setting up a division can outweigh the per-value work
-    let (digits, divisor_digits) = cases[1];
+    let (digits, divisor_digits) = div_cases[0];
     let divisor = Scalar::new(random_decimal::<T>(1, divisor_digits, 2, 42));
     for len in [1, 16, 128] {
-        let array = random_decimal::<T>(len, digits, 10, 42);
+        let array = random_decimal::<T>(len, digits, scale, 42);
         group.throughput(Throughput::Elements(len as u64));
         group.bench_function(
             format!("div_{digits}_digits_by_{divisor_digits}_digits/{len}_values"),
@@ -138,15 +150,30 @@ fn benchmark_scalar<T: DecimalType>(c: &mut Criterion, name: &str, cases: [(u32,
     group.finish();
 }
 
-/// Decimal32 and Decimal64 divide with the same instructions as Int32 and Int64,
-/// which the `integer_division` benchmark covers
 fn decimal_scalar_division(c: &mut Criterion) {
-    // `div` scales the values by 10^6. The cases are a value that fits in 64 bits after scaling,
-    // a wider value, a divisor wider than 64 bits, and a value that overflows when scaled, which
-    // `div` handles one digit at a time
-    benchmark_scalar::<Decimal128Type>(c, "decimal128", [(10, 4), (30, 4), (30, 21), (34, 4)]);
+    // The `div` cases are values that fit after scaling and values that overflow when scaled,
+    // which `div` divides one digit at a time. For each overflowing value, `div` also builds an
+    // `ArrowError` and discards it before falling back.
+    benchmark_scalar::<Decimal32Type>(c, "decimal32", 2, &[(3, 4), (6, 4)], &[(9, 4)]);
+    // A value that fits in 32 bits after scaling, a wider one, and one that overflows
+    benchmark_scalar::<Decimal64Type>(c, "decimal64", 2, &[(3, 4), (12, 4), (15, 4)], &[(18, 4)]);
+    // A value that fits in 64 bits after scaling, a wider one, a divisor wider than 64 bits, and a
+    // value that overflows. `rem` doesn't scale the values, so it has no overflow case.
+    benchmark_scalar::<Decimal128Type>(
+        c,
+        "decimal128",
+        10,
+        &[(10, 4), (30, 4), (30, 21), (34, 4)],
+        &[(10, 4), (30, 4), (30, 21)],
+    );
     // The same cases for 128 bits
-    benchmark_scalar::<Decimal256Type>(c, "decimal256", [(30, 4), (60, 4), (60, 40), (72, 4)]);
+    benchmark_scalar::<Decimal256Type>(
+        c,
+        "decimal256",
+        10,
+        &[(30, 4), (60, 4), (60, 40), (72, 4)],
+        &[(30, 4), (60, 4), (60, 40)],
+    );
 }
 
 /// Benchmarks `multiply_fixed_point`, which computes each product in `i256` and divides it by
