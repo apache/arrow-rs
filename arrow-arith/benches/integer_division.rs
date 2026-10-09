@@ -31,28 +31,21 @@ const SIZE: usize = 8192;
 
 type Kernel = fn(&dyn Datum, &dyn Datum) -> Result<ArrayRef, ArrowError>;
 
-/// Creates an array of `len` uniformly random values
-fn random_array<T: ArrowPrimitiveType>(len: usize) -> PrimitiveArray<T>
-where
-    StandardUniform: Distribution<T::Native>,
-{
-    let mut rng = StdRng::seed_from_u64(42);
-    PrimitiveArray::from_iter_values((0..len).map(|_| rng.random()))
-}
-
 fn benchmark<T: ArrowPrimitiveType>(c: &mut Criterion, name: &str)
 where
     StandardUniform: Distribution<T::Native>,
 {
-    let array = random_array::<T>(SIZE);
-    let nulls = NullBuffer::from_iter((0..SIZE).map(|i| i % 5 != 0));
+    let mut rng = StdRng::seed_from_u64(42);
+    let array = PrimitiveArray::<T>::from_iter_values((0..SIZE).map(|_| rng.random()));
+    // A fifth of the values null, at random positions
+    let nulls = NullBuffer::from_iter((0..SIZE).map(|_| rng.random_ratio(4, 5)));
     let with_nulls = PrimitiveArray::<T>::new(array.values().clone(), Some(nulls));
-    let mut group = c.benchmark_group(name);
+    let mut group = c.benchmark_group(format!("integer_division_{name}"));
+    group.throughput(Throughput::Elements(SIZE as u64));
     for (op, kernel) in [("div", div as Kernel), ("rem", rem)] {
         // 16 is a power of two, which a precomputed divisor can replace with a shift or mask
         for d in [13, 16] {
             let divisor = PrimitiveArray::<T>::new_scalar(T::Native::usize_as(d));
-            group.throughput(Throughput::Elements(SIZE as u64));
             group.bench_function(format!("{op}_{d}/no_nulls"), |b| {
                 b.iter(|| black_box(kernel(black_box(&array), black_box(&divisor)).unwrap()))
             });
@@ -63,15 +56,14 @@ where
             b.iter(|| black_box(kernel(black_box(&with_nulls), black_box(&divisor)).unwrap()))
         });
     }
-    // Small arrays, where the cost of setting up a division can outweigh the per-value work
+    // A small array, where building a divisor is a larger share of the work. On fewer values,
+    // the fixed cost of each call is far larger than building a divisor for these types.
+    let small = array.slice(0, 128);
     let divisor = PrimitiveArray::<T>::new_scalar(T::Native::usize_as(13));
-    for len in [1, 16, 128] {
-        let array = random_array::<T>(len);
-        group.throughput(Throughput::Elements(len as u64));
-        group.bench_function(format!("div_13/{len}_values"), |b| {
-            b.iter(|| black_box(div(black_box(&array), black_box(&divisor)).unwrap()))
-        });
-    }
+    group.throughput(Throughput::Elements(small.len() as u64));
+    group.bench_function("div_13/128_values", |b| {
+        b.iter(|| black_box(div(black_box(&small), black_box(&divisor)).unwrap()))
+    });
     group.finish();
 }
 
