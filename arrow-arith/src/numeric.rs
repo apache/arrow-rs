@@ -28,7 +28,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
-use num_traits::ToPrimitive;
+use num_traits::{CheckedMul, ToPrimitive};
 
 use crate::arity::{binary, try_binary};
 
@@ -1026,7 +1026,10 @@ fn decimal_op<T: DecimalType>(
     l_s: bool,
     r: &dyn Array,
     r_s: bool,
-) -> Result<ArrayRef, ArrowError> {
+) -> Result<ArrayRef, ArrowError>
+where
+    T::Native: CheckedMul,
+{
     let l = l.as_primitive::<T>();
     let r = r.as_primitive::<T>();
 
@@ -1133,14 +1136,15 @@ fn decimal_op<T: DecimalType>(
                 ),
             };
 
+            // On overflow, `mul_checked` would build an `ArrowError` for the fallback to discard
             try_op!(
                 l,
                 l_s,
                 r,
                 r_s,
-                match l.mul_checked(l_mul) {
-                    Ok(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
-                    Err(_) => scaled_div::<T>(l, r, mul_pow),
+                match l.checked_mul(&l_mul) {
+                    Some(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
+                    None => scaled_div::<T>(l, r, mul_pow),
                 }
             )
             .with_precision_and_scale(result_precision, result_scale)?
@@ -1711,6 +1715,41 @@ mod tests {
                     let expected = expected.with_precision_and_scale(1, scale + 4).unwrap();
                     assert_eq!(div(&a, &b).unwrap().as_ref(), &expected);
                 }
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_decimal_div_scaling_overflow_boundary() {
+        // `div` scales `l` by 10^6, which overflows just past `MAX / 10^6` and `MIN / 10^6`.
+        // Dividing by 10^6 returns each value, on either side of the boundary.
+        fn check<T: DecimalType>() {
+            let one = T::Native::ONE;
+            let pow = T::Native::usize_as(1_000_000);
+            let max = T::Native::MAX_TOTAL_ORDER.div_wrapping(pow);
+            let min = T::Native::MIN_TOTAL_ORDER.div_wrapping(pow);
+            let values = [
+                max,
+                max.add_wrapping(one),
+                min,
+                min.sub_wrapping(one),
+                T::Native::MAX_TOTAL_ORDER,
+                T::Native::MIN_TOTAL_ORDER.add_wrapping(one),
+            ];
+            let a = PrimitiveArray::<T>::from_iter_values(values)
+                .with_precision_and_scale(T::MAX_PRECISION, 2)
+                .unwrap();
+            for (divisor, negate) in [(pow, false), (pow.neg_wrapping(), true)] {
+                let b = PrimitiveArray::<T>::from_iter_values([divisor])
+                    .with_precision_and_scale(T::MAX_PRECISION, 2)
+                    .unwrap();
+                let result = div(&a, &Scalar::new(b)).unwrap();
+                let expected = values.map(|v| if negate { v.neg_wrapping() } else { v });
+                assert_eq!(result.as_primitive::<T>().values().as_ref(), expected);
             }
         }
         check::<Decimal32Type>();
