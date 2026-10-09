@@ -260,6 +260,9 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 if values_read == levels_read {
                     // Every level is at `max_level`
                     nulls.append_n(levels_read, true);
+                } else if values_read == 0 {
+                    // No level is at `max_level`
+                    nulls.append_n(levels_read, false);
                 } else {
                     // Safety: slice iterator has a trusted length
                     unsafe {
