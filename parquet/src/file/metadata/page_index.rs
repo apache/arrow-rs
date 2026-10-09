@@ -455,6 +455,7 @@ impl<T: HeapSize> HeapSize for PageIndexMap<T> {
 struct PageIndexEntries<T> {
     num_row_groups: usize,
     num_columns: usize,
+    /// Only populated cells are stored; a missing key represents an absent index.
     entries: Box<[(PageIndexKey, Arc<T>)]>,
 }
 
@@ -713,14 +714,12 @@ impl PageIndexBuilder {
     /// Panics if either dimension exceeds `i32::MAX`, the maximum collection size representable
     /// by Thrift.
     ///
-    /// Use [`try_new`](Self::try_new) for a non-panicking alternative that returns a `Result`.
+    /// Use [`try_new`](Self::try_new) for a fallible alternative.
     pub fn new(num_row_groups: usize, num_columns: usize) -> Self {
         Self::try_new(num_row_groups, num_columns).expect("invalid page index dimensions")
     }
 
-    /// Creates a new [`PageIndexBuilder`] for the specified number of row groups and columns.
-    ///
-    /// This is a fallible version of [`new`](Self::new) that returns a `Result` instead of panicking.
+    /// Attempts to create a new [`PageIndexBuilder`] for the specified number of row groups and columns.
     ///
     /// # Errors
     ///
@@ -759,16 +758,15 @@ impl PageIndexBuilder {
     /// by Thrift.
     ///
     /// Use [`try_allocate_column_indexes`](Self::try_allocate_column_indexes) for a
-    /// non-panicking alternative that returns a `Result`.
+    /// fallible alternative.
     pub fn allocate_column_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
         self.try_allocate_column_indexes(num_row_groups, num_columns)
             .expect("invalid page index dimensions");
     }
 
-    /// Allocates space for column indexes
+    /// Attempts to allocate space for column indexes
     ///
-    /// This is a fallible version of [`allocate_column_indexes`](Self::allocate_column_indexes)
-    /// that returns a `Result` instead of panicking.
+    /// This is a fallible version of [`allocate_column_indexes`](Self::allocate_column_indexes).
     ///
     /// # Errors
     ///
@@ -798,16 +796,15 @@ impl PageIndexBuilder {
     /// by Thrift.
     ///
     /// Use [`try_allocate_offset_indexes`](Self::try_allocate_offset_indexes) for a
-    /// non-panicking alternative that returns a `Result`.
+    /// fallible alternative.
     pub fn allocate_offset_indexes(&mut self, num_row_groups: usize, num_columns: usize) {
         self.try_allocate_offset_indexes(num_row_groups, num_columns)
             .expect("invalid page index dimensions");
     }
 
-    /// Allocates space for offset indexes
+    /// Attempts to allocate space for offset indexes
     ///
-    /// This is a fallible version of [`allocate_offset_indexes`](Self::allocate_offset_indexes)
-    /// that returns a `Result` instead of panicking.
+    /// This is a fallible version of [`allocate_offset_indexes`](Self::allocate_offset_indexes).
     ///
     /// # Errors
     ///
