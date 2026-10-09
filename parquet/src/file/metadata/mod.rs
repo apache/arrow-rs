@@ -222,9 +222,10 @@ impl ParquetMetaData {
     /// 2. Includes heap memory for sub fields such as [`FileMetaData`] and
     ///    [`RowGroupMetaData`].
     ///
-    /// 3. Includes memory from shared pointers (e.g. [`SchemaDescPtr`]). This
-    ///    means `memory_size` will over estimate the memory size if such pointers
-    ///    are shared.
+    /// 3. Includes memory from shared pointers (e.g. [`SchemaDescPtr`] and the
+    ///    [`Arc`] values in a [`PageIndex`]). This means `memory_size` will over
+    ///    estimate the memory size if such pointers are shared, including when
+    ///    page indexes are also held in an external cache.
     ///
     /// 4. Does not include any allocator overheads
     pub fn memory_size(&self) -> usize {
@@ -2358,10 +2359,22 @@ mod tests {
 
         let mut builder = PageIndexBuilder::new(2, 2);
         // Insert out of order to verify the immutable representation sorts its entries.
-        assert!(builder.try_put_column_index_shared(Arc::clone(&col_idx), 1, 0));
-        assert!(builder.try_put_column_index_shared(Arc::clone(&col_idx), 0, 1));
+        assert!(
+            builder
+                .try_put_column_index_shared(Arc::clone(&col_idx), 1, 0)
+                .is_ok()
+        );
+        assert!(
+            builder
+                .try_put_column_index_shared(Arc::clone(&col_idx), 0, 1)
+                .is_ok()
+        );
         // Coordinates outside the declared shape are reported and ignored.
-        assert!(!builder.try_put_column_index_shared(Arc::clone(&col_idx), 2, 0));
+        assert!(
+            builder
+                .try_put_column_index_shared(Arc::clone(&col_idx), 2, 0)
+                .is_err()
+        );
         let page_index = builder.build();
 
         assert!(std::ptr::eq(

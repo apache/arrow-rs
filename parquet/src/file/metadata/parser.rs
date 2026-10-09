@@ -312,11 +312,7 @@ fn parse_column_index(
                 let idx_bytes = get_index_bytes(bytes, start_offset, r)?;
                 let idx =
                     inner::parse_single_column_index(idx_bytes, metadata, col, rg_idx, col_idx)?;
-                if !page_index_builder.try_put_column_index(idx, rg_idx, col_idx) {
-                    return Err(general_err!(
-                        "column index coordinate out of bounds: row group {rg_idx}, column {col_idx}"
-                    ));
-                }
+                page_index_builder.try_put_column_index(idx, rg_idx, col_idx)?;
             }
         }
     }
@@ -343,11 +339,7 @@ fn parse_offset_index(
                 let idx_bytes = get_index_bytes(bytes, start_offset, r)?;
                 let idx =
                     inner::parse_single_offset_index(idx_bytes, metadata, col, rg_idx, col_idx)?;
-                if !page_index_builder.try_put_offset_index(idx, rg_idx, col_idx) {
-                    return Err(general_err!(
-                        "offset index coordinate out of bounds: row group {rg_idx}, column {col_idx}"
-                    ));
-                }
+                page_index_builder.try_put_offset_index(idx, rg_idx, col_idx)?;
             } else if offset_index_policy == PageIndexPolicy::Required {
                 return Err(general_err!("missing offset index"));
             }

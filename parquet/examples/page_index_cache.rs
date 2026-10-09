@@ -26,7 +26,9 @@
 //! 4. Builds a query-specific [`PageIndex`] from shared cache entries
 //!
 //! A production cache shared by multiple files would also include a stable file identity and
-//! freshness information in its keys.
+//! freshness information in its keys. This example also caches only indexes that are present;
+//! it does not record negative results. Consequently, it may request a missing index again on a
+//! later query. A production cache should track coordinates known not to have an index.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -36,7 +38,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
-use parquet::errors::{ParquetError, Result};
+use parquet::errors::Result;
 use parquet::file::metadata::page_index::{PageIndex, PageIndexBuilder, PageIndexProvider};
 use parquet::file::metadata::{
     ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
@@ -108,32 +110,22 @@ impl PageIndexCache {
             column_index_mask.column_chunk_indices(num_row_groups, num_columns)
         {
             if let Some(index) = self.column_indexes.get(&key) {
-                if !builder.try_put_column_index_shared(
+                builder.try_put_column_index_shared(
                     Arc::clone(index),
                     row_group_idx,
                     column_idx,
-                ) {
-                    return Err(ParquetError::General(format!(
-                        "failed to add cached column index for row group {row_group_idx}, \
-                         column {column_idx}"
-                    )));
-                }
+                )?;
             }
         }
         for key @ (row_group_idx, column_idx) in
             offset_index_mask.column_chunk_indices(num_row_groups, num_columns)
         {
             if let Some(index) = self.offset_indexes.get(&key) {
-                if !builder.try_put_offset_index_shared(
+                builder.try_put_offset_index_shared(
                     Arc::clone(index),
                     row_group_idx,
                     column_idx,
-                ) {
-                    return Err(ParquetError::General(format!(
-                        "failed to add cached offset index for row group {row_group_idx}, \
-                         column {column_idx}"
-                    )));
-                }
+                )?;
             }
         }
         Ok(builder.build())
