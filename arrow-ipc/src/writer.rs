@@ -1332,6 +1332,11 @@ pub(crate) fn unslice_run_array(arr: ArrayData) -> Result<ArrayData, ArrowError>
 fn into_zero_offset_run_array<R: RunEndIndexType>(
     run_array: RunArray<R>,
 ) -> Result<RunArray<R>, ArrowError> {
+    // Empty slices have no physical runs, regardless of their offset.
+    if run_array.is_empty() {
+        return Ok(ArrayData::new_empty(run_array.data_type()).into());
+    }
+
     let run_ends = run_array.run_ends();
     if run_ends.offset() == 0 && run_ends.max_value() == run_ends.len() {
         return Ok(run_array);
@@ -3814,6 +3819,56 @@ mod tests {
         let data = serialize_stream(&batch);
         let batch2 = deserialize_stream(data);
         assert_eq!(batch, batch2);
+    }
+
+    fn assert_empty_run_array_roundtrip<R: RunEndIndexType>() {
+        let run_ends = PrimitiveArray::<R>::from_iter_values(
+            [2, 5]
+                .into_iter()
+                .map(|v| R::Native::from_usize(v).unwrap()),
+        );
+        let values = Int32Array::from(vec![10, 20]);
+        let array = RunArray::<R>::try_new(&run_ends, &values).unwrap();
+        let empty = RunArray::<R>::from(ArrayData::new_empty(array.data_type()));
+
+        for source in [&array, &empty] {
+            for offset in 0..=source.len() {
+                let sliced = source.slice(offset, 0);
+                let batch = RecordBatch::try_from_iter(vec![("run", Arc::new(sliced) as ArrayRef)])
+                    .unwrap();
+                for decoded in [
+                    deserialize_stream(serialize_stream(&batch)),
+                    deserialize_file(serialize_file(&batch)),
+                ] {
+                    assert_eq!(decoded, batch);
+                    let data = decoded.column(0).to_data();
+                    data.validate_full().unwrap();
+                    assert_eq!(data.offset(), 0);
+                    assert!(data.child_data().iter().all(ArrayData::is_empty));
+                }
+
+                let normalized = into_zero_offset_run_array(source.slice(offset, 0)).unwrap();
+                normalized.to_data().validate_full().unwrap();
+                assert_eq!(normalized.offset(), 0);
+                assert!(normalized.run_ends().values().is_empty());
+                assert!(normalized.values().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn test_empty_run_array_roundtrip_i16() {
+        assert_empty_run_array_roundtrip::<Int16Type>();
+    }
+
+    #[test]
+    fn test_empty_run_array_roundtrip_i32() {
+        assert_empty_run_array_roundtrip::<Int32Type>();
+    }
+
+    #[test]
+    fn test_empty_run_array_roundtrip_i64() {
+        assert_empty_run_array_roundtrip::<Int64Type>();
     }
 
     #[test]

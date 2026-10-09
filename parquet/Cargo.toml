@@ -270,6 +270,11 @@ required-features = ["arrow", "async"]
 harness = false
 
 [[bench]]
+name = "arrow_reader_string_encoding"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "arrow_reader_predicate_fusion"
 required-features = ["arrow", "async", "snap"]
 harness = false
@@ -327,6 +332,11 @@ required-features = ["arrow"]
 name = "row_group_index_reader"
 required-features = ["arrow"]
 harness = false
+
+[[bench]]
+name = "row_selection_algebra"
+harness = false
+required-features = ["arrow"]
 
 [[bench]]
 name = "row_selection_cursor"

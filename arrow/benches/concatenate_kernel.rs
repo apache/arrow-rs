@@ -192,6 +192,27 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_concat(&v1, &v2))
     });
 
+    // A column assembled from one-row arrays, as ScalarValue::iter_to_array in DataFusion does
+    {
+        let input = (0..1024)
+            .map(|_| create_primitive_fixed_size_list_array::<Float32Type>(1, 0.0, 0.0, 3))
+            .collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat 1024 arrays fixed size list f32x3 1", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
+    {
+        // Slices, as the generator's fixed seed would give every one-row array the same validity
+        let input = create_primitive_fixed_size_list_array::<Float32Type>(1024, 0.2, 0.0, 3);
+        let slices = (0..1024).map(|i| input.slice(i, 1)).collect::<Vec<_>>();
+        let arrays: Vec<_> = slices.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat 1024 arrays fixed size list f32x3 nulls 1", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
     {
         let batch_size = 1024;
         let batch_count = 2;
