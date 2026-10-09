@@ -36,15 +36,11 @@ pub trait ColumnLevelDecoder {
 }
 
 pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
-    /// Read up to `max_records` of repetition level data into `out` returning the number
-    /// of complete records and levels read
+    /// Reads up to `num_records` records, and at most `num_levels` levels, of repetition
+    /// level data into `out`, returning the number of complete records and levels read.
     ///
-    /// A record only ends when the data contains a subsequent repetition level of 0,
-    /// it is therefore left to the caller to delimit the final record in a column
-    ///
-    /// # Panics
-    ///
-    /// Implementations may panic if `range` overlaps with already written data
+    /// A record only ends when the data contains a subsequent repetition level of 0;
+    /// it is therefore left to the caller to delimit the final record in a column.
     fn read_rep_levels(
         &mut self,
         out: &mut Self::Buffer,
@@ -52,16 +48,19 @@ pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
         num_levels: usize,
     ) -> Result<(usize, usize)>;
 
-    /// Skips over up to `num_levels` repetition levels corresponding to `num_records` records,
-    /// where a record is delimited by a repetition level of 0
+    /// Skips over up to `num_levels` repetition levels corresponding to `num_records`
+    /// records, where a record is delimited by a repetition level of 0.
     ///
-    /// Returns the number of records skipped, and the number of levels skipped
+    /// Returns the number of records skipped, and the number of levels skipped.
     ///
-    /// A record only ends when the data contains a subsequent repetition level of 0,
-    /// it is therefore left to the caller to delimit the final record in a column
+    /// A record only ends when the data contains a subsequent repetition level of 0;
+    /// it is therefore left to the caller to delimit the final record in a column.
     fn skip_rep_levels(&mut self, num_records: usize, num_levels: usize) -> Result<(usize, usize)>;
 
-    /// Flush any partially read or skipped record
+    /// Flush any partially read or skipped record.
+    ///
+    /// Returns true if there was such a record, which the caller should count
+    /// as complete.
     fn flush_partial(&mut self) -> bool;
 }
 
@@ -69,10 +68,6 @@ pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
     /// Read up to `num_levels` definition levels into `out`.
     ///
     /// Returns the number of values read, and the number of levels read.
-    ///
-    /// # Panics
-    ///
-    /// Implementations may panic if `range` overlaps with already written data
     fn read_def_levels(
         &mut self,
         out: &mut Self::Buffer,
@@ -120,12 +115,7 @@ pub trait ColumnValueDecoder {
         num_values: Option<usize>,
     ) -> Result<()>;
 
-    /// Read up to `num_values` values into `out`
-    ///
-    /// # Panics
-    ///
-    /// Implementations may panic if `range` overlaps with already written data
-    ///
+    /// Read up to `num_values` values into `out`.
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize>;
 
     /// Skips over `num_values` values
@@ -355,7 +345,7 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
     }
 }
 
-/// Returns the number of levels equal to `level`
+/// Returns the number of levels equal to `level`.
 ///
 /// Summing into a `u16`, over chunks short enough that the sum cannot
 /// overflow, helps the compiler vectorize the count better than summing into
@@ -369,11 +359,6 @@ fn count_levels_eq(levels: &[i16], level: i16) -> usize {
 
 pub(crate) const REPETITION_LEVELS_BATCH_SIZE: usize = 1024;
 
-/// The number of repetition levels [`RepetitionLevelDecoderImpl::count_records`]
-/// counts at a time. A read that ends partway through a chunk still counts the
-/// whole chunk, so this is kept small.
-const COUNT_RECORDS_CHUNK_SIZE: usize = 32;
-
 /// An implementation of [`RepetitionLevelDecoder`] for `[i16]`
 pub struct RepetitionLevelDecoderImpl {
     decoder: Option<LevelDecoder>,
@@ -381,6 +366,7 @@ pub struct RepetitionLevelDecoderImpl {
     buffer: Box<[i16; REPETITION_LEVELS_BATCH_SIZE]>,
     buffer_len: usize,
     buffer_offset: usize,
+    /// Whether the levels read so far end with a record that has not ended yet
     has_partial: bool,
 }
 
@@ -404,10 +390,22 @@ impl RepetitionLevelDecoderImpl {
         Ok(())
     }
 
-    /// Inspects the buffered repetition levels in the range `self.buffer_offset..self.buffer_len`
-    /// and returns the number of "complete" records along with the corresponding number of values
+    /// Counts the records that end within the unread levels in `self.buffer`,
+    /// looking at no more than `num_levels` of them and stopping once
+    /// `records_to_read` records have ended.
     ///
-    /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
+    /// Each repetition level of 0 starts a new record, which ends the record
+    /// before it. If `self.has_partial` is set, the levels before the first 0
+    /// continue a record started by an earlier call.
+    ///
+    /// Returns `(partial, records_read, levels_read)`:
+    /// - If it finds the end of the last requested record
+    ///   (`records_read == records_to_read`), `partial` is false and
+    ///   `levels_read` is the number of levels in the requested records, so the
+    ///   0 that starts the next record is left unread.
+    /// - Otherwise `partial` is true and `levels_read` is the number of levels
+    ///   inspected. The last record in those levels has not ended yet, and is
+    ///   not counted in `records_read`.
     fn count_records(&self, records_to_read: usize, num_levels: usize) -> (bool, usize, usize) {
         let levels = num_levels.min(self.buffer_len - self.buffer_offset);
         let buf = &self.buffer[self.buffer_offset..self.buffer_offset + levels];
@@ -417,9 +415,13 @@ impl RepetitionLevelDecoderImpl {
         let mut scan_start = usize::from(!self.has_partial && !buf.is_empty());
 
         // Skip over chunks that complete fewer records than are still needed,
-        // counting the 0s in each chunk rather than checking each level
+        // counting the 0s in each chunk rather than checking each level. Chunks
+        // are kept small so that a short read does not count many levels past
+        // where it ends, but not so small that the per-chunk overhead slows
+        // down long reads.
+        const CHUNK_SIZE: usize = 32;
         let mut records_read = 0;
-        for chunk in buf[scan_start..].chunks(COUNT_RECORDS_CHUNK_SIZE) {
+        for chunk in buf[scan_start..].chunks(CHUNK_SIZE) {
             let complete = count_levels_eq(chunk, 0);
             if records_read + complete >= records_to_read {
                 break;
