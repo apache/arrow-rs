@@ -387,6 +387,20 @@ impl HeapSize for PageIndexKey {
     }
 }
 
+fn validate_page_index_dimensions(num_row_groups: usize, num_columns: usize) -> Result<()> {
+    i32::try_from(num_row_groups).map_err(|_| {
+        ParquetError::General(format!(
+            "page index row group count exceeds i32::MAX: {num_row_groups}"
+        ))
+    })?;
+    i32::try_from(num_columns).map_err(|_| {
+        ParquetError::General(format!(
+            "page index column count exceeds i32::MAX: {num_columns}"
+        ))
+    })?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct PageIndexMap<T> {
     num_row_groups: usize,
@@ -396,39 +410,12 @@ struct PageIndexMap<T> {
 
 impl<T> PageIndexMap<T> {
     fn try_new(num_row_groups: usize, num_columns: usize) -> Result<Self> {
-        i32::try_from(num_row_groups).map_err(|_| {
-            ParquetError::General(format!(
-                "page index row group count exceeds i32::MAX: {num_row_groups}"
-            ))
-        })?;
-        i32::try_from(num_columns).map_err(|_| {
-            ParquetError::General(format!(
-                "page index column count exceeds i32::MAX: {num_columns}"
-            ))
-        })?;
+        validate_page_index_dimensions(num_row_groups, num_columns)?;
         Ok(Self {
             num_row_groups,
             num_columns,
             entries: HashMap::new(),
         })
-    }
-
-    fn try_from_rows(rows: Vec<Vec<Option<T>>>) -> Result<Self> {
-        let num_row_groups = rows.len();
-        let num_columns = rows.iter().map(Vec::len).max().unwrap_or_default();
-        let mut map = Self::try_new(num_row_groups, num_columns)?;
-
-        for (row_group_idx, columns) in rows.into_iter().enumerate() {
-            for (column_idx, value) in columns.into_iter().enumerate() {
-                if let Some(value) = value {
-                    let key = PageIndexKey::new(row_group_idx, column_idx)
-                        .expect("validated page index coordinate");
-                    map.entries.insert(key, Arc::new(value));
-                }
-            }
-        }
-
-        Ok(map)
     }
 
     fn insert(&mut self, row_group_idx: usize, column_idx: usize, value: Arc<T>) -> bool {
@@ -472,6 +459,33 @@ struct PageIndexEntries<T> {
 }
 
 impl<T> PageIndexEntries<T> {
+    fn try_from_rows(rows: Vec<Vec<Option<T>>>) -> Result<Self> {
+        let num_row_groups = rows.len();
+        let num_columns = rows.iter().map(Vec::len).max().unwrap_or_default();
+        let num_entries = rows
+            .iter()
+            .map(|columns| columns.iter().filter(|value| value.is_some()).count())
+            .sum();
+        validate_page_index_dimensions(num_row_groups, num_columns)?;
+
+        let mut entries = Vec::with_capacity(num_entries);
+        for (row_group_idx, columns) in rows.into_iter().enumerate() {
+            for (column_idx, value) in columns.into_iter().enumerate() {
+                if let Some(value) = value {
+                    let key = PageIndexKey::new(row_group_idx, column_idx)
+                        .expect("validated page index coordinate");
+                    entries.push((key, Arc::new(value)));
+                }
+            }
+        }
+
+        Ok(Self {
+            num_row_groups,
+            num_columns,
+            entries: entries.into_boxed_slice(),
+        })
+    }
+
     fn get(&self, row_group_idx: usize, column_idx: usize) -> Option<&T> {
         if row_group_idx >= self.num_row_groups || column_idx >= self.num_columns {
             return None;
@@ -595,13 +609,11 @@ impl PageIndex {
     ) -> Result<Self> {
         Ok(Self {
             column_indexes: column_indexes
-                .map(PageIndexMap::try_from_rows)
-                .transpose()?
-                .map(PageIndexMap::freeze),
+                .map(PageIndexEntries::try_from_rows)
+                .transpose()?,
             offset_indexes: offset_indexes
-                .map(PageIndexMap::try_from_rows)
-                .transpose()?
-                .map(PageIndexMap::freeze),
+                .map(PageIndexEntries::try_from_rows)
+                .transpose()?,
         })
     }
 
@@ -1069,7 +1081,7 @@ mod tests {
         builder.allocate_offset_indexes(oversized, 10);
     }
 
-    // Note: We don't test PageIndexMap::try_from_rows with dimensions > i32::MAX because
+    // Note: We don't test PageIndexEntries::try_from_rows with dimensions > i32::MAX because
     // actually allocating vectors of that size is impractical in tests. The validation
     // logic is the same as in PageIndexBuilder::new, which we test above.
 
@@ -1148,12 +1160,18 @@ mod tests {
     }
 
     #[test]
-    fn test_page_index_map_try_from_rows() {
+    fn test_page_index_entries_try_from_rows() {
         let rows = vec![vec![Some(1), None], vec![None, Some(2), Some(3)]];
-        let entries = PageIndexMap::try_from_rows(rows).unwrap().freeze();
+        let entries = PageIndexEntries::try_from_rows(rows).unwrap();
 
         assert_eq!(entries.num_row_groups, 2);
         assert_eq!(entries.num_columns, 3);
+        assert!(
+            entries
+                .entries
+                .windows(2)
+                .all(|entries| entries[0].0 < entries[1].0)
+        );
         assert_eq!(entries.get(0, 0), Some(&1));
         assert_eq!(entries.get(0, 1), None);
         assert_eq!(entries.get(1, 1), Some(&2));
