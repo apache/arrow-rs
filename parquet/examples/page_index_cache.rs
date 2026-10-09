@@ -36,7 +36,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
-use parquet::errors::Result;
+use parquet::errors::{ParquetError, Result};
 use parquet::file::metadata::page_index::{PageIndex, PageIndexBuilder, PageIndexProvider};
 use parquet::file::metadata::{
     ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
@@ -108,14 +108,32 @@ impl PageIndexCache {
             column_index_mask.column_chunk_indices(num_row_groups, num_columns)
         {
             if let Some(index) = self.column_indexes.get(&key) {
-                builder.put_column_index_shared(Arc::clone(index), row_group_idx, column_idx);
+                if !builder.try_put_column_index_shared(
+                    Arc::clone(index),
+                    row_group_idx,
+                    column_idx,
+                ) {
+                    return Err(ParquetError::General(format!(
+                        "failed to add cached column index for row group {row_group_idx}, \
+                         column {column_idx}"
+                    )));
+                }
             }
         }
         for key @ (row_group_idx, column_idx) in
             offset_index_mask.column_chunk_indices(num_row_groups, num_columns)
         {
             if let Some(index) = self.offset_indexes.get(&key) {
-                builder.put_offset_index_shared(Arc::clone(index), row_group_idx, column_idx);
+                if !builder.try_put_offset_index_shared(
+                    Arc::clone(index),
+                    row_group_idx,
+                    column_idx,
+                ) {
+                    return Err(ParquetError::General(format!(
+                        "failed to add cached offset index for row group {row_group_idx}, \
+                         column {column_idx}"
+                    )));
+                }
             }
         }
         Ok(builder.build())

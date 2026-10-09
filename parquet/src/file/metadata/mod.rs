@@ -2358,10 +2358,10 @@ mod tests {
 
         let mut builder = PageIndexBuilder::new(2, 2);
         // Insert out of order to verify the immutable representation sorts its entries.
-        builder.put_column_index_shared(Arc::clone(&col_idx), 1, 0);
-        builder.put_column_index_shared(Arc::clone(&col_idx), 0, 1);
-        // Preserve the existing behavior of ignoring coordinates outside the declared shape.
-        builder.put_column_index_shared(Arc::clone(&col_idx), 2, 0);
+        assert!(builder.try_put_column_index_shared(Arc::clone(&col_idx), 1, 0));
+        assert!(builder.try_put_column_index_shared(Arc::clone(&col_idx), 0, 1));
+        // Coordinates outside the declared shape are reported and ignored.
+        assert!(!builder.try_put_column_index_shared(Arc::clone(&col_idx), 2, 0));
         let page_index = builder.build();
 
         assert!(std::ptr::eq(

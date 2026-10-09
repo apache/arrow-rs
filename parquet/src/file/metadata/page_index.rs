@@ -845,19 +845,6 @@ impl PageIndexBuilder {
         self.try_put_column_index_shared(Arc::new(column_index), row_group_idx, column_idx)
     }
 
-    /// Sets a shared column index for a specific row group and column.
-    ///
-    /// This avoids cloning the index metadata when assembling a provider from a cache. If column
-    /// indexes were not allocated, or the coordinate is out of bounds, this method does nothing.
-    pub fn put_column_index_shared(
-        &mut self,
-        column_index: Arc<ColumnIndexMetaData>,
-        row_group_idx: usize,
-        column_idx: usize,
-    ) {
-        let _ = self.try_put_column_index_shared(column_index, row_group_idx, column_idx);
-    }
-
     /// Attempts to set a shared column index for a specific row group and column.
     ///
     /// Returns `false`, and drops `column_index`, if column indexes were not allocated or the
@@ -897,19 +884,6 @@ impl PageIndexBuilder {
         column_idx: usize,
     ) -> bool {
         self.try_put_offset_index_shared(Arc::new(offset_index), row_group_idx, column_idx)
-    }
-
-    /// Sets a shared offset index for a specific row group and column.
-    ///
-    /// This avoids cloning the index metadata when assembling a provider from a cache. If offset
-    /// indexes were not allocated, or the coordinate is out of bounds, this method does nothing.
-    pub fn put_offset_index_shared(
-        &mut self,
-        offset_index: Arc<OffsetIndexMetaData>,
-        row_group_idx: usize,
-        column_idx: usize,
-    ) {
-        let _ = self.try_put_offset_index_shared(offset_index, row_group_idx, column_idx);
     }
 
     /// Attempts to set a shared offset index for a specific row group and column.
