@@ -57,7 +57,7 @@ chrono = { workspace = true }
 chrono-tz = { version = "0.10", optional = true }
 # `tzdb-bundle-always` compiles the IANA database into the crate, as chrono-tz does, so results
 # do not depend on the host's zoneinfo files.
-jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"], optional = true }
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always", "tz-fat", "perf-inline"], optional = true }
 futures = { version = "0.3", optional = true }
 num-complex = { version = "0.4.6", default-features = false, features = ["std"] }
 num-integer = { version = "0.1.46", default-features = false, features = ["std"] }

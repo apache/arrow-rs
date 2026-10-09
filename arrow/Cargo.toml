@@ -327,6 +327,11 @@ name = "nullif_kernel"
 harness = false
 required-features = ["test_utils"]
 
+[[bench]]
+name = "named_timezone"
+harness = false
+required-features = ["chrono-tz"]
+
 [[test]]
 name = "csv"
 required-features = ["csv", "chrono-tz"]
