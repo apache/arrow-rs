@@ -35,7 +35,7 @@ enum QueuedRowGroupDecision {
 }
 
 /// Work item handed from [`RowGroupFrontier`] to [`RowGroupReaderBuilder`](crate::arrow::push_decoder::reader_builder::RowGroupReaderBuilder).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct NextRowGroup {
     pub(crate) row_group_idx: usize,
     pub(crate) row_count: usize,

@@ -22,6 +22,7 @@
 //! operands: a merge of the [`RowSelector`] runs, and a bitwise variant over
 //! [`BooleanBuffer`] masks.
 
+use super::boolean::{MaskSelection, boolean_mask_from_selectors};
 use super::{MaskRunIter, RowSelection, RowSelectionInner, RowSelector};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer, bit_util};
 use std::cmp::Ordering;
@@ -274,6 +275,23 @@ pub(super) fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) 
     });
 
     iter.collect()
+}
+
+/// Combines a mask and selectors without expanding the mask into runs.
+pub(super) fn combine_mixed_selection(
+    selectors: &[RowSelector],
+    mask: &MaskSelection,
+    op: impl FnOnce(&BooleanBuffer, &BooleanBuffer) -> BooleanBuffer,
+) -> RowSelection {
+    // An empty operand leaves the other unchanged.
+    if selectors.is_empty() {
+        return RowSelection::from_mask_selection(mask.clone());
+    }
+    if mask.mask().is_empty() {
+        return RowSelection::from_selectors(selectors.to_vec());
+    }
+    let selectors = boolean_mask_from_selectors(selectors);
+    RowSelection::from_boolean_buffer(op(mask.mask(), &selectors))
 }
 
 /// Bitwise AND of two mask-backed selections. Longer side's tail passes through.
@@ -974,8 +992,10 @@ mod tests {
             .collect();
         let expected_intersection =
             RowSelection::from_filters(&[BooleanArray::from(intersection_bits)]);
-        assert_eq!(mask.intersection(&selectors), expected_intersection);
-        assert_eq!(selectors.intersection(&mask), expected_intersection);
+        for result in [mask.intersection(&selectors), selectors.intersection(&mask)] {
+            assert!(result.as_mask().is_some());
+            assert_eq!(result, expected_intersection);
+        }
 
         let union_bits: Vec<_> = mask_bits
             .iter()
@@ -983,8 +1003,10 @@ mod tests {
             .map(|(x, y)| *x || *y)
             .collect();
         let expected_union = RowSelection::from_filters(&[BooleanArray::from(union_bits)]);
-        assert_eq!(mask.union(&selectors), expected_union);
-        assert_eq!(selectors.union(&mask), expected_union);
+        for result in [mask.union(&selectors), selectors.union(&mask)] {
+            assert!(result.as_mask().is_some());
+            assert_eq!(result, expected_union);
+        }
     }
 
     #[test]
@@ -1050,6 +1072,90 @@ mod tests {
         assert_eq!(actual.len(), expected.len(), "{context}: length");
         let actual: Vec<bool> = actual.iter().collect();
         assert_eq!(actual, expected, "{context}");
+    }
+
+    #[test]
+    fn test_mixed_mask_selector_algebra_with_offsets_and_uneven_lengths() {
+        for rows in [1, 7, 8, 63, 64, 65, 137] {
+            for (mask_len, selector_len) in [(rows, rows), (rows, 137), (137, rows)] {
+                for offset in [0, 1, 7, 63] {
+                    for mask_bits in [
+                        vec![false; mask_len],
+                        vec![true; mask_len],
+                        (0..mask_len).map(|i| i < mask_len / 2).collect(),
+                        (0..mask_len).map(|i| i % 2 == 0).collect(),
+                    ] {
+                        let buffer = BooleanBuffer::from_iter(
+                            std::iter::repeat_n(false, offset).chain(mask_bits.iter().copied()),
+                        )
+                        .slice(offset, mask_len);
+                        let mask = RowSelection::from_boolean_buffer(buffer);
+                        for selector_bits in [
+                            vec![false; selector_len],
+                            vec![true; selector_len],
+                            (0..selector_len).map(|i| i % 2 == 0).collect(),
+                            (0..selector_len).map(|i| (i / 11) % 2 == 0).collect(),
+                        ] {
+                            let selectors = RowSelection::from_filters(&[BooleanArray::from(
+                                selector_bits.clone(),
+                            )]);
+                            let context = format!(
+                                "mask_len={mask_len} selector_len={selector_len} offset={offset}"
+                            );
+                            let intersection =
+                                expected_combined(&mask_bits, &selector_bits, |a, b| a && b);
+                            let union =
+                                expected_combined(&mask_bits, &selector_bits, |a, b| a || b);
+                            for (left, right) in [(&mask, &selectors), (&selectors, &mask)] {
+                                assert_mask_eq(
+                                    left.intersection(right).as_mask().unwrap(),
+                                    &intersection,
+                                    &context,
+                                );
+                                assert_mask_eq(
+                                    left.union(right).as_mask().unwrap(),
+                                    &union,
+                                    &context,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mixed_algebra_empty_operand_preserves_tail() {
+        let empty = RowSelection::default();
+        let buffer = BooleanBuffer::from_iter((0..64).map(|i| i % 3 == 0));
+        let mask = RowSelection::from_boolean_buffer(buffer.slice(5, 40));
+        let selectors = RowSelection::from(vec![
+            RowSelector::skip(3),
+            RowSelector::select(7),
+            RowSelector::skip(4),
+        ]);
+        let empty_mask = RowSelection::from_boolean_buffer(BooleanBuffer::new_unset(0));
+        for (left, right, expected) in [
+            (&empty, &mask, &mask),
+            (&mask, &empty, &mask),
+            (&empty_mask, &selectors, &selectors),
+            (&selectors, &empty_mask, &selectors),
+            (&empty, &empty_mask, &empty_mask),
+            (&empty_mask, &empty, &empty_mask),
+        ] {
+            for result in [left.intersection(right), left.union(right)] {
+                assert_eq!(&result, expected);
+                match (result.as_mask(), expected.as_mask()) {
+                    (Some(actual), Some(expected)) => {
+                        assert_eq!(actual.inner().as_ptr(), expected.inner().as_ptr());
+                        assert_eq!(actual.offset(), expected.offset());
+                    }
+                    (None, None) => {}
+                    _ => panic!("empty operand changed the other operand's representation"),
+                }
+            }
+        }
     }
 
     #[test]
