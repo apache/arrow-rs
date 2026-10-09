@@ -1216,7 +1216,7 @@ impl IpcDataGenerator {
 
         // Each buffer is padded to the alignment as it is written, so `offset` is
         // already a multiple of the alignment -- the body needs no trailing padding.
-        debug_assert!(offset % write_options.alignment as i64 == 0);
+        debug_assert_eq!(offset % write_options.alignment as i64, 0);
         let body_len = offset as usize;
 
         let fbb = ipc_write_context.mut_fbb();
