@@ -33,8 +33,8 @@ use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::push_decoder::scan_plan::{BudgetedReadPlan, RowBudget};
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
-use crate::file::metadata::ParquetMetaData;
 use crate::file::metadata::page_index::RowGroupPageIndex;
+use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
 use data::DataRequest;
@@ -89,6 +89,26 @@ enum RowGroupDecoderState {
     },
     /// Finished (or not yet started) reading this group
     Finished,
+}
+
+impl RowGroupDecoderState {
+    /// The index of the row group, if one is active.
+    fn row_group_idx(&self) -> Option<usize> {
+        match self {
+            Self::Start { row_group_info }
+            | Self::Filters { row_group_info, .. }
+            | Self::WaitingOnFilterData { row_group_info, .. }
+            | Self::StartData { row_group_info, .. }
+            | Self::WaitingOnData { row_group_info, .. } => Some(row_group_info.row_group_idx),
+            Self::Finished => None,
+        }
+    }
+}
+
+/// The byte range of a column chunk in the file.
+pub(crate) fn column_chunk_range(column: &ColumnChunkMetaData) -> Range<u64> {
+    let (start, length) = column.byte_range();
+    start..start + length
 }
 
 #[derive(Debug)]
@@ -219,7 +239,25 @@ impl RowGroupReaderBuilder {
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
     ) -> Self {
-        let mut builder = Self {
+        let (predicate_projections, cache_projection) = match &filter {
+            Some(filter) => (
+                filter
+                    .predicates
+                    .iter()
+                    .map(|predicate| predicate.projection().clone())
+                    .collect(),
+                Self::compute_cache_projection_inner(
+                    filter,
+                    &projection,
+                    &metadata,
+                    max_predicate_cache_size,
+                ),
+            ),
+            None => (vec![], None),
+        };
+        let stages =
+            StageSchedule::new(projection.clone(), predicate_projections, cache_projection);
+        Self {
             batch_size,
             projection,
             metadata,
@@ -230,25 +268,8 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
-            stages: StageSchedule::new(ProjectionMask::all(), vec![], None),
-        };
-        let (predicate_projections, cache_projection) = match &builder.filter {
-            Some(filter) => (
-                filter
-                    .predicates
-                    .iter()
-                    .map(|predicate| predicate.projection().clone())
-                    .collect(),
-                builder.compute_cache_projection_inner(filter),
-            ),
-            None => (vec![], None),
-        };
-        builder.stages = StageSchedule::new(
-            builder.projection.clone(),
-            predicate_projections,
-            cache_projection,
-        );
-        builder
+            stages,
+        }
     }
 
     /// Decompose into [`RowGroupReaderBuilderParts`] so the builder can be
@@ -755,34 +776,95 @@ impl RowGroupReaderBuilder {
         Ok(result)
     }
 
+    /// The index of the active row group, if any.
+    pub(crate) fn active_row_group_idx(&self) -> Option<usize> {
+        self.state
+            .as_ref()
+            .and_then(RowGroupDecoderState::row_group_idx)
+    }
+
+    /// Remove the buffered bytes of all column chunks of a row group. This
+    /// includes bytes that the caller pushed but the decoder did not request,
+    /// for example the bytes between the requested ranges of a larger pushed
+    /// buffer.
+    pub(crate) fn release_row_group(&mut self, row_group_idx: usize) {
+        let ranges: Vec<Range<u64>> = self
+            .metadata
+            .row_group(row_group_idx)
+            .columns()
+            .iter()
+            .map(column_chunk_range)
+            .collect();
+        self.buffers.release_ranges(&ranges);
+    }
+
+    /// Remove the buffered bytes outside the read column chunks of
+    /// `row_groups`. A column chunk is read if the output or a predicate
+    /// reads its column. Indexes that are not in the file are ignored.
+    pub(crate) fn release_unread_bytes(&mut self, row_groups: impl IntoIterator<Item = usize>) {
+        if self.buffers.buffered_bytes() == 0 {
+            return;
+        }
+        let mut read_columns = self.projection.clone();
+        if let Some(filter) = &self.filter {
+            for predicate in &filter.predicates {
+                read_columns.union(predicate.projection());
+            }
+        }
+        let mut keep = vec![];
+        for row_group_idx in row_groups {
+            let Some(row_group) = self.metadata.row_groups().get(row_group_idx) else {
+                continue;
+            };
+            keep.extend(
+                row_group
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .filter(|(column_idx, _)| read_columns.leaf_included(*column_idx))
+                    .map(|(_, column)| column_chunk_range(column)),
+            );
+        }
+        self.buffers.retain_ranges(&keep);
+    }
+
     /// Which columns should be cached?
     ///
     /// Returns the columns that are used by the filters *and* then used in the
     /// final projection, excluding any nested columns.
     fn compute_cache_projection(&self, row_group_idx: usize, filter: &RowFilter) -> ProjectionMask {
         let meta = self.metadata.row_group(row_group_idx);
-        match self.compute_cache_projection_inner(filter) {
+        let cache_projection = Self::compute_cache_projection_inner(
+            filter,
+            &self.projection,
+            &self.metadata,
+            self.max_predicate_cache_size,
+        );
+        match cache_projection {
             Some(projection) => projection,
             None => ProjectionMask::none(meta.columns().len()),
         }
     }
 
-    fn compute_cache_projection_inner(&self, filter: &RowFilter) -> Option<ProjectionMask> {
+    /// An associated function, so that [`Self::new`] can call it before the
+    /// builder exists.
+    fn compute_cache_projection_inner(
+        filter: &RowFilter,
+        projection: &ProjectionMask,
+        metadata: &ParquetMetaData,
+        max_predicate_cache_size: usize,
+    ) -> Option<ProjectionMask> {
         // Do not compute the projection mask if the predicate cache is disabled
-        if self.max_predicate_cache_size == 0 {
+        if max_predicate_cache_size == 0 {
             return None;
         }
         let mut cache_projection = filter.predicates.first()?.projection().clone();
         for predicate in &filter.predicates {
             cache_projection.union(predicate.projection());
         }
-        cache_projection.intersect(&self.projection);
-        self.exclude_nested_columns_from_cache(&cache_projection)
-    }
-
-    /// Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
-    fn exclude_nested_columns_from_cache(&self, mask: &ProjectionMask) -> Option<ProjectionMask> {
-        mask.without_nested_types(self.metadata.file_metadata().schema_descr())
+        cache_projection.intersect(projection);
+        // Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
+        cache_projection.without_nested_types(metadata.file_metadata().schema_descr())
     }
 
     /// Get the offset index for the specified row group, if any
