@@ -471,16 +471,29 @@ struct PageIndexEntries<T> {
 }
 
 impl<T> PageIndexEntries<T> {
+    fn try_with_capacity(num_entries: usize) -> Result<Vec<(PageIndexKey, Arc<T>)>> {
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(num_entries).map_err(|err| {
+            ParquetError::General(format!(
+                "failed to allocate storage for {num_entries} page index entries: {err}"
+            ))
+        })?;
+        Ok(entries)
+    }
+
     fn try_from_rows(rows: Vec<Vec<Option<T>>>) -> Result<Self> {
         let num_row_groups = rows.len();
         let num_columns = rows.iter().map(Vec::len).max().unwrap_or_default();
         let num_entries = rows
             .iter()
             .map(|columns| columns.iter().filter(|value| value.is_some()).count())
-            .sum();
+            .try_fold(0_usize, |total, count| total.checked_add(count))
+            .ok_or_else(|| {
+                ParquetError::General("page index entry count exceeds usize::MAX".to_string())
+            })?;
         validate_page_index_dimensions(num_row_groups, num_columns)?;
 
-        let mut entries = Vec::with_capacity(num_entries);
+        let mut entries = Self::try_with_capacity(num_entries)?;
         for (row_group_idx, columns) in rows.into_iter().enumerate() {
             for (column_idx, value) in columns.into_iter().enumerate() {
                 if let Some(value) = value {
@@ -496,6 +509,10 @@ impl<T> PageIndexEntries<T> {
             num_columns,
             entries: entries.into_boxed_slice(),
         })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     fn get(&self, row_group_idx: usize, column_idx: usize) -> Option<&T> {
@@ -594,8 +611,12 @@ impl<T: HeapSize> HeapSize for PageIndexEntries<T> {
 /// // Assemble the PageIndex (one entry per row group, each with one
 /// // entry per column) and attach it to the metadata
 /// let mut page_index = PageIndexBuilder::try_new(1, 1).unwrap();
-/// assert!(page_index.try_put_column_index(column_index, 0, 0));
-/// assert!(page_index.try_put_offset_index(offset_index, 0, 0));
+/// page_index
+///     .try_put_column_index(column_index, 0, 0)
+///     .unwrap();
+/// page_index
+///     .try_put_offset_index(offset_index, 0, 0)
+///     .unwrap();
 /// let page_index = page_index.build();
 /// let metadata = metadata
 ///     .into_builder()
@@ -619,13 +640,18 @@ impl PageIndex {
         column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
         offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
     ) -> Result<Self> {
+        let column_indexes = column_indexes
+            .map(PageIndexEntries::try_from_rows)
+            .transpose()?
+            .filter(|indexes| !indexes.is_empty());
+        let offset_indexes = offset_indexes
+            .map(PageIndexEntries::try_from_rows)
+            .transpose()?
+            .filter(|indexes| !indexes.is_empty());
+
         Ok(Self {
-            column_indexes: column_indexes
-                .map(PageIndexEntries::try_from_rows)
-                .transpose()?,
-            offset_indexes: offset_indexes
-                .map(PageIndexEntries::try_from_rows)
-                .transpose()?,
+            column_indexes,
+            offset_indexes,
         })
     }
 
@@ -845,30 +871,45 @@ impl PageIndexBuilder {
 
     /// Attempts to set the column index for a specific row group and column.
     ///
-    /// Returns `false`, and drops `column_index`, if column indexes were not allocated or the
+    /// # Errors
+    ///
+    /// Returns an error, and drops `column_index`, if column indexes were not allocated or the
     /// coordinate is out of bounds.
     pub fn try_put_column_index(
         &mut self,
         column_index: ColumnIndexMetaData,
         row_group_idx: usize,
         column_idx: usize,
-    ) -> bool {
+    ) -> Result<()> {
         self.try_put_column_index_shared(Arc::new(column_index), row_group_idx, column_idx)
     }
 
     /// Attempts to set a shared column index for a specific row group and column.
     ///
-    /// Returns `false`, and drops `column_index`, if column indexes were not allocated or the
+    /// # Errors
+    ///
+    /// Returns an error, and drops `column_index`, if column indexes were not allocated or the
     /// coordinate is out of bounds.
     pub fn try_put_column_index_shared(
         &mut self,
         column_index: Arc<ColumnIndexMetaData>,
         row_group_idx: usize,
         column_idx: usize,
-    ) -> bool {
-        self.column_indexes
+    ) -> Result<()> {
+        let indexes = self
+            .column_indexes
             .as_mut()
-            .is_some_and(|indexes| indexes.insert(row_group_idx, column_idx, column_index))
+            .ok_or_else(|| ParquetError::General("column indexes are not allocated".to_string()))?;
+        indexes
+            .insert(row_group_idx, column_idx, column_index)
+            .then_some(())
+            .ok_or_else(|| {
+                ParquetError::General(format!(
+                    "column index coordinate out of bounds: row group {row_group_idx}, column \
+                     {column_idx}; dimensions are {} by {}",
+                    indexes.num_row_groups, indexes.num_columns
+                ))
+            })
     }
 
     /// Sets the offset index for a specific row group and column
@@ -886,30 +927,45 @@ impl PageIndexBuilder {
 
     /// Attempts to set the offset index for a specific row group and column.
     ///
-    /// Returns `false`, and drops `offset_index`, if offset indexes were not allocated or the
+    /// # Errors
+    ///
+    /// Returns an error, and drops `offset_index`, if offset indexes were not allocated or the
     /// coordinate is out of bounds.
     pub fn try_put_offset_index(
         &mut self,
         offset_index: OffsetIndexMetaData,
         row_group_idx: usize,
         column_idx: usize,
-    ) -> bool {
+    ) -> Result<()> {
         self.try_put_offset_index_shared(Arc::new(offset_index), row_group_idx, column_idx)
     }
 
     /// Attempts to set a shared offset index for a specific row group and column.
     ///
-    /// Returns `false`, and drops `offset_index`, if offset indexes were not allocated or the
+    /// # Errors
+    ///
+    /// Returns an error, and drops `offset_index`, if offset indexes were not allocated or the
     /// coordinate is out of bounds.
     pub fn try_put_offset_index_shared(
         &mut self,
         offset_index: Arc<OffsetIndexMetaData>,
         row_group_idx: usize,
         column_idx: usize,
-    ) -> bool {
-        self.offset_indexes
+    ) -> Result<()> {
+        let indexes = self
+            .offset_indexes
             .as_mut()
-            .is_some_and(|indexes| indexes.insert(row_group_idx, column_idx, offset_index))
+            .ok_or_else(|| ParquetError::General("offset indexes are not allocated".to_string()))?;
+        indexes
+            .insert(row_group_idx, column_idx, offset_index)
+            .then_some(())
+            .ok_or_else(|| {
+                ParquetError::General(format!(
+                    "offset index coordinate out of bounds: row group {row_group_idx}, column \
+                     {column_idx}; dimensions are {} by {}",
+                    indexes.num_row_groups, indexes.num_columns
+                ))
+            })
     }
 
     /// Checks if an index structure is entirely empty.
@@ -1107,14 +1163,30 @@ mod tests {
         let off_index = off_index.build();
 
         // Insert indexes and report coordinates that cannot be populated
-        assert!(builder.try_put_column_index(col_index.clone(), 0, 0));
-        assert!(builder.try_put_offset_index_shared(Arc::new(off_index.clone()), 0, 0));
-        assert!(!builder.try_put_column_index(col_index.clone(), 2, 0));
-        assert!(!builder.try_put_offset_index(off_index.clone(), 0, 3));
+        assert!(
+            builder
+                .try_put_column_index(col_index.clone(), 0, 0)
+                .is_ok()
+        );
+        assert!(
+            builder
+                .try_put_offset_index_shared(Arc::new(off_index.clone()), 0, 0)
+                .is_ok()
+        );
+        assert!(
+            builder
+                .try_put_column_index(col_index.clone(), 2, 0)
+                .is_err()
+        );
+        assert!(
+            builder
+                .try_put_offset_index(off_index.clone(), 0, 3)
+                .is_err()
+        );
 
         let mut unallocated = PageIndexBuilder::default();
-        assert!(!unallocated.try_put_column_index(col_index, 0, 0));
-        assert!(!unallocated.try_put_offset_index(off_index, 0, 0));
+        assert!(unallocated.try_put_column_index(col_index, 0, 0).is_err());
+        assert!(unallocated.try_put_offset_index(off_index, 0, 0).is_err());
 
         // Build and verify
         let page_index = builder.build();
@@ -1158,5 +1230,18 @@ mod tests {
         assert_eq!(entries.get(0, 1), None);
         assert_eq!(entries.get(1, 1), Some(&2));
         assert_eq!(entries.get(1, 2), Some(&3));
+    }
+
+    #[test]
+    fn test_page_index_entries_rejects_excessive_capacity() {
+        let result = PageIndexEntries::<()>::try_with_capacity(usize::MAX);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_page_index_try_new_discards_empty_indexes() {
+        let page_index = PageIndex::try_new(Some(vec![vec![None]]), Some(vec![])).unwrap();
+        assert!(!page_index.has_column_indexes());
+        assert!(!page_index.has_offset_indexes());
     }
 }
