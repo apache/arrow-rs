@@ -365,18 +365,19 @@ impl RowGroupPageIndex {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct PageIndexKey(usize);
+struct PageIndexKey(u64);
 
 impl PageIndexKey {
-    fn new(row_group_idx: usize, column_idx: usize, num_columns: usize) -> Option<Self> {
-        row_group_idx
-            .checked_mul(num_columns)?
-            .checked_add(column_idx)
-            .map(Self)
+    fn new(row_group_idx: usize, column_idx: usize) -> Option<Self> {
+        let row_group_idx = u32::try_from(row_group_idx).ok()?;
+        let column_idx = u32::try_from(column_idx).ok()?;
+        Some(Self(
+            (u64::from(row_group_idx) << u32::BITS) | u64::from(column_idx),
+        ))
     }
 
-    fn coordinates(self, num_columns: usize) -> (usize, usize) {
-        (self.0 / num_columns, self.0 % num_columns)
+    fn coordinates(self) -> (usize, usize) {
+        ((self.0 >> u32::BITS) as usize, (self.0 as u32) as usize)
     }
 }
 
@@ -405,13 +406,6 @@ impl<T> PageIndexMap<T> {
                 "page index column count exceeds i32::MAX: {num_columns}"
             ))
         })?;
-        num_row_groups.checked_mul(num_columns).ok_or_else(|| {
-            ParquetError::General(format!(
-                "page index coordinate space exceeds usize::MAX: \
-                 {num_row_groups} row groups by {num_columns} columns"
-            ))
-        })?;
-
         Ok(Self {
             num_row_groups,
             num_columns,
@@ -427,13 +421,8 @@ impl<T> PageIndexMap<T> {
         for (row_group_idx, columns) in rows.into_iter().enumerate() {
             for (column_idx, value) in columns.into_iter().enumerate() {
                 if let Some(value) = value {
-                    let key = PageIndexKey::new(row_group_idx, column_idx, num_columns)
-                        .ok_or_else(|| {
-                            ParquetError::General(format!(
-                                "page index coordinate exceeds usize::MAX: \
-                                 row group {row_group_idx}, column {column_idx}"
-                            ))
-                        })?;
+                    let key = PageIndexKey::new(row_group_idx, column_idx)
+                        .expect("validated page index coordinate");
                     map.entries.insert(key, Arc::new(value));
                 }
             }
@@ -447,7 +436,7 @@ impl<T> PageIndexMap<T> {
             return false;
         }
 
-        let Some(key) = PageIndexKey::new(row_group_idx, column_idx, self.num_columns) else {
+        let Some(key) = PageIndexKey::new(row_group_idx, column_idx) else {
             return false;
         };
         self.entries.insert(key, value);
@@ -488,7 +477,7 @@ impl<T> PageIndexEntries<T> {
             return None;
         }
 
-        let key = PageIndexKey::new(row_group_idx, column_idx, self.num_columns)?;
+        let key = PageIndexKey::new(row_group_idx, column_idx)?;
         let entry_idx = self
             .entries
             .binary_search_by_key(&key, |(entry_key, _)| *entry_key)
@@ -633,20 +622,20 @@ impl PageIndex {
         impl Iterator<Item = ((usize, usize), Arc<ColumnIndexMetaData>)>,
         impl Iterator<Item = ((usize, usize), Arc<OffsetIndexMetaData>)>,
     ) {
-        let (column_count, column_indexes) = self
+        let column_indexes = self
             .column_indexes
-            .map(|indexes| (indexes.num_columns, indexes.entries.into_vec()))
+            .map(|indexes| indexes.entries.into_vec())
             .unwrap_or_default();
         let column_indexes = column_indexes
             .into_iter()
-            .map(move |(key, index)| (key.coordinates(column_count), index));
-        let (column_count, offset_indexes) = self
+            .map(|(key, index)| (key.coordinates(), index));
+        let offset_indexes = self
             .offset_indexes
-            .map(|indexes| (indexes.num_columns, indexes.entries.into_vec()))
+            .map(|indexes| indexes.entries.into_vec())
             .unwrap_or_default();
         let offset_indexes = offset_indexes
             .into_iter()
-            .map(move |(key, index)| (key.coordinates(column_count), index));
+            .map(|(key, index)| (key.coordinates(), index));
 
         (column_indexes, offset_indexes)
     }
@@ -710,7 +699,7 @@ impl PageIndexBuilder {
     /// # Panics
     ///
     /// Panics if either dimension exceeds `i32::MAX`, the maximum collection size representable
-    /// by Thrift, or if their product cannot be represented by `usize`.
+    /// by Thrift.
     ///
     /// Use [`try_new`](Self::try_new) for a non-panicking alternative that returns a `Result`.
     pub fn new(num_row_groups: usize, num_columns: usize) -> Self {
@@ -724,7 +713,7 @@ impl PageIndexBuilder {
     /// # Errors
     ///
     /// Returns an error if either dimension exceeds `i32::MAX`, the maximum collection size
-    /// representable by Thrift, or if their product cannot be represented by `usize`.
+    /// representable by Thrift.
     pub fn try_new(num_row_groups: usize, num_columns: usize) -> Result<Self> {
         Ok(Self {
             column_indexes: Some(PageIndexMap::try_new(num_row_groups, num_columns)?),
@@ -755,7 +744,7 @@ impl PageIndexBuilder {
     /// # Panics
     ///
     /// Panics if either dimension exceeds `i32::MAX`, the maximum collection size representable
-    /// by Thrift, or if their product cannot be represented by `usize`.
+    /// by Thrift.
     ///
     /// Use [`try_allocate_column_indexes`](Self::try_allocate_column_indexes) for a
     /// non-panicking alternative that returns a `Result`.
@@ -772,7 +761,7 @@ impl PageIndexBuilder {
     /// # Errors
     ///
     /// Returns an error if either dimension exceeds `i32::MAX`, the maximum collection size
-    /// representable by Thrift, or if their product cannot be represented by `usize`.
+    /// representable by Thrift.
     pub fn try_allocate_column_indexes(
         &mut self,
         num_row_groups: usize,
@@ -794,7 +783,7 @@ impl PageIndexBuilder {
     /// # Panics
     ///
     /// Panics if either dimension exceeds `i32::MAX`, the maximum collection size representable
-    /// by Thrift, or if their product cannot be represented by `usize`.
+    /// by Thrift.
     ///
     /// Use [`try_allocate_offset_indexes`](Self::try_allocate_offset_indexes) for a
     /// non-panicking alternative that returns a `Result`.
@@ -811,7 +800,7 @@ impl PageIndexBuilder {
     /// # Errors
     ///
     /// Returns an error if either dimension exceeds `i32::MAX`, the maximum collection size
-    /// representable by Thrift, or if their product cannot be represented by `usize`.
+    /// representable by Thrift.
     pub fn try_allocate_offset_indexes(
         &mut self,
         num_row_groups: usize,
@@ -1085,19 +1074,21 @@ mod tests {
     // logic is the same as in PageIndexBuilder::new, which we test above.
 
     #[test]
-    fn test_page_index_key_overflow_protection() {
-        // PageIndexKey::new should return None on overflow
-        let large = usize::MAX / 2;
-        let result = PageIndexKey::new(large, large, 2);
-        assert!(
-            result.is_none(),
-            "should return None on multiplication overflow"
-        );
+    fn test_page_index_key_packs_coordinates() {
+        let key = PageIndexKey::new(10, 5).unwrap();
+        assert_eq!(key.0, (10_u64 << u32::BITS) | 5);
+        assert_eq!(key.coordinates(), (10, 5));
 
-        // Valid dimensions should work
-        let result = PageIndexKey::new(10, 5, 20);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().0, 10 * 20 + 5);
+        let key = PageIndexKey::new(u32::MAX as usize, u32::MAX as usize).unwrap();
+        assert_eq!(key.0, u64::MAX);
+        assert_eq!(key.coordinates(), (u32::MAX as usize, u32::MAX as usize));
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            let oversized = u32::MAX as usize + 1;
+            assert!(PageIndexKey::new(oversized, 0).is_none());
+            assert!(PageIndexKey::new(0, oversized).is_none());
+        }
     }
 
     #[test]
@@ -1153,8 +1144,7 @@ mod tests {
         #[cfg(target_pointer_width = "64")]
         assert!(PageIndexMap::<()>::try_new(i32::MAX as usize, i32::MAX as usize).is_ok());
 
-        #[cfg(target_pointer_width = "32")]
-        assert!(PageIndexMap::<()>::try_new(65_536, 65_536).is_err());
+        assert!(PageIndexMap::<()>::try_new(65_536, 65_536).is_ok());
     }
 
     #[test]
