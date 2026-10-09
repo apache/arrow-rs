@@ -20,7 +20,7 @@
 use crate::arrow::arrow_reader::{RowGroupPlan, RowGroupSelection, RowSelection};
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use super::budget::RowBudget;
@@ -48,7 +48,79 @@ pub(crate) struct NextRowGroup {
 /// Row groups and selections that have not yet been handed to the row-group
 /// reader builder.
 #[derive(Debug, Clone)]
-enum QueuedRowGroups {
+struct QueuedRowGroups {
+    queue: Queue,
+    /// The number of times each row group is in `queue`, so that
+    /// [`Self::contains`] does not scan the queue.
+    counts: HashMap<usize, usize>,
+}
+
+impl QueuedRowGroups {
+    /// Validate and queue a row-group plan for `parquet_metadata`.
+    fn try_new(
+        parquet_metadata: &ParquetMetaData,
+        row_group_plan: RowGroupPlan,
+    ) -> Result<Self, ParquetError> {
+        let queue = Queue::try_new(parquet_metadata, row_group_plan)?;
+        let mut counts = HashMap::new();
+        for row_group_idx in queue.row_group_indices() {
+            *counts.entry(row_group_idx).or_default() += 1;
+        }
+        Ok(Self { queue, counts })
+    }
+
+    /// Convert the remaining queue back into a builder configuration.
+    fn into_plan(self) -> RowGroupPlan {
+        self.queue.into_plan()
+    }
+
+    fn front(&self) -> Option<usize> {
+        self.queue.front()
+    }
+
+    /// The row groups in the queue, in no specific order and without
+    /// duplicates.
+    fn row_groups(&self) -> impl Iterator<Item = usize> + '_ {
+        self.counts.keys().copied()
+    }
+
+    /// Returns `true` if `row_group_idx` is in the queue.
+    fn contains(&self, row_group_idx: usize) -> bool {
+        self.counts.contains_key(&row_group_idx)
+    }
+
+    fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    fn clear(&mut self) {
+        self.queue.clear();
+        self.counts.clear();
+    }
+
+    /// See [`Queue::global_selection_is_exhausted`].
+    fn global_selection_is_exhausted(&self) -> bool {
+        self.queue.global_selection_is_exhausted()
+    }
+
+    /// Remove the front row group and return its local selection.
+    fn pop_front_selection(&mut self, row_count: usize) -> Option<RowSelection> {
+        if let Some(row_group_idx) = self.queue.front() {
+            match self.counts.get_mut(&row_group_idx) {
+                Some(1) => {
+                    self.counts.remove(&row_group_idx);
+                }
+                Some(count) => *count -= 1,
+                None => debug_assert!(false, "row group {row_group_idx} is queued but not counted"),
+            }
+        }
+        self.queue.pop_front_selection(row_count)
+    }
+}
+
+/// The queue of [`QueuedRowGroups`].
+#[derive(Debug, Clone)]
+enum Queue {
     /// One selection cursor spans all queued row groups.
     Global {
         row_groups: VecDeque<usize>,
@@ -58,7 +130,7 @@ enum QueuedRowGroups {
     PerRowGroup(VecDeque<RowGroupSelection>),
 }
 
-impl QueuedRowGroups {
+impl Queue {
     /// Validate and queue a row-group plan for `parquet_metadata`.
     fn try_new(
         parquet_metadata: &ParquetMetaData,
@@ -114,6 +186,17 @@ impl QueuedRowGroups {
             Self::PerRowGroup(row_groups) => row_groups
                 .front()
                 .map(|row_group| row_group.row_group_index),
+        }
+    }
+
+    /// The queued row group indexes, in order.
+    fn row_group_indices(&self) -> Vec<usize> {
+        match self {
+            Self::Global { row_groups, .. } => row_groups.iter().copied().collect(),
+            Self::PerRowGroup(row_groups) => row_groups
+                .iter()
+                .map(|row_group| row_group.row_group_index)
+                .collect(),
         }
     }
 
@@ -200,6 +283,16 @@ impl RowGroupFrontier {
             budget,
             has_predicates,
         })
+    }
+
+    /// The queued row groups, in no specific order and without duplicates.
+    pub(crate) fn queued_row_groups(&self) -> impl Iterator<Item = usize> + '_ {
+        self.queued.row_groups()
+    }
+
+    /// Returns `true` if `row_group_idx` is still queued to be read.
+    pub(crate) fn is_queued(&self, row_group_idx: usize) -> bool {
+        self.queued.contains(row_group_idx)
     }
 
     pub(crate) fn update_budget_after_row_group(&mut self, budget: RowBudget) {
@@ -454,6 +547,89 @@ mod tests {
                 .is_none()
         );
         assert_eq!(exhausted_budget.queued.len(), 0);
+    }
+
+    #[test]
+    fn queued_row_groups_count_repeated_row_groups() {
+        let metadata = test_file_parquet_metadata();
+        let budget = RowBudget::new(None, None);
+
+        // Row group 1 is skipped the first time. A row group stays queued
+        // until its last occurrence is popped.
+        let mut local = RowGroupFrontier::new(
+            Arc::clone(&metadata),
+            RowGroupPlan::PerRowGroup(vec![
+                RowGroupSelection::new(0, None),
+                RowGroupSelection::new(1, Some(RowSelection::from(vec![RowSelector::skip(200)]))),
+                RowGroupSelection::new(0, None),
+                RowGroupSelection::new(1, None),
+            ]),
+            budget,
+            false,
+        )
+        .unwrap();
+        let queued = |frontier: &RowGroupFrontier| {
+            (frontier.queued.contains(0), frontier.queued.contains(1))
+        };
+        assert_eq!(queued(&local), (true, true));
+
+        assert_eq!(
+            local
+                .next_readable_row_group()
+                .unwrap()
+                .unwrap()
+                .row_group_idx,
+            0
+        );
+        assert_eq!(queued(&local), (true, true));
+        // Peeking does not change the counts of the frontier.
+        assert_eq!(local.peek_next_row_group().unwrap(), Some(0));
+        assert_eq!(queued(&local), (true, true));
+
+        // Skips the first occurrence of row group 1.
+        assert_eq!(
+            local
+                .next_readable_row_group()
+                .unwrap()
+                .unwrap()
+                .row_group_idx,
+            0
+        );
+        assert_eq!(queued(&local), (false, true));
+
+        assert_eq!(
+            local
+                .next_readable_row_group()
+                .unwrap()
+                .unwrap()
+                .row_group_idx,
+            1
+        );
+        assert_eq!(queued(&local), (false, false));
+        assert!(local.queued.counts.is_empty());
+        assert!(local.next_readable_row_group().unwrap().is_none());
+
+        // An exhausted limit clears the queue and its counts.
+        let mut global = RowGroupFrontier::new(
+            metadata,
+            global_plan(Some(vec![0, 1, 0]), None),
+            RowBudget::new(None, Some(200)),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            global
+                .next_readable_row_group()
+                .unwrap()
+                .unwrap()
+                .row_group_idx,
+            0
+        );
+        assert_eq!(queued(&global), (true, true));
+        global.update_budget_after_row_group(RowBudget::new(None, Some(0)));
+        assert!(global.next_readable_row_group().unwrap().is_none());
+        assert_eq!(queued(&global), (false, false));
+        assert!(global.queued.counts.is_empty());
     }
 
     #[test]

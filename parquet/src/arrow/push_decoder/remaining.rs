@@ -151,15 +151,34 @@ impl RemainingRowGroups {
     /// when no row groups remain, or when every remaining row group
     /// would be skipped under the current selection/budget.
     ///
-    /// Cost: one clone of the queued row-group plan and selections per call
-    /// (the frontier is cloned so the real advance logic can run
-    /// non-destructively). For callers that peek once per row-group boundary
+    /// Cost: one clone of the queued row-group plan, selections and
+    /// row-group occurrence counts per call (the frontier is cloned so the
+    /// real advance logic can run non-destructively). For callers that peek once per row-group boundary
     /// this is O(remaining row groups + selectors) per boundary.
     pub fn peek_next_row_group(&self) -> Result<Option<usize>, ParquetError> {
         if self.row_group_reader_builder.has_active_row_group() {
             return Ok(None);
         }
         self.frontier.peek_next_row_group()
+    }
+
+    /// Release the buffered bytes that are outside the read column chunks of
+    /// the queued row groups. The decoder does not read these bytes.
+    pub fn release_unread_bytes(&mut self) {
+        self.row_group_reader_builder
+            .release_unread_bytes(self.frontier.queued_row_groups());
+    }
+
+    /// Release the buffered bytes of a row group that is done, unless the
+    /// queue reads it again. The reader of the row group holds its own
+    /// copies of the bytes that it reads.
+    fn release_row_group(&mut self, row_group_idx: Option<usize>) {
+        if let Some(row_group_idx) = row_group_idx
+            && !self.frontier.is_queued(row_group_idx)
+        {
+            self.row_group_reader_builder
+                .release_row_group(row_group_idx);
+        }
     }
 
     /// returns [`ParquetRecordBatchReader`] suitable for reading the next
@@ -191,10 +210,12 @@ impl RemainingRowGroups {
                 }
             }
 
+            let row_group_idx = self.row_group_reader_builder.active_row_group_idx();
             match self.row_group_reader_builder.try_build()? {
                 RowGroupBuildResult::Finished { remaining_budget } => {
                     self.frontier
                         .update_budget_after_row_group(remaining_budget);
+                    self.release_row_group(row_group_idx);
                     // reader is done, proceed to the next row group
                 }
                 RowGroupBuildResult::NeedsData(ranges) => {
@@ -207,6 +228,7 @@ impl RemainingRowGroups {
                 } => {
                     self.frontier
                         .update_budget_after_row_group(remaining_budget);
+                    self.release_row_group(row_group_idx);
                     // ready to read the row group
                     return Ok(DecodeResult::Data(batch_reader));
                 }

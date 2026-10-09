@@ -334,6 +334,11 @@ required-features = ["arrow"]
 harness = false
 
 [[bench]]
+name = "row_selection_algebra"
+harness = false
+required-features = ["arrow"]
+
+[[bench]]
 name = "row_selection_cursor"
 harness = false
 required-features = ["arrow"]
