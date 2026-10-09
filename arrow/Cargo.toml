@@ -83,6 +83,8 @@ force_validate = ["arrow-array/force_validate", "arrow-data/force_validate"]
 # Enable ffi support
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "arrow-array/ffi"]
 chrono-tz = ["arrow-array/chrono-tz"]
+# Resolve named timezones with jiff instead of chrono-tz (see `arrow-array/jiff`)
+jiff = ["arrow-array/jiff"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 # Enable memory tracking support
 pool = ["arrow-array/pool"]

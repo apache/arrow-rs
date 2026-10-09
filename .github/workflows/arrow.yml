@@ -77,6 +77,8 @@ jobs:
         run: cargo test -p arrow
       - name: Test arrow except pyarrow
         run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,chrono-tz
+      - name: Test arrow with named timezones resolved by jiff
+        run: cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi,chrono-tz,jiff
       - name: Run examples
         run: |
           # Test arrow examples
@@ -160,6 +162,8 @@ jobs:
         run: cargo check -p arrow --no-default-features --all-targets --features ffi
       - name: Check compilation --no-default-features --all-targets --features chrono-tz
         run: cargo check -p arrow --no-default-features --all-targets --features chrono-tz
+      - name: Check compilation --no-default-features --all-targets --features jiff
+        run: cargo check -p arrow --no-default-features --all-targets --features jiff
 
 
   # test the arrow crate builds against wasm32 in nightly rust
