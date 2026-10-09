@@ -2044,7 +2044,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "chrono-tz")]
+    #[cfg(any(feature = "chrono-tz", feature = "jiff"))]
     fn timestamp_from_naive_datetime_ambiguous() {
         use chrono::{NaiveDate, NaiveTime};
 
@@ -2062,7 +2062,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "chrono-tz")]
+    #[cfg(any(feature = "chrono-tz", feature = "jiff"))]
     fn timestamp_from_naive_datetime_none() {
         use chrono::{NaiveDate, NaiveTime};
 
