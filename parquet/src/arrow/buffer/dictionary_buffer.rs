@@ -21,7 +21,8 @@ use crate::errors::{ParquetError, Result};
 use ahash::RandomState;
 use arrow_array::{Array, DictionaryArray, PrimitiveArray, downcast_integer};
 use arrow_array::{
-    ArrayRef, FixedSizeBinaryArray, OffsetSizeTrait, cast::AsArray,
+    ArrayRef, FixedSizeBinaryArray, OffsetSizeTrait,
+    cast::AsArray,
     types::{
         ArrowDictionaryKeyType, ArrowPrimitiveType, Int8Type, Int16Type, Int32Type, Int64Type,
         UInt8Type, UInt16Type, UInt32Type, UInt64Type,
@@ -178,8 +179,8 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
 
                 let num_keys = keys.len();
                 let keys_buffer = Buffer::from_vec(keys);
-                let null_buffer = null_buffer
-                    .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, num_keys)));
+                let null_buffer =
+                    null_buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, num_keys)));
 
                 build_dictionary_array(key_type, keys_buffer, num_keys, null_buffer, values)
             }
@@ -242,9 +243,8 @@ fn build_dictionary_array(
 ) -> Result<ArrayRef> {
     macro_rules! build {
         ($kt:ty) => {{
-            let scalars = ScalarBuffer::<<$kt as ArrowPrimitiveType>::Native>::new(
-                keys_buffer, 0, num_keys,
-            );
+            let scalars =
+                ScalarBuffer::<<$kt as ArrowPrimitiveType>::Native>::new(keys_buffer, 0, num_keys);
             let keys = PrimitiveArray::<$kt>::new(scalars, null_buffer);
             // SAFETY: key bounds already validated by caller
             let dict = unsafe { DictionaryArray::<$kt>::new_unchecked(keys, values) };
@@ -260,9 +260,7 @@ fn build_dictionary_array(
         ArrowType::UInt16 => build!(UInt16Type),
         ArrowType::UInt32 => build!(UInt32Type),
         ArrowType::UInt64 => build!(UInt64Type),
-        _ => Err(general_err!(
-            "unsupported dictionary key type: {key_type}"
-        )),
+        _ => Err(general_err!("unsupported dictionary key type: {key_type}")),
     }
 }
 
