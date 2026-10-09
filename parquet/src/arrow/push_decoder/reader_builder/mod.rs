@@ -30,11 +30,13 @@ use crate::arrow::arrow_reader::{
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
-use crate::arrow::push_decoder::scan_plan::{BudgetedReadPlan, RowBudget};
+use crate::arrow::push_decoder::scan_plan::{
+    BudgetedReadPlan, RowBudget, RowGroupFrontier, ScanPlanBuilder,
+};
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
-use crate::file::metadata::ParquetMetaData;
 use crate::file::metadata::page_index::RowGroupPageIndex;
+use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
 use data::DataRequest;
@@ -89,6 +91,26 @@ enum RowGroupDecoderState {
     },
     /// Finished (or not yet started) reading this group
     Finished,
+}
+
+impl RowGroupDecoderState {
+    /// The index of the row group, if one is active.
+    fn row_group_idx(&self) -> Option<usize> {
+        match self {
+            Self::Start { row_group_info }
+            | Self::Filters { row_group_info, .. }
+            | Self::WaitingOnFilterData { row_group_info, .. }
+            | Self::StartData { row_group_info, .. }
+            | Self::WaitingOnData { row_group_info, .. } => Some(row_group_info.row_group_idx),
+            Self::Finished => None,
+        }
+    }
+}
+
+/// The byte range of a column chunk in the file.
+pub(crate) fn column_chunk_range(column: &ColumnChunkMetaData) -> Range<u64> {
+    let (start, length) = column.byte_range();
+    start..start + length
 }
 
 #[derive(Debug)]
@@ -183,7 +205,7 @@ pub(crate) struct RowGroupReaderBuilder {
 
     /// What each decoding stage fetches. Kept here because the filter is
     /// moved out of the builder while a row group is decoded.
-    stages: StageSchedule,
+    stages: Arc<StageSchedule>,
 }
 
 /// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
@@ -248,7 +270,7 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
-            stages,
+            stages: Arc::new(stages),
         }
     }
 
@@ -754,6 +776,64 @@ impl RowGroupReaderBuilder {
             }
         };
         Ok(result)
+    }
+
+    /// The index of the active row group, if any.
+    pub(crate) fn active_row_group_idx(&self) -> Option<usize> {
+        self.state
+            .as_ref()
+            .and_then(RowGroupDecoderState::row_group_idx)
+    }
+
+    /// Remove the buffered bytes of all column chunks of a row group. This
+    /// includes bytes that the caller pushed but the decoder did not request,
+    /// for example the bytes between the requested ranges of a larger pushed
+    /// buffer.
+    pub(crate) fn release_row_group(&mut self, row_group_idx: usize) {
+        let ranges: Vec<Range<u64>> = self
+            .metadata
+            .row_group(row_group_idx)
+            .columns()
+            .iter()
+            .map(column_chunk_range)
+            .collect();
+        self.buffers.release_ranges(&ranges);
+    }
+
+    /// Remove the buffered bytes outside the read column chunks of
+    /// `row_groups`. A column chunk is read if the output or a predicate
+    /// reads its column. Indexes that are not in the file are ignored.
+    pub(crate) fn release_unread_bytes(&mut self, row_groups: impl IntoIterator<Item = usize>) {
+        if self.buffers.buffered_bytes() == 0 {
+            return;
+        }
+        let mut read_columns = self.projection.clone();
+        if let Some(filter) = &self.filter {
+            for predicate in &filter.predicates {
+                read_columns.union(predicate.projection());
+            }
+        }
+        let mut keep = vec![];
+        for row_group_idx in row_groups {
+            let Some(row_group) = self.metadata.row_groups().get(row_group_idx) else {
+                continue;
+            };
+            keep.extend(
+                row_group
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .filter(|(column_idx, _)| read_columns.leaf_included(*column_idx))
+                    .map(|(_, column)| column_chunk_range(column)),
+            );
+        }
+        self.buffers.retain_ranges(&keep);
+    }
+
+    /// A [`ScanPlanBuilder`] that plans the same ranges as this builder, for
+    /// the row groups in `frontier`.
+    pub(crate) fn scan_plan_builder(&self, frontier: RowGroupFrontier) -> ScanPlanBuilder {
+        ScanPlanBuilder::new(frontier, self.batch_size, Arc::clone(&self.stages))
     }
 
     /// Which columns should be cached?
