@@ -151,31 +151,33 @@ const fn repeat_byte(b: u8) -> u64 {
 #[cfg(any(test, not(all(target_arch = "x86_64", target_feature = "bmi2"))))]
 #[inline]
 fn compress_bytes(value: u64, mask: u64) -> u64 {
-    let mut x = value & mask;
-    let mut zeros = !mask;
-    let mut n = 1;
-    while n < 8 {
+    let mut packed = value & mask;
+    let mut dropped = !mask;
+    let mut shift = 1;
+    while shift < 8 {
         // The move mask of this round: the parity of the dropped bits
-        // below each bit, in strides of `n`
-        let mut parity = zeros;
-        let mut len = n;
-        while len < 8 {
-            parity ^= (parity << len) & repeat_byte(0xFF << len);
-            len <<= 1;
+        // below each bit, in strides of `shift`
+        let mut move_mask = dropped;
+        let mut step = shift;
+        while step < 8 {
+            move_mask ^= (move_mask << step) & repeat_byte(0xFF << step);
+            step <<= 1;
         }
-        let q = x & parity;
-        x ^= q ^ ((q >> n) & repeat_byte(0xFF >> n));
-        zeros &= !parity;
-        zeros ^= (zeros >> n) & repeat_byte(0xFF >> n);
-        n <<= 1;
+        let moving = packed & move_mask;
+        packed ^= moving ^ ((moving >> shift) & repeat_byte(0xFF >> shift));
+        dropped &= !move_mask;
+        dropped ^= (dropped >> shift) & repeat_byte(0xFF >> shift);
+        shift <<= 1;
     }
-    let c = mask - ((mask >> 1) & repeat_byte(0x55));
-    let c = (c & repeat_byte(0x33)) + ((c >> 2) & repeat_byte(0x33));
-    let kept = (c + (c >> 4)) & repeat_byte(0x0F);
-    let below = kept.wrapping_mul(repeat_byte(1)) << 8;
+    // Kept bits per byte (SWAR popcount, HD 5-1)
+    let pairs = mask - ((mask >> 1) & repeat_byte(0x55));
+    let nibbles = (pairs & repeat_byte(0x33)) + ((pairs >> 2) & repeat_byte(0x33));
+    let kept = (nibbles + (nibbles >> 4)) & repeat_byte(0x0F);
+    // Where byte `j` lands: the kept bits of bytes 0..j, all eight at once
+    let dest = kept.wrapping_mul(repeat_byte(1)) << 8;
     let mut result = 0;
     for j in 0..8 {
-        result |= ((x >> (8 * j)) & 0xFF) << ((below >> (8 * j)) & 0xFF);
+        result |= ((packed >> (8 * j)) & 0xFF) << ((dest >> (8 * j)) & 0xFF);
     }
     result
 }
