@@ -26,7 +26,8 @@ use crate::bit_chunk_iterator::BitChunks;
 /// Equivalent to the x86 BMI2 `PEXT` instruction. When compiled with the
 /// `bmi2` target feature enabled (for example `-C target-cpu=x86-64-v3`)
 /// this lowers to the hardware `pext` instruction; otherwise it falls back
-/// to a portable version that picks its method by the mask's popcount.
+/// to a portable version that picks its method by the number of set bits in
+/// the mask.
 ///
 /// # Functional Example
 ///
@@ -53,9 +54,14 @@ use crate::bit_chunk_iterator::BitChunks;
 //
 // When `uint_gather_scatter_bits` is stabilised
 // (<https://github.com/rust-lang/rust/issues/149069>), measure
-// `value.compress(mask)` against this before switching: its portable
-// version is the constant-time network, which the fallback here beats on
-// sparse and dense masks.
+// `value.extract_bits(mask)` against this before switching. Its portable
+// version runs six shift stages for every mask, with each stage's mask taken
+// from prefix counts of zero bits (Hacker's Delight 7-4, see
+// <https://github.com/rust-lang/rust/blob/main/library/core/src/num/imp/int_bits.rs>).
+// The fallback here does less work on sparse and dense masks, and on x86 also
+// in between (three stages inside each byte plus one multiply, fewer shifts in
+// total); on big AArch64 cores the six-stage version is faster in that middle
+// band.
 #[inline]
 pub fn compress(value: u64, mask: u64) -> u64 {
     #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
