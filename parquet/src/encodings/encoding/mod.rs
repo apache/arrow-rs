@@ -29,8 +29,8 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{BitWriter, num_required_bits};
 use crate::util::prefix::common_prefix_length;
 
-use alp_encoder::AlpEncoder;
-use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
+pub use alp_encoder::AlpEncoder;
+pub use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
 

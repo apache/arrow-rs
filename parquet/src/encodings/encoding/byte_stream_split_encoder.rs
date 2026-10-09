@@ -32,7 +32,7 @@ pub struct ByteStreamSplitEncoder<T> {
 }
 
 impl<T: DataType> ByteStreamSplitEncoder<T> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             buffer: Vec::new(),
             _p: PhantomData,
@@ -119,7 +119,7 @@ pub struct VariableWidthByteStreamSplitEncoder<T> {
 }
 
 impl<T: DataType> VariableWidthByteStreamSplitEncoder<T> {
-    pub(crate) fn new(type_length: i32) -> Self {
+    pub fn new(type_length: i32) -> Self {
         Self {
             buffer: Vec::new(),
             type_width: type_length as usize,
