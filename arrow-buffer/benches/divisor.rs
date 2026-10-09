@@ -23,38 +23,45 @@ use std::hint;
 
 const SIZE: usize = 8192;
 
+/// Matches on the variant of `$divisor` once, outside the loop, and moves it into the
+/// closure, as a kernel would
+macro_rules! div_rem_all {
+    ($values:expr, $divisor:expr, $enum:ident, $field:tt) => {
+        match $divisor {
+            $enum::PowerOfTwo(d) => $values
+                .iter()
+                .map(move |x| d.wrapping_div_rem(*x).$field)
+                .collect::<Vec<_>>(),
+            $enum::Multiplier(d) => $values
+                .iter()
+                .map(move |x| d.wrapping_div_rem(*x).$field)
+                .collect::<Vec<_>>(),
+        }
+    };
+}
+
 /// Divides `SIZE` random values by 13 and by 16 with `/` and `%`, and with the divisor type
 macro_rules! bench_divisor {
     ($c:expr, $divisor:ident, $t:ty) => {{
         let mut rng = StdRng::seed_from_u64(42);
         let values: Vec<$t> = (0..SIZE).map(|_| rng.random()).collect();
-        let mut group = $c.benchmark_group(stringify!($t));
+        let mut group = $c.benchmark_group(concat!("divisor_", stringify!($t)));
         group.throughput(Throughput::Elements(SIZE as u64));
         for d in [13, 16] {
             // Hide the divisor from the compiler, as it is when it comes from a `Scalar`
             let d: $t = hint::black_box(d);
             let divisor = $divisor::new(d).unwrap();
             group.bench_function(format!("div {d}/operator"), |b| {
-                b.iter(|| values.iter().map(|x| x / d).collect::<Vec<_>>())
+                b.iter(|| values.iter().map(move |x| x / d).collect::<Vec<_>>())
             });
             group.bench_function(format!("div {d}/divisor"), |b| {
-                b.iter(|| {
-                    values
-                        .iter()
-                        .map(|x| divisor.div_rem(*x).0)
-                        .collect::<Vec<_>>()
-                })
+                b.iter(|| div_rem_all!(values, divisor, $divisor, 0))
             });
             group.bench_function(format!("rem {d}/operator"), |b| {
-                b.iter(|| values.iter().map(|x| x % d).collect::<Vec<_>>())
+                b.iter(|| values.iter().map(move |x| x % d).collect::<Vec<_>>())
             });
             group.bench_function(format!("rem {d}/divisor"), |b| {
-                b.iter(|| {
-                    values
-                        .iter()
-                        .map(|x| divisor.div_rem(*x).1)
-                        .collect::<Vec<_>>()
-                })
+                b.iter(|| div_rem_all!(values, divisor, $divisor, 1))
             });
         }
         group.finish();
