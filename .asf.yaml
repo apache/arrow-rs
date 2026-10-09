@@ -41,15 +41,47 @@ github:
   protected_branches:
     main:
       required_status_checks:
-        # require branches to be up-to-date before merging
-        strict: true
-        # don't require any jobs to pass
-        contexts: []
+        # The merge queue tests each PR against the latest main.
+        strict: false
+        # This job aggregates all suites in .github/workflows/ci.yml.
+        contexts:
+          - "Required Checks"
       required_pull_request_reviews:
         required_approving_review_count: 1
+  # Raw GitHub Rulesets API payload, as in apache/datafusion-comet.
+  # Rulesets and classic branch protection apply together.
+  rulesets:
+    - name: Merge Queue
+      target: branch
+      enforcement: active
+      bypass_actors:
+        # apache/root (ASF Infra) can recover a blocked queue.
+        - actor_id: 118420
+          actor_type: Team
+          bypass_mode: always
+      conditions:
+        ref_name:
+          include:
+            - "~DEFAULT_BRANCH"
+          exclude: []
+      rules:
+        - type: merge_queue
+          parameters:
+            merge_method: SQUASH
+            grouping_strategy: ALLGREEN
+            # Limit concurrent CI builds while allowing speculative testing.
+            max_entries_to_build: 2
+            # Merge up to five already-green entries together. Each PR still
+            # gets its own squash commit; this does not batch CI builds.
+            min_entries_to_merge: 1
+            max_entries_to_merge: 5
+            min_entries_to_merge_wait_minutes: 0
+            # Allow for the full test suite and ASF runner scheduling delays.
+            check_response_timeout_minutes: 300
   pull_requests:
     # enable updating head branches of pull requests
     allow_update_branch: true
+    allow_auto_merge: true
 
 # publishes the content of the `asf-site` branch to
 # https://arrow.apache.org/rust/

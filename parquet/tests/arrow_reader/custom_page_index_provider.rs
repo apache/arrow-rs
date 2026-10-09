@@ -404,7 +404,7 @@ impl PageIndexProvider for SelectivePageIndexProvider {
 }
 
 /// Create a test parquet file with multiple row groups and multiple pages per column
-fn create_test_file() -> Bytes {
+pub(super) fn create_test_file() -> Bytes {
     // Create small pages and small row groups for testing
     let props = WriterProperties::builder()
         .set_statistics_enabled(EnabledStatistics::Page)

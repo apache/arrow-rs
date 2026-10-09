@@ -803,6 +803,7 @@ fn build_string_list_page_iterator(
 fn build_int32_list_page_iterator(
     column_desc: ColumnDescPtr,
     null_density: f32,
+    min_list_len: usize,
 ) -> impl PageIterator + Clone {
     let max_def_level = column_desc.max_def_level();
     let max_rep_level = column_desc.max_rep_level();
@@ -823,7 +824,7 @@ fn build_int32_list_page_iterator(
                     def_levels.push(0);
                     continue;
                 }
-                let len = rng.random_range(0..MAX_LIST_LEN);
+                let len = rng.random_range(min_list_len..MAX_LIST_LEN);
                 if len == 0 {
                     def_levels.push(1);
                     continue;
@@ -982,6 +983,28 @@ fn bench_array_reader_skip(mut array_reader: Box<dyn ArrayReader>) -> usize {
             break;
         }
     }
+    total_count
+}
+
+/// Alternately skips and reads `run_len` records, as when reading a row
+/// selection made of short runs, and emits a batch every `BATCH_SIZE` records read
+fn bench_array_reader_runs(mut array_reader: Box<dyn ArrayReader>, run_len: usize) -> usize {
+    let mut total_count = 0;
+    let mut batch_count = 0;
+    loop {
+        let skipped = array_reader.skip_records(run_len).unwrap();
+        let read = array_reader.read_records(run_len).unwrap();
+        total_count += skipped + read;
+        batch_count += read;
+        if batch_count >= BATCH_SIZE {
+            array_reader.consume_batch().unwrap();
+            batch_count = 0;
+        }
+        if read < run_len {
+            break;
+        }
+    }
+    array_reader.consume_batch().unwrap();
     total_count
 }
 
@@ -2636,11 +2659,30 @@ fn add_benches(c: &mut Criterion) {
         ("90pct NULLs", 0.9),
         ("99pct NULLs", 0.99),
     ] {
-        let list_data = build_int32_list_page_iterator(int32_list_desc.clone(), null_density);
+        let list_data = build_int32_list_page_iterator(int32_list_desc.clone(), null_density, 0);
         group.bench_function(label, |b| {
             b.iter(|| {
                 let reader = create_int32_list_reader(list_data.clone(), int32_list_desc.clone());
                 count = bench_array_reader(reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        });
+    }
+    let list_data = build_int32_list_page_iterator(int32_list_desc.clone(), 0.0, 1);
+    group.bench_function("no NULLs or empty lists", |b| {
+        b.iter(|| {
+            let reader = create_int32_list_reader(list_data.clone(), int32_list_desc.clone());
+            count = bench_array_reader(reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+    let list_data = build_int32_list_page_iterator(int32_list_desc.clone(), 0.0, 0);
+    for run_len in [1, 32] {
+        let label = format!("no NULLs, skip and read in runs of {run_len}");
+        group.bench_function(label, |b| {
+            b.iter(|| {
+                let reader = create_int32_list_reader(list_data.clone(), int32_list_desc.clone());
+                count = bench_array_reader_runs(reader, run_len);
             });
             assert_eq!(count, EXPECTED_VALUE_COUNT);
         });
