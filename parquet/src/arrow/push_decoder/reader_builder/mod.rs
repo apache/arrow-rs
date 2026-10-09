@@ -30,7 +30,9 @@ use crate::arrow::arrow_reader::{
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
-use crate::arrow::push_decoder::scan_plan::{BudgetedReadPlan, RowBudget};
+use crate::arrow::push_decoder::scan_plan::{
+    BudgetedReadPlan, RowBudget, RowGroupFrontier, ScanPlanBuilder,
+};
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
 use crate::file::metadata::page_index::RowGroupPageIndex;
@@ -203,7 +205,7 @@ pub(crate) struct RowGroupReaderBuilder {
 
     /// What each decoding stage fetches. Kept here because the filter is
     /// moved out of the builder while a row group is decoded.
-    stages: StageSchedule,
+    stages: Arc<StageSchedule>,
 }
 
 /// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
@@ -268,7 +270,7 @@ impl RowGroupReaderBuilder {
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
-            stages,
+            stages: Arc::new(stages),
         }
     }
 
@@ -826,6 +828,12 @@ impl RowGroupReaderBuilder {
             );
         }
         self.buffers.retain_ranges(&keep);
+    }
+
+    /// A [`ScanPlanBuilder`] that plans the same ranges as this builder, for
+    /// the row groups in `frontier`.
+    pub(crate) fn scan_plan_builder(&self, frontier: RowGroupFrontier) -> ScanPlanBuilder {
+        ScanPlanBuilder::new(frontier, self.batch_size, Arc::clone(&self.stages))
     }
 
     /// Which columns should be cached?
