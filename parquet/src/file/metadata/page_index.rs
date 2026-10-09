@@ -16,6 +16,17 @@
 // under the License.
 
 //! Page Index structures for efficient page-level skipping
+//!
+//! # 32-bit platforms
+//!
+//! Row-group and column counts may each be as large as `i32::MAX`, consistent with the
+//! Parquet/Thrift metadata format. On a 32-bit platform, however, a [`PageIndex`] cannot contain
+//! more than roughly 134 to 179 million populated column indexes or offset indexes (the exact
+//! limit is target-dependent and available memory may impose a lower limit). For a fully populated
+//! index, this constrains the product of the row-group and column counts. For example, a fully
+//! populated 65,536 by 65,536 page index cannot be represented on a 32-bit platform. Sparse page
+//! indexes with the same logical dimensions may still be represented when their populated entry
+//! count fits within the platform limit.
 
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::memory::HeapSize;
