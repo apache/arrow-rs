@@ -95,6 +95,30 @@ jobs:
       - name: Format workspace
         run: cargo fmt --all -- --check
 
+  unused-dependencies:
+    name: Check unused dependencies
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Setup Rust toolchain
+        run: rustup install
+      - name: Install cargo-shear
+        id: install-shear
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
+        with:
+          tool: cargo-shear@1.14.0
+      - name: Check workspace dependencies
+        run: cargo shear --deny-warnings
+      - name: Check arrow-pyarrow-testing dependencies
+        # Report excluded crates even when an earlier scan finds issues.
+        if: ${{ !cancelled() && steps.install-shear.outcome == 'success' }}
+        run: cargo shear --deny-warnings arrow-pyarrow-testing
+      - name: Check arrow-pyarrow-integration-testing dependencies
+        if: ${{ !cancelled() && steps.install-shear.outcome == 'success' }}
+        run: cargo shear --deny-warnings arrow-pyarrow-integration-testing
+
   msrv:
     name: Verify MSRV (Minimum Supported Rust Version)
     runs-on: ubuntu-latest
