@@ -21,9 +21,11 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
-use crate::take::take_record_batch;
+use crate::take::{take, take_record_batch};
 use arrow_array::types::{BinaryViewType, StringViewType};
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, UInt64Array, downcast_primitive,
+};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -721,6 +723,169 @@ impl BatchCoalescer {
     }
 }
 
+/// Row buffer used by [`PartitionCoalescer`].
+#[derive(Debug)]
+struct BufferCoalescer {
+    schema: SchemaRef,
+    target_batch_size: usize,
+    in_progress_arrays: Vec<Box<dyn InProgressArray>>,
+    buffered_rows: usize,
+    completed: VecDeque<RecordBatch>,
+}
+
+impl BufferCoalescer {
+    fn new(schema: SchemaRef, target_batch_size: usize) -> Self {
+        let in_progress_arrays = schema
+            .fields()
+            .iter()
+            .map(|field| create_in_progress_array(field.data_type(), target_batch_size))
+            .collect();
+        Self {
+            schema,
+            target_batch_size,
+            in_progress_arrays,
+            buffered_rows: 0,
+            completed: VecDeque::with_capacity(1),
+        }
+    }
+
+    fn push_rows(
+        &mut self,
+        batch: &RecordBatch,
+        rows: &[u32],
+    ) -> Result<(), ArrowError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let columns = batch.columns();
+        if columns.len() != self.in_progress_arrays.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Batch has {} columns but BufferCoalescer expects {}",
+                columns.len(),
+                self.in_progress_arrays.len()
+            )));
+        }
+
+        let mut row_offset = 0;
+        let mut remaining = rows.len();
+        while remaining > self.target_batch_size - self.buffered_rows {
+            let room = self.target_batch_size - self.buffered_rows;
+            let chunk = &rows[row_offset..row_offset + room];
+            for (in_progress, column) in self.in_progress_arrays.iter_mut().zip(columns) {
+                in_progress.copy_rows_by_indices(column, chunk)?;
+            }
+            self.buffered_rows += room;
+            row_offset += room;
+            remaining -= room;
+            self.flush()?;
+        }
+        if remaining > 0 {
+            let chunk = &rows[row_offset..row_offset + remaining];
+            for (in_progress, column) in self.in_progress_arrays.iter_mut().zip(columns) {
+                in_progress.copy_rows_by_indices(column, chunk)?;
+            }
+            self.buffered_rows += remaining;
+        }
+        Ok(())
+    }
+
+    fn next_completed_batch(&mut self) -> Option<RecordBatch> {
+        self.completed.pop_front()
+    }
+
+    fn finish(&mut self) -> Result<(), ArrowError> {
+        self.flush()
+    }
+
+    fn flush(&mut self) -> Result<(), ArrowError> {
+        if self.buffered_rows == 0 {
+            return Ok(());
+        }
+        let arrays = self
+            .in_progress_arrays
+            .iter_mut()
+            .map(|in_progress| in_progress.finish())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+        let batch = unsafe {
+            RecordBatch::new_unchecked(Arc::clone(&self.schema), arrays, self.buffered_rows)
+        };
+        self.buffered_rows = 0;
+        self.completed.push_back(batch);
+        Ok(())
+    }
+}
+
+/// Single-partition coalescer: filters an input batch down to rows whose
+/// partition-id equals `my_partition`, buffering them into target-sized
+/// batches. Each output partition in a repartition operator owns one of these.
+#[derive(Debug)]
+pub struct PartitionCoalescer {
+    my_partition: u64,
+    /// Reused scratch of row indices where `pid == my_partition`.
+    bucket: Vec<u32>,
+    coalescer: BufferCoalescer,
+}
+
+impl PartitionCoalescer {
+    /// Create a coalescer that buffers rows tagged with `my_partition`.
+    pub fn new(schema: SchemaRef, target_batch_size: usize, my_partition: usize) -> Self {
+        Self {
+            my_partition: my_partition as u64,
+            bucket: Vec::new(),
+            coalescer: BufferCoalescer::new(schema, target_batch_size),
+        }
+    }
+
+    /// Append rows from `batch` whose partition-id equals `my_partition`.
+    pub fn push(
+        &mut self,
+        batch: &RecordBatch,
+        partition_ids: &UInt64Array,
+    ) -> Result<(), ArrowError> {
+        let pids = partition_ids.values();
+        self.bucket.clear();
+        self.bucket.reserve(pids.len());
+        let my = self.my_partition;
+        unsafe {
+            let base = self.bucket.as_mut_ptr();
+            let mut out = base;
+            // Branchless conditional store.
+            for (row, &pid) in pids.iter().enumerate() {
+                *out = row as u32;
+                out = out.add((pid == my) as usize);
+            }
+            self.bucket.set_len(out.offset_from(base) as usize);
+        }
+        if !self.bucket.is_empty() {
+            self.coalescer.push_rows(batch, &self.bucket)?;
+        }
+        Ok(())
+    }
+
+    /// Append a pre-bucketed slice of row indices.
+    pub fn push_bucket(
+        &mut self,
+        batch: &RecordBatch,
+        rows: &[u32],
+    ) -> Result<(), ArrowError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        self.coalescer.push_rows(batch, rows)
+    }
+
+    /// Pop the next completed target-sized batch, if any.
+    pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
+        self.coalescer.next_completed_batch()
+    }
+
+    /// Flush the partial tail; call once on EOF, then drain
+    /// [`Self::next_completed_batch`] to pick up remaining batches.
+    pub fn finish(&mut self) -> Result<(), ArrowError> {
+        self.coalescer.finish()
+    }
+}
+
 /// Return a new `InProgressArray` for the given data type
 fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn InProgressArray> {
     macro_rules! instantiate_primitive {
@@ -807,6 +972,32 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
             }
             FilterSelection::Indices(indices) => indices.try_for_each(|idx| self.copy_rows(idx, 1)),
         }
+    }
+
+    /// Copy rows at positions `indices` from `source` into the in-progress
+    /// array. Fallback path: builds a `UInt32Array` from `indices` without
+    /// cloning the slice, then calls [`take`]. Types with a fast path
+    /// (primitive, byte-view) override this to scatter directly from `source`.
+    fn copy_rows_by_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &[u32],
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        // Avoid cloning `indices` into a fresh Vec: wrap the existing slice in
+        // a `ScalarBuffer` (zero-copy via `Buffer::from_slice_ref` when the
+        // slice outlives the kernel call, which it does here).
+        use arrow_buffer::{Buffer, ScalarBuffer};
+        let buf = Buffer::from_slice_ref(indices);
+        let scalar: ScalarBuffer<u32> = ScalarBuffer::new(buf, 0, indices.len());
+        let indices_arr = UInt32Array::new(scalar, None);
+        let taken = take(source.as_ref(), &indices_arr, None)?;
+        self.set_source(Some(taken));
+        let result = self.copy_rows(0, indices.len());
+        self.set_source(None);
+        result
     }
 
     /// Finish the currently in-progress array and return it as an `ArrayRef`
@@ -2893,4 +3084,5 @@ mod tests {
             "draining must release the accounted memory"
         );
     }
+
 }

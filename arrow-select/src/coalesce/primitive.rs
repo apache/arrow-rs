@@ -206,6 +206,43 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         }
     }
 
+    fn copy_rows_by_indices(
+        &mut self,
+        source: &ArrayRef,
+        indices: &[u32],
+    ) -> Result<(), ArrowError> {
+        if indices.is_empty() {
+            return Ok(());
+        }
+        self.ensure_capacity();
+        let typed = source.as_primitive::<T>();
+
+        if let Some(src_nulls) = typed.nulls() {
+            for &idx in indices {
+                self.nulls.append(src_nulls.is_valid(idx as usize));
+            }
+        } else {
+            self.nulls.append_n_non_nulls(indices.len());
+        }
+
+        let values = typed.values();
+        let current_len = self.current.len();
+        self.current.reserve(indices.len());
+        unsafe {
+            let base = self
+                .current
+                .spare_capacity_mut()
+                .as_mut_ptr()
+                .cast::<T::Native>();
+            let src = values.as_ptr();
+            for (i, &idx) in indices.iter().enumerate() {
+                base.add(i).write(*src.add(idx as usize));
+            }
+            self.current.set_len(current_len + indices.len());
+        }
+        Ok(())
+    }
+
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         // take and reset the current values and nulls
         let values = std::mem::take(&mut self.current);
