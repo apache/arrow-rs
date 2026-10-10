@@ -18,6 +18,7 @@
 //! Module for unshredding VariantArray by folding typed_value columns back into the value column.
 
 use crate::variant_array::{binary_array_value, validate_binary_array};
+use crate::variant_scalar::{DecodePrimitive, TimestampType, decode_decimal, decode_timestamp};
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     Array, ArrayRef, AsArray as _, BinaryArray, BinaryViewArray, BooleanArray,
@@ -26,13 +27,11 @@ use arrow::array::{
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Decimal32Type, Decimal64Type, Decimal128Type,
-    DecimalType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    Time64MicrosecondType, TimeUnit, TimestampMicrosecondType, TimestampNanosecondType,
+    DataType, Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, DecimalType, Float32Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time64MicrosecondType, TimeUnit,
+    TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow::error::{ArrowError, Result};
-use arrow::temporal_conversions::time64us_to_time;
-use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use parquet_variant::{
     ListBuilder, ObjectBuilder, ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4,
@@ -40,7 +39,6 @@ use parquet_variant::{
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
-use uuid::Uuid;
 
 /// Removes all (nested) typed_value columns from a VariantArray by converting them back to binary
 /// variant and merging the resulting values back into the value column.
@@ -267,13 +265,13 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
             DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
             DataType::Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal32(DecimalUnshredRowBuilder::new(value, typed_value, *s))
+                Self::Decimal32(DecimalUnshredRowBuilder::new(value, typed_value))
             }
             DataType::Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal64(DecimalUnshredRowBuilder::new(value, typed_value, *s))
+                Self::Decimal64(DecimalUnshredRowBuilder::new(value, typed_value))
             }
             DataType::Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal128(DecimalUnshredRowBuilder::new(value, typed_value, *s))
+                Self::Decimal128(DecimalUnshredRowBuilder::new(value, typed_value))
             }
             DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
@@ -293,12 +291,12 @@ impl<'a> UnshredVariantRowBuilder<'a> {
                     "Time64({time_unit}) is not a valid variant shredding type",
                 )));
             }
-            DataType::Timestamp(TimeUnit::Microsecond, timezone) => Self::TimestampMicrosecond(
-                TimestampUnshredRowBuilder::new(value, typed_value, timezone.is_some()),
-            ),
-            DataType::Timestamp(TimeUnit::Nanosecond, timezone) => Self::TimestampNanosecond(
-                TimestampUnshredRowBuilder::new(value, typed_value, timezone.is_some()),
-            ),
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                Self::TimestampMicrosecond(TimestampUnshredRowBuilder::new(value, typed_value))
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                Self::TimestampNanosecond(TimestampUnshredRowBuilder::new(value, typed_value))
+            }
             DataType::Timestamp(time_unit, _) => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Timestamp({time_unit}) is not a valid variant shredding type",
@@ -396,16 +394,6 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
     }
 }
 
-/// Extension trait that directly adds row builder support for arrays that correspond to primitive
-/// variant types.
-trait AppendToVariantBuilder: Array {
-    fn append_to_variant_builder(
-        &self,
-        builder: &mut impl VariantBuilderExt,
-        index: usize,
-    ) -> Result<()>;
-}
-
 /// Macro that handles the unshredded case (typed_value is missing or NULL) and returns early if
 /// handled.  If not handled (shredded case), validates and returns the extracted value.
 macro_rules! handle_unshredded_case {
@@ -444,13 +432,13 @@ macro_rules! handle_unshredded_case {
     }};
 }
 
-/// Generic unshred builder that works with any Array implementing AppendToVariantBuilder
+/// Generic unshred builder that works with any Array implementing DecodePrimitive
 struct UnshredPrimitiveRowBuilder<'a, T> {
     value: Option<&'a ArrayRef>,
     typed_value: &'a T,
 }
 
-impl<'a, T: AppendToVariantBuilder> UnshredPrimitiveRowBuilder<'a, T> {
+impl<'a, T: DecodePrimitive> UnshredPrimitiveRowBuilder<'a, T> {
     fn new(value: Option<&'a ArrayRef>, typed_value: &'a T) -> Self {
         Self { value, typed_value }
     }
@@ -464,86 +452,8 @@ impl<'a, T: AppendToVariantBuilder> UnshredPrimitiveRowBuilder<'a, T> {
         handle_unshredded_case!(self, builder, metadata, index, false);
 
         // If we get here, typed_value is valid and value is NULL
-        self.typed_value.append_to_variant_builder(builder, index)
-    }
-}
-
-// Macro to generate AppendToVariantBuilder implementations with optional value transformation
-macro_rules! impl_append_to_variant_builder {
-    ($array_type:ty $(, |$v:ident| $transform:expr)? ) => {
-        impl AppendToVariantBuilder for $array_type {
-            fn append_to_variant_builder(
-                &self,
-                builder: &mut impl VariantBuilderExt,
-                index: usize,
-            ) -> Result<()> {
-                let value = self.value(index);
-                $(
-                    let $v = value;
-                    let value = $transform;
-                )?
-                builder.append_value(value);
-                Ok(())
-            }
-        }
-    };
-}
-
-impl_append_to_variant_builder!(BooleanArray);
-impl_append_to_variant_builder!(StringArray);
-impl_append_to_variant_builder!(StringViewArray);
-impl_append_to_variant_builder!(LargeStringArray);
-impl_append_to_variant_builder!(BinaryArray);
-impl_append_to_variant_builder!(BinaryViewArray);
-impl_append_to_variant_builder!(LargeBinaryArray);
-impl_append_to_variant_builder!(PrimitiveArray<Int8Type>);
-impl_append_to_variant_builder!(PrimitiveArray<Int16Type>);
-impl_append_to_variant_builder!(PrimitiveArray<Int32Type>);
-impl_append_to_variant_builder!(PrimitiveArray<Int64Type>);
-impl_append_to_variant_builder!(PrimitiveArray<Float32Type>);
-impl_append_to_variant_builder!(PrimitiveArray<Float64Type>);
-
-impl_append_to_variant_builder!(PrimitiveArray<Date32Type>, |days_since_epoch| {
-    Date32Type::to_naive_date_opt(days_since_epoch).ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!("Invalid Date32 value: {days_since_epoch}"))
-    })?
-});
-
-impl_append_to_variant_builder!(
-    PrimitiveArray<Time64MicrosecondType>,
-    |micros_since_midnight| {
-        time64us_to_time(micros_since_midnight).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Invalid Time64 microsecond value: {micros_since_midnight}"
-            ))
-        })?
-    }
-);
-
-// UUID from FixedSizeBinary(16)
-// NOTE: FixedSizeBinaryArray guarantees the byte length, so we can safely unwrap
-impl_append_to_variant_builder!(FixedSizeBinaryArray, |bytes| {
-    Uuid::from_slice(bytes).unwrap()
-});
-
-/// Trait for timestamp types to handle conversion to `DateTime<Utc>`
-trait TimestampType: ArrowPrimitiveType<Native = i64> {
-    fn to_datetime_utc(value: i64) -> Result<DateTime<Utc>>;
-}
-
-impl TimestampType for TimestampMicrosecondType {
-    fn to_datetime_utc(micros: i64) -> Result<DateTime<Utc>> {
-        DateTime::from_timestamp_micros(micros).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Invalid timestamp microsecond value: {micros}"
-            ))
-        })
-    }
-}
-
-impl TimestampType for TimestampNanosecondType {
-    fn to_datetime_utc(nanos: i64) -> Result<DateTime<Utc>> {
-        Ok(DateTime::from_timestamp_nanos(nanos))
+        builder.append_value(self.typed_value.decode_primitive(index)?);
+        Ok(())
     }
 }
 
@@ -551,15 +461,13 @@ impl TimestampType for TimestampNanosecondType {
 struct TimestampUnshredRowBuilder<'a, T: TimestampType> {
     value: Option<&'a ArrayRef>,
     typed_value: &'a PrimitiveArray<T>,
-    has_timezone: bool,
 }
 
 impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
-    fn new(value: Option<&'a ArrayRef>, typed_value: &'a dyn Array, has_timezone: bool) -> Self {
+    fn new(value: Option<&'a ArrayRef>, typed_value: &'a dyn Array) -> Self {
         Self {
             value,
             typed_value: typed_value.as_primitive(),
-            has_timezone,
         }
     }
 
@@ -572,13 +480,7 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
         handle_unshredded_case!(self, builder, metadata, index, false);
 
         // If we get here, typed_value is valid and value is NULL
-        let timestamp_value = self.typed_value.value(index);
-        let dt = T::to_datetime_utc(timestamp_value)?;
-        if self.has_timezone {
-            builder.append_value(dt);
-        } else {
-            builder.append_value(dt.naive_utc());
-        }
+        builder.append_value(decode_timestamp::<T>(self.typed_value, index)?);
         Ok(())
     }
 }
@@ -590,7 +492,6 @@ where
 {
     value: Option<&'a ArrayRef>,
     typed_value: &'a PrimitiveArray<A>,
-    scale: i8,
     _phantom: PhantomData<V>,
 }
 
@@ -598,11 +499,10 @@ impl<'a, A: DecimalType, V> DecimalUnshredRowBuilder<'a, A, V>
 where
     V: VariantDecimalType<Native = A::Native>,
 {
-    fn new(value: Option<&'a ArrayRef>, typed_value: &'a dyn Array, scale: i8) -> Self {
+    fn new(value: Option<&'a ArrayRef>, typed_value: &'a dyn Array) -> Self {
         Self {
             value,
             typed_value: typed_value.as_primitive(),
-            scale,
             _phantom: PhantomData,
         }
     }
@@ -615,9 +515,7 @@ where
     ) -> Result<()> {
         handle_unshredded_case!(self, builder, metadata, index, false);
 
-        let raw = self.typed_value.value(index);
-        let variant = V::try_new_with_signed_scale(raw, self.scale)?;
-        builder.append_value(variant);
+        builder.append_value(decode_decimal::<A, V>(self.typed_value, index)?);
         Ok(())
     }
 }

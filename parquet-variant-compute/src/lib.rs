@@ -20,6 +20,7 @@
 //! ## Main APIs
 //! - [`VariantArray`] : Represents an array of `Variant` values.
 //! - [`VariantArrayBuilder`]: For building [`VariantArray`]
+//! - [`VariantRowDecoder`]: Borrowed traversal of shredded rows for custom output writers.
 //!
 //! # Compute Kernels
 //! - [`json_to_variant()`]: Function to convert Arrays of JSON strings to a `VariantArray`.
@@ -56,6 +57,8 @@ mod unshred_variant;
 mod variant_array;
 mod variant_array_builder;
 mod variant_get;
+mod variant_row;
+mod variant_scalar;
 mod variant_to_arrow;
 
 pub use variant_array::{ShreddingState, VariantArray, VariantArrayIter, VariantType};
@@ -67,3 +70,6 @@ pub use shred_variant::{IntoShreddingField, ShreddedSchemaBuilder, shred_variant
 pub use to_json::variant_to_json;
 pub use unshred_variant::unshred_variant;
 pub use variant_get::{GetOptions, variant_get};
+pub use variant_row::{
+    DecodedList, DecodedObject, DecodedVariant, VariantRow, VariantRowDecoder, VariantRowState,
+};
