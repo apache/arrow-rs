@@ -25,22 +25,17 @@ permissions:
   contents: read
 
 jobs:
-  rat:
-    name: Release Audit Tool (RAT)
+  license-headers:
+    name: License headers
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Setup Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+      - name: Install HawkEye
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
         with:
-          python-version: "3.12"
-      - name: Setup Java
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
-        with:
-          distribution: temurin
-          java-version: "17"
-      - name: Audit licenses
-        run: ./dev/release/run-rat.sh .
+          tool: hawkeye@7.0.0
+      - name: Check license headers
+        run: hawkeye check --fail-on-unknown
 
   prettier:
     name: Markdown format
