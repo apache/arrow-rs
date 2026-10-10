@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 use crate::decoder::{OffsetSizeBytes, VariantBasicType, VariantPrimitiveType};
 use crate::{
     ShortString, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantList,

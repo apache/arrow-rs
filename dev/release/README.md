@@ -99,6 +99,11 @@ create a release candidate using the following steps. Note you need to
 be a committer to run these scripts as they upload to the apache `svn`
 distribution servers.
 
+Install HawkEye 7.0.0 (`cargo install hawkeye --version 7.0.0 --locked`)
+before running `create-tarball.sh`. The script checks Rust and Python license
+headers in the source tarball before signing it. It does not audit the licenses
+of every file in the archive.
+
 ### Pick a Release Candidate (RC) number
 
 Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
