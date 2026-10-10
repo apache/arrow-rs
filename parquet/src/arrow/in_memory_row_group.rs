@@ -408,7 +408,7 @@ impl ChunkReader for ColumnChunkData {
         let data = self.get(start)?;
         if data.len() < length {
             return Err(general_err!(
-                "Internal Error: column chunk data at offset {start} has {} bytes, expected {length}",
+                "column chunk data at offset {start} has {} bytes, expected {length}",
                 data.len()
             ));
         }
