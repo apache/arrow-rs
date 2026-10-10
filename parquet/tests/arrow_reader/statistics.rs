@@ -374,6 +374,313 @@ impl Test<'_> {
 // Remaining cases
 //   f64::NAN
 
+fn int96_from_nanos(nanos: i128) -> parquet::data_type::Int96 {
+    const NANOS_PER_DAY: i128 = 86_400_000_000_000;
+    let day = i32::try_from(nanos.div_euclid(NANOS_PER_DAY) + 2_440_588).unwrap();
+    let nanos = nanos.rem_euclid(NANOS_PER_DAY) as u64;
+    let mut value = parquet::data_type::Int96::new();
+    value.set_data(nanos as u32, (nanos >> 32) as u32, day as u32);
+    value
+}
+
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
+#[test]
+fn test_int96_timestamp_statistics() {
+    use parquet::basic::ColumnOrder;
+    use parquet::data_type::Int96Type;
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
+
+    let min = i128::from(i64::MIN);
+    let max = i128::from(i64::MAX);
+    let nanos_per_day = 86_400_000_000_000;
+    let min_day = (i128::from(i32::MIN) - 2_440_588) * nanos_per_day;
+    let max_day = (i128::from(i32::MAX) - 2_440_588) * nanos_per_day;
+    let bounds = [
+        (-1_234_567_890, -1),
+        (0, 1_234_567_890),
+        (min, min + 1),
+        (max - 1, max),
+        (min * 1_000, (min + 1) * 1_000),
+        ((max - 1) * 1_000, max * 1_000),
+        // The full signed Julian day range fits seconds and milliseconds.
+        (min_day, min_day + nanos_per_day - 1),
+        (max_day, max_day + nanos_per_day - 1),
+        // One overflowing endpoint invalidates both bounds, since the data
+        // reader wraps values that do not fit the requested timestamp unit.
+        (min - 1, 0),
+        (0, max + 1),
+        ((min - 1) * 1_000, 0),
+        (min * 1_000 - 1, 0),
+        (0, (max + 1) * 1_000),
+    ];
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let schema = Arc::new(parse_message_type("message test { OPTIONAL INT96 ts; }").unwrap());
+    let props = Arc::new(
+        WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build(),
+    );
+    let mut writer = SerializedFileWriter::new(file.reopen().unwrap(), schema, props).unwrap();
+    for bound in bounds.iter().map(Some).chain(std::iter::once(None)) {
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        let (values, levels) = match bound {
+            Some(&(min, max)) => (
+                vec![int96_from_nanos(min), int96_from_nanos(max)],
+                [1, 0, 1],
+            ),
+            None => (vec![], [0, 0, 0]),
+        };
+        column
+            .typed::<Int96Type>()
+            .write_batch(&values, Some(&levels), None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+    }
+    writer.close().unwrap();
+
+    for unit in [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ] {
+        for timezone in [None, Some("UTC".into())] {
+            let data_type = DataType::Timestamp(unit, timezone.clone());
+            let schema = Arc::new(Schema::new(vec![Field::new("ts", data_type.clone(), true)]));
+            let options = ArrowReaderOptions::new()
+                .with_schema(schema)
+                .with_page_index_policy(PageIndexPolicy::Required);
+            let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+                file.reopen().unwrap(),
+                options,
+            )
+            .unwrap();
+            assert_eq!(
+                reader.metadata().file_metadata().column_order(0),
+                ColumnOrder::INT96_TIMESTAMP_ORDER
+            );
+            let converter =
+                StatisticsConverter::try_new("ts", reader.schema(), reader.parquet_schema())
+                    .unwrap();
+            let divisor = match unit {
+                TimeUnit::Second => 1_000_000_000,
+                TimeUnit::Millisecond => 1_000_000,
+                TimeUnit::Microsecond => 1_000,
+                TimeUnit::Nanosecond => 1,
+            };
+            let expected: Vec<_> = bounds
+                .iter()
+                .map(|&(min, max)| {
+                    Some((
+                        i64::try_from(min.div_euclid(divisor)).ok()?,
+                        i64::try_from(max.div_euclid(divisor)).ok()?,
+                    ))
+                })
+                .chain(std::iter::once(None))
+                .collect();
+            let array = |is_min| -> ArrayRef {
+                let values = expected
+                    .iter()
+                    .map(|bound| bound.map(|(min, max)| if is_min { min } else { max }));
+                match unit {
+                    TimeUnit::Second => Arc::new(
+                        TimestampSecondArray::from_iter(values).with_timezone_opt(timezone.clone()),
+                    ),
+                    TimeUnit::Millisecond => Arc::new(
+                        TimestampMillisecondArray::from_iter(values)
+                            .with_timezone_opt(timezone.clone()),
+                    ),
+                    TimeUnit::Microsecond => Arc::new(
+                        TimestampMicrosecondArray::from_iter(values)
+                            .with_timezone_opt(timezone.clone()),
+                    ),
+                    TimeUnit::Nanosecond => Arc::new(
+                        TimestampNanosecondArray::from_iter(values)
+                            .with_timezone_opt(timezone.clone()),
+                    ),
+                }
+            };
+            let row_groups = reader.metadata().row_groups();
+            let page_index = reader.metadata().page_index().unwrap().as_ref();
+            let indices: Vec<_> = (0..row_groups.len()).collect();
+            assert_eq!(
+                converter.row_group_mins(row_groups).unwrap().as_ref(),
+                array(true).as_ref()
+            );
+            assert_eq!(
+                converter.row_group_maxes(row_groups).unwrap().as_ref(),
+                array(false).as_ref()
+            );
+            assert_eq!(
+                converter
+                    .data_page_mins(page_index, &indices)
+                    .unwrap()
+                    .as_ref(),
+                array(true).as_ref()
+            );
+            assert_eq!(
+                converter
+                    .data_page_maxes(page_index, &indices)
+                    .unwrap()
+                    .as_ref(),
+                array(false).as_ref()
+            );
+            let null_counts = UInt64Array::from_iter_values(
+                std::iter::repeat_n(1, bounds.len()).chain(std::iter::once(3)),
+            );
+            assert_eq!(
+                converter.row_group_null_counts(row_groups).unwrap(),
+                null_counts
+            );
+            assert_eq!(
+                converter
+                    .data_page_null_counts(page_index, &indices)
+                    .unwrap(),
+                null_counts
+            );
+
+            // Bounds must agree with the actual reader's rounding, including
+            // negative sub-second values and the extreme representable days.
+            let batches: Vec<_> = reader.build().unwrap().collect::<Result<_, _>>().unwrap();
+            let actual = arrow::compute::concat(
+                &batches
+                    .iter()
+                    .map(|b| b.column(0).as_ref())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+            for (i, bound) in expected.iter().enumerate() {
+                if bound.is_some() {
+                    assert_eq!(
+                        actual.slice(i * 3, 1).as_ref(),
+                        array(true).slice(i, 1).as_ref()
+                    );
+                    assert_eq!(
+                        actual.slice(i * 3 + 2, 1).as_ref(),
+                        array(false).slice(i, 1).as_ref()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_int96_unusable_statistics() {
+    use parquet::schema::parser::parse_message_type;
+
+    let parquet_schema = Arc::new(SchemaDescriptor::new(Arc::new(
+        parse_message_type("message test { OPTIONAL INT96 ts; }").unwrap(),
+    )));
+    let valid = int96_from_nanos(0);
+    let mut bounds = vec![
+        (Some(valid), None, false),
+        (None, Some(valid), false),
+        (Some(valid), Some(valid), true),
+    ];
+    // Nanos must be in [0, nanos_per_day), even when the requested unit is coarser.
+    for nanos in [86_400_000_000_000_u64, u64::MAX] {
+        let mut invalid = valid;
+        invalid.set_data(nanos as u32, (nanos >> 32) as u32, valid.data()[2]);
+        bounds.extend([
+            (Some(valid), Some(invalid), false),
+            (Some(invalid), Some(valid), false),
+        ]);
+    }
+    let row_groups: Vec<_> = bounds
+        .into_iter()
+        .map(|(min, max, deprecated)| {
+            let column = ColumnChunkMetaData::builder(parquet_schema.column(0))
+                .set_num_values(1)
+                .set_statistics(Statistics::int96(min, max, None, Some(0), deprecated))
+                .build()
+                .unwrap();
+            RowGroupMetaData::builder(parquet_schema.clone())
+                .set_num_rows(1)
+                .set_column_metadata(vec![column])
+                .build()
+                .unwrap()
+        })
+        .collect();
+    for unit in [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ] {
+        let data_type = DataType::Timestamp(unit, None);
+        let schema = Schema::new(vec![Field::new("ts", data_type.clone(), true)]);
+        let converter = StatisticsConverter::try_new("ts", &schema, &parquet_schema).unwrap();
+        let expected = new_null_array(&data_type, row_groups.len());
+        assert_eq!(
+            converter.row_group_mins(&row_groups).unwrap().as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(
+            converter.row_group_maxes(&row_groups).unwrap().as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(
+            converter.row_group_null_counts(&row_groups).unwrap(),
+            UInt64Array::from(vec![0; row_groups.len()])
+        );
+    }
+}
+
+#[test]
+fn test_int64_timestamp_one_sided_statistics() {
+    use parquet::schema::parser::parse_message_type;
+
+    let parquet_schema = Arc::new(SchemaDescriptor::new(Arc::new(
+        parse_message_type("message test { OPTIONAL INT64 ts; }").unwrap(),
+    )));
+    let bounds = [(Some(i64::MIN), None), (None, Some(i64::MAX))];
+    let row_groups: Vec<_> = bounds
+        .into_iter()
+        .map(|(min, max)| {
+            let column = ColumnChunkMetaData::builder(parquet_schema.column(0))
+                .set_num_values(1)
+                .set_statistics(Statistics::int64(min, max, None, Some(0), false))
+                .build()
+                .unwrap();
+            RowGroupMetaData::builder(parquet_schema.clone())
+                .set_num_rows(1)
+                .set_column_metadata(vec![column])
+                .build()
+                .unwrap()
+        })
+        .collect();
+    for unit in [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ] {
+        let data_type = DataType::Timestamp(unit, None);
+        let schema = Schema::new(vec![Field::new("ts", data_type.clone(), true)]);
+        let converter = StatisticsConverter::try_new("ts", &schema, &parquet_schema).unwrap();
+        let expected = |is_min| {
+            let values = Int64Array::from_iter(
+                bounds
+                    .iter()
+                    .map(|&(min, max)| if is_min { min } else { max }),
+            );
+            arrow::compute::cast(&values, &data_type).unwrap()
+        };
+        assert_eq!(
+            converter.row_group_mins(&row_groups).unwrap().as_ref(),
+            expected(true).as_ref()
+        );
+        assert_eq!(
+            converter.row_group_maxes(&row_groups).unwrap().as_ref(),
+            expected(false).as_ref()
+        );
+    }
+}
+
 #[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[tokio::test]
 async fn test_max_and_min_value_truncated() {
