@@ -18,6 +18,7 @@
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::RowGroups;
 use crate::arrow::arrow_reader::RowSelection;
+use crate::arrow::push_decoder::page_store::PageStore;
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::ParquetError;
 use crate::file::metadata::page_index::RowGroupPageIndex;
@@ -363,6 +364,13 @@ pub(crate) enum ColumnChunkData {
     },
     /// Full column chunk and the offset within the original file
     Dense { offset: usize, data: Bytes },
+    /// Pages in a [`PageStore`] that the push decoder shares with the reader.
+    /// The decoder can add pages while the reader uses them.
+    Shared {
+        /// Length of the full column chunk
+        length: usize,
+        store: Arc<PageStore>,
+    },
 }
 
 impl ColumnChunkData {
@@ -383,6 +391,12 @@ impl ColumnChunkData {
                 let start = start as usize - *offset;
                 Ok(data.slice(start..))
             }
+            ColumnChunkData::Shared { store, .. } => store.get(start).ok_or_else(|| {
+                general_err!(
+                    "Internal Error: no page at offset {start} in shared column chunk data. \
+                     The push decoder did not add the page before the reader needed it."
+                )
+            }),
         }
     }
 }
@@ -393,6 +407,7 @@ impl Length for ColumnChunkData {
         match &self {
             ColumnChunkData::Sparse { length, .. } => *length as u64,
             ColumnChunkData::Dense { data, .. } => data.len() as u64,
+            ColumnChunkData::Shared { length, .. } => *length as u64,
         }
     }
 }
@@ -447,5 +462,17 @@ mod tests {
         );
         let err = dense.get_bytes(105, 6).unwrap_err().to_string();
         assert!(err.contains("has 5 bytes, expected 6"), "{err}");
+
+        let store = Arc::new(PageStore::default());
+        store.insert(200..204, Bytes::from_static(b"abcd"));
+        let shared = ColumnChunkData::Shared { length: 10, store };
+        assert_eq!(
+            shared.get_bytes(200, 4).unwrap(),
+            Bytes::from_static(b"abcd")
+        );
+        let err = shared.get_bytes(200, 5).unwrap_err().to_string();
+        assert!(err.contains("has 4 bytes, expected 5"), "{err}");
+        let err = shared.get_bytes(204, 1).unwrap_err().to_string();
+        assert!(err.contains("no page at offset 204"), "{err}");
     }
 }
