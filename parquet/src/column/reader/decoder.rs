@@ -17,7 +17,7 @@
 
 use bytes::Bytes;
 
-use crate::basic::{Encoding, EncodingMask};
+use crate::basic::{Encoding, EncodingMask, Type};
 use crate::data_type::DataType;
 use crate::encodings::{
     decoding::{Decoder, DictDecoder, PlainDecoder, get_decoder},
@@ -134,6 +134,167 @@ pub trait ColumnValueDecoder {
     fn skip_values(&mut self, num_values: usize) -> Result<usize>;
 }
 
+fn fixed_len_byte_array_payload_size(
+    num_values: usize,
+    type_length: usize,
+    page: &str,
+) -> Result<usize> {
+    num_values.checked_mul(type_length).ok_or_else(|| {
+        general_err!(
+            "FIXED_LEN_BYTE_ARRAY {} payload size overflow: {} values of {} bytes",
+            page,
+            num_values,
+            type_length
+        )
+    })
+}
+
+/// Validate a complete decompressed PLAIN FLBA value section, excluding levels.
+/// `num_values` must count physical non-null values, not rows or requested values.
+/// Canonical payloads are returned unchanged, even if values resemble prefixes.
+pub(crate) fn normalize_fixed_len_byte_array_payload(
+    data: Bytes,
+    num_values: usize,
+    type_length: usize,
+    page: &str,
+) -> Result<Bytes> {
+    let expected_len = fixed_len_byte_array_payload_size(num_values, type_length, page)?;
+    if data.len() == expected_len {
+        return Ok(data);
+    }
+
+    // Temporary mitigation for arrow-rs #11261, reached only for a noncanonical
+    // size. Keep the repair separate from ordinary validation and value decoding.
+    super::legacy_fixed_len_byte_array::decode_length_prefixed_plain(
+        data,
+        num_values,
+        type_length,
+        expected_len,
+        page,
+    )
+}
+
+/// Prepare a complete FLBA data-page value section after extracting the levels.
+/// PLAIN requires exact size validation; other compliant encodings are unchanged.
+pub(crate) fn normalize_fixed_len_byte_array_data(
+    data: Bytes,
+    num_values: usize,
+    type_length: usize,
+    encoding: Encoding,
+) -> Result<(Encoding, Bytes)> {
+    match encoding {
+        Encoding::PLAIN => Ok((
+            encoding,
+            normalize_fixed_len_byte_array_payload(
+                data,
+                num_values,
+                type_length,
+                "PLAIN data page",
+            )?,
+        )),
+        Encoding::DELTA_LENGTH_BYTE_ARRAY => {
+            // Temporary mitigation only: this encoding is not defined for FLBA.
+            // Do not add support for it to the ordinary value decoders.
+            let expected_len = fixed_len_byte_array_payload_size(
+                num_values,
+                type_length,
+                "DELTA_LENGTH_BYTE_ARRAY data page",
+            )?;
+            let data = super::legacy_fixed_len_byte_array::decode_delta_length(
+                data,
+                num_values,
+                type_length,
+                expected_len,
+            )?;
+            Ok((Encoding::PLAIN, data))
+        }
+        _ => Ok((encoding, data)),
+    }
+}
+
+/// A value section ready for its ordinary decoder. When `validate_count` is set,
+/// account for its physical values during normal level decoding.
+pub(super) struct PreparedFixedLenByteArrayPage {
+    pub(super) encoding: Encoding,
+    pub(super) data: Bytes,
+    pub(super) validate_count: bool,
+}
+
+/// Prepare V1 FLBA values without teaching the column reader historical layouts.
+/// `definition_levels` contains the maximum level, encoding and encoded levels;
+/// absent levels mean that the page's physical count is already known.
+pub(super) fn prepare_v1_fixed_len_byte_array(
+    data: Bytes,
+    num_levels: usize,
+    type_length: usize,
+    encoding: Encoding,
+    definition_levels: Option<(i16, Encoding, &Bytes)>,
+) -> Result<PreparedFixedLenByteArrayPage> {
+    let Some((max_level, level_encoding, levels)) = definition_levels else {
+        let (encoding, data) =
+            normalize_fixed_len_byte_array_data(data, num_levels, type_length, encoding)?;
+        return Ok(PreparedFixedLenByteArrayPage {
+            encoding,
+            data,
+            validate_count: false,
+        });
+    };
+
+    // This callback is lazy: ordinary nullable pages do not create a second
+    // decoder or traverse their levels before normal reading begins.
+    let count_values = || {
+        let mut counter = DefinitionLevelDecoderImpl::new(max_level);
+        counter.set_data(level_encoding, levels.clone())?;
+        let (values, read) = counter.skip_def_levels(num_levels)?;
+        if read != num_levels {
+            return Err(general_err!(
+                "Invalid FIXED_LEN_BYTE_ARRAY {encoding} data page: \
+                 expected {num_levels} definition levels, got {read}"
+            ));
+        }
+        Ok(values)
+    };
+
+    let mut page = PreparedFixedLenByteArrayPage {
+        encoding,
+        data,
+        validate_count: false,
+    };
+    // Temporary compatibility hook. Removing it leaves the canonical path and
+    // its physical-value validation intact.
+    if super::legacy_fixed_len_byte_array::prepare_v1_page(
+        &mut page,
+        num_levels,
+        type_length,
+        &count_values,
+    )? {
+        return Ok(page);
+    }
+
+    if encoding == Encoding::PLAIN {
+        if num_levels == 0 || type_length == 0 {
+            // Preserve empty-page header validation and avoid a zero-width
+            // byte budget, which cannot establish the physical value count.
+            page.data = normalize_fixed_len_byte_array_payload(
+                page.data,
+                count_values()?,
+                type_length,
+                "PLAIN data page",
+            )?;
+        } else {
+            if !page.data.len().is_multiple_of(type_length) {
+                return Err(general_err!(
+                    "Invalid FIXED_LEN_BYTE_ARRAY PLAIN data page payload length: \
+                     {} bytes is not a multiple of {type_length}",
+                    page.data.len()
+                ));
+            }
+            page.validate_count = true;
+        }
+    }
+    Ok(page)
+}
+
 /// Bucket-based storage for decoder instances keyed by `Encoding`.
 ///
 /// This replaces `HashMap` lookups with direct indexing to avoid hashing overhead in the
@@ -180,6 +341,16 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         }
 
         if encoding == Encoding::RLE_DICTIONARY {
+            let buf = if self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY {
+                normalize_fixed_len_byte_array_payload(
+                    buf,
+                    num_values as usize,
+                    self.descr.type_length() as usize,
+                    "dictionary page",
+                )?
+            } else {
+                buf
+            };
             let mut dictionary = PlainDecoder::<T>::new(self.descr.type_length());
             dictionary.set_data(buf, num_values as usize)?;
 
@@ -258,8 +429,6 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     }
 }
 
-const SKIP_BUFFER_SIZE: usize = 1024;
-
 enum LevelDecoder {
     Packed(BitReader, u8),
     Rle(RleDecoder),
@@ -334,25 +503,16 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
     }
 
     fn skip_def_levels(&mut self, num_levels: usize) -> Result<(usize, usize)> {
-        let mut level_skip = 0;
-        let mut value_skip = 0;
-        let mut buf: Vec<i16> = vec![];
-        while level_skip < num_levels {
-            let remaining_levels = num_levels - level_skip;
-
-            let to_read = remaining_levels.min(SKIP_BUFFER_SIZE);
-            buf.resize(to_read, 0);
-            let (values_read, levels_read) = self.read_def_levels(&mut buf, to_read)?;
-            if levels_read == 0 {
-                // Reached end of page
-                break;
-            }
-
-            level_skip += levels_read;
-            value_skip += values_read;
+        if num_levels == 0 {
+            return Ok((0, 0));
         }
-
-        Ok((value_skip, level_skip))
+        match self.decoder.as_mut().unwrap() {
+            LevelDecoder::Rle(reader) => reader.skip_and_count(num_levels, self.max_level),
+            LevelDecoder::Packed(reader, 1) => Ok(reader.skip_and_count_ones(num_levels)),
+            LevelDecoder::Packed(reader, bit_width) => {
+                Ok(reader.skip_and_count(num_levels, *bit_width as usize, self.max_level))
+            }
+        }
     }
 }
 
@@ -492,6 +652,156 @@ mod tests {
     use super::*;
     use crate::encodings::rle::RleEncoder;
     use rand::{prelude::*, rng};
+
+    #[test]
+    fn fixed_len_payload_validation() {
+        let mut rng = StdRng::seed_from_u64(11262);
+        for page in ["dictionary page", "PLAIN data page"] {
+            for width in [0, 1, 4, 8, 16, 32] {
+                for count in [0, 1, 2, 33] {
+                    let raw: Bytes = (0..width * count).map(|_| rng.random::<u8>()).collect();
+                    let result =
+                        normalize_fixed_len_byte_array_payload(raw.clone(), count, width, page)
+                            .unwrap();
+                    assert_eq!(result, raw);
+                    assert_eq!(
+                        result.as_ptr(),
+                        raw.as_ptr(),
+                        "canonical data must stay zero-copy"
+                    );
+                }
+            }
+            // These are two canonical values, not one length-prefixed value.
+            let raw = Bytes::from_static(b"\x04\0\0\0abcd");
+            assert_eq!(
+                normalize_fixed_len_byte_array_payload(raw.clone(), 2, 4, page).unwrap(),
+                raw
+            );
+            // Truncated and trailing data must still be rejected.
+            for data in [b"abcdefg".as_slice(), b"abcdefghi"] {
+                assert!(
+                    normalize_fixed_len_byte_array_payload(
+                        Bytes::copy_from_slice(data),
+                        2,
+                        4,
+                        page
+                    )
+                    .is_err()
+                );
+            }
+            assert!(
+                normalize_fixed_len_byte_array_payload(Bytes::from_static(b"x"), 0, 4, page)
+                    .is_err()
+            );
+            assert!(
+                normalize_fixed_len_byte_array_payload(Bytes::new(), 1, usize::MAX, page).is_err()
+            );
+            let err = normalize_fixed_len_byte_array_payload(Bytes::new(), usize::MAX, 2, page)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("payload size overflow"), "{err}");
+            assert!(err.contains(page), "{err}");
+        }
+    }
+
+    #[test]
+    fn fixed_len_other_encodings_unchanged() {
+        // No compatibility interpretation applies to other encodings.
+        for encoding in [
+            Encoding::DELTA_BYTE_ARRAY,
+            Encoding::BYTE_STREAM_SPLIT,
+            Encoding::RLE_DICTIONARY,
+        ] {
+            let data = Bytes::from_static(b"\x04\0\0\0abcd");
+            let (actual_encoding, actual) =
+                normalize_fixed_len_byte_array_data(data.clone(), 1, 4, encoding).unwrap();
+            assert_eq!(actual_encoding, encoding);
+            assert_eq!(actual.as_ptr(), data.as_ptr());
+            assert_eq!(actual, data);
+        }
+    }
+
+    #[test]
+    #[expect(deprecated, reason = "Cover legacy BIT_PACKED definition levels")]
+    fn test_skip_def_levels() {
+        use crate::util::bit_util::BitWriter;
+
+        // A multiple of eight avoids ambiguous padding in the final packed run.
+        let num_levels = 2056;
+        for max_level in [1, 2, 3, 7, 255, 32767] {
+            let bit_width = num_required_bits(max_level as u64);
+            for levels in [
+                vec![0; num_levels],
+                vec![max_level; num_levels],
+                (0..num_levels)
+                    .map(|i| (i % (max_level as usize + 1)) as i16)
+                    .collect(),
+            ] {
+                for encoding in [Encoding::RLE, Encoding::BIT_PACKED] {
+                    let data = match encoding {
+                        Encoding::RLE => {
+                            let mut encoder = RleEncoder::new(bit_width, 1024);
+                            for &level in &levels {
+                                encoder.put(level as u64);
+                            }
+                            Bytes::from(encoder.consume())
+                        }
+                        Encoding::BIT_PACKED => {
+                            let mut encoder = BitWriter::new(num_levels);
+                            for &level in &levels {
+                                encoder.put_value(level as u64, bit_width as usize);
+                            }
+                            Bytes::from(encoder.consume())
+                        }
+                        _ => unreachable!(),
+                    };
+                    for requested in [
+                        0,
+                        1,
+                        63,
+                        64,
+                        65,
+                        1023,
+                        1024,
+                        1025,
+                        num_levels,
+                        num_levels + 17,
+                        usize::MAX,
+                    ] {
+                        let mut decoder = DefinitionLevelDecoderImpl::new(max_level);
+                        decoder.set_data(encoding, data.clone()).unwrap();
+                        let expected_levels = requested.min(num_levels);
+                        let expected_values = levels[..expected_levels]
+                            .iter()
+                            .filter(|&&level| level == max_level)
+                            .count();
+                        assert_eq!(
+                            decoder.skip_def_levels(requested).unwrap(),
+                            (expected_values, expected_levels),
+                            "{encoding}, max_level={max_level}, requested={requested}"
+                        );
+
+                        let mut remaining = vec![];
+                        let expected_remaining = &levels[expected_levels..];
+                        assert_eq!(
+                            decoder
+                                .read_def_levels(&mut remaining, expected_remaining.len())
+                                .unwrap(),
+                            (
+                                expected_remaining
+                                    .iter()
+                                    .filter(|&&level| level == max_level)
+                                    .count(),
+                                expected_remaining.len(),
+                            )
+                        );
+                        assert_eq!(remaining, expected_remaining);
+                        assert_eq!(decoder.skip_def_levels(1).unwrap(), (0, 0));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_skip_padding() {

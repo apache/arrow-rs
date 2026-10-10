@@ -548,6 +548,46 @@ impl RleDecoder {
         Ok(values_skipped)
     }
 
+    /// Skips up to `num_values`, returning the number equal to `value` and the
+    /// number skipped. Counts RLE runs directly, one-bit runs with popcount, and
+    /// wider packed values with the existing unpacker and bounded scratch space.
+    pub(crate) fn skip_and_count<T: BitPacking + Copy + PartialEq>(
+        &mut self,
+        num_values: usize,
+        value: T,
+    ) -> Result<(usize, usize)> {
+        let mut matching = 0;
+        let mut skipped = 0;
+        while skipped < num_values {
+            if self.rle_left > 0 {
+                let count = (num_values - skipped).min(self.rle_left as usize);
+                if T::from_u64(self.current_value.unwrap()) == value {
+                    matching += count;
+                }
+                self.rle_left -= count as u32;
+                skipped += count;
+            } else if self.bit_packed_left > 0 {
+                let count = (num_values - skipped).min(self.bit_packed_left as usize);
+                let reader = self
+                    .bit_reader
+                    .as_mut()
+                    .ok_or_else(|| general_err!("bit_reader should be set"))?;
+                let (matches, read) = reader.skip_and_count(count, self.bit_width as usize, value);
+                matching += matches;
+                if read == 0 {
+                    // Match get_batch's handling of truncated final packed runs.
+                    self.bit_packed_left = 0;
+                    continue;
+                }
+                self.bit_packed_left -= read as u32;
+                skipped += read;
+            } else if !self.reload()? {
+                break;
+            }
+        }
+        Ok((matching, skipped))
+    }
+
     #[inline(never)]
     pub fn get_batch_with_dict<T>(
         &mut self,
@@ -729,6 +769,104 @@ mod tests {
             .expect("getting remaining");
         assert_eq!(remaining, 6);
         assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_skip_and_count() {
+        for width in [0, 1, 2, 15, 64] {
+            let max = if width == 64 {
+                u64::MAX
+            } else {
+                (1_u64 << width) - 1
+            };
+            let values: Vec<u64> = std::iter::repeat_n(0, 1024)
+                .chain((0..128).map(|i| i & max))
+                .chain(std::iter::repeat_n(max, 2056))
+                .collect();
+            let mut encoder = RleEncoder::new(width, 1024);
+            for &value in &values {
+                encoder.put(value);
+            }
+            let data = Bytes::from(encoder.consume());
+            for value in [0, max] {
+                for prefix in [0, 1, 1023, 1024, 1027, 1152] {
+                    for requested in [0, 1, 7, 1024, usize::MAX] {
+                        let mut decoder = RleDecoder::new(width);
+                        decoder.set_data(data.clone()).unwrap();
+                        let mut read = vec![0; prefix];
+                        assert_eq!(decoder.get_batch(&mut read).unwrap(), prefix);
+                        assert_eq!(read, values[..prefix]);
+                        let skipped = requested.min(values.len() - prefix);
+                        let count = values[prefix..prefix + skipped]
+                            .iter()
+                            .filter(|&&v| v == value)
+                            .count();
+                        assert_eq!(
+                            decoder.skip_and_count(requested, value).unwrap(),
+                            (count, skipped),
+                            "width={width}, value={value}, prefix={prefix}, requested={requested}"
+                        );
+                        let mut rest = vec![0; values.len() - prefix - skipped];
+                        assert_eq!(decoder.get_batch(&mut rest).unwrap(), rest.len());
+                        assert_eq!(rest, values[prefix + skipped..]);
+                        assert_eq!(decoder.skip_and_count(1, value).unwrap(), (0, 0));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_skip_and_count_signed() {
+        let data = Bytes::from_static(&[3, 255, 0, 128, 255, 1, 2, 254, 255]);
+        let mut decoder = RleDecoder::new(8);
+        decoder.set_data(data.clone()).unwrap();
+        assert_eq!(decoder.skip_and_count(8, -1_i8).unwrap(), (3, 8));
+        decoder.set_data(data.clone()).unwrap();
+        assert_eq!(decoder.skip_and_count(8, -1_i16).unwrap(), (0, 8));
+        decoder.set_data(data).unwrap();
+        assert_eq!(decoder.skip_and_count(8, 511_i16).unwrap(), (0, 8));
+    }
+
+    #[test]
+    fn test_skip_and_count_truncated() {
+        for width in [1, 8] {
+            // Header declares 24 values, but the final packed run is truncated.
+            let mut data = vec![7];
+            data.extend(std::iter::repeat_n(0xff, if width == 1 { 2 } else { 20 }));
+            let mut decoder = RleDecoder::new(width);
+            decoder.set_data(data.into()).unwrap();
+            let count = if width == 1 { 16 } else { 20 };
+            assert_eq!(
+                decoder
+                    .skip_and_count(usize::MAX, (1_u64 << width) - 1)
+                    .unwrap(),
+                (count, count)
+            );
+            assert_eq!(decoder.skip_and_count(1, 0_u64).unwrap(), (0, 0));
+        }
+        let mut decoder = RleDecoder::new(1);
+        // A valid two-value run followed by a missing RLE value.
+        decoder.set_data(Bytes::from_static(&[4, 1, 4])).unwrap();
+        assert!(decoder.skip_and_count(3, 1_u64).is_err());
+        decoder.set_data(Bytes::from_static(&[4, 1, 4])).unwrap();
+        assert_eq!(decoder.skip_and_count(2, 1_u64).unwrap(), (2, 2));
+        assert!(decoder.skip_and_count(1, 1_u64).is_err());
+    }
+
+    #[test]
+    fn test_skip_and_count_long_run() {
+        let mut writer = BitWriter::new(8);
+        writer.put_vlq_int(u64::from(u32::MAX) * 2);
+        writer.put_aligned(1_u8, 1);
+        let mut decoder = RleDecoder::new(1);
+        decoder.set_data(writer.consume().into()).unwrap();
+        // Must not expand this run or allocate scratch space proportional to it.
+        assert_eq!(
+            decoder.skip_and_count(usize::MAX, 1_u64).unwrap(),
+            (u32::MAX as usize, u32::MAX as usize)
+        );
+        assert_eq!(decoder.skip_and_count(1, 1_u64).unwrap(), (0, 0));
     }
 
     #[test]
