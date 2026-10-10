@@ -53,8 +53,8 @@ impl LevelEncoder {
     }
 
     /// Put/encode levels vector into this level encoder and call
-    /// `observer(value, count)` for each run of identical values encountered
-    /// during encoding.
+    /// `observer(value, count)` with the number of occurrences of each distinct
+    /// value in `buffer`.
     ///
     /// Returns number of encoded values that are less than or equal to length
     /// of the input buffer.
@@ -63,30 +63,14 @@ impl LevelEncoder {
     /// incrementally across multiple batches without forcing run boundaries.
     /// The encoder is flushed automatically when [`consume`](Self::consume) is called.
     #[inline]
-    pub fn put_with_observer<F>(&mut self, buffer: &[i16], mut observer: F) -> usize
+    pub fn put_with_observer<F>(&mut self, buffer: &[i16], observer: F) -> usize
     where
         F: FnMut(i16, usize),
     {
         match *self {
             LevelEncoder::Rle(ref mut encoder) | LevelEncoder::RleV2(ref mut encoder) => {
-                let mut remaining = buffer;
-                while let Some((&value, rest)) = remaining.split_first() {
-                    encoder.put(value as u64);
-                    // After put(), check if the encoder just entered RLE
-                    // accumulation mode. If so, scan ahead for the rest of
-                    // this run to batch the observer call and bulk-extend.
-                    if encoder.is_accumulating_rle(value as u64) {
-                        let run_len = rest.iter().take_while(|&&v| v == value).count();
-                        if run_len > 0 {
-                            encoder.extend_run(run_len);
-                        }
-                        observer(value, 1 + run_len);
-                        remaining = &rest[run_len..];
-                    } else {
-                        observer(value, 1);
-                        remaining = rest;
-                    }
-                }
+                encoder.put_batch(buffer);
+                observe_level_counts(buffer, observer);
                 buffer.len()
             }
         }
@@ -171,6 +155,54 @@ impl LevelEncoder {
     }
 }
 
+/// Calls `observer(level, count)` with the number of occurrences of each
+/// distinct level in `levels`
+fn observe_level_counts(levels: &[i16], mut observer: impl FnMut(i16, usize)) {
+    let Some(&first) = levels.first() else {
+        return;
+    };
+
+    // Vectorized passes, one per level, as levels are bounded by the nesting
+    // depth and typically take only 2 or 3 distinct values
+    const MAX_PASSES: u16 = 8;
+
+    let (min, max) = levels
+        .iter()
+        .fold((first, first), |(min, max), v| (min.min(*v), max.max(*v)));
+
+    if max.abs_diff(min) >= MAX_PASSES {
+        levels
+            .chunk_by(|a, b| a == b)
+            .for_each(|run| observer(run[0], run.len()));
+        return;
+    }
+
+    // The count of the smallest level is whatever the other levels leave over
+    let mut remaining = levels.len();
+    for level in min + 1..=max {
+        let count = count_equal(levels, level);
+        if count > 0 {
+            observer(level, count);
+            remaining -= count;
+        }
+    }
+    observer(min, remaining);
+}
+
+/// Returns the number of `levels` equal to `level`
+fn count_equal(levels: &[i16], level: i16) -> usize {
+    // Narrow accumulators fit more lanes per vector register, and summing at
+    // most `u16::MAX` values can't overflow them
+    levels
+        .chunks(u16::MAX as usize)
+        .map(|block| {
+            block
+                .iter()
+                .fold(0u16, |count, v| count + (*v == level) as u16) as usize
+        })
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +213,52 @@ mod tests {
         let mut enc = LevelEncoder::v2_streaming(max_level);
         enc.put_with_observer(values, |_, _| {});
         enc.consume()
+    }
+
+    #[test]
+    fn test_put_with_observer_matches_put() {
+        use rand::prelude::*;
+        use std::collections::BTreeMap;
+
+        let mut rng = StdRng::seed_from_u64(42);
+        // Includes ranges past the vectorized counting passes
+        for max_level in [1, 2, 3, 7, 8, 15, 100] {
+            for _ in 0..20 {
+                // Mix random stretches with runs long enough to trigger RLE
+                let mut levels: Vec<i16> = Vec::new();
+                while levels.len() < 2000 {
+                    let n = rng.random_range(1..40);
+                    if rng.random_bool(0.5) {
+                        let v = rng.random_range(0..=max_level);
+                        levels.extend(std::iter::repeat_n(v, n));
+                    } else {
+                        levels.extend((0..n).map(|_| rng.random_range(0..=max_level)));
+                    }
+                }
+
+                let mut expected =
+                    RleEncoder::new_from_buf(num_required_bits(max_level as u64), Vec::new());
+                let mut expected_counts = BTreeMap::new();
+                for level in &levels {
+                    expected.put(*level as u64);
+                    *expected_counts.entry(*level).or_insert(0) += 1;
+                }
+
+                let mut actual = LevelEncoder::v2_streaming(max_level);
+                let mut actual_counts = BTreeMap::new();
+                let mut remaining = levels.as_slice();
+                while !remaining.is_empty() {
+                    let (batch, rest) = remaining.split_at(rng.random_range(1..=remaining.len()));
+                    actual.put_with_observer(batch, |level, count| {
+                        *actual_counts.entry(level).or_insert(0) += count;
+                    });
+                    remaining = rest;
+                }
+
+                assert_eq!(actual.consume(), expected.consume());
+                assert_eq!(actual_counts, expected_counts);
+            }
+        }
     }
 
     #[test]

@@ -56,6 +56,43 @@ const BIT_PACK_GROUP_SIZE: usize = 8;
 /// Maximum groups of `BIT_PACK_GROUP_SIZE` values per bit-packed run. Current value is 64.
 const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;
 
+/// A value that [`RleEncoder::put_batch`] can encode
+pub trait RleValue: Copy + PartialEq {
+    /// Returns the value as encoded, which must fit in the encoder's bit width
+    fn to_u64(self) -> u64;
+}
+
+impl RleValue for u64 {
+    #[inline]
+    fn to_u64(self) -> u64 {
+        self
+    }
+}
+
+/// Definition and repetition levels
+impl RleValue for i16 {
+    #[inline]
+    fn to_u64(self) -> u64 {
+        self as u64
+    }
+}
+
+/// Returns the number of leading values equal to `value`
+#[inline]
+fn run_length<T: RleValue>(values: &[T], value: T) -> usize {
+    // Check whole chunks with a non-short-circuiting comparison, which compiles
+    // to vector comparisons, and only search for the end of the run in the
+    // chunk that contains it
+    const CHUNK: usize = 16;
+    let (chunks, remainder) = values.as_chunks::<CHUNK>();
+    for (i, chunk) in chunks.iter().enumerate() {
+        if !chunk.iter().fold(true, |all, v| all & (*v == value)) {
+            return i * CHUNK + chunk.iter().take_while(|v| **v == value).count();
+        }
+    }
+    chunks.len() * CHUNK + remainder.iter().take_while(|v| **v == value).count()
+}
+
 /// A RLE/Bit-Packing hybrid encoder.
 // TODO: tracking memory usage
 pub struct RleEncoder {
@@ -187,15 +224,13 @@ impl RleEncoder {
     /// Produces output identical to calling [`Self::put`] for each value, but avoids
     /// the per-value run tracking wherever a whole group of values can be examined at
     /// once.
-    pub fn put_batch(&mut self, values: &[u64]) {
+    pub fn put_batch<T: RleValue>(&mut self, values: &[T]) {
         let mut i = 0;
         while i < values.len() {
             // Extend an active RLE run with its whole continuation at once
-            if self.repeat_count >= BIT_PACK_GROUP_SIZE && values[i] == self.current_value {
-                let run_len = values[i..]
-                    .iter()
-                    .take_while(|&&v| v == self.current_value)
-                    .count();
+            if self.repeat_count >= BIT_PACK_GROUP_SIZE && values[i].to_u64() == self.current_value
+            {
+                let run_len = run_length(&values[i..], values[i]);
                 self.repeat_count += run_len;
                 i += run_len;
                 continue;
@@ -213,19 +248,21 @@ impl RleEncoder {
                 && values.len() - i >= BIT_PACK_GROUP_SIZE
             {
                 debug_assert_eq!(self.repeat_count, 0);
-                let group = &values[i..i + BIT_PACK_GROUP_SIZE];
+                let group: &[T; BIT_PACK_GROUP_SIZE] =
+                    values[i..i + BIT_PACK_GROUP_SIZE].try_into().unwrap();
                 i += BIT_PACK_GROUP_SIZE;
-                if group.iter().all(|&v| v == group[0]) {
+                // Not short-circuiting compiles to a single vector comparison
+                if group.iter().fold(true, |all, v| all & (*v == group[0])) {
                     // The same decision `commit_group` makes for a group holding a
                     // single repeated value, without appending it first
                     if !self.pending_values.is_empty() {
                         self.close_bit_packed_run();
                     }
-                    self.current_value = group[0];
+                    self.current_value = group[0].to_u64();
                     self.repeat_count = BIT_PACK_GROUP_SIZE;
                 } else {
-                    self.pending_values.extend_from_slice(group);
-                    self.current_value = group[BIT_PACK_GROUP_SIZE - 1];
+                    self.pending_values.extend(group.iter().map(|v| v.to_u64()));
+                    self.current_value = group[BIT_PACK_GROUP_SIZE - 1].to_u64();
                     let num_groups = self.pending_values.len() / BIT_PACK_GROUP_SIZE;
                     if num_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
                         self.close_bit_packed_run();
@@ -236,7 +273,7 @@ impl RleEncoder {
 
             // Ending an RLE run, filling up a partial group, or a trailing partial
             // group: fall back to the per-value path
-            self.put(values[i]);
+            self.put(values[i].to_u64());
             i += 1;
         }
     }
