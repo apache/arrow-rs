@@ -169,8 +169,8 @@ pub const ENUM_VALUES_FEATURE: [Feature; 3] = [
 ///      forward compatibility guarantees).
 ///  2.  A means of negotiating between a client and server
 ///      what features a stream is allowed to use. The enums
-///      values here are intented to represent higher level
-///      features, additional details maybe negotiated
+///      values here are intended to represent higher level
+///      features, additional details may be negotiated
 ///      with key-value pairs specific to the protocol.
 ///
 /// Enums added to this list should be assigned power-of-two values
@@ -664,13 +664,29 @@ pub const ENUM_VALUES_INTERVAL_UNIT: [IntervalUnit; 3] = [
     IntervalUnit::MONTH_DAY_NANO,
 ];
 
+/// The unit of an Interval.
+///
+/// All integers in the units below are stored in the endianness indicated
+/// by the schema.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct IntervalUnit(pub i16);
 #[allow(non_upper_case_globals)]
 impl IntervalUnit {
+    /// Indicates the number of elapsed whole months, stored as
+    /// 4-byte signed integers.
     pub const YEAR_MONTH: Self = Self(0);
+    /// Indicates the number of elapsed days and milliseconds (no leap seconds),
+    /// stored as 2 contiguous 32-bit signed integers (8-bytes in total). Support
+    /// of this IntervalUnit is not required for full Arrow compatibility.
     pub const DAY_TIME: Self = Self(1);
+    /// A triple of the number of elapsed months, days, and nanoseconds.
+    /// The values are stored contiguously in 16-byte blocks. Months and days are
+    /// encoded as 32-bit signed integers and nanoseconds is encoded as a 64-bit
+    /// signed integer. Nanoseconds does not allow for leap seconds. Each field is
+    /// independent (e.g. there is no constraint that nanoseconds have the same
+    /// sign as days or that the quantity of nanoseconds represents less than a
+    /// day's worth of time).
     pub const MONTH_DAY_NANO: Self = Self(2);
 
     pub const ENUM_MIN: i16 = 0;
@@ -1862,7 +1878,7 @@ pub enum MapOffset {}
 /// may be set in the metadata for this field.
 ///
 /// In a field with Map type, the field has a child Struct field, which then
-/// has two children: key type and the second the value type. The names of the
+/// has two children: the key type and the value type. The names of the
 /// child fields may be respectively "entries", "key", and "value", but this is
 /// not enforced.
 ///
@@ -3098,9 +3114,9 @@ pub enum DecimalOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
 /// Exact decimal value represented as an integer value in two's
-/// complement. Currently only 128-bit (16-byte) and 256-bit (32-byte) integers
-/// are used. The representation uses the endianness indicated
-/// in the Schema.
+/// complement. Currently 32-bit (4-byte), 64-bit (8-byte),
+/// 128-bit (16-byte) and 256-bit (32-byte) integers are used.
+/// The representation uses the endianness indicated in the Schema.
 pub struct Decimal<'a> {
     pub _tab: flatbuffers::Table<'a>,
 }
@@ -3156,7 +3172,7 @@ impl<'a> Decimal<'a> {
         // which contains a valid value in this slot
         unsafe { self._tab.get::<i32>(Decimal::VT_SCALE, Some(0)).unwrap() }
     }
-    /// Number of bits per value. The only accepted widths are 128 and 256.
+    /// Number of bits per value. The accepted widths are 32, 64, 128 and 256.
     /// We use bitWidth for consistency with Int::bitWidth.
     #[inline]
     pub fn bitWidth(&self) -> i32 {
@@ -3739,6 +3755,9 @@ impl core::fmt::Debug for Timestamp<'_> {
 pub enum IntervalOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
+/// A "calendar" interval which models types that don't necessarily
+/// have a precise duration without the context of a base timestamp (e.g.
+/// days can differ in length during day light savings time transitions).
 pub struct Interval<'a> {
     pub _tab: flatbuffers::Table<'a>,
 }
@@ -3843,6 +3862,19 @@ impl core::fmt::Debug for Interval<'_> {
 pub enum DurationOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
+/// An absolute length of time unrelated to any calendar artifacts.
+///
+/// For the purposes of Arrow Implementations, adding this value to a Timestamp
+/// ("t1") naively (i.e. simply summing the two numbers) is acceptable even
+/// though in some cases the resulting Timestamp (t2) would not account for
+/// leap-seconds during the elapsed time between "t1" and "t2".  Similarly,
+/// representing the difference between two Unix timestamps is acceptable, but
+/// would yield a value that is possibly a few seconds off from the true elapsed
+/// time.
+///
+/// The resolution defaults to millisecond, but can be any of the other
+/// supported TimeUnit values as with Timestamp and Time types.  This type is
+/// always represented as an 8-byte integer.
 pub struct Duration<'a> {
     pub _tab: flatbuffers::Table<'a>,
 }
@@ -3948,7 +3980,7 @@ pub enum KeyValueOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
 /// ----------------------------------------------------------------------
-/// user defined key value pairs to add custom metadata to arrow
+/// user defined key value pairs to add custom metadata to Arrow
 /// key namespacing is the responsibility of the user
 pub struct KeyValue<'a> {
     pub _tab: flatbuffers::Table<'a>,
@@ -4147,7 +4179,7 @@ impl<'a> DictionaryEncoding<'a> {
         }
     }
     /// By default, dictionaries are not ordered, or the order does not have
-    /// semantic meaning. In some statistical, applications, dictionary-encoding
+    /// semantic meaning. In some statistical applications, dictionary-encoding
     /// is used to represent ordered categorical data, and we provide a way to
     /// preserve that metadata here
     #[inline]
@@ -4330,7 +4362,7 @@ impl<'a> Field<'a> {
         builder.finish()
     }
 
-    /// Name is not required, in i.e. a List
+    /// Name is not required (e.g., in a List)
     #[inline]
     pub fn name(&self) -> Option<&'a str> {
         // Safety:
@@ -5412,6 +5444,7 @@ impl<'a> Schema<'a> {
             >>(Schema::VT_FIELDS, None)
         }
     }
+    /// User-defined metadata
     #[inline]
     pub fn custom_metadata(
         &self,
