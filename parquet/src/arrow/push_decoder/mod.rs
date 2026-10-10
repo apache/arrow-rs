@@ -3163,7 +3163,7 @@ mod test {
                 Err(e) => break e.to_string(),
             }
         };
-        assert!(err.contains("bytes, expected"), "{err}");
+        assert!(err.contains("has 126 bytes, expected 127"), "{err}");
     }
 
     /// return the metadata for the test file, including the offset index
