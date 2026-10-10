@@ -18,6 +18,8 @@
 //! [`ParquetPushDecoder`]: decodes Parquet data with data provided by the
 //! caller (rather than from an underlying reader).
 
+#[cfg(test)]
+mod equivalence_tests;
 mod reader_builder;
 mod remaining;
 mod scan_plan;
