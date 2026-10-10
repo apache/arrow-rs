@@ -8,7 +8,7 @@ updates:
       interval: daily
     open-pull-requests-limit: 10
     target-branch: main
-    labels: [auto-dependencies, arrow]
+    labels: [auto-dependencies]
     groups:
       prost:
         applies-to: version-updates
