@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["build_extend","extend_nulls","wrap_column_error"]};

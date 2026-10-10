@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AxisIndices","NeedsIndexData","PageIndexPolicy"],"fn":["dictionary_page_byte_range","needs_index_data","parse_index_data"],"struct":["ColumnChunkMask","ParquetMetaDataReader"]};

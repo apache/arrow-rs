@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ARROW_MAGIC","CONTINUATION_MARKER"],"mod":["compression","convert","gen","reader","writer"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DecodeState"],"fn":["needs_range","range_for_page_index"],"struct":["ParquetMetaDataPushDecoder"]};
