@@ -189,6 +189,7 @@ fn drive_file(
 ) -> (Vec<RecordBatch>, Vec<Range<u64>>) {
     let mut batches = vec![];
     let mut requested = vec![];
+    let mut buffered_after_last_batch = 0;
     loop {
         match decoder.try_decode().unwrap() {
             DecodeResult::NeedsData(ranges) => {
@@ -200,10 +201,18 @@ fn drive_file(
                 requested.extend_from_slice(&ranges);
                 decoder.push_ranges(ranges, data).unwrap();
             }
-            DecodeResult::Data(batch) => batches.push(batch),
+            DecodeResult::Data(batch) => {
+                batches.push(batch);
+                buffered_after_last_batch = decoder.buffered_bytes();
+            }
             DecodeResult::Finished => break,
         }
     }
+    // The last batch finishes the last row group, which releases its bytes.
+    assert_eq!(
+        buffered_after_last_batch, 0,
+        "bytes left after the last batch"
+    );
     (batches, requested)
 }
 
