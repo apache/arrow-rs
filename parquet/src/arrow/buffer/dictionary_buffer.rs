@@ -19,13 +19,18 @@ use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
 use ahash::RandomState;
-use arrow_array::{Array, DictionaryArray, downcast_integer};
+use arrow_array::{Array, DictionaryArray, PrimitiveArray, downcast_integer};
 use arrow_array::{
-    ArrayRef, FixedSizeBinaryArray, OffsetSizeTrait, cast::AsArray, make_array,
-    types::ArrowDictionaryKeyType,
+    ArrayRef, FixedSizeBinaryArray, OffsetSizeTrait,
+    cast::AsArray,
+    types::{
+        ArrowDictionaryKeyType, ArrowPrimitiveType, Int8Type, Int16Type, Int32Type, Int64Type,
+        UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    },
 };
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
+};
 use arrow_schema::DataType as ArrowType;
 use hashbrown::HashMap as HbHashMap;
 use hashbrown::hash_map::Entry;
@@ -158,7 +163,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     }
                 }
 
-                let ArrowType::Dictionary(_, value_type) = data_type else {
+                let ArrowType::Dictionary(key_type, value_type) = data_type else {
                     unreachable!()
                 };
                 let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
@@ -172,18 +177,12 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     values
                 };
 
-                let builder = ArrayDataBuilder::new(data_type.clone())
-                    .len(keys.len())
-                    .add_buffer(Buffer::from_vec(keys))
-                    .add_child_data(values.into_data())
-                    .null_bit_buffer(null_buffer);
+                let num_keys = keys.len();
+                let keys_buffer = Buffer::from_vec(keys);
+                let null_buffer =
+                    null_buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, num_keys)));
 
-                let data = match cfg!(debug_assertions) {
-                    true => builder.build().unwrap(),
-                    false => unsafe { builder.build_unchecked() },
-                };
-
-                Ok(make_array(data))
+                build_dictionary_array(key_type, keys_buffer, num_keys, null_buffer, values)
             }
             Self::Values { values } => {
                 let (key_type, value_type) = match data_type {
@@ -230,6 +229,38 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
                 values.pad_nulls(read_offset, values_read, levels_read, valid_mask)
             }
         }
+    }
+}
+
+/// Build a dictionary array from a raw keys buffer and an already-decoded values
+/// `ArrayRef`, skipping the ArrayData round-trip.
+fn build_dictionary_array(
+    key_type: &ArrowType,
+    keys_buffer: Buffer,
+    num_keys: usize,
+    null_buffer: Option<NullBuffer>,
+    values: ArrayRef,
+) -> Result<ArrayRef> {
+    macro_rules! build {
+        ($kt:ty) => {{
+            let scalars =
+                ScalarBuffer::<<$kt as ArrowPrimitiveType>::Native>::new(keys_buffer, 0, num_keys);
+            let keys = PrimitiveArray::<$kt>::new(scalars, null_buffer);
+            // SAFETY: key bounds already validated by caller
+            let dict = unsafe { DictionaryArray::<$kt>::new_unchecked(keys, values) };
+            Ok(Arc::new(dict) as ArrayRef)
+        }};
+    }
+    match key_type {
+        ArrowType::Int8 => build!(Int8Type),
+        ArrowType::Int16 => build!(Int16Type),
+        ArrowType::Int32 => build!(Int32Type),
+        ArrowType::Int64 => build!(Int64Type),
+        ArrowType::UInt8 => build!(UInt8Type),
+        ArrowType::UInt16 => build!(UInt16Type),
+        ArrowType::UInt32 => build!(UInt32Type),
+        ArrowType::UInt64 => build!(UInt64Type),
+        _ => Err(general_err!("unsupported dictionary key type: {key_type}")),
     }
 }
 
