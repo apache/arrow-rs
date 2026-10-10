@@ -95,6 +95,22 @@ jobs:
       - name: Format workspace
         run: cargo fmt --all -- --check
 
+  unused-dependencies:
+    name: Check unused dependencies
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Setup Rust toolchain
+        run: rustup install
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
+        with:
+          tool: cargo-machete@0.9.2
+      - name: Check unused dependencies
+        run: cargo machete --with-metadata
+
   msrv:
     name: Verify MSRV (Minimum Supported Rust Version)
     runs-on: ubuntu-latest
