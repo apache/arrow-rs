@@ -18,6 +18,7 @@
 mod alp;
 pub mod decoding;
 pub mod encoding;
+pub(crate) mod fsst;
 pub mod levels;
 
 // Keep this module declaration explicit so rustfmt discovers its source file.

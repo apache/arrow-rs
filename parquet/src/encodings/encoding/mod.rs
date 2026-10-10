@@ -33,10 +33,12 @@ use alp_encoder::AlpEncoder;
 use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
+use fsst_encoder::FsstEncoder;
 
 mod alp_encoder;
 mod byte_stream_split_encoder;
 mod dict_encoder;
+pub(crate) mod fsst_encoder;
 
 // ----------------------------------------------------------------------
 // Encoders
@@ -183,6 +185,13 @@ pub(crate) mod private {
                     T::get_physical_type()
                 ));
             }
+            Encoding::FSST => {
+                return Err(general_err!(
+                    "Encoding {} only supports BYTE_ARRAY, got {}",
+                    encoding,
+                    T::get_physical_type()
+                ));
+            }
             #[expect(deprecated, reason = "BIT_PACKED is the encoding we reject here")]
             e @ Encoding::BIT_PACKED => return Err(nyi_err!("Encoding {} is not supported", e)),
         };
@@ -193,8 +202,19 @@ pub(crate) mod private {
     impl GetEncoder for i32 {}
     impl GetEncoder for i64 {}
     impl GetEncoder for Int96 {}
-    impl GetEncoder for ByteArray {}
     impl GetEncoder for FixedLenByteArray {}
+
+    impl GetEncoder for ByteArray {
+        fn get_encoder<T: DataType<T = Self>>(
+            descr: &ColumnDescPtr,
+            encoding: Encoding,
+        ) -> Result<Box<dyn Encoder<T>>> {
+            match encoding {
+                Encoding::FSST => Ok(Box::new(FsstEncoder::new())),
+                _ => get_encoder_default(descr, encoding),
+            }
+        }
+    }
 
     impl GetEncoder for f32 {
         #[expect(
