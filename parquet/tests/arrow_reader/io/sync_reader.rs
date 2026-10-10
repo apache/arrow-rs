@@ -156,10 +156,11 @@ fn test_read_single_column_no_page_index() {
 
 #[test]
 fn test_read_row_selection() {
-    // Note: the skip that precedes the selected rows now defers the dictionary
-    // page instead of decoding it up front, so the dictionary is read on first
-    // decode of the following data page rather than before it. Same requests
-    // and bytes, order swapped. See apache/arrow-rs#11154.
+    // Dictionary pages are read on first decode of a data page that needs
+    // them, so skipping a page does not pull its dictionary in. That is why
+    // the trace below shows the dictionary *after* the data page wherever a
+    // skip precedes it, and *before* the data page where none does.
+    // See apache/arrow-rs#11154.
     // There are 400 total rows spread across 4 data pages (100 rows each)
     // select rows 175..225 (i.e. DataPage(1) of row group 0 and DataPage(0) of row group 1)
     let test_file = test_file();
@@ -225,10 +226,11 @@ fn test_read_limit() {
 
 #[test]
 fn test_read_single_row_filter() {
-    // Note: the skip that precedes the selected rows now defers the dictionary
-    // page instead of decoding it up front, so the dictionary is read on first
-    // decode of the following data page rather than before it. Same requests
-    // and bytes, order swapped. See apache/arrow-rs#11154.
+    // Dictionary pages are read on first decode of a data page that needs
+    // them, so skipping a page does not pull its dictionary in. That is why
+    // the trace below shows the dictionary *after* the data page wherever a
+    // skip precedes it, and *before* the data page where none does.
+    // See apache/arrow-rs#11154.
     // Values from column "b" range 400..799
     // filter  "b" > 575 and < 625
     // (last data page in Row Group 0 and first DataPage in Row Group 1)
@@ -277,10 +279,11 @@ fn test_read_single_row_filter() {
 
 #[test]
 fn test_read_multiple_row_filter() {
-    // Note: the skip that precedes the selected rows now defers the dictionary
-    // page instead of decoding it up front, so the dictionary is read on first
-    // decode of the following data page rather than before it. Same requests
-    // and bytes, order swapped. See apache/arrow-rs#11154.
+    // Dictionary pages are read on first decode of a data page that needs
+    // them, so skipping a page does not pull its dictionary in. That is why
+    // the trace below shows the dictionary *after* the data page wherever a
+    // skip precedes it, and *before* the data page where none does.
+    // See apache/arrow-rs#11154.
     // Values in column "a" range 0..399
     // Values in column "b" range 400..799
     // First filter: "a" > 175  (last data page in Row Group 0)
