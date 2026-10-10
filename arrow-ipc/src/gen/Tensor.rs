@@ -155,6 +155,8 @@ impl core::fmt::Debug for TensorDim<'_> {
 pub enum TensorOffset {}
 #[derive(Copy, Clone, PartialEq)]
 
+/// DEPRECATED: The recommended way to pass tensors over Arrow IPC is
+/// using columns with the `arrow.fixed_shape_tensor` canonical type.
 pub struct Tensor<'a> {
     pub _tab: flatbuffers::Table<'a>,
 }
