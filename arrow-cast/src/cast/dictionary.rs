@@ -132,6 +132,13 @@ fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
 ) -> Result<ArrayRef, ArrowError> {
     use DataType::*;
 
+    // Value type unchanged (and not nested dict): cast keys only, reuse values Arc.
+    if array.values().data_type() == to_value_type
+        && !matches!(array.values().data_type(), Dictionary(_, _))
+    {
+        return cast_keys_only(array, to_index_type, cast_options);
+    }
+
     // Fast path for a nested dictionary source (`Dictionary<K, Dictionary<K2, V>>`).
     // Both layers index into the same inner values, so the two index layers can
     // be composed into one rather than materializing the values: `take` gathers
@@ -197,6 +204,58 @@ fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
     };
 
     Ok(new_array)
+}
+
+fn finish_keys_only<K2: ArrowDictionaryKeyType>(
+    cast_keys: ArrayRef,
+    values: ArrayRef,
+) -> Result<ArrayRef, ArrowError> {
+    let new_keys = cast_keys
+        .as_any()
+        .downcast_ref::<PrimitiveArray<K2>>()
+        .ok_or_else(|| {
+            ArrowError::ComputeError(
+                "Internal Error: cast keys did not downcast to target key type".to_string(),
+            )
+        })?
+        .clone();
+    // SAFETY: caller rejects overflowing keys, so every non-null key stays in bounds of `values`.
+    Ok(Arc::new(unsafe {
+        DictionaryArray::<K2>::new_unchecked(new_keys, values)
+    }))
+}
+
+fn cast_keys_only<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+    to_index_type: &DataType,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let source_keys: ArrayRef = Arc::new(PrimitiveArray::<K>::from(array.keys().to_data()));
+    let cast_keys = cast_with_options(&source_keys, to_index_type, cast_options)?;
+
+    if cast_keys.null_count() > source_keys.null_count() {
+        return Err(ArrowError::ComputeError(format!(
+            "Could not convert {} dictionary indexes from {:?} to {:?}",
+            cast_keys.null_count() - source_keys.null_count(),
+            source_keys.data_type(),
+            to_index_type
+        )));
+    }
+
+    let values = array.values().clone();
+    match to_index_type {
+        DataType::Int8 => finish_keys_only::<Int8Type>(cast_keys, values),
+        DataType::Int16 => finish_keys_only::<Int16Type>(cast_keys, values),
+        DataType::Int32 => finish_keys_only::<Int32Type>(cast_keys, values),
+        DataType::Int64 => finish_keys_only::<Int64Type>(cast_keys, values),
+        DataType::UInt8 => finish_keys_only::<UInt8Type>(cast_keys, values),
+        DataType::UInt16 => finish_keys_only::<UInt16Type>(cast_keys, values),
+        DataType::UInt32 => finish_keys_only::<UInt32Type>(cast_keys, values),
+        DataType::UInt64 => finish_keys_only::<UInt64Type>(cast_keys, values),
+        _ => Err(ArrowError::CastError(format!(
+            "Unsupported type {to_index_type} for dictionary index"
+        ))),
+    }
 }
 
 /// Cast `Dict<K, Binary>` or `Dict<K, LargeBinary>` to `Utf8View`, validating UTF-8 for each
