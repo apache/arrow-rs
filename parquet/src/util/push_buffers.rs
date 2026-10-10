@@ -235,31 +235,58 @@ impl PushBuffers {
     }
 
     /// Clear any range and corresponding buffer that is exactly in the ranges_to_clear
+    ///
+    /// A binary search finds the buffers that start at the start of each
+    /// range to clear, as in [`Self::find`]. Thus, a call does not visit the
+    /// other buffers.
     #[cfg(feature = "arrow")]
     pub(crate) fn clear_ranges(&mut self, ranges_to_clear: &[Range<u64>]) {
-        // Use `(start, end)` tuples because `Range` is not `Ord`
-        let mut clear: Vec<(u64, u64)> = ranges_to_clear.iter().map(|r| (r.start, r.end)).collect();
-        if clear.is_empty() {
-            return;
+        // The indexes of the buffers to remove. The buffers are sorted by
+        // start, so all buffers with the same start are adjacent.
+        let mut remove = vec![];
+        for clear in ranges_to_clear {
+            let first = self.ranges.partition_point(|r| r.start < clear.start);
+            let same_start = self.ranges[first..]
+                .iter()
+                .take_while(|r| r.start == clear.start);
+            remove.extend(
+                same_start
+                    .enumerate()
+                    .filter(|(_, r)| r.end == clear.end)
+                    .map(|(idx, _)| first + idx),
+            );
         }
-        clear.sort_unstable();
-        let mut ranges = Vec::with_capacity(self.ranges.len());
-        let mut buffers = Vec::with_capacity(self.buffers.len());
-        for (range, buffer) in self.ranges.drain(..).zip(self.buffers.drain(..)) {
-            if clear.binary_search(&(range.start, range.end)).is_err() {
-                ranges.push(range);
-                buffers.push(buffer);
+        // Buffers with the same start are not sorted by end, and
+        // `ranges_to_clear` can contain a range more than once.
+        remove.sort_unstable();
+        remove.dedup();
+        let (Some(&first), Some(&last)) = (remove.first(), remove.last()) else {
+            return;
+        };
+        // Move the kept buffers in `first..=last` to the start of that span,
+        // in order, then remove the rest of the span. The buffers outside the
+        // span are not visited.
+        let mut removed_longest = false;
+        let mut kept = first;
+        let mut remove = remove.into_iter().peekable();
+        for idx in first..=last {
+            if remove.next_if_eq(&idx).is_some() {
+                let len = self.ranges[idx].end.saturating_sub(self.ranges[idx].start);
+                self.buffered_bytes -= len;
+                self.empty -= usize::from(len == 0);
+                removed_longest |= len == self.max_len;
+            } else {
+                self.ranges.swap(kept, idx);
+                self.buffers.swap(kept, idx);
+                kept += 1;
             }
         }
-        self.ranges = ranges;
-        self.buffers = buffers;
-        self.buffered_bytes = self
-            .ranges
-            .iter()
-            .map(|r| r.end.saturating_sub(r.start))
-            .sum();
-        self.empty = self.ranges.iter().filter(|r| r.is_empty()).count();
-        self.update_max_len();
+        self.ranges.drain(kept..=last);
+        self.buffers.drain(kept..=last);
+        // `max_len` can change only if a buffer of that length was removed.
+        if removed_longest {
+            self.update_max_len();
+        }
     }
 
     /// Set `max_len` to the maximum length of the remaining ranges.
@@ -765,6 +792,26 @@ mod tests {
         buffers.clear_ranges(&[40..50, 10..15, 5..30]);
         assert_valid(&buffers);
         assert_eq!(buffers.ranges, vec![0..30, 10..20]);
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn clear_ranges_with_buffers_of_the_same_start() {
+        let mut buffers = PushBuffers::new(1000);
+        for range in [0..5, 10..20, 10..15, 10..20, 10..30, 10..12, 40..50] {
+            push(&mut buffers, range);
+        }
+        // Buffers with the same start are not sorted by end. A range to clear
+        // can match more than one buffer, and can be given more than once.
+        buffers.clear_ranges(&[10..30, 10..20, 10..20, 60..70]);
+        assert_valid(&buffers);
+        assert_eq!(buffers.ranges, vec![0..5, 10..15, 10..12, 40..50]);
+        assert_eq!(buffers.buffered_bytes(), 22);
+
+        // No buffer matches: the buffers do not change.
+        buffers.clear_ranges(&[10..20, 0..50]);
+        assert_valid(&buffers);
+        assert_eq!(buffers.ranges, vec![0..5, 10..15, 10..12, 40..50]);
     }
 
     /// Random pushes, clears and lookups, compared with a list that is
