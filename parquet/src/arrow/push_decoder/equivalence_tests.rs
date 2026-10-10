@@ -19,8 +19,9 @@
 //!
 //! Each test describes a scan as a [`Scan`], and [`assert_same_rows`] checks
 //! that the push decoder returns the same rows, in the same order, as
-//! [`ParquetRecordBatchReader`] for the same scan. The `fuzz_*` tests combine
-//! the scan options at random.
+//! [`ParquetRecordBatchReader`] for the same scan. The `test_fuzz_*` tests
+//! use [`proptest`] to combine the scan options at random and to shrink a
+//! scan that fails.
 //!
 //! [`ParquetRecordBatchReader`]: crate::arrow::arrow_reader::ParquetRecordBatchReader
 
@@ -44,9 +45,12 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, SchemaRef};
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
-use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
-use rand::{RngExt, SeedableRng};
+use proptest::collection::vec;
+use proptest::option::weighted;
+use proptest::prelude::*;
+use proptest::sample::select;
+use proptest::test_runner::{Config, TestRng, TestRunner};
+use std::cell::Cell;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
@@ -403,81 +407,17 @@ fn assert_same_rows(scan: &Scan) -> Decoded {
     }
     let expected = concat_batches(&schema, &expected).unwrap();
     let actual = concat_batches(&schema, &actual).unwrap();
-    assert_eq!(actual, expected, "rows differ for {scan:?}");
+    // Do not print the rows: proptest runs a failing scan many times to
+    // shrink it.
+    assert!(
+        actual == expected,
+        "rows differ for {scan:?}: {} rows, expected {}",
+        actual.num_rows(),
+        expected.num_rows()
+    );
     Decoded {
         rows: actual.num_rows(),
         requested,
-    }
-}
-
-#[test]
-#[cfg_attr(miri, ignore)] // Takes too long
-fn test_batch_sizes_and_projections() {
-    for batch_size in [1, 7, 24, 25, 26, 100, 599, 600, 601, 5000] {
-        for projection in [
-            None,
-            Some(columns(&["a"])),
-            Some(columns(&["c", "b"])),
-            Some(columns(&["l"])),
-            Some(columns(&["s"])),
-            Some(columns(&["l", "s", "b"])),
-        ] {
-            assert_same_rows(&Scan {
-                batch_size: Some(batch_size),
-                projection,
-                ..Default::default()
-            });
-        }
-    }
-}
-
-#[test]
-#[cfg_attr(miri, ignore)] // Takes too long
-fn test_row_selections_skip_pages() {
-    // Select 20 rows, skip 40: most pages are read partly, some are skipped.
-    let alternating: Vec<RowSelector> = (0..NUM_ROWS / 60)
-        .flat_map(|_| [RowSelector::select(20), RowSelector::skip(40)])
-        .collect();
-    // Select a few rows far apart: most pages are skipped entirely.
-    let sparse = RowSelection::from_consecutive_ranges(
-        [3..4, 180..190, 700..701, 1203..1300, 1799..1800].into_iter(),
-        NUM_ROWS,
-    );
-    for selection in [RowSelection::from(alternating), sparse] {
-        for policy in [
-            None,
-            Some(RowSelectionPolicy::Selectors),
-            Some(RowSelectionPolicy::Mask),
-        ] {
-            for batch_size in [8, 64, 600] {
-                assert_same_rows(&Scan {
-                    batch_size: Some(batch_size),
-                    selection: Some(selection.clone()),
-                    policy,
-                    ..Default::default()
-                });
-            }
-        }
-    }
-}
-
-#[test]
-#[cfg_attr(miri, ignore)] // Takes too long
-fn test_offset_and_limit() {
-    for (offset, limit) in [
-        (None, Some(1)),
-        (Some(650), Some(500)),
-        (Some(599), None),
-        (Some(1799), Some(10)),
-        (Some(2000), None),
-        (None, Some(0)),
-    ] {
-        assert_same_rows(&Scan {
-            batch_size: Some(70),
-            offset,
-            limit,
-            ..Default::default()
-        });
     }
 }
 
@@ -493,183 +433,168 @@ fn test_empty_selection_requests_nothing() {
     assert!(decoded.requested.is_empty());
 }
 
-fn filtered(predicates: Vec<PredicateSpec>) -> Scan {
-    Scan {
-        batch_size: Some(100),
-        predicates,
-        ..Default::default()
-    }
-}
-
-#[test]
-#[cfg_attr(miri, ignore)] // Takes too long
-fn test_predicates() {
-    let cases = vec![
-        vec![PredicateSpec::new("a", Cmp::Lt(900))],
-        vec![
-            PredicateSpec::new("a", Cmp::Ge(300)),
-            PredicateSpec::new("b", Cmp::ModNotZero(3)),
-        ],
-        vec![
-            PredicateSpec::new("a", Cmp::Ge(100)),
-            PredicateSpec::new("a", Cmp::Lt(1500)),
-            PredicateSpec::new("b", Cmp::ModNotZero(2)),
-        ],
-        vec![PredicateSpec::new("a", Cmp::Ge(750))],
-        vec![PredicateSpec::new("a", Cmp::None)],
-        vec![PredicateSpec::new("a", Cmp::All)],
-        vec![
-            PredicateSpec::new("b", Cmp::None),
-            PredicateSpec::new("a", Cmp::All),
-        ],
-    ];
-    for predicates in cases {
-        for projection in [None, Some(columns(&["c", "l"])), Some(columns(&["a", "s"]))] {
-            let mut scan = filtered(predicates.clone());
-            scan.projection = projection;
-            assert_same_rows(&scan);
+/// A selection of `total` rows: runs of skipped and selected rows in turn.
+/// It shrinks to a selection with fewer and shorter runs.
+fn selection_strategy(total: usize) -> impl Strategy<Value = RowSelection> {
+    let runs = select(vec![3usize, 40, 400]).prop_flat_map(|max_run| vec(1..=max_run, 1..200));
+    (any::<bool>(), runs).prop_map(move |(mut skip, runs)| {
+        let mut selectors = vec![];
+        let mut rows_left = total;
+        // The last run takes the rows that are left.
+        let last = std::iter::once(total);
+        for run in runs.into_iter().chain(last) {
+            let run = run.min(rows_left);
+            if run == 0 {
+                break;
+            }
+            selectors.push(match skip {
+                true => RowSelector::skip(run),
+                false => RowSelector::select(run),
+            });
+            rows_left -= run;
+            skip = !skip;
         }
-    }
+        RowSelection::from(selectors)
+    })
 }
 
-#[test]
-#[cfg_attr(miri, ignore)] // Takes too long
-fn test_predicates_with_selection_limit_and_offset() {
-    let selection = RowSelection::from(
-        (0..NUM_ROWS / 100)
-            .flat_map(|_| [RowSelector::select(60), RowSelector::skip(40)])
-            .collect::<Vec<_>>(),
-    );
-    for (offset, limit) in [(None, None), (None, Some(333)), (Some(211), Some(400))] {
-        for selection in [None, Some(selection.clone())] {
-            let mut scan = filtered(vec![PredicateSpec::new("b", Cmp::ModNotZero(3))]);
-            scan.selection = selection;
-            scan.offset = offset;
-            scan.limit = limit;
-            assert_same_rows(&scan);
-        }
-    }
+/// No batch size (the default), a batch size next to the size of a page or of
+/// a row group, or any batch size.
+fn batch_size_strategy() -> impl Strategy<Value = Option<usize>> {
+    let boundaries = [1, ROWS_PER_PAGE, ROWS_PER_ROW_GROUP, 700, NUM_ROWS]
+        .into_iter()
+        .flat_map(|size| [size.saturating_sub(1).max(1), size, size + 1])
+        .collect::<Vec<_>>();
+    prop_oneof![
+        1 => Just(None),
+        4 => select(boundaries).prop_map(Some),
+        4 => (1..2 * NUM_ROWS).prop_map(Some),
+    ]
 }
 
-#[test]
-#[cfg_attr(miri, ignore)] // Takes too long
-fn test_predicate_batch_smaller_than_page() {
-    let mut scan = filtered(vec![PredicateSpec::new("b", Cmp::ModNotZero(5))]);
-    scan.batch_size = Some(10);
-    assert_same_rows(&scan);
-}
-
-/// A random selection of `total` rows.
-fn random_selection(rng: &mut StdRng, total: usize) -> RowSelection {
-    let mut selectors = vec![];
-    let mut rows_left = total;
-    let mut skip = rng.random_bool(0.5);
-    let max_run = [3, 40, 400][rng.random_range(0..3)];
-    while rows_left > 0 {
-        let run = rng.random_range(1..=rows_left.min(max_run));
-        selectors.push(if skip {
-            RowSelector::skip(run)
-        } else {
-            RowSelector::select(run)
-        });
-        rows_left -= run;
-        skip = !skip;
-    }
-    RowSelection::from(selectors)
-}
-
-fn random_predicate(rng: &mut StdRng) -> PredicateSpec {
-    let value = rng.random_range(0..NUM_ROWS as i64);
-    match rng.random_range(0..9) {
-        0 => PredicateSpec::new("a", Cmp::Lt(value)),
-        1 => PredicateSpec::new("a", Cmp::Ge(value)),
-        2 => PredicateSpec::new("b", Cmp::ModNotZero(rng.random_range(2..7))),
-        3 => PredicateSpec::new("a", Cmp::ModNotZero(rng.random_range(2..40))),
-        4 => PredicateSpec::new("b", Cmp::All),
-        5 => PredicateSpec::new("l", Cmp::ListNotNull),
-        6 => PredicateSpec::new("s", Cmp::StructXLt(2 * value)),
-        7 => PredicateSpec::new("a", Cmp::NullEvery(rng.random_range(2..9))),
-        _ => PredicateSpec::new("b", Cmp::None),
-    }
+fn predicate_strategy() -> impl Strategy<Value = PredicateSpec> {
+    let value = 0..NUM_ROWS as i64;
+    prop_oneof![
+        value
+            .clone()
+            .prop_map(|v| PredicateSpec::new("a", Cmp::Lt(v))),
+        value
+            .clone()
+            .prop_map(|v| PredicateSpec::new("a", Cmp::Ge(v))),
+        (2..7i64).prop_map(|m| PredicateSpec::new("b", Cmp::ModNotZero(m))),
+        (2..40i64).prop_map(|m| PredicateSpec::new("a", Cmp::ModNotZero(m))),
+        Just(PredicateSpec::new("b", Cmp::All)),
+        Just(PredicateSpec::new("l", Cmp::ListNotNull)),
+        value.prop_map(|v| PredicateSpec::new("s", Cmp::StructXLt(2 * v))),
+        (2..9i64).prop_map(|m| PredicateSpec::new("a", Cmp::NullEvery(m))),
+        Just(PredicateSpec::new("b", Cmp::None)),
+    ]
 }
 
 /// A scan with batch size, projection, row groups, row selection, selection
 /// policy, predicates, predicate cache size, offset and limit at random.
-fn random_scan(rng: &mut StdRng, heterogeneous: bool) -> Scan {
-    let projections = [
-        None,
-        Some(vec!["a"]),
-        Some(vec!["c"]),
-        Some(vec!["a", "c"]),
-        Some(vec!["b", "c"]),
-        Some(vec!["l"]),
-        Some(vec!["s", "b"]),
-        Some(vec!["l", "a", "s"]),
-    ];
+fn scan_strategy(heterogeneous: bool) -> impl Strategy<Value = Scan> {
     let row_group_rows = match heterogeneous {
         true => HETEROGENEOUS_ROW_GROUP_ROWS,
         false => [ROWS_PER_ROW_GROUP; 3],
     };
     // Some of the row groups, in any order.
-    let row_groups = rng.random_bool(0.3).then(|| {
-        let mut row_groups = vec![0, 1, 2];
-        row_groups.shuffle(rng);
-        row_groups.truncate(rng.random_range(1..=3));
-        row_groups
-    });
-    // A selection must cover exactly the row groups of the scan.
-    let total: usize = match &row_groups {
-        Some(row_groups) => row_groups.iter().map(|&i| row_group_rows[i]).sum(),
-        None => NUM_ROWS,
-    };
-    let num_predicates = rng.random_range(0..4);
-    Scan {
-        heterogeneous,
-        page_index_off: rng.random_bool(0.1),
-        batch_size: [
-            None,
-            Some(1),
-            Some(7),
-            Some(25),
-            Some(64),
-            Some(100),
-            Some(512),
-        ][rng.random_range(0..7)],
-        projection: projections[rng.random_range(0..projections.len())]
-            .as_ref()
-            .map(|names| columns(names)),
-        row_groups,
-        selection: rng.random_bool(0.5).then(|| random_selection(rng, total)),
-        limit: rng.random_bool(0.3).then(|| rng.random_range(1..=total)),
-        offset: rng.random_bool(0.3).then(|| rng.random_range(0..total / 2)),
-        predicates: (0..num_predicates).map(|_| random_predicate(rng)).collect(),
-        policy: [
-            None,
-            Some(RowSelectionPolicy::Selectors),
-            Some(RowSelectionPolicy::Mask),
-        ][rng.random_range(0..3)],
-        max_predicate_cache_size: [None, Some(0), Some(1)][rng.random_range(0..3)],
-    }
+    let row_groups = (Just(vec![0, 1, 2]).prop_shuffle(), 1..=3usize)
+        .prop_map(|(row_groups, len)| row_groups[..len].to_vec());
+    weighted(0.3, row_groups)
+        .prop_flat_map(move |row_groups| {
+            // A selection must cover exactly the row groups of the scan.
+            let total: usize = match &row_groups {
+                Some(row_groups) => row_groups.iter().map(|&i| row_group_rows[i]).sum(),
+                None => NUM_ROWS,
+            };
+            (
+                Just(row_groups),
+                proptest::bool::weighted(0.1),
+                batch_size_strategy(),
+                select(vec![
+                    None,
+                    Some(vec!["a"]),
+                    Some(vec!["c"]),
+                    Some(vec!["a", "c"]),
+                    Some(vec!["b", "c"]),
+                    Some(vec!["l"]),
+                    Some(vec!["s", "b"]),
+                    Some(vec!["l", "a", "s"]),
+                ]),
+                weighted(0.5, selection_strategy(total)),
+                // Mostly a limit and an offset that leave rows. Sometimes a
+                // limit of 0, or an offset after the last row.
+                weighted(0.3, prop_oneof![9 => 1..=total, 1 => Just(0)]),
+                weighted(0.3, prop_oneof![9 => 0..total / 2, 1 => total..total + 300]),
+                vec(predicate_strategy(), 0..4),
+                select(vec![
+                    None,
+                    Some(RowSelectionPolicy::Selectors),
+                    Some(RowSelectionPolicy::Mask),
+                ]),
+                select(vec![None, Some(0), Some(1)]),
+            )
+        })
+        .prop_map(
+            move |(
+                row_groups,
+                page_index_off,
+                batch_size,
+                projection,
+                selection,
+                limit,
+                offset,
+                predicates,
+                policy,
+                max_predicate_cache_size,
+            )| Scan {
+                heterogeneous,
+                page_index_off,
+                batch_size,
+                projection: projection.map(|names| columns(&names)),
+                row_groups,
+                selection,
+                limit,
+                offset,
+                predicates,
+                policy,
+                max_predicate_cache_size,
+            },
+        )
 }
 
-/// Seeds of each fuzz test, so that it runs in a few seconds in a debug
+/// Scans of each fuzz test, so that it runs in a few seconds in a debug
 /// build.
-const FUZZ_SEEDS: u64 = 250;
+const FUZZ_CASES: u32 = 1000;
 
-/// Check [`FUZZ_SEEDS`] random scans. Most of the scans must return rows, so
-/// that the test does not compare empty results only.
+/// Check [`FUZZ_CASES`] random scans. If a scan fails, proptest shrinks it to
+/// a smaller scan that fails. Most of the scans must return rows, so that the
+/// test does not compare empty results only.
+///
+/// The scans are the same in each run, so that a failure in CI comes from
+/// the change under test.
 fn fuzz(heterogeneous: bool) {
-    let mut scans_with_rows = 0;
-    for seed in 0..FUZZ_SEEDS {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let scan = random_scan(&mut rng, heterogeneous);
-        if assert_same_rows(&scan).rows > 0 {
-            scans_with_rows += 1;
-        }
-    }
+    let config = Config {
+        cases: FUZZ_CASES,
+        failure_persistence: None,
+        ..Config::default()
+    };
+    let rng = TestRng::deterministic_rng(config.rng_algorithm);
+    let mut runner = TestRunner::new_with_rng(config, rng);
+    let scans_with_rows = Cell::new(0);
+    runner
+        .run(&scan_strategy(heterogeneous), |scan| {
+            if assert_same_rows(&scan).rows > 0 {
+                scans_with_rows.set(scans_with_rows.get() + 1);
+            }
+            Ok(())
+        })
+        .unwrap();
     assert!(
-        scans_with_rows * 3 >= FUZZ_SEEDS * 2,
-        "only {scans_with_rows} of {FUZZ_SEEDS} scans returned rows"
+        scans_with_rows.get() * 3 >= FUZZ_CASES * 2,
+        "only {} of {FUZZ_CASES} scans returned rows",
+        scans_with_rows.get()
     );
 }
 

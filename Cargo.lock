@@ -2584,6 +2584,7 @@ dependencies = [
  "parquet-geospatial",
  "parquet-variant",
  "parquet-variant-compute",
+ "proptest",
  "rand 0.10.3",
  "ring",
  "seq-macro",
