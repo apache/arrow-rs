@@ -441,13 +441,10 @@ impl ParquetMetaDataPushDecoder {
 
                 DecodeState::ReadingPageIndex(metadata) => {
                     match self.try_decode_page_index_for_metadata(metadata)? {
-                        PageIndexDecodeResult::NeedsData(ranges) => {
+                        DecodeResult::NeedsData(ranges) => {
                             return Ok(DecodeResult::NeedsData(ranges));
                         }
-                        PageIndexDecodeResult::Data {
-                            mut metadata,
-                            page_index,
-                        } => {
+                        DecodeResult::Data((mut metadata, page_index)) => {
                             // Install the newly decoded indexes, or clear any existing indexes if
                             // none were requested or present in the file.
                             if let Some(page_index) = page_index {
@@ -457,6 +454,7 @@ impl ParquetMetaDataPushDecoder {
                             }
                             return Ok(DecodeResult::Data(*metadata));
                         }
+                        DecodeResult::Finished => return Ok(DecodeResult::Finished),
                     }
                 }
 
@@ -470,8 +468,8 @@ impl ParquetMetaDataPushDecoder {
         }
     }
 
-    /// Try to decode the page indexes from the pushed data, returning the
-    /// decoded [`PageIndex`] or an error if not enough data is available.
+    /// Try to decode the page indexes from the pushed data, returning the stored
+    /// [`ParquetMetaData`] together with the decoded [`PageIndex`].
     ///
     /// This method can only be called after [`Self::try_new_with_metadata`],
     /// which initializes the decoder with previously decoded metadata.
@@ -483,32 +481,36 @@ impl ParquetMetaDataPushDecoder {
     ///    [`Self::with_column_index_mask`] or [`Self::with_offset_index_mask`]
     ///
     /// When the data can be accessed through a [`ChunkReader`], prefer
-    /// [`ParquetMetaDataReader::read_page_index`] (or
-    /// [`ParquetMetaDataReader::read_page_index_async`] for asynchronous
+    /// [`ParquetMetaDataReader::read_page_index_and_finish`] (or
+    /// [`ParquetMetaDataReader::load_page_index_and_finish`] for asynchronous
     /// I/O), which handles the decoder state machine and I/O requests.
     ///
     /// # Returns
     ///
-    /// * `Ok(DecodeResult::Data(Some(page_index)))` - Successfully decoded the
-    ///   requested page indexes based on the configured policies and masks
-    /// * `Ok(DecodeResult::Data(None))` - No page indexes were requested
-    ///   (both policies set to [`PageIndexPolicy::Skip`] or masks select nothing)
+    /// * `Ok(DecodeResult::Data((metadata, Some(page_index))))` - Successfully decoded the
+    ///   requested page indexes based on the configured policies and masks. The newly decoded page
+    ///   index is returned separately; any page index already attached to `metadata` is unchanged.
+    /// * `Ok(DecodeResult::Data((metadata, None)))` - No page indexes were requested or found
+    ///   according to the configured policies and masks. The stored metadata is still returned.
     /// * `Ok(DecodeResult::NeedsData(ranges))` - More data is needed to decode
     ///   the page indexes. Push the requested ranges and call this method again.
     /// * `Ok(DecodeResult::Finished)` - The decoder has finished and no more
     ///   data can be decoded
     /// * `Err(_)` - An error occurred during decoding
     ///
-    /// [`ParquetMetaDataReader::read_page_index`]: crate::file::metadata::ParquetMetaDataReader::read_page_index
-    /// [`ParquetMetaDataReader::read_page_index_async`]: crate::file::metadata::ParquetMetaDataReader::read_page_index_async
-    pub fn try_decode_page_index(&mut self) -> Result<DecodeResult<Option<PageIndex>>> {
+    /// [`ParquetMetaDataReader::read_page_index_and_finish`]: crate::file::metadata::ParquetMetaDataReader::read_page_index_and_finish
+    /// [`ParquetMetaDataReader::load_page_index_and_finish`]: crate::file::metadata::ParquetMetaDataReader::load_page_index_and_finish
+    pub fn try_decode_page_index(
+        &mut self,
+    ) -> Result<DecodeResult<(ParquetMetaData, Option<PageIndex>)>> {
         match std::mem::replace(&mut self.state, DecodeState::Intermediate) {
             DecodeState::ReadingPageIndex(metadata) => {
                 Ok(match self.try_decode_page_index_for_metadata(metadata)? {
-                    PageIndexDecodeResult::NeedsData(ranges) => DecodeResult::NeedsData(ranges),
-                    PageIndexDecodeResult::Data { page_index, .. } => {
-                        DecodeResult::Data(page_index)
+                    DecodeResult::NeedsData(ranges) => DecodeResult::NeedsData(ranges),
+                    DecodeResult::Data((metadata, page_index)) => {
+                        DecodeResult::Data((*metadata, page_index))
                     }
+                    DecodeResult::Finished => DecodeResult::Finished,
                 })
             }
             DecodeState::Finished => Ok(DecodeResult::Finished),
@@ -521,7 +523,7 @@ impl ParquetMetaDataPushDecoder {
     fn try_decode_page_index_for_metadata(
         &mut self,
         metadata: Box<ParquetMetaData>,
-    ) -> Result<PageIndexDecodeResult> {
+    ) -> Result<DecodeResult<(Box<ParquetMetaData>, Option<PageIndex>)>> {
         let range = range_for_page_index(
             &metadata,
             self.column_index_policy,
@@ -532,15 +534,12 @@ impl ParquetMetaDataPushDecoder {
 
         let Some(page_index_range) = range else {
             self.state = DecodeState::Finished;
-            return Ok(PageIndexDecodeResult::Data {
-                metadata,
-                page_index: None,
-            });
+            return Ok(DecodeResult::Data((metadata, None)));
         };
 
         if !self.buffers.has_range(&page_index_range) {
             self.state = DecodeState::ReadingPageIndex(metadata);
-            return Ok(PageIndexDecodeResult::NeedsData(vec![page_index_range]));
+            return Ok(DecodeResult::NeedsData(vec![page_index_range]));
         }
 
         let buffer = self.get_bytes(&page_index_range)?;
@@ -555,10 +554,7 @@ impl ParquetMetaDataPushDecoder {
         )?;
 
         self.state = DecodeState::Finished;
-        Ok(PageIndexDecodeResult::Data {
-            metadata,
-            page_index,
-        })
+        Ok(DecodeResult::Data((metadata, page_index)))
     }
 
     /// Returns the bytes for the given range from the internal buffer
@@ -593,14 +589,6 @@ enum DecodeState {
     /// State left during the `try_decode` method so something valid is present.
     /// This state should never be observed.
     Intermediate,
-}
-
-enum PageIndexDecodeResult {
-    NeedsData(Vec<Range<u64>>),
-    Data {
-        metadata: Box<ParquetMetaData>,
-        page_index: Option<PageIndex>,
-    },
 }
 
 /// Returns the byte range needed to read the offset/page indexes, based on the
@@ -715,7 +703,7 @@ mod tests {
         assert_eq!(ranges.len(), 1);
         push_ranges_to_metadata_decoder(&mut decoder, ranges);
 
-        let page_index = expect_data(decoder.try_decode_page_index()).unwrap();
+        let page_index = expect_data(decoder.try_decode_page_index()).1.unwrap();
         expect_finished(decoder.try_decode_page_index());
 
         for row_group_idx in 0..2 {
@@ -740,7 +728,7 @@ mod tests {
                 .unwrap()
                 .with_page_index_policy(PageIndexPolicy::Skip);
 
-        assert!(expect_data(decoder.try_decode_page_index()).is_none());
+        assert!(expect_data(decoder.try_decode_page_index()).1.is_none());
         expect_finished(decoder.try_decode_page_index());
 
         let metadata = test_metadata_without_page_index();
@@ -749,7 +737,7 @@ mod tests {
                 .unwrap()
                 .with_page_index_mask(ColumnChunkMask::none());
 
-        assert!(expect_data(decoder.try_decode_page_index()).is_none());
+        assert!(expect_data(decoder.try_decode_page_index()).1.is_none());
         expect_finished(decoder.try_decode_page_index());
     }
 

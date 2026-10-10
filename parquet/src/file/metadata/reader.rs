@@ -574,31 +574,36 @@ impl ParquetMetaDataReader {
         self.read_page_indexes_sized(reader, reader.len())
     }
 
-    /// Reads and returns the page index structures described by the stored
-    /// [`ParquetMetaData`].
+    /// Reads the page index structures described by the stored [`ParquetMetaData`], returning the
+    /// metadata together with the decoded page index.
     ///
-    /// Unlike [`Self::read_page_indexes`], this returns the decoded [`PageIndex`] separately
-    /// instead of attaching it to the metadata. This is useful for populating an external page
-    /// index cache. The configured page index policies and masks determine which indexes are
-    /// returned.
+    /// Unlike [`Self::read_page_indexes`], this returns the newly decoded [`PageIndex`] separately;
+    /// any page index already attached to the returned metadata is unchanged. This is useful for
+    /// populating an external page index cache. The configured page index policies and masks
+    /// determine which indexes are returned. The page index is `None` when no indexes were
+    /// requested or found.
     ///
-    /// This operation consumes `self` and the stored [`ParquetMetaData`]. Use
-    /// [`Self::new_with_metadata`] to construct the reader.
-    pub fn read_page_index<R: ChunkReader>(self, reader: &R) -> Result<Option<PageIndex>> {
-        self.read_page_index_sized(reader, reader.len())
+    /// This operation consumes `self`, but returns the stored [`ParquetMetaData`] as the first
+    /// tuple element. Use [`Self::new_with_metadata`] to construct the reader.
+    pub fn read_page_index_and_finish<R: ChunkReader>(
+        self,
+        reader: &R,
+    ) -> Result<(ParquetMetaData, Option<PageIndex>)> {
+        self.read_page_index_sized_and_finish(reader, reader.len())
     }
 
-    /// Reads and returns the page index structures described by the stored
-    /// [`ParquetMetaData`], using `file_size` as the size of the original Parquet file.
+    /// Reads the page index structures described by the stored [`ParquetMetaData`], returning the
+    /// metadata and decoded page index, and using `file_size` as the size of the original Parquet
+    /// file.
     ///
     /// This variant supports a [`Bytes`] reader containing only a suffix of the file. It returns
     /// [`ParquetError::NeedMoreData`] if that suffix does not contain the requested page indexes.
-    /// See [`Self::read_page_index`] for ownership and configuration details.
-    pub fn read_page_index_sized<R: ChunkReader>(
+    /// See [`Self::read_page_index_and_finish`] for ownership and configuration details.
+    pub fn read_page_index_sized_and_finish<R: ChunkReader>(
         mut self,
         reader: &R,
         file_size: u64,
-    ) -> Result<Option<PageIndex>> {
+    ) -> Result<(ParquetMetaData, Option<PageIndex>)> {
         let Some(metadata) = self.metadata.take() else {
             return Err(general_err!(
                 "Tried to read page indexes without ParquetMetaData metadata"
@@ -804,17 +809,19 @@ impl ParquetMetaDataReader {
         self.load_page_index_with_remainder(fetch, None).await
     }
 
-    /// Asynchronously reads and returns the page index structures described by the stored
-    /// [`ParquetMetaData`].
+    /// Asynchronously loads the page index structures described by the stored [`ParquetMetaData`],
+    /// returning the metadata together with the decoded page index.
     ///
-    /// Unlike [`Self::load_page_index`], this returns the decoded [`PageIndex`] separately instead
-    /// of attaching it to the metadata. This is useful for populating an external page index
-    /// cache. This operation consumes `self` and the stored metadata.
+    /// Unlike [`Self::load_page_index`], this returns the newly decoded [`PageIndex`] separately;
+    /// any page index already attached to the returned metadata is unchanged. This is useful for
+    /// populating an external page index cache. The page index is `None` when no indexes were
+    /// requested or found. This operation consumes `self`, but returns the stored metadata as the
+    /// first tuple element.
     #[cfg(all(feature = "async", feature = "arrow"))]
-    pub async fn read_page_index_async<F: MetadataFetch>(
+    pub async fn load_page_index_and_finish<F: MetadataFetch>(
         mut self,
         mut fetch: F,
-    ) -> Result<Option<PageIndex>> {
+    ) -> Result<(ParquetMetaData, Option<PageIndex>)> {
         let Some(metadata) = self.metadata.take() else {
             return Err(general_err!("Footer metadata is not present"));
         };
@@ -1254,10 +1261,10 @@ fn needs_index_data(
 }
 
 /// Determines a single combined range of bytes needed to read the page indexes, or returns the
-/// decoded page index if no additional data is needed.
+/// metadata and decoded page index if no additional data is needed.
 fn needs_page_index_data(
     push_decoder: &mut ParquetMetaDataPushDecoder,
-) -> Result<NeedsIndexData<Option<PageIndex>>> {
+) -> Result<NeedsIndexData<(ParquetMetaData, Option<PageIndex>)>> {
     match push_decoder.try_decode_page_index()? {
         DecodeResult::NeedsData(ranges) => {
             let range = ranges
@@ -1283,11 +1290,11 @@ fn parse_index_data(push_decoder: &mut ParquetMetaDataPushDecoder) -> Result<Par
     }
 }
 
-/// Given a push decoder that has had the needed ranges pushed to it, decode and return the page
-/// indexes.
+/// Given a push decoder that has had the needed ranges pushed to it, decode and return the metadata
+/// and page indexes.
 fn parse_page_index_data(
     push_decoder: &mut ParquetMetaDataPushDecoder,
-) -> Result<Option<PageIndex>> {
+) -> Result<(ParquetMetaData, Option<PageIndex>)> {
     match push_decoder.try_decode_page_index()? {
         DecodeResult::NeedsData(_) => Err(general_err!(
             "Internal error: decoder still needs data after reading required range"
@@ -1481,7 +1488,7 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
-    fn test_read_page_index() {
+    fn test_read_page_index_and_finish() {
         use crate::file::metadata::page_index::PageIndexProvider;
 
         let file = get_test_file("alltypes_tiny_pages.parquet");
@@ -1490,13 +1497,19 @@ mod tests {
             .unwrap();
 
         let reader = ParquetMetaDataReader::new_with_metadata(metadata.clone());
-        assert!(reader.read_page_index(&file).unwrap().is_none());
+        assert!(
+            reader
+                .read_page_index_and_finish(&file)
+                .unwrap()
+                .1
+                .is_none()
+        );
 
         let reader = ParquetMetaDataReader::new_with_metadata(metadata)
             .with_page_index_policy(PageIndexPolicy::Required)
             .with_column_index_mask(ColumnChunkMask::columns([0]))
             .with_offset_index_mask(ColumnChunkMask::columns([0]));
-        let page_index = reader.read_page_index(&file).unwrap().unwrap();
+        let page_index = reader.read_page_index_and_finish(&file).unwrap().1.unwrap();
 
         assert!(page_index.column_index(0, 0).is_some());
         assert!(page_index.offset_index(0, 0).is_some());
@@ -1611,7 +1624,7 @@ mod async_tests {
     }
 
     #[tokio::test]
-    async fn test_read_page_index_async() {
+    async fn test_load_page_index_and_finish() {
         use crate::file::metadata::page_index::PageIndexProvider;
 
         let mut file = get_test_file("alltypes_tiny_pages.parquet");
@@ -1624,7 +1637,12 @@ mod async_tests {
             .with_offset_index_mask(ColumnChunkMask::columns([0]));
         let fetch = MetadataFetchFn(|range| futures::future::ready(read_range(&mut file, range)));
 
-        let page_index = reader.read_page_index_async(fetch).await.unwrap().unwrap();
+        let page_index = reader
+            .load_page_index_and_finish(fetch)
+            .await
+            .unwrap()
+            .1
+            .unwrap();
 
         assert!(page_index.column_index(0, 0).is_some());
         assert!(page_index.offset_index(0, 0).is_some());
