@@ -26,7 +26,6 @@
 use super::RowSelector;
 use arrow_buffer::bit_iterator::BitSliceIterator;
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, Buffer};
-use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// Mask-backed [`RowSelection`] storage.
@@ -92,14 +91,6 @@ impl MaskSelection {
         self.selectors
             .get_or_init(|| mask_to_selectors(&self.mask))
             .as_slice()
-    }
-
-    /// Borrows the cached RLE form, converting into a temporary if not cached.
-    pub(super) fn borrowed_selectors(&self) -> Cow<'_, [RowSelector]> {
-        match self.selectors.get() {
-            Some(selectors) => Cow::Borrowed(selectors.as_slice()),
-            None => Cow::Owned(mask_to_selectors(&self.mask)),
-        }
     }
 
     /// The RLE form, taking the cache if it was populated.
@@ -450,25 +441,33 @@ mod tests {
     }
 
     #[test]
-    fn test_borrowed_selectors_reuses_cache_without_populating_it() {
-        let selection = RowSelection::from_boolean_buffer(interleaved_mask());
-        let mask = match &selection.inner {
-            RowSelectionInner::Mask(m) => m,
-            RowSelectionInner::Selectors(_) => unreachable!(),
-        };
-
-        // Uncached: converts into a temporary, leaving the cache empty.
-        assert!(matches!(mask.borrowed_selectors(), Cow::Owned(_)));
-        assert!(mask.selectors.get().is_none());
-
-        let expected: Vec<RowSelector> = selection.iter().copied().collect();
-        let mask = match &selection.inner {
-            RowSelectionInner::Mask(m) => m,
-            RowSelectionInner::Selectors(_) => unreachable!(),
-        };
-        match mask.borrowed_selectors() {
-            Cow::Borrowed(selectors) => assert_eq!(selectors, expected.as_slice()),
-            Cow::Owned(_) => panic!("expected the cached selectors to be reused"),
+    fn test_mixed_set_algebra_does_not_materialize_selector_cache() {
+        let other = RowSelection::from(vec![
+            RowSelector::skip(3),
+            RowSelector::select(129),
+            RowSelector::skip(5),
+        ]);
+        for buffer in [
+            BooleanBuffer::from_iter((0..137).map(|i| i < 64)),
+            BooleanBuffer::from_iter((0..137).map(|i| i % 2 == 0)),
+        ] {
+            for cached in [false, true] {
+                let selection = RowSelection::from_boolean_buffer(buffer.clone());
+                if cached {
+                    let _ = selection.iter().count();
+                }
+                let cache_before = cached_selectors_ptr(&selection);
+                for result in [
+                    selection.intersection(&other),
+                    other.intersection(&selection),
+                    selection.union(&other),
+                    other.union(&selection),
+                ] {
+                    assert!(result.as_mask().is_some());
+                    assert!(cached_selectors_ptr(&result).is_none());
+                }
+                assert_eq!(cached_selectors_ptr(&selection), cache_before);
+            }
         }
     }
 

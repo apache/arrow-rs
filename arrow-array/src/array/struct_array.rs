@@ -435,7 +435,7 @@ impl From<ArrayData> for StructArray {
             .into_iter()
             .map(|cd| {
                 if parent_offset != 0 || parent_len != cd.len() {
-                    make_array(cd.slice(parent_offset, parent_len))
+                    make_array(cd.sliced(parent_offset, parent_len))
                 } else {
                     make_array(cd)
                 }

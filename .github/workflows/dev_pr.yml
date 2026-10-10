@@ -18,7 +18,7 @@
 name: dev_pr
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  group: ${{ github.repository }}-${{ github.event.pull_request.number }}-${{ github.workflow }}
   cancel-in-progress: true
 
 # Trigger whenever a PR is changed (title as well as new / changed commits)
@@ -49,3 +49,46 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           configuration-path: .github/workflows/dev_pr/labeler.yml
           sync-labels: true
+
+  # Copy labels from linked issue if present, to help with changelog generation.
+  # For simplicity we just run once on open and for first linked issue; its trivial
+  # for maintainers to fix up the label manually for more complex cases.
+  copy-issue-labels:
+    name: Copy labels from (first) closing issue
+    if: github.event.action == 'opened'
+    needs: process
+    runs-on: ubuntu-slim
+    permissions:
+      issues: read
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          script: |
+            const { node } = await github.graphql(`
+              query($id: ID!) {
+                node(id: $id) {
+                  ... on PullRequest {
+                    closingIssuesReferences(first: 1) {
+                      nodes { number repository { nameWithOwner } }
+                    }
+                  }
+                }
+              }
+            `, { id: context.payload.pull_request.node_id });
+            const issue = node?.closingIssuesReferences?.nodes[0];
+            const repository = `${context.repo.owner}/${context.repo.repo}`.toLowerCase();
+            // just in case its referencing an external repo
+            if (!issue || issue.repository.nameWithOwner.toLowerCase() !== repository) return;
+            const labels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              ...context.repo, issue_number: issue.number, per_page: 100,
+            });
+            // these ones impact changelog generation the most
+            const allowedLabels = ['bug', 'enhancement', 'development-process', 'performance'];
+            const labelsToCopy = labels.map(label => label.name).filter(name => allowedLabels.includes(name));
+            if (labelsToCopy.length) {
+              await github.rest.issues.addLabels({
+                ...context.repo, issue_number: context.issue.number,
+                labels: labelsToCopy,
+              });
+            }
