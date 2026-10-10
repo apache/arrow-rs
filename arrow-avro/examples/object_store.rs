@@ -21,10 +21,11 @@ use arrow_avro::reader::{AsyncAvroFileReader, AsyncFileReader, SpawnedReader};
 use arrow_avro::writer::AvroWriter;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::{FutureExt, TryStreamExt};
+use futures::stream::BoxStream;
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt};
+use object_store::{GetOptions, GetRange, ObjectStore, ObjectStoreExt};
 use std::error::Error;
 use std::ops::Range;
 use std::sync::Arc;
@@ -114,6 +115,28 @@ impl AsyncFileReader for ObjectStoreReader {
                 .get_range(&self.path, range)
                 .await
                 .map_err(|e| AvroError::General(e.to_string()))
+        }
+        .boxed()
+    }
+
+    fn get_stream(
+        &mut self,
+        range: Range<u64>,
+    ) -> BoxFuture<'_, Result<BoxStream<'_, Result<Bytes, AvroError>>, AvroError>> {
+        async move {
+            let options = GetOptions {
+                range: Some(GetRange::Bounded(range)),
+                ..Default::default()
+            };
+            let get_result = self
+                .store
+                .get_opts(&self.path, options)
+                .await
+                .map_err(|e| AvroError::General(e.to_string()))?;
+            Ok(get_result
+                .into_stream()
+                .map_err(|e| AvroError::General(e.to_string()))
+                .boxed())
         }
         .boxed()
     }

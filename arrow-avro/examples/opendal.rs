@@ -28,7 +28,8 @@ use arrow_avro::reader::{AsyncAvroFileReader, AsyncFileReader, SpawnedReader};
 use arrow_avro::writer::AvroWriter;
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::{FutureExt, TryStreamExt};
+use futures::stream::BoxStream;
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use opendal::{Operator, Reader, services::Memory};
 use std::ops::Range;
 use std::sync::Arc;
@@ -107,6 +108,18 @@ impl AsyncFileReader for OpenDalReader {
                         .collect()
                 })
                 .map_err(to_avro_err)
+        }
+        .boxed()
+    }
+
+    fn get_stream(
+        &mut self,
+        range: Range<u64>,
+    ) -> BoxFuture<'_, Result<BoxStream<'_, Result<Bytes, AvroError>>, AvroError>> {
+        let reader = self.0.clone();
+        async move {
+            let stream = reader.into_bytes_stream(range).await.map_err(to_avro_err)?;
+            Ok(stream.map_err(Into::into).boxed())
         }
         .boxed()
     }
