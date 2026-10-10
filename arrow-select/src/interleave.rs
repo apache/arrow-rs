@@ -105,6 +105,7 @@ pub fn interleave(
         DataType::LargeUtf8 => interleave_bytes::<LargeUtf8Type>(values, indices),
         DataType::Binary => interleave_bytes::<BinaryType>(values, indices),
         DataType::LargeBinary => interleave_bytes::<LargeBinaryType>(values, indices),
+        DataType::Boolean => interleave_boolean(values, indices),
         DataType::BinaryView => interleave_views::<BinaryViewType>(values, indices),
         DataType::Utf8View => interleave_views::<StringViewType>(values, indices),
         DataType::Dictionary(k, _) => downcast_integer! {
@@ -126,6 +127,58 @@ pub fn interleave(
         DataType::LargeListView(field) => interleave_list_view::<i64>(values, indices, field),
         _ => interleave_fallback(values, indices)
     }
+}
+
+/// Interleave Boolean arrays directly for scattered selections.
+///
+/// `MutableArrayData` efficiently copies contiguous ranges, so retain that path
+/// when the selections contain a long run. For scattered indices, gathering
+/// the packed values and validity bits directly avoids one range-copy operation
+/// per selected row.
+fn interleave_boolean(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    if has_long_contiguous_run(indices) {
+        return interleave_fallback(values, indices);
+    }
+
+    // The fallback reports invalid source indices and row ranges as errors. Keep
+    // that behaviour before using the unchecked BooleanArray accessors below.
+    for &(array, row) in indices {
+        let Some(source) = values.get(array) else {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Source array index {array} is out of bounds: there are {} source arrays",
+                values.len()
+            )));
+        };
+        if row >= source.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid range {row}..{} for source array {array} of length {}",
+                row.saturating_add(1),
+                source.len()
+            )));
+        }
+    }
+
+    let interleaved = Interleave::<'_, BooleanArray>::new(values, indices);
+    let values = BooleanBuffer::collect_bool(indices.len(), |i| {
+        let (array, row) = indices[i];
+        interleaved.arrays[array].value(row)
+    });
+
+    Ok(Arc::new(BooleanArray::new(values, interleaved.nulls)))
+}
+
+/// Detect a run of 64 or more contiguous rows without scanning every index.
+/// Checking 32-row strides catches any run of that length regardless of its
+/// starting alignment; false positives only select the existing fallback.
+fn has_long_contiguous_run(indices: &[(usize, usize)]) -> bool {
+    (0..indices.len().saturating_sub(32)).step_by(32).any(|i| {
+        let (array, row) = indices[i];
+        let (next_array, next_row) = indices[i + 32];
+        array == next_array && row.checked_add(32) == Some(next_row)
+    })
 }
 
 /// Common functionality for interleaving arrays
@@ -1000,6 +1053,132 @@ mod tests {
         let v = interleave(&[&a], &[]).unwrap();
         assert!(v.is_empty());
         assert_eq!(v.data_type(), &DataType::Int32);
+    }
+
+    #[test]
+    fn test_interleave_boolean_sliced_with_nulls() {
+        let a = BooleanArray::from(vec![
+            Some(false),
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+            Some(false),
+            None,
+        ])
+        .slice(1, 5);
+        let b = BooleanArray::from(vec![
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(true),
+        ])
+        .slice(3, 3);
+
+        let result =
+            interleave(&[&a, &b], &[(0, 0), (1, 1), (0, 1), (1, 0), (0, 4), (1, 2)]).unwrap();
+
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![
+                Some(true),
+                Some(false),
+                None,
+                Some(true),
+                Some(false),
+                Some(true)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_interleave_boolean_all_null_and_repeated_indices() {
+        let values = BooleanArray::from(vec![None, None, None]);
+
+        let result = interleave(&[&values], &[(0, 1), (0, 1), (0, 0)]).unwrap();
+
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![None; 3]
+        );
+        result.to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_interleave_boolean_empty() {
+        let values = BooleanArray::from(vec![true, false]);
+
+        let result = interleave(&[&values], &[]).unwrap();
+
+        assert!(result.is_empty());
+        assert_eq!(result.data_type(), &DataType::Boolean);
+    }
+
+    #[test]
+    fn test_interleave_boolean_nested_in_struct() {
+        let field = Arc::new(Field::new("flag", DataType::Boolean, true));
+        let a = StructArray::from(vec![(
+            field.clone(),
+            Arc::new(BooleanArray::from(vec![Some(true), Some(false), None])) as ArrayRef,
+        )]);
+        let b = StructArray::from(vec![(
+            field,
+            Arc::new(BooleanArray::from(vec![Some(false), Some(true), None])) as ArrayRef,
+        )]);
+
+        let result = interleave(&[&a, &b], &[(0, 2), (1, 0), (0, 1), (1, 2)]).unwrap();
+        let result = result.as_struct();
+
+        assert_eq!(
+            result.column(0).as_boolean().iter().collect::<Vec<_>>(),
+            vec![None, Some(false), Some(false), None]
+        );
+    }
+
+    #[test]
+    fn test_interleave_boolean_preserves_invalid_index_errors() {
+        let values = BooleanArray::from(vec![true, false]);
+
+        let err = interleave(&[&values], &[(1, 0)]).unwrap_err();
+        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
+
+        let err = interleave(&[&values], &[(0, 2)]).unwrap_err();
+        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
+    }
+
+    #[test]
+    fn test_boolean_interleave_probe_keeps_clustered_ranges_on_fallback() {
+        assert!(!has_long_contiguous_run(&[]));
+        assert!(!has_long_contiguous_run(&[(0, 0); 64]));
+
+        for run_length in [1, 2, 4, 8, 16, 32] {
+            let indices: Vec<_> = (0..1024)
+                .map(|row| {
+                    let run = row / run_length;
+                    ((run / 4) % 2, (run / 8) * run_length + row % run_length)
+                })
+                .collect();
+            assert!(
+                !has_long_contiguous_run(&indices),
+                "short hash run of {run_length} rows was treated as a long cluster"
+            );
+        }
+
+        for offset in 0..32 {
+            let mut indices = vec![(1, 0); offset];
+            indices.extend((0..64).map(|row| (0, row)));
+            assert!(
+                has_long_contiguous_run(&indices),
+                "64-row run starting at offset {offset} was not detected"
+            );
+        }
+
+        let mut overflow = vec![(0, 0); 33];
+        overflow[0] = (0, usize::MAX);
+        overflow[32] = (0, 31);
+        assert!(!has_long_contiguous_run(&overflow));
     }
 
     #[test]
