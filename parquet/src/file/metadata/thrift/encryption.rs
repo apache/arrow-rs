@@ -37,6 +37,7 @@ use crate::{
     thrift_struct, thrift_union,
 };
 use std::io::Write;
+use std::sync::Arc;
 
 thrift_struct!(
 pub(crate) struct AesGcmV1 {

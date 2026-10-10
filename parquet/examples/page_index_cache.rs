@@ -21,7 +21,7 @@
 //! query it:
 //!
 //! 1. Finds the requested column chunks that are absent from the page-index cache
-//! 2. Uses [`ParquetMetaDataReader::read_page_index`] to request and decode those misses
+//! 2. Uses [`ParquetMetaDataReader::read_page_index_and_finish`] to request and decode those misses
 //! 3. Moves the decoded entries into the cache
 //! 4. Builds a query-specific [`PageIndex`] from shared cache entries
 //!
@@ -57,15 +57,15 @@ struct PageIndexCache {
 }
 
 impl PageIndexCache {
-    /// Returns a page index containing exactly the entries requested for one query, loading any
-    /// cache misses through `ParquetMetaDataReader` first.
+    /// Returns the footer metadata and a page index containing exactly the entries requested for
+    /// one query, loading any cache misses through `ParquetMetaDataReader` first.
     fn page_index_for_query(
         &mut self,
-        metadata: &ParquetMetaData,
+        mut metadata: ParquetMetaData,
         file_bytes: &Bytes,
         column_index_mask: &ColumnChunkMask,
         offset_index_mask: &ColumnChunkMask,
-    ) -> Result<PageIndex> {
+    ) -> Result<(ParquetMetaData, PageIndex)> {
         let num_row_groups = metadata.num_row_groups();
         let num_columns = metadata.file_metadata().schema_descr().num_columns();
 
@@ -90,13 +90,15 @@ impl PageIndexCache {
             // sets. Those additional entries are useful cache population and are retained below.
             let column_miss_mask = covering_mask(&missing_column_indexes);
             let offset_miss_mask = covering_mask(&missing_offset_indexes);
-            let reader = ParquetMetaDataReader::new_with_metadata(metadata.clone())
+            let reader = ParquetMetaDataReader::new_with_metadata(metadata)
                 .with_column_index_policy(PageIndexPolicy::Optional)
                 .with_offset_index_policy(PageIndexPolicy::Optional)
                 .with_column_index_mask(column_miss_mask)
                 .with_offset_index_mask(offset_miss_mask);
 
-            if let Some(page_index) = reader.read_page_index(file_bytes)? {
+            let (returned_metadata, page_index) = reader.read_page_index_and_finish(file_bytes)?;
+            metadata = returned_metadata;
+            if let Some(page_index) = page_index {
                 let (column_indexes, offset_indexes) = page_index.into_index_entries();
                 self.column_indexes.extend(column_indexes);
                 self.offset_indexes.extend(offset_indexes);
@@ -128,7 +130,7 @@ impl PageIndexCache {
                 )?;
             }
         }
-        Ok(builder.build())
+        Ok((metadata, builder.build()))
     }
 }
 
@@ -155,20 +157,19 @@ fn decode_footer(file_bytes: &Bytes) -> Result<ParquetMetaData> {
 
 fn main() -> Result<()> {
     let file_bytes = create_sample_file()?;
-    let cached_metadata = Arc::new(decode_footer(&file_bytes)?);
+    let cached_metadata = decode_footer(&file_bytes)?;
     let mut cache = PageIndexCache::default();
 
     // Query 1 filters column 0 and projects columns 0, 1, and 4 in row group 0.
     let column_mask = ColumnChunkMask::row_groups_and_columns([0], [0]);
     let offset_mask = ColumnChunkMask::row_groups_and_columns([0], [0, 1, 4]);
     println!("Query 1:");
-    let page_index =
-        cache.page_index_for_query(&cached_metadata, &file_bytes, &column_mask, &offset_mask)?;
+    let (cached_metadata, page_index) =
+        cache.page_index_for_query(cached_metadata, &file_bytes, &column_mask, &offset_mask)?;
     assert_query_indexes(&page_index, 0, &[0], &[0, 1, 4]);
 
     // Attach the query-specific provider to a cheap clone of the cached footer metadata.
     let query_metadata = cached_metadata
-        .as_ref()
         .clone()
         .into_builder()
         .set_page_index(Some(Arc::new(page_index)))
@@ -179,8 +180,8 @@ fn main() -> Result<()> {
     // index for column 2 is decoded and added to the cache.
     let offset_mask = ColumnChunkMask::row_groups_and_columns([0], [0, 2, 4]);
     println!("Query 2:");
-    let page_index =
-        cache.page_index_for_query(&cached_metadata, &file_bytes, &column_mask, &offset_mask)?;
+    let (_cached_metadata, page_index) =
+        cache.page_index_for_query(cached_metadata, &file_bytes, &column_mask, &offset_mask)?;
     assert_query_indexes(&page_index, 0, &[0], &[0, 2, 4]);
 
     println!(
