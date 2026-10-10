@@ -48,6 +48,7 @@ pub fn div_rem<const N: usize>(numerator: &[u64; N], divisor: &[u64; N]) -> ([u6
 }
 
 /// Return the least number of bits needed to represent the number
+#[inline]
 fn bits(arr: &[u64]) -> usize {
     for (idx, v) in arr.iter().enumerate().rev() {
         if *v > 0 {
@@ -211,11 +212,13 @@ fn div_rem_word(hi: u64, lo: u64, divisor: u64) -> (u64, u64) {
 }
 
 /// Perform `a += b`
+#[inline]
 fn add_assign(a: &mut [u64], b: &[u64]) -> bool {
     binop_slice(a, b, u64::overflowing_add)
 }
 
 /// Perform `a -= b`
+#[inline]
 fn sub_assign(a: &mut [u64], b: &[u64]) -> bool {
     binop_slice(a, b, u64::overflowing_sub)
 }
