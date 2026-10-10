@@ -23,7 +23,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
 #[cfg(feature = "arrow")]
 use crate::file::metadata::dictionary::decode_dictionary_page;
-use crate::file::metadata::page_index::PageIndex;
+use crate::file::metadata::page_index::{PageIndex, PageIndexProvider};
 use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::thrift::parquet_schema_from_bytes;
 use crate::file::metadata::{
@@ -604,6 +604,14 @@ impl ParquetMetaDataReader {
         reader: &R,
         file_size: u64,
     ) -> Result<(ParquetMetaData, Option<PageIndex>)> {
+        self.read_page_index_sized_impl(reader, file_size)
+    }
+
+    fn read_page_index_sized_impl<R: ChunkReader>(
+        &mut self,
+        reader: &R,
+        file_size: u64,
+    ) -> Result<(ParquetMetaData, Option<PageIndex>)> {
         let Some(metadata) = self.metadata.take() else {
             return Err(general_err!(
                 "Tried to read page indexes without ParquetMetaData metadata"
@@ -664,65 +672,10 @@ impl ParquetMetaDataReader {
         reader: &R,
         file_size: u64,
     ) -> Result<()> {
-        let Some(metadata) = self.metadata.take() else {
-            return Err(general_err!(
-                "Tried to read page indexes without ParquetMetaData metadata"
-            ));
-        };
-
-        let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
-            .with_offset_index_policy(self.offset_index)
-            .with_column_index_policy(self.column_index)
-            .with_offset_index_mask(self.offset_index_mask.clone())
-            .with_column_index_mask(self.column_index_mask.clone())
-            .with_metadata_options(self.metadata_options.clone());
-        let mut push_decoder = self.prepare_push_decoder(push_decoder);
-
-        // Get bounds needed for page indexes (if any are present in the file).
-        let range = match needs_index_data(&mut push_decoder)? {
-            NeedsIndexData::No(metadata) => {
-                self.metadata = Some(metadata);
-                return Ok(());
-            }
-            NeedsIndexData::Yes(range) => range,
-        };
-
-        // Check to see if needed range is within `file_range`. Checking `range.end` seems
-        // redundant, but it guards against `range_for_page_index()` returning garbage.
-        let file_range = file_size.saturating_sub(reader.len())..file_size;
-        if !(file_range.contains(&range.start) && file_range.contains(&range.end)) {
-            // Requested range starts beyond EOF
-            return if range.end > file_size {
-                Err(eof_err!(
-                    "Parquet file too small. Range {range:?} is beyond file bounds {file_size}",
-                ))
-            } else {
-                // Ask for a larger buffer
-                Err(ParquetError::NeedMoreData(
-                    (file_size - range.start).try_into()?,
-                ))
-            };
-        }
-
-        // Perform extra sanity check to make sure `range` and the footer metadata don't
-        // overlap.
-        if let Some(metadata_size) = self.metadata_size {
-            let metadata_range = file_size.saturating_sub(metadata_size as u64)..file_size;
-            if range.end > metadata_range.start {
-                return Err(eof_err!(
-                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}",
-                ));
-            }
-        }
-
-        // add the needed ranges to the decoder
-        let bytes_needed = usize::try_from(range.end - range.start)?;
-        let bytes = reader.get_bytes(range.start - file_range.start, bytes_needed)?;
-
-        push_decoder.push_range(range, bytes)?;
-        let metadata = parse_index_data(&mut push_decoder)?;
+        let (mut metadata, page_index) = self.read_page_index_sized_impl(reader, file_size)?;
+        metadata
+            .set_page_index(page_index.map(|index| Arc::new(index) as Arc<dyn PageIndexProvider>));
         self.metadata = Some(metadata);
-
         Ok(())
     }
 
@@ -820,36 +773,9 @@ impl ParquetMetaDataReader {
     #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn load_page_index_and_finish<F: MetadataFetch>(
         mut self,
-        mut fetch: F,
+        fetch: F,
     ) -> Result<(ParquetMetaData, Option<PageIndex>)> {
-        let Some(metadata) = self.metadata.take() else {
-            return Err(general_err!("Footer metadata is not present"));
-        };
-
-        // MetadataFetch uses absolute file offsets, so the actual file size is not needed here.
-        let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(u64::MAX, metadata)?
-            .with_offset_index_policy(self.offset_index)
-            .with_column_index_policy(self.column_index)
-            .with_offset_index_mask(self.offset_index_mask.clone())
-            .with_column_index_mask(self.column_index_mask.clone())
-            .with_metadata_options(self.metadata_options.clone());
-        let mut push_decoder = self.prepare_push_decoder(push_decoder);
-
-        let range = match needs_page_index_data(&mut push_decoder)? {
-            NeedsIndexData::No(page_index) => return Ok(page_index),
-            NeedsIndexData::Yes(range) => range,
-        };
-        let bytes = fetch.fetch(range.clone()).await?;
-        if bytes.len() as u64 != range.end - range.start {
-            return Err(general_err!(
-                "Corrupted parquet file: index data length mismatch, expected {}, got {}",
-                range.end - range.start,
-                bytes.len()
-            ));
-        }
-
-        push_decoder.push_range(range, bytes)?;
-        parse_page_index_data(&mut push_decoder)
+        self.load_page_index_with_remainder_impl(fetch, None).await
     }
 
     /// Reads and decodes the dictionary page of a column chunk into an Arrow array.
@@ -902,9 +828,24 @@ impl ParquetMetaDataReader {
     #[cfg(all(feature = "async", feature = "arrow"))]
     async fn load_page_index_with_remainder<F: MetadataFetch>(
         &mut self,
-        mut fetch: F,
+        fetch: F,
         remainder: Option<(usize, Bytes)>,
     ) -> Result<()> {
+        let (mut metadata, page_index) = self
+            .load_page_index_with_remainder_impl(fetch, remainder)
+            .await?;
+        metadata
+            .set_page_index(page_index.map(|index| Arc::new(index) as Arc<dyn PageIndexProvider>));
+        self.metadata = Some(metadata);
+        Ok(())
+    }
+
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    async fn load_page_index_with_remainder_impl<F: MetadataFetch>(
+        &mut self,
+        mut fetch: F,
+        remainder: Option<(usize, Bytes)>,
+    ) -> Result<(ParquetMetaData, Option<PageIndex>)> {
         let Some(metadata) = self.metadata.take() else {
             return Err(general_err!("Footer metadata is not present"));
         };
@@ -921,11 +862,8 @@ impl ParquetMetaDataReader {
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
         // Get bounds needed for page indexes (if any are present in the file).
-        let range = match needs_index_data(&mut push_decoder)? {
-            NeedsIndexData::No(metadata) => {
-                self.metadata = Some(metadata);
-                return Ok(());
-            }
+        let range = match needs_page_index_data(&mut push_decoder)? {
+            NeedsIndexData::No(page_index) => return Ok(page_index),
             NeedsIndexData::Yes(range) => range,
         };
 
@@ -956,9 +894,7 @@ impl ParquetMetaDataReader {
             ));
         }
         push_decoder.push_range(range.clone(), bytes)?;
-        let metadata = parse_index_data(&mut push_decoder)?;
-        self.metadata = Some(metadata);
-        Ok(())
+        parse_page_index_data(&mut push_decoder)
     }
 
     // One-shot parse of footer.
@@ -1242,24 +1178,6 @@ enum NeedsIndexData<T> {
     Yes(Range<u64>),
 }
 
-/// Determines a single combined range of bytes needed to read the page indexes,
-/// or returns the metadata if no additional data is needed (e.g. if no page indexes are requested)
-fn needs_index_data(
-    push_decoder: &mut ParquetMetaDataPushDecoder,
-) -> Result<NeedsIndexData<ParquetMetaData>> {
-    match push_decoder.try_decode()? {
-        DecodeResult::NeedsData(ranges) => {
-            let range = ranges
-                .into_iter()
-                .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end))
-                .ok_or_else(|| general_err!("Internal error: no ranges provided"))?;
-            Ok(NeedsIndexData::Yes(range))
-        }
-        DecodeResult::Data(metadata) => Ok(NeedsIndexData::No(metadata)),
-        DecodeResult::Finished => Err(general_err!("Internal error: decoder was finished")),
-    }
-}
-
 /// Determines a single combined range of bytes needed to read the page indexes, or returns the
 /// metadata and decoded page index if no additional data is needed.
 fn needs_page_index_data(
@@ -1274,18 +1192,6 @@ fn needs_page_index_data(
             Ok(NeedsIndexData::Yes(range))
         }
         DecodeResult::Data(page_index) => Ok(NeedsIndexData::No(page_index)),
-        DecodeResult::Finished => Err(general_err!("Internal error: decoder was finished")),
-    }
-}
-
-/// Given a push decoder that has had the needed ranges pushed to it,
-/// attempt to decode indexes and return the updated metadata.
-fn parse_index_data(push_decoder: &mut ParquetMetaDataPushDecoder) -> Result<ParquetMetaData> {
-    match push_decoder.try_decode()? {
-        DecodeResult::NeedsData(_) => Err(general_err!(
-            "Internal error: decoder still needs data after reading required range"
-        )),
-        DecodeResult::Data(metadata) => Ok(metadata),
         DecodeResult::Finished => Err(general_err!("Internal error: decoder was finished")),
     }
 }
@@ -1493,23 +1399,29 @@ mod tests {
 
         let file = get_test_file("alltypes_tiny_pages.parquet");
         let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Required)
             .parse_and_finish(&file)
             .unwrap();
+        let original_page_index = Arc::clone(metadata.page_index().unwrap());
 
-        let reader = ParquetMetaDataReader::new_with_metadata(metadata.clone());
-        assert!(
-            reader
-                .read_page_index_and_finish(&file)
-                .unwrap()
-                .1
-                .is_none()
-        );
+        let reader = ParquetMetaDataReader::new_with_metadata(metadata);
+        let (metadata, page_index) = reader.read_page_index_and_finish(&file).unwrap();
+        assert!(page_index.is_none());
+        assert!(Arc::ptr_eq(
+            metadata.page_index().unwrap(),
+            &original_page_index
+        ));
 
         let reader = ParquetMetaDataReader::new_with_metadata(metadata)
             .with_page_index_policy(PageIndexPolicy::Required)
             .with_column_index_mask(ColumnChunkMask::columns([0]))
             .with_offset_index_mask(ColumnChunkMask::columns([0]));
-        let page_index = reader.read_page_index_and_finish(&file).unwrap().1.unwrap();
+        let (metadata, page_index) = reader.read_page_index_and_finish(&file).unwrap();
+        let page_index = page_index.unwrap();
+        assert!(Arc::ptr_eq(
+            metadata.page_index().unwrap(),
+            &original_page_index
+        ));
 
         assert!(page_index.column_index(0, 0).is_some());
         assert!(page_index.offset_index(0, 0).is_some());
