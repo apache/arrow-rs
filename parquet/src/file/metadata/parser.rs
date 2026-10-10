@@ -260,10 +260,13 @@ pub(crate) fn parse_page_index(
 ) -> Result<()> {
     let num_row_groups = metadata.num_row_groups();
     let num_columns = metadata.file_metadata().schema_descr().num_columns();
-    let mut builder = PageIndexBuilder::default();
-
+    let mut builder = PageIndexBuilder::try_new_with_masks(
+        num_row_groups,
+        num_columns,
+        (column_index_policy != PageIndexPolicy::Skip).then_some(column_index_mask),
+        (offset_index_policy != PageIndexPolicy::Skip).then_some(offset_index_mask),
+    )?;
     if column_index_policy != PageIndexPolicy::Skip {
-        builder.allocate_column_indexes(num_row_groups, num_columns);
         parse_column_index(
             metadata,
             column_index_policy,
@@ -274,7 +277,6 @@ pub(crate) fn parse_page_index(
         )?;
     }
     if offset_index_policy != PageIndexPolicy::Skip {
-        builder.allocate_offset_indexes(num_row_groups, num_columns);
         parse_offset_index(
             metadata,
             offset_index_policy,

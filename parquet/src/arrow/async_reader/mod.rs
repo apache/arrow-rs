@@ -1006,7 +1006,7 @@ mod tests {
     use crate::basic::Encoding;
     use crate::file::metadata::PageIndexPolicy;
     use crate::file::metadata::ParquetMetaDataReader;
-    use crate::file::metadata::page_index::PageIndex;
+    use crate::file::metadata::page_index::{Grid, PageIndex};
     use crate::file::properties::WriterProperties;
     use arrow_array::cast::AsArray;
     use arrow_array::{Array, ArrayRef, BinaryArray, StringArray};
@@ -1247,7 +1247,7 @@ mod tests {
             .await
             .unwrap();
 
-        let page_index = PageIndex::new(None, Some(vec![]));
+        let page_index = PageIndex::new(None, Some(Grid::from_vec(vec![]).unwrap()));
         metadata.set_page_index(Some(Arc::new(page_index)));
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();

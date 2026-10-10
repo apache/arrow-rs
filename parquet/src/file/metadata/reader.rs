@@ -237,6 +237,14 @@ impl ColumnChunkMask {
         self.row_groups.is_none() && self.columns.is_none()
     }
 
+    pub(crate) fn selected_row_groups_shared(&self) -> Option<Arc<[u32]>> {
+        self.row_groups.clone()
+    }
+
+    pub(crate) fn selected_columns_shared(&self) -> Option<Arc<[u32]>> {
+        self.columns.clone()
+    }
+
     /// Returns `true` when either configured axis is empty (and thus would select no column chunks).
     ///
     /// This does not consider the dimensions of a particular Parquet file, so may return `false`
