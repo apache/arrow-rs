@@ -5354,37 +5354,138 @@ mod test {
     }
 
     #[test]
-    fn get_variant_as_union_prefers_most_exact_field() {
-        // Int8 picks the later-declared Int32 over Int64: exactness wins over declaration order
+    fn get_variant_as_union_signed_integer_value_order() {
         let fields = UnionFields::try_new(
-            vec![0, 1],
+            vec![11, 29],
             vec![
                 Field::new("big", DataType::Int64, true),
                 Field::new("small", DataType::Int32, true),
             ],
         )
         .unwrap();
-        let mut builder = VariantArrayBuilder::new(3);
+        let mut builder = VariantArrayBuilder::new(4);
         builder.append_variant(Variant::Int8(1));
-        builder.append_variant(Variant::Int32(2));
-        builder.append_variant(Variant::Int64(3));
+        builder.append_variant(Variant::Int16(1));
+        builder.append_variant(Variant::Int32(1));
+        builder.append_variant(Variant::Int64(1));
         let array = ArrayRef::from(builder.build());
 
-        let result = variant_get(&array, union_get_options(&fields, UnionMode::Dense)).unwrap();
+        for mode in [UnionMode::Dense, UnionMode::Sparse] {
+            let result = variant_get(&array, union_get_options(&fields, mode)).unwrap();
+            let union = result.as_any().downcast_ref::<UnionArray>().unwrap();
+            assert_eq!(union.type_ids(), &[29, 29, 29, 29]);
+            let child = union
+                .child(29)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            assert_eq!(child, &Int32Array::from(vec![1, 1, 1, 1]));
+            if mode == UnionMode::Dense {
+                assert_eq!(union.offsets().unwrap().as_ref(), &[0, 1, 2, 3]);
+            } else {
+                assert!(union.offsets().is_none());
+            }
+        }
+    }
 
-        let expected: ArrayRef = Arc::new(
-            UnionArray::try_new(
-                fields,
-                ScalarBuffer::from(vec![1i8, 1, 0]),
-                Some(ScalarBuffer::from(vec![0i32, 1, 0])),
+    #[test]
+    fn get_variant_as_union_signed_integer_narrowing_bounds() {
+        let fields =
+            UnionFields::try_new(vec![42], vec![Field::new("i8", DataType::Int8, true)]).unwrap();
+        let mut builder = VariantArrayBuilder::new(7);
+        for value in [-129, -128, 1, 127, 128] {
+            builder.append_variant(Variant::Int64(value));
+        }
+        builder.append_null();
+        builder.append_variant(Variant::Null);
+        let array = ArrayRef::from(builder.build());
+
+        for mode in [UnionMode::Dense, UnionMode::Sparse] {
+            let result = variant_get(&array, union_get_options(&fields, mode)).unwrap();
+            let union = result.as_any().downcast_ref::<UnionArray>().unwrap();
+            assert_eq!(union.type_ids(), &[42; 7]);
+            let child = union
+                .child(42)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap();
+            assert_eq!(
+                child,
+                &Int8Array::from(vec![None, Some(-128), Some(1), Some(127), None, None, None])
+            );
+
+            let mut builder = VariantArrayBuilder::new(1);
+            builder.append_variant(Variant::Int64(1));
+            let input = ArrayRef::from(builder.build());
+            let options = union_get_options(&fields, mode).with_cast_options(CastOptions {
+                safe: false,
+                ..Default::default()
+            });
+            let result = variant_get(&input, options).unwrap();
+            let union = result.as_any().downcast_ref::<UnionArray>().unwrap();
+            assert_eq!(union.type_ids(), &[42]);
+            let child = union
+                .child(42)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap();
+            assert!(!child.is_null(0));
+            assert_eq!(child.value(0), 1);
+
+            for value in [-129, 128] {
+                let mut builder = VariantArrayBuilder::new(1);
+                builder.append_variant(Variant::Int64(value));
+                let input = ArrayRef::from(builder.build());
+                let options = union_get_options(&fields, mode).with_cast_options(CastOptions {
+                    safe: false,
+                    ..Default::default()
+                });
+                let error = variant_get(&input, options).unwrap_err();
+                assert!(error.to_string().contains("no field can represent it"));
+            }
+        }
+    }
+
+    #[test]
+    fn get_variant_as_union_signed_integer_encoded_child() {
+        let encoded_types = [
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int8)),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
+                Arc::new(Field::new(
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                    DataType::Int8,
+                    true,
+                )),
+            ),
+        ];
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::Int64(1));
+        let array = ArrayRef::from(builder.build());
+
+        for encoded_type in encoded_types {
+            let fields = UnionFields::try_new(
+                vec![11, 29],
                 vec![
-                    Arc::new(Int64Array::from(vec![3])),
-                    Arc::new(Int32Array::from(vec![1, 2])),
+                    Field::new("big", DataType::Int64, true),
+                    Field::new("small", encoded_type, true),
                 ],
             )
-            .unwrap(),
-        );
-        assert_eq!(&result, &expected);
+            .unwrap();
+            for mode in [UnionMode::Dense, UnionMode::Sparse] {
+                let result = variant_get(&array, union_get_options(&fields, mode)).unwrap();
+                let union = result.as_any().downcast_ref::<UnionArray>().unwrap();
+                assert_eq!(union.type_ids(), &[29]);
+                let decoded = cast(union.child(29).as_ref(), &DataType::Int8).unwrap();
+                let values = decoded.as_any().downcast_ref::<Int8Array>().unwrap();
+                assert!(!values.is_null(0));
+                assert_eq!(values.value(0), 1);
+            }
+        }
     }
 
     #[test]

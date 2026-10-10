@@ -719,8 +719,9 @@ impl<'a> StructVariantToArrowRowBuilder<'a> {
 
 /// Builder for converting variant values into a [`UnionArray`].
 ///
-/// Each value is dispatched to the union field that most exactly represents its runtime type
-/// (see [`union_child_rank`]), with ties broken by declaration order. Unions have no top-level
+/// Signed integers use the smallest child type that holds their value. Other values use the
+/// closest matching runtime type (see [`union_child_rank`]). Ties use declaration order.
+/// Unions have no top-level
 /// null buffer, so null rows -- and, in safe mode, values no field can represent -- become a
 /// null in the [`DataType::Null`] child if the union declares one, otherwise in the first child.
 pub(crate) struct UnionVariantToArrowRowBuilder<'a> {
@@ -876,28 +877,38 @@ impl<'a> UnionVariantToArrowRowBuilder<'a> {
     }
 }
 
-/// Ranks how exactly a union child of type `data_type` can represent a variant value's runtime
-/// type: 0 is the value's natural Arrow type, higher ranks are lossless widenings, and `None`
-/// means the child cannot represent the value losslessly. Every pair admitted here must be
-/// convertible by the corresponding row builder.
+/// Ranks signed integer children by width when they hold the value exactly. Other ranks use the
+/// value's runtime type and lossless widenings. Every admitted pair must be convertible by its
+/// row builder.
 fn union_child_rank(value: &Variant<'_, '_>, data_type: &DataType) -> Option<u8> {
     use DataType::*;
-    let rank = match (value, data_type) {
-        (_, Dictionary(_, value_type)) => return union_child_rank(value, value_type),
-        (_, RunEndEncoded(_, value_field)) => {
+    match data_type {
+        Dictionary(_, value_type) => return union_child_rank(value, value_type),
+        RunEndEncoded(_, value_field) => {
             return union_child_rank(value, value_field.data_type());
         }
+        _ => {}
+    }
+
+    let integer = match value {
+        Variant::Int8(value) => Some(i64::from(*value)),
+        Variant::Int16(value) => Some(i64::from(*value)),
+        Variant::Int32(value) => Some(i64::from(*value)),
+        Variant::Int64(value) => Some(*value),
+        _ => None,
+    };
+    if let Some(integer) = integer {
+        return match data_type {
+            Int8 if i8::try_from(integer).is_ok() => Some(0),
+            Int16 if i16::try_from(integer).is_ok() => Some(1),
+            Int32 if i32::try_from(integer).is_ok() => Some(2),
+            Int64 => Some(3),
+            _ => None,
+        };
+    }
+
+    let rank = match (value, data_type) {
         (Variant::BooleanTrue | Variant::BooleanFalse, Boolean) => 0,
-        (Variant::Int8(_), Int8) => 0,
-        (Variant::Int8(_), Int16) => 1,
-        (Variant::Int8(_), Int32) => 2,
-        (Variant::Int8(_), Int64) => 3,
-        (Variant::Int16(_), Int16) => 0,
-        (Variant::Int16(_), Int32) => 1,
-        (Variant::Int16(_), Int64) => 2,
-        (Variant::Int32(_), Int32) => 0,
-        (Variant::Int32(_), Int64) => 1,
-        (Variant::Int64(_), Int64) => 0,
         (Variant::Float(_), Float32) => 0,
         (Variant::Float(_), Float64) => 1,
         (Variant::Double(_), Float64) => 0,
