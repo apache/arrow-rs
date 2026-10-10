@@ -25,8 +25,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Int8Type, Int32Type, Int64Type, UInt16Type, UInt32Type};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, Date32Array, DictionaryArray,
-    FixedSizeBinaryArray, Int32Array, LargeStringArray, StringArray, StringViewArray, StructArray,
-    TimestampSecondArray,
+    FixedSizeBinaryArray, Int8Array, Int32Array, LargeStringArray, StringArray, StringViewArray,
+    StructArray, TimestampSecondArray,
 };
 use arrow_buffer::NullBuffer;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
@@ -671,6 +671,24 @@ fn test_cast_dict_to_dict_bad_index_value_utf8() {
         actual_error.contains(expected_error),
         "did not find expected error '{actual_error}' in actual error '{expected_error}'"
     );
+}
+
+#[test]
+fn test_cast_dict_to_dict_key_width_only_reuses_values() {
+    let values = Arc::new(StringArray::from(vec!["foo", "bar"])) as ArrayRef;
+    let dict = DictionaryArray::<Int8Type>::new(
+        Int8Array::from(vec![Some(0), None, Some(1), Some(0)]),
+        values.clone(),
+    );
+
+    let result = cast(&dict, &Dictionary(Box::new(Int32), Box::new(Utf8))).unwrap();
+    let result = result.as_dictionary::<Int32Type>();
+
+    assert_eq!(
+        result.keys(),
+        &Int32Array::from(vec![Some(0), None, Some(1), Some(0)])
+    );
+    assert!(Arc::ptr_eq(&values, result.values()));
 }
 
 #[test]
