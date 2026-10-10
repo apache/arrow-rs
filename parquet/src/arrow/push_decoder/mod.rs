@@ -1027,6 +1027,7 @@ mod test {
     };
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::errors::ParquetError;
+    use crate::file::metadata::page_index::PageIndexBuilder;
     use crate::file::metadata::{PageIndexPolicy, ParquetMetaDataPushDecoder};
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::{gt, lt};
@@ -3123,6 +3124,46 @@ mod test {
             panic!("Expected metadata to be decoded successfully");
         };
         Arc::new(metadata)
+    }
+
+    /// An offset index whose last page is longer than the column chunk gives
+    /// an error, not a panic.
+    #[test]
+    fn test_decoder_offset_index_page_past_column_chunk() {
+        let metadata = Arc::unwrap_or_clone(test_file_parquet_metadata_with_offset_index());
+        let num_columns = metadata.row_group(0).num_columns();
+        let mut page_index = PageIndexBuilder::new(metadata.num_row_groups(), num_columns);
+        for row_group in 0..metadata.num_row_groups() {
+            let row_group_index = metadata.page_index_for_row_group(row_group);
+            for column in 0..num_columns {
+                let mut offset_index = row_group_index.offset_index(column).unwrap().clone();
+                if (row_group, column) == (0, 0) {
+                    let last = offset_index.page_locations.last_mut().unwrap();
+                    last.compressed_page_size += 1;
+                }
+                page_index.put_offset_index(offset_index, row_group, column);
+            }
+        }
+        let metadata = metadata
+            .into_builder()
+            .set_page_index(Some(Arc::new(page_index.build())))
+            .build();
+
+        let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(Arc::new(metadata))
+            .unwrap()
+            .with_row_groups(vec![0])
+            .build()
+            .unwrap();
+        let ranges = expect_needs_data(decoder.try_decode());
+        push_ranges_to_decoder(&mut decoder, ranges);
+        let err = loop {
+            match decoder.try_decode() {
+                Ok(DecodeResult::Data(_)) => {}
+                Ok(other) => panic!("expected an error, got {other:?}"),
+                Err(e) => break e.to_string(),
+            }
+        };
+        assert!(err.contains("has 126 bytes, expected 127"), "{err}");
     }
 
     /// return the metadata for the test file, including the offset index
