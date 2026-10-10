@@ -208,6 +208,14 @@ where
         self.values.take().unwrap_or_else(|| V::with_capacity(0))
     }
 
+    /// Install a pre-seeded values buffer for the next read, letting callers
+    /// recycle allocations from the previous batch. No-op if a buffer is already present.
+    pub fn seed_values_buffer(&mut self, buffer: V) {
+        if self.values.is_none() {
+            self.values = Some(buffer);
+        }
+    }
+
     /// Reset state of record reader.
     /// Should be called after consuming data, e.g. `consume_rep_levels`,
     /// `consume_rep_levels`, `consume_record_data` and `consume_compact_bitmap`.

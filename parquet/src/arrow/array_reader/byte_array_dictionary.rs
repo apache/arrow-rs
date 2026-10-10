@@ -23,7 +23,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{
     Array, ArrayRef, BinaryViewArray, OffsetSizeTrait, StringViewArray, new_empty_array,
 };
-use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 
@@ -164,6 +164,9 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
     /// Reusable scratch space for hashing byte slices when building dictionaries from plain-encoded values.
     hash_scratch: MutableBuffer,
+    /// Keys `Buffer` recovered from the previously produced `DictionaryArray`, if any.
+    /// Reclaimed into a `Vec<K>` for the next batch when uniquely owned (zero copy).
+    recycled_keys_buffer: Option<Buffer>,
 }
 
 impl<K, V> ByteArrayDictionaryReader<K, V>
@@ -203,6 +206,7 @@ where
             rep_levels_buffer: None,
             record_reader,
             hash_scratch: MutableBuffer::new(0),
+            recycled_keys_buffer: None,
         })
     }
 }
@@ -221,6 +225,12 @@ where
     }
 
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        if let Some(buffer) = self.recycled_keys_buffer.take()
+            && let Ok(recycled_vec) = buffer.into_vec::<K>()
+        {
+            let seeded = DictionaryBuffer::<K, V>::with_recycled_keys(recycled_vec);
+            self.record_reader.seed_values_buffer(seeded);
+        }
         read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)
     }
 
@@ -239,14 +249,25 @@ where
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_compact_bitmap();
 
+        let mut stashed_keys_buffer: Option<Buffer> = None;
         let array = match &self.buffer_type {
-            None => buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?,
+            None => buffer.into_array(
+                null_buffer,
+                &self.data_type,
+                &mut self.hash_scratch,
+                &mut stashed_keys_buffer,
+            )?,
             Some(buffer_type) => {
-                let buffer_array =
-                    buffer.into_array(null_buffer, buffer_type, &mut self.hash_scratch)?;
+                let buffer_array = buffer.into_array(
+                    null_buffer,
+                    buffer_type,
+                    &mut self.hash_scratch,
+                    &mut stashed_keys_buffer,
+                )?;
                 convert_values_to_view(buffer_array, &self.data_type)?
             }
         };
+        self.recycled_keys_buffer = stashed_keys_buffer;
 
         self.record_reader.reset();
 
@@ -526,7 +547,12 @@ mod tests {
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
         let array = output
-            .into_array(Some(valid_buffer), &data_type, &mut MutableBuffer::new(0))
+            .into_array(
+                Some(valid_buffer),
+                &data_type,
+                &mut MutableBuffer::new(0),
+                &mut None,
+            )
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -599,7 +625,12 @@ mod tests {
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
         let array = output
-            .into_array(Some(valid_buffer), &data_type, &mut MutableBuffer::new(0))
+            .into_array(
+                Some(valid_buffer),
+                &data_type,
+                &mut MutableBuffer::new(0),
+                &mut None,
+            )
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -636,7 +667,7 @@ mod tests {
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 4);
         }
         let array = output
-            .into_array(None, &data_type, &mut MutableBuffer::new(0))
+            .into_array(None, &data_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -682,7 +713,7 @@ mod tests {
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 2);
         }
         let array = output
-            .into_array(None, &data_type, &mut MutableBuffer::new(0))
+            .into_array(None, &data_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -750,6 +781,7 @@ mod tests {
                     Some(Buffer::from(&[0])),
                     &data_type,
                     &mut MutableBuffer::new(0),
+                    &mut None,
                 )
                 .unwrap();
 
@@ -769,6 +801,7 @@ mod tests {
                     Some(Buffer::from(&[0])),
                     &data_type,
                     &mut MutableBuffer::new(0),
+                    &mut None,
                 )
                 .unwrap();
 
