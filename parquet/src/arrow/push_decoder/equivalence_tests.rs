@@ -643,7 +643,7 @@ fn random_scan(rng: &mut StdRng, heterogeneous: bool) -> Scan {
     }
 }
 
-/// Seeds of each fuzz test, so that it runs in about two seconds in a debug
+/// Seeds of each fuzz test, so that it runs in a few seconds in a debug
 /// build.
 const FUZZ_SEEDS: u64 = 250;
 
