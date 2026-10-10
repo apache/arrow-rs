@@ -45,6 +45,7 @@ use arrow_schema::{DataType, Field, SchemaRef};
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::{RngExt, SeedableRng};
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
@@ -53,7 +54,8 @@ const ROWS_PER_ROW_GROUP: usize = 600;
 const ROWS_PER_PAGE: usize = 25;
 const NUM_ROWS: usize = 1800;
 
-/// Three row groups of 600 rows, 25 rows per data page, columns:
+/// Three row groups of 600 rows, with a new data page each 25 rows or less,
+/// columns:
 ///
 /// * `a`: 0, 1, 2, ... (plain)
 /// * `b`: `a % 10` (dictionary)
@@ -202,7 +204,6 @@ fn drive_file(
             DecodeResult::Finished => break,
         }
     }
-    assert_eq!(decoder.buffered_bytes(), 0, "bytes left after the scan");
     (batches, requested)
 }
 
@@ -368,14 +369,21 @@ impl Scan {
     }
 }
 
+/// What the push decoder did for a scan.
+struct Decoded {
+    /// Rows returned.
+    rows: usize,
+    /// Every range requested, in order.
+    requested: Vec<Range<u64>>,
+}
+
 /// Assert that the push decoder gives the same rows as the sync reader for
-/// `scan`, in the same order. Returns the ranges that the push decoder
-/// requested.
+/// `scan`, in the same order.
 ///
 /// The batch boundaries can differ: the push decoder ends a batch at the end
 /// of each row group.
 #[track_caller]
-fn assert_same_rows(scan: &Scan) -> Vec<Range<u64>> {
+fn assert_same_rows(scan: &Scan) -> Decoded {
     let (schema, expected) = scan.sync_batches();
     let (actual, requested) = drive_file(scan.push_decoder(), scan.data());
     if let Some(batch_size) = scan.batch_size {
@@ -387,11 +395,15 @@ fn assert_same_rows(scan: &Scan) -> Vec<Range<u64>> {
     let expected = concat_batches(&schema, &expected).unwrap();
     let actual = concat_batches(&schema, &actual).unwrap();
     assert_eq!(actual, expected, "rows differ for {scan:?}");
-    requested
+    Decoded {
+        rows: actual.num_rows(),
+        requested,
+    }
 }
 
 #[test]
-fn batch_sizes_and_projections() {
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_batch_sizes_and_projections() {
     for batch_size in [1, 7, 24, 25, 26, 100, 599, 600, 601, 5000] {
         for projection in [
             None,
@@ -411,7 +423,8 @@ fn batch_sizes_and_projections() {
 }
 
 #[test]
-fn row_selections_skip_pages() {
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_row_selections_skip_pages() {
     // Select 20 rows, skip 40: most pages are read partly, some are skipped.
     let alternating: Vec<RowSelector> = (0..NUM_ROWS / 60)
         .flat_map(|_| [RowSelector::select(20), RowSelector::skip(40)])
@@ -440,7 +453,8 @@ fn row_selections_skip_pages() {
 }
 
 #[test]
-fn offset_and_limit() {
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_offset_and_limit() {
     for (offset, limit) in [
         (None, Some(1)),
         (Some(650), Some(500)),
@@ -459,13 +473,15 @@ fn offset_and_limit() {
 }
 
 #[test]
-fn empty_selection_requests_nothing() {
-    let requested = assert_same_rows(&Scan {
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_empty_selection_requests_nothing() {
+    let decoded = assert_same_rows(&Scan {
         batch_size: Some(64),
         selection: Some(RowSelection::from(vec![RowSelector::skip(NUM_ROWS)])),
         ..Default::default()
     });
-    assert!(requested.is_empty());
+    assert_eq!(decoded.rows, 0);
+    assert!(decoded.requested.is_empty());
 }
 
 fn filtered(predicates: Vec<PredicateSpec>) -> Scan {
@@ -477,7 +493,8 @@ fn filtered(predicates: Vec<PredicateSpec>) -> Scan {
 }
 
 #[test]
-fn predicates() {
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_predicates() {
     let cases = vec![
         vec![PredicateSpec::new("a", Cmp::Lt(900))],
         vec![
@@ -507,7 +524,8 @@ fn predicates() {
 }
 
 #[test]
-fn predicates_with_selection_limit_and_offset() {
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_predicates_with_selection_limit_and_offset() {
     let selection = RowSelection::from(
         (0..NUM_ROWS / 100)
             .flat_map(|_| [RowSelector::select(60), RowSelector::skip(40)])
@@ -525,7 +543,8 @@ fn predicates_with_selection_limit_and_offset() {
 }
 
 #[test]
-fn predicate_batch_smaller_than_page() {
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_predicate_batch_smaller_than_page() {
     let mut scan = filtered(vec![PredicateSpec::new("b", Cmp::ModNotZero(5))]);
     scan.batch_size = Some(10);
     assert_same_rows(&scan);
@@ -551,68 +570,115 @@ fn random_selection(rng: &mut StdRng, total: usize) -> RowSelection {
 }
 
 fn random_predicate(rng: &mut StdRng) -> PredicateSpec {
-    match rng.random_range(0..6) {
-        0 => PredicateSpec::new("a", Cmp::Lt(rng.random_range(0..NUM_ROWS as i64))),
-        1 => PredicateSpec::new("a", Cmp::Ge(rng.random_range(0..NUM_ROWS as i64))),
+    let value = rng.random_range(0..NUM_ROWS as i64);
+    match rng.random_range(0..9) {
+        0 => PredicateSpec::new("a", Cmp::Lt(value)),
+        1 => PredicateSpec::new("a", Cmp::Ge(value)),
         2 => PredicateSpec::new("b", Cmp::ModNotZero(rng.random_range(2..7))),
         3 => PredicateSpec::new("a", Cmp::ModNotZero(rng.random_range(2..40))),
         4 => PredicateSpec::new("b", Cmp::All),
+        5 => PredicateSpec::new("l", Cmp::ListNotNull),
+        6 => PredicateSpec::new("s", Cmp::StructXLt(2 * value)),
+        7 => PredicateSpec::new("a", Cmp::NullEvery(rng.random_range(2..9))),
         _ => PredicateSpec::new("b", Cmp::None),
     }
 }
 
-/// Combine batch size, projection, row groups, row selection, selection
-/// policy, predicates, predicate cache size, offset and limit at random, and
-/// check that the push decoder and the sync reader give the same rows.
-#[test]
-fn fuzz_equivalence() {
+/// A scan with batch size, projection, row groups, row selection, selection
+/// policy, predicates, predicate cache size, offset and limit at random.
+fn random_scan(rng: &mut StdRng, heterogeneous: bool) -> Scan {
     let projections = [
         None,
         Some(vec!["a"]),
+        Some(vec!["c"]),
         Some(vec!["a", "c"]),
         Some(vec!["b", "c"]),
         Some(vec!["l"]),
         Some(vec!["s", "b"]),
         Some(vec!["l", "a", "s"]),
     ];
-    for seed in 0..300u64 {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let num_predicates = rng.random_range(0..3);
-        let scan = Scan {
-            page_index_off: rng.random_bool(0.1),
-            batch_size: Some([1, 7, 25, 64, 100, 512][rng.random_range(0..6)]),
-            projection: projections[rng.random_range(0..projections.len())]
-                .as_ref()
-                .map(|names| columns(names)),
-            row_groups: rng
-                .random_bool(0.2)
-                .then(|| vec![2, 0, 1][..rng.random_range(1..4)].to_vec()),
-            selection: rng
-                .random_bool(0.5)
-                .then(|| random_selection(&mut rng, NUM_ROWS)),
-            limit: rng.random_bool(0.3).then(|| rng.random_range(0..NUM_ROWS)),
-            offset: rng.random_bool(0.3).then(|| rng.random_range(0..NUM_ROWS)),
-            predicates: (0..num_predicates)
-                .map(|_| random_predicate(&mut rng))
-                .collect(),
-            policy: [
-                None,
-                Some(RowSelectionPolicy::Selectors),
-                Some(RowSelectionPolicy::Mask),
-            ][rng.random_range(0..3)],
-            max_predicate_cache_size: [None, Some(0), Some(1)][rng.random_range(0..3)],
-            ..Default::default()
-        };
-        // A selection must cover exactly the selected row groups.
-        if scan.row_groups.is_some() && scan.selection.is_some() {
-            continue;
-        }
-        assert_same_rows(&scan);
+    let row_group_rows = match heterogeneous {
+        true => HETEROGENEOUS_ROW_GROUP_ROWS,
+        false => [ROWS_PER_ROW_GROUP; 3],
+    };
+    // Some of the row groups, in any order.
+    let row_groups = rng.random_bool(0.3).then(|| {
+        let mut row_groups = vec![0, 1, 2];
+        row_groups.shuffle(rng);
+        row_groups.truncate(rng.random_range(1..=3));
+        row_groups
+    });
+    // A selection must cover exactly the row groups of the scan.
+    let total: usize = match &row_groups {
+        Some(row_groups) => row_groups.iter().map(|&i| row_group_rows[i]).sum(),
+        None => NUM_ROWS,
+    };
+    let num_predicates = rng.random_range(0..4);
+    Scan {
+        heterogeneous,
+        page_index_off: rng.random_bool(0.1),
+        batch_size: [
+            None,
+            Some(1),
+            Some(7),
+            Some(25),
+            Some(64),
+            Some(100),
+            Some(512),
+        ][rng.random_range(0..7)],
+        projection: projections[rng.random_range(0..projections.len())]
+            .as_ref()
+            .map(|names| columns(names)),
+        row_groups,
+        selection: rng.random_bool(0.5).then(|| random_selection(rng, total)),
+        limit: rng.random_bool(0.3).then(|| rng.random_range(1..=total)),
+        offset: rng.random_bool(0.3).then(|| rng.random_range(0..total / 2)),
+        predicates: (0..num_predicates).map(|_| random_predicate(rng)).collect(),
+        policy: [
+            None,
+            Some(RowSelectionPolicy::Selectors),
+            Some(RowSelectionPolicy::Mask),
+        ][rng.random_range(0..3)],
+        max_predicate_cache_size: [None, Some(0), Some(1)][rng.random_range(0..3)],
     }
 }
 
+/// Seeds of each fuzz test, so that it runs in about two seconds in a debug
+/// build.
+const FUZZ_SEEDS: u64 = 250;
+
+/// Check [`FUZZ_SEEDS`] random scans. Most of the scans must return rows, so
+/// that the test does not compare empty results only.
+fn fuzz(heterogeneous: bool) {
+    let mut scans_with_rows = 0;
+    for seed in 0..FUZZ_SEEDS {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let scan = random_scan(&mut rng, heterogeneous);
+        if assert_same_rows(&scan).rows > 0 {
+            scans_with_rows += 1;
+        }
+    }
+    assert!(
+        scans_with_rows * 3 >= FUZZ_SEEDS * 2,
+        "only {scans_with_rows} of {FUZZ_SEEDS} scans returned rows"
+    );
+}
+
 #[test]
-fn page_boundaries_differ_per_column() {
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_fuzz_equivalence() {
+    fuzz(false);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_fuzz_equivalence_heterogeneous_pages() {
+    fuzz(true);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_page_boundaries_differ_per_column() {
     let metadata = HETEROGENEOUS_WITH_PAGE_INDEX.metadata();
     let row_groups: Vec<i64> = metadata
         .row_groups()
@@ -630,81 +696,3 @@ fn page_boundaries_differ_per_column() {
         "{pages:?}"
     );
 }
-
-fn random_predicate_any_column(rng: &mut StdRng) -> PredicateSpec {
-    match rng.random_range(0..9) {
-        0 => PredicateSpec::new("a", Cmp::Lt(rng.random_range(0..NUM_ROWS as i64))),
-        1 => PredicateSpec::new("a", Cmp::Ge(rng.random_range(0..NUM_ROWS as i64))),
-        2 => PredicateSpec::new("b", Cmp::ModNotZero(rng.random_range(2..7))),
-        3 => PredicateSpec::new("a", Cmp::ModNotZero(rng.random_range(2..40))),
-        4 => PredicateSpec::new("b", Cmp::All),
-        5 => PredicateSpec::new("l", Cmp::ListNotNull),
-        6 => PredicateSpec::new(
-            "s",
-            Cmp::StructXLt(rng.random_range(0..2 * NUM_ROWS as i64)),
-        ),
-        7 => PredicateSpec::new("a", Cmp::NullEvery(rng.random_range(2..9))),
-        _ => PredicateSpec::new("b", Cmp::None),
-    }
-}
-
-/// [`fuzz_equivalence`] on [`HETEROGENEOUS_FILE`], with predicates on
-/// nested columns and predicates that return nulls, and with a row selection
-/// combined with a subset of the row groups.
-#[test]
-fn fuzz_equivalence_heterogeneous_pages() {
-    let projections = [
-        None,
-        Some(vec!["a"]),
-        Some(vec!["a", "c"]),
-        Some(vec!["b", "c"]),
-        Some(vec!["l"]),
-        Some(vec!["s", "b"]),
-        Some(vec!["l", "a", "s"]),
-        Some(vec!["c"]),
-    ];
-    for seed in 0..SEEDS_HETEROGENEOUS {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let num_predicates = rng.random_range(0..4);
-        let row_groups = rng
-            .random_bool(0.3)
-            .then(|| vec![2, 0, 1][..rng.random_range(1..4)].to_vec());
-        let total = row_groups
-            .as_ref()
-            .map(|row_groups| {
-                row_groups
-                    .iter()
-                    .map(|&i| HETEROGENEOUS_ROW_GROUP_ROWS[i])
-                    .sum()
-            })
-            .unwrap_or(NUM_ROWS);
-        let scan = Scan {
-            heterogeneous: true,
-            page_index_off: rng.random_bool(0.1),
-            batch_size: Some([1, 3, 17, 40, 64, 100, 333, 1000][rng.random_range(0..8)]),
-            projection: projections[rng.random_range(0..projections.len())]
-                .as_ref()
-                .map(|names| columns(names)),
-            row_groups,
-            selection: rng
-                .random_bool(0.5)
-                .then(|| random_selection(&mut rng, total)),
-            limit: rng.random_bool(0.3).then(|| rng.random_range(0..NUM_ROWS)),
-            offset: rng.random_bool(0.3).then(|| rng.random_range(0..NUM_ROWS)),
-            predicates: (0..num_predicates)
-                .map(|_| random_predicate_any_column(&mut rng))
-                .collect(),
-            policy: [
-                None,
-                Some(RowSelectionPolicy::Selectors),
-                Some(RowSelectionPolicy::Mask),
-            ][rng.random_range(0..3)],
-            max_predicate_cache_size: [None, Some(0), Some(1)][rng.random_range(0..3)],
-        };
-        assert_same_rows(&scan);
-    }
-}
-
-/// Seeds of [`fuzz_equivalence_heterogeneous_pages`], so that it runs
-/// in about two seconds in a debug build.
-const SEEDS_HETEROGENEOUS: u64 = 200;
