@@ -136,7 +136,7 @@ pub fn union_extract_by_type(
     };
 
     let Some((type_id, _)) = resolve_child_array(fields, target_type) else {
-        return Err(ArrowError::CastError(format!(
+        return Err(ArrowError::NotYetImplemented(format!(
             "cannot cast Union with fields {} to {}",
             fields
                 .iter()
