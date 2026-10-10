@@ -534,16 +534,14 @@ impl i256 {
 
     /// Performs wrapping division
     ///
+    /// Use [`Self::wrapping_div_rem`] if you also need the remainder.
+    ///
     /// # Panics
     ///
     /// Panics if `other` is zero
     #[inline]
     pub fn wrapping_div(self, other: Self) -> Self {
-        match self.div_rem(other) {
-            Ok((v, _)) => v,
-            Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
-            Err(_) => Self::MIN,
-        }
+        self.wrapping_div_rem(other).0
     }
 
     /// Performs checked division
@@ -554,22 +552,75 @@ impl i256 {
 
     /// Performs wrapping remainder
     ///
+    /// Use [`Self::wrapping_div_rem`] if you also need the quotient.
+    ///
     /// # Panics
     ///
     /// Panics if `other` is zero
     #[inline]
     pub fn wrapping_rem(self, other: Self) -> Self {
-        match self.div_rem(other) {
-            Ok((_, v)) => v,
-            Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
-            Err(_) => Self::ZERO,
-        }
+        self.wrapping_div_rem(other).1
     }
 
     /// Performs checked remainder
     #[inline]
     pub fn checked_rem(self, other: Self) -> Option<Self> {
         self.div_rem(other).map(|(_, v)| v).ok()
+    }
+
+    /// Performs wrapping division and remainder, returning `(quotient, remainder)`
+    ///
+    /// This computes both results with one division, while calling
+    /// [`Self::wrapping_div`] and [`Self::wrapping_rem`] divides twice.
+    ///
+    /// The quotient is truncated toward zero, and the remainder has the sign of
+    /// `self`. `i256::MIN / -1` wraps to `(i256::MIN, 0)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `other` is zero
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::i256;
+    /// let (q, r) = i256::from_i128(-7).wrapping_div_rem(i256::from_i128(2));
+    /// assert_eq!((q, r), (i256::from_i128(-3), i256::from_i128(-1)));
+    ///
+    /// let (q, r) = i256::MIN.wrapping_div_rem(i256::MINUS_ONE);
+    /// assert_eq!((q, r), (i256::MIN, i256::ZERO));
+    /// ```
+    #[inline]
+    pub fn wrapping_div_rem(self, other: Self) -> (Self, Self) {
+        match self.div_rem(other) {
+            Ok(v) => v,
+            Err(DivRemError::DivideByZero) => panic!("attempt to divide by zero"),
+            Err(DivRemError::DivideOverflow) => (Self::MIN, Self::ZERO),
+        }
+    }
+
+    /// Performs checked division and remainder, returning `(quotient, remainder)`
+    ///
+    /// This computes both results with one division, while calling
+    /// [`Self::checked_div`] and [`Self::checked_rem`] divides twice.
+    ///
+    /// The quotient is truncated toward zero, and the remainder has the sign of
+    /// `self`.
+    ///
+    /// Returns `None` if `other` is zero or the quotient overflows, which happens
+    /// only for `i256::MIN / -1`
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::i256;
+    /// let qr = i256::from_i128(-7).checked_div_rem(i256::from_i128(2));
+    /// assert_eq!(qr, Some((i256::from_i128(-3), i256::from_i128(-1))));
+    ///
+    /// assert_eq!(i256::ONE.checked_div_rem(i256::ZERO), None);
+    /// assert_eq!(i256::MIN.checked_div_rem(i256::MINUS_ONE), None);
+    /// ```
+    #[inline]
+    pub fn checked_div_rem(self, other: Self) -> Option<(Self, Self)> {
+        self.div_rem(other).ok()
     }
 
     /// Performs checked exponentiation
@@ -677,7 +728,10 @@ impl i256 {
     fn i256_to_f64(input: i256) -> f64 {
         let k = i256::redundant_leading_sign_bits_i256(input);
         let n = input << k; // left-justify (no redundant sign bits)
-        let n = (n.high >> 64) as i64; // throw away the lower 192 bits
+        // If the retained bits land exactly on a midpoint, set the low bit so
+        // non-zero discarded bits push it just past and it rounds to nearest.
+        let sticky = n.low != 0 || (n.high as u64) != 0;
+        let n = ((n.high >> 64) as i64) | i64::from(sticky);
         (n as f64) * f64::powi(2.0, 192 - (k as i32)) // convert to f64 and scale it, as we left-shift k bit previous, so we need to scale it by 2^(192-k)
     }
 
@@ -1342,7 +1396,7 @@ impl Not for i256 {
 mod tests {
     use super::*;
     use num_traits::Signed;
-    use rand::{RngExt, rng};
+    use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1451,42 +1505,8 @@ mod tests {
             ),
         }
 
-        // Division
-        if ir != i256::ZERO {
-            let actual = il.wrapping_div(ir);
-            let expected = bl.clone() / br.clone();
-            let checked = il.checked_div(ir);
-
-            if ir == i256::MINUS_ONE && il == i256::MIN {
-                // BigInt produces an integer over i256::MAX
-                assert_eq!(actual, i256::MIN);
-                assert!(checked.is_none());
-            } else {
-                assert_eq!(actual.to_string(), expected.to_string());
-                assert_eq!(checked.unwrap().to_string(), expected.to_string());
-            }
-        } else {
-            // `wrapping_div` panics on division by zero
-            assert!(il.checked_div(ir).is_none());
-        }
-
-        // Remainder
-        if ir != i256::ZERO {
-            let actual = il.wrapping_rem(ir);
-            let expected = bl.clone() % br.clone();
-            let checked = il.checked_rem(ir);
-
-            assert_eq!(actual.to_string(), expected.to_string(), "{il} % {ir}");
-
-            if ir == i256::MINUS_ONE && il == i256::MIN {
-                assert!(checked.is_none());
-            } else {
-                assert_eq!(checked.unwrap().to_string(), expected.to_string());
-            }
-        } else {
-            // `wrapping_rem` panics on division by zero
-            assert!(il.checked_rem(ir).is_none());
-        }
+        // Division and remainder
+        test_div_rem(il, ir);
 
         // Exponentiation
         for exp in [0, 1, 2, 3, 8, 100] {
@@ -1618,6 +1638,79 @@ mod tests {
         }
     }
 
+    fn test_div_rem(n: i256, d: i256) {
+        if d == i256::ZERO {
+            // The wrapping methods panic on division by zero
+            assert_eq!(n.checked_div(d), None);
+            assert_eq!(n.checked_rem(d), None);
+            assert_eq!(n.checked_div_rem(d), None);
+            return;
+        }
+
+        let bn = BigInt::from_signed_bytes_le(&n.to_le_bytes());
+        let bd = BigInt::from_signed_bytes_le(&d.to_le_bytes());
+
+        // BigInt produces an integer over i256::MAX for i256::MIN / -1
+        let (q, overflow) = i256::from_bigint_with_overflow(bn.clone() / bd.clone());
+        let (r, _) = i256::from_bigint_with_overflow(bn % bd);
+
+        assert_eq!(n.wrapping_div(d), q, "{n} / {d}");
+        assert_eq!(n.wrapping_rem(d), r, "{n} % {d}");
+        assert_eq!(n.wrapping_div_rem(d), (q, r), "{n} / {d}");
+        assert_eq!(n.checked_div(d), (!overflow).then_some(q), "{n} / {d}");
+        assert_eq!(n.checked_rem(d), (!overflow).then_some(r), "{n} % {d}");
+        assert_eq!(
+            n.checked_div_rem(d),
+            (!overflow).then_some((q, r)),
+            "{n} / {d}"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn test_div_rem_powers_of_ten() {
+        let dividends = [
+            i256::ZERO,
+            i256::ONE,
+            i256::MIN,
+            i256::MAX,
+            i256::from_i128(i128::MIN),
+            i256::from_i128(i128::MAX),
+            i256::from_i128(u64::MAX as i128),
+            i256::from_i128(1 << 64),
+            i256::from_i128((1 << 64) + 1),
+            i256::from_parts(u128::MAX, 0),
+            i256::from_parts(0, 1),
+            i256::from_parts(1, 1),
+        ];
+
+        // 10^76 is the largest power of ten that fits in an i256
+        for k in 0..=76 {
+            let p = i256::from_i128(10).wrapping_pow(k);
+            for d in [p - i256::ONE, p, p + i256::ONE] {
+                for n in dividends
+                    .into_iter()
+                    .chain([p - i256::ONE, p, p + i256::ONE])
+                {
+                    for (n, d) in [
+                        (n, d),
+                        (n.wrapping_neg(), d),
+                        (n, -d),
+                        (n.wrapping_neg(), -d),
+                    ] {
+                        test_div_rem(n, d);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to divide by zero")]
+    fn test_wrapping_div_rem_zero_panics() {
+        let _ = i256::ONE.wrapping_div_rem(i256::ZERO);
+    }
+
     #[test]
     fn test_signed_ops() {
         // signum
@@ -1646,14 +1739,20 @@ mod tests {
 
         for _ in 0..1000 {
             let mut l = [0_u8; 32];
-            let len = rng.random_range(0..32);
+            let len = rng.random_range(0..=32);
             l.iter_mut().take(len).for_each(|x| *x = rng.random());
 
             let mut r = [0_u8; 32];
-            let len = rng.random_range(0..32);
+            let len = rng.random_range(0..=32);
             r.iter_mut().take(len).for_each(|x| *x = rng.random());
 
-            test_ops(i256::from_le_bytes(l), i256::from_le_bytes(r))
+            // Random bytes almost never produce a negative value of small magnitude
+            let l = i256::from_le_bytes(l);
+            let r = i256::from_le_bytes(r);
+            let l = if rng.random() { l.wrapping_neg() } else { l };
+            let r = if rng.random() { r.wrapping_neg() } else { r };
+
+            test_ops(l, r)
         }
     }
 
@@ -1874,6 +1973,56 @@ mod tests {
             for ir in candidates {
                 test_reference_op(il, ir)
             }
+        }
+    }
+
+    #[test]
+    fn test_i256_to_f64_midpoint_rounding() {
+        // Regression test for #11314: the value is one above the binary64 midpoint.
+        let integer = (1_i128 << 63) + 1024 + 1;
+        assert_eq!(
+            i256::from_i128(integer).to_f64().unwrap().to_bits(),
+            (integer as f64).to_bits()
+        );
+
+        let two = i256::from(2);
+        // Binary64 has a 53-bit significand: inside [2^e, 2^(e+1)) adjacent values
+        // are 2^(e-52) apart, so the exact tie is 2^(e-53) above 2^e. Ties are where
+        // #11314 rounded the wrong way. Start at 53 (below that the midpoint is not
+        // an integer) and stop at 254 (2^255 overflows i256).
+        for exponent in 53..=254 {
+            let midpoint = two.wrapping_pow(exponent) + two.wrapping_pow(exponent - 53);
+            for delta in -2_i64..=2 {
+                for value in [
+                    midpoint + i256::from(delta),
+                    -(midpoint + i256::from(delta)),
+                ] {
+                    let expected: f64 = value.to_string().parse().unwrap();
+                    assert_eq!(
+                        value.to_f64().unwrap().to_bits(),
+                        expected.to_bits(),
+                        "i256 {value} should round to nearest"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_i256_to_f64_fuzz() {
+        // `to_string().parse::<f64>()` is a correctly rounded decimal-to-binary oracle.
+        for value in [i256::MIN, i256::MAX, i256::MINUS_ONE, i256::ZERO, i256::ONE] {
+            let expected: f64 = value.to_string().parse().unwrap();
+            assert_eq!(value.to_f64().unwrap().to_bits(), expected.to_bits());
+        }
+
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..1_000 {
+            let low = u128::from(rng.random::<u64>()) | (u128::from(rng.random::<u64>()) << 64);
+            let high = u128::from(rng.random::<u64>()) | (u128::from(rng.random::<u64>()) << 64);
+            let value = i256::from_parts(low, high as i128);
+            let expected: f64 = value.to_string().parse().unwrap();
+            assert_eq!(value.to_f64().unwrap().to_bits(), expected.to_bits());
         }
     }
 
