@@ -1865,6 +1865,12 @@ impl ParquetRecordBatchReader {
         }
     }
 
+    /// Returns the inner [`ArrayReader`], which keeps its position, so that
+    /// the caller can continue with a new [`ReadPlan`].
+    pub(crate) fn into_array_reader(self) -> Box<dyn ArrayReader> {
+        self.array_reader
+    }
+
     #[inline(always)]
     pub(crate) fn batch_size(&self) -> usize {
         self.read_plan.batch_size()
