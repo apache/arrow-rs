@@ -23,7 +23,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{
     Array, ArrayRef, BinaryViewArray, OffsetSizeTrait, StringViewArray, new_empty_array,
 };
-use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 
@@ -164,6 +164,8 @@ struct ByteArrayDictionaryReader<K: ArrowNativeType, V: OffsetSizeTrait> {
     record_reader: GenericRecordReader<DictionaryBuffer<K, V>, DictionaryDecoder<K, V>>,
     /// Reusable scratch space for hashing byte slices when building dictionaries from plain-encoded values.
     hash_scratch: MutableBuffer,
+    /// Keys buffer recycled from the previous batch's `DictionaryArray` when uniquely owned, reused via [`Buffer::into_vec`] to avoid a per-batch alloc/free.
+    recycled_keys_buffer: Option<Buffer>,
 }
 
 impl<K, V> ByteArrayDictionaryReader<K, V>
@@ -203,6 +205,7 @@ where
             rep_levels_buffer: None,
             record_reader,
             hash_scratch: MutableBuffer::new(0),
+            recycled_keys_buffer: None,
         })
     }
 }
@@ -221,6 +224,13 @@ where
     }
 
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        // Reclaim the previous batch's keys allocation if the consumer dropped the output array; otherwise fall through and allocate fresh.
+        if let Some(buffer) = self.recycled_keys_buffer.take()
+            && let Ok(recycled_vec) = buffer.into_vec::<K>()
+        {
+            let seeded = DictionaryBuffer::<K, V>::with_recycled_keys(recycled_vec);
+            self.record_reader.seed_values_buffer(seeded);
+        }
         read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)
     }
 
@@ -239,14 +249,27 @@ where
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_compact_bitmap();
 
+        // `into_array` stashes the newly-constructed keys `Buffer`.
+        // On the next `read_records` call we try to reclaim this allocation.
+        let mut stashed_keys_buffer: Option<Buffer> = None;
         let array = match &self.buffer_type {
-            None => buffer.into_array(null_buffer, &self.data_type, &mut self.hash_scratch)?,
+            None => buffer.into_array(
+                null_buffer,
+                &self.data_type,
+                &mut self.hash_scratch,
+                &mut stashed_keys_buffer,
+            )?,
             Some(buffer_type) => {
-                let buffer_array =
-                    buffer.into_array(null_buffer, buffer_type, &mut self.hash_scratch)?;
+                let buffer_array = buffer.into_array(
+                    null_buffer,
+                    buffer_type,
+                    &mut self.hash_scratch,
+                    &mut stashed_keys_buffer,
+                )?;
                 convert_values_to_view(buffer_array, &self.data_type)?
             }
         };
+        self.recycled_keys_buffer = stashed_keys_buffer;
 
         self.record_reader.reset();
 
@@ -279,6 +302,8 @@ enum MaybeDictionaryDecoder {
         /// This is a maximum as the null count is not always known, e.g. value data from
         /// a v1 data page
         max_remaining_values: usize,
+        /// RLE bit width; lets `DictionaryBuffer` skip key validation when `(1 << bit_width) <= dict.len()`.
+        bit_width: u8,
     },
     Fallback(ByteArrayDecoder),
 }
@@ -377,6 +402,7 @@ where
                 MaybeDictionaryDecoder::Dict {
                     decoder,
                     max_remaining_values: num_values.unwrap_or(num_levels),
+                    bit_width,
                 }
             }
             _ => MaybeDictionaryDecoder::Fallback(ByteArrayDecoder::new(
@@ -400,6 +426,7 @@ where
             MaybeDictionaryDecoder::Dict {
                 decoder,
                 max_remaining_values,
+                bit_width,
             } => {
                 let len = num_values.min(*max_remaining_values);
 
@@ -414,18 +441,24 @@ where
                     return Ok(0); // All data must be NULL
                 }
 
-                match out.as_keys(dict) {
+                let decoded_len = match out.as_keys_with_bit_width(dict, Some(*bit_width)) {
                     Some(keys) => {
-                        // Happy path - can just copy keys
-                        // Keys will be validated on conversion to arrow
-
+                        // Happy path: decode directly into the vec's spare capacity to skip the zero-fill.
                         // TODO: Push vec into decoder (#5177)
                         let start = keys.len();
-                        keys.resize(start + len, K::default());
-                        let len = decoder.get_batch(&mut keys[start..])?;
-                        keys.truncate(start + len);
-                        *max_remaining_values -= len;
-                        Ok(len)
+                        keys.reserve(len);
+                        let decoded_len = {
+                            let spare = keys.spare_capacity_mut();
+                            // SAFETY: `MaybeUninit<K>` matches `K`'s layout; `get_batch` is write-only.
+                            let dst: &mut [K] = unsafe {
+                                std::slice::from_raw_parts_mut(spare.as_mut_ptr().cast::<K>(), len)
+                            };
+                            decoder.get_batch(dst)?
+                        };
+                        // SAFETY: `get_batch` initialised the first `decoded_len` spare slots.
+                        unsafe { keys.set_len(start + decoded_len) };
+                        *max_remaining_values -= decoded_len;
+                        decoded_len
                     }
                     None => {
                         // Sad path - need to recompute dictionary
@@ -445,9 +478,10 @@ where
 
                         values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values)?;
                         *max_remaining_values -= len;
-                        Ok(len)
+                        len
                     }
-                }
+                };
+                Ok(decoded_len)
             }
         }
     }
@@ -458,6 +492,7 @@ where
             MaybeDictionaryDecoder::Dict {
                 decoder,
                 max_remaining_values,
+                bit_width: _,
             } => {
                 let num_values = num_values.min(*max_remaining_values);
                 *max_remaining_values -= num_values;
@@ -526,7 +561,12 @@ mod tests {
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
         let array = output
-            .into_array(Some(valid_buffer), &data_type, &mut MutableBuffer::new(0))
+            .into_array(
+                Some(valid_buffer),
+                &data_type,
+                &mut MutableBuffer::new(0),
+                &mut None,
+            )
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -599,7 +639,12 @@ mod tests {
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
         let array = output
-            .into_array(Some(valid_buffer), &data_type, &mut MutableBuffer::new(0))
+            .into_array(
+                Some(valid_buffer),
+                &data_type,
+                &mut MutableBuffer::new(0),
+                &mut None,
+            )
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -636,7 +681,7 @@ mod tests {
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 4);
         }
         let array = output
-            .into_array(None, &data_type, &mut MutableBuffer::new(0))
+            .into_array(None, &data_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -682,7 +727,7 @@ mod tests {
             assert_eq!(decoder.read(&mut output, 1024).unwrap(), 2);
         }
         let array = output
-            .into_array(None, &data_type, &mut MutableBuffer::new(0))
+            .into_array(None, &data_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap();
         assert_eq!(array.data_type(), &data_type);
 
@@ -750,6 +795,7 @@ mod tests {
                     Some(Buffer::from(&[0])),
                     &data_type,
                     &mut MutableBuffer::new(0),
+                    &mut None,
                 )
                 .unwrap();
 
@@ -769,6 +815,7 @@ mod tests {
                     Some(Buffer::from(&[0])),
                     &data_type,
                     &mut MutableBuffer::new(0),
+                    &mut None,
                 )
                 .unwrap();
 

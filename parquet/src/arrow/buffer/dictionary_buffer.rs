@@ -38,49 +38,102 @@ use std::sync::Arc;
 /// An array of variable length byte arrays that are potentially dictionary encoded
 /// and can be converted into a corresponding [`ArrayRef`]
 pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
-    Dict { keys: Vec<K>, values: ArrayRef },
-    Values { values: OffsetBuffer<V> },
+    Dict {
+        keys: Vec<K>,
+        values: ArrayRef,
+        /// Exclusive upper bound on key values; see [`Self::as_keys_with_bit_width`].
+        key_upper_bound: Option<u64>,
+    },
+    Values {
+        values: OffsetBuffer<V>,
+        /// Recycled keys vec from the previous batch, adopted on transition to `Dict`.
+        recycled_keys: Option<Vec<K>>,
+    },
+}
+
+/// Widens `existing` so it covers both its previous bound and `incoming`.
+/// Any `None` on either side collapses to `None` (validation required).
+fn widen_key_bound(existing: &mut Option<u64>, incoming: Option<u64>) {
+    *existing = match (*existing, incoming) {
+        (Some(current), Some(new)) => Some(current.max(new)),
+        _ => None,
+    };
 }
 
 impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
+    /// `Values` variant seeded with a recycled keys vec; only the allocation is reused.
+    pub fn with_recycled_keys(mut recycled_keys: Vec<K>) -> Self {
+        recycled_keys.clear();
+        Self::Values {
+            values: OffsetBuffer::with_capacity(0),
+            recycled_keys: Some(recycled_keys),
+        }
+    }
+
     #[cfg_attr(not(test), expect(unused))]
     pub fn len(&self) -> usize {
         match self {
             Self::Dict { keys, .. } => keys.len(),
-            Self::Values { values } => values.len(),
+            Self::Values { values, .. } => values.len(),
         }
     }
 
-    /// Returns a mutable reference to a keys array
+    /// Returns a mutable reference to a keys array, or `None` if the dictionary
+    /// needs to be recomputed.
     ///
-    /// Returns None if the dictionary needs to be recomputed
+    /// When `rle_bit_width` is provided, records `2^bit_width` as an exclusive
+    /// upper bound on key values. If that bound is `<= values.len()`,
+    /// [`Self::into_array`] can skip its per-batch min/max scan because every
+    /// representable key is already a valid dictionary index. The bound is
+    /// widened across calls so it remains valid as more keys are appended;
+    /// a `None` on either side collapses the stored bound to `None`
+    /// (validation required).
     ///
     /// # Panics
     ///
-    /// Panics if the dictionary is too large for `K`
-    pub fn as_keys(&mut self, dictionary: &ArrayRef) -> Option<&mut Vec<K>> {
+    /// Panics if the dictionary is too large for `K`.
+    pub fn as_keys_with_bit_width(
+        &mut self,
+        dictionary: &ArrayRef,
+        rle_bit_width: Option<u8>,
+    ) -> Option<&mut Vec<K>> {
         assert!(K::from_usize(dictionary.len()).is_some());
 
+        // 2^bit_width is the exclusive upper bound on any key the decoder can
+        // produce. bit_width is capped at 32, so the shift fits in u64.
+        let incoming_bound = rle_bit_width.map(|bit_width| 1u64 << bit_width);
+
         match self {
-            Self::Dict { keys, values } => {
+            Self::Dict {
+                keys,
+                values,
+                key_upper_bound,
+            } => {
                 // Need to discard fat pointer for equality check
                 // - https://stackoverflow.com/a/67114787
                 // - https://github.com/rust-lang/rust/issues/46139
                 let values_ptr = std::ptr::from_ref(values.as_ref()).cast::<()>();
                 let dict_ptr = std::ptr::from_ref(dictionary.as_ref()).cast::<()>();
                 if values_ptr == dict_ptr {
+                    widen_key_bound(key_upper_bound, incoming_bound);
                     Some(keys)
                 } else if keys.is_empty() {
                     *values = Arc::clone(dictionary);
+                    *key_upper_bound = incoming_bound;
                     Some(keys)
                 } else {
                     None
                 }
             }
-            Self::Values { values } if values.is_empty() => {
+            Self::Values {
+                values,
+                recycled_keys,
+            } if values.is_empty() => {
+                let keys = recycled_keys.take().unwrap_or_default();
                 *self = Self::Dict {
-                    keys: Default::default(),
+                    keys,
                     values: Arc::clone(dictionary),
+                    key_upper_bound: incoming_bound,
                 };
                 match self {
                     Self::Dict { keys, .. } => Some(keys),
@@ -97,8 +150,8 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
     /// dictionary encoded representation
     pub fn spill_values(&mut self) -> Result<&mut OffsetBuffer<V>> {
         match self {
-            Self::Values { values } => Ok(values),
-            Self::Dict { keys, values } => {
+            Self::Values { values, .. } => Ok(values),
+            Self::Dict { keys, values, .. } => {
                 let mut spilled = OffsetBuffer::with_capacity(0);
                 let data = values.to_data();
                 let dict_buffers = data.buffers();
@@ -117,40 +170,52 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     spilled.extend_from_dictionary(keys.as_slice(), dict_offsets, dict_values)?;
                 }
 
-                *self = Self::Values { values: spilled };
+                *self = Self::Values {
+                    values: spilled,
+                    recycled_keys: None,
+                };
                 match self {
-                    Self::Values { values } => Ok(values),
+                    Self::Values { values, .. } => Ok(values),
                     Self::Dict { .. } => unreachable!(),
                 }
             }
         }
     }
 
-    /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
+    /// Converts this into an [`ArrayRef`]. `keys_buffer_sink` receives a clone
+    /// of the keys buffer for next-batch reclamation; pass `&mut None` to skip.
     pub fn into_array(
         self,
         null_buffer: Option<Buffer>,
         data_type: &ArrowType,
         hash_scratch: &mut MutableBuffer,
+        keys_buffer_sink: &mut Option<Buffer>,
     ) -> Result<ArrayRef> {
         assert!(matches!(data_type, ArrowType::Dictionary(_, _)));
 
         match self {
-            Self::Dict { keys, values } => {
-                // Validate keys unless dictionary is empty
-                if !values.is_empty() {
+            Self::Dict {
+                keys,
+                values,
+                key_upper_bound,
+            } => {
+                // Skip the key-bounds scan when the RLE bit width guarantees every key is in range.
+                let keys_provably_in_range = key_upper_bound
+                    .map(|bound| bound <= values.len() as u64)
+                    .unwrap_or(false);
+
+                if !values.is_empty() && !keys_provably_in_range {
                     let min = K::from_usize(0).unwrap();
                     let max = K::from_usize(values.len()).unwrap();
 
-                    // using copied and fold gets auto-vectorized since rust 1.70
-                    // all/any would allow early exit on invalid values
-                    // but in the happy case all values have to be checked anyway
-                    if !keys
-                        .as_slice()
-                        .iter()
-                        .copied()
-                        .fold(true, |a, x| a && x >= min && x < max)
-                    {
+                    let (observed_min, observed_max) = keys.as_slice().iter().copied().fold(
+                        (max, min),
+                        |(current_min, current_max), key| {
+                            (current_min.min(key), current_max.max(key))
+                        },
+                    );
+
+                    if observed_min < min || observed_max >= max {
                         return Err(general_err!(
                             "dictionary key beyond bounds of dictionary: 0..{}",
                             values.len()
@@ -172,9 +237,13 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     values
                 };
 
+                let keys_len = keys.len();
+                let keys_buffer = Buffer::from_vec(keys);
+                *keys_buffer_sink = Some(keys_buffer.clone());
+
                 let builder = ArrayDataBuilder::new(data_type.clone())
-                    .len(keys.len())
-                    .add_buffer(Buffer::from_vec(keys))
+                    .len(keys_len)
+                    .add_buffer(keys_buffer)
                     .add_child_data(values.into_data())
                     .null_bit_buffer(null_buffer);
 
@@ -185,7 +254,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
 
                 Ok(make_array(data))
             }
-            Self::Values { values } => {
+            Self::Values { values, .. } => {
                 let (key_type, value_type) = match data_type {
                     ArrowType::Dictionary(k, v) => (k, v.as_ref().clone()),
                     _ => unreachable!(),
@@ -204,6 +273,7 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
     fn with_capacity(capacity: usize) -> Self {
         Self::Values {
             values: OffsetBuffer::with_capacity(capacity),
+            recycled_keys: None,
         }
     }
 
@@ -447,7 +517,10 @@ mod tests {
 
         // Read some data preserving the dictionary
         let values = &[1, 0, 3, 2, 4];
-        buffer.as_keys(&d1).unwrap().extend_from_slice(values);
+        buffer
+            .as_keys_with_bit_width(&d1, None)
+            .unwrap()
+            .extend_from_slice(values);
 
         let mut valid = vec![false, false, true, true, false, true, true, true];
         let valid_buffer = Buffer::from_iter(valid.iter().copied());
@@ -472,7 +545,12 @@ mod tests {
         let split = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0));
 
         let array = split
-            .into_array(Some(null_buffer), &dict_type, &mut MutableBuffer::new(0))
+            .into_array(
+                Some(null_buffer),
+                &dict_type,
+                &mut MutableBuffer::new(0),
+                &mut None,
+            )
             .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
@@ -502,12 +580,12 @@ mod tests {
         assert_eq!(buffer.len(), 0);
         let d2 = Arc::new(StringArray::from(vec!["bingo", ""])) as ArrayRef;
         buffer
-            .as_keys(&d2)
+            .as_keys_with_bit_width(&d2, None)
             .unwrap()
             .extend_from_slice(&[0, 1, 0, 1]);
 
         let array = std::mem::replace(&mut buffer, DictionaryBuffer::with_capacity(0))
-            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
@@ -522,11 +600,14 @@ mod tests {
         assert!(matches!(&buffer, DictionaryBuffer::Values { .. }));
         assert_eq!(buffer.len(), 0);
         let d3 = Arc::new(StringArray::from(vec!["bongo"])) as ArrayRef;
-        buffer.as_keys(&d3).unwrap().extend_from_slice(&[0, 0]);
+        buffer
+            .as_keys_with_bit_width(&d3, None)
+            .unwrap()
+            .extend_from_slice(&[0, 0]);
 
         // Cannot change dictionary as keys not empty
         let d4 = Arc::new(StringArray::from(vec!["bananas"])) as ArrayRef;
-        assert!(buffer.as_keys(&d4).is_none());
+        assert!(buffer.as_keys_with_bit_width(&d4, None).is_none());
     }
 
     #[test]
@@ -536,10 +617,13 @@ mod tests {
 
         let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
         let d = Arc::new(StringArray::from(vec!["", "f"])) as ArrayRef;
-        buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 2, 0]);
+        buffer
+            .as_keys_with_bit_width(&d, None)
+            .unwrap()
+            .extend_from_slice(&[0, 2, 0]);
 
         let err = buffer
-            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap_err()
             .to_string();
         assert!(
@@ -550,7 +634,10 @@ mod tests {
 
         let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
         let d = Arc::new(StringArray::from(vec![""])) as ArrayRef;
-        buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 1, 0]);
+        buffer
+            .as_keys_with_bit_width(&d, None)
+            .unwrap()
+            .extend_from_slice(&[0, 1, 0]);
 
         let err = buffer.spill_values().unwrap_err().to_string();
         assert!(
@@ -572,7 +659,7 @@ mod tests {
         }
 
         let array = buffer
-            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap();
         let dict = array
             .as_any()
@@ -599,7 +686,7 @@ mod tests {
                     .unwrap();
             }
             buffer
-                .into_array(None, &dict_type, &mut scratch)
+                .into_array(None, &dict_type, &mut scratch, &mut None)
                 .expect("128 unique strings must fit: last index is 127 = i8::MAX");
         }
 
@@ -612,7 +699,7 @@ mod tests {
                     .unwrap();
             }
             let err = buffer
-                .into_array(None, &dict_type, &mut scratch)
+                .into_array(None, &dict_type, &mut scratch, &mut None)
                 .unwrap_err()
                 .to_string();
             assert!(
@@ -667,7 +754,7 @@ mod tests {
         }
 
         let array = buffer
-            .into_array(None, &dict_type, &mut MutableBuffer::new(0))
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
             .unwrap();
         let dict = array
             .as_any()
@@ -676,5 +763,85 @@ mod tests {
 
         assert_eq!(dict.data_type(), &dict_type);
         assert_eq!(dict.values().data_type(), &ArrowType::Binary);
+    }
+
+    #[test]
+    fn test_key_upper_bound_skip_scan_when_bound_fits_otherwise_scan() {
+        let dict_type =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
+        let dict_5 = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])) as ArrayRef;
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(2))
+            .unwrap()
+            .extend_from_slice(&[0, 1, 2, 3]);
+        assert!(matches!(
+            buffer,
+            DictionaryBuffer::Dict {
+                key_upper_bound: Some(4),
+                ..
+            }
+        ));
+        let array = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
+            .unwrap();
+        assert_eq!(array.len(), 4);
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(4))
+            .unwrap()
+            .extend_from_slice(&[0, 10]);
+        let err = buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("dictionary key beyond bounds"), "{err}");
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, None)
+            .unwrap()
+            .extend_from_slice(&[0, 7]);
+        buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
+            .unwrap_err();
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_capacity(0);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(2))
+            .unwrap()
+            .extend_from_slice(&[0, 1]);
+        buffer
+            .as_keys_with_bit_width(&dict_5, Some(4))
+            .unwrap()
+            .extend_from_slice(&[10]);
+        assert!(matches!(
+            buffer,
+            DictionaryBuffer::Dict {
+                key_upper_bound: Some(16),
+                ..
+            }
+        ));
+        buffer
+            .into_array(None, &dict_type, &mut MutableBuffer::new(0), &mut None)
+            .unwrap_err();
+    }
+
+    #[test]
+    fn test_recycled_keys_vec_allocation_survives_values_to_dict_transition() {
+        let mut recycled: Vec<i32> = Vec::with_capacity(1024);
+        recycled.extend_from_slice(&[7; 512]);
+        let original_ptr = recycled.as_ptr();
+        let original_cap = recycled.capacity();
+
+        let mut buffer = DictionaryBuffer::<i32, i32>::with_recycled_keys(recycled);
+        let dict = Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef;
+        let keys = buffer.as_keys_with_bit_width(&dict, Some(1)).unwrap();
+
+        assert_eq!(keys.as_ptr(), original_ptr);
+        assert_eq!(keys.capacity(), original_cap);
+        assert!(keys.is_empty());
     }
 }
