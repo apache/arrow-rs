@@ -1011,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
+    #[should_panic(expected = "buffer is not aligned for i32 (requires 4-byte alignment)")]
     #[cfg(not(feature = "force_validate"))]
     fn test_list_view_array_alignment() {
         let offset_buf = Buffer::from_slice_ref([0_u64]);
