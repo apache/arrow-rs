@@ -64,38 +64,11 @@ pub struct Action {
     pub body: ::prost::bytes::Bytes,
 }
 ///
-/// The request of the CancelFlightInfo action.
-///
-/// The request should be stored in Action.body.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CancelFlightInfoRequest {
-    #[prost(message, optional, tag = "1")]
-    pub info: ::core::option::Option<FlightInfo>,
-}
-///
-/// The request of the RenewFlightEndpoint action.
-///
-/// The request should be stored in Action.body.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RenewFlightEndpointRequest {
-    #[prost(message, optional, tag = "1")]
-    pub endpoint: ::core::option::Option<FlightEndpoint>,
-}
-///
 /// An opaque result returned after executing an action.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Result {
     #[prost(bytes = "bytes", tag = "1")]
     pub body: ::prost::bytes::Bytes,
-}
-///
-/// The result of the CancelFlightInfo action.
-///
-/// The result should be stored in Result.body.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CancelFlightInfoResult {
-    #[prost(enumeration = "CancelStatus", tag = "1")]
-    pub status: i32,
 }
 ///
 /// Wrap the result of a getSchema call
@@ -201,7 +174,7 @@ pub struct FlightInfo {
     /// represent partitioned data.
     ///
     /// If the returned data has an ordering, an application can use
-    /// "FlightInfo.ordered = true" or should return the all data in a
+    /// "FlightInfo.ordered = true" or should return all data in a
     /// single endpoint. Otherwise, there is no ordering defined on
     /// endpoints or the data within.
     ///
@@ -214,7 +187,7 @@ pub struct FlightInfo {
     ///
     /// * An application requires that all clients must read data in
     ///    returned endpoints order.
-    /// * An application must return the all data in a single endpoint.
+    /// * An application must return all data in a single endpoint.
     #[prost(message, repeated, tag = "3")]
     pub endpoint: ::prost::alloc::vec::Vec<FlightEndpoint>,
     /// Set these to -1 if unknown.
@@ -278,6 +251,76 @@ pub struct PollInfo {
     pub expiration_time: ::core::option::Option<::prost_types::Timestamp>,
 }
 ///
+/// The request of the CancelFlightInfo action.
+///
+/// The request should be stored in Action.body.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CancelFlightInfoRequest {
+    #[prost(message, optional, tag = "1")]
+    pub info: ::core::option::Option<FlightInfo>,
+}
+///
+/// The result of the CancelFlightInfo action.
+///
+/// The result should be stored in Result.body.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CancelFlightInfoResult {
+    #[prost(enumeration = "CancelStatus", tag = "1")]
+    pub status: i32,
+}
+///
+/// An opaque identifier that the service can use to retrieve a particular
+/// portion of a stream.
+///
+/// Tickets are meant to be single use. It is an error/application-defined
+/// behavior to reuse a ticket.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Ticket {
+    #[prost(bytes = "bytes", tag = "1")]
+    pub ticket: ::prost::bytes::Bytes,
+}
+///
+/// A location to retrieve a particular stream from. This URI should be one of
+/// the following:
+///   - An empty string or the string 'arrow-flight-reuse-connection://?':
+///     indicating that the ticket can be redeemed on the service where the
+///     ticket was generated via a DoGet request.
+///   - A valid grpc URI (grpc://, grpc+tls://, grpc+unix://, etc.):
+///     indicating that the ticket can be redeemed on the service at the given
+///     URI via a DoGet request.
+///   - A valid HTTP URI (<http://,> <https://,> etc.):
+///     indicating that the client should perform a GET request against the
+///     given URI to retrieve the stream. The ticket should be empty
+///     in this case and should be ignored by the client. Cloud object storage
+///     can be utilized by presigned URLs or mediating the auth separately and
+///     returning the full URL (e.g. <https://amzn-s3-demo-bucket.s3.us-west-2.amazonaws.com/...>).
+///
+/// We allow non-Flight URIs for the purpose of allowing Flight services to indicate that
+/// results can be downloaded in formats other than Arrow (such as Parquet) or to allow
+/// direct fetching of results from a URI to reduce excess copying and data movement.
+/// In these cases, the following conventions should be followed by servers and clients:
+///
+///   - Unless otherwise specified by the 'Content-Type' header of the response,
+///     a client should assume the response is using the Arrow IPC Streaming format.
+///     Usage of an IANA media type like 'application/octet-stream' should be assumed to
+///     be using the Arrow IPC Streaming format.
+///   - The server may allow the client to choose a specific response format by
+///     specifying an 'Accept' header in the request, such as 'application/vnd.apache.parquet'
+///     or 'application/vnd.apache.arrow.stream'. If multiple types are requested and
+///     supported by the server, the choice of which to use is server-specific. If
+///     none of the requested content-types are supported, the server may respond with
+///     either 406 (Not Acceptable) or 415 (Unsupported Media Type), or successfully
+///     respond with a different format that it does support along with the correct
+///     'Content-Type' header.
+///
+/// Note: new schemes may be proposed in the future to allow for more flexibility based
+/// on community requests.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Location {
+    #[prost(string, tag = "1")]
+    pub uri: ::prost::alloc::string::String,
+}
+///
 /// A particular stream or split associated with a flight.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FlightEndpoint {
@@ -292,11 +335,15 @@ pub struct FlightEndpoint {
     /// be redeemed on the current service where the ticket was
     /// generated.
     ///
-    /// If the list is not empty, the expectation is that the ticket can
-    /// be redeemed at any of the locations, and that the data returned
-    /// will be equivalent. In this case, the ticket may only be redeemed
-    /// at one of the given locations, and not (necessarily) on the
-    /// current service.
+    /// If the list is not empty, the expectation is that the ticket can be
+    /// redeemed at any of the locations, and that the data returned will be
+    /// equivalent. In this case, the ticket may only be redeemed at one of the
+    /// given locations, and not (necessarily) on the current service. If one
+    /// of the given locations is "arrow-flight-reuse-connection://?", the
+    /// client may redeem the ticket on the service where the ticket was
+    /// generated (i.e., the same as above), in addition to the other
+    /// locations. (This URI was chosen to maximize compatibility, as 'scheme:'
+    /// or 'scheme://' are not accepted by Java's java.net.URI.)
     ///
     /// In other words, an application can use multiple locations to
     /// represent redundant and/or load balanced services.
@@ -320,23 +367,13 @@ pub struct FlightEndpoint {
     pub app_metadata: ::prost::bytes::Bytes,
 }
 ///
-/// A location where a Flight service will accept retrieval of a particular
-/// stream given a ticket.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct Location {
-    #[prost(string, tag = "1")]
-    pub uri: ::prost::alloc::string::String,
-}
+/// The request of the RenewFlightEndpoint action.
 ///
-/// An opaque identifier that the service can use to retrieve a particular
-/// portion of a stream.
-///
-/// Tickets are meant to be single use. It is an error/application-defined
-/// behavior to reuse a ticket.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct Ticket {
-    #[prost(bytes = "bytes", tag = "1")]
-    pub ticket: ::prost::bytes::Bytes,
+/// The request should be stored in Action.body.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RenewFlightEndpointRequest {
+    #[prost(message, optional, tag = "1")]
+    pub endpoint: ::core::option::Option<FlightEndpoint>,
 }
 ///
 /// A batch of Arrow data as part of a stream of batches.
@@ -369,6 +406,213 @@ pub struct FlightData {
 pub struct PutResult {
     #[prost(bytes = "bytes", tag = "1")]
     pub app_metadata: ::prost::bytes::Bytes,
+}
+///
+/// EXPERIMENTAL: Union of possible value types for a Session Option to be set to.
+///
+/// By convention, an attempt to set a valueless SessionOptionValue should
+/// attempt to unset or clear the named option value on the server.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SessionOptionValue {
+    #[prost(oneof = "session_option_value::OptionValue", tags = "1, 2, 3, 4, 5")]
+    pub option_value: ::core::option::Option<session_option_value::OptionValue>,
+}
+/// Nested message and enum types in `SessionOptionValue`.
+pub mod session_option_value {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct StringListValue {
+        #[prost(string, repeated, tag = "1")]
+        pub values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    }
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionValue {
+        #[prost(string, tag = "1")]
+        StringValue(::prost::alloc::string::String),
+        #[prost(bool, tag = "2")]
+        BoolValue(bool),
+        #[prost(sfixed64, tag = "3")]
+        Int64Value(i64),
+        #[prost(double, tag = "4")]
+        DoubleValue(f64),
+        #[prost(message, tag = "5")]
+        StringListValue(StringListValue),
+    }
+}
+///
+/// EXPERIMENTAL: A request to set session options for an existing or new (implicit)
+/// server session.
+///
+/// Sessions are persisted and referenced via a transport-level state management, typically
+/// RFC 6265 HTTP cookies when using an HTTP transport.  The suggested cookie name or state
+/// context key is 'arrow_flight_session_id', although implementations may freely choose their
+/// own name.
+///
+/// Session creation (if one does not already exist) is implied by this RPC request, however
+/// server implementations may choose to initiate a session that also contains client-provided
+/// session options at any other time, e.g. on authentication, or when any other call is made
+/// and the server wishes to use a session to persist any state (or lack thereof).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetSessionOptionsRequest {
+    #[prost(map = "string, message", tag = "1")]
+    pub session_options: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        SessionOptionValue,
+    >,
+}
+///
+/// EXPERIMENTAL: The results (individually) of setting a set of session options.
+///
+/// Option names should only be present in the response if they were not successfully
+/// set on the server; that is, a response without an Error for a name provided in the
+/// SetSessionOptionsRequest implies that the named option value was set successfully.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetSessionOptionsResult {
+    #[prost(map = "string, message", tag = "1")]
+    pub errors: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        set_session_options_result::Error,
+    >,
+}
+/// Nested message and enum types in `SetSessionOptionsResult`.
+pub mod set_session_options_result {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Error {
+        #[prost(enumeration = "ErrorValue", tag = "1")]
+        pub value: i32,
+    }
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum ErrorValue {
+        /// Protobuf deserialization fallback value: The status is unknown or unrecognized.
+        /// Servers should avoid using this value. The request may be retried by the client.
+        Unspecified = 0,
+        /// The given session option name is invalid.
+        InvalidName = 1,
+        /// The session option value or type is invalid.
+        InvalidValue = 2,
+        /// The session option cannot be set.
+        Error = 3,
+    }
+    impl ErrorValue {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "UNSPECIFIED",
+                Self::InvalidName => "INVALID_NAME",
+                Self::InvalidValue => "INVALID_VALUE",
+                Self::Error => "ERROR",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "UNSPECIFIED" => Some(Self::Unspecified),
+                "INVALID_NAME" => Some(Self::InvalidName),
+                "INVALID_VALUE" => Some(Self::InvalidValue),
+                "ERROR" => Some(Self::Error),
+                _ => None,
+            }
+        }
+    }
+}
+///
+/// EXPERIMENTAL: A request to access the session options for the current server session.
+///
+/// The existing session is referenced via a cookie header or similar (see
+/// SetSessionOptionsRequest above); it is an error to make this request with a missing,
+/// invalid, or expired session cookie header or other implementation-defined session
+/// reference token.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetSessionOptionsRequest {}
+///
+/// EXPERIMENTAL: The result containing the current server session options.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetSessionOptionsResult {
+    #[prost(map = "string, message", tag = "1")]
+    pub session_options: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        SessionOptionValue,
+    >,
+}
+///
+/// Request message for the "Close Session" action.
+///
+/// The existing session is referenced via a cookie header.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CloseSessionRequest {}
+///
+/// The result of closing a session.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CloseSessionResult {
+    #[prost(enumeration = "close_session_result::Status", tag = "1")]
+    pub status: i32,
+}
+/// Nested message and enum types in `CloseSessionResult`.
+pub mod close_session_result {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum Status {
+        /// Protobuf deserialization fallback value: The session close status is unknown or
+        /// not recognized. Servers should avoid using this value (send a NOT_FOUND error if
+        /// the requested session is not known or expired). Clients can retry the request.
+        Unspecified = 0,
+        /// The session close request is complete. Subsequent requests with
+        /// the same session produce a NOT_FOUND error.
+        Closed = 1,
+        /// The session close request is in progress. The client may retry
+        /// the close request.
+        Closing = 2,
+        /// The session is not closeable. The client should not retry the
+        /// close request.
+        NotCloseable = 3,
+    }
+    impl Status {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "UNSPECIFIED",
+                Self::Closed => "CLOSED",
+                Self::Closing => "CLOSING",
+                Self::NotCloseable => "NOT_CLOSEABLE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "UNSPECIFIED" => Some(Self::Unspecified),
+                "CLOSED" => Some(Self::Closed),
+                "CLOSING" => Some(Self::Closing),
+                "NOT_CLOSEABLE" => Some(Self::NotCloseable),
+                _ => None,
+            }
+        }
+    }
 }
 ///
 /// The result of a cancel operation.

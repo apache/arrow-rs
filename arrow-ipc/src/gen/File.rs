@@ -98,7 +98,7 @@ impl<'a> Block {
         s
     }
 
-    /// Index to the start of the RecordBlock (note this is past the Message header)
+    /// Index to the start of the RecordBatch (note this is past the Message header)
     pub fn offset(&self) -> i64 {
         let mut mem = core::mem::MaybeUninit::<<i64 as EndianScalar>::Scalar>::uninit();
         // Safety:
