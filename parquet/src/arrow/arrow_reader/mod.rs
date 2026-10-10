@@ -1647,19 +1647,21 @@ fn consume_record_batch(array_reader: &mut dyn ArrayReader) -> Result<RecordBatc
 ///
 /// Each [`MaskCursor`] chunk is safe to decode because it stays within loaded
 /// pages. Gaps are crossed with [`ArrayReader::skip_records`], while decoded
-/// arrays and their mask fragments remain buffered. Once `batch_size` selected
-/// rows have accumulated, this consumes the underlying batch and filters it
-/// once with the combined mask.
+/// arrays and their mask fragments remain buffered. The total number of rows
+/// decoded for one output batch is also bounded by `batch_size`; sparse masks
+/// can therefore produce smaller output batches. The underlying batch is
+/// filtered once with the combined mask.
 fn read_mask_batch(
     array_reader: &mut dyn ArrayReader,
     mask_cursor: &mut MaskCursor,
     batch_size: usize,
 ) -> Result<Option<RecordBatch>> {
     let mut selected_rows = 0;
+    let mut decoded_rows = 0;
     let mut filter_mask = FilterMaskAccumulator::default();
 
-    while selected_rows < batch_size && !mask_cursor.is_empty() {
-        let mask_chunk = mask_cursor.next_chunk(batch_size - selected_rows)?;
+    while selected_rows < batch_size && decoded_rows < batch_size && !mask_cursor.is_empty() {
+        let mask_chunk = mask_cursor.next_chunk(batch_size - decoded_rows)?;
 
         if mask_chunk.initial_skip > 0 {
             let skipped = array_reader.skip_records(mask_chunk.initial_skip)?;
@@ -1690,6 +1692,7 @@ fn read_mask_batch(
 
         filter_mask.append(mask.values().clone());
         selected_rows += mask_chunk.selected_rows;
+        decoded_rows += mask_chunk.chunk_rows;
     }
 
     if selected_rows == 0 {

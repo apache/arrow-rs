@@ -189,6 +189,51 @@ fn test_list_skip() {
 }
 
 #[test]
+fn test_sparse_mask_selection_bounds_decoded_rows_per_batch() {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        ArrowDataType::Int32,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int32Array::from((0..101).collect::<Vec<_>>()))],
+    )
+    .unwrap();
+    let mut buffer = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let selection = RowSelection::from(vec![
+        RowSelector::select(1),
+        RowSelector::skip(49),
+        RowSelector::select(1),
+        RowSelector::skip(49),
+        RowSelector::select(1),
+    ]);
+    let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer))
+        .unwrap()
+        .with_batch_size(2)
+        .with_row_selection(selection)
+        .build()
+        .unwrap();
+
+    let batches = reader.collect::<std::result::Result<Vec<_>, _>>().unwrap();
+    assert_eq!(
+        batches
+            .iter()
+            .map(RecordBatch::num_rows)
+            .collect::<Vec<_>>(),
+        vec![1, 1, 1]
+    );
+    assert_eq!(
+        concat_batches(&schema, &batches).unwrap(),
+        RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![0, 50, 100]))],).unwrap()
+    );
+}
+
+#[test]
 #[cfg_attr(miri, ignore)] // Takes too long
 fn test_list_selection() {
     let schema = Arc::new(Schema::new(vec![Field::new_list(

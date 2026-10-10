@@ -226,7 +226,10 @@ impl MaskCursor {
         self.position >= self.mask.len()
     }
 
-    /// Advance through the mask representation, producing the next chunk summary
+    /// Advance through the mask representation, producing the next chunk summary.
+    ///
+    /// A chunk contains at most `batch_size` decoded rows, even when the mask is
+    /// sparse and needs to scan farther to find that many selected rows.
     pub fn next_mask_chunk(&mut self, batch_size: usize) -> Option<MaskChunk> {
         if self.is_empty() {
             return None;
@@ -258,10 +261,10 @@ impl MaskCursor {
             let mut chunk_rows = 0;
             let mut selected_rows = 0;
 
-            // Advance until enough rows have been selected to satisfy the batch size,
-            // or until the mask is exhausted. This mirrors the behaviour of the legacy
-            // `RowSelector` queue-based iteration.
-            while cursor < mask.len() && selected_rows < batch_size {
+            // Bound decoded rows as well as selected rows. Otherwise a sparse mask
+            // can make one chunk span an arbitrarily large number of variable-width
+            // values before filtering them out.
+            while cursor < mask.len() && selected_rows < batch_size && chunk_rows < batch_size {
                 chunk_rows += 1;
                 if mask.value(cursor) {
                     selected_rows += 1;
@@ -325,7 +328,11 @@ impl MaskCursor {
         let mask_start = cursor;
         let mut selected_rows = 0;
         let mut chunk_end = cursor;
-        while cursor < loaded_range_end && cursor < self.mask.len() && selected_rows < batch_size {
+        while cursor < loaded_range_end
+            && cursor < self.mask.len()
+            && selected_rows < batch_size
+            && cursor - mask_start < batch_size
+        {
             if self.mask.value(cursor) {
                 selected_rows += 1;
                 chunk_end = cursor + 1;
@@ -465,6 +472,32 @@ mod tests {
     }
 
     #[test]
+    fn test_loaded_mask_chunk_bounds_sparse_decoding() {
+        let loaded =
+            LoadedRowRanges::from_selection(RowSelection::from(vec![RowSelector::select(51)]));
+        let RowSelectionCursor::Mask(mut cursor) = RowSelectionStrategy::Mask.build_cursor(
+            RowSelection::from(vec![
+                RowSelector::select(1),
+                RowSelector::skip(49),
+                RowSelector::select(1),
+            ]),
+            Some(loaded.into()),
+        ) else {
+            unreachable!()
+        };
+
+        let first = cursor.next_chunk(2).unwrap();
+        assert_eq!(first.chunk_rows, 1);
+        assert_eq!(first.selected_rows, 1);
+
+        let second = cursor.next_chunk(2).unwrap();
+        assert_eq!(second.initial_skip, 49);
+        assert_eq!(second.chunk_rows, 1);
+        assert_eq!(second.selected_rows, 1);
+        assert!(cursor.is_empty());
+    }
+
+    #[test]
     fn test_next_mask_chunk_until_cursor_is_empty() {
         let RowSelectionCursor::Mask(mut cursor) = RowSelectionStrategy::Mask.build_cursor(
             RowSelection::from(vec![
@@ -488,6 +521,30 @@ mod tests {
         assert_eq!(second.chunk_rows, 1);
         assert_eq!(second.selected_rows, 1);
 
+        assert!(cursor.next_mask_chunk(2).is_none());
+    }
+
+    #[test]
+    fn test_next_mask_chunk_bounds_rows_decoded_for_sparse_selection() {
+        let RowSelectionCursor::Mask(mut cursor) = RowSelectionStrategy::Mask.build_cursor(
+            RowSelection::from(vec![
+                RowSelector::select(1),
+                RowSelector::skip(49),
+                RowSelector::select(1),
+            ]),
+            None,
+        ) else {
+            unreachable!()
+        };
+
+        let first = cursor.next_mask_chunk(2).unwrap();
+        assert_eq!(first.chunk_rows, 2);
+        assert_eq!(first.selected_rows, 1);
+
+        let second = cursor.next_mask_chunk(2).unwrap();
+        assert_eq!(second.initial_skip, 48);
+        assert_eq!(second.chunk_rows, 1);
+        assert_eq!(second.selected_rows, 1);
         assert!(cursor.next_mask_chunk(2).is_none());
     }
 }
