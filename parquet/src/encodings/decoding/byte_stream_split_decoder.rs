@@ -34,7 +34,7 @@ pub struct ByteStreamSplitDecoder<T: DataType> {
 }
 
 impl<T: DataType> ByteStreamSplitDecoder<T> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             _phantom: PhantomData,
             encoded_bytes: Bytes::new(),
@@ -146,7 +146,7 @@ pub struct VariableWidthByteStreamSplitDecoder<T: DataType> {
 }
 
 impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
-    pub(crate) fn new(type_length: i32) -> Self {
+    pub fn new(type_length: i32) -> Self {
         Self {
             _phantom: PhantomData,
             encoded_bytes: Bytes::new(),

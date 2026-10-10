@@ -622,7 +622,7 @@ impl<T: DataType> AlpEncoder<T>
 where
     T::T: AlpFloat,
 {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             values: Vec::new(),
             preset: None,

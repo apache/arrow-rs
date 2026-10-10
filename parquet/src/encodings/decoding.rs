@@ -26,8 +26,8 @@ use super::rle::{MAX_RLE_DICTIONARY_BIT_WIDTH, RleDecoder};
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
-use crate::encodings::decoding::alp_decoder::AlpDecoder;
-use crate::encodings::decoding::byte_stream_split_decoder::{
+pub use crate::encodings::decoding::alp_decoder::AlpDecoder;
+pub use crate::encodings::decoding::byte_stream_split_decoder::{
     ByteStreamSplitDecoder, VariableWidthByteStreamSplitDecoder,
 };
 use crate::errors::{ParquetError, Result};
