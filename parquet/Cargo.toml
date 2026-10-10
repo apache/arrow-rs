@@ -93,6 +93,9 @@ object_store = { workspace = true, features = ["azure", "fs"] }
 opendal = { version = "0.59.1", default-features = false, features = ["services-memory"] }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tikv-jemallocator = { version = "0.7", default-features = false }
+
 [package.metadata.docs.rs]
 all-features = true
 

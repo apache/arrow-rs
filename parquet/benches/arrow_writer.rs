@@ -18,6 +18,17 @@
 #[macro_use]
 extern crate criterion;
 
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static BENCH_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+// tikv-jemallocator prefixes its symbols by default.
+#[cfg(target_os = "linux")]
+#[used]
+#[unsafe(export_name = "_rjem_malloc_conf")]
+pub static JEMALLOC_CONF: &[u8] =
+    b"abort_conf:true,background_thread:false,narenas:1,dirty_decay_ms:-1,muzzy_decay_ms:-1\0";
+
 use arrow_array::builder::StringDictionaryBuilder;
 use criterion::{Bencher, Criterion, Throughput};
 use parquet::arrow::ArrowWriter;
