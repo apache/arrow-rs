@@ -173,6 +173,11 @@ name = "custom_page_index"
 required-features = ["arrow"]
 path = "./examples/custom_page_index.rs"
 
+[[example]]
+name = "page_index_cache"
+required-features = ["arrow"]
+path = "./examples/page_index_cache.rs"
+
 [[test]]
 name = "arrow_reader"
 required-features = ["arrow"]
