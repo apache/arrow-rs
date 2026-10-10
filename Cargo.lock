@@ -53,15 +53,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alloca"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5a7d05ea6aea7e9e64d25b9156ba2fee3fdd659e34e41063cd2fc7cd020d7f4"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -194,7 +185,7 @@ dependencies = [
  "arrow-string",
  "bytes",
  "chrono",
- "criterion",
+ "codspeed-criterion-compat",
  "half",
  "memmap2",
  "rand 0.10.3",
@@ -210,7 +201,7 @@ dependencies = [
  "arrow-data",
  "arrow-schema",
  "chrono",
- "criterion",
+ "codspeed-criterion-compat",
  "num-traits",
 ]
 
@@ -224,7 +215,7 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "chrono-tz",
- "criterion",
+ "codspeed-criterion-compat",
  "futures",
  "half",
  "hashbrown 0.17.1",
@@ -249,8 +240,8 @@ dependencies = [
  "async-stream",
  "bytes",
  "bzip2",
+ "codspeed-criterion-compat",
  "crc",
- "criterion",
  "flate2",
  "futures",
  "half",
@@ -276,7 +267,7 @@ name = "arrow-buffer"
 version = "60.0.0"
 dependencies = [
  "bytes",
- "criterion",
+ "codspeed-criterion-compat",
  "half",
  "num-bigint 0.5.1",
  "num-traits",
@@ -296,8 +287,8 @@ dependencies = [
  "atoi",
  "base64 0.23.1",
  "chrono",
+ "codspeed-criterion-compat",
  "comfy-table",
- "criterion",
  "half",
  "insta",
  "lexical-core",
@@ -369,7 +360,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "clap",
- "criterion",
+ "codspeed-criterion-compat",
  "futures",
  "http",
  "http-body",
@@ -430,7 +421,7 @@ dependencies = [
  "arrow-schema",
  "arrow-select",
  "bytes",
- "criterion",
+ "codspeed-criterion-compat",
  "flatbuffers",
  "lz4_flex",
  "memmap2",
@@ -452,7 +443,7 @@ dependencies = [
  "arrow-select",
  "bytes",
  "chrono",
- "criterion",
+ "codspeed-criterion-compat",
  "flate2",
  "futures",
  "half",
@@ -514,7 +505,7 @@ name = "arrow-schema"
 version = "60.0.0"
 dependencies = [
  "bitflags 2.13.2",
- "criterion",
+ "codspeed-criterion-compat",
  "insta",
  "postcard",
  "serde",
@@ -532,7 +523,7 @@ dependencies = [
  "arrow-cmp",
  "arrow-data",
  "arrow-schema",
- "criterion",
+ "codspeed-criterion-compat",
  "num-traits",
  "rand 0.10.3",
 ]
@@ -974,10 +965,80 @@ dependencies = [
 ]
 
 [[package]]
+name = "codspeed"
+version = "4.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57af92d1db7f6871b7e82c79cd87f2501db66f36b0eab924be6ea83dd6b2f3f3"
+dependencies = [
+ "anyhow",
+ "cc",
+ "colored",
+ "getrandom 0.2.17",
+ "glob",
+ "libc",
+ "nix",
+ "serde",
+ "serde_json",
+ "statrs",
+]
+
+[[package]]
+name = "codspeed-criterion-compat"
+version = "4.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d31ae2e9ab23c29fa13bdfa06d012524176f5c0f4e25ec262cd829d947ebc5e"
+dependencies = [
+ "clap",
+ "codspeed",
+ "codspeed-criterion-compat-walltime",
+ "colored",
+ "futures",
+ "regex",
+ "tokio",
+]
+
+[[package]]
+name = "codspeed-criterion-compat-walltime"
+version = "4.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc8605e40bab5114dcb0f76268e18880082b5798dec10757b5b58d2c3bbc7a1c"
+dependencies = [
+ "anes",
+ "cast",
+ "ciborium",
+ "clap",
+ "codspeed",
+ "criterion-plot",
+ "futures",
+ "is-terminal",
+ "itertools 0.10.5",
+ "num-traits",
+ "once_cell",
+ "oorandom",
+ "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "tinytemplate",
+ "tokio",
+ "walkdir",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
+
+[[package]]
+name = "colored"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
+dependencies = [
+ "lazy_static",
+ "windows-sys 0.52.0",
+]
 
 [[package]]
 name = "combine"
@@ -1086,38 +1147,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "criterion"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "950046b2aa2492f9a536f5f4f9a3de7b9e2476e575e05bd6c333371add4d98f3"
-dependencies = [
- "alloca",
- "anes",
- "cast",
- "ciborium",
- "clap",
- "criterion-plot",
- "futures",
- "itertools 0.13.0",
- "num-traits",
- "oorandom",
- "page_size",
- "regex",
- "serde",
- "serde_json",
- "tinytemplate",
- "tokio",
- "walkdir",
-]
-
-[[package]]
 name = "criterion-plot"
-version = "0.8.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8d80a2f4f5b554395e47b5d8305bc3d27813bacb73493eb1001e8f76dae29ea"
+checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
 dependencies = [
  "cast",
- "itertools 0.13.0",
+ "itertools 0.10.5",
 ]
 
 [[package]]
@@ -1529,6 +1565,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
 name = "h2"
 version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1585,6 +1627,12 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "hermit-abi"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "hex"
@@ -1888,6 +1936,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
 
 [[package]]
+name = "is-terminal"
+version = "0.4.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
+dependencies = [
+ "hermit-abi",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1895,9 +1954,9 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
+version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
 dependencies = [
  "either",
 ]
@@ -2517,16 +2576,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "page_size"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
-dependencies = [
- "libc",
- "winapi",
-]
-
-[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2568,8 +2617,8 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "codspeed-criterion-compat",
  "crc32fast",
- "criterion",
  "flate2",
  "futures",
  "half",
@@ -2616,7 +2665,7 @@ version = "60.0.0"
 dependencies = [
  "arrow-schema",
  "chrono",
- "criterion",
+ "codspeed-criterion-compat",
  "half",
  "indexmap",
  "proptest",
@@ -2632,7 +2681,7 @@ dependencies = [
  "arrow",
  "arrow-schema",
  "chrono",
- "criterion",
+ "codspeed-criterion-compat",
  "half",
  "indexmap",
  "num-traits",
@@ -3573,6 +3622,16 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "statrs"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a3fe7c28c6512e766b0874335db33c94ad7b8f9054228ae1c2abd47ce7d335e"
+dependencies = [
+ "approx",
+ "num-traits",
+]
 
 [[package]]
 name = "strsim"
