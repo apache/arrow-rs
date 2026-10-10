@@ -18,7 +18,9 @@
 #[macro_use]
 extern crate criterion;
 
-use criterion::Criterion;
+mod interleave_byte_view_cases;
+
+use criterion::{BenchmarkId, Criterion, Throughput};
 use std::ops::Range;
 
 use rand::RngExt;
@@ -27,9 +29,10 @@ use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
 use arrow_buffer::ScalarBuffer;
-use arrow_select::interleave::interleave;
+use arrow_select::interleave::{Interleaver, interleave};
 use std::hint;
 use std::sync::Arc;
+use std::time::Duration;
 
 fn do_bench(
     c: &mut Criterion,
@@ -64,6 +67,60 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
     c.bench_function(name, |b| {
         b.iter(|| hint::black_box(interleave(values, &indices).unwrap()))
     });
+}
+
+fn bench_byte_view_compaction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("interleave_byte_view_compaction");
+    interleave_byte_view_cases::for_each_case(|case| {
+        let values: Vec<&dyn Array> = case.arrays.iter().map(|a| a as &dyn Array).collect();
+        group.throughput(Throughput::Elements(case.indices.len() as u64));
+        group.bench_with_input(
+            BenchmarkId::new("interleave", &case.name),
+            &case.indices,
+            |b, indices| b.iter(|| hint::black_box(interleave(&values, indices).unwrap())),
+        );
+        group.bench_with_input(
+            BenchmarkId::new("interleave_gc", &case.name),
+            &case.indices,
+            |b, indices| {
+                b.iter(|| {
+                    let selected = interleave(&values, indices).unwrap();
+                    let selected = selected.as_any().downcast_ref::<StringViewArray>().unwrap();
+                    hint::black_box(Arc::new(selected.gc()) as ArrayRef)
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("compact", &case.name),
+            &case.indices,
+            |b, indices| {
+                b.iter(|| {
+                    hint::black_box(
+                        Interleaver::new()
+                            .with_compact_byte_views(true)
+                            .interleave(&values, indices)
+                            .unwrap(),
+                    )
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("compact_shared", &case.name),
+            &case.indices,
+            |b, indices| {
+                b.iter(|| {
+                    hint::black_box(
+                        Interleaver::new()
+                            .with_compact_byte_views(true)
+                            .with_preserve_byte_view_sharing(true)
+                            .interleave(&values, indices)
+                            .unwrap(),
+                    )
+                })
+            },
+        );
+    });
+    group.finish();
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -219,4 +276,12 @@ fn add_benchmark(c: &mut Criterion) {
 }
 
 criterion_group!(benches, add_benchmark);
-criterion_main!(benches);
+criterion_group! {
+    name = byte_view_benches;
+    config = Criterion::default()
+        .sample_size(20)
+        .warm_up_time(Duration::from_millis(100))
+        .measurement_time(Duration::from_millis(300));
+    targets = bench_byte_view_compaction
+}
+criterion_main!(benches, byte_view_benches);
