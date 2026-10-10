@@ -728,6 +728,7 @@ where
 {
     let array = array.as_primitive::<D>();
 
+    // div is always > 0, so div_wrapping(div) can never overflow/panic
     let div: D::Native = D::Native::usize_as(10)
         .pow_checked(scale.unsigned_abs() as u32)
         .map_err(|_| {

@@ -559,6 +559,9 @@ where
         // Compute the scale factor once in the source type. Scaling before the
         // checked conversion permits values that only fit the decimal native
         // type after scaling.
+        //
+        // scale_factor is always > 0, so div_wrapping(scale_factor) can never
+        // overflow/panic
         let scale_factor = T::Native::usize_as(10)
             .pow_checked(scale.unsigned_abs() as u32)
             .ok();
@@ -569,14 +572,12 @@ where
                     .expect("value fits the decimal")
             }),
             (Some(scale_factor), true) => array.unary_opt::<_, D>(|v| {
-                let v = v.div_wrapping(scale_factor);
-                let v = integer_to_decimal_native::<_, M>(v)?;
+                let v = integer_to_decimal_native::<_, M>(v.div_wrapping(scale_factor))?;
                 (D::is_valid_decimal_precision(v, precision)).then_some(v)
             }),
             (Some(scale_factor), false) => array.try_unary::<_, D, _>(|v| {
-                let original_v = v;
-                let v = v.div_wrapping(scale_factor);
-                let v = integer_to_decimal_native::<_, M>(v).ok_or_else(|| overflow(original_v))?;
+                let v = integer_to_decimal_native::<_, M>(v.div_wrapping(scale_factor))
+                    .ok_or_else(|| overflow(v))?;
                 D::validate_decimal_precision(v, precision, scale).map(|()| v)
             })?,
             // A scale factor that overflows the source type is larger than all
