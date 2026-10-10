@@ -18,6 +18,8 @@
 use crate::errors::ParquetError;
 use crate::file::reader::{ChunkReader, Length};
 use bytes::Bytes;
+use std::cmp::Ordering;
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Range;
 
@@ -54,10 +56,13 @@ pub struct PushBuffers {
     file_len: u64,
     /// The ranges of data that are available for decoding (not adjusted for
     /// offset), sorted by `start`
-    ranges: Vec<Range<u64>>,
+    ///
+    /// A `VecDeque`, because a scan pushes buffers at the end and releases
+    /// them at the start. Both are then `O(1)` for each buffer.
+    ranges: VecDeque<Range<u64>>,
     /// The buffers of data that can be used to decode the Parquet file, in the
     /// same order as `ranges`
-    buffers: Vec<Bytes>,
+    buffers: VecDeque<Bytes>,
     /// The length of the longest range in `ranges`.
     ///
     /// This keeps lookups fast in the common case: buffers that do not
@@ -66,9 +71,18 @@ pub struct PushBuffers {
     /// when no earlier buffer can reach the requested range, so it checks one
     /// or two buffers, not all of them. See [`Self::find`].
     max_len: u64,
+    /// The number of ranges in `ranges` with the length `max_len`. `max_len`
+    /// can decrease only when this count goes to zero. Thus, a release does
+    /// not scan all ranges to update `max_len` while other ranges of that
+    /// length remain.
+    max_len_count: usize,
     /// The sum of the lengths of `ranges`, kept up to date so that
     /// [`Self::buffered_bytes`] does not scan all ranges.
     buffered_bytes: u64,
+    /// The number of empty ranges in `ranges`. [`Self::push_range`] accepts
+    /// them, and [`Self::release_ranges`] removes them. The count tells
+    /// `release_ranges` when it must look for them in all buffers.
+    empty: usize,
 }
 
 impl Display for PushBuffers {
@@ -105,10 +119,12 @@ impl PushBuffers {
         Self {
             offset: 0,
             file_len,
-            ranges: Vec::new(),
-            buffers: Vec::new(),
+            ranges: VecDeque::new(),
+            buffers: VecDeque::new(),
             max_len: 0,
+            max_len_count: 0,
             buffered_bytes: 0,
+            empty: 0,
         }
     }
 
@@ -155,8 +171,13 @@ impl PushBuffers {
         // Insert after all buffers that start at or before `range.start`.
         // Thus, ranges pushed in file order go at the end.
         let idx = self.ranges.partition_point(|r| r.start <= range.start);
-        self.max_len = self.max_len.max(expected);
+        match expected.cmp(&self.max_len) {
+            Ordering::Greater => (self.max_len, self.max_len_count) = (expected, 1),
+            Ordering::Equal => self.max_len_count += 1,
+            Ordering::Less => {}
+        }
         self.buffered_bytes += expected;
+        self.empty += usize::from(expected == 0);
         self.ranges.insert(idx, range);
         self.buffers.insert(idx, buffer);
         Ok(())
@@ -197,8 +218,8 @@ impl PushBuffers {
         // long only if a caller pushes one large buffer and then many small
         // buffers after its start.
         let candidates = self.ranges.partition_point(|r| r.start <= start);
-        self.ranges[..candidates]
-            .iter()
+        self.ranges
+            .range(..candidates)
             .enumerate()
             .rev()
             .take_while(|(_, r)| r.start.saturating_add(self.max_len) >= end)
@@ -229,45 +250,78 @@ impl PushBuffers {
     }
 
     /// Clear any range and corresponding buffer that is exactly in the ranges_to_clear
+    ///
+    /// A binary search finds the buffers that start at the start of each
+    /// range to clear, as in [`Self::find`]. Thus, a call does not visit the
+    /// other buffers.
     #[cfg(feature = "arrow")]
     pub(crate) fn clear_ranges(&mut self, ranges_to_clear: &[Range<u64>]) {
-        // Use `(start, end)` tuples because `Range` is not `Ord`
-        let mut clear: Vec<(u64, u64)> = ranges_to_clear.iter().map(|r| (r.start, r.end)).collect();
-        if clear.is_empty() {
-            return;
+        // The indexes of the buffers to remove. The buffers are sorted by
+        // start, so all buffers with the same start are adjacent.
+        let mut remove = vec![];
+        for clear in ranges_to_clear {
+            let first = self.ranges.partition_point(|r| r.start < clear.start);
+            let same_start = self
+                .ranges
+                .range(first..)
+                .take_while(|r| r.start == clear.start);
+            remove.extend(
+                same_start
+                    .enumerate()
+                    .filter(|(_, r)| r.end == clear.end)
+                    .map(|(idx, _)| first + idx),
+            );
         }
-        clear.sort_unstable();
-        let mut ranges = Vec::with_capacity(self.ranges.len());
-        let mut buffers = Vec::with_capacity(self.buffers.len());
-        for (range, buffer) in self.ranges.drain(..).zip(self.buffers.drain(..)) {
-            if clear.binary_search(&(range.start, range.end)).is_err() {
-                ranges.push(range);
-                buffers.push(buffer);
+        // Buffers with the same start are not sorted by end, and
+        // `ranges_to_clear` can contain a range more than once.
+        remove.sort_unstable();
+        remove.dedup();
+        let (Some(&first), Some(&last)) = (remove.first(), remove.last()) else {
+            return;
+        };
+        // Move the kept buffers in `first..=last` to the start of that span,
+        // in order, then remove the rest of the span. The buffers outside the
+        // span are not visited.
+        let mut kept = first;
+        let mut remove = remove.into_iter().peekable();
+        for idx in first..=last {
+            if remove.next_if_eq(&idx).is_some() {
+                let len = self.ranges[idx].end.saturating_sub(self.ranges[idx].start);
+                self.buffered_bytes -= len;
+                self.empty -= usize::from(len == 0);
+                if len == self.max_len {
+                    self.max_len_count -= 1;
+                }
+            } else {
+                self.ranges.swap(kept, idx);
+                self.buffers.swap(kept, idx);
+                kept += 1;
             }
         }
-        self.ranges = ranges;
-        self.buffers = buffers;
-        self.buffered_bytes = self
-            .ranges
-            .iter()
-            .map(|r| r.end.saturating_sub(r.start))
-            .sum();
-        self.update_max_len();
+        self.ranges.drain(kept..=last);
+        self.buffers.drain(kept..=last);
+        // `max_len` changes only when no buffer of that length remains.
+        if self.max_len_count == 0 {
+            self.update_max_len();
+        }
     }
 
-    /// Set `max_len` to the maximum length of the remaining ranges.
+    /// Set `max_len` to the maximum length of the remaining ranges, and
+    /// `max_len_count` to the number of ranges of that length.
     ///
     /// A `max_len` that is too large is still correct, lookups only scan
     /// further. This update is for performance: a large buffer that was
     /// removed must not slow down later lookups.
     #[cfg(feature = "arrow")]
     fn update_max_len(&mut self) {
-        self.max_len = self
-            .ranges
-            .iter()
-            .map(|r| r.end.saturating_sub(r.start))
-            .max()
-            .unwrap_or(0);
+        (self.max_len, self.max_len_count) = (0, 0);
+        for len in self.ranges.iter().map(|r| r.end.saturating_sub(r.start)) {
+            match len.cmp(&self.max_len) {
+                Ordering::Greater => (self.max_len, self.max_len_count) = (len, 1),
+                Ordering::Equal => self.max_len_count += 1,
+                Ordering::Less => {}
+            }
+        }
     }
 
     /// Remove all buffered bytes in `ranges`.
@@ -281,38 +335,63 @@ impl PushBuffers {
     /// The buffers stay sorted by start, which lookups require (see
     /// [`Self::find`]). If no buffer overlaps `ranges`, the buffers do not
     /// change.
+    ///
+    /// A binary search finds the buffers that can overlap `ranges`, as in
+    /// [`Self::find`]. Thus, a call does not visit the other buffers.
     #[cfg(feature = "arrow")]
     pub(crate) fn release_ranges(&mut self, ranges: &[Range<u64>]) {
         let release = merge_ranges(ranges);
         if release.is_empty() {
             return;
         }
-        // Most calls release ranges that are no longer buffered. Return
-        // before reallocating the buffers.
         let overlaps = |range: &Range<u64>| {
             !range.is_empty() && {
                 let first = release.partition_point(|r| r.end <= range.start);
                 release.get(first).is_some_and(|r| r.start < range.end)
             }
         };
-        if !self.ranges.iter().any(overlaps) {
-            return;
+        // Find the buffers that overlap a released range. The buffers are
+        // sorted by start, and no buffer is longer than `max_len`. Thus, a
+        // buffer can overlap `r` only if it starts before `r.end` and less
+        // than `max_len` bytes before `r.start`:
+        //
+        //   buffers:  0..25    ├─────────┤
+        //             25..50             ├─────────┤
+        //             50..75                       ├─────────┤
+        //             75..100                                ├─────────┤
+        //   release:  55..70                         ├─────┤  max_len is 25: check 50..75 only
+        let mut overlapping = vec![];
+        let mut visited = 0;
+        for r in &release {
+            let max_len = self.max_len;
+            let first = self
+                .ranges
+                .partition_point(|b| b.start.saturating_add(max_len) <= r.start);
+            let end = self.ranges.partition_point(|b| b.start < r.end);
+            // A buffer that an earlier released range visited is not visited
+            // again, because `overlaps` checks all released ranges.
+            overlapping
+                .extend((first.max(visited)..end).filter(|&idx| overlaps(&self.ranges[idx])));
+            visited = visited.max(end);
         }
+        // Most calls release ranges that are no longer buffered. Return
+        // before changing the buffers.
+        let (Some(&first), Some(&last)) = (overlapping.first(), overlapping.last()) else {
+            return;
+        };
         // Trim the buffers that overlap a released range in place, and do not
         // clone or move the others. The parts after the first part of a split
         // buffer go to `split`. A buffer that is released entirely becomes
         // empty, and is removed below.
         let mut split = vec![];
         let mut emptied = false;
-        for (range, buffer) in self.ranges.iter_mut().zip(self.buffers.iter_mut()) {
-            if range.is_empty() {
-                emptied = true;
-                continue;
-            }
-            if !overlaps(range) {
-                continue;
-            }
+        for idx in overlapping {
+            let (range, buffer) = (&mut self.ranges[idx], &mut self.buffers[idx]);
             let whole = range.clone();
+            // Each kept part is shorter than `whole`.
+            if whole.end - whole.start == self.max_len {
+                self.max_len_count -= 1;
+            }
             let offset = |pos: u64| (pos - whole.start) as usize;
             // The parts of `whole` between the released ranges.
             let first = release.partition_point(|r| r.end <= whole.start);
@@ -351,30 +430,49 @@ impl PushBuffers {
                 }
             }
         }
-        if emptied {
+        if emptied || self.empty > 0 {
             // Remove the released buffers. As before, this also removes empty
-            // buffers that were pushed. `retain` visits each element exactly
-            // once in the original order, so both calls keep the same indices.
-            let mut keep = self.ranges.iter().map(|range| !range.is_empty());
-            self.buffers.retain(|_| keep.next().unwrap());
-            self.ranges.retain(|range| !range.is_empty());
+            // buffers that were pushed. The released buffers are all in
+            // `first..=last`, so look at all buffers only if empty buffers
+            // were pushed. `drain` moves the buffers on the shorter side of
+            // the removed ones, so a release at the start or at the end of
+            // the buffers moves none.
+            let span = match self.empty {
+                0 => first..last + 1,
+                _ => 0..self.ranges.len(),
+            };
+            let mut kept = span.start;
+            for idx in span.clone() {
+                if !self.ranges[idx].is_empty() {
+                    self.ranges.swap(kept, idx);
+                    self.buffers.swap(kept, idx);
+                    kept += 1;
+                }
+            }
+            self.ranges.drain(kept..span.end);
+            self.buffers.drain(kept..span.end);
+            self.empty = 0;
         }
-        for (range, buffer) in split {
-            self.ranges.push(range);
-            self.buffers.push(buffer);
-        }
-        // Split parts are appended, and if buffers overlap, the tail of a
-        // trimmed buffer can start after the start of the next buffer. The
-        // sort is stable.
-        if !self.ranges.is_sorted_by_key(|range| range.start) {
+        // A trim moves the start of a buffer only past released bytes. Each
+        // other buffer that starts in those bytes is trimmed past them too,
+        // or is empty and removed. Thus, the buffers are still sorted, except
+        // for the split parts, which are appended. Splits are rare, so sort
+        // all buffers then. The sort is stable.
+        if !split.is_empty() {
             let mut parts: Vec<_> = std::mem::take(&mut self.ranges)
                 .into_iter()
                 .zip(std::mem::take(&mut self.buffers))
+                .chain(split)
                 .collect();
             parts.sort_by_key(|(range, _)| range.start);
             (self.ranges, self.buffers) = parts.into_iter().unzip();
         }
-        self.update_max_len();
+        // `max_len` changes only when no buffer of that length remains. Only
+        // then pay for the pass over all buffers, which keeps `max_len` exact
+        // (see `update_max_len`).
+        if self.max_len_count == 0 {
+            self.update_max_len();
+        }
     }
 
     /// Remove all buffered bytes outside `keep`.
@@ -398,7 +496,9 @@ impl PushBuffers {
         self.ranges.clear();
         self.buffers.clear();
         self.max_len = 0;
+        self.max_len_count = 0;
         self.buffered_bytes = 0;
+        self.empty = 0;
     }
 
     /// Panics if `ranges`, `buffers` and `max_len` do not agree, or if the
@@ -408,7 +508,7 @@ impl PushBuffers {
     fn assert_invariants(&self) {
         assert_eq!(self.ranges.len(), self.buffers.len());
         assert!(
-            self.ranges.is_sorted_by_key(|r| r.start),
+            self.ranges.iter().is_sorted_by_key(|r| r.start),
             "not sorted: {:?}",
             self.ranges
         );
@@ -420,7 +520,15 @@ impl PushBuffers {
             .iter()
             .map(|r| r.end.saturating_sub(r.start))
             .max();
-        assert_eq!(self.max_len, max_len.unwrap_or(0));
+        let max_len = max_len.unwrap_or(0);
+        assert_eq!(self.max_len, max_len);
+        let is_longest = |r: &&Range<u64>| r.end.saturating_sub(r.start) == max_len;
+        assert_eq!(
+            self.max_len_count,
+            self.ranges.iter().filter(is_longest).count()
+        );
+        let empty = self.ranges.iter().filter(|r| r.is_empty()).count();
+        assert_eq!(self.empty, empty);
     }
 }
 
@@ -712,6 +820,26 @@ mod tests {
         assert_eq!(buffers.ranges, vec![0..30, 10..20]);
     }
 
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn clear_ranges_with_buffers_of_the_same_start() {
+        let mut buffers = PushBuffers::new(1000);
+        for range in [0..5, 10..20, 10..15, 10..20, 10..30, 10..12, 40..50] {
+            push(&mut buffers, range);
+        }
+        // Buffers with the same start are not sorted by end. A range to clear
+        // can match more than one buffer, and can be given more than once.
+        buffers.clear_ranges(&[10..30, 10..20, 10..20, 60..70]);
+        assert_valid(&buffers);
+        assert_eq!(buffers.ranges, vec![0..5, 10..15, 10..12, 40..50]);
+        assert_eq!(buffers.buffered_bytes(), 22);
+
+        // No buffer matches: the buffers do not change.
+        buffers.clear_ranges(&[10..20, 0..50]);
+        assert_valid(&buffers);
+        assert_eq!(buffers.ranges, vec![0..5, 10..15, 10..12, 40..50]);
+    }
+
     /// Random pushes, clears and lookups, compared with a list that is
     /// scanned in full for each lookup.
     #[test]
@@ -764,7 +892,7 @@ mod tests {
                     }
                 }
                 assert_valid(&buffers);
-                let mut actual = buffers.ranges.clone();
+                let mut actual = Vec::from(buffers.ranges.clone());
                 actual.sort_by_key(|r| (r.start, r.end));
                 model.sort_by_key(|r| (r.start, r.end));
                 assert_eq!(actual, model, "seed {seed}");
