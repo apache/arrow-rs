@@ -18,8 +18,9 @@
 //! Example of implementing a custom PageIndexProvider
 //!
 //! This example demonstrates how to create a custom page index provider that:
-//! - Only stores page indexes for specified columns (selective storage)
-//! - Uses nested HashMaps for efficient storage and lookup
+//! - Loads page indexes only for specified row groups and columns
+//! - Caches decoded page indexes for reuse across queries
+//! - Builds query-specific providers containing only the requested indexes
 //! - Implements all required PageIndexProvider trait methods
 //!
 //! This approach can significantly reduce memory usage and reduce load time
@@ -36,86 +37,124 @@ use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::index_reader::{decode_column_index, decode_offset_index};
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-// A custom PageIndexProvider that only stores indexes for a subset of columns
-//
-// This provider contains the parsed footer metadata and the entire contents of a
-// Parquet file. Indexes are lazily populated as they are requested.
-#[derive(Debug, Clone)]
-pub struct OnDemandPageIndexProvider {
-    metadata: ParquetMetaData,
-    file_bytes: Bytes,
-    // indexes are accessed first by row_group index and then by column index
-    column_indexes: Option<HashMap<usize, HashMap<usize, ColumnIndexMetaData>>>,
-    offset_indexes: Option<HashMap<usize, HashMap<usize, OffsetIndexMetaData>>>,
+/// A custom [`PageIndexProvider`] containing indexes for a subset of row groups
+/// and columns.
+///
+/// Loading is performed separately by [`SelectivePageIndexLoader`], so this
+/// provider retains neither the Parquet footer metadata nor the file contents.
+#[derive(Debug)]
+struct SparsePageIndexProvider {
+    column_indexes: HashMap<(usize, usize), Arc<ColumnIndexMetaData>>,
+    offset_indexes: HashMap<(usize, usize), Arc<OffsetIndexMetaData>>,
 }
 
-impl OnDemandPageIndexProvider {
-    fn new(metadata: ParquetMetaData, file_bytes: Bytes) -> Self {
+/// A cache of decoded page indexes for a single Parquet file.
+///
+/// A cache shared by multiple files would also need to include a stable file
+/// identity and freshness information in each key.
+#[derive(Default)]
+struct PageIndexCache {
+    column_indexes: HashMap<(usize, usize), Arc<ColumnIndexMetaData>>,
+    offset_indexes: HashMap<(usize, usize), Arc<OffsetIndexMetaData>>,
+}
+
+/// Loads selected page indexes and constructs a [`SparsePageIndexProvider`].
+struct SelectivePageIndexLoader<'a> {
+    metadata: &'a ParquetMetaData,
+    file_bytes: &'a Bytes,
+    cache: &'a mut PageIndexCache,
+    provider: SparsePageIndexProvider,
+}
+
+impl<'a> SelectivePageIndexLoader<'a> {
+    fn new(
+        metadata: &'a ParquetMetaData,
+        file_bytes: &'a Bytes,
+        cache: &'a mut PageIndexCache,
+    ) -> Self {
         Self {
             metadata,
             file_bytes,
-            column_indexes: None,
-            offset_indexes: None,
+            cache,
+            provider: SparsePageIndexProvider {
+                column_indexes: HashMap::new(),
+                offset_indexes: HashMap::new(),
+            },
         }
     }
 
-    // fetches the bytes for and parses the column index for the given row group and
-    // column. If already fetched, this does nothing.
-    fn fetch_column_index(&mut self, row_group_idx: usize, column_idx: usize) -> Result<()> {
-        let map = self.column_indexes.get_or_insert_with(HashMap::new);
-        let rg = map.entry(row_group_idx).or_default();
-        if let Entry::Vacant(e) = rg.entry(column_idx) {
-            // get the `ColumnIndexMetaData` for the requested row group and column...
-            let column = self.metadata.row_group(row_group_idx).column(column_idx);
-            // and get the location of the column index for this chunk
-            let range = column.column_index_range();
-            if let Some(range) = range {
-                let idx_bytes = self
-                    .file_bytes
-                    .slice(range.start as usize..range.end as usize);
-                let idx = decode_column_index(&idx_bytes, column.column_type())?;
-                e.insert(idx);
-            }
+    /// Loads and decodes the column index for the specified column chunk.
+    /// Repeated requests for the same entry do nothing.
+    fn load_column_index(&mut self, row_group_idx: usize, column_idx: usize) -> Result<()> {
+        let key = (row_group_idx, column_idx);
+        if self.provider.column_indexes.contains_key(&key) {
+            return Ok(());
+        }
+        if let Some(index) = self.cache.column_indexes.get(&key) {
+            println!("  Column index {key:?}: cache hit");
+            self.provider.column_indexes.insert(key, Arc::clone(index));
+            return Ok(());
+        }
+
+        let column = self.metadata.row_group(row_group_idx).column(column_idx);
+        if let Some(range) = column.column_index_range() {
+            println!("  Column index {key:?}: cache miss, decoding");
+            let idx_bytes = self
+                .file_bytes
+                .slice(range.start as usize..range.end as usize);
+            let index = Arc::new(decode_column_index(&idx_bytes, column.column_type())?);
+            self.cache.column_indexes.insert(key, Arc::clone(&index));
+            self.provider.column_indexes.insert(key, index);
         }
         Ok(())
     }
 
-    // fetches the bytes for and parses the offset index for the given row group and
-    // column. If already fetched, this does nothing.
-    fn fetch_offset_index(&mut self, row_group_idx: usize, column_idx: usize) -> Result<()> {
-        let map = self.offset_indexes.get_or_insert_with(HashMap::new);
-        let rg = map.entry(row_group_idx).or_default();
-        if let Entry::Vacant(e) = rg.entry(column_idx) {
-            // get the `ColumnIndexMetaData` for the requested row group and column...
-            let column = self.metadata.row_group(row_group_idx).column(column_idx);
-            // and get the location of the offset index for this chunk
-            let range = column.offset_index_range();
-            if let Some(range) = range {
-                let idx_bytes = self
-                    .file_bytes
-                    .slice(range.start as usize..range.end as usize);
-                let idx = decode_offset_index(&idx_bytes)?;
-                e.insert(idx);
-            }
+    /// Loads and decodes the offset index for the specified column chunk.
+    /// Repeated requests for the same entry do nothing.
+    fn load_offset_index(&mut self, row_group_idx: usize, column_idx: usize) -> Result<()> {
+        let key = (row_group_idx, column_idx);
+        if self.provider.offset_indexes.contains_key(&key) {
+            return Ok(());
+        }
+        if let Some(index) = self.cache.offset_indexes.get(&key) {
+            println!("  Offset index {key:?}: cache hit");
+            self.provider.offset_indexes.insert(key, Arc::clone(index));
+            return Ok(());
+        }
+
+        let column = self.metadata.row_group(row_group_idx).column(column_idx);
+        if let Some(range) = column.offset_index_range() {
+            println!("  Offset index {key:?}: cache miss, decoding");
+            let idx_bytes = self
+                .file_bytes
+                .slice(range.start as usize..range.end as usize);
+            let index = Arc::new(decode_offset_index(&idx_bytes)?);
+            self.cache.offset_indexes.insert(key, Arc::clone(&index));
+            self.provider.offset_indexes.insert(key, index);
         }
         Ok(())
+    }
+
+    /// Finishes loading and returns an immutable provider containing only the
+    /// selected indexes.
+    fn finish(self) -> SparsePageIndexProvider {
+        self.provider
     }
 }
 
 // Custom providers must implement the `PageIndexProvider` trait.
-impl PageIndexProvider for OnDemandPageIndexProvider {
+impl PageIndexProvider for SparsePageIndexProvider {
     fn has_offset_indexes(&self) -> bool {
-        self.offset_indexes.is_some()
+        !self.offset_indexes.is_empty()
     }
 
     fn has_column_indexes(&self) -> bool {
-        self.column_indexes.is_some()
+        !self.column_indexes.is_empty()
     }
 
     fn column_index(
@@ -124,9 +163,8 @@ impl PageIndexProvider for OnDemandPageIndexProvider {
         column_idx: usize,
     ) -> Option<&ColumnIndexMetaData> {
         self.column_indexes
-            .as_ref()?
-            .get(&row_group_idx)?
-            .get(&column_idx)
+            .get(&(row_group_idx, column_idx))
+            .map(Arc::as_ref)
     }
 
     fn offset_index(
@@ -135,9 +173,8 @@ impl PageIndexProvider for OnDemandPageIndexProvider {
         column_idx: usize,
     ) -> Option<&OffsetIndexMetaData> {
         self.offset_indexes
-            .as_ref()?
-            .get(&row_group_idx)?
-            .get(&column_idx)
+            .get(&(row_group_idx, column_idx))
+            .map(Arc::as_ref)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -192,6 +229,9 @@ fn main() -> Result<()> {
         }
     };
 
+    // Store the footer-only metadata in a shared metadata cache.
+    let cached_metadata = Arc::new(metadata);
+
     // In this scenario, a query is performed which projects columns 0, 1, and 4
     // after applying a predicate to column 0. Chunk level statistics on column 0
     // have already indicated only row group 0 satisfies the predicate. We now wish
@@ -199,24 +239,52 @@ fn main() -> Result<()> {
     // for the predicate column 0, and only fetch the Offset Index (page locations)
     // for the projected columns 0, 1, and 4. Both indexes are only fetched for
     // row group 0.
-    let mut provider = OnDemandPageIndexProvider::new(metadata.clone(), file_bytes);
+    let mut page_index_cache = PageIndexCache::default();
+    println!("Query 1 page index cache lookups:");
+    let mut loader =
+        SelectivePageIndexLoader::new(cached_metadata.as_ref(), &file_bytes, &mut page_index_cache);
     let row_group_idx = 0;
-    provider.fetch_column_index(row_group_idx, 0)?;
-    provider.fetch_offset_index(row_group_idx, 0)?;
-    provider.fetch_offset_index(row_group_idx, 1)?;
-    provider.fetch_offset_index(row_group_idx, 4)?;
+    loader.load_column_index(row_group_idx, 0)?;
+    loader.load_offset_index(row_group_idx, 0)?;
+    loader.load_offset_index(row_group_idx, 1)?;
+    loader.load_offset_index(row_group_idx, 4)?;
+    let provider = loader.finish();
 
-    // convert the retrieved metadata into a `ParquetMetaDataBuilder`
-    let mut builder = metadata.into_builder();
-
-    // and add the provider to the metadata
-    builder = builder.set_page_index(Some(Arc::new(provider)));
-
-    let metadata = builder.build();
+    // Create query-specific metadata by cheaply cloning the cached footer and
+    // attaching the sparse provider. The provider retains only the selected,
+    // decoded indexes; it does not retain `file_bytes` or another metadata copy.
+    let metadata = cached_metadata
+        .as_ref()
+        .clone()
+        .into_builder()
+        .set_page_index(Some(Arc::new(provider)))
+        .build();
     println!("== Indexes should be partially populated");
     print_page_index(&metadata, 0)?;
     println!("== Indexes should be unpopulated");
     print_page_index(&metadata, 1)?;
+
+    // A second query uses the same predicate column but projects columns 0, 2,
+    // and 4. It reuses three indexes loaded by the first query and loads only
+    // the newly requested offset index for column 2.
+    println!("=== Query 2: Selective PageIndex (columns 0, 2, 4 only) ===");
+    println!("Query 2 page index cache lookups:");
+    let mut loader =
+        SelectivePageIndexLoader::new(cached_metadata.as_ref(), &file_bytes, &mut page_index_cache);
+    loader.load_column_index(row_group_idx, 0)?;
+    loader.load_offset_index(row_group_idx, 0)?;
+    loader.load_offset_index(row_group_idx, 2)?;
+    loader.load_offset_index(row_group_idx, 4)?;
+    let provider = loader.finish();
+
+    let metadata = cached_metadata
+        .as_ref()
+        .clone()
+        .into_builder()
+        .set_page_index(Some(Arc::new(provider)))
+        .build();
+    println!("== Indexes should be partially populated");
+    print_page_index(&metadata, 0)?;
 
     Ok(())
 }

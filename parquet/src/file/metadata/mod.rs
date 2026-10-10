@@ -116,20 +116,23 @@ pub(crate) use writer::ThriftMetadataWriter;
 /// This structure is read by the various readers in this crate or can be read
 /// directly from a file using the [`ParquetMetaDataReader`] struct.
 ///
+/// The individual fields of this structure are stored in a way that make cloning
+/// this structure low-cost.
+///
 /// See the [`ParquetMetaDataBuilder`] to create and modify this structure.
 ///
 /// [`parquet.thrift`]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 #[derive(Debug, Clone)]
 pub struct ParquetMetaData {
     /// File level metadata
-    file_metadata: FileMetaData,
+    file_metadata: Arc<FileMetaData>,
     /// Row group metadata
-    row_groups: Vec<RowGroupMetaData>,
+    row_groups: Arc<Vec<RowGroupMetaData>>,
     /// Page level index for each page in each column chunk
     page_index: Option<Arc<dyn PageIndexProvider>>,
     /// Optional file decryptor
     #[cfg(feature = "encryption")]
-    file_decryptor: Option<Box<FileDecryptor>>,
+    file_decryptor: Option<Arc<FileDecryptor>>,
 }
 
 impl ParquetMetaData {
@@ -137,19 +140,12 @@ impl ParquetMetaData {
     /// group metadata
     pub fn new(file_metadata: FileMetaData, row_groups: Vec<RowGroupMetaData>) -> Self {
         ParquetMetaData {
-            file_metadata,
-            row_groups,
+            file_metadata: Arc::new(file_metadata),
+            row_groups: Arc::new(row_groups),
             page_index: None,
             #[cfg(feature = "encryption")]
             file_decryptor: None,
         }
-    }
-
-    /// Adds [`FileDecryptor`] to this metadata instance to enable decryption of
-    /// encrypted data.
-    #[cfg(feature = "encryption")]
-    pub(crate) fn with_file_decryptor(&mut self, file_decryptor: Option<FileDecryptor>) {
-        self.file_decryptor = file_decryptor.map(Box::new);
     }
 
     /// Convert this ParquetMetaData into a [`ParquetMetaDataBuilder`]
@@ -333,28 +329,57 @@ impl PartialEq for ParquetMetaData {
 ///   .add_row_group(last_row_group)
 ///   .build();
 /// ```
-pub struct ParquetMetaDataBuilder(ParquetMetaData);
+pub struct ParquetMetaDataBuilder {
+    /// File level metadata
+    file_metadata: Arc<FileMetaData>,
+    /// Row group metadata
+    row_groups: Arc<Vec<RowGroupMetaData>>,
+    /// Page level index for each page in each column chunk
+    page_index: Option<Arc<dyn PageIndexProvider>>,
+    /// Optional file decryptor
+    #[cfg(feature = "encryption")]
+    file_decryptor: Option<Arc<FileDecryptor>>,
+}
 
 impl ParquetMetaDataBuilder {
     /// Create a new builder from a file metadata, with no row groups
     pub fn new(file_meta_data: FileMetaData) -> Self {
-        Self(ParquetMetaData::new(file_meta_data, vec![]))
+        Self {
+            file_metadata: Arc::new(file_meta_data),
+            row_groups: Arc::new(vec![]),
+            page_index: None,
+            #[cfg(feature = "encryption")]
+            file_decryptor: None,
+        }
     }
 
     /// Create a new builder from an existing ParquetMetaData
     pub fn new_from_metadata(metadata: ParquetMetaData) -> Self {
-        Self(metadata)
+        let ParquetMetaData {
+            file_metadata,
+            row_groups,
+            page_index,
+            #[cfg(feature = "encryption")]
+            file_decryptor,
+        } = metadata;
+        Self {
+            file_metadata,
+            row_groups,
+            page_index,
+            #[cfg(feature = "encryption")]
+            file_decryptor,
+        }
     }
 
     /// Adds a row group to the metadata
     pub fn add_row_group(mut self, row_group: RowGroupMetaData) -> Self {
-        self.0.row_groups.push(row_group);
+        Arc::make_mut(&mut self.row_groups).push(row_group);
         self
     }
 
     /// Sets all the row groups to the specified list
     pub fn set_row_groups(mut self, row_groups: Vec<RowGroupMetaData>) -> Self {
-        self.0.row_groups = row_groups;
+        self.row_groups = Arc::new(row_groups);
         self
     }
 
@@ -364,12 +389,12 @@ impl ParquetMetaDataBuilder {
     /// This can be used for more efficient creation of a new ParquetMetaData
     /// from an existing one.
     pub fn take_row_groups(&mut self) -> Vec<RowGroupMetaData> {
-        std::mem::take(&mut self.0.row_groups)
+        Arc::unwrap_or_clone(std::mem::take(&mut self.row_groups))
     }
 
     /// Return a reference to the current row groups
     pub fn row_groups(&self) -> &[RowGroupMetaData] {
-        &self.0.row_groups
+        &self.row_groups
     }
 
     /// Sets the [`PageIndexProvider`]
@@ -381,37 +406,42 @@ impl ParquetMetaDataBuilder {
     ///
     /// [`custom_page_index.rs`]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/custom_page_index.rs
     pub fn set_page_index(mut self, page_index: Option<Arc<dyn PageIndexProvider>>) -> Self {
-        self.0.page_index = page_index;
+        self.page_index = page_index;
         self
     }
 
     /// Returns the current [`PageIndexProvider`] from the builder, replacing it with `None`
     pub fn take_page_index(&mut self) -> Option<Arc<dyn PageIndexProvider>> {
-        std::mem::take(&mut self.0.page_index)
+        std::mem::take(&mut self.page_index)
     }
 
     /// Return a reference to the current [`PageIndexProvider`], if any
     pub fn page_index(&self) -> Option<&dyn PageIndexProvider> {
-        self.0.page_index.as_ref().map(|arc| arc.as_ref())
+        self.page_index.as_ref().map(|arc| arc.as_ref())
     }
 
     /// Sets the file decryptor needed to decrypt this metadata.
     #[cfg(feature = "encryption")]
     pub(crate) fn set_file_decryptor(mut self, file_decryptor: Option<FileDecryptor>) -> Self {
-        self.0.with_file_decryptor(file_decryptor);
+        self.file_decryptor = file_decryptor.map(Arc::new);
         self
     }
 
     /// Creates a new ParquetMetaData from the builder
     pub fn build(self) -> ParquetMetaData {
-        let Self(metadata) = self;
-        metadata
+        ParquetMetaData {
+            file_metadata: self.file_metadata,
+            row_groups: self.row_groups,
+            page_index: self.page_index,
+            #[cfg(feature = "encryption")]
+            file_decryptor: self.file_decryptor,
+        }
     }
 }
 
 impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     fn from(meta_data: ParquetMetaData) -> Self {
-        Self(meta_data)
+        Self::new_from_metadata(meta_data)
     }
 }
 
@@ -2085,9 +2115,9 @@ mod tests {
 
         // Base size without page index
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2766;
+        let base_expected_size = 2814;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2934;
+        let base_expected_size = 2982;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -2122,9 +2152,9 @@ mod tests {
 
         // Size with page index (includes Arc overhead plus PageIndex heap size)
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3280;
+        let bigger_expected_size = 3328;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3448;
+        let bigger_expected_size = 3496;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
@@ -2171,7 +2201,7 @@ mod tests {
             .set_row_groups(row_group_meta.clone())
             .build();
 
-        let base_expected_size = 2042;
+        let base_expected_size = 2090;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
         let footer_key = b"0123456789012345";
@@ -2197,7 +2227,7 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        let expected_size_with_decryptor = 3056;
+        let expected_size_with_decryptor = 3120;
         assert!(expected_size_with_decryptor > base_expected_size);
 
         assert_eq!(
@@ -2256,6 +2286,24 @@ mod tests {
         // Both should be None since they were never populated
         assert!(!page_index.has_column_indexes());
         assert!(!page_index.has_offset_indexes());
+    }
+
+    #[test]
+    fn test_replace_page_index_preserves_shared_metadata() {
+        let schema_descr = get_test_schema_descr();
+        let file_metadata = FileMetaData::new(1, 0, None, None, schema_descr, None);
+        let cached = Arc::new(ParquetMetaData::new(file_metadata, vec![]));
+
+        let page_index = Arc::new(PageIndexBuilder::new(0, 0).build());
+        let rebuilt = cached
+            .as_ref()
+            .clone()
+            .into_builder()
+            .set_page_index(Some(page_index))
+            .build();
+
+        assert!(Arc::ptr_eq(&cached.file_metadata, &rebuilt.file_metadata));
+        assert!(Arc::ptr_eq(&cached.row_groups, &rebuilt.row_groups));
     }
 
     #[test]
