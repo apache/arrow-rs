@@ -220,6 +220,13 @@
 //! [`csv`]: https://docs.rs/arrow/latest/arrow/csv/index.html
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [RecordBatchStream]: https://docs.rs/datafusion/latest/datafusion/execution/trait.RecordBatchStream.html
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -228,6 +235,9 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
+
+/// Arrow crate version
+pub const ARROW_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod array;
 pub use array::*;

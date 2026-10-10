@@ -39,7 +39,7 @@ use parquet::data_type::{ByteArrayType, DoubleType, FixedLenByteArrayType, Int32
 use parquet::schema::parser::parse_message_type;
 use parquet::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use parquet::util::{DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 // ---------------------------------------------------------------------------
 // Thread-local tracking allocator
@@ -84,7 +84,7 @@ fn add_allocated_bytes(size: usize) {
     });
 }
 
-#[allow(unsafe_code)]
+#[expect(unsafe_code)]
 unsafe impl std::alloc::GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = unsafe { self.inner.alloc(layout) };

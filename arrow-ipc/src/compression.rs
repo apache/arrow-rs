@@ -110,7 +110,7 @@ impl DecompressionContext {
     }
 }
 
-#[allow(clippy::derivable_impls)]
+#[expect(clippy::derivable_impls)]
 impl Default for DecompressionContext {
     fn default() -> Self {
         DecompressionContext {
@@ -201,7 +201,7 @@ impl CompressionCodec {
             // empty input, nothing to do
         } else {
             // write compressed data directly into the output buffer
-            output.extend_from_slice(&uncompressed_data_len.to_le_bytes());
+            output.extend_from_slice(&(uncompressed_data_len as i64).to_le_bytes());
             self.compress(input, output, context)?;
 
             let compression_len = output.len() - original_output_len;
@@ -242,7 +242,7 @@ impl CompressionCodec {
         } else if let Ok(decompressed_length) = usize::try_from(decompressed_length) {
             // decompress data using the codec
             let input_data = &input[(LENGTH_OF_PREFIX_DATA as usize)..];
-            let v = self.decompress(input_data, decompressed_length as _, context)?;
+            let v = self.decompress(input_data, decompressed_length, context)?;
             Buffer::from_vec(v)
         } else {
             return Err(ArrowError::IpcError(format!(
@@ -280,7 +280,7 @@ impl CompressionCodec {
         };
         if ret.len() != decompressed_size {
             return Err(ArrowError::IpcError(format!(
-                "Expected compressed length of {decompressed_size} got {}",
+                "Expected decompressed length of {decompressed_size} got {}",
                 ret.len()
             )));
         }
@@ -300,7 +300,6 @@ fn compress_lz4(input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
 }
 
 #[cfg(not(feature = "lz4"))]
-#[allow(clippy::ptr_arg)]
 fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "lz4 IPC compression requires the lz4 feature".to_string(),
@@ -311,12 +310,22 @@ fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> 
 fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     use std::io::Read;
     let mut output = Vec::with_capacity(decompressed_size);
-    lz4_flex::frame::FrameDecoder::new(input).read_to_end(&mut output)?;
+    let mut decoder = lz4_flex::frame::FrameDecoder::new(input);
+    decoder
+        .by_ref()
+        .take(decompressed_size as u64)
+        .read_to_end(&mut output)?;
+
+    // Probe without growing `output` to reject data exceeding the advertised size.
+    if decoder.read(&mut [0])? != 0 {
+        return Err(ArrowError::IpcError(format!(
+            "LZ4 decompressed buffer exceeds advertised size of {decompressed_size}"
+        )));
+    }
     Ok(output)
 }
 
 #[cfg(not(feature = "lz4"))]
-#[allow(clippy::ptr_arg)]
 fn decompress_lz4(_input: &[u8], _decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "lz4 IPC decompression requires the lz4 feature".to_string(),
@@ -330,13 +339,19 @@ fn compress_zstd(
     context: &mut IpcWriteContext,
     level: i32,
 ) -> Result<(), ArrowError> {
-    let result = context.zstd_compressor(level).compress(input)?;
-    output.extend_from_slice(&result);
+    let start = output.len();
+    output.reserve(zstd::zstd_safe::compress_bound(input.len()));
+
+    let mut cursor = std::io::Cursor::new(output);
+    cursor.set_position(start as u64);
+    context
+        .zstd_compressor(level)
+        .compress_to_buffer(input, &mut cursor)?;
+
     Ok(())
 }
 
 #[cfg(not(feature = "zstd"))]
-#[allow(clippy::ptr_arg)]
 fn compress_zstd(
     _input: &[u8],
     _output: &mut Vec<u8>,
@@ -361,7 +376,6 @@ fn decompress_zstd(
 }
 
 #[cfg(not(feature = "zstd"))]
-#[allow(clippy::ptr_arg)]
 fn decompress_zstd(
     _input: &[u8],
     _decompressed_size: usize,
@@ -411,6 +425,26 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "lz4")]
+    fn test_lz4_decompression_rejects_output_exceeding_advertised_size() {
+        let input_bytes = b"hello lz4";
+        let codec = super::CompressionCodec::Lz4Frame;
+        let mut compressed = Vec::new();
+        codec
+            .compress(input_bytes, &mut compressed, &mut Default::default())
+            .unwrap();
+
+        let err = codec
+            .decompress(&compressed, input_bytes.len() - 1, &mut Default::default())
+            .expect_err("output larger than the advertised size should fail");
+
+        assert!(
+            err.to_string().contains("exceeds advertised size"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     #[cfg(feature = "zstd")]
     fn test_zstd_compression() {
         let input_bytes = b"hello zstd";
@@ -439,5 +473,21 @@ mod tests {
                 .contains("Compressed IPC buffer is too short"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "lz4")]
+    fn test_compress_to_vec_writes_8_byte_length_prefix() {
+        // The length prefix must always be 8 bytes (i64),
+        // even on platforms where `usize` is narrower (e.g. wasm32).
+        let input_bytes = vec![42u8; 132];
+        let codec = super::CompressionCodec::Lz4Frame;
+        let mut output_bytes: Vec<u8> = Vec::new();
+        codec
+            .compress_to_vec(&input_bytes, &mut output_bytes, &mut Default::default())
+            .unwrap();
+
+        let prefix: [u8; 8] = output_bytes[..8].try_into().unwrap();
+        assert_eq!(i64::from_le_bytes(prefix), input_bytes.len() as i64);
     }
 }

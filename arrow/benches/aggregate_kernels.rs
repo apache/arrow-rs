@@ -20,8 +20,6 @@ extern crate criterion;
 use criterion::{Criterion, Throughput};
 use rand::distr::{Distribution, StandardUniform};
 
-extern crate arrow;
-
 use arrow::compute::kernels::aggregate::*;
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};

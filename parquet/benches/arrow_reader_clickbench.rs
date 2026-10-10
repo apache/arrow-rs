@@ -654,7 +654,7 @@ impl ClickBenchPredicate {
     }
 
     /// Create Predicate: col LIKE '%Google%'
-    #[allow(non_snake_case)]
+    #[expect(non_snake_case)]
     fn like_Google(column_index: usize) -> Self {
         Self::new(column_index, move || {
             let google_url = StringViewArray::new_scalar("%Google%");

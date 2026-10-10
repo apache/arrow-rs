@@ -70,7 +70,8 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), A
             mutable.child_data[0]
                 .data
                 .buffer1
-                .extend_from_slice(new_value.to_byte_slice());
+                .try_extend_from_slice(new_value.to_byte_slice())
+                .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
         }};
     }
 
@@ -80,7 +81,7 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), A
         DataType::Int32 => extend_nulls_impl!(i32),
         DataType::Int64 => extend_nulls_impl!(i64),
         _ => panic!("Invalid run end type for RunEndEncoded array: {run_end_type}"),
-    };
+    }
 
     mutable.child_data[0].data.len += 1;
     Ok(())
@@ -251,7 +252,7 @@ pub fn build_extend(array: &ArrayData) -> Extend<'_> {
                 DataType::Int16 => build_and_process_impl!(i16),
                 DataType::Int32 => build_and_process_impl!(i32),
                 DataType::Int64 => build_and_process_impl!(i64),
-                _ => panic!("Invalid run end type for RunEndEncoded array: {dest_run_end_type}",),
+                _ => panic!("Invalid run end type for RunEndEncoded array: {dest_run_end_type}"),
             }
             Ok(())
         },
@@ -268,8 +269,16 @@ mod tests {
     use std::sync::Arc;
 
     fn create_run_array_data(run_ends: Vec<i32>, values: ArrayData) -> ArrayData {
-        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
-        let values_field = Arc::new(Field::new("values", values.data_type().clone(), true));
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            values.data_type().clone(),
+            true,
+        ));
         let data_type = DataType::RunEndEncoded(run_ends_field, values_field);
 
         let last_run_end = if run_ends.is_empty() {
@@ -294,8 +303,16 @@ mod tests {
     }
 
     fn create_run_array_data_int16(run_ends: Vec<i16>, values: ArrayData) -> ArrayData {
-        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int16, false));
-        let values_field = Arc::new(Field::new("values", values.data_type().clone(), true));
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int16,
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            values.data_type().clone(),
+            true,
+        ));
         let data_type = DataType::RunEndEncoded(run_ends_field, values_field);
 
         let last_run_end = if run_ends.is_empty() {
@@ -320,8 +337,16 @@ mod tests {
     }
 
     fn create_run_array_data_int64(run_ends: Vec<i64>, values: ArrayData) -> ArrayData {
-        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int64, false));
-        let values_field = Arc::new(Field::new("values", values.data_type().clone(), true));
+        let run_ends_field = Arc::new(Field::new(
+            Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            false,
+        ));
+        let values_field = Arc::new(Field::new(
+            Field::REE_VALUES_FIELD_DEFAULT_NAME,
+            values.data_type().clone(),
+            true,
+        ));
         let data_type = DataType::RunEndEncoded(run_ends_field, values_field);
 
         let last_run_end = if run_ends.is_empty() {

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! A command line client for Arrow Flight SQL.
+
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
@@ -138,7 +140,7 @@ struct ClientArgs {
     /// Since the client needs to decide on the compression before sending the request, there is no client<->server
     /// negotiation. If the server does NOT support the chosen compression, it will respond with an error a la:
     ///
-    /// ```
+    /// ```text
     /// Ipc error: Status {
     ///     code: Unimplemented,
     ///     message: "Content is compressed with `zstd` which isn't supported",

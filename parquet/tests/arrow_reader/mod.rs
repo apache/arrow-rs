@@ -38,14 +38,20 @@ use parquet::file::properties::{
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+#[cfg(feature = "async")]
+mod async_reader;
 mod bad_data;
 mod bloom_filter;
 #[cfg(feature = "crc")]
 mod checksum;
+mod custom_page_index_provider;
 mod int96_stats_roundtrip;
 mod invalid_utf8;
 mod io;
 mod large_string_overflow;
+mod page_index;
+mod parquet_testing;
+mod partial_offset_index;
 #[cfg(feature = "async")]
 mod predicate_cache;
 mod row_filter;
@@ -674,8 +680,8 @@ fn make_dict_batch() -> RecordBatch {
         Some("fffff"),
         Some("aaa"),
     ];
-    let dict_i8_array = DictionaryArray::<Int8Type>::from_iter(values.iter().cloned());
-    let dict_i32_array = DictionaryArray::<Int32Type>::from_iter(values.iter().cloned());
+    let dict_i8_array = DictionaryArray::<Int8Type>::from_iter(values.iter().copied());
+    let dict_i32_array = DictionaryArray::<Int32Type>::from_iter(values.iter().copied());
 
     // Dictionary array of integers
     let int64_values = Int64Array::from(vec![0, -100, 100]);

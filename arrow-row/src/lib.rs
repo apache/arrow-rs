@@ -152,6 +152,13 @@
 //! [compared]: PartialOrd
 //! [compare]: PartialOrd
 //! [the issue]: https://github.com/apache/arrow-rs/issues/4811
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -1051,12 +1058,12 @@ impl RowConverter {
                 columns.len()
             )));
         }
-        for colum in columns.iter().skip(1) {
-            if colum.len() != columns[0].len() {
+        for column in columns.iter().skip(1) {
+            if column.len() != columns[0].len() {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "RowConverter columns must all have the same length, expected {} got {}",
                     columns[0].len(),
-                    colum.len()
+                    column.len()
                 )));
             }
         }
@@ -1342,6 +1349,10 @@ pub type RowLengthIter<'a> = Map<Windows<'a, usize>, fn(&'a [usize]) -> usize>;
 
 impl Rows {
     /// Append a [`Row`] to this [`Rows`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row` was not produced by the same [`RowConverter`] as `self`
     pub fn push(&mut self, row: Row<'_>) {
         assert!(
             Arc::ptr_eq(&row.config.fields, &self.config.fields),
@@ -1359,6 +1370,10 @@ impl Rows {
     }
 
     /// Returns the row at index `row`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row >= self.num_rows()`
     pub fn row(&self, row: usize) -> Row<'_> {
         self.checked_row_end(row);
         unsafe { self.row_unchecked(row) }
@@ -1487,7 +1502,7 @@ impl<'a> IntoIterator for &'a Rows {
 }
 
 /// An iterator over [`Rows`]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RowsIter<'a> {
     rows: &'a Rows,
     start: usize,
@@ -1512,6 +1527,48 @@ impl<'a> Iterator for RowsIter<'a> {
         let len = self.len();
         (len, Some(len))
     }
+
+    fn count(self) -> usize
+    where
+        Self: Sized,
+    {
+        self.len()
+    }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        // Check if we can advance to the desired offset.
+        // When n is 0 it means we want the next() value
+        // and when n is 1 we want the next().next() value
+        // so adding n to the current offset and not n - 1
+        match self.start.checked_add(n) {
+            // Yes, and still within bounds
+            Some(new_offset) if new_offset < self.end => {
+                self.start = new_offset;
+            }
+
+            // Either overflow or would exceed end
+            _ => {
+                self.start = self.end;
+                return None;
+            }
+        }
+
+        self.next()
+    }
+
+    fn last(mut self) -> Option<Self::Item> {
+        // If already at the end, return None
+        if self.start == self.end {
+            return None;
+        }
+
+        // Go to the one before the last bit
+        self.start = self.end - 1;
+
+        // Return the last bit
+        self.next()
+    }
 }
 
 impl ExactSizeIterator for RowsIter<'_> {
@@ -1532,6 +1589,27 @@ impl DoubleEndedIterator for RowsIter<'_> {
         //          therefore `end - 1` is within range
         let row = unsafe { self.rows.row_unchecked(self.end) };
         Some(row)
+    }
+
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        // Check if we can advance to the desired offset.
+        // When n is 0 it means we want the next_back() value
+        // and when n is 1 we want the next_back().next_back() value
+        // so subtracting n to the current offset and not n - 1
+        match self.end.checked_sub(n) {
+            // Yes, and still within bounds
+            Some(new_offset) if self.start < new_offset => {
+                self.end = new_offset;
+            }
+
+            // Either underflow or would exceed start
+            _ => {
+                self.start = self.end;
+                return None;
+            }
+        }
+
+        self.next_back()
     }
 }
 
@@ -2215,11 +2293,11 @@ unsafe fn decode_column(
                 DataType::Boolean => Arc::new(decode_bool(rows, options)),
                 DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
                 DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
-                DataType::BinaryView => Arc::new(decode_binary_view(rows, options)),
+                DataType::BinaryView => Arc::new(decode_binary_view(rows, options)?),
                 DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size, options)),
                 DataType::Utf8 => Arc::new(unsafe{ decode_string::<i32>(rows, options, validate_utf8) }),
                 DataType::LargeUtf8 => Arc::new(unsafe { decode_string::<i64>(rows, options, validate_utf8) }),
-                DataType::Utf8View => Arc::new(unsafe { decode_string_view(rows, options, validate_utf8) }),
+                DataType::Utf8View => Arc::new(unsafe { decode_string_view(rows, options, validate_utf8) }?),
                 _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {data_type}" )))
             }
         }
@@ -2367,13 +2445,13 @@ unsafe fn decode_column(
                         let null_row_bytes: &[u8] = &null_rows[field_idx].data;
 
                         for idx in 0..len {
-                            if let Some((next_idx, bytes)) = field_row_iter.peek() {
-                                if *next_idx == idx {
-                                    sparse_data.push(*bytes);
+                            if let Some((next_idx, bytes)) = field_row_iter.peek()
+                                && *next_idx == idx
+                            {
+                                sparse_data.push(*bytes);
 
-                                    field_row_iter.next();
-                                    continue;
-                                }
+                                field_row_iter.next();
+                                continue;
                             }
                             sparse_data.push(null_row_bytes);
                         }
@@ -2382,7 +2460,7 @@ unsafe fn decode_column(
                             unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
 
                         // advance row slices by the bytes consumed for rows that belong to this field
-                        for (row_idx, child_row) in field_rows.iter() {
+                        for (row_idx, child_row) in field_rows {
                             let remaining_len = sparse_data[*row_idx].len();
                             let consumed_length = 1 + child_row.len() - remaining_len;
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
@@ -2424,9 +2502,9 @@ unsafe fn decode_column(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use arrow_array::builder::*;
     use arrow_array::types::*;
-    use arrow_array::*;
     use arrow_buffer::{Buffer, OffsetBuffer};
     use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
@@ -2434,9 +2512,10 @@ mod tests {
     use rand::distr::uniform::SampleUniform;
     use rand::distr::{Distribution, StandardUniform};
     use rand::prelude::StdRng;
-    use rand::{Rng, RngCore, SeedableRng};
-
-    use super::*;
+    use rand::{RngExt, SeedableRng};
+    use std::fmt::Debug;
+    use std::iter::Copied;
+    use std::slice::Iter;
 
     fn all_sort_options() -> [SortOptions; 4] {
         [
@@ -4426,7 +4505,11 @@ mod tests {
     #[test]
     fn test_single_map_with_non_nullable_values() {
         // Use `with_values_field` on `MapBuilder` to set the values are not nullable
-        let value_field = Arc::new(Field::new("values", DataType::Int32, false));
+        let value_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
             .with_values_field(value_field);
         // Entry 0: {"a": 1, "b": 2}
@@ -4464,7 +4547,11 @@ mod tests {
     #[test]
     fn test_single_map_with_non_nullable_map_but_with_nullable_values() {
         // Map column is non-nullable, but values are nullable
-        let value_field = Arc::new(Field::new("values", DataType::Int32, true));
+        let value_field = Arc::new(Field::new(
+            Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            true,
+        ));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
             .with_values_field(value_field);
 
@@ -4575,7 +4662,7 @@ mod tests {
     }
 
     fn generate_primitive_array<K>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> PrimitiveArray<K>
@@ -4588,10 +4675,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_all_unique_primitive_array<K>(
-        rng: &mut impl RngCore,
-        len: usize,
-    ) -> PrimitiveArray<K>
+    fn generate_all_unique_primitive_array<K>(rng: &mut StdRng, len: usize) -> PrimitiveArray<K>
     where
         K: ArrowPrimitiveType,
         K::Native: Hash + Eq,
@@ -4620,18 +4704,14 @@ mod tests {
             .collect()
     }
 
-    fn generate_boolean_array(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> BooleanArray {
+    fn generate_boolean_array(rng: &mut StdRng, len: usize, valid_percent: f64) -> BooleanArray {
         (0..len)
             .map(|_| rng.random_bool(valid_percent).then(|| rng.random_bool(0.5)))
             .collect()
     }
 
     fn generate_strings<O: OffsetSizeTrait>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> GenericStringArray<O> {
@@ -4646,11 +4726,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_string_view(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> StringViewArray {
+    fn generate_string_view(rng: &mut StdRng, len: usize, valid_percent: f64) -> StringViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -4662,11 +4738,7 @@ mod tests {
             .collect()
     }
 
-    fn generate_byte_view(
-        rng: &mut impl RngCore,
-        len: usize,
-        valid_percent: f64,
-    ) -> BinaryViewArray {
+    fn generate_byte_view(rng: &mut StdRng, len: usize, valid_percent: f64) -> BinaryViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -4707,7 +4779,7 @@ mod tests {
     }
 
     fn generate_dictionary<K>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         values: ArrayRef,
         len: usize,
         valid_percent: f64,
@@ -4740,7 +4812,7 @@ mod tests {
     }
 
     fn generate_fixed_size_binary(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
     ) -> FixedSizeBinaryArray {
@@ -4761,7 +4833,7 @@ mod tests {
         builder.finish()
     }
 
-    fn generate_struct(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> StructArray {
+    fn generate_struct(rng: &mut StdRng, len: usize, valid_percent: f64) -> StructArray {
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let a = generate_primitive_array::<Int32Type>(rng, len, valid_percent);
         let b = generate_strings::<i32>(rng, len, valid_percent);
@@ -4773,17 +4845,12 @@ mod tests {
         StructArray::new(fields, values, Some(nulls))
     }
 
-    fn generate_list<R: RngCore, F>(
-        rng: &mut R,
-        len: usize,
-        valid_percent: f64,
-        values: F,
-    ) -> ListArray
+    fn generate_list<F>(rng: &mut StdRng, len: usize, valid_percent: f64, values: F) -> ListArray
     where
-        F: FnOnce(&mut R, usize) -> ArrayRef,
+        F: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
-        let values_len = offsets.last().unwrap().to_usize().unwrap();
+        let values_len = offsets.last().as_usize();
         let values = values(rng, values_len);
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
@@ -4791,18 +4858,18 @@ mod tests {
     }
 
     fn generate_list_view<F>(
-        rng: &mut impl RngCore,
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
         values: F,
     ) -> ListViewArray
     where
-        F: FnOnce(usize) -> ArrayRef,
+        F: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         // Generate sizes first, then create a values array large enough
         let sizes: Vec<i32> = (0..len).map(|_| rng.random_range(0..10)).collect();
         let values_len: usize = sizes.iter().map(|s| *s as usize).sum::<usize>().max(1);
-        let values = values(values_len);
+        let values = values(rng, values_len);
 
         // Generate offsets that can overlap, be non-monotonic, or share ranges
         let offsets: Vec<i32> = sizes
@@ -4827,27 +4894,35 @@ mod tests {
         )
     }
 
-    fn generate_map<R: RngCore, KeysFn, ValuesFn>(
-        rng: &mut R,
+    fn generate_map<KeysFn, ValuesFn>(
+        rng: &mut StdRng,
         len: usize,
         valid_percent: f64,
         gen_keys: KeysFn,
         gen_values: ValuesFn,
     ) -> MapArray
     where
-        KeysFn: FnOnce(&mut R, usize) -> ArrayRef,
-        ValuesFn: FnOnce(&mut R, usize) -> ArrayRef,
+        KeysFn: FnOnce(&mut StdRng, usize) -> ArrayRef,
+        ValuesFn: FnOnce(&mut StdRng, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
-        let entries_len = offsets.last().unwrap().to_usize().unwrap();
+        let entries_len = offsets.last().as_usize();
         let keys = gen_keys(rng, entries_len);
         let values = gen_values(rng, entries_len);
         let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
         let field = Arc::new(Field::new_map(
             "",
-            "entries",
-            Field::new("keys", keys.data_type().clone(), false),
-            Field::new("values", values.data_type().clone(), true),
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                keys.data_type().clone(),
+                false,
+            ),
+            Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                values.data_type().clone(),
+                true,
+            ),
             false,
             true,
         ));
@@ -4881,7 +4956,7 @@ mod tests {
         let keys_arrow_row_converter =
             RowConverter::new(vec![SortField::new(array.key_type().clone())]).unwrap();
 
-        array.iter().enumerate().flat_map(|(index, entry)| entry.map(|entry| (index, Arc::clone(entry.column(0))))).for_each(|(entry_index, keys)| {
+        array.iter().enumerate().filter_map(|(index, entry)| entry.map(|entry| (index, Arc::clone(entry.column(0))))).for_each(|(entry_index, keys)| {
             let keys_as_rows = keys_arrow_row_converter.convert_columns(&[Arc::clone(&keys)]).expect("should be able to convert keys");
 
             for i in 0..keys_as_rows.num_rows() {
@@ -4897,7 +4972,7 @@ mod tests {
         })
     }
 
-    fn generate_nulls(rng: &mut impl RngCore, len: usize) -> Option<NullBuffer> {
+    fn generate_nulls(rng: &mut StdRng, len: usize) -> Option<NullBuffer> {
         Some(NullBuffer::from_iter(
             (0..len).map(|_| rng.random_bool(0.8)),
         ))
@@ -5083,7 +5158,7 @@ mod tests {
         )
     }
 
-    fn generate_column(rng: &mut (impl RngCore + Clone), len: usize) -> ArrayRef {
+    fn generate_column(rng: &mut StdRng, len: usize) -> ArrayRef {
         match rng.random_range(0..24) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
@@ -5123,32 +5198,23 @@ mod tests {
             15 => Arc::new(generate_byte_view(rng, len, 0.8)),
             16 => Arc::new(generate_fixed_stringview_column(len)),
             17 => Arc::new(
-                generate_list(&mut rng.clone(), len + 1000, 0.8, |rng, values_len| {
+                generate_list(rng, len + 1000, 0.8, |rng, values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
             ),
             18 => Arc::new(generate_boolean_array(rng, len, 0.8)),
-            19 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8)),
-            )),
-            20 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.8)),
-            )),
-            21 => Arc::new(generate_list_view(
-                &mut rng.clone(),
-                len,
-                0.8,
-                |values_len| Arc::new(generate_struct(rng, values_len, 0.8)),
-            )),
+            19 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
+            })),
+            20 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_strings::<i32>(rng, values_len, 0.8))
+            })),
+            21 => Arc::new(generate_list_view(rng, len, 0.8, |rng, values_len| {
+                Arc::new(generate_struct(rng, values_len, 0.8))
+            })),
             22 => Arc::new(
-                generate_list_view(&mut rng.clone(), len + 1000, 0.8, |values_len| {
+                generate_list_view(rng, len + 1000, 0.8, |rng, values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(rng, values_len, 0.8))
                 })
                 .slice(500, len),
@@ -5205,7 +5271,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn fuzz_test() {
         let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..100 {
@@ -5403,7 +5469,7 @@ mod tests {
         let second = Int32Array::from(vec![Some(2), None, Some(4)]);
         let arrays = [Arc::new(first) as ArrayRef, Arc::new(second) as ArrayRef];
 
-        for array in arrays.iter() {
+        for array in &arrays {
             rows.clear();
             converter
                 .append(&mut rows, std::slice::from_ref(array))
@@ -5436,7 +5502,7 @@ mod tests {
 
         let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
         let values = BinaryArray::from(vec![
-            Some("a".as_bytes()),
+            Some(b"a".as_slice()),
             Some(b"b"),
             Some(b"c"),
             Some(b"d"),
@@ -6355,11 +6421,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6386,11 +6460,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6416,11 +6498,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0i32].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6444,11 +6534,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6474,11 +6572,19 @@ mod tests {
 
         let offsets = OffsetBuffer::new(vec![0, 0, 0, 0].into());
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6507,11 +6613,19 @@ mod tests {
         let inner_null_values = Arc::new(NullArray::new(3)) as ArrayRef;
 
         let inner_entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let inner_struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(inner_entries_fields.clone().into()),
             false,
         ));
@@ -6535,11 +6649,19 @@ mod tests {
 
         let inner_map_type = DataType::Map(inner_struct_field.clone(), false);
         let outer_entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", inner_map_type, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                inner_map_type,
+                true,
+            )),
         ];
         let outer_struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(outer_entries_fields.clone().into()),
             false,
         ));
@@ -6574,11 +6696,19 @@ mod tests {
         let null_values = Arc::new(NullArray::new(3)) as ArrayRef;
 
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Null, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                DataType::Null,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6625,11 +6755,19 @@ mod tests {
 
         let list_type = list_array.data_type().clone();
         let entries_fields = vec![
-            Arc::new(Field::new("keys", DataType::Utf8, false)),
-            Arc::new(Field::new("values", list_type, true)),
+            Arc::new(Field::new(
+                Field::MAP_KEY_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::MAP_VALUE_FIELD_DEFAULT_NAME,
+                list_type,
+                true,
+            )),
         ];
         let struct_field = Arc::new(Field::new(
-            "entries",
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
             DataType::Struct(entries_fields.clone().into()),
             false,
         ));
@@ -6704,5 +6842,430 @@ mod tests {
 
         assert_eq!(rows_iter.next_back(), None);
         assert_eq!(rows_iter.next(), None);
+    }
+
+    trait SharedBetweenRowsIteratorAndSliceIter<'a>:
+        ExactSizeIterator<Item = Row<'a>> + DoubleEndedIterator<Item = Row<'a>>
+    {
+    }
+    impl<'a, T: ?Sized + ExactSizeIterator<Item = Row<'a>> + DoubleEndedIterator<Item = Row<'a>>>
+        SharedBetweenRowsIteratorAndSliceIter<'a> for T
+    {
+    }
+
+    fn get_rows_iterator_cases() -> impl Iterator<Item = Rows> {
+        let rows_converter = RowConverter::new(vec![SortField::new(DataType::Int32)]).unwrap();
+
+        [0, 1, 6, 8, 100, 164]
+            .map(|len| {
+                let source = (0..).take(len).collect::<Vec<i32>>();
+
+                let source = Int32Array::from(source);
+
+                rows_converter.convert_columns(&[Arc::new(source)]).unwrap()
+            })
+            .into_iter()
+    }
+
+    fn setup_and_assert(
+        setup_iters: impl Fn(&mut dyn SharedBetweenRowsIteratorAndSliceIter),
+        assert_fn: impl Fn(RowsIter, Copied<Iter<Row>>),
+    ) {
+        for rows in get_rows_iterator_cases() {
+            let expected = (0..rows.num_rows())
+                .map(|i| rows.row(i))
+                .collect::<Vec<_>>();
+            let mut expected_iter = expected.iter().copied();
+
+            let mut actual = rows.iter();
+
+            setup_iters(&mut actual);
+            setup_iters(&mut expected_iter);
+
+            assert_fn(actual, expected_iter);
+        }
+    }
+
+    /// Trait representing an operation on a [`RowsIter`]
+    /// that can be compared against a slice iterator
+    trait RowsIteratorOp {
+        /// What the operation returns (e.g. Option<Row> for last, usize for count, etc)
+        type Output<'a>: PartialEq + Debug;
+
+        /// The name of the operation, used for error messages
+        const NAME: &'static str;
+
+        /// Get the value of the operation for the provided iterator
+        /// This will be either a [`RowsIter`] or a slice iterator to make sure they produce the same result
+        fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(iter: T)
+        -> Self::Output<'a>;
+    }
+
+    /// Helper function that will assert that the provided operation
+    /// produces the same result for both [`RowsIter`] and slice iterator
+    /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
+    fn assert_rows_iterator_cases<O: RowsIteratorOp>() {
+        setup_and_assert(
+            |_iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {},
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                iter.next();
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming 1 element from the start (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                iter.next_back();
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming 1 element from the end (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                iter.next();
+                iter.next_back();
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming 1 element from start and end (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                while iter.len() > 1 {
+                    iter.next();
+                }
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming all from the start but 1 (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                while iter.len() > 1 {
+                    iter.next_back();
+                }
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming all from the end but 1 (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                while iter.next().is_some() {}
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming all from the start (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+
+        setup_and_assert(
+            |iter: &mut dyn SharedBetweenRowsIteratorAndSliceIter| {
+                while iter.next_back().is_some() {}
+            },
+            |actual, expected| {
+                let current_iterator_values: Vec<Row> = expected.clone().collect();
+
+                assert_eq!(
+                    O::get_value(actual),
+                    O::get_value(expected),
+                    "Failed on op {} for new iter after consuming all from the end (left actual, right expected) ({current_iterator_values:?})",
+                    O::NAME
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn assert_rows_iterator_count() {
+        struct CountOp;
+
+        impl RowsIteratorOp for CountOp {
+            type Output<'a> = usize;
+            const NAME: &'static str = "count";
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                iter: T,
+            ) -> Self::Output<'a> {
+                iter.count()
+            }
+        }
+
+        assert_rows_iterator_cases::<CountOp>()
+    }
+
+    #[test]
+    fn assert_rows_iterator_last() {
+        struct LastOp;
+
+        impl RowsIteratorOp for LastOp {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = "last";
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                iter: T,
+            ) -> Self::Output<'a> {
+                iter.last()
+            }
+        }
+
+        assert_rows_iterator_cases::<LastOp>()
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_0() {
+        struct NthOp<const BACK: bool>;
+
+        impl<const BACK: bool> RowsIteratorOp for NthOp<BACK> {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = if BACK { "nth_back(0)" } else { "nth(0)" };
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
+                if BACK { iter.nth_back(0) } else { iter.nth(0) }
+            }
+        }
+
+        assert_rows_iterator_cases::<NthOp<false>>();
+        assert_rows_iterator_cases::<NthOp<true>>();
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_1() {
+        struct NthOp<const BACK: bool>;
+
+        impl<const BACK: bool> RowsIteratorOp for NthOp<BACK> {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = if BACK { "nth_back(1)" } else { "nth(1)" };
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
+                if BACK { iter.nth_back(1) } else { iter.nth(1) }
+            }
+        }
+
+        assert_rows_iterator_cases::<NthOp<false>>();
+        assert_rows_iterator_cases::<NthOp<true>>();
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_after_end() {
+        struct NthOp<const BACK: bool>;
+
+        impl<const BACK: bool> RowsIteratorOp for NthOp<BACK> {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = if BACK {
+                "nth_back(iter.len() + 1)"
+            } else {
+                "nth(iter.len() + 1)"
+            };
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
+                if BACK {
+                    iter.nth_back(iter.len() + 1)
+                } else {
+                    iter.nth(iter.len() + 1)
+                }
+            }
+        }
+
+        assert_rows_iterator_cases::<NthOp<false>>();
+        assert_rows_iterator_cases::<NthOp<true>>();
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_len() {
+        struct NthOp<const BACK: bool>;
+
+        impl<const BACK: bool> RowsIteratorOp for NthOp<BACK> {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = if BACK {
+                "nth_back(iter.len())"
+            } else {
+                "nth(iter.len())"
+            };
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
+                if BACK {
+                    iter.nth_back(iter.len())
+                } else {
+                    iter.nth(iter.len())
+                }
+            }
+        }
+
+        assert_rows_iterator_cases::<NthOp<false>>();
+        assert_rows_iterator_cases::<NthOp<true>>();
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_last() {
+        struct NthOp<const BACK: bool>;
+
+        impl<const BACK: bool> RowsIteratorOp for NthOp<BACK> {
+            type Output<'a> = Option<Row<'a>>;
+            const NAME: &'static str = if BACK {
+                "nth_back(iter.len().saturating_sub(1))"
+            } else {
+                "nth(iter.len().saturating_sub(1))"
+            };
+
+            fn get_value<'a, T: SharedBetweenRowsIteratorAndSliceIter<'a>>(
+                mut iter: T,
+            ) -> Self::Output<'a> {
+                if BACK {
+                    iter.nth_back(iter.len().saturating_sub(1))
+                } else {
+                    iter.nth(iter.len().saturating_sub(1))
+                }
+            }
+        }
+
+        assert_rows_iterator_cases::<NthOp<false>>();
+        assert_rows_iterator_cases::<NthOp<true>>();
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_and_reuse() {
+        setup_and_assert(
+            |_| {},
+            |actual, expected| {
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        #[expect(clippy::iter_nth_zero)]
+                        let actual_val = actual.nth(0);
+                        #[expect(clippy::iter_nth_zero)]
+                        let expected_val = expected.nth(0);
+                        assert_eq!(actual_val, expected_val, "Failed on nth(0)");
+                    }
+                }
+
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        let actual_val = actual.nth(1);
+                        let expected_val = expected.nth(1);
+                        assert_eq!(actual_val, expected_val, "Failed on nth(1)");
+                    }
+                }
+
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        let actual_val = actual.nth(2);
+                        let expected_val = expected.nth(2);
+                        assert_eq!(actual_val, expected_val, "Failed on nth(2)");
+                    }
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn assert_rows_iterator_nth_back_and_reuse() {
+        setup_and_assert(
+            |_| {},
+            |actual, expected| {
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        let actual_val = actual.nth_back(0);
+                        let expected_val = expected.nth_back(0);
+                        assert_eq!(actual_val, expected_val, "Failed on nth_back(0)");
+                    }
+                }
+
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        let actual_val = actual.nth_back(1);
+                        let expected_val = expected.nth_back(1);
+                        assert_eq!(actual_val, expected_val, "Failed on nth_back(1)");
+                    }
+                }
+
+                {
+                    let mut actual = actual.clone();
+                    let mut expected = expected.clone();
+                    for _ in 0..expected.len() {
+                        let actual_val = actual.nth_back(2);
+                        let expected_val = expected.nth_back(2);
+                        assert_eq!(actual_val, expected_val, "Failed on nth_back(2)");
+                    }
+                }
+            },
+        );
     }
 }

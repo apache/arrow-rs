@@ -118,8 +118,10 @@ impl BlockDecoder {
                 }
                 BlockDecoderState::Sync => {
                     let to_decode = buf.len().min(self.bytes_remaining);
-                    let write = &mut self.in_progress.sync[16 - to_decode..];
-                    write[..to_decode].copy_from_slice(&buf[..to_decode]);
+                    // Fill from the front: the marker may arrive split across decode() calls.
+                    let offset = 16 - self.bytes_remaining;
+                    self.in_progress.sync[offset..offset + to_decode]
+                        .copy_from_slice(&buf[..to_decode]);
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];
                     if self.bytes_remaining == 0 {
@@ -221,5 +223,24 @@ mod tests {
         assert_eq!(block.count, 2);
         assert_eq!(block.data, payload);
         assert_eq!(block.sync, sync);
+    }
+
+    #[test]
+    fn test_sync_marker_split_across_decode_calls() {
+        // count=1 (zig-zag 0x02), size=1 (0x02), one data byte, 16-byte sync marker
+        let sync: [u8; 16] = core::array::from_fn(|i| i as u8);
+        let mut block_bytes = vec![0x02, 0x02, 0xAA];
+        block_bytes.extend_from_slice(&sync);
+
+        for chunk_size in 1..block_bytes.len() {
+            let mut decoder = BlockDecoder::default();
+            for chunk in block_bytes.chunks(chunk_size) {
+                decoder.decode(chunk).unwrap();
+            }
+            let block = decoder.flush().expect("complete block");
+            assert_eq!(block.count, 1);
+            assert_eq!(block.data, vec![0xAA]);
+            assert_eq!(block.sync, sync, "chunk_size {chunk_size}");
+        }
     }
 }

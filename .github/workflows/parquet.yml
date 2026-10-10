@@ -16,41 +16,25 @@
 # under the License.
 
 ---
-# tests for parquet crate
+# tests for parquet and related crates
 name: "parquet"
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs that touch certain files and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - rust-toolchain.toml
-      - arrow/**
-      - arrow-array/**
-      - arrow-buffer/**
-      - arrow-cast/**
-      - arrow-data/**
-      - arrow-schema/**
-      - arrow-select/**
-      - arrow-ipc/**
-      - arrow-csv/**
-      - arrow-json/**
-      - arrow-avro/**
-      - parquet/**
-      - parquet-variant/**
-      - parquet-variant-compute/**
-      - parquet-variant-json/**
-      - .github/**
+  workflow_call:
+    inputs:
+      cache-refresh-only:
+        description: Populate caches without running tests or linters
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
   # test the crate
   linux-test:
+    if: ${{ !inputs.cache-refresh-only }}
     name: Test
     runs-on: ubuntu-latest
     container:
@@ -65,14 +49,27 @@ jobs:
         run: cargo test -p parquet
       - name: Test --all-features
         run: cargo test -p parquet --all-features
+      - name: Test parquet-variant
+        run: cargo test -p parquet-variant
+      - name: Test parquet-variant-json
+        run: cargo test -p parquet-variant-json
+      - name: Test parquet-variant-compute
+        run: cargo test -p parquet-variant-compute
       - name: Run examples
         run: |
           # Test parquet examples
           cargo run -p parquet --example read_parquet
           cargo run -p parquet --example read_with_rowgroup --features="async"
+      - name: Test parquet_derive
+        run: |
+          cargo test -p parquet_derive
+          cargo test -p parquet_derive_test
+      - name: Test parquet-geospatial
+        run: cargo test -p parquet-geospatial
 
   # test compilation
   linux-features:
+    if: ${{ !inputs.cache-refresh-only }}
     name: Check Compilation
     runs-on: ubuntu-latest
     container:
@@ -124,10 +121,19 @@ jobs:
         run: cargo check -p parquet --no-default-features --features flate2 --features flate2-zlib-rs
       - name: Check compilation --no-default-features --features variant_experimental
         run: cargo check -p parquet --no-default-features --features variant_experimental
+      - name: Check compilation (parquet-variant)
+        run: cargo check -p parquet-variant
+      - name: Check compilation (parquet-variant-json)
+        run: cargo check -p parquet-variant-json
+      - name: Check compilation (parquet-variant-compute)
+        run: cargo check -p parquet-variant-compute
+      - name: Check compilation (parquet-geospatial)
+        run: cargo check -p parquet-geospatial
 
 
   # test the parquet crate builds against wasm32 in stable rust
   wasm32-build:
+    if: ${{ !inputs.cache-refresh-only }}
     name: Build wasm32
     runs-on: ubuntu-latest
     container:
@@ -167,24 +173,29 @@ jobs:
           cd parquet/pytest
           pip install -r requirements.txt
       - name: Black check the test files
+        if: ${{ !inputs.cache-refresh-only }}
         run: |
           cd parquet/pytest
           black --check *.py --verbose
       - name: Setup Rust toolchain
+        if: ${{ !inputs.cache-refresh-only }}
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
       - name: Install binary for checking
+        if: ${{ !inputs.cache-refresh-only }}
         run: |
           cargo install --path parquet --bin parquet-show-bloom-filter --features=cli
           cargo install --path parquet --bin parquet-fromcsv --features=arrow,cli
           cargo install --path parquet --bin parquet-index --features=cli
       - name: Run pytest
+        if: ${{ !inputs.cache-refresh-only }}
         run: |
           cd parquet/pytest
           pytest -v
 
   clippy:
+    if: ${{ !inputs.cache-refresh-only }}
     name: Clippy
     runs-on: ubuntu-latest
     container:
@@ -197,3 +208,13 @@ jobs:
         run: rustup component add clippy
       - name: Run clippy
         run: cargo clippy -p parquet --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet_derive)
+        run: cargo clippy -p parquet_derive --all-features -- -D warnings
+      - name: Run clippy (parquet-variant)
+        run: cargo clippy -p parquet-variant --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-variant-json)
+        run: cargo clippy -p parquet-variant-json --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-variant-compute)
+        run: cargo clippy -p parquet-variant-compute --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-geospatial)
+        run: cargo clippy -p parquet-geospatial --all-targets --all-features -- -D warnings

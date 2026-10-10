@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::null_sentinel;
-use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
@@ -24,7 +23,7 @@ use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
 };
 use arrow_data::MAX_INLINE_VIEW_LEN;
-use arrow_schema::SortOptions;
+use arrow_schema::{ArrowError, SortOptions};
 use builder::make_view;
 
 /// The block size of the variable length encoding
@@ -204,10 +203,9 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
     let end_offset = block_count * (SIZE + 1);
     let to_write = &mut out[..end_offset];
 
-    let chunks = val.chunks_exact(SIZE);
-    let remainder = chunks.remainder();
-    for (input, output) in chunks.clone().zip(to_write.chunks_exact_mut(SIZE + 1)) {
-        let input: &[u8; SIZE] = input.try_into().unwrap();
+    let (chunks, remainder) = val.as_chunks::<SIZE>();
+    let to_write_chunks = to_write.chunks_exact_mut(SIZE + 1);
+    for (input, output) in chunks.iter().zip(to_write_chunks) {
         let out_block: &mut [u8; SIZE] = (&mut output[..SIZE]).try_into().unwrap();
 
         *out_block = *input;
@@ -284,14 +282,14 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     let nulls = decode_nulls_sentinel(rows, options);
 
     let values_capacity = rows.iter().map(|row| decoded_len(row, options)).sum();
-    let mut offsets = BufferBuilder::<I>::new(len + 1);
-    offsets.append(I::zero());
+    let mut offsets = Vec::<I>::with_capacity(len + 1);
+    offsets.push(I::zero());
     let mut values = MutableBuffer::new(values_capacity);
 
     for row in rows {
         let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
         *row = &row[offset..];
-        offsets.append(I::from_usize(values.len()).expect("offset overflow"))
+        offsets.push(I::from_usize(values.len()).expect("offset overflow"))
     }
 
     if options.descending {
@@ -312,7 +310,7 @@ pub fn decode_binary<I: OffsetSizeTrait>(
 fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
     rows: &mut [&[u8]],
     options: SortOptions,
-) -> BinaryViewArray {
+) -> Result<BinaryViewArray, ArrowError> {
     let len = rows.len();
     let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
@@ -328,6 +326,15 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
         } else if VALIDATE_UTF8 {
             inline_capacity += len;
         }
+    }
+    // Every view offset is at most the total length of the non-inlined values,
+    // so checking it once here keeps the offsets below within the `i32` range
+    // the Arrow spec requires
+    let long_values_len = values_capacity - inline_str_max_len;
+    if long_values_len > i32::MAX as usize {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "{long_values_len} bytes of non-inlined values too long to decode into a view array with a single data buffer"
+        )));
     }
     let mut values = MutableBuffer::new(values_capacity);
     let mut view_utf8_validation_buffer = if VALIDATE_UTF8 {
@@ -375,11 +382,17 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
 
     // SAFETY:
     // Valid by construction above
-    unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()], nulls) }
+    Ok(unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()].into(), nulls) })
 }
 
 /// Decodes a binary view array from `rows` with the provided `options`
-pub fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryViewArray {
+///
+/// Returns an error if the non-inlined values are longer than `i32::MAX` bytes,
+/// the most a single data buffer can address
+pub fn decode_binary_view(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+) -> Result<BinaryViewArray, ArrowError> {
     decode_binary_view_inner::<false>(rows, options)
 }
 
@@ -411,17 +424,20 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
 /// # Safety
 ///
 /// The row must contain valid UTF-8 data
+///
+/// Returns an error if the non-inlined values are longer than `i32::MAX` bytes,
+/// the most a single data buffer can address
 pub unsafe fn decode_string_view(
     rows: &mut [&[u8]],
     options: SortOptions,
     validate_utf8: bool,
-) -> StringViewArray {
+) -> Result<StringViewArray, ArrowError> {
     let view = if validate_utf8 {
-        decode_binary_view_inner::<true>(rows, options)
+        decode_binary_view_inner::<true>(rows, options)?
     } else {
-        decode_binary_view_inner::<false>(rows, options)
+        decode_binary_view_inner::<false>(rows, options)?
     };
-    unsafe { view.to_string_view_unchecked() }
+    Ok(unsafe { view.to_string_view_unchecked() })
 }
 
 pub fn decode_null_value(rows: &mut [&[u8]], options: SortOptions) {

@@ -36,6 +36,13 @@
 //!    `flight-sql` feature of this crate to be activated.
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -59,9 +66,10 @@ use std::{fmt, ops::Deref};
 
 type ArrowResult<T> = std::result::Result<T, ArrowError>;
 
+// This code is generated so we don't want to fix any lint violations manually
+#[allow(clippy::allow_attributes)]
 #[allow(clippy::all)]
 mod r#gen {
-    // Since this file is auto-generated, we suppress all warnings
     #![allow(missing_docs)]
     include!("arrow.flight.protocol.rs");
 }
@@ -186,7 +194,7 @@ fn limited_fmt(f: &mut fmt::Formatter<'_>, value: &[u8], limit: usize) -> fmt::R
     if value.len() > limit {
         write!(f, "{:?}", &value[..limit])
     } else {
-        write!(f, "{:?}", &value)
+        write!(f, "{value:?}")
     }
 }
 
@@ -197,7 +205,7 @@ impl fmt::Display for FlightData {
         match &self.flight_descriptor {
             Some(d) => write!(f, "{d}")?,
             None => write!(f, "None")?,
-        };
+        }
         write!(f, ", header: ")?;
         limited_fmt(f, &self.data_header, 8)?;
         write!(f, ", metadata: ")?;
@@ -320,7 +328,7 @@ impl fmt::Display for CancelFlightInfoRequest {
         match &self.info {
             Some(value) => write!(f, "{value}")?,
             None => write!(f, "None")?,
-        };
+        }
         write!(f, " }}")
     }
 }
@@ -340,7 +348,7 @@ impl fmt::Display for RenewFlightEndpointRequest {
         match &self.endpoint {
             Some(value) => write!(f, "{value}")?,
             None => write!(f, "None")?,
-        };
+        }
         write!(f, " }}")
     }
 }
@@ -843,7 +851,7 @@ mod tests {
 
     #[test]
     fn it_creates_flight_descriptor_command() {
-        let expected_cmd = "my_command".as_bytes();
+        let expected_cmd = b"my_command";
         let fd = FlightDescriptor::new_cmd(expected_cmd.to_vec());
         assert_eq!(fd.r#type(), DescriptorType::Cmd);
         assert_eq!(fd.cmd, expected_cmd.to_vec());

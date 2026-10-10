@@ -17,39 +17,21 @@
 
 name: miri
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs that touch certain files and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - .github/**
-      - rust-toolchain.toml
-      - arrow-array/**
-      - arrow-buffer/**
-      - arrow-cast/**
-      - arrow-csv/**
-      - arrow-data/**
-      - arrow-ipc/**
-      - arrow-json/**
-      - arrow-avro/**
-      - arrow-schema/**
-      - arrow-select/**
-      - arrow-string/**
-      - arrow/**
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   miri-checks:
     name: MIRI
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        partition: [1, 2, 3, 4]
+        partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -60,10 +42,11 @@ jobs:
           rustup override set nightly
           cargo miri setup
       - name: Set up nextest
-        run: |
-          cargo install cargo-nextest --version 0.9.132 --locked
+        uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
+        with:
+          tool: nextest
       - name: Run Miri Checks
         env:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
-        run: bash .github/workflows/miri.sh ${{ matrix.partition }} 4
+        run: bash .github/workflows/miri.sh ${{ matrix.partition }} 12

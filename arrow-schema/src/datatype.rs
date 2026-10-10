@@ -319,7 +319,7 @@ pub enum DataType {
     /// A list of some logical data type with variable length.
     ///
     /// Logically the same as [`List`], but the internal representation differs in how child
-    /// data is referenced, allowing flexibility in how data is layed out.
+    /// data is referenced, allowing flexibility in how data is laid out.
     ///
     /// [`List`]: Self::List
     ListView(FieldRef),
@@ -332,7 +332,7 @@ pub enum DataType {
     /// A list of some logical data type with variable length and 64-bit offsets.
     ///
     /// Logically the same as [`LargeList`], but the internal representation differs in how child
-    /// data is referenced, allowing flexibility in how data is layed out.
+    /// data is referenced, allowing flexibility in how data is laid out.
     ///
     /// [`LargeList`]: Self::LargeList
     LargeListView(FieldRef),
@@ -415,6 +415,11 @@ pub enum DataType {
     /// has two children: key type and the second the value type. The names of the
     /// child fields may be respectively "entries", "key", and "value", but this is
     /// not enforced.
+    ///
+    /// # Requirements
+    /// - The entries [`Field`] (first argument) must be non-nullable.
+    /// - The entries field must be a [`DataType::Struct`] with exactly 2 children.
+    /// - The first child (key) must be non-nullable.
     Map(FieldRef, bool),
     /// A run-end encoding (REE) is a variation of run-length encoding (RLE). These
     /// encodings are well-suited for representing data containing sequences of the
@@ -427,6 +432,10 @@ pub enum DataType {
     ///
     /// These child arrays are prescribed the standard names of "run_ends" and "values"
     /// respectively.
+    ///
+    /// # Requirements
+    /// - The run_ends [`Field`] (first argument) must be non-nullable and of type
+    ///   [`DataType::Int16`], [`DataType::Int32`], or [`DataType::Int64`].
     RunEndEncoded(FieldRef, FieldRef),
 }
 
@@ -1271,7 +1280,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
+    #[cfg_attr(miri, ignore)] // fork is not supported
     fn test_debug_format_field() {
         // Make sure the `Debug` formatting of `DataType` is readable and not too long
         insta::assert_debug_snapshot!(DataType::new_list(DataType::Int8, false), @r"

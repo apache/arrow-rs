@@ -19,7 +19,6 @@
 name = "arrow-schema"
 version = { workspace = true }
 description = "Defines the logical types for arrow arrays"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -61,3 +60,6 @@ postcard = { version = "1.0.10", default-features = false, features = ["use-std"
 name = "ffi"
 harness = false
 required-features = ["ffi"]
+
+[lints]
+workspace = true

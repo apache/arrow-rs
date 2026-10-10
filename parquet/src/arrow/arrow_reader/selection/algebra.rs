@@ -22,10 +22,21 @@
 //! operands: a merge of the [`RowSelector`] runs, and a bitwise variant over
 //! [`BooleanBuffer`] masks.
 
+use super::boolean::{MaskSelection, boolean_mask_from_selectors};
 use super::{MaskRunIter, RowSelection, RowSelectionInner, RowSelector};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer, bit_util};
 use std::cmp::Ordering;
 use std::iter::Peekable;
+
+// Use word-at-a-time expansion for masks with at least 8192 rows, roughly
+// 75% outer selectivity and 5% inner selectivity. Smaller or sparser inputs
+// use set indices to avoid scanning every output word.
+// In `outer.and_then(inner)`, outer selects from the original rows, and inner
+// selects from those selected rows: inner.len() == outer.count_set_bits().
+// The selectivity constants are divisors: at most 1/4 dropped, at least 1/20 kept.
+const AND_THEN_DENSE_MASK_MIN_LEN: usize = 8192;
+const AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION: usize = 4;
+const AND_THEN_DENSE_MASK_MIN_INNER_FRACTION: usize = 20;
 
 /// Applies `second` to the rows selected by `first`, both selector-backed.
 pub(super) fn and_then_row_selections(
@@ -266,42 +277,96 @@ pub(super) fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) 
     iter.collect()
 }
 
+/// Combines a mask and selectors without expanding the mask into runs.
+pub(super) fn combine_mixed_selection(
+    selectors: &[RowSelector],
+    mask: &MaskSelection,
+    op: impl FnOnce(&BooleanBuffer, &BooleanBuffer) -> BooleanBuffer,
+) -> RowSelection {
+    // An empty operand leaves the other unchanged.
+    if selectors.is_empty() {
+        return RowSelection::from_mask_selection(mask.clone());
+    }
+    if mask.mask().is_empty() {
+        return RowSelection::from_selectors(selectors.to_vec());
+    }
+    let selectors = boolean_mask_from_selectors(selectors);
+    RowSelection::from_boolean_buffer(op(mask.mask(), &selectors))
+}
+
 /// Bitwise AND of two mask-backed selections. Longer side's tail passes through.
 pub(super) fn intersect_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer {
     if l.len() == r.len() {
-        return l & r;
+        return combine_equal_length_masks(l, r, |a, b| a & b);
     }
-    let common = l.len().min(r.len());
-    let head = &l.slice(0, common) & &r.slice(0, common);
-    let (longer, longer_len) = if l.len() > r.len() {
-        (l, l.len())
-    } else {
-        (r, r.len())
-    };
-    let tail = longer.slice(common, longer_len - common);
-    let mut builder = BooleanBufferBuilder::new(longer_len);
-    builder.append_buffer(&head);
-    builder.append_buffer(&tail);
-    builder.finish()
+    combine_unequal_length_masks(l, r, |a, b| a & b)
 }
 
 /// Bitwise OR of two mask-backed selections. Longer side's tail passes through.
 pub(super) fn union_masks(l: &BooleanBuffer, r: &BooleanBuffer) -> BooleanBuffer {
     if l.len() == r.len() {
-        return l | r;
+        return combine_equal_length_masks(l, r, |a, b| a | b);
     }
-    let common = l.len().min(r.len());
-    let head = &l.slice(0, common) | &r.slice(0, common);
-    let (longer, longer_len) = if l.len() > r.len() {
-        (l, l.len())
-    } else {
-        (r, r.len())
-    };
-    let tail = longer.slice(common, longer_len - common);
-    let mut builder = BooleanBufferBuilder::new(longer_len);
-    builder.append_buffer(&head);
-    builder.append_buffer(&tail);
-    builder.finish()
+    combine_unequal_length_masks(l, r, |a, b| a | b)
+}
+
+/// Combines two masks of equal length with the bitwise operation `op`.
+///
+/// `BitAnd`/`BitOr` on `&BooleanBuffer` normalise the result to a zero bit offset,
+/// which costs a second allocation and a shifting copy when both operands
+/// share the same non-zero sub-64-bit alignment, causing
+/// `from_bitwise_binary_op` to return a non-zero-offset result. Building the
+/// buffer directly keeps the offset, as the unequal-length path does.
+fn combine_equal_length_masks<F>(l: &BooleanBuffer, r: &BooleanBuffer, op: F) -> BooleanBuffer
+where
+    F: FnMut(u64, u64) -> u64,
+{
+    BooleanBuffer::from_bitwise_binary_op(
+        l.values(),
+        l.offset(),
+        r.values(),
+        r.offset(),
+        l.len(),
+        op,
+    )
+}
+
+/// Combines two masks of unequal length with the bitwise operation `op`,
+/// passing the longer side's tail through unchanged.
+///
+/// The longer mask is copied once into a [`MutableBuffer`] and `op` is then
+/// applied in place over the common prefix. This avoids materialising the
+/// prefix into its own buffer and copying both prefix and tail again through a
+/// [`BooleanBufferBuilder`].
+///
+/// Neither the mask offsets nor the prefix length are assumed to be byte
+/// aligned: the copy keeps the longer mask's offset within its first byte so it
+/// stays a plain byte copy, and that offset is carried over to the result. Only
+/// the longer mask's own byte range is copied, so the result does not retain the
+/// backing allocation it was sliced from.
+fn combine_unequal_length_masks<F>(l: &BooleanBuffer, r: &BooleanBuffer, op: F) -> BooleanBuffer
+where
+    F: FnMut(u64, u64) -> u64,
+{
+    let (longer, shorter) = if l.len() > r.len() { (l, r) } else { (r, l) };
+
+    let sub_byte_offset = longer.offset() % 8;
+    let start_byte = longer.offset() / 8;
+    let end_byte = bit_util::ceil(longer.offset() + longer.len(), 8);
+    let bytes = &longer.values()[start_byte..end_byte];
+    let mut buffer = MutableBuffer::new(bytes.len());
+    buffer.extend_from_slice(bytes);
+
+    bit_util::apply_bitwise_binary_op(
+        buffer.as_slice_mut(),
+        sub_byte_offset,
+        shorter.values(),
+        shorter.offset(),
+        shorter.len(),
+        op,
+    );
+
+    BooleanBuffer::new(buffer.into(), sub_byte_offset, longer.len())
 }
 
 /// Applies `other` to the selected rows of `mask`, preserving the original row domain.
@@ -368,6 +433,26 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
         return mask.clone();
     }
 
+    if should_use_dense_mask(mask.len(), selected_count, other_true_count) {
+        and_then_dense_masks(mask, other)
+    } else {
+        and_then_sparse_masks(mask, other)
+    }
+}
+
+/// Checks the length and selectivity thresholds for dense expansion.
+#[inline]
+fn should_use_dense_mask(mask_len: usize, selected_count: usize, other_true_count: usize) -> bool {
+    mask_len >= AND_THEN_DENSE_MASK_MIN_LEN
+        && mask_len - selected_count <= mask_len.div_ceil(AND_THEN_DENSE_MASK_MAX_DROPPED_FRACTION)
+        && other_true_count >= selected_count / AND_THEN_DENSE_MASK_MIN_INNER_FRACTION
+}
+
+/// Maps each set bit in `other` to the corresponding set bit in `mask`.
+/// Requires `other.len() == mask.count_set_bits()`.
+fn and_then_sparse_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
+    debug_assert_eq!(other.len(), mask.count_set_bits());
+
     let mut builder = BooleanBufferBuilder::new(mask.len());
     let mut outer_set_indices = mask.set_indices();
     let mut next_selected_ordinal = 0usize;
@@ -393,11 +478,51 @@ fn and_then_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer 
     builder.finish()
 }
 
+/// Scatters the next `mask_word.count_ones()` bits of `other` into each mask word.
+/// Requires `other.len() == mask.count_set_bits()`.
+#[inline(never)]
+fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
+    debug_assert_eq!(other.len(), mask.count_set_bits());
+
+    let mut other_chunks = other.bit_chunks().iter_padded();
+    let mut other_remaining = other.len();
+    let mut pending = 0_u128;
+    let mut pending_len = 0;
+    let mut output = MutableBuffer::with_capacity(mask.len().div_ceil(8));
+
+    for mask_word in mask
+        .bit_chunks()
+        .iter_padded()
+        .take(mask.len().div_ceil(64))
+    {
+        let selected = mask_word.count_ones() as usize;
+        while pending_len < selected {
+            let chunk = other_chunks
+                .next()
+                .expect("validated other length matches selected row count");
+            let chunk_len = other_remaining.min(64);
+            pending |= (chunk as u128) << pending_len;
+            pending_len += chunk_len;
+            other_remaining -= chunk_len;
+        }
+
+        let values = pending as u64;
+        output.extend_from_slice(&bit_util::expand(values, mask_word).to_le_bytes());
+        pending >>= selected;
+        pending_len -= selected;
+    }
+
+    debug_assert_eq!(other_remaining, 0);
+    debug_assert_eq!(pending_len, 0);
+    output.truncate(mask.len().div_ceil(8));
+    BooleanBuffer::new(output.into(), 0, mask.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow_array::BooleanArray;
-    use rand::{Rng, rng};
+    use rand::{RngExt, SeedableRng, rng, rngs::StdRng};
 
     #[test]
     fn test_and() {
@@ -546,6 +671,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_and_fuzz() {
         let mut rand = rng();
         for _ in 0..100 {
@@ -568,8 +694,7 @@ mod tests {
 
             let expected = RowSelection::from_filters(&[BooleanArray::from(expected_bools)]);
 
-            let total_rows: usize = expected.selectors().iter().map(|s| s.row_count).sum();
-            assert_eq!(a_len, total_rows);
+            assert_eq!(a_len, expected.total_row_count());
 
             assert_eq!(a.and_then(&b), expected);
         }
@@ -691,6 +816,108 @@ mod tests {
         );
     }
 
+    struct AndThenTest {
+        outer: BooleanBuffer,
+        inner: BooleanBuffer,
+        dense_mask_expected: bool,
+    }
+
+    impl AndThenTest {
+        fn run(self) {
+            let Self {
+                outer,
+                inner,
+                dense_mask_expected,
+            } = self;
+            assert_eq!(inner.len(), outer.count_set_bits());
+            assert_eq!(
+                should_use_dense_mask(outer.len(), inner.len(), inner.count_set_bits()),
+                dense_mask_expected
+            );
+
+            let mut inner_idx = 0;
+            let expected = BooleanBuffer::from_iter((0..outer.len()).map(|i| {
+                if !outer.value(i) {
+                    return false;
+                }
+                let value = inner.value(inner_idx);
+                inner_idx += 1;
+                value
+            }));
+
+            if dense_mask_expected {
+                assert_eq!(and_then_dense_masks(&outer, &inner), expected);
+            }
+
+            let outer = RowSelection::from_boolean_buffer(outer);
+            let inner = RowSelection::from_boolean_buffer(inner);
+            let actual = outer.and_then(&inner);
+            assert_eq!(actual.as_mask().unwrap(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_dense_mask_and_then_mask_with_offsets() {
+        for len in [8192, 8193, 10_000] {
+            for outer_stride in [100, 20, 4] {
+                let outer_offset = 3;
+                let outer = BooleanBuffer::from_iter(
+                    (0..len + outer_offset).map(|i| (i + 1) % outer_stride != 0),
+                )
+                .slice(outer_offset, len);
+
+                let inner_offset = 5;
+                let inner_len = outer.count_set_bits();
+                let inner = BooleanBuffer::from_iter(
+                    (0..inner_len + inner_offset).map(|i| (i + 2) % 97 != 0),
+                )
+                .slice(inner_offset, inner_len);
+
+                AndThenTest {
+                    outer,
+                    inner,
+                    dense_mask_expected: true,
+                }
+                .run();
+            }
+        }
+    }
+
+    #[test]
+    fn test_dense_mask_and_then_mask_randomized_word_boundaries() {
+        let mut rng = StdRng::seed_from_u64(0x67e4_a91b_239d_c805);
+
+        for (len, outer_offset, inner_offset) in [(8192, 0, 0), (8192, 3, 5), (8193, 7, 1)] {
+            let outer =
+                BooleanBuffer::from_iter((0..len + outer_offset).map(|_| rng.random_bool(0.8)))
+                    .slice(outer_offset, len);
+            let inner_len = outer.count_set_bits();
+            let inner = BooleanBuffer::from_iter(
+                (0..inner_len + inner_offset).map(|_| rng.random_bool(0.5)),
+            )
+            .slice(inner_offset, inner_len);
+
+            AndThenTest {
+                outer,
+                inner,
+                dense_mask_expected: true,
+            }
+            .run();
+        }
+    }
+
+    #[test]
+    fn test_dense_mask_and_then_policy() {
+        let len = 8192;
+        let selected = len * 3 / 4;
+        let min_inner = selected / AND_THEN_DENSE_MASK_MIN_INNER_FRACTION;
+
+        assert!(!should_use_dense_mask(len - 1, selected, min_inner));
+        assert!(!should_use_dense_mask(len, selected - 1, min_inner));
+        assert!(!should_use_dense_mask(len, selected, min_inner - 1));
+        assert!(should_use_dense_mask(len, selected, min_inner));
+    }
+
     #[test]
     fn test_selector_and_then_mask() {
         let outer =
@@ -765,8 +992,10 @@ mod tests {
             .collect();
         let expected_intersection =
             RowSelection::from_filters(&[BooleanArray::from(intersection_bits)]);
-        assert_eq!(mask.intersection(&selectors), expected_intersection);
-        assert_eq!(selectors.intersection(&mask), expected_intersection);
+        for result in [mask.intersection(&selectors), selectors.intersection(&mask)] {
+            assert!(result.as_mask().is_some());
+            assert_eq!(result, expected_intersection);
+        }
 
         let union_bits: Vec<_> = mask_bits
             .iter()
@@ -774,8 +1003,10 @@ mod tests {
             .map(|(x, y)| *x || *y)
             .collect();
         let expected_union = RowSelection::from_filters(&[BooleanArray::from(union_bits)]);
-        assert_eq!(mask.union(&selectors), expected_union);
-        assert_eq!(selectors.union(&mask), expected_union);
+        for result in [mask.union(&selectors), selectors.union(&mask)] {
+            assert!(result.as_mask().is_some());
+            assert_eq!(result, expected_union);
+        }
     }
 
     #[test]
@@ -824,5 +1055,255 @@ mod tests {
         let r_mask = r.as_mask().unwrap();
         let bits: Vec<bool> = (0..5).map(|i| r_mask.value(i)).collect();
         assert_eq!(bits, vec![true, true, false, false, true]);
+    }
+
+    /// Expected result of combining two masks of possibly differing lengths:
+    /// `op` over the common prefix, then the longer side's tail unchanged.
+    fn expected_combined(l: &[bool], r: &[bool], op: fn(bool, bool) -> bool) -> Vec<bool> {
+        let common = l.len().min(r.len());
+        let longer = if l.len() > r.len() { l } else { r };
+        (0..common)
+            .map(|i| op(l[i], r[i]))
+            .chain(longer[common..].iter().copied())
+            .collect()
+    }
+
+    fn assert_mask_eq(actual: &BooleanBuffer, expected: &[bool], context: &str) {
+        assert_eq!(actual.len(), expected.len(), "{context}: length");
+        let actual: Vec<bool> = actual.iter().collect();
+        assert_eq!(actual, expected, "{context}");
+    }
+
+    #[test]
+    fn test_mixed_mask_selector_algebra_with_offsets_and_uneven_lengths() {
+        for rows in [1, 7, 8, 63, 64, 65, 137] {
+            for (mask_len, selector_len) in [(rows, rows), (rows, 137), (137, rows)] {
+                for offset in [0, 1, 7, 63] {
+                    for mask_bits in [
+                        vec![false; mask_len],
+                        vec![true; mask_len],
+                        (0..mask_len).map(|i| i < mask_len / 2).collect(),
+                        (0..mask_len).map(|i| i % 2 == 0).collect(),
+                    ] {
+                        let buffer = BooleanBuffer::from_iter(
+                            std::iter::repeat_n(false, offset).chain(mask_bits.iter().copied()),
+                        )
+                        .slice(offset, mask_len);
+                        let mask = RowSelection::from_boolean_buffer(buffer);
+                        for selector_bits in [
+                            vec![false; selector_len],
+                            vec![true; selector_len],
+                            (0..selector_len).map(|i| i % 2 == 0).collect(),
+                            (0..selector_len).map(|i| (i / 11) % 2 == 0).collect(),
+                        ] {
+                            let selectors = RowSelection::from_filters(&[BooleanArray::from(
+                                selector_bits.clone(),
+                            )]);
+                            let context = format!(
+                                "mask_len={mask_len} selector_len={selector_len} offset={offset}"
+                            );
+                            let intersection =
+                                expected_combined(&mask_bits, &selector_bits, |a, b| a && b);
+                            let union =
+                                expected_combined(&mask_bits, &selector_bits, |a, b| a || b);
+                            for (left, right) in [(&mask, &selectors), (&selectors, &mask)] {
+                                assert_mask_eq(
+                                    left.intersection(right).as_mask().unwrap(),
+                                    &intersection,
+                                    &context,
+                                );
+                                assert_mask_eq(
+                                    left.union(right).as_mask().unwrap(),
+                                    &union,
+                                    &context,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mixed_algebra_empty_operand_preserves_tail() {
+        let empty = RowSelection::default();
+        let buffer = BooleanBuffer::from_iter((0..64).map(|i| i % 3 == 0));
+        let mask = RowSelection::from_boolean_buffer(buffer.slice(5, 40));
+        let selectors = RowSelection::from(vec![
+            RowSelector::skip(3),
+            RowSelector::select(7),
+            RowSelector::skip(4),
+        ]);
+        let empty_mask = RowSelection::from_boolean_buffer(BooleanBuffer::new_unset(0));
+        for (left, right, expected) in [
+            (&empty, &mask, &mask),
+            (&mask, &empty, &mask),
+            (&empty_mask, &selectors, &selectors),
+            (&selectors, &empty_mask, &selectors),
+            (&empty, &empty_mask, &empty_mask),
+            (&empty_mask, &empty, &empty_mask),
+        ] {
+            for result in [left.intersection(right), left.union(right)] {
+                assert_eq!(&result, expected);
+                match (result.as_mask(), expected.as_mask()) {
+                    (Some(actual), Some(expected)) => {
+                        assert_eq!(actual.inner().as_ptr(), expected.inner().as_ptr());
+                        assert_eq!(actual.offset(), expected.offset());
+                    }
+                    (None, None) => {}
+                    _ => panic!("empty operand changed the other operand's representation"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn test_mask_algebra_with_offsets() {
+        // Offsets and lengths that are not byte (or word) aligned on either side,
+        // so the common prefix can start and end mid byte. Covers both the equal
+        // and uneven length paths.
+        let base: Vec<bool> = (0..600).map(|i| i % 7 == 0 || i % 3 == 1).collect();
+        let other: Vec<bool> = (0..600).map(|i| i % 5 == 2 || i % 11 == 4).collect();
+        let base = BooleanBuffer::from(base);
+        let other = BooleanBuffer::from(other);
+
+        for l_offset in [0, 1, 5, 8, 13, 64, 67] {
+            for r_offset in [0, 1, 3, 8, 60, 64, 70] {
+                for (l_len, r_len) in [
+                    (0, 9),
+                    (9, 0),
+                    (1, 200),
+                    (200, 1),
+                    (63, 130),
+                    (321, 65),
+                    (0, 0),
+                    (1, 1),
+                    (63, 63),
+                    (64, 64),
+                    (200, 200),
+                    (321, 321),
+                ] {
+                    let l = base.slice(l_offset, l_len);
+                    let r = other.slice(r_offset, r_len);
+                    let l_bits: Vec<bool> = l.iter().collect();
+                    let r_bits: Vec<bool> = r.iter().collect();
+                    let context =
+                        format!("l_offset={l_offset} r_offset={r_offset} lens=({l_len},{r_len})");
+
+                    assert_mask_eq(
+                        &intersect_masks(&l, &r),
+                        &expected_combined(&l_bits, &r_bits, |a, b| a && b),
+                        &format!("intersect {context}"),
+                    );
+                    assert_mask_eq(
+                        &union_masks(&l, &r),
+                        &expected_combined(&l_bits, &r_bits, |a, b| a || b),
+                        &format!("union {context}"),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn test_mask_algebra_does_not_retain_backing_buffer() {
+        // A short slice of a long mask must not keep the long allocation alive,
+        // including when the other operand is empty and contributes nothing.
+        // Comparing capacities rather than lengths, since a shallow slice reports a
+        // short length while still holding the original allocation through its `Arc`.
+        let long = BooleanBuffer::from((0..80_000).map(|i| i % 3 == 0).collect::<Vec<bool>>());
+        assert!(long.inner().capacity() >= 10_000);
+
+        for (l, r) in [
+            (long.slice(5, 40), BooleanBuffer::new_unset(0)),
+            (long.slice(5, 40), BooleanBuffer::new_set(7)),
+            (BooleanBuffer::new_set(7), long.slice(5, 40)),
+        ] {
+            for combined in [intersect_masks(&l, &r), union_masks(&l, &r)] {
+                assert!(
+                    combined.inner().capacity() < long.inner().capacity(),
+                    "result retained the original backing allocation"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
+    fn test_mask_algebra_fuzz() {
+        let mut rng = rng();
+        for _ in 0..200 {
+            let l_offset = rng.random_range(0..70);
+            let r_offset = rng.random_range(0..70);
+            let l_len = rng.random_range(0..300);
+            // Bias towards equal lengths so that path is hit often
+            let r_len = match rng.random_bool(0.25) {
+                true => l_len,
+                false => rng.random_range(0..300),
+            };
+
+            let l_bits: Vec<bool> = (0..l_offset + l_len)
+                .map(|_| rng.random_bool(0.5))
+                .collect();
+            let r_bits: Vec<bool> = (0..r_offset + r_len)
+                .map(|_| rng.random_bool(0.5))
+                .collect();
+            let l = BooleanBuffer::from(l_bits).slice(l_offset, l_len);
+            let r = BooleanBuffer::from(r_bits).slice(r_offset, r_len);
+            let l_bits: Vec<bool> = l.iter().collect();
+            let r_bits: Vec<bool> = r.iter().collect();
+
+            assert_mask_eq(
+                &intersect_masks(&l, &r),
+                &expected_combined(&l_bits, &r_bits, |a, b| a && b),
+                "intersect",
+            );
+            assert_mask_eq(
+                &union_masks(&l, &r),
+                &expected_combined(&l_bits, &r_bits, |a, b| a || b),
+                "union",
+            );
+        }
+    }
+
+    #[test]
+    fn dense_composition_with_zero_words_and_offsets() {
+        for mask_len in [8192, 8193, 65537] {
+            for (mask_offset, inner_offset) in [(0, 0), (3, 5), (63, 65), (65, 129)] {
+                for stride in [4, 100] {
+                    let mask =
+                        BooleanBuffer::from_iter((0..mask_offset + mask_len + 73).map(|i| {
+                            !(mask_offset..mask_offset + mask_len).contains(&i)
+                                || (i - mask_offset) % stride != 0
+                        }))
+                        .slice(mask_offset, mask_len);
+                    let len = mask.count_set_bits();
+                    for start in [0, 63, len / 2] {
+                        for select_last in [false, true] {
+                            let count = len / 10;
+                            let inner =
+                                BooleanBuffer::from_iter((0..inner_offset + len + 73).map(|i| {
+                                    if !(inner_offset..inner_offset + len).contains(&i) {
+                                        return true;
+                                    }
+                                    let j = i - inner_offset;
+                                    (start..start + count).contains(&j)
+                                        || select_last && j == len - 1
+                                }))
+                                .slice(inner_offset, len);
+                            AndThenTest {
+                                outer: mask.clone(),
+                                inner,
+                                dense_mask_expected: true,
+                            }
+                            .run();
+                        }
+                    }
+                }
+            }
+        }
     }
 }

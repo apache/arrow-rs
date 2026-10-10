@@ -253,7 +253,7 @@ fn regex_like(pattern: &str, case_insensitive: bool) -> Result<Regex, ArrowError
             chars_iter.next();
         }
         _ => result.push('^'),
-    };
+    }
 
     while let Some(c) = chars_iter.next() {
         match c {

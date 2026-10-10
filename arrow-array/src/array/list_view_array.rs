@@ -134,7 +134,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     /// * `offsets.len() != sizes.len()`
     /// * `offsets.len() != nulls.len()`
     /// * `offsets[i] > values.len()`
-    /// * `!field.is_nullable() && values.is_nullable()`
+    /// * `!field.is_nullable() && values.logical_null_count() != 0`
     /// * `field.data_type() != values.data_type()`
     /// * `0 <= offsets[i] <= length of the child array`
     /// * `0 <= offsets[i] + size[i] <= length of the child array`
@@ -146,14 +146,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
         let len = offsets.len();
-        if let Some(n) = nulls.as_ref() {
-            if n.len() != len {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Incorrect length of null buffer for {}ListViewArray, expected {len} got {}",
-                    OffsetSize::PREFIX,
-                    n.len(),
-                )));
-            }
+        if let Some(n) = nulls.as_ref()
+            && n.len() != len
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Incorrect length of null buffer for {}ListViewArray, expected {len} got {}",
+                OffsetSize::PREFIX,
+                n.len(),
+            )));
         }
         if len != sizes.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -181,7 +181,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             }
         }
 
-        if !field.is_nullable() && values.is_nullable() {
+        if !field.is_nullable() && values.logical_null_count() != 0 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Non-nullable field of {}ListViewArray {:?} cannot contain nulls",
                 OffsetSize::PREFIX,
@@ -274,9 +274,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         ArrayRef,
         Option<NullBuffer>,
     ) {
-        let f = match self.data_type {
-            DataType::ListView(f) | DataType::LargeListView(f) => f,
-            _ => unreachable!(),
+        let (DataType::ListView(f) | DataType::LargeListView(f)) = self.data_type else {
+            unreachable!()
         };
         (
             f,
@@ -285,6 +284,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             self.values,
             self.nulls,
         )
+    }
+
+    /// The field that describes the values of this list.
+    pub fn value_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::ListView(f) | DataType::LargeListView(f) => f,
+            _ => unreachable!(),
+        }
     }
 
     /// Returns a reference to the offsets of this list
@@ -335,7 +342,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
     ///
     /// # Panics
-    /// Panics if the index is out of bounds
+    /// Panics if `i >= self.len()`
     pub fn value(&self, i: usize) -> ArrayRef {
         let offset = self.value_offsets()[i].as_usize();
         let length = self.value_sizes()[i].as_usize();
@@ -355,12 +362,18 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// Returns the size for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if `i >= self.len()`
     #[inline]
     pub fn value_size(&self, i: usize) -> OffsetSize {
         self.value_sizes[i]
     }
 
     /// Returns the offset for value at index `i`.
+    ///
+    /// # Panics
+    /// Panics if `i >= self.len()`
     pub fn value_offset(&self, i: usize) -> OffsetSize {
         self.value_offsets[i]
     }
@@ -381,6 +394,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    /// Panics if `offset + length > self.len()`
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -429,6 +445,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
             }
         }
         builder.finish()
+    }
+}
+
+impl<'a, OffsetSize: OffsetSizeTrait> IntoIterator for &'a GenericListViewArray<OffsetSize> {
+    type Item = Option<ArrayRef>;
+    type IntoIter = GenericListViewArrayIter<'a, OffsetSize>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        GenericListViewArrayIter::<'a, OffsetSize>::new(self)
     }
 }
 
@@ -543,8 +568,8 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListViewArray<Offse
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let prefix = OffsetSize::PREFIX;
         write!(f, "{prefix}ListViewArray\n[\n")?;
-        print_long_array(self, f, |array, index, f| {
-            std::fmt::Debug::fmt(&array.value(index), f)
+        print_long_array(self, f, &mut |index, f| {
+            std::fmt::Debug::fmt(&self.value(index), f)
         })?;
         write!(f, "]")
     }
@@ -685,7 +710,7 @@ mod tests {
     use crate::builder::{FixedSizeListBuilder, Int32Builder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use crate::{Int32Array, Int64Array};
+    use crate::{Int8Array, Int8DictionaryArray, Int32Array, Int64Array, StringArray};
 
     use super::*;
 
@@ -1113,6 +1138,37 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Non-nullable field of LargeListViewArray \"element\" cannot contain nulls"
         );
+    }
+
+    #[test]
+    fn test_try_new_non_nullable_field_dictionary_values() {
+        let keys = Int8Array::new(vec![0i8, 1].into(), Some(NullBuffer::new_valid(2)));
+        let values = StringArray::from(vec!["x", "y"]);
+        let dict = Int8DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
+        let field = Arc::new(Field::new("element", dict.data_type().clone(), false));
+        ListViewArray::try_new(
+            field,
+            ScalarBuffer::from(vec![0]),
+            ScalarBuffer::from(vec![2]),
+            Arc::new(dict),
+            None,
+        )
+        .unwrap();
+
+        let keys = Int8Array::from(vec![Some(0i8), None]);
+        let values = StringArray::from(vec!["x", "y"]);
+        let dict = Int8DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
+        let field = Arc::new(Field::new("element", dict.data_type().clone(), false));
+        let err = ListViewArray::try_new(
+            field,
+            ScalarBuffer::from(vec![0]),
+            ScalarBuffer::from(vec![2]),
+            Arc::new(dict),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("cannot contain nulls"));
     }
 
     #[test]

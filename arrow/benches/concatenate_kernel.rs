@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-extern crate arrow;
 #[macro_use]
 extern crate criterion;
 use std::sync::Arc;
@@ -193,6 +192,27 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_concat(&v1, &v2))
     });
 
+    // A column assembled from one-row arrays, as ScalarValue::iter_to_array in DataFusion does
+    {
+        let input = (0..1024)
+            .map(|_| create_primitive_fixed_size_list_array::<Float32Type>(1, 0.0, 0.0, 3))
+            .collect::<Vec<_>>();
+        let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat 1024 arrays fixed size list f32x3 1", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
+    {
+        // Slices, as the generator's fixed seed would give every one-row array the same validity
+        let input = create_primitive_fixed_size_list_array::<Float32Type>(1024, 0.2, 0.0, 3);
+        let slices = (0..1024).map(|i| input.slice(i, 1)).collect::<Vec<_>>();
+        let arrays: Vec<_> = slices.iter().map(|arr| arr as &dyn Array).collect();
+        c.bench_function("concat 1024 arrays fixed size list f32x3 nulls 1", |b| {
+            b.iter(|| bench_concat_arrays(&arrays))
+        });
+    }
+
     {
         let batch_size = 1024;
         let batch_count = 2;
@@ -235,6 +255,21 @@ fn add_benchmark(c: &mut Criterion) {
             &format!("concat struct with int32 and dicts size={batch_size} count={batch_count}"),
             |b| b.iter(|| bench_concat_arrays(&array_refs)),
         );
+    }
+
+    // (name, logical_len, physical_len, num_arrays)
+    for (name, logical, physical, n) in [
+        ("small logical=32 physical=4 x4", 32usize, 4usize, 4usize),
+        ("logical=1024 physical=128 x8", 1024, 128, 8),
+        ("logical=8192 physical=1024 x10", 8192, 1024, 10),
+    ] {
+        let arrays: Vec<RunArray<Int32Type>> = (0..n)
+            .map(|_| create_primitive_run_array::<Int32Type, Int32Type>(logical, physical))
+            .collect();
+        let array_refs: Vec<&dyn Array> = arrays.iter().map(|a| a as &dyn Array).collect();
+        c.bench_function(&format!("concat run_end i32 {name}"), |b| {
+            b.iter(|| bench_concat_arrays(&array_refs))
+        });
     }
 }
 

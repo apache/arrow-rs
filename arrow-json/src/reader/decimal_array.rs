@@ -53,7 +53,7 @@ where
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayRef, ArrowError> {
         let mut builder = PrimitiveBuilder::<D>::with_capacity(pos.len());
 
-        #[allow(unused)] // initial value overwritten without ever being read
+        #[expect(unused_assignments)] // initial value overwritten without ever being read
         let mut anchor = String::default();
         for p in pos {
             let value = match tape.get(*p) {

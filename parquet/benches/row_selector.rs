@@ -16,10 +16,49 @@
 // under the License.
 
 use arrow_array::BooleanArray;
+use arrow_buffer::BooleanBuffer;
 use criterion::*;
-use parquet::arrow::arrow_reader::RowSelection;
-use rand::Rng;
-use std::hint;
+use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+use rand::RngExt;
+use std::{hint, time::Duration};
+
+/// Run lengths for the mask conversion benchmarks. Shorter runs mean more
+/// [`RowSelector`]s per row, so the RLE encoding dominates.
+const MASK_RUN_LENGTHS: &[usize] = &[1, 4, 16, 32, 48, 64, 96, 128];
+
+const MASK_ALGEBRA_ROWS: usize = 3_000_000;
+
+/// Inputs for the mask-backed `and_then` sweeps. `MASK_AND_THEN_ROWS` is the
+/// length used by the selectivity and offset sweeps. Selectivities are the
+/// percentage of rows that are selected; the values bracket the thresholds
+/// that choose between the word-at-a-time expansion and the set-index
+/// implementation (roughly 75% outer, 5% inner, 8,192 rows), and the lengths
+/// include sizes on both sides of the row threshold.
+const MASK_AND_THEN_ROWS: usize = 8192;
+const MASK_AND_THEN_OUTER_SELECTIVITY: &[usize] = &[70, 75, 80, 99];
+const MASK_AND_THEN_INNER_SELECTIVITY: &[usize] = &[1, 5, 10, 99];
+const MASK_AND_THEN_LENGTHS: &[usize] = &[64, 4096, 8192, 16_384, 65_536];
+const MASK_AND_THEN_OFFSETS: &[(&str, usize, usize)] =
+    &[("outer_3_inner_5", 3, 5), ("outer_7_inner_1", 7, 1)];
+
+/// Operand length pairs. Unequal lengths pass the longer side's tail through unchanged,
+/// so the ratio decides how much of the work is the bitwise combine versus the tail.
+const MASK_ALGEBRA_LENGTHS: &[(&str, usize, usize)] = &[
+    ("equal", MASK_ALGEBRA_ROWS, MASK_ALGEBRA_ROWS),
+    ("tail1", MASK_ALGEBRA_ROWS, MASK_ALGEBRA_ROWS - 1),
+    ("tail1of3", MASK_ALGEBRA_ROWS, MASK_ALGEBRA_ROWS * 2 / 3),
+    ("tail_most", MASK_ALGEBRA_ROWS, 1_000),
+];
+
+/// Bit offsets for the left and right operand. Masks come from [`BooleanBuffer::slice`],
+/// so a non-zero offset is normal. Whether the two share a sub-64-bit alignment decides
+/// which path the underlying bitwise helpers take, so both are covered.
+const MASK_ALGEBRA_OFFSETS: &[(&str, usize, usize)] = &[
+    ("both_zero", 0, 0),
+    ("same_mod64", 3, 3),
+    ("same_mod64_far", 3, 67),
+    ("diff_mod64", 3, 5),
+];
 
 /// Generates a random RowSelection with a specified selection ratio.
 ///
@@ -37,6 +76,285 @@ fn generate_random_row_selection(total_rows: usize, selection_ratio: f64) -> Boo
         .map(|_| rng.random_bool(selection_ratio))
         .collect();
     BooleanArray::from(bools)
+}
+
+/// Generates a mask alternating between selected and skipped runs of `run_len` rows.
+fn generate_run_length_mask(total_rows: usize, run_len: usize) -> BooleanBuffer {
+    BooleanBuffer::from_iter((0..total_rows).map(|row| (row / run_len).is_multiple_of(2)))
+}
+
+/// Builds a mask-backed [`RowSelection`] carrying `offset` as its bit offset.
+fn mask_algebra_operand(len: usize, offset: usize, selection_ratio: f64) -> RowSelection {
+    let mut rng = rand::rng();
+    let bits: Vec<bool> = (0..len + offset)
+        .map(|_| rng.random_bool(selection_ratio))
+        .collect();
+    RowSelection::from_boolean_buffer(BooleanBuffer::from(bits).slice(offset, len))
+}
+
+/// Selects exactly `selection_percent` of `len` rows, chosen by a hash of the
+/// row index so the set bits are spread evenly. The buffer is built with
+/// `offset` leading bits and then sliced, so the mask starts mid-word.
+fn pseudo_random_mask_with_offset(
+    len: usize,
+    selection_percent: usize,
+    seed: u64,
+    offset: usize,
+) -> BooleanBuffer {
+    assert!(len > 1);
+    assert!(selection_percent <= 100);
+    let selected = (len * selection_percent / 100).clamp(1, len - 1);
+    let mut ranked = (0..len)
+        .map(|row| {
+            let mut value = (row as u64).wrapping_add(seed);
+            value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            value ^= value >> 31;
+            (value, row)
+        })
+        .collect::<Vec<_>>();
+    ranked.select_nth_unstable_by_key(selected, |(value, _)| *value);
+
+    let mut bits = vec![false; len + offset];
+    for (_, row) in &ranked[..selected] {
+        bits[offset + *row] = true;
+    }
+    BooleanBuffer::from(bits).slice(offset, len)
+}
+
+/// Selects `selection_percent` of `len` rows as one contiguous run starting at
+/// `seed % len` and wrapping around the end. Every word is all set or all
+/// unset except at the run boundaries, which models page-level filters.
+fn clustered_mask(len: usize, selection_percent: usize, seed: usize) -> BooleanBuffer {
+    assert!(len > 1);
+    assert!(selection_percent <= 100);
+    let selected = (len * selection_percent / 100).clamp(1, len - 1);
+    let start = seed % len;
+    let mut bits = vec![false; len];
+    for row in 0..selected {
+        bits[(start + row) % len] = true;
+    }
+    BooleanBuffer::from(bits)
+}
+
+/// Builds a pseudo-random outer mask of `rows` rows and an inner mask sized to
+/// the outer mask's selected row count, as `and_then` requires.
+fn mask_and_then_operands(
+    rows: usize,
+    outer_percent: usize,
+    inner_percent: usize,
+) -> (RowSelection, RowSelection) {
+    mask_and_then_operands_with_offsets(rows, outer_percent, inner_percent, 0, 0)
+}
+
+fn mask_and_then_operands_with_offsets(
+    rows: usize,
+    outer_percent: usize,
+    inner_percent: usize,
+    outer_offset: usize,
+    inner_offset: usize,
+) -> (RowSelection, RowSelection) {
+    let outer =
+        pseudo_random_mask_with_offset(rows, outer_percent, 0x517c_c1b7_2722_0a95, outer_offset);
+    let inner = pseudo_random_mask_with_offset(
+        outer.count_set_bits(),
+        inner_percent,
+        0x6eed_0e9d_a4d9_4a4f,
+        inner_offset,
+    );
+    (
+        RowSelection::from_boolean_buffer(outer),
+        RowSelection::from_boolean_buffer(inner),
+    )
+}
+
+/// Same as `mask_and_then_operands`, but both masks are contiguous runs.
+fn clustered_mask_and_then_operands(
+    rows: usize,
+    outer_percent: usize,
+    inner_percent: usize,
+) -> (RowSelection, RowSelection) {
+    let outer = clustered_mask(rows, outer_percent, 17);
+    let inner = clustered_mask(outer.count_set_bits(), inner_percent, 31);
+    (
+        RowSelection::from_boolean_buffer(outer),
+        RowSelection::from_boolean_buffer(inner),
+    )
+}
+
+/// Sweeps the inputs that decide whether the word-at-a-time mask expansion is
+/// faster than the set-index implementation. Short measurement times keep the
+/// full matrix practical while still providing many iterations per sample.
+fn bench_mask_and_then_sweeps(c: &mut Criterion) {
+    let mut selectivity = c.benchmark_group("mask_and_then_selectivity/8192");
+    selectivity
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(1))
+        .sample_size(30);
+
+    for &outer_percent in MASK_AND_THEN_OUTER_SELECTIVITY {
+        for &inner_percent in MASK_AND_THEN_INNER_SELECTIVITY {
+            let (outer, inner) =
+                mask_and_then_operands(MASK_AND_THEN_ROWS, outer_percent, inner_percent);
+            selectivity.bench_function(
+                format!("outer_{outer_percent:02}_inner_{inner_percent:02}"),
+                |b| b.iter(|| hint::black_box(outer.and_then(&inner))),
+            );
+        }
+    }
+    selectivity.finish();
+
+    let mut clustered = c.benchmark_group("mask_and_then_clustered_selectivity/8192");
+    clustered
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(1))
+        .sample_size(30);
+
+    for &outer_percent in MASK_AND_THEN_OUTER_SELECTIVITY {
+        for &inner_percent in MASK_AND_THEN_INNER_SELECTIVITY {
+            let (outer, inner) =
+                clustered_mask_and_then_operands(MASK_AND_THEN_ROWS, outer_percent, inner_percent);
+            clustered.bench_function(
+                format!("outer_{outer_percent:02}_inner_{inner_percent:02}"),
+                |b| b.iter(|| hint::black_box(outer.and_then(&inner))),
+            );
+        }
+    }
+    clustered.finish();
+
+    let mut offsets = c.benchmark_group("mask_and_then_offsets/8192/outer_75_inner_05");
+    offsets
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(1))
+        .sample_size(30);
+
+    for &(label, outer_offset, inner_offset) in MASK_AND_THEN_OFFSETS {
+        let (outer, inner) = mask_and_then_operands_with_offsets(
+            MASK_AND_THEN_ROWS,
+            75,
+            5,
+            outer_offset,
+            inner_offset,
+        );
+        offsets.bench_function(label, |b| {
+            b.iter(|| hint::black_box(outer.and_then(&inner)))
+        });
+    }
+    offsets.finish();
+
+    for &(outer_percent, inner_percent) in &[(75, 5), (99, 5), (99, 99)] {
+        let mut lengths = c.benchmark_group(format!(
+            "mask_and_then_length/outer_{outer_percent:02}_inner_{inner_percent:02}"
+        ));
+        lengths
+            .warm_up_time(Duration::from_millis(500))
+            .measurement_time(Duration::from_secs(1))
+            .sample_size(30);
+
+        for &rows in MASK_AND_THEN_LENGTHS {
+            let (outer, inner) = mask_and_then_operands(rows, outer_percent, inner_percent);
+            lengths.bench_function(rows.to_string(), |b| {
+                b.iter(|| hint::black_box(outer.and_then(&inner)))
+            });
+        }
+        lengths.finish();
+
+        let mut clustered_lengths = c.benchmark_group(format!(
+            "mask_and_then_clustered_length/outer_{outer_percent:02}_inner_{inner_percent:02}"
+        ));
+        clustered_lengths
+            .warm_up_time(Duration::from_millis(500))
+            .measurement_time(Duration::from_secs(1))
+            .sample_size(30);
+
+        for &rows in MASK_AND_THEN_LENGTHS {
+            let (outer, inner) =
+                clustered_mask_and_then_operands(rows, outer_percent, inner_percent);
+            clustered_lengths.bench_function(rows.to_string(), |b| {
+                b.iter(|| hint::black_box(outer.and_then(&inner)))
+            });
+        }
+        clustered_lengths.finish();
+    }
+}
+
+/// Benchmarks the bitwise `intersection`/`union` path, taken when both operands are
+/// mask-backed. The `intersection`/`union` benchmarks above are selector-backed and take
+/// the [`RowSelector`] merge path instead.
+fn bench_mask_backed_algebra(c: &mut Criterion, selection_ratio: f64) {
+    for (offset_label, left_offset, right_offset) in MASK_ALGEBRA_OFFSETS {
+        for (length_label, left_len, right_len) in MASK_ALGEBRA_LENGTHS {
+            let left = mask_algebra_operand(*left_len, *left_offset, selection_ratio);
+            let right = mask_algebra_operand(*right_len, *right_offset, selection_ratio);
+            let label = format!("{length_label}/{offset_label}");
+
+            c.bench_with_input(
+                BenchmarkId::new("mask_intersection", &label),
+                &(&left, &right),
+                |b, (left, right)| b.iter(|| hint::black_box(left.intersection(right))),
+            );
+
+            c.bench_with_input(
+                BenchmarkId::new("mask_union", &label),
+                &(&left, &right),
+                |b, (left, right)| b.iter(|| hint::black_box(left.union(right))),
+            );
+        }
+    }
+}
+
+/// Benchmarks converting a mask-backed [`RowSelection`] into [`RowSelector`]s.
+///
+/// `RowSelection::iter` caches the RLE form, so a caller that iterates before
+/// consuming should reuse that cache rather than encode the bitmap twice.
+/// `mask_consume` is the same conversion with a cold cache.
+fn bench_mask_backed_conversion(c: &mut Criterion, total_rows: usize, selection_ratio: f64) {
+    let mut cases: Vec<(String, BooleanBuffer)> = MASK_RUN_LENGTHS
+        .iter()
+        .map(|&run_len| {
+            (
+                format!("run{run_len:02}"),
+                generate_run_length_mask(total_rows, run_len),
+            )
+        })
+        .collect();
+    cases.push((
+        "random".to_string(),
+        generate_random_row_selection(total_rows, selection_ratio)
+            .values()
+            .clone(),
+    ));
+
+    for (label, mask) in cases {
+        let selection = RowSelection::from_boolean_buffer(mask);
+
+        c.bench_with_input(
+            BenchmarkId::new("mask_iterate_then_consume", &label),
+            &selection,
+            |b, selection| {
+                b.iter(|| {
+                    // `clone` drops the selector cache, so each iteration
+                    // starts from an unconverted selection.
+                    let selection = selection.clone();
+                    let rows: usize = selection.iter().map(|s| s.row_count).sum();
+                    hint::black_box(rows);
+                    let selectors: Vec<RowSelector> = selection.into();
+                    hint::black_box(selectors);
+                })
+            },
+        );
+
+        c.bench_with_input(
+            BenchmarkId::new("mask_consume", &label),
+            &selection,
+            |b, selection| {
+                b.iter(|| {
+                    let selectors: Vec<RowSelector> = selection.clone().into();
+                    hint::black_box(selectors);
+                })
+            },
+        );
+    }
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -82,6 +400,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             hint::black_box(result);
         })
     });
+
+    bench_mask_and_then_sweeps(c);
+
+    bench_mask_backed_algebra(c, selection_ratio);
+    bench_mask_backed_conversion(c, total_rows, selection_ratio);
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -24,13 +24,17 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
+use crate::file::properties::ResolvedColumnProperties;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{BitWriter, num_required_bits};
+use crate::util::prefix::common_prefix_length;
 
+use alp_encoder::AlpEncoder;
 use byte_stream_split_encoder::{ByteStreamSplitEncoder, VariableWidthByteStreamSplitEncoder};
 use bytes::Bytes;
 pub use dict_encoder::DictEncoder;
 
+mod alp_encoder;
 mod byte_stream_split_encoder;
 mod dict_encoder;
 
@@ -80,30 +84,159 @@ pub trait Encoder<T: DataType>: Send {
 
 /// Gets a encoder for the particular data type `T` and encoding `encoding`. Memory usage
 /// for the encoder instance is tracked by `mem_tracker`.
+#[cfg_attr(all(not(feature = "experimental"), not(test)), expect(dead_code))]
 pub fn get_encoder<T: DataType>(
     encoding: Encoding,
     descr: &ColumnDescPtr,
 ) -> Result<Box<dyn Encoder<T>>> {
-    let encoder: Box<dyn Encoder<T>> = match encoding {
-        Encoding::PLAIN => Box::new(PlainEncoder::new()),
-        Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
-            return Err(general_err!(
-                "Cannot initialize this encoding through this function"
-            ));
+    <T::T as private::GetEncoder>::get_encoder(descr, encoding, None)
+}
+
+pub(crate) fn get_encoder_with_properties<T: DataType>(
+    encoding: Encoding,
+    descr: &ColumnDescPtr,
+    column_props: &ResolvedColumnProperties,
+) -> Result<Box<dyn Encoder<T>>> {
+    <T::T as private::GetEncoder>::get_encoder(descr, encoding, Some(column_props))
+}
+
+pub(crate) mod private {
+    use super::*;
+
+    /// A trait that allows getting an [`Encoder`] implementation for a [`DataType`]
+    /// with the corresponding [`ParquetValueType`]. This is necessary to support
+    /// [`Encoder`] implementations that may not be applicable for all [`DataType`]
+    /// and by extension all [`ParquetValueType`], such as ALP, which encodes only
+    /// floating-point columns.
+    ///
+    /// [`ParquetValueType`]: crate::data_type::private::ParquetValueType
+    pub trait GetEncoder {
+        #[expect(
+            private_interfaces,
+            reason = "this trait is not nameable outside the crate"
+        )]
+        fn get_encoder<T: DataType<T = Self>>(
+            descr: &ColumnDescPtr,
+            encoding: Encoding,
+            options: Option<&ResolvedColumnProperties>,
+        ) -> Result<Box<dyn Encoder<T>>> {
+            get_encoder_default(descr, encoding, options)
         }
-        Encoding::RLE => Box::new(RleValueEncoder::new()),
-        Encoding::DELTA_BINARY_PACKED => Box::new(DeltaBitPackEncoder::new()),
-        Encoding::DELTA_LENGTH_BYTE_ARRAY => Box::new(DeltaLengthByteArrayEncoder::new()),
-        Encoding::DELTA_BYTE_ARRAY => Box::new(DeltaByteArrayEncoder::new()),
-        Encoding::BYTE_STREAM_SPLIT => match T::get_physical_type() {
-            Type::FIXED_LEN_BYTE_ARRAY => Box::new(VariableWidthByteStreamSplitEncoder::new(
-                descr.type_length(),
-            )),
-            _ => Box::new(ByteStreamSplitEncoder::new()),
-        },
-        e => return Err(nyi_err!("Encoding {} is not supported", e)),
-    };
-    Ok(encoder)
+    }
+
+    fn get_encoder_default<T: DataType>(
+        descr: &ColumnDescPtr,
+        encoding: Encoding,
+        options: Option<&ResolvedColumnProperties>,
+    ) -> Result<Box<dyn Encoder<T>>> {
+        let encoder: Box<dyn Encoder<T>> = match encoding {
+            Encoding::PLAIN => Box::new(PlainEncoder::new()),
+            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
+                return Err(general_err!(
+                    "Cannot initialize this encoding through this function"
+                ));
+            }
+            Encoding::RLE => match T::get_physical_type() {
+                Type::BOOLEAN => Box::new(RleValueEncoder::new()),
+                physical_type => return Err(unsupported_column_encoding(encoding, physical_type)),
+            },
+            Encoding::DELTA_BINARY_PACKED => match T::get_physical_type() {
+                Type::INT32 | Type::INT64 => Box::new(
+                    match options.and_then(|props| props.delta_binary_packed_encoder_options) {
+                        Some(options) => DeltaBitPackEncoder::new_with_options(options),
+                        None => DeltaBitPackEncoder::new(),
+                    },
+                ),
+                physical_type => return Err(unsupported_column_encoding(encoding, physical_type)),
+            },
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => match T::get_physical_type() {
+                Type::BYTE_ARRAY => Box::new(
+                    match options.and_then(|props| props.delta_binary_packed_encoder_options) {
+                        Some(options) => DeltaLengthByteArrayEncoder::new_with_options(options),
+                        None => DeltaLengthByteArrayEncoder::new(),
+                    },
+                ),
+                physical_type => return Err(unsupported_column_encoding(encoding, physical_type)),
+            },
+            Encoding::DELTA_BYTE_ARRAY => match T::get_physical_type() {
+                Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => Box::new(
+                    match options.and_then(|props| props.delta_binary_packed_encoder_options) {
+                        Some(options) => DeltaByteArrayEncoder::new_with_options(options),
+                        None => DeltaByteArrayEncoder::new(),
+                    },
+                ),
+                physical_type => return Err(unsupported_column_encoding(encoding, physical_type)),
+            },
+            Encoding::BYTE_STREAM_SPLIT => match T::get_physical_type() {
+                Type::FIXED_LEN_BYTE_ARRAY => Box::new(VariableWidthByteStreamSplitEncoder::new(
+                    descr.type_length(),
+                )),
+                Type::INT32 | Type::INT64 | Type::FLOAT | Type::DOUBLE => {
+                    Box::new(ByteStreamSplitEncoder::new())
+                }
+                physical_type => return Err(unsupported_column_encoding(encoding, physical_type)),
+            },
+            Encoding::ALP => {
+                return Err(general_err!(
+                    "Encoding {} only supports FLOAT and DOUBLE, got {}",
+                    encoding,
+                    T::get_physical_type()
+                ));
+            }
+            #[expect(deprecated, reason = "BIT_PACKED is the encoding we reject here")]
+            e @ Encoding::BIT_PACKED => return Err(nyi_err!("Encoding {} is not supported", e)),
+        };
+        Ok(encoder)
+    }
+
+    impl GetEncoder for bool {}
+    impl GetEncoder for i32 {}
+    impl GetEncoder for i64 {}
+    impl GetEncoder for Int96 {}
+    impl GetEncoder for ByteArray {}
+    impl GetEncoder for FixedLenByteArray {}
+
+    impl GetEncoder for f32 {
+        #[expect(
+            private_interfaces,
+            reason = "this trait is not nameable outside the crate"
+        )]
+        fn get_encoder<T: DataType<T = Self>>(
+            descr: &ColumnDescPtr,
+            encoding: Encoding,
+            options: Option<&ResolvedColumnProperties>,
+        ) -> Result<Box<dyn Encoder<T>>> {
+            match encoding {
+                Encoding::ALP => Ok(Box::new(AlpEncoder::new())),
+                _ => get_encoder_default(descr, encoding, options),
+            }
+        }
+    }
+
+    impl GetEncoder for f64 {
+        #[expect(
+            private_interfaces,
+            reason = "this trait is not nameable outside the crate"
+        )]
+        fn get_encoder<T: DataType<T = Self>>(
+            descr: &ColumnDescPtr,
+            encoding: Encoding,
+            options: Option<&ResolvedColumnProperties>,
+        ) -> Result<Box<dyn Encoder<T>>> {
+            match encoding {
+                Encoding::ALP => Ok(Box::new(AlpEncoder::new())),
+                _ => get_encoder_default(descr, encoding, options),
+            }
+        }
+    }
+}
+
+fn unsupported_column_encoding(encoding: Encoding, physical_type: Type) -> ParquetError {
+    nyi_err!(
+        "Encoding {} is not supported for physical type {:?}",
+        encoding,
+        physical_type
+    )
 }
 
 // ----------------------------------------------------------------------
@@ -218,9 +351,13 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
             RleEncoder::new_from_buf(1, buffer)
         });
 
-        for value in values {
-            let value = value.as_u64()?;
-            rle_encoder.put(value)
+        let mut buf = [0_u64; 64];
+        for chunk in values.chunks(buf.len()) {
+            let buf = &mut buf[..chunk.len()];
+            for (b, value) in buf.iter_mut().zip(chunk) {
+                *b = value.as_u64()?;
+            }
+            rle_encoder.put_batch(buf);
         }
         Ok(())
     }
@@ -272,8 +409,69 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
 // DELTA_BINARY_PACKED encoding
 
 const MAX_PAGE_HEADER_WRITER_SIZE: usize = 32;
-const DEFAULT_BIT_WRITER_SIZE: usize = 1024 * 1024;
 const DEFAULT_NUM_MINI_BLOCKS: usize = 4;
+
+/// Controls the block layout emitted by [`DeltaBitPackEncoder`] and the integer sub-encoders used
+/// by [`DeltaLengthByteArrayEncoder`] and [`DeltaByteArrayEncoder`].
+///
+/// In the [Parquet DELTA_BINARY_PACKED encoding], each block records a minimum delta and each mini
+/// block records its own bit width. The defaults use 128 values per block and 4 mini blocks for
+/// `INT32`, and 256 values per block and 4 mini blocks for `INT64`.
+///
+/// Smaller blocks or mini blocks can reduce encoded size for bursty data, where the required bit
+/// width changes over short ranges, and for short pages that would otherwise need more padding.
+/// They also add more minimum-delta and bit-width metadata. Larger blocks or mini blocks can reduce
+/// that metadata and block-processing overhead for long inputs with stable delta distributions,
+/// improving compression or throughput, but an outlier then affects more values and the encoder
+/// uses a larger scratch buffer. Benchmark representative data before changing the defaults.
+///
+/// The format requires block sizes to be multiples of 128 and mini block sizes to be multiples
+/// of 32.
+///
+/// [Parquet DELTA_BINARY_PACKED encoding]: https://github.com/apache/parquet-format/blob/master/Encodings.md#delta-encoding-delta_binary_packed--5
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeltaBinaryPackedEncoderOptions {
+    block_size: usize,
+    mini_blocks_per_block: usize,
+}
+
+impl DeltaBinaryPackedEncoderOptions {
+    /// Creates validated delta binary packed encoder options.
+    pub fn try_new(block_size: usize, mini_blocks_per_block: usize) -> Result<Self> {
+        if block_size == 0 || !block_size.is_multiple_of(128) {
+            return Err(general_err!(
+                "delta binary packed block size must be a positive multiple of 128, got {block_size}"
+            ));
+        }
+        if mini_blocks_per_block == 0 || !block_size.is_multiple_of(mini_blocks_per_block) {
+            return Err(general_err!(
+                "delta binary packed mini block count must be a positive divisor of the block size, got {mini_blocks_per_block} for block size {block_size}"
+            ));
+        }
+
+        let mini_block_size = block_size / mini_blocks_per_block;
+        if !mini_block_size.is_multiple_of(32) {
+            return Err(general_err!(
+                "delta binary packed mini block size must be a multiple of 32, got {mini_block_size}"
+            ));
+        }
+
+        Ok(Self {
+            block_size,
+            mini_blocks_per_block,
+        })
+    }
+
+    /// Returns the number of values in each block.
+    pub fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    /// Returns the number of mini blocks in each block.
+    pub fn mini_blocks_per_block(&self) -> usize {
+        self.mini_blocks_per_block
+    }
+}
 
 /// Delta bit packed encoder.
 /// Consists of a header followed by blocks of delta encoded values binary packed.
@@ -334,19 +532,35 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
         let block_size = mini_block_size * num_mini_blocks;
         assert_eq!(block_size % 128, 0);
 
+        Self::new_with_layout(block_size, num_mini_blocks)
+    }
+
+    fn new_with_layout(block_size: usize, num_mini_blocks: usize) -> Self {
         DeltaBitPackEncoder {
             page_header_writer: BitWriter::new(MAX_PAGE_HEADER_WRITER_SIZE),
-            bit_writer: BitWriter::new(DEFAULT_BIT_WRITER_SIZE),
+            // Don't pre-allocate: encoders are often created eagerly (e.g. as a
+            // byte array fallback encoder) and may never be used. The buffer
+            // grows on demand and retains its capacity across pages.
+            bit_writer: BitWriter::new(0),
             total_values: 0,
             first_value: 0,
             current_value: 0, // current value to keep adding deltas
             block_size,       // can write fewer values than block size for last block
-            mini_block_size,
+            mini_block_size: block_size / num_mini_blocks,
             num_mini_blocks,
             values_in_block: 0, // will be at most block_size
             deltas: vec![0; block_size],
             _phantom: PhantomData,
         }
+    }
+
+    /// Creates a delta bit packed encoder with a custom block layout.
+    pub fn new_with_options(options: DeltaBinaryPackedEncoderOptions) -> Self {
+        Self::assert_supported_type();
+
+        let block_size = options.block_size();
+        let num_mini_blocks = options.mini_blocks_per_block();
+        Self::new_with_layout(block_size, num_mini_blocks)
     }
 
     /// Writes page header for blocks, this method is invoked when we are done encoding
@@ -411,12 +625,15 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             let bit_width = num_required_bits(self.subtract_u64(max_delta, min_delta)) as usize;
             self.bit_writer.write_at(offset + i, bit_width as u8);
 
-            // Encode values in current mini block using min_delta and bit_width
-            for j in 0..n {
-                let packed_value =
-                    self.subtract_u64(self.deltas[i * self.mini_block_size + j], min_delta);
-                self.bit_writer.put_value(packed_value, bit_width);
+            // Encode values in current mini block using min_delta and bit_width. This
+            // mini block's deltas are not read again, so they can be rewritten in place
+            // with the values to pack
+            let start = i * self.mini_block_size;
+            for j in start..start + n {
+                self.deltas[j] = self.subtract_u64(self.deltas[j], min_delta) as i64;
             }
+            self.bit_writer
+                .put_batch(&self.deltas[start..start + n], bit_width);
 
             // Pad the last block (n < mini_block_size)
             for _ in n..self.mini_block_size {
@@ -589,6 +806,16 @@ impl<T: DataType> DeltaLengthByteArrayEncoder<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// Creates a delta length byte array encoder with a custom layout for its length encoder.
+    pub fn new_with_options(options: DeltaBinaryPackedEncoderOptions) -> Self {
+        Self {
+            len_encoder: DeltaBitPackEncoder::new_with_options(options),
+            data: vec![],
+            encoded_size: 0,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
@@ -678,6 +905,17 @@ impl<T: DataType> DeltaByteArrayEncoder<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// Creates a delta byte array encoder with a custom layout for its prefix and suffix length
+    /// encoders.
+    pub fn new_with_options(options: DeltaBinaryPackedEncoderOptions) -> Self {
+        Self {
+            prefix_len_encoder: DeltaBitPackEncoder::new_with_options(options),
+            suffix_writer: DeltaLengthByteArrayEncoder::new_with_options(options),
+            previous: vec![],
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
@@ -698,13 +936,8 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
 
         for byte_array in values {
             let current = byte_array.data();
-            // Maximum prefix length that is shared between previous value and current
-            // value
-            let prefix_len = cmp::min(self.previous.len(), current.len());
-            let mut match_len = 0;
-            while match_len < prefix_len && self.previous[match_len] == current[match_len] {
-                match_len += 1;
-            }
+            // Number of leading bytes shared with the previous value
+            let match_len = common_prefix_length(&self.previous, current);
             prefix_lengths.push(match_len as i32);
             suffixes.push(byte_array.slice(match_len, byte_array.len() - match_len));
             // Update previous for the next prefix
@@ -767,6 +1000,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::encodings::decoding::{Decoder, DictDecoder, PlainDecoder, get_decoder};
+    use crate::file::properties::WriterProperties;
     use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
     use crate::util::bit_util;
     use crate::util::test_common::rand_gen::{RandGen, random_bytes};
@@ -774,12 +1008,143 @@ mod tests {
     const TEST_SET_SIZE: usize = 1024;
 
     #[test]
+    fn test_delta_binary_packed_encoder_options() {
+        let options = DeltaBinaryPackedEncoderOptions::try_new(256, 4).unwrap();
+        assert_eq!(options.block_size(), 256);
+        assert_eq!(options.mini_blocks_per_block(), 4);
+
+        let encoder = DeltaBitPackEncoder::<Int32Type>::new_with_options(options);
+        assert_eq!(encoder.block_size, 256);
+        assert_eq!(encoder.mini_block_size, 64);
+        assert_eq!(encoder.num_mini_blocks, 4);
+
+        let props = WriterProperties::builder()
+            .set_delta_binary_packed_encoder_options(options)
+            .build();
+        let column_props = props.resolve_column_properties(&ColumnPath::new(vec![]));
+        let desc = create_test_col_desc_ptr(-1, Type::INT32);
+        let mut encoder = get_encoder_with_properties::<Int32Type>(
+            Encoding::DELTA_BINARY_PACKED,
+            &desc,
+            &column_props,
+        )
+        .unwrap();
+        let input: Vec<i32> = (0..600).map(|value| value * value).collect();
+        encoder.put(&input).unwrap();
+        let encoded = encoder.flush_buffer().unwrap();
+        let mut header = bit_util::BitReader::new(encoded.clone());
+        assert_eq!(header.get_vlq_int(), Some(256));
+        assert_eq!(header.get_vlq_int(), Some(4));
+
+        let mut decoder = create_test_decoder::<Int32Type>(-1, Encoding::DELTA_BINARY_PACKED);
+        decoder.set_data(encoded, input.len()).unwrap();
+        let mut output = vec![0; input.len()];
+        assert_eq!(decoder.get(&mut output).unwrap(), input.len());
+        assert_eq!(output, input);
+
+        let encoder = DeltaLengthByteArrayEncoder::<ByteArrayType>::new_with_options(options);
+        assert_eq!(encoder.len_encoder.block_size, 256);
+        let encoder = DeltaByteArrayEncoder::<ByteArrayType>::new_with_options(options);
+        assert_eq!(encoder.prefix_len_encoder.block_size, 256);
+        assert_eq!(encoder.suffix_writer.len_encoder.block_size, 256);
+
+        let input: Vec<ByteArray> = (0..600)
+            .map(|value| ByteArray::from(format!("prefix-{value:04}-suffix").into_bytes()))
+            .collect();
+        let desc = create_test_col_desc_ptr(-1, Type::BYTE_ARRAY);
+        for encoding in [
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ] {
+            let mut encoder =
+                get_encoder_with_properties::<ByteArrayType>(encoding, &desc, &column_props)
+                    .unwrap();
+            encoder.put(&input).unwrap();
+            let encoded = encoder.flush_buffer().unwrap();
+            let mut header = bit_util::BitReader::new(encoded.clone());
+            assert_eq!(header.get_vlq_int(), Some(256));
+            assert_eq!(header.get_vlq_int(), Some(4));
+
+            let mut decoder = create_test_decoder::<ByteArrayType>(-1, encoding);
+            decoder.set_data(encoded, input.len()).unwrap();
+            let mut output = vec![ByteArray::default(); input.len()];
+            assert_eq!(decoder.get(&mut output).unwrap(), input.len());
+            assert_eq!(output, input);
+        }
+    }
+
+    #[test]
+    fn test_delta_binary_packed_encoder_options_validation() {
+        for (block_size, mini_blocks_per_block, message) in [
+            (0, 4, "positive multiple of 128"),
+            (127, 4, "positive multiple of 128"),
+            (128, 0, "positive divisor"),
+            (128, 3, "positive divisor"),
+            (256, 16, "must be a multiple of 32"),
+        ] {
+            let error = DeltaBinaryPackedEncoderOptions::try_new(block_size, mini_blocks_per_block)
+                .unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn test_get_encoders_with_properties() {
+        fn check<T: DataType>(
+            encoding: Encoding,
+            values: &[T::T],
+            props: &ResolvedColumnProperties,
+        ) {
+            let desc = create_test_col_desc_ptr(-1, T::get_physical_type());
+            let mut default = get_encoder::<T>(encoding, &desc).unwrap();
+            let mut resolved = get_encoder_with_properties::<T>(encoding, &desc, props).unwrap();
+            default.put(values).unwrap();
+            resolved.put(values).unwrap();
+            assert_eq!(resolved.encoding(), encoding);
+            assert_eq!(
+                resolved.flush_buffer().unwrap(),
+                default.flush_buffer().unwrap()
+            );
+        }
+
+        let path = ColumnPath::from("col");
+        let props = WriterProperties::builder().build();
+        let defaults = props.resolve_column_properties(&path);
+        let ints: Vec<i32> = (0..600).map(|value| value * value).collect();
+        check::<Int32Type>(Encoding::DELTA_BINARY_PACKED, &ints, &defaults);
+        let longs: Vec<i64> = ints.iter().map(|&value| i64::from(value)).collect();
+        check::<Int64Type>(Encoding::DELTA_BINARY_PACKED, &longs, &defaults);
+        let bytes: Vec<ByteArray> = ints
+            .iter()
+            .map(|value| ByteArray::from(format!("prefix-{value}").into_bytes()))
+            .collect();
+        for encoding in [
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ] {
+            check::<ByteArrayType>(encoding, &bytes, &defaults);
+        }
+
+        let props = WriterProperties::builder()
+            .set_delta_binary_packed_encoder_options(
+                DeltaBinaryPackedEncoderOptions::try_new(256, 4).unwrap(),
+            )
+            .build();
+        let custom = props.resolve_column_properties(&path);
+        for props in [&defaults, &custom] {
+            check::<Int32Type>(Encoding::PLAIN, &ints, props);
+            for encoding in [Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT, Encoding::ALP] {
+                check::<FloatType>(encoding, &[1.25, -2.5, 3.75], props);
+                check::<DoubleType>(encoding, &[1.25, -2.5, 3.75], props);
+            }
+        }
+    }
+
+    #[test]
     fn test_get_encoders() {
         // supported encodings
         create_and_check_encoder::<Int32Type>(0, Encoding::PLAIN, None);
         create_and_check_encoder::<Int32Type>(0, Encoding::DELTA_BINARY_PACKED, None);
-        create_and_check_encoder::<Int32Type>(0, Encoding::DELTA_LENGTH_BYTE_ARRAY, None);
-        create_and_check_encoder::<Int32Type>(0, Encoding::DELTA_BYTE_ARRAY, None);
         create_and_check_encoder::<BoolType>(0, Encoding::RLE, None);
 
         // error when initializing
@@ -797,14 +1162,158 @@ mod tests {
                 "Cannot initialize this encoding through this function"
             )),
         );
+        create_and_check_encoder::<Int32Type>(
+            0,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Some(unsupported_column_encoding(
+                Encoding::DELTA_LENGTH_BYTE_ARRAY,
+                Type::INT32,
+            )),
+        );
+        create_and_check_encoder::<Int32Type>(
+            0,
+            Encoding::DELTA_BYTE_ARRAY,
+            Some(unsupported_column_encoding(
+                Encoding::DELTA_BYTE_ARRAY,
+                Type::INT32,
+            )),
+        );
+        create_and_check_encoder::<Int32Type>(
+            0,
+            Encoding::ALP,
+            Some(general_err!(
+                "Encoding ALP only supports FLOAT and DOUBLE, got INT32"
+            )),
+        );
 
         // unsupported
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         create_and_check_encoder::<Int32Type>(
             0,
             Encoding::BIT_PACKED,
             Some(nyi_err!("Encoding BIT_PACKED is not supported")),
         );
+    }
+
+    #[test]
+    fn column_construction_validates_encoding_fallback_matrix() {
+        use crate::file::properties::{WriterProperties, WriterVersion};
+        use crate::file::writer::SerializedFileWriter;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        use std::sync::Arc;
+
+        fn check_encoder<T: DataType>(encoding: Encoding, supported: bool) {
+            let error = if supported {
+                None
+            } else if encoding == Encoding::ALP {
+                Some(general_err!(
+                    "Encoding ALP only supports FLOAT and DOUBLE, got {}",
+                    T::get_physical_type()
+                ))
+            } else {
+                Some(unsupported_column_encoding(
+                    encoding,
+                    T::get_physical_type(),
+                ))
+            };
+            create_and_check_encoder::<T>(4, encoding, error);
+        }
+
+        let encodings = [
+            Encoding::PLAIN,
+            Encoding::RLE,
+            Encoding::DELTA_BINARY_PACKED,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+            Encoding::BYTE_STREAM_SPLIT,
+            Encoding::ALP,
+        ];
+        for physical in [
+            Type::BOOLEAN,
+            Type::INT32,
+            Type::INT64,
+            Type::INT96,
+            Type::FLOAT,
+            Type::DOUBLE,
+            Type::BYTE_ARRAY,
+            Type::FIXED_LEN_BYTE_ARRAY,
+        ] {
+            let valid: &[Encoding] = match physical {
+                Type::BOOLEAN => &[Encoding::PLAIN, Encoding::RLE],
+                Type::INT32 | Type::INT64 => &[
+                    Encoding::PLAIN,
+                    Encoding::DELTA_BINARY_PACKED,
+                    Encoding::BYTE_STREAM_SPLIT,
+                ],
+                Type::INT96 => &[Encoding::PLAIN],
+                Type::FLOAT | Type::DOUBLE => {
+                    &[Encoding::PLAIN, Encoding::BYTE_STREAM_SPLIT, Encoding::ALP]
+                }
+                Type::BYTE_ARRAY => &[
+                    Encoding::PLAIN,
+                    Encoding::DELTA_LENGTH_BYTE_ARRAY,
+                    Encoding::DELTA_BYTE_ARRAY,
+                ],
+                Type::FIXED_LEN_BYTE_ARRAY => &[
+                    Encoding::PLAIN,
+                    Encoding::DELTA_BYTE_ARRAY,
+                    Encoding::BYTE_STREAM_SPLIT,
+                ],
+            };
+            // Check the factory's returned errors directly, independently of the
+            // infallible column writer constructor that unwraps those errors.
+            for encoding in encodings {
+                let supported = valid.contains(&encoding);
+                match physical {
+                    Type::BOOLEAN => check_encoder::<BoolType>(encoding, supported),
+                    Type::INT32 => check_encoder::<Int32Type>(encoding, supported),
+                    Type::INT64 => check_encoder::<Int64Type>(encoding, supported),
+                    Type::INT96 => check_encoder::<Int96Type>(encoding, supported),
+                    Type::FLOAT => check_encoder::<FloatType>(encoding, supported),
+                    Type::DOUBLE => check_encoder::<DoubleType>(encoding, supported),
+                    Type::BYTE_ARRAY => check_encoder::<ByteArrayType>(encoding, supported),
+                    Type::FIXED_LEN_BYTE_ARRAY => {
+                        check_encoder::<FixedLenByteArrayType>(encoding, supported)
+                    }
+                }
+            }
+            for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+                for dictionary in [false, true] {
+                    for encoding in encodings {
+                        let field = Arc::new(
+                            SchemaType::primitive_type_builder("a", physical)
+                                .with_length(4)
+                                .build()
+                                .unwrap(),
+                        );
+                        let schema = Arc::new(
+                            SchemaType::group_type_builder("schema")
+                                .with_fields(vec![field])
+                                .build()
+                                .unwrap(),
+                        );
+                        let props = Arc::new(
+                            WriterProperties::builder()
+                                .set_writer_version(version)
+                                .set_dictionary_enabled(dictionary)
+                                .set_encoding(encoding)
+                                .build(),
+                        );
+                        let created = catch_unwind(AssertUnwindSafe(|| {
+                            let mut writer =
+                                SerializedFileWriter::new(Vec::new(), schema, props).unwrap();
+                            let mut group = writer.next_row_group().unwrap();
+                            group.next_column().unwrap().unwrap();
+                        }));
+                        assert_eq!(
+                            created.is_ok(),
+                            valid.contains(&encoding),
+                            "{physical:?} {version:?} dictionary={dictionary} {encoding:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -815,6 +1324,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i32() {
         Int32Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int32Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -823,6 +1333,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i64() {
         Int64Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int64Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -831,6 +1342,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_i96() {
         Int96Type::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         Int96Type::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -844,6 +1356,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_double() {
         DoubleType::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         DoubleType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -851,6 +1364,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_byte_array() {
         ByteArrayType::test(Encoding::PLAIN, TEST_SET_SIZE, -1);
         ByteArrayType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, -1);
@@ -859,6 +1373,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_fixed_len_byte_array() {
         FixedLenByteArrayType::test(Encoding::PLAIN, TEST_SET_SIZE, 100);
         FixedLenByteArrayType::test(Encoding::PLAIN_DICTIONARY, TEST_SET_SIZE, 100);
@@ -1150,15 +1665,35 @@ mod tests {
         err: Option<ParquetError>,
     ) {
         let desc = create_test_col_desc_ptr(type_length, T::get_physical_type());
-        let encoder = get_encoder::<T>(encoding, &desc);
-        match err {
-            Some(parquet_error) => {
-                assert_eq!(
-                    encoder.err().unwrap().to_string(),
-                    parquet_error.to_string()
-                )
+        let defaults = WriterProperties::builder().build();
+        let custom = WriterProperties::builder()
+            .set_delta_binary_packed_encoder_options(
+                DeltaBinaryPackedEncoderOptions::try_new(256, 4).unwrap(),
+            )
+            .build();
+        let path = ColumnPath::from("t");
+        for encoder in [
+            get_encoder::<T>(encoding, &desc),
+            get_encoder_with_properties::<T>(
+                encoding,
+                &desc,
+                &defaults.resolve_column_properties(&path),
+            ),
+            get_encoder_with_properties::<T>(
+                encoding,
+                &desc,
+                &custom.resolve_column_properties(&path),
+            ),
+        ] {
+            match &err {
+                Some(parquet_error) => {
+                    assert_eq!(
+                        encoder.err().unwrap().to_string(),
+                        parquet_error.to_string()
+                    )
+                }
+                None => assert_eq!(encoder.unwrap().encoding(), encoding),
             }
-            None => assert_eq!(encoder.unwrap().encoding(), encoding),
         }
     }
 
