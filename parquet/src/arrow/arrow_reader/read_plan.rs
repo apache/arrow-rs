@@ -403,6 +403,11 @@ pub struct ReadPlan {
 }
 
 impl ReadPlan {
+    /// Returns a reference to the row selection cursor
+    pub(crate) fn row_selection_cursor(&self) -> &RowSelectionCursor {
+        &self.row_selection_cursor
+    }
+
     /// Returns a mutable reference to the row selection cursor
     pub fn row_selection_cursor_mut(&mut self) -> &mut RowSelectionCursor {
         &mut self.row_selection_cursor
