@@ -164,6 +164,42 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
             let _ = json_to_variant(&array_ref).unwrap();
         });
     });
+
+    let large_array = format!(
+        "[{}]",
+        (0..1024)
+            .map(|number| number.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let large_string = format!(r#"{{"payload":"{}","id":42}}"#, "x".repeat(8192));
+    let duplicate_large = format!(r#"{{"a":"{}","a":0}}"#, "x".repeat(100_000));
+    for (name, json) in [
+        ("int32", r#"{"id":123456789}"#),
+        (
+            "fixed_point_decimals",
+            r#"{"small":1.23,"medium":999999999.0,"large":0.9999999999999999999}"#,
+        ),
+        (
+            "escaped_strings",
+            r#"{"line":"one\ntwo","quote":"\"value\"","unicode":"\u2764"}"#,
+        ),
+        ("large_array_1024", large_array.as_str()),
+        ("large_string_8k", large_string.as_str()),
+        ("duplicate_key_100k", duplicate_large.as_str()),
+    ] {
+        let rows = (1_048_576 / json.len()).clamp(1, 8_000);
+        let array_ref: ArrayRef = Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+            json, rows,
+        )));
+        let id = format!(
+            "batch_json_string_to_variant {name} ({} bytes per document, {rows} rows)",
+            json.len()
+        );
+        c.bench_function(&id, |b| {
+            b.iter(|| std::hint::black_box(json_to_variant(&array_ref).unwrap()));
+        });
+    }
 }
 
 pub fn variant_get_bench(c: &mut Criterion) {

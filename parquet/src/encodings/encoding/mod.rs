@@ -84,6 +84,7 @@ pub trait Encoder<T: DataType>: Send {
 
 /// Gets a encoder for the particular data type `T` and encoding `encoding`. Memory usage
 /// for the encoder instance is tracked by `mem_tracker`.
+#[cfg_attr(all(not(feature = "experimental"), not(test)), expect(dead_code))]
 pub fn get_encoder<T: DataType>(
     encoding: Encoding,
     descr: &ColumnDescPtr,
