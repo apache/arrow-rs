@@ -88,8 +88,13 @@ mkdir -p ${distdir}
      git archive ${tag} --prefix ${release}/ \
          | gzip > ${tarball})
 
-echo "Running rat license checker on ${tarball}"
-${SOURCE_DIR}/run-rat.sh ${tarball}
+echo "Checking license headers on ${tarball}"
+(
+    audit_dir=$(mktemp -d)
+    trap 'rm -rf "${audit_dir}"' EXIT
+    "${tar}" -xzf "${tarball}" -C "${audit_dir}"
+    (cd "${audit_dir}/${release}" && hawkeye check --fail-on-unknown)
+)
 
 echo "Signing tarball and creating checksums"
 gpg --armor --output ${tarball}.asc --detach-sig ${tarball}
