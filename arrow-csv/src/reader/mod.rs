@@ -173,6 +173,7 @@ use arrow_schema::*;
 use chrono::{TimeZone, Utc};
 use csv::StringRecord;
 use regex::{Regex, RegexSet};
+use std::borrow::Cow;
 use std::fmt::{self, Debug};
 use std::fs::File;
 use std::io::{BufRead, BufReader as StdBufReader, Read};
@@ -251,7 +252,9 @@ impl InferredDataType {
     }
 
     /// Updates the [`InferredDataType`] with the given string
-    fn update(&mut self, string: &str) {
+    fn update(&mut self, string: &str, decimal_separator: Option<u8>) {
+        let normalized = normalize_decimal_separator(string, decimal_separator);
+        let string = normalized.as_ref();
         self.packed |= if string.starts_with('"') {
             1 << 8 // Utf8
         } else if let Some(m) = REGEX_SET.matches(string).into_iter().next() {
@@ -279,6 +282,7 @@ pub struct Format {
     quote: Option<u8>,
     terminator: Option<u8>,
     comment: Option<u8>,
+    decimal_separator: Option<u8>,
     null_regex: NullRegex,
     truncated_rows: bool,
 }
@@ -305,6 +309,17 @@ impl Format {
     /// Specify a custom delimiter character, defaults to comma `','`
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = Some(delimiter);
+        self
+    }
+
+    /// Specify a custom decimal separator for floating-point values, defaults to `'.'`.
+    ///
+    /// The decimal separator must be ASCII punctuation that does not conflict with the CSV
+    /// delimiter, quote, escape, terminator, or comment character. Digits and floating-point
+    /// syntax characters (`+`, `-`, and `e`) are not valid separators. Invalid values are
+    /// rejected by [`Self::infer_schema`], [`Self::infer_format`], and [`ReaderBuilder::build`].
+    pub fn with_decimal_separator(mut self, decimal_separator: u8) -> Self {
+        self.decimal_separator = Some(decimal_separator);
         self
     }
 
@@ -380,6 +395,7 @@ impl Format {
         reader: R,
         max_records: Option<usize>,
     ) -> Result<(Self, usize), ArrowError> {
+        self.validate_decimal_separator()?;
         let (header, records_read) = self.infer_header(reader, max_records)?;
         self.header = header;
         Ok((self, records_read))
@@ -410,7 +426,7 @@ impl Format {
         let mut first_types = vec![InferredDataType::default(); first_record.len()];
         for (value, inferred) in first_record.iter().zip(&mut first_types) {
             if !self.null_regex.is_null(value) {
-                inferred.update(value);
+                inferred.update(value, self.decimal_separator);
             }
         }
 
@@ -424,7 +440,7 @@ impl Format {
             records_count += 1;
             for (value, inferred) in record.iter().zip(&mut column_types) {
                 if !self.null_regex.is_null(value) {
-                    inferred.update(value);
+                    inferred.update(value, self.decimal_separator);
                 }
             }
         }
@@ -437,7 +453,9 @@ impl Format {
                 // Numeric-looking values (e.g. +1) are not header evidence, even
                 // when ordinary schema inference conservatively treats them as text.
                 first.get() == DataType::Utf8
-                    && value.parse::<f64>().is_err()
+                    && normalize_decimal_separator(value, self.decimal_separator)
+                        .parse::<f64>()
+                        .is_err()
                     && !matches!(rest.get(), DataType::Utf8 | DataType::Null)
             });
         Ok((has_header, records_count + 1))
@@ -454,6 +472,7 @@ impl Format {
         reader: R,
         max_records: Option<usize>,
     ) -> Result<(Schema, usize), ArrowError> {
+        self.validate_decimal_separator()?;
         let mut csv_reader = self.build_reader(reader);
 
         // get or create header names
@@ -488,7 +507,7 @@ impl Format {
                 if let Some(string) = record.get(i)
                     && !self.null_regex.is_null(string)
                 {
-                    column_type.update(string)
+                    column_type.update(string, self.decimal_separator)
                 }
             }
         }
@@ -541,6 +560,42 @@ impl Format {
             builder.terminator(csv_core::Terminator::Any(t));
         }
         builder.build()
+    }
+
+    fn validate_decimal_separator(&self) -> Result<(), ArrowError> {
+        let Some(decimal_separator) = self.decimal_separator else {
+            return Ok(());
+        };
+
+        let delimiter = self.delimiter.unwrap_or(b',');
+        let quote = self.quote.unwrap_or(b'"');
+        let conflicts_with_csv = decimal_separator == delimiter
+            || decimal_separator == quote
+            || self.escape == Some(decimal_separator)
+            || self.terminator == Some(decimal_separator)
+            || self.comment == Some(decimal_separator);
+        let conflicts_with_float = decimal_separator.is_ascii_digit()
+            || matches!(decimal_separator, b'+' | b'-' | b'e' | b'E');
+
+        if !decimal_separator.is_ascii_punctuation() || conflicts_with_csv || conflicts_with_float {
+            return Err(ArrowError::CsvError(format!(
+                "Invalid decimal separator {:?}",
+                char::from(decimal_separator)
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+fn normalize_decimal_separator(value: &str, decimal_separator: Option<u8>) -> Cow<'_, str> {
+    match decimal_separator {
+        Some(decimal_separator)
+            if decimal_separator != b'.' && value.as_bytes().contains(&decimal_separator) =>
+        {
+            Cow::Owned(value.replace(char::from(decimal_separator), "."))
+        }
+        _ => Cow::Borrowed(value),
     }
 }
 
@@ -762,6 +817,9 @@ pub struct Decoder {
 
     /// Check if the string matches this pattern for `NULL`.
     null_regex: NullRegex,
+
+    /// Optional decimal separator for floating-point values.
+    decimal_separator: Option<u8>,
 }
 
 impl Decoder {
@@ -821,6 +879,7 @@ impl Decoder {
             self.projection.as_ref(),
             self.line_number,
             &self.null_regex,
+            self.decimal_separator,
         )?;
         self.line_number += rows.len();
         Ok(Some(batch))
@@ -874,6 +933,7 @@ fn parse(
     projection: Option<&Vec<usize>>,
     line_number: usize,
     null_regex: &NullRegex,
+    decimal_separator: Option<u8>,
 ) -> Result<RecordBatch, ArrowError> {
     let fields = schema.fields();
     let projection: Vec<usize> = match projection {
@@ -945,15 +1005,27 @@ fn parse(
                 DataType::UInt64 => {
                     build_primitive_array::<UInt64Type>(line_number, rows, i, null_regex)
                 }
-                DataType::Float16 => {
-                    build_primitive_array::<Float16Type>(line_number, rows, i, null_regex)
-                }
-                DataType::Float32 => {
-                    build_primitive_array::<Float32Type>(line_number, rows, i, null_regex)
-                }
-                DataType::Float64 => {
-                    build_primitive_array::<Float64Type>(line_number, rows, i, null_regex)
-                }
+                DataType::Float16 => build_float_array::<Float16Type>(
+                    line_number,
+                    rows,
+                    i,
+                    null_regex,
+                    decimal_separator,
+                ),
+                DataType::Float32 => build_float_array::<Float32Type>(
+                    line_number,
+                    rows,
+                    i,
+                    null_regex,
+                    decimal_separator,
+                ),
+                DataType::Float64 => build_float_array::<Float64Type>(
+                    line_number,
+                    rows,
+                    i,
+                    null_regex,
+                    decimal_separator,
+                ),
                 DataType::Date32 => {
                     build_primitive_array::<Date32Type>(line_number, rows, i, null_regex)
                 }
@@ -1126,6 +1198,38 @@ fn parse_bool(string: &str) -> Option<bool> {
     } else {
         None
     }
+}
+
+fn build_float_array<T: ArrowPrimitiveType + Parser>(
+    line_number: usize,
+    rows: &StringRecords<'_>,
+    col_idx: usize,
+    null_regex: &NullRegex,
+    decimal_separator: Option<u8>,
+) -> Result<ArrayRef, ArrowError> {
+    rows.iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            let value = row.get(col_idx);
+            if null_regex.is_null(value) {
+                return Ok(None);
+            }
+
+            let normalized = normalize_decimal_separator(value, decimal_separator);
+            match T::parse(&normalized) {
+                Some(parsed) => Ok(Some(parsed)),
+                None => Err(ArrowError::ParseError(format!(
+                    "Error while parsing value '{}' as type '{}' for column {} at line {}. Row data: '{}'",
+                    value,
+                    T::DATA_TYPE,
+                    col_idx,
+                    line_number + row_index,
+                    row
+                ))),
+            }
+        })
+        .collect::<Result<PrimitiveArray<T>, ArrowError>>()
+        .map(|array| Arc::new(array) as ArrayRef)
 }
 
 // parse the column string to an Arrow Array
@@ -1358,6 +1462,14 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set a custom decimal separator for floating-point values, defaults to `'.'`.
+    ///
+    /// See [`Format::with_decimal_separator`] for the accepted values.
+    pub fn with_decimal_separator(mut self, decimal_separator: u8) -> Self {
+        self.format.decimal_separator = Some(decimal_separator);
+        self
+    }
+
     /// Set the given character as the CSV file's escape character
     pub fn with_escape(mut self, escape: u8) -> Self {
         self.format.escape = Some(escape);
@@ -1428,6 +1540,7 @@ impl ReaderBuilder {
 
     /// Create a new `BufReader` from a buffered reader
     pub fn build_buffered<R: BufRead>(self, reader: R) -> Result<BufReader<R>, ArrowError> {
+        self.format.validate_decimal_separator()?;
         let schema = match &self.projection {
             Some(projection) => Arc::new(self.schema.project(projection)?),
             None => self.schema.clone(),
@@ -1466,6 +1579,7 @@ impl ReaderBuilder {
             projection: self.projection,
             batch_size: self.batch_size,
             null_regex: self.format.null_regex,
+            decimal_separator: self.format.decimal_separator,
         }
     }
 }
@@ -1502,6 +1616,75 @@ mod tests {
             let rows: usize = reader.map(|batch| batch.unwrap().num_rows()).sum();
             assert_eq!(rows, records_read, "CSV: {csv:?}");
         }
+    }
+
+    #[test]
+    fn test_decimal_separator_inference_and_parsing() {
+        let csv = "price;count\n1234,5;2\n6,25;3\n";
+        let (format, records_read) = Format::default()
+            .with_delimiter(b';')
+            .with_decimal_separator(b',')
+            .infer_format(Cursor::new(csv), None)
+            .unwrap();
+
+        assert!(format.header);
+        assert_eq!(records_read, 3);
+
+        let (schema, records_read) = format.infer_schema(Cursor::new(csv), None).unwrap();
+        assert_eq!(schema.field(0).data_type(), &DataType::Float64);
+        assert_eq!(schema.field(1).data_type(), &DataType::Int64);
+        assert_eq!(records_read, 2);
+
+        let reader = ReaderBuilder::new(Arc::new(schema))
+            .with_header(true)
+            .with_delimiter(b';')
+            .with_decimal_separator(b',')
+            .build(Cursor::new(csv))
+            .unwrap();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let prices = batches[0].column(0).as_primitive::<Float64Type>();
+        assert_eq!(prices.values(), &[1234.5, 6.25]);
+    }
+
+    #[test]
+    fn test_decimal_separator_defaults_to_period() {
+        let csv = "1.5\n2.25\n";
+        let (schema, _) = Format::default()
+            .infer_schema(Cursor::new(csv), None)
+            .unwrap();
+        assert_eq!(schema.field(0).data_type(), &DataType::Float64);
+
+        let reader = ReaderBuilder::new(Arc::new(schema))
+            .build(Cursor::new(csv))
+            .unwrap();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let values = batches[0].column(0).as_primitive::<Float64Type>();
+        assert_eq!(values.values(), &[1.5, 2.25]);
+    }
+
+    #[test]
+    fn test_invalid_decimal_separator_rejected() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            true,
+        )]));
+
+        for separator in *b"1e;\"" {
+            let result = ReaderBuilder::new(schema.clone())
+                .with_delimiter(b';')
+                .with_decimal_separator(separator)
+                .build(Cursor::new("1;2\n"));
+            assert!(result.is_err(), "separator {separator:?} was accepted");
+        }
+
+        let result = Format::default()
+            .with_decimal_separator(b',')
+            .infer_schema(Cursor::new("1,5\n"), None);
+        assert!(
+            result.is_err(),
+            "separator conflicting with delimiter was accepted"
+        );
     }
 
     #[test]
@@ -2387,7 +2570,7 @@ mod tests {
     /// Infer the data type of a record
     fn infer_field_schema(string: &str) -> DataType {
         let mut v = InferredDataType::default();
-        v.update(string);
+        v.update(string, None);
         v.get()
     }
 
@@ -3410,7 +3593,7 @@ mod tests {
         for (values, expected) in cases {
             let mut t = InferredDataType::default();
             for v in *values {
-                t.update(v)
+                t.update(v, None)
             }
             assert_eq!(&t.get(), expected, "{values:?}")
         }
