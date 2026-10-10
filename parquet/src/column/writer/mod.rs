@@ -1612,6 +1612,9 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     }
                 };
 
+                // Pages can stay in memory until the row group is flushed (#10448).
+                shrink_to_fit_if_wasteful(&mut buffer);
+
                 let data_page = Page::DataPageV2 {
                     buf: buffer.into(),
                     num_values: self.page_metrics.num_buffered_values,
@@ -1982,6 +1985,14 @@ fn has_dictionary_support(kind: Type) -> bool {
         // Booleans do not support dict encoding and should use a fallback encoding.
         Type::BOOLEAN => false,
         _ => true,
+    }
+}
+
+/// Calls [`Vec::shrink_to_fit`] only when spare capacity exceeds 10% of the length,
+/// so we don't pay for a reallocation and copy that saves just a few bytes.
+fn shrink_to_fit_if_wasteful(buf: &mut Vec<u8>) {
+    if buf.capacity() - buf.len() > buf.len() / 10 {
+        buf.shrink_to_fit();
     }
 }
 
@@ -3018,6 +3029,21 @@ mod tests {
             .set_compression(Compression::SNAPPY)
             .build();
         column_roundtrip_random::<Int32Type>(props, 2048, i32::MIN, i32::MAX, 10, 10);
+    }
+
+    #[test]
+    fn test_shrink_to_fit_if_wasteful() {
+        let mut half_empty = Vec::with_capacity(200);
+        half_empty.extend_from_slice(&[1u8; 100]);
+        shrink_to_fit_if_wasteful(&mut half_empty);
+        assert!(half_empty.capacity() < 200);
+        assert_eq!(half_empty, vec![1u8; 100]);
+
+        let mut nearly_full = Vec::with_capacity(110);
+        nearly_full.extend_from_slice(&[1u8; 100]);
+        let capacity = nearly_full.capacity();
+        shrink_to_fit_if_wasteful(&mut nearly_full);
+        assert_eq!(nearly_full.capacity(), capacity);
     }
 
     #[test]
