@@ -69,10 +69,6 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
 fn add_benchmark(c: &mut Criterion) {
     let i32 = create_primitive_array::<Int32Type>(1024, 0.);
     let i32_opt = create_primitive_array::<Int32Type>(1024, 0.5);
-    let boolean = BooleanArray::from_iter((0..1024).map(|i| Some(i % 2 == 0)));
-    let boolean_opt = BooleanArray::from_iter(
-        (0..1024).map(|i| if i % 10 == 0 { None } else { Some(i % 2 == 0) }),
-    );
     let string = create_string_array_with_len::<i32>(1024, 0., 20);
     let string_opt = create_string_array_with_len::<i32>(1024, 0.5, 20);
     let values = create_string_array_with_len::<i32>(10, 0.0, 20);
@@ -167,8 +163,6 @@ fn add_benchmark(c: &mut Criterion) {
     let ree_dict = RunArray::<Int32Type>::try_new(&ree_run_ends, &dict_for_ree).unwrap();
 
     let cases: &[(&str, &dyn Array)] = &[
-        ("bool(0.0)", &boolean),
-        ("bool(0.1)", &boolean_opt),
         ("i32(0.0)", &i32),
         ("i32(0.5)", &i32_opt),
         ("str(20, 0.0)", &string),
