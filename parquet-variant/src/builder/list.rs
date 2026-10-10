@@ -207,6 +207,13 @@ impl<S: BuilderSpecificState> VariantBuilderExt for ListBuilder<'_, S> {
         self.append_value(value);
     }
 
+    fn try_append_value<'m, 'v>(
+        &mut self,
+        value: impl Into<Variant<'m, 'v>>,
+    ) -> Result<(), ArrowError> {
+        self.try_append_value(value)
+    }
+
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
         Ok(self.new_list())
     }
