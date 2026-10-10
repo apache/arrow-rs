@@ -19,9 +19,10 @@
 //!
 //! Each test describes a scan as a [`Scan`], and [`assert_same_rows`] checks
 //! that the push decoder returns the same rows, in the same order, as
-//! [`ParquetRecordBatchReader`] for the same scan. The `test_fuzz_*` tests
-//! use [`proptest`] to combine the scan options at random and to shrink a
-//! scan that fails.
+//! [`ParquetRecordBatchReader`] for the same scan, and that
+//! [`FetchGranularity::Batch`] returns the same batches as the default
+//! [`FetchGranularity::RowGroup`]. The `test_fuzz_*` tests use [`proptest`] to
+//! combine the scan options at random and to shrink a scan that fails.
 //!
 //! [`ParquetRecordBatchReader`]: crate::arrow::arrow_reader::ParquetRecordBatchReader
 
@@ -30,7 +31,7 @@ use crate::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
     ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionPolicy, RowSelector,
 };
-use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use crate::arrow::push_decoder::{FetchGranularity, ParquetPushDecoder, ParquetPushDecoderBuilder};
 use crate::arrow::{ArrowWriter, ProjectionMask};
 use crate::file::metadata::PageIndexPolicy;
 use crate::file::properties::WriterProperties;
@@ -54,9 +55,9 @@ use std::cell::Cell;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
-const ROWS_PER_ROW_GROUP: usize = 600;
-const ROWS_PER_PAGE: usize = 25;
-const NUM_ROWS: usize = 1800;
+pub(super) const ROWS_PER_ROW_GROUP: usize = 600;
+pub(super) const ROWS_PER_PAGE: usize = 25;
+pub(super) const NUM_ROWS: usize = 1800;
 
 /// Three row groups of 600 rows, with a new data page each 25 rows or less,
 /// columns:
@@ -66,12 +67,12 @@ const NUM_ROWS: usize = 1800;
 /// * `c`: a string (plain)
 /// * `l`: a list of 0 to 3 `a` values, some lists null (plain)
 /// * `s`: a struct of `a * 2` and `a % 7` (plain)
-struct TestFile {
-    data: Bytes,
-    batch: RecordBatch,
+pub(super) struct TestFile {
+    pub(super) data: Bytes,
+    pub(super) batch: RecordBatch,
 }
 
-static TEST_FILE: LazyLock<TestFile> = LazyLock::new(|| {
+pub(super) static TEST_FILE: LazyLock<TestFile> = LazyLock::new(|| {
     let a: Vec<i64> = (0..NUM_ROWS as i64).collect();
     let mut lists = ListBuilder::new(Int64Builder::new());
     for &v in &a {
@@ -151,7 +152,7 @@ static HETEROGENEOUS_FILE: LazyLock<Bytes> = LazyLock::new(|| {
     Bytes::from(buffer)
 });
 
-fn load_metadata(data: &Bytes, policy: PageIndexPolicy) -> ArrowReaderMetadata {
+pub(super) fn load_metadata(data: &Bytes, policy: PageIndexPolicy) -> ArrowReaderMetadata {
     let options = ArrowReaderOptions::new().with_page_index_policy(policy);
     ArrowReaderMetadata::load(data, options).unwrap()
 }
@@ -165,7 +166,7 @@ static HETEROGENEOUS_WITH_PAGE_INDEX: LazyLock<ArrowReaderMetadata> =
 static HETEROGENEOUS_WITHOUT_PAGE_INDEX: LazyLock<ArrowReaderMetadata> =
     LazyLock::new(|| load_metadata(&HETEROGENEOUS_FILE, PageIndexPolicy::Skip));
 
-fn metadata(page_index: bool) -> ArrowReaderMetadata {
+pub(super) fn metadata(page_index: bool) -> ArrowReaderMetadata {
     if page_index {
         WITH_PAGE_INDEX.clone()
     } else {
@@ -181,7 +182,7 @@ fn schema() -> SchemaDescriptor {
         .clone()
 }
 
-fn columns(names: &[&str]) -> ProjectionMask {
+pub(super) fn columns(names: &[&str]) -> ProjectionMask {
     ProjectionMask::columns(&schema(), names.iter().copied())
 }
 
@@ -222,7 +223,7 @@ fn drive_file(
 
 /// A predicate on one column: an Int64 column unless noted.
 #[derive(Clone, Copy, Debug)]
-enum Cmp {
+pub(super) enum Cmp {
     Lt(i64),
     Ge(i64),
     ModNotZero(i64),
@@ -237,13 +238,13 @@ enum Cmp {
 }
 
 #[derive(Clone, Debug)]
-struct PredicateSpec {
+pub(super) struct PredicateSpec {
     column: &'static str,
     cmp: Cmp,
 }
 
 impl PredicateSpec {
-    fn new(column: &'static str, cmp: Cmp) -> Self {
+    pub(super) fn new(column: &'static str, cmp: Cmp) -> Self {
         Self { column, cmp }
     }
 
@@ -332,20 +333,20 @@ macro_rules! apply_options {
 /// A scan configuration, so that the same scan can be built for more than
 /// one reader.
 #[derive(Clone, Debug, Default)]
-struct Scan {
+pub(super) struct Scan {
     /// Read [`HETEROGENEOUS_FILE`] instead of [`TEST_FILE`].
-    heterogeneous: bool,
-    page_index_off: bool,
-    batch_size: Option<usize>,
-    projection: Option<ProjectionMask>,
-    row_groups: Option<Vec<usize>>,
-    selection: Option<RowSelection>,
-    limit: Option<usize>,
-    offset: Option<usize>,
+    pub(super) heterogeneous: bool,
+    pub(super) page_index_off: bool,
+    pub(super) batch_size: Option<usize>,
+    pub(super) projection: Option<ProjectionMask>,
+    pub(super) row_groups: Option<Vec<usize>>,
+    pub(super) selection: Option<RowSelection>,
+    pub(super) limit: Option<usize>,
+    pub(super) offset: Option<usize>,
     /// Built again for each reader, as predicates have state.
-    predicates: Vec<PredicateSpec>,
-    policy: Option<RowSelectionPolicy>,
-    max_predicate_cache_size: Option<usize>,
+    pub(super) predicates: Vec<PredicateSpec>,
+    pub(super) policy: Option<RowSelectionPolicy>,
+    pub(super) max_predicate_cache_size: Option<usize>,
 }
 
 impl Scan {
@@ -357,7 +358,7 @@ impl Scan {
         }
     }
 
-    fn data(&self) -> &'static Bytes {
+    pub(super) fn data(&self) -> &'static Bytes {
         if self.heterogeneous {
             &HETEROGENEOUS_FILE
         } else {
@@ -365,9 +366,22 @@ impl Scan {
         }
     }
 
-    fn push_decoder(&self) -> ParquetPushDecoder {
+    pub(super) fn builder(&self) -> ParquetPushDecoderBuilder {
         let builder = ParquetPushDecoderBuilder::new_with_metadata(self.metadata());
-        apply_options!(self, builder).build().unwrap()
+        apply_options!(self, builder)
+    }
+
+    /// A decoder with [`FetchGranularity::RowGroup`], the default.
+    pub(super) fn row_group_decoder(&self) -> ParquetPushDecoder {
+        self.builder().build().unwrap()
+    }
+
+    /// A decoder with [`FetchGranularity::Batch`].
+    pub(super) fn batch_decoder(&self) -> ParquetPushDecoder {
+        self.builder()
+            .with_fetch_granularity(FetchGranularity::Batch)
+            .build()
+            .unwrap()
     }
 
     /// The batches of the scan from the sync reader.
@@ -380,6 +394,20 @@ impl Scan {
         let schema = reader.schema();
         (schema, reader.map(|batch| batch.unwrap()).collect())
     }
+}
+
+/// Sort and merge ranges into disjoint, non-adjacent ranges.
+pub(super) fn union(ranges: impl IntoIterator<Item = Range<u64>>) -> Vec<Range<u64>> {
+    let mut ranges: Vec<_> = ranges.into_iter().filter(|r| !r.is_empty()).collect();
+    ranges.sort_by_key(|r| r.start);
+    let mut merged: Vec<Range<u64>> = vec![];
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
 }
 
 /// What the push decoder did for a scan.
@@ -398,7 +426,31 @@ struct Decoded {
 #[track_caller]
 fn assert_same_rows(scan: &Scan) -> Decoded {
     let (schema, expected) = scan.sync_batches();
-    let (actual, requested) = drive_file(scan.push_decoder(), scan.data());
+    let (actual, requested) = drive_file(scan.row_group_decoder(), scan.data());
+    // `FetchGranularity::Batch` gives the same batches, with the same
+    // boundaries.
+    let (batch_mode, mut batch_mode_requested) = drive_file(scan.batch_decoder(), scan.data());
+    // Do not print the batches: proptest runs a failing scan many times to
+    // shrink it.
+    assert!(batch_mode == actual, "batch mode differs for {scan:?}");
+    // Without predicates, both modes read the same bytes. Batch mode asks for
+    // them in more and smaller requests.
+    if scan.predicates.is_empty() {
+        assert_eq!(
+            union(batch_mode_requested.clone()),
+            union(requested.clone()),
+            "batch mode read other bytes for {scan:?}"
+        );
+    }
+    // A range requested twice means the decoder released it too early.
+    let num_requested = batch_mode_requested.len();
+    batch_mode_requested.sort_by_key(|r| (r.start, r.end));
+    batch_mode_requested.dedup();
+    assert_eq!(
+        batch_mode_requested.len(),
+        num_requested,
+        "batch mode requested a range twice for {scan:?}"
+    );
     if let Some(batch_size) = scan.batch_size {
         assert!(
             actual.iter().all(|b| b.num_rows() <= batch_size),
@@ -407,8 +459,6 @@ fn assert_same_rows(scan: &Scan) -> Decoded {
     }
     let expected = concat_batches(&schema, &expected).unwrap();
     let actual = concat_batches(&schema, &actual).unwrap();
-    // Do not print the rows: proptest runs a failing scan many times to
-    // shrink it.
     assert!(
         actual == expected,
         "rows differ for {scan:?}: {} rows, expected {}",
@@ -431,6 +481,15 @@ fn test_empty_selection_requests_nothing() {
     });
     assert_eq!(decoded.rows, 0);
     assert!(decoded.requested.is_empty());
+}
+
+/// A scan with predicates and a batch size of 100.
+pub(super) fn filtered(predicates: Vec<PredicateSpec>) -> Scan {
+    Scan {
+        batch_size: Some(100),
+        predicates,
+        ..Default::default()
+    }
 }
 
 /// A selection of `total` rows: runs of skipped and selected rows in turn.

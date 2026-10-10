@@ -22,6 +22,9 @@
 //!
 //! The `scan_plan` group measures `ParquetPushDecoder::scan_plan` for wide
 //! schemas with a page index.
+//!
+//! The `decode` group decodes a file with `try_decode`, for each
+//! [`FetchGranularity`].
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -36,7 +39,7 @@ use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, RowSelection, RowSelector,
 };
-use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
+use parquet::arrow::push_decoder::{FetchGranularity, ParquetPushDecoderBuilder};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataPushDecoder};
 use parquet::file::properties::WriterProperties;
 
@@ -251,5 +254,60 @@ fn bench_scan_plan(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_1buf, bench_nbuf, bench_scan_plan);
+/// Decode 10 columns and 1,000 rows with `try_decode`, pushing exactly the
+/// ranges that the decoder requests.
+///
+/// `10pages_100batch` has one page per batch. `100pages_10batch` has small
+/// pages and small batches, where the cost per request is largest.
+fn bench_decode(c: &mut Criterion) {
+    let mut group = c.benchmark_group("push_decoder/decode");
+
+    for (pages, batch_size) in [(10, 100), (100, 10)] {
+        let file_data = make_paged_test_file(10, pages);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let metadata = ArrowReaderMetadata::load(&file_data, options).unwrap();
+
+        for (name, granularity) in [
+            ("row_group", FetchGranularity::RowGroup),
+            ("batch", FetchGranularity::Batch),
+        ] {
+            let id = format!("{pages}pages_{batch_size}batch");
+            group.bench_function(BenchmarkId::new(name, &id), |b| {
+                b.iter(|| {
+                    let mut decoder =
+                        ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())
+                            .with_batch_size(batch_size)
+                            .with_fetch_granularity(granularity)
+                            .build()
+                            .unwrap();
+                    let mut num_rows = 0;
+                    loop {
+                        match decoder.try_decode().unwrap() {
+                            DecodeResult::NeedsData(ranges) => {
+                                let data = ranges
+                                    .iter()
+                                    .map(|r| file_data.slice(r.start as usize..r.end as usize))
+                                    .collect();
+                                decoder.push_ranges(ranges, data).unwrap();
+                            }
+                            DecodeResult::Data(batch) => num_rows += batch.num_rows(),
+                            DecodeResult::Finished => break,
+                        }
+                    }
+                    black_box(num_rows)
+                })
+            });
+        }
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_1buf,
+    bench_nbuf,
+    bench_scan_plan,
+    bench_decode
+);
 criterion_main!(benches);
