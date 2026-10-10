@@ -55,6 +55,9 @@ arrow-schema = { workspace = true }
 arrow-data = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { version = "0.10", optional = true }
+# `tzdb-bundle-always` compiles the IANA database into the crate, as chrono-tz does, so results
+# do not depend on the host's zoneinfo files.
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always", "tz-fat", "perf-inline"], optional = true }
 futures = { version = "0.3", optional = true }
 num-complex = { version = "0.4.6", default-features = false, features = ["std"] }
 num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
@@ -69,6 +72,9 @@ all-features = true
 async = ["dep:futures"]
 ffi = ["arrow-schema/ffi", "arrow-data/ffi", "dep:libc"]
 force_validate = ["arrow-data/force_validate"]
+# Resolve named (IANA) timezones with jiff instead of chrono-tz. Takes precedence over `chrono-tz`
+# when both are enabled.
+jiff = ["dep:jiff"]
 # Enable memory tracking support
 pool = ["arrow-buffer/pool", "arrow-data/pool"]
 

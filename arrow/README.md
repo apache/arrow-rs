@@ -62,6 +62,7 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `prettyprint` - support for formatting record batches as textual columns
   implementations of some [compute](https://github.com/apache/arrow-rs/tree/main/arrow/src/compute/kernels)
 - `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
+- `jiff` - support of parsing timezone using [jiff](https://docs.rs/jiff/latest/jiff/), which keeps applying a zone's daylight saving rules past the last precomputed transition (takes precedence over `chrono-tz`)
 - `ffi` - bindings for the Arrow C [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 - `pyarrow` - bindings for pyo3 to call arrow-rs from python
 - `pyarrow-experimental-inspect` - record the pyarrow type of each conversion in PyO3's introspection data, so that stub generators emit e.g. `pyarrow.Array` rather than `_typeshed.Incomplete` (also enables `pyarrow`)

@@ -269,6 +269,10 @@ pub mod nonblocking;
 pub mod run_iterator;
 pub mod temporal_conversions;
 pub mod timezone;
+// `jiff` takes precedence over `chrono-tz` when both are enabled, leaving chrono-tz compiled but
+// unreferenced. Keep `-D unused_crate_dependencies` satisfied for `--all-features` builds.
+#[cfg(all(feature = "chrono-tz", feature = "jiff"))]
+use chrono_tz as _;
 mod trusted_len;
 pub mod types;
 
