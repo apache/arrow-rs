@@ -363,7 +363,7 @@ fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
 /// [`ArrowError::IoError`] just like [`write!`] does
 fn json_encoding_error(context: &str, error: serde_json::Error) -> ArrowError {
     if error.is_io() {
-        ArrowError::IoError(error.to_string(), std::io::Error::other(error))
+        ArrowError::IoError(error.to_string(), error.into())
     } else {
         ArrowError::InvalidArgumentError(format!("{context}: {error}"))
     }
