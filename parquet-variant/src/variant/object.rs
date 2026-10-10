@@ -396,6 +396,14 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         self.metadata.get(field_id as _)
     }
 
+    /// Like `try_field_name`, but returns the raw name bytes without UTF-8 validation.
+    fn try_field_name_bytes(&self, i: usize) -> Result<&'m [u8], ArrowError> {
+        let byte_range = self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _;
+        let field_id_bytes = slice_from_slice(self.value, byte_range)?;
+        let field_id = self.header.field_id_size.unpack_u32(field_id_bytes, i)?;
+        self.metadata.get_bytes(field_id as _)
+    }
+
     /// Returns an iterator of (name, value) pairs over the fields of this object.
     ///
     /// # Panics
@@ -436,7 +444,16 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         // NOTE: This does not require a sorted metadata dictionary, because the variant spec
         // requires object field ids to be lexically sorted by their corresponding string values,
         // and probing the dictionary for a field id is always O(1) work.
-        let cmp = |i| Some(self.field_name(i)?.cmp(name));
+        //
+        // Compare raw bytes: byte order is `str` order, and a name equal to `name` is valid UTF-8,
+        // so no probe needs UTF-8 validation.
+        let needle = name.as_bytes();
+        let cmp = |i| {
+            let bytes = self
+                .try_field_name_bytes(i)
+                .expect("Invalid variant object field name");
+            Some(bytes.cmp(needle))
+        };
         let i = try_binary_search_range_by(0..self.len(), cmp)?.ok()?;
         self.field(i)
     }

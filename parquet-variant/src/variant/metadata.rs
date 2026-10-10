@@ -384,6 +384,15 @@ impl<'m> VariantMetadata<'m> {
         Ok(unsafe { str::from_utf8_unchecked(value_bytes) })
     }
 
+    /// Returns the raw bytes of dictionary entry `i` without UTF-8 validation.
+    ///
+    /// Offsets are still bounds-checked. A caller that compares the bytes against a `&str` needs
+    /// no validation: bytes equal to a valid `&str` are valid UTF-8, and byte order is `str` order.
+    pub(crate) fn get_bytes(&self, i: usize) -> Result<&'m [u8], ArrowError> {
+        let byte_range = self.get_offset(i)? as _..self.get_offset(i + 1)? as _;
+        slice_from_slice_at_offset(self.bytes, self.first_value_byte as _, byte_range)
+    }
+
     // Helper method used by our `impl Index` and also by `get_entry`. Panics if the underlying
     // bytes are invalid. Needed because the `Index` trait forces the returned result to have the
     // lifetime of `self` instead of the string's own (longer) lifetime `'m`.
@@ -479,13 +488,20 @@ impl<'m> VariantMetadata<'m> {
             return Some((field_id, self.get_impl(field_id as _)));
         }
 
+        // Compare raw bytes: byte order is `str` order, so only the matching entry is converted to
+        // `&str` below.
+        let needle = field_name.as_bytes();
+        let entry = |i| {
+            self.get_bytes(i)
+                .expect("Invalid metadata dictionary entry")
+        };
         let field_id = if self.is_sorted() && self.len() > 10 {
             // Binary search is faster for a not-tiny sorted metadata dictionary
-            let cmp = |i| Some(self.get_impl(i).cmp(field_name));
+            let cmp = |i| Some(entry(i).cmp(needle));
             try_binary_search_range_by(0..self.len(), cmp)?.ok()?
         } else {
             // Fall back to Linear search for tiny or unsorted dictionary
-            (0..self.len()).find(|i| self.get_impl(*i) == field_name)?
+            (0..self.len()).find(|i| entry(*i) == needle)?
         };
         Some((field_id as u32, self.get_impl(field_id)))
     }
