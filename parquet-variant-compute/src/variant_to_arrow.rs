@@ -717,12 +717,28 @@ impl<'a> StructVariantToArrowRowBuilder<'a> {
     }
 }
 
+/// Returns whether a union field can physically represent a null value.
+fn field_can_represent_null(field: &FieldRef) -> bool {
+    if !field.is_nullable() {
+        return false;
+    }
+
+    match field.data_type() {
+        DataType::RunEndEncoded(_, values) => field_can_represent_null(values),
+        DataType::Union(fields, _) => fields
+            .iter()
+            .any(|(_, child)| field_can_represent_null(child)),
+        _ => true,
+    }
+}
+
 /// Builder for converting variant values into a [`UnionArray`].
 ///
 /// Each value is dispatched to the union field that most exactly represents its runtime type
 /// (see [`union_child_rank`]), with ties broken by declaration order. Unions have no top-level
 /// null buffer, so null rows -- and, in safe mode, values no field can represent -- become a
-/// null in the [`DataType::Null`] child if the union declares one, otherwise in the first child.
+/// null in the [`DataType::Null`] child when one is available, otherwise in the first nullable
+/// child. If no child can represent nulls, the conversion returns an error.
 pub(crate) struct UnionVariantToArrowRowBuilder<'a> {
     fields: &'a UnionFields,
     mode: UnionMode,
@@ -730,7 +746,7 @@ pub(crate) struct UnionVariantToArrowRowBuilder<'a> {
     type_ids: Vec<i8>,
     /// Dense mode only
     offsets: Vec<i32>,
-    null_child: usize,
+    null_child: Option<usize>,
     cast_options: &'a CastOptions<'a>,
 }
 
@@ -770,8 +786,14 @@ impl<'a> UnionVariantToArrowRowBuilder<'a> {
         }
         let null_child = fields
             .iter()
-            .position(|(_, field)| field.data_type() == &DataType::Null)
-            .unwrap_or(0);
+            .position(|(_, field)| {
+                field.data_type() == &DataType::Null && field_can_represent_null(field)
+            })
+            .or_else(|| {
+                fields
+                    .iter()
+                    .position(|(_, field)| field_can_represent_null(field))
+            });
         let offsets = match mode {
             UnionMode::Dense => Vec::with_capacity(capacity),
             UnionMode::Sparse => Vec::new(),
@@ -788,7 +810,12 @@ impl<'a> UnionVariantToArrowRowBuilder<'a> {
     }
 
     fn append_null(&mut self) -> Result<()> {
-        self.append_to_child(self.null_child, None)?;
+        let Some(null_child) = self.null_child else {
+            return Err(ArrowError::ComputeError(
+                "Cannot represent nulls in union: no field can represent nulls".into(),
+            ));
+        };
+        self.append_to_child(null_child, None)?;
         Ok(())
     }
 
