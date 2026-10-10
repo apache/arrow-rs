@@ -279,6 +279,8 @@ enum MaybeDictionaryDecoder {
         /// This is a maximum as the null count is not always known, e.g. value data from
         /// a v1 data page
         max_remaining_values: usize,
+        /// RLE bit width; lets `DictionaryBuffer` skip key validation when `(1 << bit_width) <= dict.len()`.
+        bit_width: u8,
     },
     Fallback(ByteArrayDecoder),
 }
@@ -377,6 +379,7 @@ where
                 MaybeDictionaryDecoder::Dict {
                     decoder,
                     max_remaining_values: num_values.unwrap_or(num_levels),
+                    bit_width,
                 }
             }
             _ => MaybeDictionaryDecoder::Fallback(ByteArrayDecoder::new(
@@ -400,6 +403,7 @@ where
             MaybeDictionaryDecoder::Dict {
                 decoder,
                 max_remaining_values,
+                bit_width,
             } => {
                 let len = num_values.min(*max_remaining_values);
 
@@ -414,7 +418,7 @@ where
                     return Ok(0); // All data must be NULL
                 }
 
-                match out.as_keys(dict) {
+                match out.as_keys_with_bit_width(dict, Some(*bit_width)) {
                     Some(keys) => {
                         // Happy path - can just copy keys
                         // Keys will be validated on conversion to arrow
@@ -458,6 +462,7 @@ where
             MaybeDictionaryDecoder::Dict {
                 decoder,
                 max_remaining_values,
+                bit_width: _,
             } => {
                 let num_values = num_values.min(*max_remaining_values);
                 *max_remaining_values -= num_values;
