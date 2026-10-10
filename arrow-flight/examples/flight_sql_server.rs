@@ -670,6 +670,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             prepared_statement_handle: FAKE_HANDLE.into(),
             dataset_schema: schema_bytes,
             parameter_schema: Default::default(), // TODO: parameters
+            is_update: None,
         };
         Ok(res)
     }
