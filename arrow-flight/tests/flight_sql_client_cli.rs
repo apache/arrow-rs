@@ -419,6 +419,7 @@ impl FlightSqlServiceImpl {
             prepared_statement_handle: handle.into(),
             dataset_schema: serialize_schema(&schema)?,
             parameter_schema: serialize_schema(&parameter_schema)?,
+            is_update: None,
         })
     }
 
