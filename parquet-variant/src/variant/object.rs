@@ -397,6 +397,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 
     /// Like `try_field_name`, but returns the raw name bytes without UTF-8 validation.
+    #[inline(never)]
     fn try_field_name_bytes(&self, i: usize) -> Result<&'m [u8], ArrowError> {
         let byte_range = self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _;
         let field_id_bytes = slice_from_slice(self.value, byte_range)?;
