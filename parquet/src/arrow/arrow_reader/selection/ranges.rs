@@ -15,18 +15,58 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Mapping the [`RowSelector`] runs of a selection onto ranges: the byte ranges
+//! Mapping row selections onto ranges: the byte ranges
 //! of the data pages that must be fetched ([`RowSelection::scan_ranges`]) and
 //! the expansion of a selection to batch boundaries.
 //!
-//! Both are shared by the selector and mask backings, which stream their runs
-//! from a slice and a [`MaskRunIter`] respectively.
+//! Page selection checks bitmap-backed selections directly, while batch
+//! expansion streams their runs using [`MaskRunIter`].
 //!
 //! [`MaskRunIter`]: crate::arrow::arrow_reader::MaskRunIter
 
 use super::{RowSelection, RowSelector};
 use crate::file::page_index::offset_index::PageLocation;
+use arrow_buffer::BooleanBuffer;
+use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use std::ops::Range;
+
+/// Checks each page for a selected bit without expanding the mask into runs.
+pub(super) fn scan_ranges_from_mask(
+    mask: &BooleanBuffer,
+    page_locations: &[PageLocation],
+) -> Vec<Range<u64>> {
+    let mut ranges = Vec::new();
+    let mut row_start = 0;
+    for (idx, page) in page_locations.iter().enumerate() {
+        if row_start >= mask.len() {
+            break;
+        }
+        let row_end = page_locations
+            .get(idx + 1)
+            .map_or(mask.len(), |next| next.first_row_index as usize)
+            .min(mask.len());
+
+        let selected = if row_start == row_end {
+            // Multiple pages can start at the same row. Preserve the run
+            // scanner's behavior for these zero-width page ranges.
+            mask.value(row_start)
+        } else {
+            UnalignedBitChunk::new(
+                mask.values(),
+                mask.offset() + row_start,
+                row_end - row_start,
+            )
+            .iter()
+            .any(|word| word != 0)
+        };
+        if selected {
+            let start = page.offset as u64;
+            ranges.push(start..start + page.compressed_page_size as u64);
+        }
+        row_start = row_end;
+    }
+    ranges
+}
 
 /// Byte ranges of the data pages containing at least one selected row.
 #[inline]
@@ -139,6 +179,96 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_array::BooleanArray;
+
+    #[test]
+    fn test_mask_scan_ranges_matches_selectors() {
+        use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+        for len in [0, 1, 7, 8, 63, 64, 65, 127, 128, 129, 511, 2049] {
+            for page_rows in [1, 7, 31, 63, 64, 65, 127, 257] {
+                // Include pages beyond the selection and a final partial page.
+                let total_rows = len + 37;
+                let pages: Vec<_> = (0..total_rows)
+                    .step_by(page_rows)
+                    .enumerate()
+                    .map(|(idx, start)| PageLocation {
+                        offset: (idx * 23 + 5) as i64,
+                        compressed_page_size: (idx % 13 + 1) as i32,
+                        first_row_index: start as i64,
+                    })
+                    .collect();
+
+                for offset in [0, 1, 3, 7, 31, 63, 64, 65] {
+                    for pattern in 0..7 {
+                        let mut rng = StdRng::seed_from_u64(42);
+                        let mask = BooleanBuffer::from_iter((0..offset + len + 64).map(|row| {
+                            if !(offset..offset + len).contains(&row) {
+                                // Padding must not cause extra pages to load.
+                                return true;
+                            }
+                            let row = row - offset;
+                            match pattern {
+                                0 => false,
+                                1 => true,
+                                2 => row % 2 == 0,
+                                3 => row % page_rows == page_rows - 1,
+                                4 => rng.random_bool(0.01),
+                                5 => rng.random_bool(0.5),
+                                _ => rng.random_bool(0.99),
+                            }
+                        }))
+                        .slice(offset, len);
+                        let selectors =
+                            RowSelection::from_filters(&[BooleanArray::new(mask.clone(), None)]);
+                        let selection = RowSelection::from_boolean_buffer(mask);
+                        assert_eq!(
+                            selection.scan_ranges(&pages),
+                            selectors.scan_ranges(&pages),
+                            "len={len}, page_rows={page_rows}, offset={offset}, pattern={pattern}"
+                        );
+                        assert_eq!(
+                            selection.row_ranges_for_selected_pages(&pages, total_rows),
+                            selectors.row_ranges_for_selected_pages(&pages, total_rows)
+                        );
+                        assert!(selection.scan_ranges(&[]).is_empty());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mask_scan_ranges_repeated_page_row_offsets() {
+        let pages: Vec<_> = [0, 0, 1, 1, 7, 8, 31, 32, 63, 63, 64, 65, 127, 128, 129]
+            .into_iter()
+            .enumerate()
+            .map(|(idx, row)| PageLocation {
+                offset: (idx * 10) as i64,
+                compressed_page_size: 10,
+                first_row_index: row,
+            })
+            .collect();
+        assert!(
+            RowSelection::from_boolean_buffer(BooleanBuffer::new_unset(0))
+                .scan_ranges(&pages)
+                .is_empty()
+        );
+        for len in [1, 7, 63, 64, 65, 128, 129, 257] {
+            for offset in [0, 1, 3, 7, 63, 65] {
+                for selected_row in 0..len {
+                    let mask = BooleanBuffer::from_iter(
+                        (0..offset + len + 64).map(|row| row == offset + selected_row),
+                    )
+                    .slice(offset, len);
+                    let selectors =
+                        RowSelection::from_filters(&[BooleanArray::new(mask.clone(), None)]);
+                    let selection = RowSelection::from_boolean_buffer(mask);
+                    assert_eq!(selection.scan_ranges(&pages), selectors.scan_ranges(&pages));
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_scan_ranges() {
