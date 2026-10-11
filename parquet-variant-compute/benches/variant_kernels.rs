@@ -42,6 +42,7 @@ use std::sync::Arc;
 const VARIANT_GET_UNSHREDDED_OBJECT_ROWS: usize = 262_144;
 const VARIANT_ARRAY_BUILD_ROWS: usize = 262_144;
 const SHRED_VARIANT_OBJECT_ROWS: usize = 8_192;
+const PER_ROW_METADATA_ROWS: usize = 65_536;
 
 fn variant_array_builder_build_bench(c: &mut Criterion) {
     c.bench_function("variant_array_builder_build_262k_small_values", |b| {
@@ -296,6 +297,65 @@ pub fn variant_get_unshredded_object_path_bench(c: &mut Criterion) {
 
     c.bench_function("variant_get_unshredded_object_path_262k_rows", |b| {
         b.iter(|| variant_get(&input, options.clone()).unwrap())
+    });
+}
+
+/// Reads one field from unshredded objects where every row has its own metadata dictionary.
+///
+/// Each row holds a different subset of field names, so no two rows share metadata bytes, as in
+/// data written one record at a time. `present` reads a field that every row has, `sparse` one
+/// that about 10% of rows have, and `absent` one that no row has.
+pub fn variant_get_per_row_metadata_bench(c: &mut Criterion) {
+    let input = ArrayRef::from(create_per_row_metadata_object_variant_array(
+        PER_ROW_METADATA_ROWS,
+    ));
+    let rows = PER_ROW_METADATA_ROWS;
+    let cases = [
+        ("present", PER_ROW_METADATA_PRESENT_FIELD, rows..=rows),
+        (
+            "sparse",
+            PER_ROW_METADATA_SPARSE_FIELD,
+            rows / 20..=rows / 5,
+        ),
+        ("absent", "attr.missing", 0..=0),
+    ];
+    for (name, field_name, expected_non_null) in cases {
+        let field: FieldRef = Arc::new(Field::new("typed_value", DataType::Int32, true));
+        let path = VariantPath::from(vec![VariantPathElement::field(field_name)]);
+        let options = GetOptions::new_with_path(path).with_as_type(Some(field));
+
+        let result = variant_get(&input, options.clone()).unwrap();
+        let non_null = result.len() - result.null_count();
+        assert!(
+            expected_non_null.contains(&non_null),
+            "{name}: {non_null} non-null rows"
+        );
+
+        c.bench_function(
+            &format!("variant_get_per_row_metadata_{name}_64k_rows"),
+            |b| b.iter(|| variant_get(&input, options.clone()).unwrap()),
+        );
+    }
+}
+
+/// Shreds objects where every row has its own metadata dictionary. See
+/// [`variant_get_per_row_metadata_bench`] for the input shape.
+pub fn shred_variant_per_row_metadata_bench(c: &mut Criterion) {
+    let variant_array = create_per_row_metadata_object_variant_array(SHRED_VARIANT_OBJECT_ROWS);
+    let shredded_fields = [
+        PER_ROW_METADATA_PRESENT_FIELD,
+        PER_ROW_METADATA_SPARSE_FIELD,
+        "attr.000",
+        "attr.100",
+        "attr.200",
+    ]
+    .into_iter()
+    .map(|name| Arc::new(Field::new(name, DataType::Int32, true)))
+    .collect::<Vec<FieldRef>>();
+    let as_type = DataType::Struct(Fields::from(shredded_fields));
+
+    c.bench_function("shred_variant_per_row_metadata_8k_rows", |b| {
+        b.iter(|| std::hint::black_box(shred_variant(&variant_array, &as_type).unwrap()))
     });
 }
 
@@ -708,8 +768,10 @@ criterion_group!(
     variant_get_list_index_all_oob_int64_bench,
     variant_get_shredded_utf8_bench,
     variant_get_unshredded_object_path_bench,
+    variant_get_per_row_metadata_bench,
     shred_variant_partial_object_bench,
     shred_variant_unmatched_object_bench,
+    shred_variant_per_row_metadata_bench,
     variant_array_builder_build_bench,
     benchmark_batch_json_string_to_variant,
     variant_get_utf8_from_unshredded_string_bench,
@@ -807,6 +869,44 @@ fn create_unshredded_object_variant_array(size: usize) -> VariantArray {
 
     VariantArray::try_new(input.as_ref())
         .expect("created struct should be a valid unshredded variant")
+}
+
+/// A field that every row of [`create_per_row_metadata_object_variant_array`] has.
+const PER_ROW_METADATA_PRESENT_FIELD: &str = "attr.140";
+/// A field that about 10% of the rows of [`create_per_row_metadata_object_variant_array`] have.
+const PER_ROW_METADATA_SPARSE_FIELD: &str = "attr.142";
+
+/// Creates a `VariantArray` of objects in which every row has its own metadata dictionary.
+///
+/// Each row holds [`PER_ROW_METADATA_PRESENT_FIELD`], [`PER_ROW_METADATA_SPARSE_FIELD`] in about 10%
+/// of rows, and about 16 other fields drawn from a pool of 300 names. The fields are inserted in
+/// name order, so each dictionary is sorted. Values alternate between integers and short strings.
+fn create_per_row_metadata_object_variant_array(size: usize) -> VariantArray {
+    let field_names = (0..300)
+        .map(|index| format!("attr.{index:03}"))
+        .collect::<Vec<_>>();
+    let mut rng = StdRng::seed_from_u64(42);
+    let mut builder = VariantArrayBuilder::new(size);
+    for row in 0..size {
+        let mut object = builder.new_object();
+        for (index, name) in field_names.iter().enumerate() {
+            let include = match name.as_str() {
+                PER_ROW_METADATA_PRESENT_FIELD => true,
+                PER_ROW_METADATA_SPARSE_FIELD => rng.random_range(0..10) == 0,
+                _ => rng.random_range(0..300) < 16,
+            };
+            if !include {
+                continue;
+            }
+            if index % 2 == 0 {
+                object.insert(name, index as i32);
+            } else {
+                object.insert(name, format!("value_{row}_{index}").as_str());
+            }
+        }
+        object.finish();
+    }
+    builder.build()
 }
 
 /// Return an iterator off JSON strings, each representing a person
