@@ -21,6 +21,18 @@
 
 # Changelog
 
+## [59.3.0](https://github.com/apache/arrow-rs/tree/59.3.0) - (2026-08-25)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/59.2.0...59.3.0)
+
+### Security fixes
+- [59_maintenance] Backport `cargo audit` fix by updating `h2` dependency by @alamb in [#10834](https://github.com/apache/arrow-rs/pull/10834)
+
+### Bug fixes
+- [59_maintenance] Backport fix for concat_run_arrays with all-empty run arrays by @alamb in [#10828](https://github.com/apache/arrow-rs/pull/10828)
+- [59_maintenance] Backport fix for DELTA_BYTE_ARRAY dedup with values larger than the page size limit by @alamb in [#10826](https://github.com/apache/arrow-rs/pull/10826)
+- [59_maintenance] Backport fix for cached Mask reads crossing unloaded sparse pages by @alamb in [#10766](https://github.com/apache/arrow-rs/pull/10766)
+
 ## [59.2.0](https://github.com/apache/arrow-rs/tree/59.2.0) - (2026-08-02)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/59.1.0...59.2.0)
@@ -3259,7 +3271,7 @@
 - Manually run fmt on all files under parquet [\#6328](https://github.com/apache/arrow-rs/pull/6328) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
 - Implement UnionArray logical\_nulls [\#6303](https://github.com/apache/arrow-rs/pull/6303) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gstvg](https://github.com/gstvg))
 - Parquet: Verify 32-bit CRC checksum when decoding pages [\#6290](https://github.com/apache/arrow-rs/pull/6290) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([xmakro](https://github.com/xmakro))
-- 
+-
 ## [53.0.0](https://github.com/apache/arrow-rs/tree/53.0.0) (2024-08-31)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/52.2.0...53.0.0)
