@@ -23,8 +23,8 @@ use crate::type_conversion::{
     primitive_conversion_single_value,
 };
 use arrow::array::{
-    Array, ArrayRef, AsArray, StructArray, StructArrayAssembler, downcast_dictionary_array,
-    downcast_run_array, new_null_array,
+    Array, ArrayRef, AsArray, BinaryViewArray, StructArray, StructArrayAssembler,
+    downcast_dictionary_array, downcast_run_array, new_null_array,
 };
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
@@ -69,6 +69,29 @@ pub(crate) fn binary_array_value(array: &dyn Array, index: usize) -> Option<&[u8
             _ => unreachable!(),
         },
         _ => None,
+    }
+}
+
+/// A binary-like column whose array type is resolved once, not on every row.
+pub(crate) enum BinaryColumn<'a> {
+    View(&'a BinaryViewArray),
+    Other(&'a dyn Array),
+}
+
+impl<'a> BinaryColumn<'a> {
+    pub(crate) fn new(array: &'a dyn Array) -> Self {
+        match array.as_binary_view_opt() {
+            Some(array) => Self::View(array),
+            None => Self::Other(array),
+        }
+    }
+
+    /// The bytes of row `index`, or `None` if the row is null or the column is not binary-like.
+    pub(crate) fn value(&self, index: usize) -> Option<&'a [u8]> {
+        match self {
+            Self::View(array) => array.is_valid(index).then(|| array.value(index)),
+            Self::Other(array) => binary_array_value(*array, index),
+        }
     }
 }
 
