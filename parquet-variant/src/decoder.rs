@@ -152,16 +152,6 @@ impl OffsetSizeBytes {
     /// Return one unsigned little-endian value from `bytes`.
     ///
     /// * `bytes` – the byte buffer to index
-    /// * `index` – 0-based index into the buffer
-    ///
-    /// Each value is `self as u32` bytes wide (1, 2, 3 or 4), zero-extended to 32 bits as needed.
-    pub(crate) fn unpack_u32(&self, bytes: &[u8], index: usize) -> Result<u32, ArrowError> {
-        self.unpack_u32_at_offset(bytes, 0, index)
-    }
-
-    /// Return one unsigned little-endian value from `bytes`.
-    ///
-    /// * `bytes` – the byte buffer to index
     /// * `byte_offset` – number of bytes to skip **before** reading the first
     ///   value (e.g. `1` to move past a header byte).
     /// * `offset_index` – 0-based index **after** the skipped bytes
@@ -169,7 +159,7 @@ impl OffsetSizeBytes {
     ///
     /// Each value is `self as u32` bytes wide (1, 2, 3 or 4), zero-extended to 32 bits as needed.
     pub(crate) fn unpack_u32_at_offset(
-        &self,
+        self,
         bytes: &[u8],
         byte_offset: usize,  // how many bytes to skip
         offset_index: usize, // which offset in an array of offsets
@@ -177,9 +167,9 @@ impl OffsetSizeBytes {
         use OffsetSizeBytes::*;
 
         // Index into the byte array:
-        // byte_offset + (*self as usize) * offset_index
+        // byte_offset + (self as usize) * offset_index
         let offset = offset_index
-            .checked_mul(*self as usize)
+            .checked_mul(self as usize)
             .and_then(|n| n.checked_add(byte_offset))
             .ok_or_else(|| overflow_error("unpacking offset array value"))?;
         let value = match self {
@@ -649,39 +639,61 @@ mod tests {
     fn unpack_u32_all_widths() {
         // One-byte offsets
         let buf_one = [0x01u8, 0xAB, 0xCD];
-        assert_eq!(OffsetSizeBytes::One.unpack_u32(&buf_one, 0).unwrap(), 0x01);
-        assert_eq!(OffsetSizeBytes::One.unpack_u32(&buf_one, 2).unwrap(), 0xCD);
+        assert_eq!(
+            OffsetSizeBytes::One
+                .unpack_u32_at_offset(&buf_one, 0, 0)
+                .unwrap(),
+            0x01
+        );
+        assert_eq!(
+            OffsetSizeBytes::One
+                .unpack_u32_at_offset(&buf_one, 0, 2)
+                .unwrap(),
+            0xCD
+        );
 
         // Two-byte offsets (little-endian 0x1234, 0x5678)
         let buf_two = [0x34, 0x12, 0x78, 0x56];
         assert_eq!(
-            OffsetSizeBytes::Two.unpack_u32(&buf_two, 0).unwrap(),
+            OffsetSizeBytes::Two
+                .unpack_u32_at_offset(&buf_two, 0, 0)
+                .unwrap(),
             0x1234
         );
         assert_eq!(
-            OffsetSizeBytes::Two.unpack_u32(&buf_two, 1).unwrap(),
+            OffsetSizeBytes::Two
+                .unpack_u32_at_offset(&buf_two, 0, 1)
+                .unwrap(),
             0x5678
         );
 
         // Three-byte offsets (0x030201 and 0x0000FF)
         let buf_three = [0x01, 0x02, 0x03, 0xFF, 0x00, 0x00];
         assert_eq!(
-            OffsetSizeBytes::Three.unpack_u32(&buf_three, 0).unwrap(),
+            OffsetSizeBytes::Three
+                .unpack_u32_at_offset(&buf_three, 0, 0)
+                .unwrap(),
             0x030201
         );
         assert_eq!(
-            OffsetSizeBytes::Three.unpack_u32(&buf_three, 1).unwrap(),
+            OffsetSizeBytes::Three
+                .unpack_u32_at_offset(&buf_three, 0, 1)
+                .unwrap(),
             0x0000FF
         );
 
         // Four-byte offsets (0x12345678, 0x90ABCDEF)
         let buf_four = [0x78, 0x56, 0x34, 0x12, 0xEF, 0xCD, 0xAB, 0x90];
         assert_eq!(
-            OffsetSizeBytes::Four.unpack_u32(&buf_four, 0).unwrap(),
+            OffsetSizeBytes::Four
+                .unpack_u32_at_offset(&buf_four, 0, 0)
+                .unwrap(),
             0x1234_5678
         );
         assert_eq!(
-            OffsetSizeBytes::Four.unpack_u32(&buf_four, 1).unwrap(),
+            OffsetSizeBytes::Four
+                .unpack_u32_at_offset(&buf_four, 0, 1)
+                .unwrap(),
             0x90AB_CDEF
         );
     }
@@ -689,8 +701,16 @@ mod tests {
     #[test]
     fn unpack_u32_out_of_bounds() {
         let tiny = [0x00u8]; // deliberately too short
-        assert!(OffsetSizeBytes::Two.unpack_u32(&tiny, 0).is_err());
-        assert!(OffsetSizeBytes::Three.unpack_u32(&tiny, 0).is_err());
+        assert!(
+            OffsetSizeBytes::Two
+                .unpack_u32_at_offset(&tiny, 0, 0)
+                .is_err()
+        );
+        assert!(
+            OffsetSizeBytes::Three
+                .unpack_u32_at_offset(&tiny, 0, 0)
+                .is_err()
+        );
     }
 
     #[test]

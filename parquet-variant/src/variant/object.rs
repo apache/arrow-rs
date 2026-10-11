@@ -16,9 +16,8 @@
 // under the License.
 
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
-use crate::utils::{
-    first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
-};
+use crate::utils::slice_from_slice;
+use crate::variant::view::ObjectView;
 use crate::variant::{MAX_NESTING_DEPTH, Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
@@ -27,30 +26,31 @@ use arrow_schema::ArrowError;
 const NUM_HEADER_BYTES: u32 = 1;
 
 /// Header structure for [`VariantObject`]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct VariantObjectHeader {
-    num_elements_size: OffsetSizeBytes,
-    field_id_size: OffsetSizeBytes,
-    field_offset_size: OffsetSizeBytes,
+    pub(crate) num_elements_size: OffsetSizeBytes,
+    pub(crate) field_id_size: OffsetSizeBytes,
+    pub(crate) field_offset_size: OffsetSizeBytes,
 }
 
 impl VariantObjectHeader {
     // Hide the ugly casting
-    const fn num_elements_size(&self) -> u32 {
+    pub(crate) const fn num_elements_size(&self) -> u32 {
         self.num_elements_size as _
     }
-    const fn field_id_size(&self) -> u32 {
+    pub(crate) const fn field_id_size(&self) -> u32 {
         self.field_id_size as _
     }
-    const fn field_offset_size(&self) -> u32 {
+    pub(crate) const fn field_offset_size(&self) -> u32 {
         self.field_offset_size as _
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
-    const fn field_ids_start_byte(&self) -> u32 {
+    pub(crate) const fn field_ids_start_byte(&self) -> u32 {
         NUM_HEADER_BYTES + self.num_elements_size()
     }
 
+    #[inline]
     pub(crate) fn try_new(header_byte: u8) -> Result<Self, ArrowError> {
         // Parse the header byte to get object parameters
         let value_header = header_byte >> 2;
@@ -166,48 +166,43 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        let header_byte = first_byte_from_slice(value)?;
-        let header = VariantObjectHeader::try_new(header_byte)?;
+        ObjectView::try_new(metadata.view(), value)?.into_object(metadata)
+    }
 
-        // Determine num_elements size based on is_large flag and fetch the value
-        let num_elements =
-            header
-                .num_elements_size
-                .unpack_u32_at_offset(value, NUM_HEADER_BYTES as _, 0)?;
-
-        // Calculate byte offsets for field offsets and values with overflow protection, and verify
-        // they're in bounds
-        let first_field_offset_byte = num_elements
-            .checked_mul(header.field_id_size())
-            .and_then(|n| n.checked_add(header.field_ids_start_byte()))
-            .ok_or_else(|| overflow_error("offset of variant object field offsets"))?;
-
-        let first_value_byte = num_elements
-            .checked_add(1)
-            .and_then(|n| n.checked_mul(header.field_offset_size()))
-            .and_then(|n| n.checked_add(first_field_offset_byte))
-            .ok_or_else(|| overflow_error("offset of variant object field values"))?;
-
-        let mut new_self = Self {
-            metadata,
-            value,
-            header,
-            num_elements,
-            first_field_offset_byte,
-            first_value_byte,
-            validated: false,
-        };
-
+    // Promotes a view by validating just the last field offset.
+    #[inline]
+    pub(crate) fn try_from_view(
+        view: ObjectView<'m, 'v>,
+        metadata: VariantMetadata<'m>,
+    ) -> Result<Self, ArrowError> {
         // Spec says: "The last field_offset points to the byte after the end of the last value"
         //
         // Use it to upper-bound the value bytes, which also verifies that the field id and field
         // offset arrays are in bounds.
-        let last_offset = new_self
-            .get_offset(num_elements as _)?
-            .checked_add(first_value_byte)
-            .ok_or_else(|| overflow_error("variant object size"))?;
-        new_self.value = slice_from_slice(value, ..last_offset as _)?;
-        Ok(new_self)
+        let last_offset = view.byte_len()?;
+        Ok(Self {
+            metadata,
+            value: slice_from_slice(view.value, ..last_offset)?,
+            header: view.header,
+            num_elements: view.num_elements,
+            first_field_offset_byte: view.first_field_offset_byte,
+            first_value_byte: view.first_value_byte,
+            validated: false,
+        })
+    }
+
+    /// A view of this object, which reads only the fields it is asked for.
+    #[doc(hidden)]
+    #[inline]
+    pub fn view(&self) -> ObjectView<'m, 'v> {
+        ObjectView {
+            metadata: self.metadata.view(),
+            value: self.value,
+            header: self.header,
+            num_elements: self.num_elements,
+            first_field_offset_byte: self.first_field_offset_byte,
+            first_value_byte: self.first_value_byte,
+        }
     }
 
     /// True if this instance is fully [validated] for panic-free infallible accesses.
@@ -364,16 +359,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     // Attempts to retrieve the ith field value from the value region of the byte buffer; it
     // performs only basic (constant-cost) validation.
     fn try_field_with_shallow_validation(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
-        let value_bytes = slice_from_slice(self.value, self.first_value_byte as _..)?;
-        let value_bytes = slice_from_slice(value_bytes, self.get_offset(i)? as _..)?;
-        Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
-    }
-
-    // Attempts to retrieve the ith offset from the field offset region of the byte buffer.
-    fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
-        let byte_range = self.first_field_offset_byte as _..self.first_value_byte as _;
-        let field_offsets = slice_from_slice(self.value, byte_range)?;
-        self.header.field_offset_size.unpack_u32(field_offsets, i)
+        let field = self.view().field(i)?;
+        Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), field.value)
     }
 
     /// Get a field's name by index in `0..self.len()`
@@ -390,10 +377,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Fallible version of `field_name`. Returns field name by index, capturing validation errors
     fn try_field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
-        let byte_range = self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _;
-        let field_id_bytes = slice_from_slice(self.value, byte_range)?;
-        let field_id = self.header.field_id_size.unpack_u32(field_id_bytes, i)?;
-        self.metadata.get(field_id as _)
+        self.metadata.get(self.view().field_id(i)? as _)
     }
 
     /// Returns an iterator of (name, value) pairs over the fields of this object.
@@ -421,9 +405,15 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn iter_try_with_shallow_validation(
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
-        (0..self.len()).map(|i| {
-            let field = self.try_field_with_shallow_validation(i)?;
-            Ok((self.try_field_name(i)?, field))
+        // One view serves every field, and the range bounds each field index.
+        let view = self.view();
+        (0..self.len()).map(move |i| {
+            let field = view.read_field(i)?;
+            let field = Variant::try_new_with_metadata_and_shallow_validation(
+                self.metadata.clone(),
+                field.value,
+            )?;
+            Ok((self.metadata.get(view.read_field_id(i)? as _)?, field))
         })
     }
 
@@ -431,13 +421,13 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     ///
     /// Returns `Some(Variant)` if the field exists, or `None` if the field does not exist.
     pub fn get(&self, name: &str) -> Option<Variant<'m, 'v>> {
-        // Binary search through the field IDs of this object to find the requested field name.
-        //
         // NOTE: This does not require a sorted metadata dictionary, because the variant spec
         // requires object field ids to be lexically sorted by their corresponding string values,
         // and probing the dictionary for a field id is always O(1) work.
-        let cmp = |i| Some(self.field_name(i)?.cmp(name));
-        let i = try_binary_search_range_by(0..self.len(), cmp)?.ok()?;
+        let i = self
+            .view()
+            .find(name.as_bytes())
+            .expect("Invalid variant object field name")?;
         self.field(i)
     }
 }

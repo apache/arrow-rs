@@ -352,9 +352,18 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
     }
 }
 
+fn duplicate_field_name(field_name: &[u8]) -> ArrowError {
+    ArrowError::InvalidArgumentError(format!(
+        "Duplicate field name: {}",
+        String::from_utf8_lossy(field_name)
+    ))
+}
+
 pub(crate) struct VariantToShreddedObjectVariantRowBuilder<'a> {
     value_builder: VariantValueArrayBuilder,
     typed_value_builders: IndexMap<&'a str, VariantToShreddedVariantRowBuilder<'a>>,
+    /// The names of `typed_value_builders` as bytes, sorted, each with its builder's index.
+    sorted_field_names: Vec<(&'a [u8], usize)>,
     typed_value_nulls: NullBufferBuilder,
     nulls: NullBufferBuilder,
     null_value: NullValue,
@@ -382,8 +391,15 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             Ok((field.name().as_str(), builder))
         });
         let typed_value_builders: IndexMap<_, _> = typed_value_builders.collect::<Result<_>>()?;
+        let mut sorted_field_names: Vec<_> = typed_value_builders
+            .keys()
+            .enumerate()
+            .map(|(index, name)| (name.as_bytes(), index))
+            .collect();
+        sorted_field_names.sort_unstable();
         Ok(Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
+            sorted_field_names,
             seen: vec![false; typed_value_builders.len()],
             typed_value_builders,
             typed_value_nulls: NullBufferBuilder::new(capacity),
@@ -414,32 +430,44 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             return Ok(false);
         };
 
-        // Route the object's fields by name as either shredded or unshredded
+        // Route the object's fields by name as either shredded or unshredded. An unshredded field
+        // keeps its field id and its encoded bytes, because the leftover `value` column uses the
+        // same metadata dictionary.
         let Self {
             value_builder,
             typed_value_builders,
+            sorted_field_names,
             seen,
             ..
         } = self;
         seen.fill(false);
+        let object = obj.view();
         let mut builder = value_builder.builder_ext(value.metadata());
         // Error on a repeated unshredded field instead of overwriting it
         let mut object_builder = builder.try_new_object()?.with_validate_unique_fields(true);
         let mut partially_shredded = false;
-        for (field_name, value) in obj.iter() {
-            match typed_value_builders.get_full_mut(field_name) {
-                Some((index, _, typed_value_builder)) => {
+        // The object builder only catches a repeated field id. A sorted dictionary holds each name
+        // once, so that suffices; an unsorted one may repeat a name under distinct ids. The spec
+        // lists an object's fields in name order, so such a repeat follows its first occurrence.
+        let check_adjacent_names = !value.metadata().is_sorted();
+        for i in 0..object.len() {
+            let field_name = object.field_name(i)?;
+            let field = object.field(i)?;
+            match sorted_field_names.binary_search_by(|(name, _)| name.cmp(&field_name)) {
+                Ok(position) => {
+                    let index = sorted_field_names[position].1;
                     // A repeated field would append a second row to this builder
                     if seen[index] {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "Duplicate field name: {field_name}"
-                        )));
+                        return Err(duplicate_field_name(field_name));
                     }
-                    typed_value_builder.append_value(value)?;
+                    typed_value_builders[index].append_value(field.to_variant()?)?;
                     seen[index] = true;
                 }
-                None => {
-                    object_builder.try_insert_bytes(field_name, value)?;
+                Err(_) => {
+                    if check_adjacent_names && i > 0 && object.field_name(i - 1)? == field_name {
+                        return Err(duplicate_field_name(field_name));
+                    }
+                    object_builder.insert_encoded(object.field_id(i)?, field.bytes()?)?;
                     partially_shredded = true;
                 }
             }
