@@ -252,11 +252,14 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
             }
             '\'' | '"' if quote == Some(c) => {
                 quote = None;
-                unescaped.push(c);
+                if let Some(unescaped) = &mut unescaped {
+                    unescaped.push(c);
+                }
             }
-            '\'' | '"' if quote.is_none() && unescaped.is_empty() => {
+            // Every consumed char advances the offset, so a quote can only
+            // open the bracket content at offset 0
+            '\'' | '"' if quote.is_none() && offset == 0 => {
                 quote = Some(c);
-                unescaped.push(c);
             }
             ']' if quote.is_none() => {
                 // An unescaped ']' outside quotes ends the bracket
