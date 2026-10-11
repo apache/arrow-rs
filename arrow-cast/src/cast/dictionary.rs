@@ -190,7 +190,7 @@ fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
         UInt32 => Arc::new(DictionaryArray::<UInt32Type>::from(data)),
         UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)),
         _ => {
-            return Err(ArrowError::CastError(format!(
+            return Err(ArrowError::NotYetImplemented(format!(
                 "Unsupported type {to_index_type} for dictionary index"
             )));
         }
@@ -481,7 +481,7 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             pack_byte_to_fixed_size_dictionary::<K>(array, cast_options, byte_size)
         }
         Struct(_) => pack_struct_to_dictionary::<K>(array, dict_value_type, cast_options),
-        _ => Err(ArrowError::CastError(format!(
+        _ => Err(ArrowError::NotYetImplemented(format!(
             "Unsupported output type for dictionary packing: {dict_value_type}"
         ))),
     }
