@@ -51,5 +51,9 @@ rand = { version = "0.10", default-features = false, features = ["std", "std_rng
 name = "filter_bits"
 harness = false
 
+[[bench]]
+name = "filter_primitive"
+harness = false
+
 [lints]
 workspace = true
