@@ -55,6 +55,7 @@ mod type_conversion;
 mod unshred_variant;
 mod variant_array;
 mod variant_array_builder;
+mod variant_field_lookup;
 mod variant_get;
 mod variant_to_arrow;
 

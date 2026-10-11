@@ -25,10 +25,13 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{VariantPath, VariantPathElement};
+use parquet_variant::{
+    EMPTY_VARIANT_METADATA, Variant, VariantMetadata, VariantPath, VariantPathElement,
+};
 
 use crate::ShreddingState;
 use crate::variant_array::all_null_value_column;
+use crate::variant_field_lookup::object_field_by_path;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 use crate::{VariantArray, VariantType, unshred_variant};
 
@@ -188,6 +191,69 @@ pub(crate) fn follow_shredded_path_element(
     }
 }
 
+/// Extracts `path` from unshredded `BinaryView` columns for a concrete output type, finding each
+/// row's field straight from the encoded bytes.
+///
+/// The generic row loop builds and validates a `Variant` for every row, and then walks the path
+/// through it. This path builds a `Variant` only for the value it finds. Rows without the field
+/// build nothing.
+///
+/// Returns `None` if the fast path does not apply: `Variant` output, a `typed_value` column, a path
+/// with a non-field element, or columns other than `BinaryView`.
+fn get_field_path_from_bytes(
+    target: &VariantArray,
+    path: &VariantPath<'_>,
+    as_type: Option<&DataType>,
+    cast_options: &CastOptions,
+) -> Option<Result<ArrayRef>> {
+    as_type?;
+    if path.is_empty() || target.typed_value_column().is_some() {
+        return None;
+    }
+    let names = path
+        .iter()
+        .map(|element| match element {
+            VariantPathElement::Field { name } => Some(name.as_bytes()),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let metadata = target.metadata_column().as_binary_view_opt()?;
+    let value = target.value_column().as_binary_view_opt()?;
+
+    let extract = || {
+        let mut builder = make_variant_to_arrow_row_builder(
+            target.metadata_column(),
+            VariantPath::default(),
+            as_type,
+            cast_options,
+            target.len(),
+        )?;
+        for i in 0..target.len() {
+            if target.is_null(i) || value.is_null(i) {
+                builder.append_null()?;
+                continue;
+            }
+            let metadata_bytes = metadata.value(i);
+            match object_field_by_path(metadata_bytes, value.value(i), &names) {
+                Ok(Some(found)) => {
+                    // Only objects and arrays (basic types 2 and 3) read the metadata dictionary.
+                    let found_metadata = if found.first().is_some_and(|b| b & 0x02 != 0) {
+                        VariantMetadata::new(metadata_bytes)
+                    } else {
+                        EMPTY_VARIANT_METADATA
+                    };
+                    builder.append_value(Variant::new_with_metadata(found_metadata, found))?;
+                }
+                Ok(None) => builder.append_null()?,
+                Err(_) if cast_options.safe => builder.append_null()?,
+                Err(e) => return Err(e),
+            }
+        }
+        builder.finish()
+    };
+    Some(extract())
+}
+
 /// Follows the given path as far as possible through shredded variant fields. If the path ends on a
 /// shredded field, return it directly. Otherwise, use a row shredder to follow the rest of the path
 /// and extract the requested value on a per-row basis.
@@ -245,6 +311,9 @@ fn shredded_get_path(
             } else {
                 as_field.map(|f| f.data_type())
             };
+            if let Some(result) = get_field_path_from_bytes(&target, &path, as_type, cast_options) {
+                return result;
+            }
             let mut builder = make_variant_to_arrow_row_builder(
                 target.metadata_column(),
                 path,
