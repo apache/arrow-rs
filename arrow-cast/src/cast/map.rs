@@ -25,9 +25,7 @@ pub(crate) fn cast_map_values(
     to_ordered: bool,
 ) -> Result<ArrayRef, ArrowError> {
     let DataType::Map(entries_field, _) = to_data_type else {
-        return Err(ArrowError::CastError(
-            "Internal Error: to_data_type is not a map type.".to_string(),
-        ));
+        unreachable!("cast_with_options only calls cast_map_values for Map target types");
     };
 
     let key_field = key_field(entries_field).ok_or(ArrowError::CastError(

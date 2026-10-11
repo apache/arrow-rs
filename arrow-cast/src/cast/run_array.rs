@@ -27,10 +27,7 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
 ) -> Result<ArrayRef, ArrowError> {
     match array.data_type() {
         DataType::RunEndEncoded(_, _) => {
-            let run_array = array
-                .as_any()
-                .downcast_ref::<RunArray<K>>()
-                .ok_or_else(|| ArrowError::CastError("Expected RunArray".to_string()))?;
+            let run_array = array.as_run::<K>();
 
             match to_type {
                 // Stay as RunEndEncoded, cast only the values
@@ -100,10 +97,9 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
             }
         }
 
-        _ => Err(ArrowError::CastError(format!(
-            "Cannot cast array of type {:?} to RunEndEncodedArray",
-            array.data_type()
-        ))),
+        _ => unreachable!(
+            "cast_with_options only calls run_end_encoded_cast for RunEndEncoded source arrays"
+        ),
     }
 }
 
@@ -135,9 +131,9 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
 
     // REE arrays are handled by run_end_encoded_cast
     if let DataType::RunEndEncoded(_, _) = array.data_type() {
-        return Err(ArrowError::CastError(
-            "Source array is already a RunEndEncoded array, should have been handled by run_end_encoded_cast".to_string()
-        ));
+        unreachable!(
+            "cast_with_options handles RunEndEncoded source arrays with run_end_encoded_cast first"
+        );
     }
 
     // Partition the array to identify runs of consecutive equal values
