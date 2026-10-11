@@ -65,9 +65,5 @@ harness = false
 name = "variant_validation"
 harness = false
 
-[[bench]]
-name = "variant_path"
-harness = false
-
 [lints]
 workspace = true
