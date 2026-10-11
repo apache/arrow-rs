@@ -69,17 +69,8 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
 fn add_benchmark(c: &mut Criterion) {
     let i32 = create_primitive_array::<Int32Type>(1024, 0.);
     let i32_opt = create_primitive_array::<Int32Type>(1024, 0.5);
-    let mut rng = seedable_rng();
-
-    let boolean = BooleanArray::from_iter((0..1024).map(|_| Some(rng.random::<bool>())));
-
-    let boolean_opt = BooleanArray::from_iter((0..1024).map(|i| {
-        if i % 10 == 0 {
-            None
-        } else {
-            Some(rng.random::<bool>())
-        }
-    }));
+    let boolean = create_boolean_array(1024, 0.0, 0.5);
+    let boolean_opt = create_boolean_array(1024, 0.1, 0.5);
     let string = create_string_array_with_len::<i32>(1024, 0., 20);
     let string_opt = create_string_array_with_len::<i32>(1024, 0.5, 20);
     let values = create_string_array_with_len::<i32>(10, 0.0, 20);
