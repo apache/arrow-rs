@@ -1711,62 +1711,74 @@ mod tests {
         assert_eq!(9, d.value(1));
     }
 
-    // Sliced at offset 1 so the null bits sit off a byte boundary, with a
-    // partial trailing word. Rows 0 and 129 are null.
-    fn nullable_slice(null_every: i32) -> Int32Array {
-        let values: Int32Array = (0..131)
-            .map(|i| (i % null_every != 1).then_some(i))
-            .collect();
-        values.slice(1, 130)
+    // Three full 64-bit words and an 8-bit partial trailing word
+    const LEN: usize = 200;
+    // The first row of the first two words, and the last row of the partial one
+    const NULL_ROWS: [usize; 3] = [0, 64, 199];
+    // A valid row in the partial trailing word
+    const SPARSE_ROW: usize = 192;
+
+    // Sliced at offset 1 so the null bits start off a byte boundary
+    fn nullable_values() -> Int32Array {
+        let mut values = vec![Some(0); LEN + 1];
+        for row in NULL_ROWS {
+            values[row + 1] = None;
+        }
+        Int32Array::from(values).slice(1, LEN)
     }
 
-    fn filter_masks(keep: impl Fn(usize) -> bool) -> [BooleanArray; 2] {
-        let mask: BooleanArray = (0..130).map(|i| Some(keep(i))).collect();
-        let sliced: BooleanArray = (0..131).map(|i| Some(i > 0 && keep(i - 1))).collect();
-        [mask, sliced.slice(1, 130)]
+    // One case per path through `selects_null` and the filter strategies
+    fn keep_valid_rows(nulls: &NullBuffer) -> [Vec<bool>; 3] {
+        [
+            // Above FILTER_SLICES_SELECTIVITY_THRESHOLD, so a slices strategy
+            (0..LEN).map(|i| nulls.is_valid(i)).collect(),
+            // Below it, so an index strategy that scans the mask
+            (0..LEN).map(|i| i % 2 == 1 && nulls.is_valid(i)).collect(),
+            // Under one row per word, so the optimized predicate probes its indices
+            (0..LEN).map(|i| i == SPARSE_ROW).collect(),
+        ]
+    }
+
+    fn predicates(keep: &[bool]) -> Vec<FilterPredicate> {
+        let mask = BooleanArray::from(keep.to_vec());
+        let padded: BooleanArray = std::iter::once(false).chain(keep.iter().copied()).collect();
+        let offset_mask = padded.slice(1, keep.len());
+        [mask, offset_mask]
+            .iter()
+            .flat_map(|mask| {
+                [
+                    FilterBuilder::new(mask).build(),
+                    FilterBuilder::new(mask).optimize().build(),
+                ]
+            })
+            .collect()
     }
 
     #[test]
     fn test_filter_nulls_selecting_only_valid_rows() {
-        // Every 43rd row null puts the dense filter above the slices threshold
-        for null_every in [3, 43] {
-            let values = nullable_slice(null_every);
-            let nulls = values.nulls().unwrap();
-            let masks = filter_masks(|i| nulls.is_valid(i))
-                .into_iter()
-                .chain(filter_masks(|i| i == 128));
-            for mask in masks {
-                for predicate in [
-                    FilterBuilder::new(&mask).build(),
-                    FilterBuilder::new(&mask).optimize().build(),
-                ] {
-                    assert!(!predicate.selects_null(nulls));
-                    let filtered = predicate.filter(&values).unwrap();
-                    assert_eq!(filtered.nulls(), None);
-                    assert_eq!(filtered.len(), mask.true_count());
-                }
+        let values = nullable_values();
+        let nulls = values.nulls().unwrap();
+        for keep in keep_valid_rows(nulls) {
+            for predicate in predicates(&keep) {
+                assert!(!predicate.selects_null(nulls));
+                let filtered = predicate.filter(&values).unwrap();
+                assert_eq!(filtered.nulls(), None);
+                assert_eq!(filtered.len(), keep.iter().filter(|k| **k).count());
             }
         }
     }
 
     #[test]
     fn test_filter_nulls_selecting_one_null() {
-        for null_every in [3, 43] {
-            let values = nullable_slice(null_every);
-            let nulls = values.nulls().unwrap();
-            for null_row in [0, 129] {
-                let masks = filter_masks(|i| nulls.is_valid(i) || i == null_row)
-                    .into_iter()
-                    .chain(filter_masks(|i| i == 128 || i == null_row));
-                for mask in masks {
-                    for predicate in [
-                        FilterBuilder::new(&mask).build(),
-                        FilterBuilder::new(&mask).optimize().build(),
-                    ] {
-                        assert!(predicate.selects_null(nulls));
-                        let filtered_nulls = predicate.filter_nulls(Some(nulls)).unwrap();
-                        assert_eq!(filtered_nulls.null_count(), 1);
-                    }
+        let values = nullable_values();
+        let nulls = values.nulls().unwrap();
+        for null_row in NULL_ROWS {
+            for mut keep in keep_valid_rows(nulls) {
+                keep[null_row] = true;
+                for predicate in predicates(&keep) {
+                    assert!(predicate.selects_null(nulls));
+                    let filtered_nulls = predicate.filter_nulls(Some(nulls)).unwrap();
+                    assert_eq!(filtered_nulls.null_count(), 1);
                 }
             }
         }
@@ -2833,8 +2845,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "nulls.len() >= len")]
     fn test_filter_nulls_shorter_than_filter() {
-        let nulls = NullBuffer::from_iter((0..8).map(|i| i != 1));
-        let predicate = BooleanArray::from_iter((0..9).map(|i| Some(i == 0)));
+        let nulls = NullBuffer::from(vec![true, false, true, true, true, true, true, true]);
+        let predicate = BooleanArray::from(vec![
+            true, false, false, false, false, false, false, false, false,
+        ]);
         let filter = FilterBuilder::new(&predicate).optimize().build();
         filter.filter_nulls(Some(&nulls));
     }
