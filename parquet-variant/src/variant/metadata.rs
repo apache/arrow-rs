@@ -16,10 +16,8 @@
 // under the License.
 
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
-use crate::utils::{
-    first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
-    string_from_slice, try_binary_search_range_by,
-};
+use crate::utils::{overflow_error, slice_from_slice, str_from_bytes, string_from_slice};
+use crate::variant::view::MetadataView;
 
 use arrow_schema::ArrowError;
 
@@ -27,9 +25,9 @@ use arrow_schema::ArrowError;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct VariantMetadataHeader {
     version: u8,
-    is_sorted: bool,
+    pub(crate) is_sorted: bool,
     /// Note: This is `offset_size_minus_one` + 1
-    offset_size: OffsetSizeBytes,
+    pub(crate) offset_size: OffsetSizeBytes,
 }
 
 // According to the spec this is currently always = 1, and so we store this const for validation
@@ -41,12 +39,12 @@ const NUM_HEADER_BYTES: u32 = 1;
 
 impl VariantMetadataHeader {
     // Hide the cast
-    const fn offset_size(&self) -> u32 {
+    pub(crate) const fn offset_size(&self) -> u32 {
         self.offset_size as u32
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
-    const fn first_offset_byte(&self) -> u32 {
+    pub(crate) const fn first_offset_byte(&self) -> u32 {
         NUM_HEADER_BYTES + self.offset_size()
     }
 
@@ -66,6 +64,7 @@ impl VariantMetadataHeader {
     /// - sorted_strings is a 1-bit value indicating whether dictionary strings are sorted and unique.
     /// - offset_size_minus_one is a 2-bit value providing the number of bytes per dictionary size and offset field.
     /// - The actual number of bytes, offset_size, is offset_size_minus_one + 1
+    #[inline]
     pub(crate) fn try_new(header_byte: u8) -> Result<Self, ArrowError> {
         let version = header_byte & 0x0F; // First four bits
         if version != CORRECT_VERSION_VALUE {
@@ -208,35 +207,14 @@ impl<'m> VariantMetadata<'m> {
 
     // The actual constructor, which performs only basic (constant-const) validation.
     pub(crate) fn try_new_with_shallow_validation(bytes: &'m [u8]) -> Result<Self, ArrowError> {
-        let header_byte = first_byte_from_slice(bytes)?;
-        let header = VariantMetadataHeader::try_new(header_byte)?;
+        MetadataView::try_new(bytes)?.into_metadata()
+    }
 
-        // First element after header is dictionary size; the offset array immediately follows.
-        let dictionary_size =
-            header
-                .offset_size
-                .unpack_u32_at_offset(bytes, NUM_HEADER_BYTES as usize, 0)?;
-
-        // Calculate the starting offset of the dictionary string bytes.
-        //
-        // There are dict_size + 1 offsets, and the value bytes immediately follow
-        // = (dict_size + 1) * offset_size + header.first_offset_byte()
-        let first_value_byte = dictionary_size
-            .checked_add(1)
-            .and_then(|n| n.checked_mul(header.offset_size()))
-            .and_then(|n| n.checked_add(header.first_offset_byte()))
-            .ok_or_else(|| overflow_error("offset of variant metadata dictionary"))?;
-
-        let mut new_self = Self {
-            bytes,
-            header,
-            dictionary_size,
-            first_value_byte,
-            validated: false,
-        };
-
-        // Validate just the first and last offset, ignoring the other offsets and all value bytes.
-        let first_offset = new_self.get_offset(0)?;
+    // Promotes a view by validating just the first and last offset, ignoring the other offsets
+    // and all value bytes.
+    #[inline]
+    pub(crate) fn try_from_view(view: MetadataView<'m>) -> Result<Self, ArrowError> {
+        let first_offset = view.offset(0)?;
         if first_offset != 0 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "First offset is not zero: {first_offset}"
@@ -244,12 +222,29 @@ impl<'m> VariantMetadata<'m> {
         }
 
         // Use the last offset to upper-bound the byte slice
-        let last_offset = new_self
-            .get_offset(dictionary_size as _)?
-            .checked_add(first_value_byte)
+        let last_offset = view
+            .offset(view.len())?
+            .checked_add(view.first_value_byte)
             .ok_or_else(|| overflow_error("variant metadata size"))?;
-        new_self.bytes = slice_from_slice(bytes, ..last_offset as _)?;
-        Ok(new_self)
+        Ok(Self {
+            bytes: slice_from_slice(view.bytes, ..last_offset as _)?,
+            header: view.header,
+            dictionary_size: view.dictionary_size,
+            first_value_byte: view.first_value_byte,
+            validated: false,
+        })
+    }
+
+    /// A view of this dictionary, which reads only the entries it is asked for.
+    #[doc(hidden)]
+    #[inline]
+    pub fn view(&self) -> MetadataView<'m> {
+        MetadataView {
+            bytes: self.bytes,
+            header: self.header,
+            dictionary_size: self.dictionary_size,
+            first_value_byte: self.first_value_byte,
+        }
     }
 
     /// The number of metadata dictionary entries
@@ -343,16 +338,6 @@ impl<'m> VariantMetadata<'m> {
         self.header.version
     }
 
-    /// Gets an offset into the dictionary entry by index.
-    ///
-    /// This offset is an index into the dictionary, at the boundary between string `i-1` and string
-    /// `i`. See [`Self::get`] to retrieve a specific dictionary entry.
-    fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
-        let offset_byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
-        let bytes = slice_from_slice(self.bytes, offset_byte_range)?;
-        self.header.offset_size.unpack_u32(bytes, i)
-    }
-
     /// Returns the total size, in bytes, of the metadata.
     ///
     /// Note this value may be smaller than what was passed to [`Self::new`] or
@@ -367,16 +352,13 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn get(&self, i: usize) -> Result<&'m str, ArrowError> {
-        let byte_range = self.get_offset(i)? as _..self.get_offset(i + 1)? as _;
+        let value_bytes = self.view().entry(i)?;
         if !self.validated {
-            return string_from_slice(self.bytes, self.first_value_byte as _, byte_range);
+            return str_from_bytes(value_bytes);
         }
 
         // Full validation already proved every dictionary entry is valid UTF-8, so validating
         // again here would charge that cost once per field access instead of once per buffer.
-        let value_bytes =
-            slice_from_slice_at_offset(self.bytes, self.first_value_byte as _, byte_range)?;
-
         debug_assert!(std::str::from_utf8(value_bytes).is_ok());
 
         // SAFETY: `validated` is set only by `with_full_validation`, which proved that every
@@ -391,78 +373,6 @@ impl<'m> VariantMetadata<'m> {
         self.get(i).expect("Invalid metadata dictionary entry")
     }
 
-    /// Attempts to resolve `field_name` to its field id under the assumption that `field_name` is
-    /// itself a slice of this dictionary's value region, as is the case for every field name
-    /// obtained from [`VariantObject::field_name`] or [`Self::get`] on the same metadata instance.
-    /// Returns `None` when that assumption does not hold, so callers must be prepared to fall back
-    /// to a name-based search such as [`Self::get_entry`].
-    ///
-    /// This is much cheaper than searching by name, because a borrowed field name already encodes
-    /// its own field id: it belongs to the entry whose dictionary offset equals its distance from
-    /// the start of the value region. Finding that entry is a binary search over the
-    /// (non-decreasing) offset array, comparing integers rather than decoding and comparing
-    /// dictionary strings at every step, and it needs no string comparison to confirm the hit.
-    ///
-    /// # Correctness
-    ///
-    /// This is only attempted for a [sorted] dictionary. The spec requires dictionary entries to
-    /// be unique only when `sorted_strings` is set, so an unsorted dictionary may legally hold the
-    /// same string at more than one field id. Resolving a borrowed name by the id it came from
-    /// would then disagree with a resolution by name, and callers rely on a name mapping to a
-    /// single id: [`ObjectBuilder`] detects duplicate fields by comparing field ids, so two ids
-    /// naming the same string would build an object whose field names are not unique. Requiring
-    /// sortedness makes the two resolutions agree, because validation rejects a sorted dictionary
-    /// with duplicate entries.
-    ///
-    /// A returned field id is also always verified, so this never reports an id whose entry is not
-    /// `field_name` itself, even for [invalid] metadata whose offsets are arbitrary. The candidate
-    /// entry is accepted only when it starts at `field_name`'s address and has exactly
-    /// `field_name`'s length, which makes the entry's bytes and `field_name`'s bytes the same
-    /// bytes. (Two live allocations cannot overlap, so an address inside our own byte range
-    /// belongs to our own bytes. In the degenerate zero-length case the two are both empty and
-    /// therefore still equal.)
-    ///
-    /// [`ObjectBuilder`]: crate::ObjectBuilder
-    /// [`VariantObject::field_name`]: crate::VariantObject::field_name
-    /// [invalid]: Self#Validation
-    /// [sorted]: Self::is_sorted
-    pub(crate) fn borrowed_field_id(&self, field_name: &str) -> Option<u32> {
-        // An unsorted dictionary may hold duplicate entries, which would make the id a name was
-        // borrowed from differ from the id a search by name returns; see "Correctness" above.
-        if !self.is_sorted() {
-            return None;
-        }
-
-        // Addresses are compared as integers and never dereferenced, so this stays safe even when
-        // `field_name` borrows from an unrelated allocation.
-        let value_region_start = (self.bytes.as_ptr() as usize) + self.first_value_byte as usize;
-        let value_region_end = (self.bytes.as_ptr() as usize) + self.bytes.len();
-        let field_name_start = field_name.as_ptr() as usize;
-        if field_name_start < value_region_start || field_name_start >= value_region_end {
-            return None;
-        }
-        let field_name_offset = u32::try_from(field_name_start - value_region_start).ok()?;
-
-        // Hoist the offset array out of the search, so each step is just an unaligned load.
-        let offset_byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
-        let offsets = slice_from_slice(self.bytes, offset_byte_range).ok()?;
-        let offset_size = self.header.offset_size;
-        let cmp = |i| {
-            Some(
-                offset_size
-                    .unpack_u32(offsets, i)
-                    .ok()?
-                    .cmp(&field_name_offset),
-            )
-        };
-        let field_id = try_binary_search_range_by(0..self.len(), cmp)?.ok()?;
-
-        // Verify that this entry has exactly `field_name`'s bytes; see "Correctness" above.
-        let entry_end = offset_size.unpack_u32(offsets, field_id + 1).ok()?;
-        let entry_len = entry_end.checked_sub(field_name_offset)?;
-        (entry_len as usize == field_name.len()).then_some(field_id as u32)
-    }
-
     /// Attempts to retrieve a dictionary entry and its field id, returning None if the requested field
     /// name is not present. The search cost is logarithmic if [`Self::is_sorted`] and linear
     /// otherwise.
@@ -473,21 +383,11 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn get_entry(&self, field_name: &str) -> Option<(u32, &'m str)> {
-        // A field name borrowed from this dictionary's (sorted) value region resolves without
-        // any string comparisons.
-        if let Some(field_id) = self.borrowed_field_id(field_name) {
-            return Some((field_id, self.get_impl(field_id as _)));
-        }
-
-        let field_id = if self.is_sorted() && self.len() > 10 {
-            // Binary search is faster for a not-tiny sorted metadata dictionary
-            let cmp = |i| Some(self.get_impl(i).cmp(field_name));
-            try_binary_search_range_by(0..self.len(), cmp)?.ok()?
-        } else {
-            // Fall back to Linear search for tiny or unsorted dictionary
-            (0..self.len()).find(|i| self.get_impl(*i) == field_name)?
-        };
-        Some((field_id as u32, self.get_impl(field_id)))
+        let field_id = self
+            .view()
+            .find(field_name.as_bytes())
+            .expect("Invalid metadata dictionary entry")?;
+        Some((field_id, self.get_impl(field_id as _)))
     }
 
     /// Returns an iterator that attempts to visit all dictionary entries, producing `Err` if the
@@ -556,11 +456,11 @@ mod tests {
         assert_eq!(&md[1], "dog");
 
         // Offsets
-        assert_eq!(md.get_offset(0).unwrap(), 0x00);
-        assert_eq!(md.get_offset(1).unwrap(), 0x03);
-        assert_eq!(md.get_offset(2).unwrap(), 0x06);
+        assert_eq!(md.view().offset(0).unwrap(), 0x00);
+        assert_eq!(md.view().offset(1).unwrap(), 0x03);
+        assert_eq!(md.view().offset(2).unwrap(), 0x06);
 
-        let err = md.get_offset(3).unwrap_err();
+        let err = md.get(2).unwrap_err();
         assert!(
             matches!(err, ArrowError::InvalidArgumentError(_)),
             "unexpected error: {err:?}"
@@ -739,19 +639,12 @@ mod tests {
         builder.finish().0
     }
 
-    /// Every entry of `metadata` must resolve to its own field id through the general name search
-    /// and through an owned (non-borrowed) copy of the name. The borrowed fast path must agree
-    /// whenever it applies, which is only for a sorted dictionary.
+    /// Every entry of `metadata` must resolve to its own field id, whether the name is borrowed from
+    /// the dictionary or owned.
     fn assert_lookups_agree(metadata: &VariantMetadata<'_>) {
         for i in 0..metadata.len() {
             let borrowed = metadata.get(i).unwrap();
             let owned = borrowed.to_string();
-
-            assert_eq!(
-                metadata.borrowed_field_id(borrowed),
-                metadata.is_sorted().then_some(i as u32),
-                "borrowed lookup of {borrowed:?} (field id {i})"
-            );
             assert_eq!(
                 metadata.get_entry(borrowed),
                 Some((i as u32, borrowed)),
@@ -762,29 +655,11 @@ mod tests {
                 Some((i as u32, borrowed)),
                 "get_entry of owned {borrowed:?} (field id {i})"
             );
-            // An owned copy does not borrow from the dictionary, so it cannot take the fast path.
-            assert_eq!(metadata.borrowed_field_id(owned.as_str()), None);
-        }
-    }
-
-    /// Like [`assert_lookups_agree`], but tolerates the fast path declining an entry, as it may
-    /// for a dictionary whose offset array does not increase strictly.
-    fn assert_lookups_agree_or_decline(metadata: &VariantMetadata<'_>) {
-        for i in 0..metadata.len() {
-            let borrowed = metadata.get(i).unwrap();
-            if let Some(field_id) = metadata.borrowed_field_id(borrowed) {
-                assert_eq!(field_id, i as u32, "borrowed lookup of {borrowed:?}");
-            }
-            assert_eq!(
-                metadata.get_entry(borrowed),
-                Some((i as u32, borrowed)),
-                "get_entry of borrowed {borrowed:?} (field id {i})"
-            );
         }
     }
 
     #[test]
-    fn test_borrowed_field_id_sorted_dictionary() {
+    fn test_get_entry_sorted_dictionary() {
         // More than 10 entries, so `get_entry` uses its binary search path.
         let names: Vec<String> = (0..64).map(|i| format!("field_{i:03}")).collect();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -796,26 +671,23 @@ mod tests {
         assert_lookups_agree(&metadata);
 
         assert_eq!(metadata.get_entry("field_999"), None);
-        assert_eq!(metadata.borrowed_field_id("field_999"), None);
     }
 
     #[test]
-    fn test_borrowed_field_id_unsorted_dictionary() {
+    fn test_get_entry_unsorted_dictionary() {
         let bytes = metadata_bytes_for(&["zebra", "apple", "mango", "kiwi"]);
         let metadata = VariantMetadata::try_new(&bytes).unwrap();
 
         assert!(!metadata.is_sorted());
         assert_eq!(metadata.len(), 4);
-        // An unsorted dictionary may hold duplicate entries, so the fast path never applies to it
-        // and every name falls back to the general search.
+        // An unsorted dictionary is searched linearly.
         assert_lookups_agree(&metadata);
     }
 
-    /// A dictionary that is not marked sorted may legally repeat a string, and the two field ids
-    /// naming it must not become distinguishable by where the caller's name was borrowed from:
-    /// `ObjectBuilder` detects duplicate fields by field id, so a name must map to a single id.
+    /// A dictionary that is not marked sorted may legally repeat a string. A name must still map to
+    /// a single field id, because `ObjectBuilder` detects duplicate fields by field id.
     #[test]
-    fn test_borrowed_field_id_unsorted_dictionary_with_duplicate_entries() {
+    fn test_get_entry_unsorted_dictionary_with_duplicate_entries() {
         let bytes = &[
             0b0000_0001, // header: offset_size_minus_one=0, sorted=0, version=1
             2,           // dictionary_size
@@ -833,13 +705,12 @@ mod tests {
         // Whichever entry a name was borrowed from, it resolves to the first entry naming it.
         let owned = String::from("a");
         for name in [metadata.get(0).unwrap(), metadata.get(1).unwrap(), &owned] {
-            assert_eq!(metadata.borrowed_field_id(name), None);
             assert_eq!(metadata.get_entry(name), Some((0, "a")));
         }
     }
 
     #[test]
-    fn test_borrowed_field_id_ignores_names_from_another_dictionary() {
+    fn test_get_entry_ignores_names_from_another_dictionary() {
         let this_bytes = metadata_bytes_for(&["alpha", "beta", "gamma"]);
         let this = VariantMetadata::try_new(&this_bytes).unwrap();
 
@@ -851,9 +722,6 @@ mod tests {
             let name = other.get(i).unwrap();
             // A copy that borrows from neither dictionary, to compare results against.
             let unborrowed_name: String = name.chars().collect();
-            // The name borrows from `other`, so `this` must not take the fast path for it...
-            assert_eq!(this.borrowed_field_id(name), None);
-            // ...and the general search must still return `this`'s own field id for that name.
             assert_eq!(this.get_entry(name), this.get_entry(&unborrowed_name));
         }
 
@@ -862,11 +730,8 @@ mod tests {
     }
 
     #[test]
-    fn test_borrowed_field_id_rejects_substring_of_an_entry() {
-        // Dictionary ["x", "yy"], stored as the bytes "xyy". A slice of entry 1 that starts one
-        // byte into the value region shares its start offset with entry 1 without being equal to
-        // it, which the fast path must detect rather than reporting a bogus field id. The
-        // dictionary is sorted, so the fast path applies to it.
+    fn test_get_entry_rejects_substring_of_an_entry() {
+        // Dictionary ["x", "yy"], stored as the bytes "xyy". A slice of an entry is not the entry.
         let bytes = &[
             0b0001_0001, // header: offset_size_minus_one=0, ordered=1, version=1
             2,           // dictionary_size
@@ -882,22 +747,20 @@ mod tests {
         assert_eq!(metadata.get(0).unwrap(), "x");
         assert_eq!(metadata.get(1).unwrap(), "yy");
         assert_eq!(
-            metadata.borrowed_field_id(metadata.get(1).unwrap()),
-            Some(1)
+            metadata.get_entry(metadata.get(1).unwrap()),
+            Some((1, "yy"))
         );
 
         let prefix_of_entry_1 = &metadata.get(1).unwrap()[..1];
         assert_eq!(prefix_of_entry_1, "y");
-        assert_eq!(metadata.borrowed_field_id(prefix_of_entry_1), None);
         assert_eq!(metadata.get_entry(prefix_of_entry_1), None);
 
-        // A slice that starts inside an entry, at an offset no entry starts at, is also rejected.
         let suffix_of_entry_1 = &metadata.get(1).unwrap()[1..];
-        assert_eq!(metadata.borrowed_field_id(suffix_of_entry_1), None);
+        assert_eq!(metadata.get_entry(suffix_of_entry_1), None);
     }
 
     #[test]
-    fn test_borrowed_field_id_with_empty_field_name() {
+    fn test_get_entry_with_empty_field_name() {
         let bytes = &[
             0b0000_0001, // header: offset_size_minus_one=0, ordered=0, version=1
             2,           // dictionary_size
@@ -918,14 +781,12 @@ mod tests {
         );
         assert_eq!(metadata.get_entry(metadata.get(1).unwrap()), Some((1, "")));
         assert_eq!(metadata.get_entry(""), Some((1, "")));
-        assert_eq!(metadata.borrowed_field_id(metadata.get(0).unwrap()), None);
     }
 
     #[test]
-    fn test_borrowed_field_id_with_leading_empty_field_name() {
+    fn test_get_entry_with_leading_empty_field_name() {
         // A sorted dictionary can only hold an empty string as its first entry, where it shares a
-        // start offset with the entry after it. The fast path is free to decline such an
-        // ambiguous offset, but must never report the wrong field id for it.
+        // start offset with the entry after it.
         let bytes = &[
             0b0001_0001, // header: offset_size_minus_one=0, ordered=1, version=1
             2,           // dictionary_size
@@ -940,7 +801,7 @@ mod tests {
         assert_eq!(metadata.get(0).unwrap(), "");
         assert_eq!(metadata.get(1).unwrap(), "hi");
 
-        assert_lookups_agree_or_decline(&metadata);
+        assert_lookups_agree(&metadata);
         assert_eq!(metadata.get_entry(""), Some((0, "")));
     }
 
