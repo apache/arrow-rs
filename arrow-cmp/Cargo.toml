@@ -41,6 +41,12 @@ arrow-schema = { workspace = true }
 
 [dev-dependencies]
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
+criterion = { workspace = true }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+
+[[bench]]
+name = "dict_cmp"
+harness = false
 
 [lints]
 workspace = true

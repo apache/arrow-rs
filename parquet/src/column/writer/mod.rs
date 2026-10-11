@@ -634,7 +634,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // materialized slice to split and the per-mini-batch work is O(1), so we
         // can safely use a much larger batch size.
         let base_batch_size = if both_levels_compact && has_levels {
-            self.props.data_page_row_count_limit()
+            self.column_props.data_page_row_count_limit
         } else {
             self.props.write_batch_size()
         };
@@ -1209,7 +1209,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             return false;
         }
 
-        self.page_metrics.num_buffered_rows as usize >= self.props.data_page_row_count_limit()
+        self.page_metrics.num_buffered_rows as usize >= self.column_props.data_page_row_count_limit
             || self
                 .encoder
                 .estimated_data_page_size()
@@ -3141,6 +3141,27 @@ mod tests {
                 .set_data_page_size_limit(1000)
                 .set_column_data_page_size_limit(ColumnPath::from("col"), 10)
                 .set_write_batch_size(3)
+                .build(),
+        );
+        let data = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        let col_values =
+            write_and_collect_page_values(ColumnPath::from("col"), Arc::clone(&props), data);
+        let other_values = write_and_collect_page_values(ColumnPath::from("other"), props, data);
+
+        assert_eq!(col_values, vec![3, 3, 3, 1]);
+        assert_eq!(other_values, vec![10]);
+    }
+
+    #[test]
+    fn test_column_writer_column_data_page_row_count_limit() {
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_1_0)
+                .set_dictionary_enabled(false)
+                .set_data_page_row_count_limit(100)
+                .set_column_data_page_row_count_limit(ColumnPath::from("col"), 3)
+                .set_write_batch_size(1)
                 .build(),
         );
         let data = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];

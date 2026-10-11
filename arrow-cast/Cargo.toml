@@ -99,5 +99,9 @@ name = "format_decimal"
 harness = false
 
 [[bench]]
+name = "cast_decimal"
+harness = false
+
+[[bench]]
 name = "format_boolean"
 harness = false
