@@ -700,10 +700,7 @@ mod ree {
     where
         F: FnMut(V::Native, V::Native, usize) -> Result<V::Native, E>,
     {
-        let run_ends = array.run_ends();
-        let logical_start = run_ends.offset();
-        let logical_end = run_ends.offset() + run_ends.len();
-        let run_ends = run_ends.sliced_values();
+        let run_ends = array.run_ends().sliced_values();
 
         let values_slice = array.run_array().values_slice();
         let values = values_slice
@@ -717,7 +714,7 @@ mod ree {
         let mut has_non_null_value = false;
 
         for (run_end, value) in run_ends.zip(values) {
-            let current_run_end = run_end.as_usize().clamp(logical_start, logical_end);
+            let current_run_end = run_end.as_usize();
             let run_length = current_run_end - prev_end;
 
             if let Some(value) = value {
@@ -726,9 +723,6 @@ mod ree {
             }
 
             prev_end = current_run_end;
-            if current_run_end == logical_end {
-                break;
-            }
         }
 
         Ok(if has_non_null_value { Some(acc) } else { None })
@@ -2081,6 +2075,108 @@ mod tests {
 
         let result = sum_array_checked::<UInt8Type, _>(typed_array).unwrap();
         assert_eq!(result, Some(100));
+    }
+
+    #[test]
+    fn test_ree_sum_array_sliced_across_runs() {
+        let run_ends = Int16Array::from(vec![4, 8]);
+        let values = Int32Array::from(vec![10, 100]);
+        let array = RunArray::<Int16Type>::try_new(&run_ends, &values).unwrap();
+        let sliced = array.slice(3, 4);
+        let typed_array = sliced.downcast::<Int32Array>().unwrap();
+
+        assert_eq!(sum_array::<Int32Type, _>(typed_array), Some(310));
+    }
+
+    #[test]
+    fn test_ree_sum_array_all_slices() {
+        fn check<I: RunEndIndexType>() {
+            let values = [
+                Some(2),
+                Some(2),
+                None,
+                None,
+                Some(-3),
+                Some(-3),
+                Some(-3),
+                Some(4),
+            ];
+            let run_array = make_run_array::<I, Int32Type, _>(&values);
+            let plain_array = Int32Array::from(values.to_vec());
+
+            for offset in 0..=values.len() {
+                for len in 0..=values.len() - offset {
+                    let sliced = run_array.slice(offset, len);
+                    let typed = sliced.downcast::<Int32Array>().unwrap();
+                    let expected = plain_array.slice(offset, len);
+
+                    assert_eq!(
+                        sum_array::<Int32Type, _>(typed),
+                        sum_array::<Int32Type, _>(&expected),
+                        "offset={offset}, len={len}"
+                    );
+                    assert_eq!(
+                        sum_array_checked::<Int32Type, _>(typed).unwrap(),
+                        sum_array_checked::<Int32Type, _>(&expected).unwrap(),
+                        "offset={offset}, len={len}"
+                    );
+                }
+            }
+
+            let nested = run_array.slice(1, 7).slice(2, 4);
+            let typed = nested.downcast::<Int32Array>().unwrap();
+            let expected = plain_array.slice(1, 7).slice(2, 4);
+            assert_eq!(
+                sum_array::<Int32Type, _>(typed),
+                sum_array::<Int32Type, _>(&expected)
+            );
+            assert_eq!(
+                sum_array_checked::<Int32Type, _>(typed).unwrap(),
+                sum_array_checked::<Int32Type, _>(&expected).unwrap()
+            );
+        }
+
+        check::<Int16Type>();
+        check::<Int32Type>();
+        check::<Int64Type>();
+    }
+
+    #[test]
+    fn test_ree_sum_array_checked_sliced_overflow() {
+        let values = [50, 50, 50, 50, 1, 1, 1, 1];
+        let run_array = make_run_array::<Int16Type, Int8Type, _>(&values);
+        let sliced = run_array.slice(3, 4);
+        let typed = sliced.downcast::<Int8Array>().unwrap();
+        assert_eq!(sum_array_checked::<Int8Type, _>(typed).unwrap(), Some(53));
+
+        let values = [1, 1, 1, 1, 50, 50, 50, 50];
+        let run_array = make_run_array::<Int16Type, Int8Type, _>(&values);
+        let sliced = run_array.slice(3, 4);
+        let typed = sliced.downcast::<Int8Array>().unwrap();
+        assert!(sum_array_checked::<Int8Type, _>(typed).is_err());
+    }
+
+    #[test]
+    fn test_ree_sum_array_sliced_infinity() {
+        let values = [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::INFINITY,
+        ];
+        let run_array = make_run_array::<Int16Type, Float64Type, _>(&values);
+        let sliced = run_array.slice(5, 4);
+        let typed = sliced.downcast::<Float64Array>().unwrap();
+
+        assert_eq!(sum_array::<Float64Type, _>(typed), Some(f64::INFINITY));
     }
 
     #[test]

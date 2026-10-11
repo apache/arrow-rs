@@ -181,6 +181,9 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// In contrast to this function, it is then the responsibility of the caller
 /// to use [FilterBuilder::optimize] if appropriate.
 ///
+/// If the number of rows that `predicate` selects is already known,
+/// [`FilterBuilder::with_count`] avoids counting them again.
+///
 /// # See also
 /// * [`FilterBuilder`] for more control over the filtering process.
 /// * [`filter_record_batch`] to filter a [`RecordBatch`]
@@ -223,6 +226,9 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
 /// calling [FilterPredicate::filter_record_batch].
 /// In contrast to this function, it is then the responsibility of the caller
 /// to use [FilterBuilder::optimize] if appropriate.
+///
+/// If the number of rows that `predicate` selects is already known,
+/// [`FilterBuilder::with_count`] avoids counting them again.
 pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
@@ -248,33 +254,62 @@ pub fn filter_record_batch(
 #[derive(Debug)]
 pub struct FilterBuilder {
     filter: BooleanArray,
-    count: usize,
-    strategy: IterationStrategy,
+    /// The number of rows `filter` selects, if provided by [`Self::with_count`]
+    count: Option<usize>,
+    optimize: bool,
 }
 
 impl FilterBuilder {
     /// Create a new [`FilterBuilder`] that can be used to construct a [`FilterPredicate`]
     pub fn new(filter: &BooleanArray) -> Self {
-        Self::new_with_count(filter, filter.true_count())
-    }
-
-    pub(crate) fn new_with_count(filter: &BooleanArray, count: usize) -> Self {
         let filter = match filter.null_count() {
             0 => filter.clone(),
             _ => prep_null_mask_filter(filter),
         };
 
-        let strategy = IterationStrategy::default_strategy(filter.len(), count);
-
         Self {
             filter,
-            count,
-            strategy,
+            count: None,
+            optimize: false,
         }
     }
 
-    /// Compute an optimized representation of the provided `filter` mask that can be
-    /// applied to an array more quickly.
+    /// Set the number of rows that the filter selects, so that [`Self::build`]
+    /// does not have to count them.
+    ///
+    /// Callers that build a mask row by row, or derive it from a validity
+    /// buffer with a cached null count, often already hold this number.
+    ///
+    /// # Safety
+    ///
+    /// `count` must equal [`BooleanArray::true_count`] of the filter passed to
+    /// [`Self::new`]: the number of `true` values that are not null.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{BooleanArray, Int32Array};
+    /// # use arrow_select::filter::FilterBuilder;
+    /// let values = Int32Array::from(vec![1, 2, 3, 4]);
+    /// let mask = BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]);
+    /// // The null is not selected, so the mask selects two rows.
+    /// // SAFETY: the count matches the mask.
+    /// let predicate = unsafe { FilterBuilder::new(&mask).with_count(2) }.build();
+    /// assert_eq!(predicate.count(), 2);
+    /// let filtered = predicate.filter(&values).unwrap();
+    /// assert_eq!(filtered.as_ref(), &Int32Array::from(vec![1, 3]));
+    /// ```
+    pub unsafe fn with_count(mut self, count: usize) -> Self {
+        debug_assert_eq!(
+            count,
+            self.filter.true_count(),
+            "count must match the number of rows the filter selects"
+        );
+        self.count = Some(count);
+        self
+    }
+
+    /// Compute an optimized representation of the provided `filter` mask in
+    /// [`Self::build`], so that it can be applied to an array more quickly.
     ///
     /// When filtering multiple arrays (e.g. a [`RecordBatch`] or a
     /// [`StructArray`] with multiple fields), optimizing the filter can provide
@@ -284,17 +319,7 @@ impl FilterBuilder {
     /// than the original mask, so it is often faster to filter a single array,
     /// without filter optimization.
     pub fn optimize(mut self) -> Self {
-        match self.strategy {
-            IterationStrategy::SlicesIterator => {
-                let slices = SlicesIterator::new(&self.filter).collect();
-                self.strategy = IterationStrategy::Slices(slices)
-            }
-            IterationStrategy::IndexIterator => {
-                let indices = IndexIterator::new(&self.filter, self.count).collect();
-                self.strategy = IterationStrategy::Indices(indices)
-            }
-            _ => {}
-        }
+        self.optimize = true;
         self
     }
 
@@ -316,10 +341,26 @@ impl FilterBuilder {
 
     /// Construct the final `FilterPredicate`
     pub fn build(self) -> FilterPredicate {
+        let count = self.count.unwrap_or_else(|| self.filter.true_count());
+        let mut strategy = IterationStrategy::default_strategy(self.filter.len(), count);
+        if self.optimize {
+            match strategy {
+                IterationStrategy::SlicesIterator => {
+                    let slices = SlicesIterator::new(&self.filter).collect();
+                    strategy = IterationStrategy::Slices(slices)
+                }
+                IterationStrategy::IndexIterator => {
+                    let indices = IndexIterator::new(&self.filter, count).collect();
+                    strategy = IterationStrategy::Indices(indices)
+                }
+                _ => {}
+            }
+        }
+
         FilterPredicate {
             filter: self.filter,
-            count: self.count,
-            strategy: self.strategy,
+            count,
+            strategy,
         }
     }
 }
@@ -483,6 +524,11 @@ impl FilterPredicate {
         self.count
     }
 
+    /// Length of the filter mask, including rows that are not selected
+    pub(crate) fn filter_len(&self) -> usize {
+        self.filter.len()
+    }
+
     /// Return a [`FilterSelection`] for iterating over the rows selected by
     /// this [`FilterPredicate`].
     pub(crate) fn selection(&self) -> FilterSelection<'_> {
@@ -510,10 +556,24 @@ impl FilterPredicate {
     /// because the input `nulls` was `None`, the input had no nulls, or the
     /// filtered result has no nulls. Otherwise returns the filtered
     /// [`NullBuffer`] with its precomputed null count.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the input contains nulls and is shorter than this predicate.
     pub fn filter_nulls(&self, nulls: Option<&NullBuffer>) -> Option<NullBuffer> {
         let nulls = nulls?;
         if nulls.null_count() == 0 {
             return None;
+        }
+
+        assert!(nulls.len() >= self.filter.len());
+        match self.strategy {
+            IterationStrategy::None => return None,
+            IterationStrategy::All => {
+                let nulls = nulls.slice(0, self.count);
+                return (nulls.null_count() != 0).then_some(nulls);
+            }
+            _ => {}
         }
 
         let nulls = filter_bits(nulls.inner(), self);
@@ -1217,6 +1277,80 @@ mod tests {
     use rand::distr::{Alphanumeric, StandardUniform};
     use rand::prelude::*;
     use rand::rng;
+
+    #[test]
+    fn test_filter_nulls_all() {
+        let predicate = FilterBuilder::new(&BooleanArray::from(vec![true, true])).build();
+        let nulls = NullBuffer::from(vec![true, false]);
+        assert_eq!(predicate.filter_nulls(Some(&nulls)), Some(nulls));
+    }
+
+    #[test]
+    fn test_filter_nulls_none() {
+        let predicate = FilterBuilder::new(&BooleanArray::from(vec![false, false])).build();
+        let nulls = NullBuffer::from(vec![true, false]);
+        assert_eq!(predicate.filter_nulls(Some(&nulls)), None);
+    }
+
+    #[test]
+    fn test_filter_nulls_selection() {
+        // Cover full and partial prefixes, empty selections, and both general
+        // iteration strategies, with and without materializing the selection.
+        let filters = [
+            vec![],
+            vec![true],
+            vec![true, true],
+            vec![true; 6],
+            vec![false; 6],
+            vec![true, false, false, false, false, false],
+            vec![true, true, true, true, true, false],
+        ];
+        for offset in [0, 3, 9] {
+            let mut validity = vec![false; offset];
+            validity.extend([true, false, true, false, true, false]);
+            let nulls = NullBuffer::from(validity).slice(offset, 6);
+            for filter in &filters {
+                let expected: NullBuffer = filter
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, selected)| **selected)
+                    .map(|(i, _)| nulls.is_valid(i))
+                    .collect();
+                let expected = (expected.null_count() != 0).then_some(expected);
+                let filter = BooleanArray::from(filter.clone());
+                for optimize in [false, true] {
+                    let builder = FilterBuilder::new(&filter);
+                    let predicate = if optimize {
+                        builder.optimize()
+                    } else {
+                        builder
+                    }
+                    .build();
+                    assert_eq!(predicate.filter_nulls(Some(&nulls)), expected);
+                    assert_eq!(predicate.filter_nulls(None), None);
+                    assert_eq!(
+                        predicate.filter_nulls(Some(&NullBuffer::new_valid(6))),
+                        None
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_filter_nulls_length_check() {
+        for filter in [vec![true, true], vec![false, false], vec![true, false]] {
+            let predicate = FilterBuilder::new(&BooleanArray::from(filter)).build();
+            let nulls = NullBuffer::new_null(1);
+            assert!(std::panic::catch_unwind(|| predicate.filter_nulls(Some(&nulls))).is_err());
+            // Inputs without nulls continue to short-circuit before checking length.
+            assert_eq!(
+                predicate.filter_nulls(Some(&NullBuffer::new_valid(1))),
+                None
+            );
+            assert_eq!(predicate.filter_nulls(None), None);
+        }
+    }
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {

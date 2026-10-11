@@ -17,45 +17,21 @@
 
 name: integration
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs that touch certain files and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - .github/**
-      - rust-toolchain.toml
-      - arrow-arith/**
-      - arrow-array/**
-      - arrow-buffer/**
-      - arrow-cast/**
-      - arrow-cmp/**
-      - arrow-csv/**
-      - arrow-data/**
-      - arrow-flight/**
-      - arrow-integration-test/**
-      - arrow-integration-testing/**
-      - arrow-ipc/**
-      - arrow-json/**
-      - arrow-ord/**
-      - arrow-pyarrow-integration-testing/**
-      - arrow-pyarrow/**
-      - arrow-row/**
-      - arrow-schema/**
-      - arrow-select/**
-      - arrow-string/**
-      - arrow/**
+  workflow_call:
+    inputs:
+      cache-refresh-only:
+        description: Populate caches without running tests or linters
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   integration:
+    if: ${{ !inputs.cache-refresh-only }}
     name: Archery test With other arrows
     runs-on: ubuntu-latest
     container:
@@ -198,7 +174,8 @@ jobs:
       matrix:
         rust: [stable]
         # PyArrow 15 was the first version to introduce StringView/BinaryView support
-        pyarrow: ["15", "16", "17"]
+        # The cache keys are shared across these versions; one build warms them.
+        pyarrow: ${{ inputs.cache-refresh-only && fromJSON('["17"]') || fromJSON('["15", "16", "17"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -212,13 +189,15 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: /home/runner/.cargo
-          key: cargo-maturin-cache-
+          key: cargo-maturin-cache-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: cargo-maturin-cache-
       - name: Cache Rust dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
-          path: /home/runner/target
+          path: arrow-pyarrow-integration-testing/target
           # this key is not equal because maturin uses different compilation flags.
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-maturin-cache-${{ matrix.rust }}-
+          key: ${{ runner.os }}-${{ runner.arch }}-target-maturin-cache-${{ matrix.rust }}-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-target-maturin-cache-${{ matrix.rust }}-
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.8'
@@ -230,6 +209,7 @@ jobs:
           source venv/bin/activate
           pip install maturin toml pytest pytz pyarrow==${{ matrix.pyarrow }}
       - name: Run Rust tests
+        if: ${{ !inputs.cache-refresh-only }}
         run: |
           source venv/bin/activate
           # arrow-pyarrow's own tests are feature-gated, so the workspace-wide `cargo test` in
@@ -239,6 +219,7 @@ jobs:
           cd arrow-pyarrow-testing
           cargo test
       - name: Clippy arrow-pyarrow
+        if: ${{ !inputs.cache-refresh-only }}
         run: |
           source venv/bin/activate
           # Here rather than in arrow.yml's clippy job: that one runs in a
@@ -248,9 +229,14 @@ jobs:
           # default features, so the --no-default-features variant arrow.yml
           # also runs would be this same command.
           cargo clippy -p arrow-pyarrow --all-features -- -D unused_crate_dependencies
-      - name: Run Python tests
+      - name: Build Python extension
         run: |
           source venv/bin/activate
           cd arrow-pyarrow-integration-testing
           maturin develop
+      - name: Run Python tests
+        if: ${{ !inputs.cache-refresh-only }}
+        run: |
+          source venv/bin/activate
+          cd arrow-pyarrow-integration-testing
           pytest -v .

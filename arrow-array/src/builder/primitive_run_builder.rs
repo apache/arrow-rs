@@ -200,9 +200,10 @@ where
         // write the last run end to the array.
         self.append_run_end();
 
-        // reset the run index to zero.
+        // reset the run indexes to zero.
         self.current_value = None;
         self.current_run_end_index = 0;
+        self.prev_run_end_index = 0;
 
         // build the run encoded array by adding run_ends and values array as its children.
         let run_ends_array = self.run_ends_builder.finish();
@@ -334,6 +335,23 @@ mod tests {
     }
 
     #[test]
+    fn test_reuse_after_finish() {
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Int16Type>::new();
+        builder.extend([1, 2, 3].into_iter().map(Some));
+        builder.finish();
+
+        // A single run with the same length as the previous batch
+        builder.extend([7, 7, 7].into_iter().map(Some));
+        let array = builder.finish();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.run_ends().values(), &[3]);
+        assert_eq!(array.values().as_primitive::<Int16Type>().values(), &[7]);
+
+        // Nothing appended since the last finish
+        assert_eq!(builder.finish().len(), 0);
+    }
+
+    #[test]
     #[should_panic(expected = "incompatible data type for builder")]
     fn test_override_data_type_invalid() {
         PrimitiveRunBuilder::<Int16Type, UInt32Type>::new().with_data_type(DataType::UInt64);
@@ -365,5 +383,16 @@ mod tests {
         let array = array.downcast::<TimestampMicrosecondArray>().unwrap();
         let values = array.values();
         assert_eq!(values.timezone(), Some("Europe/Paris"));
+    }
+
+    #[test]
+    fn test_finish_cloned_keeps_data_type() {
+        let data_type = DataType::Decimal128(5, 2);
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Decimal128Type>::new()
+            .with_data_type(data_type.clone());
+        // Leave the run open, so `finish_cloned` has to add it to a copy of the values
+        builder.append_value(123);
+        let array = builder.finish_cloned();
+        assert_eq!(array.values().data_type(), &data_type);
     }
 }

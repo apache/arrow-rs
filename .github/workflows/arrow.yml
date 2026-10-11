@@ -18,36 +18,9 @@
 # tests for arrow crate
 name: arrow
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  # always trigger
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - .github/**
-      - rust-toolchain.toml
-      - arrow-arith/**
-      - arrow-array/**
-      - arrow-buffer/**
-      - arrow-cast/**
-      - arrow-cmp/**
-      - arrow-csv/**
-      - arrow-data/**
-      - arrow-integration-test/**
-      - arrow-ipc/**
-      - arrow-json/**
-      - arrow-avro/**
-      - arrow-ord/**
-      - arrow-row/**
-      - arrow-schema/**
-      - arrow-select/**
-      - arrow-string/**
-      - arrow/**
+  workflow_call:
 
 permissions:
   contents: read

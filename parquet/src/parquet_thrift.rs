@@ -734,18 +734,7 @@ where
     let list_ident = prot.read_list_begin()?;
     validate_list_type(T::ELEMENT_TYPE, &list_ident)?;
     let size = list_ident.size as usize;
-    // Each list element occupies at least one byte on the wire. Bound the
-    // declared count by remaining input before reserving, so a malformed
-    // header cannot abort the process with a huge allocation.
-    if let Some(remaining) = prot.remaining_bytes()
-        && size > remaining
-    {
-        return Err(general_err!(
-            "Thrift list size {} exceeds remaining input length {}",
-            size,
-            remaining
-        ));
-    }
+    check_list_size(prot.remaining_bytes(), size)?;
     let mut res = Vec::with_capacity(size);
     for _ in 0..list_ident.size {
         let val = T::read_thrift(prot)?;
@@ -760,6 +749,22 @@ pub(crate) fn validate_list_type(expected: ElementType, got: &ListIdentifier) ->
             "Expected list element type of {:?} but got {:?}",
             expected,
             got.element_type
+        ));
+    }
+    Ok(())
+}
+
+/// Reject a declared list size that cannot fit the remaining input. Each list
+/// element is at least one byte on the wire, so a size past the remaining
+/// bytes is a malformed header; bounding it before reserving stops a huge
+/// allocation. `remaining` is `None` when the protocol is not backed by a
+/// finite buffer, in which case there is nothing to check against.
+pub(crate) fn check_list_size(remaining: Option<usize>, size: usize) -> Result<()> {
+    if let Some(remaining) = remaining
+        && size > remaining
+    {
+        return Err(general_err!(
+            "Thrift list size {size} exceeds remaining input length {remaining}"
         ));
     }
     Ok(())

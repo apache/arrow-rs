@@ -25,8 +25,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::ToByteSlice;
+use arrow::error::Result as ArrowResult;
 use arrow_array::builder::{
-    FixedSizeBinaryBuilder, ListBuilder, PrimitiveDictionaryBuilder, StringViewBuilder,
+    FixedSizeBinaryBuilder, Int32Builder, ListBuilder, PrimitiveDictionaryBuilder,
+    PrimitiveRunBuilder, StringViewBuilder, StructBuilder,
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
@@ -35,28 +37,32 @@ use arrow_array::types::{
     Time32MillisecondType, Time64MicrosecondType, UInt8Type, UInt16Type, UInt32Type,
 };
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, Date32Array, Date64Array, Decimal32Array,
-    Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray, DurationMicrosecondArray,
-    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
-    Float16Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-    Int32DictionaryArray, Int64Array, LargeBinaryArray, LargeListArray, LargeListViewArray,
-    LargeStringArray, ListArray, ListViewArray, NullArray, PrimitiveArray, RecordBatch,
-    RecordBatchReader, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray,
+    DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+    DurationSecondArray, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int8Array,
+    Int16Array, Int32Array, Int32DictionaryArray, Int32RunArray, Int64Array, IntervalDayTimeArray,
+    IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
+    ListArray, ListViewArray, NullArray, PrimitiveArray, RecordBatch, RecordBatchOptions,
+    RecordBatchReader, RunArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
     UInt8DictionaryArray, UInt16Array, UInt32Array, UInt64Array,
 };
-use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, i256};
+use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, NullBuffer, OffsetBuffer, i256};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema, TimeUnit};
+use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use bytes::Bytes;
 use half::f16;
 use num_traits::{FromPrimitive, PrimInt, ToPrimitive};
-use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+};
+use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
 use parquet::basic::Type as PhysicalType;
 use parquet::errors::Result;
 use parquet::file::properties::WriterProperties;
+use tempfile::tempfile;
 
 #[test]
 #[cfg_attr(miri, ignore)] // Takes too long
@@ -1229,6 +1235,768 @@ fn arrow_writer_string_dictionary_unsigned_index() {
         .collect();
 
     RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
+}
+
+/// Writes a single-column RecordBatch to an in-memory Parquet buffer.
+fn write_column_to_bytes(array: ArrayRef) -> Bytes {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        array.data_type().clone(),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+    let mut buf = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    Bytes::from(buf)
+}
+
+/// Reads column 0 from a single-row-group Parquet buffer, projecting it with the given schema.
+/// Passing a flat schema when the buffer was written from a REE array lets callers decode
+/// the physical values without the run-end encoding wrapper.
+fn read_column_with_schema(bytes: Bytes, schema: SchemaRef) -> ArrayRef {
+    let opts = ArrowReaderOptions::new().with_schema(schema);
+    ParquetRecordBatchReaderBuilder::try_new_with_options(bytes, opts)
+        .unwrap()
+        .build()
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .column(0)
+        .clone()
+}
+
+fn ree_write_read_roundtrip(ree: ArrayRef, flat: ArrayRef) {
+    let flat_schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        flat.data_type().clone(),
+        true,
+    )]));
+    let ree_bytes = write_column_to_bytes(ree);
+    let flat_bytes = write_column_to_bytes(flat.clone());
+    assert_eq!(
+        ree_bytes, flat_bytes,
+        "REE and flat bytes should be identical"
+    );
+
+    let decoded_ree = read_column_with_schema(ree_bytes, flat_schema.clone());
+    let decoded_flat = read_column_with_schema(flat_bytes, flat_schema);
+
+    assert_eq!(decoded_ree.as_ref(), flat.as_ref());
+    assert_eq!(decoded_ree.as_ref(), decoded_flat.as_ref());
+}
+
+#[test]
+fn ree_string() {
+    let ree: ArrayRef = Arc::new(
+        [Some("a"), Some("a"), None, Some("b"), Some("b")]
+            .into_iter()
+            .collect::<Int32RunArray>(),
+    );
+    let flat: ArrayRef = Arc::new(StringArray::from(vec![
+        Some("a"),
+        Some("a"),
+        None,
+        Some("b"),
+        Some("b"),
+    ]));
+    ree_write_read_roundtrip(ree, flat);
+}
+
+#[test]
+fn ree_int32() {
+    let mut b = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+    for v in [Some(1), Some(1), None, Some(2), Some(2)] {
+        b.append_option(v);
+    }
+    let ree: ArrayRef = Arc::new(b.finish());
+    let flat: ArrayRef = Arc::new(Int32Array::from(vec![
+        Some(1),
+        Some(1),
+        None,
+        Some(2),
+        Some(2),
+    ]));
+    ree_write_read_roundtrip(ree, flat);
+}
+
+#[test]
+fn ree_bool() {
+    // run_ends [3, 5, 7] → [T,T,T, null,null, F,F]
+    let ree: ArrayRef = Arc::new(
+        RunArray::try_new(
+            &Int32Array::from(vec![3, 5, 7]),
+            &BooleanArray::from(vec![Some(true), None, Some(false)]),
+        )
+        .unwrap(),
+    );
+    let flat: ArrayRef = Arc::new(BooleanArray::from(vec![
+        Some(true),
+        Some(true),
+        Some(true),
+        None,
+        None,
+        Some(false),
+        Some(false),
+    ]));
+    ree_write_read_roundtrip(ree, flat);
+}
+
+#[test]
+fn ree_fixed_size_binary() {
+    let mk = |vals: &[Option<&[u8]>]| -> FixedSizeBinaryArray {
+        let mut b = FixedSizeBinaryBuilder::new(2);
+        for v in vals {
+            match v {
+                Some(x) => b.append_value(x).unwrap(),
+                None => b.append_null(),
+            }
+        }
+        b.finish()
+    };
+    // run_ends [2, 4, 6] → [aa,aa, null,null, bb,bb]
+    let ree: ArrayRef = Arc::new(
+        RunArray::try_new(
+            &Int32Array::from(vec![2, 4, 6]),
+            &mk(&[Some(b"aa"), None, Some(b"bb")]),
+        )
+        .unwrap(),
+    );
+    let flat: ArrayRef = Arc::new(mk(&[
+        Some(b"aa"),
+        Some(b"aa"),
+        None,
+        None,
+        Some(b"bb"),
+        Some(b"bb"),
+    ]));
+    ree_write_read_roundtrip(ree, flat);
+}
+
+#[test]
+fn ree_single_run() {
+    let ree: ArrayRef = Arc::new(["x", "x", "x"].into_iter().collect::<Int32RunArray>());
+    let flat: ArrayRef = Arc::new(StringArray::from(vec!["x", "x", "x"]));
+    ree_write_read_roundtrip(ree, flat);
+}
+
+#[test]
+fn ree_float32() {
+    // run_ends [2, 4, 5] → [1.0, 1.0, null, null, 2.5]
+    let ree: ArrayRef = Arc::new(
+        RunArray::try_new(
+            &Int32Array::from(vec![2, 4, 5]),
+            &Float32Array::from(vec![Some(1.0_f32), None, Some(2.5_f32)]),
+        )
+        .unwrap(),
+    );
+    let flat: ArrayRef = Arc::new(Float32Array::from(vec![
+        Some(1.0_f32),
+        Some(1.0_f32),
+        None,
+        None,
+        Some(2.5_f32),
+    ]));
+    ree_write_read_roundtrip(ree, flat);
+}
+
+#[test]
+fn ree_sliced() {
+    // A sliced (non-zero offset) REE array: verify that get_physical_index
+    // correctly accounts for the logical offset when expanding.
+    // Full array: run_ends [3, 5, 7] → [a,a,a, b,b, c,c]
+    // After slice(2, 5) the logical view is [a, b, b, c, c].
+    let full: ArrayRef = Arc::new(
+        RunArray::try_new(
+            &Int32Array::from(vec![3, 5, 7]),
+            &StringArray::from(vec!["a", "b", "c"]),
+        )
+        .unwrap(),
+    );
+    let sliced = full.slice(2, 5);
+    let flat: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "b", "c", "c"]));
+    ree_write_read_roundtrip(sliced, flat);
+}
+
+#[test]
+fn arrow_writer() {
+    // define schema
+    let schema = Schema::new(vec![
+        Field::new("a", ArrowDataType::Int32, false),
+        Field::new("b", ArrowDataType::Int32, true),
+    ]);
+
+    // create some data
+    let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    let b = Int32Array::from(vec![Some(1), None, None, Some(4), Some(5)]);
+
+    // build a record batch
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]).unwrap();
+
+    roundtrip(batch, Some(SMALL_SIZE / 2));
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_non_null() {
+    let schema = Schema::new(vec![Field::new("a", ArrowDataType::Int32, false)]);
+    let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+
+    RoundTripTest::new(Arc::new(a))
+        .with_schema(Arc::new(schema))
+        .run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_binary() {
+    let raw_string_values = vec!["foo", "bar", "baz", "quux"];
+    let raw_binary_values = [
+        b"foo".to_vec(),
+        b"bar".to_vec(),
+        b"baz".to_vec(),
+        b"quux".to_vec(),
+    ];
+    let raw_binary_value_refs = raw_binary_values
+        .iter()
+        .map(|x| x.as_slice())
+        .collect::<Vec<_>>();
+
+    let string_values = StringArray::from(raw_string_values.clone());
+    let binary_values = BinaryArray::from(raw_binary_value_refs);
+    assert_eq!(string_values.null_count(), 0);
+    assert_eq!(binary_values.null_count(), 0);
+
+    RoundTripTest::new(Arc::new(string_values)).run();
+    RoundTripTest::new(Arc::new(binary_values)).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_binary_view() {
+    let raw_string_values = vec!["foo", "bar", "large payload over 12 bytes", "lulu"];
+    let raw_binary_values = vec![
+        b"foo".to_vec(),
+        b"bar".to_vec(),
+        b"large payload over 12 bytes".to_vec(),
+        b"lulu".to_vec(),
+    ];
+    let nullable_string_values = vec![Some("foo"), None, Some("large payload over 12 bytes"), None];
+
+    let string_view_values = StringViewArray::from(raw_string_values);
+    let binary_view_values = BinaryViewArray::from_iter_values(raw_binary_values);
+    let nullable_string_view_values = StringViewArray::from(nullable_string_values);
+
+    RoundTripTest::new(Arc::new(string_view_values)).run();
+    RoundTripTest::new(Arc::new(binary_view_values)).run();
+    RoundTripTest::new(Arc::new(nullable_string_view_values)).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn arrow_writer_binary_view_long_value() {
+    // There is special case validation for long values (greater than 128)
+    // 128 encodes as 0x80 0x00 0x00 0x00 in little endian, which should
+    // trigger the long-string UTF-8 validation branch in the plain decoder.
+    let long = "a".repeat(128);
+    let raw_string_values = vec!["foo", long.as_str(), "bar"];
+    let raw_binary_values = vec![b"foo".to_vec(), long.as_bytes().to_vec(), b"bar".to_vec()];
+
+    let string_view_values: ArrayRef = Arc::new(StringViewArray::from(raw_string_values));
+    let binary_view_values: ArrayRef =
+        Arc::new(BinaryViewArray::from_iter_values(raw_binary_values));
+
+    RoundTripTest::new(Arc::clone(&string_view_values))
+        .with_nullable(false)
+        .run();
+    RoundTripTest::new(Arc::clone(&binary_view_values))
+        .with_nullable(false)
+        .run();
+}
+
+fn get_decimal_batch(precision: u8, scale: i8) -> RecordBatch {
+    let decimal_field = Field::new("a", ArrowDataType::Decimal128(precision, scale), false);
+    let schema = Schema::new(vec![decimal_field]);
+
+    let decimal_values = vec![10_000, 50_000, 0, -100]
+        .into_iter()
+        .map(Some)
+        .collect::<Decimal128Array>()
+        .with_precision_and_scale(precision, scale)
+        .unwrap();
+
+    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(decimal_values)]).unwrap()
+}
+
+#[test]
+fn arrow_writer_decimal() {
+    // int32 to store the decimal value
+    let batch_int32_decimal = get_decimal_batch(5, 2);
+    roundtrip(batch_int32_decimal, Some(SMALL_SIZE / 2));
+    // int64 to store the decimal value
+    let batch_int64_decimal = get_decimal_batch(12, 2);
+    roundtrip(batch_int64_decimal, Some(SMALL_SIZE / 2));
+    // fixed_length_byte_array to store the decimal value
+    let batch_fixed_len_byte_array_decimal = get_decimal_batch(30, 2);
+    roundtrip(batch_fixed_len_byte_array_decimal, Some(SMALL_SIZE / 2));
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // inline assembly is not supported
+fn arrow_writer_float_nans() {
+    const MEDIUM_SIZE: usize = 63;
+
+    let f16_field = Field::new("a", ArrowDataType::Float16, false);
+    let f32_field = Field::new("b", ArrowDataType::Float32, false);
+    let f64_field = Field::new("c", ArrowDataType::Float64, false);
+    let schema = Schema::new(vec![f16_field, f32_field, f64_field]);
+
+    let f16_values = (0..MEDIUM_SIZE)
+        .map(|i| {
+            Some(if i % 2 == 0 {
+                f16::NAN
+            } else {
+                f16::from_f32(i as f32)
+            })
+        })
+        .collect::<Float16Array>();
+
+    let f32_values = (0..MEDIUM_SIZE)
+        .map(|i| Some(if i % 2 == 0 { f32::NAN } else { i as f32 }))
+        .collect::<Float32Array>();
+
+    let f64_values = (0..MEDIUM_SIZE)
+        .map(|i| Some(if i % 2 == 0 { f64::NAN } else { i as f64 }))
+        .collect::<Float64Array>();
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(f16_values),
+            Arc::new(f32_values),
+            Arc::new(f64_values),
+        ],
+    )
+    .unwrap();
+
+    roundtrip(batch, None);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn all_null_primitive_single_column() {
+    let values = Arc::new(Int32Array::from(vec![None; SMALL_SIZE]));
+    RoundTripTest::new(values).run();
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn null_single_column() {
+    let values = Arc::new(NullArray::new(SMALL_SIZE));
+    RoundTripTest::new(values).run();
+    // null arrays are always nullable, a test with non-nullable nulls fails
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn bool_single_column() {
+    required_and_optional::<BooleanArray, _>(
+        [true, false].iter().cycle().copied().take(SMALL_SIZE),
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn interval_year_month_single_column() {
+    required_and_optional::<IntervalYearMonthArray, _>(0..SMALL_SIZE as i32);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn interval_day_time_single_column() {
+    required_and_optional::<IntervalDayTimeArray, _>(vec![
+        IntervalDayTime::new(0, 1),
+        IntervalDayTime::new(0, 3),
+        IntervalDayTime::new(3, -2),
+        IntervalDayTime::new(-200, 4),
+    ]);
+}
+
+#[test]
+fn arrow_writer_test_type_compatibility() {
+    fn ensure_compatible_write<T1, T2>(array1: T1, array2: T2, expected_result: T1)
+    where
+        T1: Array + 'static,
+        T2: Array + 'static,
+    {
+        let schema1 = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            array1.data_type().clone(),
+            false,
+        )]));
+
+        let file = tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), schema1.clone(), None).unwrap();
+
+        let rb1 = RecordBatch::try_new(schema1.clone(), vec![Arc::new(array1)]).unwrap();
+        writer.write(&rb1).unwrap();
+
+        let schema2 = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            array2.data_type().clone(),
+            false,
+        )]));
+        let rb2 = RecordBatch::try_new(schema2, vec![Arc::new(array2)]).unwrap();
+        writer.write(&rb2).unwrap();
+
+        writer.close().unwrap();
+
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(file.try_clone().unwrap(), 1024).unwrap();
+        let actual_batch = record_batch_reader.next().unwrap().unwrap();
+
+        let expected_batch =
+            RecordBatch::try_new(schema1, vec![Arc::new(expected_result)]).unwrap();
+        assert_eq!(actual_batch, expected_batch);
+    }
+
+    // check compatibility between native and dictionaries
+
+    ensure_compatible_write(
+        DictionaryArray::new(
+            UInt8Array::from_iter_values(vec![0]),
+            Arc::new(StringArray::from_iter_values(vec!["parquet"])),
+        ),
+        StringArray::from_iter_values(vec!["barquet"]),
+        DictionaryArray::new(
+            UInt8Array::from_iter_values(vec![0, 1]),
+            Arc::new(StringArray::from_iter_values(vec!["parquet", "barquet"])),
+        ),
+    );
+
+    ensure_compatible_write(
+        StringArray::from_iter_values(vec!["parquet"]),
+        DictionaryArray::new(
+            UInt8Array::from_iter_values(vec![0]),
+            Arc::new(StringArray::from_iter_values(vec!["barquet"])),
+        ),
+        StringArray::from_iter_values(vec!["parquet", "barquet"]),
+    );
+
+    // check compatibility between dictionaries with different key types
+
+    ensure_compatible_write(
+        DictionaryArray::new(
+            UInt8Array::from_iter_values(vec![0]),
+            Arc::new(StringArray::from_iter_values(vec!["parquet"])),
+        ),
+        DictionaryArray::new(
+            UInt16Array::from_iter_values(vec![0]),
+            Arc::new(StringArray::from_iter_values(vec!["barquet"])),
+        ),
+        DictionaryArray::new(
+            UInt8Array::from_iter_values(vec![0, 1]),
+            Arc::new(StringArray::from_iter_values(vec!["parquet", "barquet"])),
+        ),
+    );
+
+    // check compatibility between dictionaries with different value types
+    ensure_compatible_write(
+        DictionaryArray::new(
+            UInt8Array::from_iter_values(vec![0]),
+            Arc::new(StringArray::from_iter_values(vec!["parquet"])),
+        ),
+        DictionaryArray::new(
+            UInt8Array::from_iter_values(vec![0]),
+            Arc::new(LargeStringArray::from_iter_values(vec!["barquet"])),
+        ),
+        DictionaryArray::new(
+            UInt8Array::from_iter_values(vec![0, 1]),
+            Arc::new(StringArray::from_iter_values(vec!["parquet", "barquet"])),
+        ),
+    );
+
+    // check compatibility between a dictionary and a native array with a different type
+    ensure_compatible_write(
+        DictionaryArray::new(
+            UInt8Array::from_iter_values(vec![0]),
+            Arc::new(StringArray::from_iter_values(vec!["parquet"])),
+        ),
+        LargeStringArray::from_iter_values(vec!["barquet"]),
+        DictionaryArray::new(
+            UInt8Array::from_iter_values(vec![0, 1]),
+            Arc::new(StringArray::from_iter_values(vec!["parquet", "barquet"])),
+        ),
+    );
+
+    // check compatibility for string types
+
+    ensure_compatible_write(
+        StringArray::from_iter_values(vec!["parquet"]),
+        LargeStringArray::from_iter_values(vec!["barquet"]),
+        StringArray::from_iter_values(vec!["parquet", "barquet"]),
+    );
+
+    ensure_compatible_write(
+        LargeStringArray::from_iter_values(vec!["parquet"]),
+        StringArray::from_iter_values(vec!["barquet"]),
+        LargeStringArray::from_iter_values(vec!["parquet", "barquet"]),
+    );
+
+    ensure_compatible_write(
+        StringArray::from_iter_values(vec!["parquet"]),
+        StringViewArray::from_iter_values(vec!["barquet"]),
+        StringArray::from_iter_values(vec!["parquet", "barquet"]),
+    );
+
+    ensure_compatible_write(
+        StringViewArray::from_iter_values(vec!["parquet"]),
+        StringArray::from_iter_values(vec!["barquet"]),
+        StringViewArray::from_iter_values(vec!["parquet", "barquet"]),
+    );
+
+    ensure_compatible_write(
+        LargeStringArray::from_iter_values(vec!["parquet"]),
+        StringViewArray::from_iter_values(vec!["barquet"]),
+        LargeStringArray::from_iter_values(vec!["parquet", "barquet"]),
+    );
+
+    ensure_compatible_write(
+        StringViewArray::from_iter_values(vec!["parquet"]),
+        LargeStringArray::from_iter_values(vec!["barquet"]),
+        StringViewArray::from_iter_values(vec!["parquet", "barquet"]),
+    );
+
+    // check compatibility for binary types
+
+    ensure_compatible_write(
+        BinaryArray::from_iter_values(vec![b"parquet"]),
+        LargeBinaryArray::from_iter_values(vec![b"barquet"]),
+        BinaryArray::from_iter_values(vec![b"parquet", b"barquet"]),
+    );
+
+    ensure_compatible_write(
+        LargeBinaryArray::from_iter_values(vec![b"parquet"]),
+        BinaryArray::from_iter_values(vec![b"barquet"]),
+        LargeBinaryArray::from_iter_values(vec![b"parquet", b"barquet"]),
+    );
+
+    ensure_compatible_write(
+        BinaryArray::from_iter_values(vec![b"parquet"]),
+        BinaryViewArray::from_iter_values(vec![b"barquet"]),
+        BinaryArray::from_iter_values(vec![b"parquet", b"barquet"]),
+    );
+
+    ensure_compatible_write(
+        BinaryViewArray::from_iter_values(vec![b"parquet"]),
+        BinaryArray::from_iter_values(vec![b"barquet"]),
+        BinaryViewArray::from_iter_values(vec![b"parquet", b"barquet"]),
+    );
+
+    ensure_compatible_write(
+        BinaryViewArray::from_iter_values(vec![b"parquet"]),
+        LargeBinaryArray::from_iter_values(vec![b"barquet"]),
+        BinaryViewArray::from_iter_values(vec![b"parquet", b"barquet"]),
+    );
+
+    ensure_compatible_write(
+        LargeBinaryArray::from_iter_values(vec![b"parquet"]),
+        BinaryViewArray::from_iter_values(vec![b"barquet"]),
+        LargeBinaryArray::from_iter_values(vec![b"parquet", b"barquet"]),
+    );
+
+    // check compatibility for list types
+
+    let list_field_metadata = HashMap::from_iter(vec![(
+        PARQUET_FIELD_ID_META_KEY.to_string(),
+        "1".to_string(),
+    )]);
+    let list_field = Field::new_list_field(ArrowDataType::Int32, false);
+
+    let values1 = Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4]));
+    let offsets1 = OffsetBuffer::new(vec![0, 2, 5].into());
+
+    let values2 = Arc::new(Int32Array::from(vec![5, 6, 7, 8, 9]));
+    let offsets2 = OffsetBuffer::new(vec![0, 3, 5].into());
+
+    let values_expected = Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
+    let offsets_expected = OffsetBuffer::new(vec![0, 2, 5, 8, 10].into());
+
+    ensure_compatible_write(
+        // when the initial schema has the metadata ...
+        ListArray::try_new(
+            Arc::new(
+                list_field
+                    .clone()
+                    .with_metadata(list_field_metadata.clone()),
+            ),
+            offsets1,
+            values1,
+            None,
+        )
+        .unwrap(),
+        // ... and some intermediate schema doesn't have the metadata
+        ListArray::try_new(Arc::new(list_field.clone()), offsets2, values2, None).unwrap(),
+        // ... the write will still go through, and the resulting schema will inherit the initial metadata
+        ListArray::try_new(
+            Arc::new(
+                list_field
+                    .clone()
+                    .with_metadata(list_field_metadata.clone()),
+            ),
+            offsets_expected,
+            values_expected,
+            None,
+        )
+        .unwrap(),
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore)] // Takes too long
+fn test_list_of_struct_roundtrip() {
+    // define schema
+    let int_field = Field::new("a", ArrowDataType::Int32, true);
+    let int_field2 = Field::new("b", ArrowDataType::Int32, true);
+
+    let int_builder = Int32Builder::with_capacity(10);
+    let int_builder2 = Int32Builder::with_capacity(10);
+
+    let struct_builder = StructBuilder::new(
+        vec![int_field, int_field2],
+        vec![Box::new(int_builder), Box::new(int_builder2)],
+    );
+    let mut list_builder = ListBuilder::new(struct_builder);
+
+    // Construct the following array
+    // [{a: 1, b: 2}], [], null, [null, null], [{a: null, b: 3}], [{a: 2, b: null}]
+
+    // [{a: 1, b: 2}]
+    let values = list_builder.values();
+    values
+        .field_builder::<Int32Builder>(0)
+        .unwrap()
+        .append_value(1);
+    values
+        .field_builder::<Int32Builder>(1)
+        .unwrap()
+        .append_value(2);
+    values.append(true);
+    list_builder.append(true);
+
+    // []
+    list_builder.append(true);
+
+    // null
+    list_builder.append(false);
+
+    // [null, null]
+    let values = list_builder.values();
+    values
+        .field_builder::<Int32Builder>(0)
+        .unwrap()
+        .append_null();
+    values
+        .field_builder::<Int32Builder>(1)
+        .unwrap()
+        .append_null();
+    values.append(false);
+    values
+        .field_builder::<Int32Builder>(0)
+        .unwrap()
+        .append_null();
+    values
+        .field_builder::<Int32Builder>(1)
+        .unwrap()
+        .append_null();
+    values.append(false);
+    list_builder.append(true);
+
+    // [{a: null, b: 3}]
+    let values = list_builder.values();
+    values
+        .field_builder::<Int32Builder>(0)
+        .unwrap()
+        .append_null();
+    values
+        .field_builder::<Int32Builder>(1)
+        .unwrap()
+        .append_value(3);
+    values.append(true);
+    list_builder.append(true);
+
+    // [{a: 2, b: null}]
+    let values = list_builder.values();
+    values
+        .field_builder::<Int32Builder>(0)
+        .unwrap()
+        .append_value(2);
+    values
+        .field_builder::<Int32Builder>(1)
+        .unwrap()
+        .append_null();
+    values.append(true);
+    list_builder.append(true);
+
+    let array = Arc::new(list_builder.finish());
+
+    RoundTripTest::new(array).run();
+}
+
+#[test]
+// https://github.com/apache/arrow-rs/issues/6988
+fn test_roundtrip_empty_schema() {
+    // create empty record batch with empty schema
+    let empty_batch = RecordBatch::try_new_with_options(
+        Arc::new(Schema::empty()),
+        vec![],
+        &RecordBatchOptions::default().with_row_count(Some(0)),
+    )
+    .unwrap();
+
+    // write to parquet
+    let mut parquet_bytes: Vec<u8> = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut parquet_bytes, empty_batch.schema(), None).unwrap();
+    writer.write(&empty_batch).unwrap();
+    writer.close().unwrap();
+
+    // read from parquet
+    let bytes = Bytes::from(parquet_bytes);
+    let reader = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+    assert_eq!(reader.schema(), &empty_batch.schema());
+    let batches: Vec<_> = reader
+        .build()
+        .unwrap()
+        .collect::<ArrowResult<Vec<_>>>()
+        .unwrap();
+    assert_eq!(batches.len(), 0);
+}
+
+#[test]
+fn test_arrow_writer_nullable() {
+    let batch_schema = Schema::new(vec![Field::new("int32", ArrowDataType::Int32, false)]);
+    let file_schema = Schema::new(vec![Field::new("int32", ArrowDataType::Int32, true)]);
+    let file_schema = Arc::new(file_schema);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(batch_schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+    )
+    .unwrap();
+
+    let mut buf = Vec::with_capacity(1024);
+    let mut writer = ArrowWriter::try_new(&mut buf, file_schema.clone(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let mut read = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024).unwrap();
+    let back = read.next().unwrap().unwrap();
+    assert_eq!(back.schema(), file_schema);
+    assert_ne!(back.schema(), batch.schema());
+    assert_eq!(back.column(0).as_ref(), batch.column(0).as_ref());
 }
 
 #[test]

@@ -53,13 +53,12 @@ fn get_expected_batches(
                     if let Some(last_start) = last_start.take() {
                         expected_batches.push(column.slice(last_start, row_offset - last_start))
                     }
-                    row_offset += to_read
                 }
                 false => {
                     last_start.get_or_insert(row_offset);
-                    row_offset += to_read
                 }
             }
+            row_offset += to_read;
         }
     }
 

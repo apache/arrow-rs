@@ -113,6 +113,23 @@ impl FixedShapeTensor {
         self.metadata.list_size()
     }
 
+    /// Returns the physical shape of the contained tensors.
+    ///
+    /// [`Self::dimensions`] and [`Self::list_size`] do not identify this
+    /// shape. `[2, 6]` and `[3, 4]` are both 2-dimensional and both have
+    /// 12 elements.
+    ///
+    /// ```
+    /// # use arrow_schema::extension::FixedShapeTensor;
+    /// # use arrow_schema::DataType;
+    /// let tensor = FixedShapeTensor::try_new(DataType::Float32, [2, 6], None, None).unwrap();
+    /// assert_eq!(tensor.shape(), &[2, 6]);
+    /// assert_eq!(tensor.list_size(), 12);
+    /// ```
+    pub fn shape(&self) -> &[usize] {
+        self.metadata.shape()
+    }
+
     /// Returns the number of dimensions in this fixed shape tensor.
     pub fn dimensions(&self) -> usize {
         self.metadata.dimensions()
@@ -128,6 +145,30 @@ impl FixedShapeTensor {
     /// dimensions, if set.
     pub fn permutations(&self) -> Option<&[usize]> {
         self.metadata.permutations()
+    }
+
+    /// Returns the logical shape.
+    ///
+    /// Logical dimension `i` has the size of physical dimension
+    /// `permutations[i]`. Without a permutation, this is the physical shape.
+    ///
+    /// Physical shape `[100, 200, 500]` and permutation `[2, 0, 1]` have
+    /// logical shape `[500, 100, 200]`.
+    ///
+    /// ```
+    /// # use arrow_schema::extension::FixedShapeTensor;
+    /// # use arrow_schema::DataType;
+    /// let tensor = FixedShapeTensor::try_new(
+    ///     DataType::Float32,
+    ///     [100, 200, 500],
+    ///     None,
+    ///     Some(vec![2, 0, 1]),
+    /// )
+    /// .unwrap();
+    /// assert_eq!(tensor.logical_shape(), vec![500, 100, 200]);
+    /// ```
+    pub fn logical_shape(&self) -> Vec<usize> {
+        self.metadata.logical_shape()
     }
 }
 
@@ -334,6 +375,11 @@ impl FixedShapeTensorMetadata {
         })
     }
 
+    /// Returns the physical shape of the contained tensors.
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
     /// Returns the product of all the elements in tensor shape.
     pub fn list_size(&self) -> usize {
         self.shape.iter().product()
@@ -354,6 +400,16 @@ impl FixedShapeTensorMetadata {
     /// dimensions, if set.
     pub fn permutations(&self) -> Option<&[usize]> {
         self.permutations.as_ref().map(AsRef::as_ref)
+    }
+
+    /// Returns the logical shape.
+    ///
+    /// See [`FixedShapeTensor::logical_shape`].
+    pub fn logical_shape(&self) -> Vec<usize> {
+        match &self.permutations {
+            Some(permutation) => permutation.iter().map(|&index| self.shape[index]).collect(),
+            None => self.shape.clone(),
+        }
     }
 }
 
@@ -438,7 +494,7 @@ mod tests {
     use crate::extension::CanonicalExtensionType;
     use crate::{
         Field,
-        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
+        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType},
     };
 
     use super::*;
@@ -462,11 +518,46 @@ mod tests {
             field.try_extension_type::<FixedShapeTensor>()?,
             fixed_shape_tensor
         );
+        assert_eq!(fixed_shape_tensor.shape(), &[100, 200, 500]);
+        assert_eq!(fixed_shape_tensor.metadata().shape(), &[100, 200, 500]);
         #[cfg(feature = "canonical_extension_types")]
         assert_eq!(
             field.try_canonical_extension_type()?,
             CanonicalExtensionType::FixedShapeTensor(fixed_shape_tensor)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn logical_shape_follows_permutation() -> Result<(), ArrowError> {
+        let physical = FixedShapeTensor::try_new(DataType::Float32, [100, 200, 500], None, None)?;
+        assert_eq!(physical.logical_shape(), vec![100, 200, 500]);
+        assert_eq!(physical.metadata().logical_shape(), vec![100, 200, 500]);
+
+        let permuted = FixedShapeTensor::try_new(
+            DataType::Float32,
+            [100, 200, 500],
+            Some(vec!["C".to_owned(), "H".to_owned(), "W".to_owned()]),
+            Some(vec![2, 0, 1]),
+        )?;
+        assert_eq!(permuted.logical_shape(), vec![500, 100, 200]);
+        assert_eq!(permuted.metadata().logical_shape(), vec![500, 100, 200]);
+
+        let identity =
+            FixedShapeTensor::try_new(DataType::Float32, [2, 6], None, Some(vec![0, 1]))?;
+        assert_eq!(identity.logical_shape(), vec![2, 6]);
+        Ok(())
+    }
+
+    #[test]
+    fn shape_distinguishes_equal_sizes() -> Result<(), ArrowError> {
+        let wide = FixedShapeTensor::try_new(DataType::Float32, [2, 6], None, None)?;
+        let tall = FixedShapeTensor::try_new(DataType::Float32, [3, 4], None, None)?;
+        assert_eq!(wide.dimensions(), tall.dimensions());
+        assert_eq!(wide.list_size(), tall.list_size());
+        assert_eq!(wide.shape(), &[2, 6]);
+        assert_eq!(tall.shape(), &[3, 4]);
+        assert_ne!(wide.shape(), tall.shape());
         Ok(())
     }
 

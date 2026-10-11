@@ -19,7 +19,6 @@
 name = "arrow-avro"
 version = { workspace = true }
 description = "Support for parsing Avro format into the Arrow format"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }

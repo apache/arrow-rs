@@ -44,12 +44,13 @@ mod ranges;
 mod selector;
 
 use algebra::{
-    and_then_mask, and_then_row_selections, and_then_selectors_with_mask, intersect_masks,
-    intersect_row_selections, union_masks, union_row_selections,
+    and_then_mask, and_then_row_selections, and_then_selectors_with_mask, combine_mixed_selection,
+    intersect_masks, intersect_row_selections, union_masks, union_row_selections,
 };
 pub use boolean::MaskRunIter;
 use boolean::{
-    MaskSelection, limit_mask, mask_has_at_least_runs, offset_mask, split_off_mask, trim_mask,
+    MaskSelection, boolean_mask_from_selectors, limit_mask, mask_has_at_least_runs, offset_mask,
+    split_off_mask, trim_mask,
 };
 pub(crate) use cursor::{LoadedRowRanges, MaskCursor, RowSelectionStrategy};
 pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
@@ -233,9 +234,48 @@ impl RowSelection {
         }
     }
 
+    /// Consume this selection and return a mask-backed selection.
+    ///
+    /// If this selection is already mask-backed, it is returned unchanged.
+    /// Otherwise, its selectors are converted to a bitmap, preserving all
+    /// selected and skipped rows, including trailing skips.
+    ///
+    /// This can be used to keep the result of [`Self::intersection`] or
+    /// [`Self::union`] mask-backed when the other selection is mask-backed.
+    ///
+    /// # Example
+    /// ```
+    /// use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+    ///
+    /// let selection = RowSelection::from(vec![
+    ///     RowSelector::skip(2),
+    ///     RowSelector::select(3),
+    ///     RowSelector::skip(1),
+    /// ]).force_mask();
+    ///
+    /// assert!(selection.as_mask().is_some());
+    /// assert_eq!(selection.total_row_count(), 6);
+    /// assert_eq!(selection.row_count(), 3);
+    /// ```
+    pub fn force_mask(self) -> Self {
+        if self.as_mask().is_some() {
+            self
+        } else {
+            Self::from_boolean_buffer(self.into_boolean_buffer())
+        }
+    }
+
     /// Consume the selection and return its internal storage.
     pub(crate) fn into_inner(self) -> RowSelectionInner {
         self.inner
+    }
+
+    /// Consume this selection and return its bitmap representation.
+    pub(crate) fn into_boolean_buffer(self) -> BooleanBuffer {
+        match self.inner {
+            RowSelectionInner::Mask(mask) => mask.into_mask(),
+            RowSelectionInner::Selectors(selectors) => boolean_mask_from_selectors(&selectors),
+        }
     }
 
     /// Choose the automatic materialisation strategy without converting between
@@ -507,6 +547,10 @@ impl RowSelection {
     }
 
     /// Compute the intersection of two [`RowSelection`]
+    ///
+    /// Nonempty mixed inputs return a mask-backed result.
+    /// If only one input is empty, the result keeps the other's representation.
+    ///
     /// For example:
     /// self:      NNYYYYNNYYNYN
     /// other:     NYNNNNNNY
@@ -520,16 +564,18 @@ impl RowSelection {
             (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
                 intersect_row_selections(l, r)
             }
-            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                intersect_row_selections(l, &r.borrowed_selectors())
-            }
-            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                intersect_row_selections(&l.borrowed_selectors(), r)
+            (RowSelectionInner::Selectors(selectors), RowSelectionInner::Mask(mask))
+            | (RowSelectionInner::Mask(mask), RowSelectionInner::Selectors(selectors)) => {
+                combine_mixed_selection(selectors, mask, intersect_masks)
             }
         }
     }
 
     /// Compute the union of two [`RowSelection`]
+    ///
+    /// Nonempty mixed inputs return a mask-backed result.
+    /// If only one input is empty, the result keeps the other's representation.
+    ///
     /// For example:
     /// self:      NNYYYYNNYYNYN
     /// other:     NYNNNNNNN
@@ -543,11 +589,9 @@ impl RowSelection {
             (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
                 union_row_selections(l, r)
             }
-            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                union_row_selections(l, &r.borrowed_selectors())
-            }
-            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                union_row_selections(&l.borrowed_selectors(), r)
+            (RowSelectionInner::Selectors(selectors), RowSelectionInner::Mask(mask))
+            | (RowSelectionInner::Mask(mask), RowSelectionInner::Selectors(selectors)) => {
+                combine_mixed_selection(selectors, mask, union_masks)
             }
         }
     }
@@ -1120,6 +1164,73 @@ mod tests {
         }
 
         filters
+    }
+
+    #[test]
+    fn test_force_mask_from_selectors() {
+        let cases = [
+            (vec![], vec![]),
+            (vec![RowSelector::select(9)], vec![true; 9]),
+            (vec![RowSelector::skip(9)], vec![false; 9]),
+            (
+                vec![
+                    RowSelector::skip(3),
+                    RowSelector::select(7),
+                    RowSelector::skip(2),
+                    RowSelector::select(1),
+                    RowSelector::skip(4),
+                ],
+                vec![
+                    false, false, false, true, true, true, true, true, true, true, false, false,
+                    true, false, false, false, false,
+                ],
+            ),
+        ];
+
+        for (selectors, bits) in cases {
+            let original = RowSelection::from(selectors);
+            let selection = original.clone().force_mask();
+            assert_eq!(selection.as_mask().unwrap(), &BooleanBuffer::from(bits));
+            assert_eq!(selection.total_row_count(), original.total_row_count());
+            assert_eq!(selection.row_count(), original.row_count());
+            assert_eq!(selection.skipped_row_count(), original.skipped_row_count());
+            assert_eq!(selection, original);
+        }
+    }
+
+    #[test]
+    fn test_force_mask_preserves_existing_mask() {
+        let mask = BooleanBuffer::from(vec![
+            false, true, false, true, true, false, true, false, false, true, false,
+        ])
+        .slice(3, 7);
+        let selection = RowSelection::from_boolean_buffer(mask.clone()).force_mask();
+        assert!(selection.as_mask().unwrap().ptr_eq(&mask));
+        assert_eq!(selection.row_count(), 4);
+
+        // Repeated conversion also preserves the buffer and its bit offset.
+        let selection = selection.force_mask();
+        assert!(selection.as_mask().unwrap().ptr_eq(&mask));
+        assert_eq!(selection.total_row_count(), 7);
+    }
+
+    #[test]
+    fn test_force_mask_preserves_bitmap_intersection() {
+        let existing = RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            true, false, true, true, false, true, true, false, true,
+        ]));
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(2),
+            RowSelector::select(5),
+            RowSelector::skip(2),
+        ]);
+        let expected = existing.intersection(&selection);
+        let actual = existing.intersection(&selection.force_mask());
+
+        assert!(actual.as_mask().is_some());
+        assert_eq!(actual, expected);
+        assert_eq!(actual.total_row_count(), 9);
+        assert_eq!(actual.row_count(), 4);
     }
 
     #[test]
