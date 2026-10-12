@@ -34,8 +34,13 @@ use rand::{RngExt, SeedableRng};
 const TOTAL_ROWS: usize = 1 << 20;
 const BATCH_SIZE: usize = 1 << 10;
 const BASE_SEED: u64 = 0xA55AA55A;
+// 4 exercises fragmented selections; 28, 32, and 40 cover average run lengths
+// below, at, and above the default Auto threshold of 32.
 const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 28, 32, 40];
+// 2, 8, and 32 exercise narrow, medium, and wide projections.
 const COLUMN_WIDTHS: &[usize] = &[2, 8, 32];
+// 8 exercises inline Utf8View values, 16 crosses the 12-byte inline limit,
+// and 256 exercises longer strings.
 const UTF8VIEW_LENS: &[usize] = &[8, 16, 256];
 const BENCH_MODES: &[BenchMode] = &[BenchMode::Selector, BenchMode::Mask, BenchMode::Auto];
 const BACKINGS: &[Backing] = &[Backing::Selectors, Backing::Mask];
