@@ -1136,7 +1136,6 @@ where
                 ),
             };
 
-            // On overflow, `mul_checked` would build an `ArrowError` for the fallback to discard
             try_op!(
                 l,
                 l_s,
