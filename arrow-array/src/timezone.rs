@@ -146,7 +146,8 @@ mod private {
     /// use. The table's keys are fixed when it is built, so its memory is bounded by the database
     /// and lookups take no lock.
     fn named_tz(name: &str) -> Result<&'static NamedTz, ArrowError> {
-        static SLOTS: OnceLock<HashMap<Box<str>, OnceLock<Option<NamedTz>>>> = OnceLock::new();
+        type Slots = HashMap<Box<str>, OnceLock<Option<NamedTz>>, ahash::RandomState>;
+        static SLOTS: OnceLock<Slots> = OnceLock::new();
         let slots = SLOTS.get_or_init(|| {
             bundled_db()
                 .available()
