@@ -54,6 +54,7 @@ mod parquet_testing;
 mod partial_offset_index;
 #[cfg(feature = "async")]
 mod predicate_cache;
+mod push_decoder_equivalence;
 mod row_filter;
 mod statistics;
 
