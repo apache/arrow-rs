@@ -237,8 +237,7 @@ where
 
     let f_fallible = move |x: I::Native| {
         // div is >= 10 and so this cannot overflow
-        let d = x.div_wrapping(div);
-        let r = x.mod_wrapping(div);
+        let (d, r) = x.div_rem_wrapping(div);
 
         // Round result
         let adjusted = match x >= I::Native::ZERO {
