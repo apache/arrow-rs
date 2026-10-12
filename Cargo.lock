@@ -229,6 +229,7 @@ dependencies = [
  "half",
  "hashbrown 0.17.1",
  "jiff",
+ "jiff-tzdb",
  "libc",
  "num-complex",
  "num-integer",

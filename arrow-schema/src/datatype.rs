@@ -217,7 +217,8 @@ pub enum DataType {
     ///
     /// When feature `jiff` is enabled, named timezones are instead resolved with [jiff](https://docs.rs/jiff/latest/jiff/),
     /// which applies a zone's daylight saving rules to any instant rather than only up to the last
-    /// precomputed transition.
+    /// precomputed transition. It takes precedence over `chrono-tz`, so enabling it for any crate
+    /// in a build applies to the whole build.
     Timestamp(TimeUnit, Option<Arc<str>>),
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days.
