@@ -22,6 +22,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::errors::ParquetError;
 use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use crate::file::metrics::DecompressionMetrics;
 use crate::file::page_index::offset_index::PageLocation;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use bytes::{Buf, Bytes};
@@ -37,6 +38,8 @@ pub(crate) struct InMemoryRowGroup<'a> {
     pub(crate) row_count: usize,
     pub(crate) row_group_idx: usize,
     pub(crate) metadata: &'a ParquetMetaData,
+    /// Handed to every column's page reader, so one scan totals across columns
+    pub(crate) decompression: DecompressionMetrics,
 }
 
 /// What ranges to fetch for the columns in this row group
@@ -50,6 +53,12 @@ pub(crate) struct FetchRanges {
 }
 
 impl InMemoryRowGroup<'_> {
+    /// Measures decompression in the page readers this row group hands out.
+    pub(crate) fn with_decompression_metrics(mut self, metrics: DecompressionMetrics) -> Self {
+        self.decompression = metrics;
+        self
+    }
+
     /// Returns the byte ranges to fetch for the columns specified in
     /// `projection` and `selection`.
     ///
@@ -318,7 +327,8 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     column_chunk_metadata,
                     self.row_count,
                     page_locations,
-                )?;
+                )?
+                .with_decompression_metrics(self.decompression.clone());
                 let page_reader = page_reader.add_crypto_context(
                     self.row_group_idx,
                     i,

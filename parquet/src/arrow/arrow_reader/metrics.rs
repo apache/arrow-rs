@@ -19,6 +19,9 @@
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use std::time::Duration;
+
+use crate::file::metrics::DecompressionMetrics;
 
 /// This enum represents the state of Arrow reader metrics collection.
 ///
@@ -46,6 +49,67 @@ impl ArrowReaderMetrics {
     /// Creates a new instance of [`ArrowReaderMetrics::Enabled`]
     pub fn enabled() -> Self {
         Self::Enabled(Arc::new(ArrowReaderMetricsInner::new()))
+    }
+
+    /// The decompression counters.
+    ///
+    /// Read the four cells of the page kind by phase matrix through this, for
+    /// example the dictionary time paid while skipping, which is work done for
+    /// rows that were never returned. The totals are also forwarded directly by
+    /// [`Self::dictionary_decompress_time`] and its siblings.
+    ///
+    /// Also the handle to give to a page reader built by hand, via
+    /// [`SerializedPageReader::with_decompression_metrics`]. Disabled when
+    /// these metrics are, so nothing downstream reads a clock.
+    ///
+    /// [`SerializedPageReader::with_decompression_metrics`]:
+    ///     crate::file::serialized_reader::SerializedPageReader::with_decompression_metrics
+    pub fn decompression(&self) -> DecompressionMetrics {
+        match self {
+            Self::Disabled => DecompressionMetrics::disabled(),
+            Self::Enabled(inner) => inner.decompression.clone(),
+        }
+    }
+
+    /// Time spent decompressing dictionary pages, across every column read.
+    ///
+    /// A dictionary page is decompressed once per column chunk, however few of
+    /// its values are later decoded, so this is the cost a selective read pays
+    /// before it looks at anything. Decompression happens inside decoding and
+    /// inside skipping, so this is a share of the scan's time rather than a
+    /// stage to add beside it.
+    ///
+    /// Returns None if metrics are disabled.
+    pub fn dictionary_decompress_time(&self) -> Option<Duration> {
+        self.decompression_view()?.dictionary_decompress_time()
+    }
+
+    /// Time spent decompressing data pages, across every column read.
+    ///
+    /// Returns None if metrics are disabled.
+    pub fn data_decompress_time(&self) -> Option<Duration> {
+        self.decompression_view()?.data_decompress_time()
+    }
+
+    /// Uncompressed bytes produced from dictionary pages.
+    ///
+    /// Returns None if metrics are disabled.
+    pub fn dictionary_decompressed_bytes(&self) -> Option<u64> {
+        self.decompression_view()?.dictionary_decompressed_bytes()
+    }
+
+    /// Uncompressed bytes produced from data pages.
+    ///
+    /// Returns None if metrics are disabled.
+    pub fn data_decompressed_bytes(&self) -> Option<u64> {
+        self.decompression_view()?.data_decompressed_bytes()
+    }
+
+    fn decompression_view(&self) -> Option<&DecompressionMetrics> {
+        match self {
+            Self::Disabled => None,
+            Self::Enabled(inner) => Some(&inner.decompression),
+        }
     }
 
     /// Predicate Cache: number of records read directly from the inner reader
@@ -122,6 +186,8 @@ pub struct ArrowReaderMetricsInner {
     records_read_from_inner: AtomicUsize,
     /// Total number of records read from previously cached pages
     records_read_from_cache: AtomicUsize,
+    /// Decompression timings, shared with every page reader of this scan
+    decompression: DecompressionMetrics,
 }
 
 impl ArrowReaderMetricsInner {
@@ -130,6 +196,7 @@ impl ArrowReaderMetricsInner {
         Self {
             records_read_from_inner: AtomicUsize::new(0),
             records_read_from_cache: AtomicUsize::new(0),
+            decompression: DecompressionMetrics::enabled(),
         }
     }
 }

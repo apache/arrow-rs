@@ -27,6 +27,7 @@ use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::thrift::PageHeader;
+use crate::file::metrics::{DecompressionMetrics, DecompressionPhase, PageKind};
 use crate::file::page_index::offset_index::PageLocation;
 use crate::file::statistics;
 use crate::file::{
@@ -402,6 +403,8 @@ pub(crate) fn decode_page(
     buffer: Bytes,
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
+    metrics: &DecompressionMetrics,
+    phase: DecompressionPhase,
 ) -> Result<Page> {
     // Verify the 32-bit CRC checksum of the page
     #[cfg(feature = "crc")]
@@ -460,7 +463,28 @@ pub(crate) fn decode_page(
             // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
             if decompressed_size > 0 {
                 let compressed = &buffer[offset..];
-                decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
+                // Reading a clock per page is not free, so only do it when the
+                // caller asked for these numbers. Disabled is one enum test.
+                if metrics.is_enabled() {
+                    let started = std::time::Instant::now();
+                    decompressor.decompress(
+                        compressed,
+                        &mut decompressed,
+                        Some(decompressed_size),
+                    )?;
+                    let kind = if page_header.r#type == PageType::DICTIONARY_PAGE {
+                        PageKind::Dictionary
+                    } else {
+                        PageKind::Data
+                    };
+                    metrics.record(kind, phase, started.elapsed(), decompressed_size);
+                } else {
+                    decompressor.decompress(
+                        compressed,
+                        &mut decompressed,
+                        Some(decompressed_size),
+                    )?;
+                }
             }
 
             if decompressed.len() != uncompressed_page_size {
@@ -585,9 +609,25 @@ pub struct SerializedPageReader<R: ChunkReader> {
     state: SerializedPageReaderState,
 
     context: SerializedPageReaderContext,
+
+    /// Where decompression timings go. Disabled unless the caller asked.
+    decompression_metrics: DecompressionMetrics,
+
+    /// Whether the pages being decompressed now are read or skipped. Set by
+    /// the column reader, which is the layer that knows.
+    decompression_phase: DecompressionPhase,
 }
 
 impl<R: ChunkReader> SerializedPageReader<R> {
+    /// Collect decompression timings into `metrics`.
+    ///
+    /// Off by default: without this call the reader reads no clock while
+    /// decompressing. Pass a clone of one handle to every column's page reader
+    /// to total a whole read.
+    pub fn with_decompression_metrics(mut self, metrics: DecompressionMetrics) -> Self {
+        self.decompression_metrics = metrics;
+        self
+    }
     /// Creates a new serialized page reader from a chunk reader and metadata
     pub fn new(
         reader: Arc<R>,
@@ -687,6 +727,8 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             state,
             physical_type: meta.column_type(),
             context,
+            decompression_metrics: DecompressionMetrics::disabled(),
+            decompression_phase: DecompressionPhase::Read,
         })
     }
 
@@ -934,6 +976,10 @@ pub(crate) fn verify_page_size(
 }
 
 impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
+    fn set_decompression_phase(&mut self, phase: DecompressionPhase) {
+        self.decompression_phase = phase;
+    }
+
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         loop {
             let page = match &mut self.state {
@@ -988,6 +1034,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         buffer,
                         self.physical_type,
                         self.decompressor.as_mut(),
+                        &self.decompression_metrics,
+                        self.decompression_phase,
                     )?;
                     if page.is_data_page() {
                         *page_index += 1;
@@ -1032,6 +1080,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         bytes,
                         self.physical_type,
                         self.decompressor.as_mut(),
+                        &self.decompression_metrics,
+                        self.decompression_phase,
                     )?
                 }
             };
@@ -1234,7 +1284,15 @@ mod tests {
         };
 
         let buffer = Bytes::new();
-        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        let err = decode_page(
+            page_header,
+            buffer,
+            Type::INT32,
+            None,
+            &DecompressionMetrics::disabled(),
+            DecompressionPhase::Read,
+        )
+        .unwrap_err();
         assert!(
             err.to_string()
                 .contains("DataPage v2 header contains implausible values")
@@ -1254,7 +1312,15 @@ mod tests {
             data_page_header_v2: None,
         };
         let buffer = Bytes::new();
-        let err = decode_page(page_header.clone(), buffer.clone(), Type::INT32, None).unwrap_err();
+        let err = decode_page(
+            page_header.clone(),
+            buffer.clone(),
+            Type::INT32,
+            None,
+            &DecompressionMetrics::disabled(),
+            DecompressionPhase::Read,
+        )
+        .unwrap_err();
         assert_eq!(
             err.to_string(),
             "Parquet error: Page type INDEX_PAGE is not supported"
@@ -1270,7 +1336,15 @@ mod tests {
             is_compressed: None,
             statistics: None,
         });
-        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        let err = decode_page(
+            page_header,
+            buffer,
+            Type::INT32,
+            None,
+            &DecompressionMetrics::disabled(),
+            DecompressionPhase::Read,
+        )
+        .unwrap_err();
         assert!(
             err.to_string()
                 .contains("DataPage v2 header contains implausible values")

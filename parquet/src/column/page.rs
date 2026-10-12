@@ -24,6 +24,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::thrift::{
     DataPageHeader, DataPageHeaderV2, DictionaryPageHeader, PageHeader,
 };
+use crate::file::metrics::DecompressionPhase;
 use crate::file::statistics::{Statistics, page_stats_to_thrift};
 
 /// Parquet Page definition.
@@ -403,6 +404,13 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// Skips reading the next page, returns an error if no
     /// column index information
     fn skip_next_page(&mut self) -> Result<()>;
+
+    /// Tell the reader whether the pages it decompresses next are being read
+    /// or skipped, so decompression cost can be attributed to the right one.
+    ///
+    /// Default is a no-op: an implementation that collects no metrics, and
+    /// every implementation outside this crate, needs no change.
+    fn set_decompression_phase(&mut self, _phase: DecompressionPhase) {}
 
     /// Returns `true` if the next page can be assumed to contain the start of a new record
     ///
