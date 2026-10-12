@@ -464,7 +464,7 @@ impl ByteArrayInterner {
         let len = value.len();
 
         self.page.reserve(4 + value.len());
-        self.page.extend_from_slice(&len.to_le_bytes());
+        self.page.extend_from_slice(&(len as u32).to_le_bytes());
         let offset = self.page.len() as u64;
         self.page.extend_from_slice(value);
         self.num_unique_values += 1;
@@ -551,7 +551,7 @@ impl DictEncoder {
     }
 
     fn bit_width(&self) -> u8 {
-        let length = self.interner.page.len();
+        let length = self.interner.num_unique_values;
         num_required_bits(length.saturating_sub(1) as u64)
     }
 
