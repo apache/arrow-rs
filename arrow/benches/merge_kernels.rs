@@ -22,6 +22,7 @@ use rand::prelude::StdRng;
 use rand::{RngExt, SeedableRng};
 use std::hint;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow::array::*;
 use arrow::datatypes::*;
@@ -133,6 +134,27 @@ where
     }
 }
 
+/// A mask whose set bits come in runs averaging `run` bits, with the unset
+/// runs sized to give `true_density`: a CASE over a clustered or sorted
+/// column, where the output is long copies from either side.
+fn create_clustered_array(len: usize, true_density: f64, run: f64, seed: u64) -> BooleanArray {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let leave_set = 1.0 / run;
+    let leave_unset = true_density / (run * (1.0 - true_density));
+    let mut set = rng.random_bool(true_density);
+    (0..len)
+        .map(|_| {
+            let bit = set;
+            set = if set {
+                !rng.random_bool(leave_set)
+            } else {
+                rng.random_bool(leave_unset)
+            };
+            Some(bit)
+        })
+        .collect()
+}
+
 fn mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
     vec![
         ("all_true", create_boolean_array(len, 0.0, 1.0)),
@@ -146,11 +168,39 @@ fn mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
     ]
 }
 
-fn bench_merge_on_input_generator(c: &mut Criterion, input_generator: &impl InputGenerator) {
+fn run_mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
+    [
+        ("runs_of_64_50pct_true", 0.5, 64.0),
+        ("runs_of_64_10pct_true", 0.1, 64.0),
+        ("runs_of_512_50pct_true", 0.5, 512.0),
+        ("runs_of_512_10pct_true", 0.1, 512.0),
+    ]
+    .into_iter()
+    .map(|(name, density, run)| (name, create_clustered_array(len, density, run, 7)))
+    .collect()
+}
+
+/// Which input combinations to run for a type.
+#[derive(PartialEq)]
+enum Scenarios {
+    All,
+    /// Only an array against a scalar, the CASE WHEN ... THEN expr ELSE literal shape.
+    ScalarSide,
+}
+
+fn bench_merge_on_input_generator(
+    c: &mut Criterion,
+    input_generator: &impl InputGenerator,
+    scenarios: Scenarios,
+) {
     const ARRAY_LEN: usize = 8192;
 
     let mut group =
         c.benchmark_group(format!("merge_{ARRAY_LEN}_from_{}", input_generator.name()).as_str());
+    // One merge of 8192 rows takes microseconds, so the default 3 s warm up
+    // and 5 s of samples per case would make the whole run take over an hour.
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(1));
 
     let null_scalar = input_generator.generate_scalar_with_null_value();
     let [non_null_scalar_1, non_null_scalar_2]: [_; 2] = input_generator
@@ -161,8 +211,54 @@ fn bench_merge_on_input_generator(c: &mut Criterion, input_generator: &impl Inpu
     // For simplicity, we generate arrays with length ARRAY_LEN. Not all input values will be used.
     let array_1_10pct_nulls = input_generator.generate_array(42, ARRAY_LEN, 0.1);
     let array_2_10pct_nulls = input_generator.generate_array(18, ARRAY_LEN, 0.1);
+    let array_no_nulls = input_generator.generate_array(42, ARRAY_LEN, 0.0);
 
     let masks = mask_cases(ARRAY_LEN);
+    // Runs only matter where one side is a scalar: they decide between
+    // copying runs of the array and writing it row by row.
+    let scalar_side_masks: Vec<_> = masks
+        .iter()
+        .cloned()
+        .chain(run_mask_cases(ARRAY_LEN))
+        .collect();
+
+    bench_merge_input_on_all_masks(
+        "array_vs_non_null_scalar",
+        &mut group,
+        &scalar_side_masks,
+        &array_1_10pct_nulls,
+        &Scalar::new(non_null_scalar_1.clone()),
+    );
+
+    bench_merge_input_on_all_masks(
+        "array_no_nulls_vs_non_null_scalar",
+        &mut group,
+        &scalar_side_masks,
+        &array_no_nulls,
+        &Scalar::new(non_null_scalar_1.clone()),
+    );
+
+    // CASE WHEN ... THEN array END: the ELSE side is NULL.
+    bench_merge_input_on_all_masks(
+        "array_vs_null_scalar",
+        &mut group,
+        &scalar_side_masks,
+        &array_1_10pct_nulls,
+        &Scalar::new(null_scalar.clone()),
+    );
+
+    bench_merge_input_on_all_masks(
+        "non_null_scalar_vs_array",
+        &mut group,
+        &scalar_side_masks,
+        &Scalar::new(non_null_scalar_1.clone()),
+        &array_1_10pct_nulls,
+    );
+
+    if scenarios == Scenarios::ScalarSide {
+        group.finish();
+        return;
+    }
 
     // Benchmarks for different scalar combinations
     for (description, truthy, falsy) in &[
@@ -182,22 +278,6 @@ fn bench_merge_on_input_generator(c: &mut Criterion, input_generator: &impl Inpu
             &Scalar::new(falsy),
         );
     }
-
-    bench_merge_input_on_all_masks(
-        "array_vs_non_null_scalar",
-        &mut group,
-        &masks,
-        &array_1_10pct_nulls,
-        &Scalar::new(non_null_scalar_1.clone()),
-    );
-
-    bench_merge_input_on_all_masks(
-        "non_null_scalar_vs_array",
-        &mut group,
-        &masks,
-        &Scalar::new(non_null_scalar_1.clone()),
-        &array_1_10pct_nulls,
-    );
 
     bench_merge_input_on_all_masks(
         "array_vs_array",
@@ -233,6 +313,16 @@ fn add_benchmark(c: &mut Criterion) {
             description: "i32".to_string(),
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
+    );
+
+    bench_merge_on_input_generator(
+        c,
+        &GeneratePrimitive::<Decimal128Type> {
+            description: "decimal128".to_string(),
+            _marker: std::marker::PhantomData,
+        },
+        Scenarios::ScalarSide,
     );
 
     // Short strings
@@ -243,6 +333,7 @@ fn add_benchmark(c: &mut Criterion) {
             range_length: 3..10,
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
     );
 
     // Long strings
@@ -253,6 +344,7 @@ fn add_benchmark(c: &mut Criterion) {
             range_length: 100..400,
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
     );
 
     // Short Bytes
@@ -263,6 +355,7 @@ fn add_benchmark(c: &mut Criterion) {
             range_length: 3..10,
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
     );
 
     // Long Bytes
@@ -273,6 +366,7 @@ fn add_benchmark(c: &mut Criterion) {
             range_length: 100..400,
             _marker: std::marker::PhantomData,
         },
+        Scenarios::All,
     );
 }
 
