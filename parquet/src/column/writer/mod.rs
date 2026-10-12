@@ -53,6 +53,7 @@ use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 
 mod byte_budget_chunker;
 pub(crate) mod encoder;
+pub(crate) mod min_max;
 
 use byte_budget_chunker::{ByteBudgetChunker, SubBatchStrategy};
 
