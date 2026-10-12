@@ -30,11 +30,19 @@ use std::hint::black_box;
 
 const ZONES: [&str; 4] = ["UTC", "America/Los_Angeles", "Europe/London", "Asia/Tokyo"];
 
-/// Instant ranges in microseconds. Fat TZif data, and so jiff's transition tables, stop at 2038;
-/// chrono-tz precomputes transitions to 2099. Later instants take jiff's POSIX rule path.
-const RANGES: [(&str, i64, i64); 2] = [
-    ("1970_to_2038", 0, 2_145_916_800_000_000),
-    ("2038_to_2100", 2_145_916_800_000_000, 4_102_444_800_000_000),
+/// Microseconds since the epoch at the start of 2038, 2100 and 2300
+const Y2038: i64 = 2_145_916_800_000_000;
+const Y2100: i64 = 4_102_444_800_000_000;
+const Y2300: i64 = 10_413_792_000_000_000;
+
+/// Instant ranges in microseconds. Up to 2038 both read a transition table, as fat TZif data, and
+/// so jiff's tables, stop there. From 2038 to 2100, jiff evaluates the zone's POSIX TZ rule while
+/// chrono-tz still reads its table, which runs to 2099, and both agree. After 2100, chrono-tz
+/// keeps its last offset, standard time for these zones, where jiff still applies daylight saving.
+const RANGES: [(&str, i64, i64); 3] = [
+    ("1970_to_2038", 0, Y2038),
+    ("2038_to_2100", Y2038, Y2100),
+    ("2100_to_2300", Y2100, Y2300),
 ];
 
 /// Microsecond instants spread evenly over the range
