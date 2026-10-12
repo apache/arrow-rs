@@ -17,9 +17,14 @@
 
 //! Timezone for timestamp arrays
 
-use arrow_schema::ArrowError;
-use chrono::FixedOffset;
+use arrow_schema::{ArrowError, TimeUnit};
+use chrono::{FixedOffset, LocalResult, Offset, TimeZone};
 pub use private::{Tz, TzOffset};
+
+use crate::{
+    temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS, as_datetime_with_data_type},
+    types::ArrowTimestampType,
+};
 
 /// Parses a fixed offset of the form "+09:00", "-09" or "+0930"
 fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
@@ -51,8 +56,7 @@ fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
 #[cfg(feature = "chrono-tz")]
 mod private {
     use super::*;
-    use chrono::offset::TimeZone;
-    use chrono::{LocalResult, NaiveDate, NaiveDateTime, Offset};
+    use chrono::{NaiveDate, NaiveDateTime};
     use std::fmt::Display;
     use std::str::FromStr;
 
@@ -163,7 +167,11 @@ mod private {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use chrono::{Timelike, Utc};
+        use crate::types::{
+            TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+            TimestampSecondType,
+        };
+        use chrono::{DateTime, Timelike, Utc};
 
         #[test]
         fn test_with_timezone() {
@@ -247,14 +255,195 @@ mod private {
                 assert_eq!(tz.to_string(), case);
             }
         }
+
+        const HOUR: i64 = 60 * 60;
+
+        /// Seconds since the epoch for the given date and time,
+        /// interpreted as a wall clock time with no timezone.
+        fn epoch_secs(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> i64 {
+            NaiveDate::from_ymd_opt(y, mo, d)
+                .unwrap()
+                .and_hms_opt(h, mi, s)
+                .unwrap()
+                .and_utc()
+                .timestamp()
+        }
+
+        fn named_offset_from_utc_timestamp<T: ArrowTimestampType>(mult: i64) {
+            let tz: Tz = "America/New_York".parse().unwrap();
+            // (UTC timestamp, expected offset)
+            let cases = [
+                // Winter, EST
+                (epoch_secs(2021, 1, 15, 12, 0, 0), -5 * HOUR),
+                // Summer, EDT
+                (epoch_secs(2021, 7, 15, 12, 0, 0), -4 * HOUR),
+                // DST starts at 2021-03-14T07:00:00Z (02:00 EST)
+                (epoch_secs(2021, 3, 14, 6, 59, 59), -5 * HOUR),
+                (epoch_secs(2021, 3, 14, 7, 0, 0), -4 * HOUR),
+                // DST ends at 2021-11-07T06:00:00Z (02:00 EDT)
+                (epoch_secs(2021, 11, 7, 5, 59, 59), -4 * HOUR),
+                (epoch_secs(2021, 11, 7, 6, 0, 0), -5 * HOUR),
+            ];
+            for (utc, offset) in cases {
+                assert_eq!(
+                    tz.offset_from_utc_timestamp::<T>(utc * mult),
+                    Some(offset * mult),
+                    "{:?} {utc}",
+                    T::UNIT
+                );
+            }
+        }
+
+        #[test]
+        fn test_named_offset_from_utc_timestamp() {
+            named_offset_from_utc_timestamp::<TimestampSecondType>(1);
+            named_offset_from_utc_timestamp::<TimestampMillisecondType>(MILLISECONDS);
+            named_offset_from_utc_timestamp::<TimestampMicrosecondType>(MICROSECONDS);
+            named_offset_from_utc_timestamp::<TimestampNanosecondType>(NANOSECONDS);
+        }
+
+        fn named_offset_from_utc_timestamp_sub_second<T: ArrowTimestampType>(mult: i64) {
+            // The instant one unit before a transition should still use
+            // the old offset.
+            let tz: Tz = "America/New_York".parse().unwrap();
+            let utc = epoch_secs(2021, 3, 14, 7, 0, 0) * mult;
+            assert_eq!(
+                tz.offset_from_utc_timestamp::<T>(utc - 1),
+                Some(-5 * HOUR * mult),
+                "{:?}",
+                T::UNIT
+            );
+            assert_eq!(
+                tz.offset_from_utc_timestamp::<T>(utc),
+                Some(-4 * HOUR * mult),
+                "{:?}",
+                T::UNIT
+            );
+        }
+
+        #[test]
+        fn test_named_offset_from_utc_timestamp_sub_second() {
+            named_offset_from_utc_timestamp_sub_second::<TimestampSecondType>(1);
+            named_offset_from_utc_timestamp_sub_second::<TimestampMillisecondType>(MILLISECONDS);
+            named_offset_from_utc_timestamp_sub_second::<TimestampMicrosecondType>(MICROSECONDS);
+            named_offset_from_utc_timestamp_sub_second::<TimestampNanosecondType>(NANOSECONDS);
+        }
+
+        fn named_offset_from_local_timestamp<T: ArrowTimestampType>(mult: i64) {
+            let tz: Tz = "America/New_York".parse().unwrap();
+
+            // Unambiguous local times
+            let local = epoch_secs(2021, 1, 15, 12, 0, 0) * mult;
+            assert_eq!(
+                tz.offset_from_local_timestamp::<T>(local),
+                LocalResult::Single(-5 * HOUR * mult),
+                "{:?}",
+                T::UNIT
+            );
+            let local = epoch_secs(2021, 7, 15, 12, 0, 0) * mult;
+            assert_eq!(
+                tz.offset_from_local_timestamp::<T>(local),
+                LocalResult::Single(-4 * HOUR * mult),
+                "{:?}",
+                T::UNIT
+            );
+
+            // 02:30 on 2021-03-14 is skipped when DST starts
+            let local = epoch_secs(2021, 3, 14, 2, 30, 0) * mult;
+            assert_eq!(
+                tz.offset_from_local_timestamp::<T>(local),
+                LocalResult::None,
+                "{:?}",
+                T::UNIT
+            );
+
+            // 01:30 on 2021-11-07 happens twice when DST ends, the
+            // earlier is EDT and the later is EST.
+            let local = epoch_secs(2021, 11, 7, 1, 30, 0) * mult;
+            assert_eq!(
+                tz.offset_from_local_timestamp::<T>(local),
+                LocalResult::Ambiguous(-4 * HOUR * mult, -5 * HOUR * mult),
+                "{:?}",
+                T::UNIT
+            );
+        }
+
+        #[test]
+        fn test_named_offset_from_local_timestamp() {
+            named_offset_from_local_timestamp::<TimestampSecondType>(1);
+            named_offset_from_local_timestamp::<TimestampMillisecondType>(MILLISECONDS);
+            named_offset_from_local_timestamp::<TimestampMicrosecondType>(MICROSECONDS);
+            named_offset_from_local_timestamp::<TimestampNanosecondType>(NANOSECONDS);
+        }
+
+        fn named_round_trip<T: ArrowTimestampType>(mult: i64) {
+            let tz: Tz = "Australia/Sydney".parse().unwrap();
+            // Step through a day either side of each DST transition in
+            // 15 minute increments.
+            let starts = [
+                epoch_secs(2021, 4, 3, 0, 0, 0),
+                epoch_secs(2021, 10, 2, 0, 0, 0),
+            ];
+            for start in starts {
+                for step in 0..(2 * 24 * 4) {
+                    let utc = (start + step * 15 * 60) * mult;
+                    let offset = tz.offset_from_utc_timestamp::<T>(utc).unwrap();
+                    let local = utc + offset;
+                    // The UTC offset must be one of the possible
+                    // offsets for the corresponding local time.
+                    match tz.offset_from_local_timestamp::<T>(local) {
+                        LocalResult::Single(o) => assert_eq!(o, offset),
+                        LocalResult::Ambiguous(a, b) => {
+                            assert!(a == offset || b == offset, "{:?} {utc}", T::UNIT)
+                        }
+                        LocalResult::None => panic!("no offset for {:?} {local}", T::UNIT),
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn test_named_round_trip() {
+            named_round_trip::<TimestampSecondType>(1);
+            named_round_trip::<TimestampMillisecondType>(MILLISECONDS);
+            named_round_trip::<TimestampMicrosecondType>(MICROSECONDS);
+            named_round_trip::<TimestampNanosecondType>(NANOSECONDS);
+        }
+
+        #[test]
+        fn test_named_matches_chrono() {
+            // The timestamp based methods should agree with the chrono
+            // TimeZone implementation.
+            for tz in ["America/New_York", "Australia/Lord_Howe", "Asia/Kolkata"] {
+                let tz: Tz = tz.parse().unwrap();
+                let start = epoch_secs(2021, 1, 1, 0, 0, 0);
+                for step in 0..(365 * 24) {
+                    let ts = start + step * HOUR;
+                    let dt = DateTime::from_timestamp(ts, 0).unwrap().naive_utc();
+                    let expected = tz.offset_from_utc_datetime(&dt).fix().local_minus_utc() as i64;
+                    assert_eq!(
+                        tz.offset_from_utc_timestamp::<TimestampSecondType>(ts),
+                        Some(expected),
+                        "{tz} {ts}"
+                    );
+                    let expected = tz
+                        .offset_from_local_datetime(&dt)
+                        .map(|o| o.fix().local_minus_utc() as i64);
+                    assert_eq!(
+                        tz.offset_from_local_timestamp::<TimestampSecondType>(ts),
+                        expected,
+                        "{tz} {ts}"
+                    );
+                }
+            }
+        }
     }
 }
 
 #[cfg(not(feature = "chrono-tz"))]
 mod private {
     use super::*;
-    use chrono::offset::TimeZone;
-    use chrono::{LocalResult, NaiveDate, NaiveDateTime, Offset};
+    use chrono::{NaiveDate, NaiveDateTime};
     use std::str::FromStr;
 
     /// An [`Offset`] for [`Tz`]
@@ -315,10 +504,72 @@ mod private {
     }
 }
 
+impl TzOffset {
+    /// Return the value to add to convert from UTC to the local
+    /// time in the requested time unit.
+    #[inline]
+    pub fn local_minus_utc(&self, unit: TimeUnit) -> i64 {
+        Self::secs_to_unit(self.fix().local_minus_utc(), unit)
+    }
+
+    /// Return the value to add to convert from the local time to
+    /// UTC in the requested time unit.
+    #[inline]
+    pub fn utc_minus_local(&self, unit: TimeUnit) -> i64 {
+        Self::secs_to_unit(self.fix().utc_minus_local(), unit)
+    }
+
+    /// Convert a number of seconds into the given time unit.
+    #[inline]
+    fn secs_to_unit(secs: i32, unit: TimeUnit) -> i64 {
+        match unit {
+            TimeUnit::Second => secs.into(),
+            TimeUnit::Millisecond => i64::from(secs) * MILLISECONDS,
+            TimeUnit::Microsecond => i64::from(secs) * MICROSECONDS,
+            TimeUnit::Nanosecond => i64::from(secs) * NANOSECONDS,
+        }
+    }
+}
+
+impl Tz {
+    /// Creates the offset(s) for a given local timestamp if
+    /// possible. The offsets are the values needed to be added to
+    /// a UTC timestamp to get the local timestamp, in the requested
+    /// units.
+    ///
+    /// Returns `LocalResult::None` if the local time is skipped by a
+    /// transition, or the timestamp is outside of the range
+    /// supported by [`NaiveDateTime`](chrono::NaiveDateTime).
+    #[inline]
+    pub fn offset_from_local_timestamp<T: ArrowTimestampType>(
+        &self,
+        local: i64,
+    ) -> LocalResult<i64> {
+        as_datetime_with_data_type(&T::DATA_TYPE, local).map_or(LocalResult::None, |local| {
+            self.offset_from_local_datetime(&local)
+                .map(|offset| offset.local_minus_utc(T::UNIT))
+        })
+    }
+
+    /// Create the offset for a given UTC timestamp. The offset is
+    /// the values needed to be added to a UTC timestamp to get the
+    /// local timestamp. This returns None when the timestamp is
+    /// outside of the range supported by [`NaiveDateTime`](chrono::NaiveDateTime).
+    #[inline]
+    pub fn offset_from_utc_timestamp<T: ArrowTimestampType>(&self, utc: i64) -> Option<i64> {
+        as_datetime_with_data_type(&T::DATA_TYPE, utc)
+            .map(|utc| self.offset_from_utc_datetime(&utc).local_minus_utc(T::UNIT))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{NaiveDate, Offset, TimeZone};
+    use crate::types::{
+        TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+        TimestampSecondType,
+    };
+    use chrono::{DateTime, LocalResult, NaiveDate, Offset, TimeZone};
 
     #[test]
     fn test_with_offset() {
@@ -354,5 +605,189 @@ mod tests {
 
         let err = "+9:00".parse::<Tz>().unwrap_err().to_string();
         assert!(err.contains("Invalid timezone"), "{}", err);
+    }
+
+    /// Fixed offset timezones and their offsets from UTC in seconds.
+    const FIXED_OFFSETS: [(&str, i64); 6] = [
+        ("+00:00", 0),
+        ("-00:00", 0),
+        ("+09:00", 9 * 3600),
+        ("-10:00", -10 * 3600),
+        ("+0530", 5 * 3600 + 30 * 60),
+        ("-0345", -(3 * 3600 + 45 * 60)),
+    ];
+
+    /// Timestamps (in seconds) that are within the range supported by
+    /// every [`TimeUnit`], including nanoseconds.
+    const TIMESTAMPS: [i64; 5] = [
+        0,
+        1,
+        -1,
+        946_684_800,    // 2000-01-01T00:00:00Z
+        -2_208_988_800, // 1900-01-01T00:00:00Z
+    ];
+
+    fn tz_offset_local_minus_utc<T: ArrowTimestampType>(mult: i64) {
+        let t = NaiveDate::from_ymd_opt(2000, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        for (name, secs) in FIXED_OFFSETS {
+            let tz: Tz = name.parse().unwrap();
+            let offset = tz.offset_from_utc_datetime(&t);
+            assert_eq!(
+                offset.local_minus_utc(T::UNIT),
+                secs * mult,
+                "{name} {:?}",
+                T::UNIT
+            );
+            assert_eq!(
+                offset.utc_minus_local(T::UNIT),
+                -secs * mult,
+                "{name} {:?}",
+                T::UNIT
+            );
+        }
+    }
+
+    #[test]
+    fn test_tz_offset_local_minus_utc() {
+        tz_offset_local_minus_utc::<TimestampSecondType>(1);
+        tz_offset_local_minus_utc::<TimestampMillisecondType>(MILLISECONDS);
+        tz_offset_local_minus_utc::<TimestampMicrosecondType>(MICROSECONDS);
+        tz_offset_local_minus_utc::<TimestampNanosecondType>(NANOSECONDS);
+    }
+
+    fn fixed_offset_from_utc_timestamp<T: ArrowTimestampType>(mult: i64) {
+        for (name, secs) in FIXED_OFFSETS {
+            let tz: Tz = name.parse().unwrap();
+            for ts in TIMESTAMPS {
+                let utc = ts * mult;
+                assert_eq!(
+                    tz.offset_from_utc_timestamp::<T>(utc),
+                    Some(secs * mult),
+                    "{name} {:?} {utc}",
+                    T::UNIT
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fixed_offset_from_utc_timestamp() {
+        fixed_offset_from_utc_timestamp::<TimestampSecondType>(1);
+        fixed_offset_from_utc_timestamp::<TimestampMillisecondType>(MILLISECONDS);
+        fixed_offset_from_utc_timestamp::<TimestampMicrosecondType>(MICROSECONDS);
+        fixed_offset_from_utc_timestamp::<TimestampNanosecondType>(NANOSECONDS);
+    }
+
+    fn fixed_offset_from_local_timestamp<T: ArrowTimestampType>(mult: i64) {
+        for (name, secs) in FIXED_OFFSETS {
+            let tz: Tz = name.parse().unwrap();
+            for ts in TIMESTAMPS {
+                let local = ts * mult;
+                assert_eq!(
+                    tz.offset_from_local_timestamp::<T>(local),
+                    LocalResult::Single(secs * mult),
+                    "{name} {:?} {local}",
+                    T::UNIT
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fixed_offset_from_local_timestamp() {
+        fixed_offset_from_local_timestamp::<TimestampSecondType>(1);
+        fixed_offset_from_local_timestamp::<TimestampMillisecondType>(MILLISECONDS);
+        fixed_offset_from_local_timestamp::<TimestampMicrosecondType>(MICROSECONDS);
+        fixed_offset_from_local_timestamp::<TimestampNanosecondType>(NANOSECONDS);
+    }
+
+    fn fixed_offset_round_trip<T: ArrowTimestampType>(mult: i64) {
+        for (name, _) in FIXED_OFFSETS {
+            let tz: Tz = name.parse().unwrap();
+            for ts in TIMESTAMPS {
+                let utc = ts * mult;
+                let local = utc + tz.offset_from_utc_timestamp::<T>(utc).unwrap();
+                let offset = tz.offset_from_local_timestamp::<T>(local).single().unwrap();
+                assert_eq!(local - offset, utc, "{name} {:?} {utc}", T::UNIT);
+            }
+        }
+    }
+
+    #[test]
+    fn test_fixed_offset_round_trip() {
+        fixed_offset_round_trip::<TimestampSecondType>(1);
+        fixed_offset_round_trip::<TimestampMillisecondType>(MILLISECONDS);
+        fixed_offset_round_trip::<TimestampMicrosecondType>(MICROSECONDS);
+        fixed_offset_round_trip::<TimestampNanosecondType>(NANOSECONDS);
+    }
+
+    #[test]
+    fn test_fixed_offset_matches_chrono() {
+        // The timestamp based methods should agree with the chrono
+        // TimeZone implementation.
+        for (name, _) in FIXED_OFFSETS {
+            let tz: Tz = name.parse().unwrap();
+            for ts in TIMESTAMPS {
+                let dt = DateTime::from_timestamp(ts, 0).unwrap().naive_utc();
+                let expected = tz.offset_from_utc_datetime(&dt).fix().local_minus_utc() as i64;
+                assert_eq!(
+                    tz.offset_from_utc_timestamp::<TimestampSecondType>(ts),
+                    Some(expected)
+                );
+                let expected = tz
+                    .offset_from_local_datetime(&dt)
+                    .map(|o| o.fix().local_minus_utc() as i64);
+                assert_eq!(
+                    tz.offset_from_local_timestamp::<TimestampSecondType>(ts),
+                    expected
+                );
+            }
+        }
+    }
+
+    fn fixed_offset_out_of_range<T: ArrowTimestampType>() {
+        for (name, _) in FIXED_OFFSETS {
+            let tz: Tz = name.parse().unwrap();
+            for ts in [i64::MAX, i64::MIN] {
+                assert_eq!(
+                    tz.offset_from_utc_timestamp::<T>(ts),
+                    None,
+                    "{name} {:?} {ts}",
+                    T::UNIT
+                );
+                assert_eq!(
+                    tz.offset_from_local_timestamp::<T>(ts),
+                    LocalResult::None,
+                    "{name} {:?} {ts}",
+                    T::UNIT
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fixed_offset_out_of_range() {
+        fixed_offset_out_of_range::<TimestampSecondType>();
+        fixed_offset_out_of_range::<TimestampMillisecondType>();
+        fixed_offset_out_of_range::<TimestampMicrosecondType>();
+        // Every i64 nanosecond timestamp is representable
+        for (name, secs) in FIXED_OFFSETS {
+            let tz: Tz = name.parse().unwrap();
+            for ts in [i64::MAX, i64::MIN] {
+                assert_eq!(
+                    tz.offset_from_utc_timestamp::<TimestampNanosecondType>(ts),
+                    Some(secs * NANOSECONDS),
+                    "{name} {ts}"
+                );
+                assert_eq!(
+                    tz.offset_from_local_timestamp::<TimestampNanosecondType>(ts),
+                    LocalResult::Single(secs * NANOSECONDS),
+                    "{name} {ts}"
+                );
+            }
+        }
     }
 }
