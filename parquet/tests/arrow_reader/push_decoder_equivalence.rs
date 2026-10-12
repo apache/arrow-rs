@@ -23,18 +23,8 @@
 //! use [`proptest`] to combine the scan options at random and to shrink a
 //! scan that fails.
 //!
-//! [`ParquetRecordBatchReader`]: crate::arrow::arrow_reader::ParquetRecordBatchReader
+//! [`ParquetRecordBatchReader`]: parquet::arrow::arrow_reader::ParquetRecordBatchReader
 
-use crate::DecodeResult;
-use crate::arrow::arrow_reader::{
-    ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
-    ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionPolicy, RowSelector,
-};
-use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
-use crate::arrow::{ArrowWriter, ProjectionMask};
-use crate::file::metadata::PageIndexPolicy;
-use crate::file::properties::WriterProperties;
-use crate::schema::types::SchemaDescriptor;
 use arrow_array::builder::{Int64Builder, ListBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
@@ -45,6 +35,16 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, SchemaRef};
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
+use parquet::DecodeResult;
+use parquet::arrow::arrow_reader::{
+    ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
+    ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionPolicy, RowSelector,
+};
+use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use parquet::arrow::{ArrowWriter, ProjectionMask};
+use parquet::file::metadata::PageIndexPolicy;
+use parquet::file::properties::WriterProperties;
+use parquet::schema::types::SchemaDescriptor;
 use proptest::collection::vec;
 use proptest::option::weighted;
 use proptest::prelude::*;
