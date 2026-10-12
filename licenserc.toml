@@ -19,10 +19,29 @@
 builtin = "Apache-2.0-ASF"
 
 [files]
-includes = ["*.rs", "*.py"]
+includes = ["*.rs", "*.py", "*.md", "*.toml", "*.sh"]
 excludes = [
   # Third-party and generated Rust files have no ASF header.
   "arrow-array/src/delta.rs",
   "arrow-flight/src/arrow.flight.protocol.rs",
   "arrow-flight/src/sql/arrow.flight.protocol.sql.rs",
+  # These Markdown, TOML, and shell files have no ASF header.
+  ".config/nextest.toml",
+  ".github/pull_request_template.md",
+  ".github/workflows/miri.sh",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "arrow-flight/examples/data/gen_certs.sh",
+  # cliff.toml embeds an ASF notice in generated Markdown, not as a file header.
+  "cliff.toml",
 ]
+
+[styles.markdown_asf]
+kind = "block"
+start = "<!---"
+prefix = "  "
+end = "-->"
+
+[[rules]]
+extensions = ["md"]
+style_out = "markdown_asf"
