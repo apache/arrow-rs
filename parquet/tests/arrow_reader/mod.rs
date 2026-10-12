@@ -38,6 +38,8 @@ use parquet::file::properties::{
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
+#[cfg(feature = "async")]
+mod async_reader;
 mod bad_data;
 mod bloom_filter;
 #[cfg(feature = "crc")]
@@ -52,6 +54,7 @@ mod parquet_testing;
 mod partial_offset_index;
 #[cfg(feature = "async")]
 mod predicate_cache;
+mod push_decoder_equivalence;
 mod row_filter;
 mod statistics;
 
