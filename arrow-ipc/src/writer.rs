@@ -638,7 +638,7 @@ impl IpcDataGenerator {
     fn _collect_dict_updates<I: Iterator<Item = i64>>(
         &self,
         column: &ArrayRef,
-        encoded_dictionaries: &mut Vec<DictionaryToEncode>,
+        dictionaries_to_encode: &mut Vec<DictionaryToEncode>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
         dict_id: &mut I,
@@ -650,7 +650,7 @@ impl IpcDataGenerator {
                     self.collect_dict_updates(
                         field,
                         column,
-                        encoded_dictionaries,
+                        dictionaries_to_encode,
                         dictionary_tracker,
                         write_options,
                         dict_id,
@@ -671,7 +671,7 @@ impl IpcDataGenerator {
                 self.collect_dict_updates(
                     values,
                     &values_array,
-                    encoded_dictionaries,
+                    dictionaries_to_encode,
                     dictionary_tracker,
                     write_options,
                     dict_id,
@@ -682,7 +682,7 @@ impl IpcDataGenerator {
                 self.collect_dict_updates(
                     field,
                     list.values(),
-                    encoded_dictionaries,
+                    dictionaries_to_encode,
                     dictionary_tracker,
                     write_options,
                     dict_id,
@@ -693,7 +693,7 @@ impl IpcDataGenerator {
                 self.collect_dict_updates(
                     field,
                     list.values(),
-                    encoded_dictionaries,
+                    dictionaries_to_encode,
                     dictionary_tracker,
                     write_options,
                     dict_id,
@@ -704,7 +704,7 @@ impl IpcDataGenerator {
                 self.collect_dict_updates(
                     field,
                     list.values(),
-                    encoded_dictionaries,
+                    dictionaries_to_encode,
                     dictionary_tracker,
                     write_options,
                     dict_id,
@@ -715,7 +715,7 @@ impl IpcDataGenerator {
                 self.collect_dict_updates(
                     field,
                     list.values(),
-                    encoded_dictionaries,
+                    dictionaries_to_encode,
                     dictionary_tracker,
                     write_options,
                     dict_id,
@@ -729,7 +729,7 @@ impl IpcDataGenerator {
                 self.collect_dict_updates(
                     field,
                     list.values(),
-                    encoded_dictionaries,
+                    dictionaries_to_encode,
                     dictionary_tracker,
                     write_options,
                     dict_id,
@@ -747,7 +747,7 @@ impl IpcDataGenerator {
                 self.collect_dict_updates(
                     keys,
                     map_array.keys(),
-                    encoded_dictionaries,
+                    dictionaries_to_encode,
                     dictionary_tracker,
                     write_options,
                     dict_id,
@@ -757,7 +757,7 @@ impl IpcDataGenerator {
                 self.collect_dict_updates(
                     values,
                     map_array.values(),
-                    encoded_dictionaries,
+                    dictionaries_to_encode,
                     dictionary_tracker,
                     write_options,
                     dict_id,
@@ -770,7 +770,7 @@ impl IpcDataGenerator {
                     self.collect_dict_updates(
                         field,
                         column,
-                        encoded_dictionaries,
+                        dictionaries_to_encode,
                         dictionary_tracker,
                         write_options,
                         dict_id,
@@ -790,7 +790,7 @@ impl IpcDataGenerator {
         &self,
         field: &Field,
         column: &ArrayRef,
-        dictionaries: &mut Vec<DictionaryToEncode>,
+        dictionaries_to_encode: &mut Vec<DictionaryToEncode>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
         dict_id_seq: &mut I,
@@ -811,7 +811,7 @@ impl IpcDataGenerator {
 
                 self._collect_dict_updates(
                     &values,
-                    dictionaries,
+                    dictionaries_to_encode,
                     dictionary_tracker,
                     write_options,
                     dict_id_seq,
@@ -836,14 +836,14 @@ impl IpcDataGenerator {
                 )? {
                     DictionaryUpdate::None => {}
                     DictionaryUpdate::New | DictionaryUpdate::Replaced => {
-                        dictionaries.push(DictionaryToEncode {
+                        dictionaries_to_encode.push(DictionaryToEncode {
                             id: dict_id,
                             data: dict_values.clone(),
                             is_delta: false,
                         });
                     }
                     DictionaryUpdate::Delta(data) => {
-                        dictionaries.push(DictionaryToEncode {
+                        dictionaries_to_encode.push(DictionaryToEncode {
                             id: dict_id,
                             data,
                             is_delta: true,
@@ -853,7 +853,7 @@ impl IpcDataGenerator {
             }
             _ => self._collect_dict_updates(
                 column,
-                dictionaries,
+                dictionaries_to_encode,
                 dictionary_tracker,
                 write_options,
                 dict_id_seq,
