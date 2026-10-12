@@ -483,6 +483,11 @@ pub struct ActionCreatePreparedStatementResult {
     /// schema of the expected parameters.  It should be an IPC-encapsulated Schema, as described in Schema.fbs.
     #[prost(bytes = "bytes", tag = "3")]
     pub parameter_schema: ::prost::bytes::Bytes,
+    /// When set to true, the query should be executed with CommandPreparedStatementUpdate,
+    /// when set to false, the query should be executed with CommandPreparedStatementQuery.
+    /// If not set, the client can choose how to execute the query.
+    #[prost(bool, optional, tag = "4")]
+    pub is_update: ::core::option::Option<bool>,
 }
 ///
 /// Request message for the "ClosePreparedStatement" action on a Flight SQL enabled backend.

@@ -408,6 +408,213 @@ pub struct PutResult {
     pub app_metadata: ::prost::bytes::Bytes,
 }
 ///
+/// EXPERIMENTAL: Union of possible value types for a Session Option to be set to.
+///
+/// By convention, an attempt to set a valueless SessionOptionValue should
+/// attempt to unset or clear the named option value on the server.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SessionOptionValue {
+    #[prost(oneof = "session_option_value::OptionValue", tags = "1, 2, 3, 4, 5")]
+    pub option_value: ::core::option::Option<session_option_value::OptionValue>,
+}
+/// Nested message and enum types in `SessionOptionValue`.
+pub mod session_option_value {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct StringListValue {
+        #[prost(string, repeated, tag = "1")]
+        pub values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    }
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionValue {
+        #[prost(string, tag = "1")]
+        StringValue(::prost::alloc::string::String),
+        #[prost(bool, tag = "2")]
+        BoolValue(bool),
+        #[prost(sfixed64, tag = "3")]
+        Int64Value(i64),
+        #[prost(double, tag = "4")]
+        DoubleValue(f64),
+        #[prost(message, tag = "5")]
+        StringListValue(StringListValue),
+    }
+}
+///
+/// EXPERIMENTAL: A request to set session options for an existing or new (implicit)
+/// server session.
+///
+/// Sessions are persisted and referenced via a transport-level state management, typically
+/// RFC 6265 HTTP cookies when using an HTTP transport.  The suggested cookie name or state
+/// context key is 'arrow_flight_session_id', although implementations may freely choose their
+/// own name.
+///
+/// Session creation (if one does not already exist) is implied by this RPC request, however
+/// server implementations may choose to initiate a session that also contains client-provided
+/// session options at any other time, e.g. on authentication, or when any other call is made
+/// and the server wishes to use a session to persist any state (or lack thereof).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetSessionOptionsRequest {
+    #[prost(map = "string, message", tag = "1")]
+    pub session_options: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        SessionOptionValue,
+    >,
+}
+///
+/// EXPERIMENTAL: The results (individually) of setting a set of session options.
+///
+/// Option names should only be present in the response if they were not successfully
+/// set on the server; that is, a response without an Error for a name provided in the
+/// SetSessionOptionsRequest implies that the named option value was set successfully.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetSessionOptionsResult {
+    #[prost(map = "string, message", tag = "1")]
+    pub errors: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        set_session_options_result::Error,
+    >,
+}
+/// Nested message and enum types in `SetSessionOptionsResult`.
+pub mod set_session_options_result {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Error {
+        #[prost(enumeration = "ErrorValue", tag = "1")]
+        pub value: i32,
+    }
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum ErrorValue {
+        /// Protobuf deserialization fallback value: The status is unknown or unrecognized.
+        /// Servers should avoid using this value. The request may be retried by the client.
+        Unspecified = 0,
+        /// The given session option name is invalid.
+        InvalidName = 1,
+        /// The session option value or type is invalid.
+        InvalidValue = 2,
+        /// The session option cannot be set.
+        Error = 3,
+    }
+    impl ErrorValue {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "UNSPECIFIED",
+                Self::InvalidName => "INVALID_NAME",
+                Self::InvalidValue => "INVALID_VALUE",
+                Self::Error => "ERROR",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "UNSPECIFIED" => Some(Self::Unspecified),
+                "INVALID_NAME" => Some(Self::InvalidName),
+                "INVALID_VALUE" => Some(Self::InvalidValue),
+                "ERROR" => Some(Self::Error),
+                _ => None,
+            }
+        }
+    }
+}
+///
+/// EXPERIMENTAL: A request to access the session options for the current server session.
+///
+/// The existing session is referenced via a cookie header or similar (see
+/// SetSessionOptionsRequest above); it is an error to make this request with a missing,
+/// invalid, or expired session cookie header or other implementation-defined session
+/// reference token.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetSessionOptionsRequest {}
+///
+/// EXPERIMENTAL: The result containing the current server session options.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetSessionOptionsResult {
+    #[prost(map = "string, message", tag = "1")]
+    pub session_options: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        SessionOptionValue,
+    >,
+}
+///
+/// Request message for the "Close Session" action.
+///
+/// The existing session is referenced via a cookie header.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CloseSessionRequest {}
+///
+/// The result of closing a session.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CloseSessionResult {
+    #[prost(enumeration = "close_session_result::Status", tag = "1")]
+    pub status: i32,
+}
+/// Nested message and enum types in `CloseSessionResult`.
+pub mod close_session_result {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum Status {
+        /// Protobuf deserialization fallback value: The session close status is unknown or
+        /// not recognized. Servers should avoid using this value (send a NOT_FOUND error if
+        /// the requested session is not known or expired). Clients can retry the request.
+        Unspecified = 0,
+        /// The session close request is complete. Subsequent requests with
+        /// the same session produce a NOT_FOUND error.
+        Closed = 1,
+        /// The session close request is in progress. The client may retry
+        /// the close request.
+        Closing = 2,
+        /// The session is not closeable. The client should not retry the
+        /// close request.
+        NotCloseable = 3,
+    }
+    impl Status {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "UNSPECIFIED",
+                Self::Closed => "CLOSED",
+                Self::Closing => "CLOSING",
+                Self::NotCloseable => "NOT_CLOSEABLE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "UNSPECIFIED" => Some(Self::Unspecified),
+                "CLOSED" => Some(Self::Closed),
+                "CLOSING" => Some(Self::Closing),
+                "NOT_CLOSEABLE" => Some(Self::NotCloseable),
+                _ => None,
+            }
+        }
+    }
+}
+///
 /// The result of a cancel operation.
 ///
 /// This is used by CancelFlightInfoResult.status.
