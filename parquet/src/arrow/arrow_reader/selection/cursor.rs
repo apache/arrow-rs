@@ -26,8 +26,7 @@ use super::{RowSelection, RowSelector};
 use crate::errors::ParquetError;
 use arrow_array::BooleanArray;
 use arrow_buffer::BooleanBuffer;
-use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
-use arrow_buffer::bit_iterator::BitIndexIterator;
+use arrow_buffer::bit_chunk_iterator::BitChunks;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
@@ -250,22 +249,23 @@ impl MaskCursor {
 
     /// Find the first selected row without inspecting every skipped bit.
     fn next_selected_row(&self) -> Option<usize> {
-        BitIndexIterator::new(
+        let chunks = BitChunks::new(
             self.mask.values(),
             self.mask.offset() + self.position,
             self.mask.len() - self.position,
-        )
-        .next()
-        .map(|row| self.position + row)
+        );
+        chunks.iter_padded().enumerate().find_map(|(idx, word)| {
+            (word != 0).then(|| self.position + idx * 64 + word.trailing_zeros() as usize)
+        })
     }
 
     /// Count whole words until the batch is full or the loaded range ends.
-    /// Both ends of the bitmap slice are masked by `UnalignedBitChunk`, so
-    /// padding and bits in an unloaded page cannot contribute to the count.
+    /// `BitChunks` normalizes words to little-endian and masks the remainder,
+    /// so padding and bits in an unloaded page cannot contribute to the count.
     // Keep the scanning loop out of the reader's selection dispatch.
     #[inline(never)]
     fn scan_chunk(&mut self, mask_start: usize, end: usize, batch_size: usize) -> MaskChunk {
-        let chunks = UnalignedBitChunk::new(
+        let chunks = BitChunks::new(
             self.mask.values(),
             self.mask.offset() + mask_start,
             end - mask_start,
@@ -274,7 +274,7 @@ impl MaskCursor {
         let mut chunk_end = mask_start;
 
         if batch_size > 0 {
-            for (idx, mut word) in chunks.iter().enumerate() {
+            for (idx, mut word) in chunks.iter_padded().enumerate() {
                 let count = word.count_ones() as usize;
                 if count == 0 {
                     continue;
@@ -292,7 +292,7 @@ impl MaskCursor {
                     selected_rows = batch_size;
                     word.trailing_zeros() as usize
                 };
-                chunk_end = mask_start + (idx * 64 + last_bit + 1 - chunks.lead_padding());
+                chunk_end = mask_start + idx * 64 + last_bit + 1;
                 if selected_rows == batch_size {
                     break;
                 }
@@ -455,6 +455,14 @@ mod tests {
         }
         assert!(cursor.is_empty());
         assert!(cursor.next_mask_chunk(batch_size).is_none());
+    }
+
+    #[test]
+    fn test_mask_chunks_sparse_aligned_words() {
+        // Distinct byte positions expose native-endian word interpretation
+        // on big-endian platforms. Both selections must form one-row chunks.
+        let mask = BooleanBuffer::from_iter((0..256).map(|row| row == 0 || row == 255));
+        assert_mask_chunks(mask, None, 1);
     }
 
     #[test]
