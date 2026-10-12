@@ -49,6 +49,8 @@ jobs:
           cargo test -p arrow-array --all-features
           # Disable feature `force_validate`
           cargo test -p arrow-array --features=ffi
+          # `--all-features` resolves named timezones with jiff, so test chrono-tz on its own
+          cargo test -p arrow-array --features=chrono-tz
       - name: Test arrow-cmp
         run: cargo test -p arrow-cmp --all-features
       - name: Test arrow-select
@@ -226,6 +228,8 @@ jobs:
         run: |
           mod=arrow-array
           cargo clippy -p "$mod" --all-targets --all-features -- -D warnings
+          # `--all-features` resolves named timezones with jiff, so lint chrono-tz on its own
+          cargo clippy -p "$mod" --all-targets --features chrono-tz -- -D warnings
           # Dependency checks excluding tests & benches.
           cargo clippy -p "$mod" -- -D unused_crate_dependencies
           cargo clippy -p "$mod" --all-features -- -D unused_crate_dependencies
