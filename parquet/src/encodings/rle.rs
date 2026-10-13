@@ -608,8 +608,9 @@ impl RleDecoder {
 
                     let idx = &index_buf[..num_values];
                     let dict_len = dict.len();
-                    // Negative i32 cast to u32 becomes a large value so the bounds check still
-                    // rejects it.
+                    // u32 max-reduction instead of `.all(|&i| ..)`: `.all` short-circuits and
+                    // blocks autovectorisation. Negative i32 cast to u32 becomes a large value so
+                    // the bounds check still rejects it.
                     let max_idx = idx.iter().fold(0u32, |acc, &i| acc.max(i as u32)) as usize;
                     if max_idx >= dict_len {
                         #[cold]
