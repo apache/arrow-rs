@@ -176,6 +176,7 @@ pub struct CommandGetDbSchemas {
 ///   - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case-sensitive, "0" otherwise.
 ///   - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///   - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
+///   - ARROW:FLIGHT:SQL:REMARKS           - A comment describing the column. This field has been added after all others, clients should be prepared to find it missing.
 /// The returned data should be ordered by catalog_name, db_schema_name, table_name, then table_type, followed by table_schema if requested.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandGetTables {
@@ -501,8 +502,8 @@ pub struct ActionBeginTransactionRequest {}
 /// Request message for the "BeginSavepoint" action.
 /// Creates a savepoint within a transaction.
 ///
-/// Only supported if FLIGHT_SQL_TRANSACTION is
-/// FLIGHT_SQL_TRANSACTION_SUPPORT_SAVEPOINT.
+/// Only supported if FLIGHT_SQL_SERVER_TRANSACTION returns
+/// SQL_SUPPORTED_TRANSACTION_SAVEPOINT.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionBeginSavepointRequest {
     /// The transaction to which a savepoint belongs.
@@ -677,6 +678,7 @@ pub mod action_end_savepoint_request {
 ///     - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case-sensitive, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
+///     - ARROW:FLIGHT:SQL:REMARKS           - A comment describing the column. This field has been added after all others, clients should be prepared to find it missing.
 ///   - GetFlightInfo: execute the query.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandStatementQuery {
@@ -702,6 +704,7 @@ pub struct CommandStatementQuery {
 ///     - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case-sensitive, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
+///     - ARROW:FLIGHT:SQL:REMARKS           - A comment describing the column. This field has been added after all others, clients should be prepared to find it missing.
 ///   - GetFlightInfo: execute the query.
 ///   - DoPut: execute the query.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -737,6 +740,7 @@ pub struct TicketStatementQuery {
 ///     - ARROW:FLIGHT:SQL:IS_CASE_SENSITIVE - "1" indicates if the column is case-sensitive, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_READ_ONLY      - "1" indicates if the column is read only, "0" otherwise.
 ///     - ARROW:FLIGHT:SQL:IS_SEARCHABLE     - "1" indicates if the column is searchable via WHERE clause, "0" otherwise.
+///     - ARROW:FLIGHT:SQL:REMARKS           - A comment describing the column. This field has been added after all others, clients should be prepared to find it missing.
 ///
 ///     If the schema is retrieved after parameter values have been bound with DoPut, then the server should account
 ///     for the parameters when determining the schema.
@@ -772,7 +776,7 @@ pub struct CommandPreparedStatementUpdate {
 }
 ///
 /// Represents a bulk ingestion request. Used in the command member of FlightDescriptor
-/// for the the RPC call DoPut to cause the server load the contents of the stream's
+/// for the RPC call DoPut to cause the server load the contents of the stream's
 /// FlightData into the target destination.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStatementIngest {
@@ -938,8 +942,8 @@ pub struct DoPutPreparedStatementResult {
     /// statement must use this new handle.
     /// The updated handle allows implementing query parameters with stateless services.
     ///
-    /// When an updated handle is not provided by the server, clients should contiue
-    /// using the previous handle provided by `ActionCreatePreparedStatementResonse`.
+    /// When an updated handle is not provided by the server, clients should continue
+    /// using the previous handle provided by `ActionCreatePreparedStatementResult`.
     #[prost(bytes = "bytes", optional, tag = "1")]
     pub prepared_statement_handle: ::core::option::Option<::prost::bytes::Bytes>,
 }
@@ -1129,14 +1133,14 @@ pub enum SqlInfo {
     /// - true: if it supports CREATE and DROP of tables.
     SqlDdlTable = 502,
     ///
-    /// Retrieves a int32 ordinal representing the case sensitivity of catalog, table, schema and table names.
+    /// Retrieves an int32 ordinal representing the case sensitivity of catalog, table, schema and table names.
     ///
     /// The possible values are listed in `arrow.flight.protocol.sql.SqlSupportedCaseSensitivity`.
     SqlIdentifierCase = 503,
     /// Retrieves a UTF-8 string with the supported character(s) used to surround a delimited identifier.
     SqlIdentifierQuoteChar = 504,
     ///
-    /// Retrieves a int32 describing the case sensitivity of quoted identifiers.
+    /// Retrieves an int32 describing the case sensitivity of quoted identifiers.
     ///
     /// The possible values are listed in `arrow.flight.protocol.sql.SqlSupportedCaseSensitivity`.
     SqlQuotedIdentifierCase = 505,
@@ -1150,7 +1154,7 @@ pub enum SqlInfo {
     ///
     /// Retrieves the null ordering.
     ///
-    /// Returns a int32 ordinal for the null ordering being used, as described in
+    /// Returns an int32 ordinal for the null ordering being used, as described in
     /// `arrow.flight.protocol.sql.SqlNullOrdering`.
     SqlNullOrdering = 507,
     /// Retrieves a UTF-8 string list with values of the supported keywords.
@@ -1187,7 +1191,7 @@ pub enum SqlInfo {
     /// Retrieves a boolean value indicating whether concatenations between null and non-null values being
     /// null are supported.
     ///
-    /// - Returns:
+    /// Returns:
     /// - false: if concatenations between null and non-null values being null are unsupported;
     /// - true: if concatenations between null and non-null values being null are supported.
     SqlNullPlusNullIsNull = 516,
@@ -1293,13 +1297,13 @@ pub enum SqlInfo {
     /// Retrieves a boolean value indicating whether the SQL Integrity Enhancement Facility is supported.
     ///
     /// Returns:
-    /// - false: if the SQL Integrity Enhancement Facility is supported;
+    /// - false: if the SQL Integrity Enhancement Facility is unsupported;
     /// - true: if the SQL Integrity Enhancement Facility is supported.
     SqlSupportsIntegrityEnhancementFacility = 527,
     ///
     /// Retrieves the support level for SQL OUTER JOINs.
     ///
-    /// Returns a int32 ordinal for the SQL ordering being used, as described in
+    /// Returns an int32 ordinal for the SQL ordering being used, as described in
     /// `arrow.flight.protocol.sql.SqlOuterJoinsSupportLevel`.
     SqlOuterJoinsSupportLevel = 528,
     /// Retrieves a UTF-8 string with the preferred term for "schema".
@@ -1308,7 +1312,7 @@ pub enum SqlInfo {
     SqlProcedureTerm = 530,
     ///
     /// Retrieves a UTF-8 string with the preferred term for "catalog".
-    /// If a empty string is returned its assumed that the server does NOT supports catalogs.
+    /// If an empty string is returned it is assumed that the server does NOT support catalogs.
     SqlCatalogTerm = 531,
     ///
     /// Retrieves a boolean value indicating whether a catalog appears at the start of a fully qualified table name.
@@ -1331,10 +1335,10 @@ pub enum SqlInfo {
     /// - return 5 (\b101) => \[SQL_ELEMENT_IN_PROCEDURE_CALLS, SQL_ELEMENT_IN_PRIVILEGE_DEFINITIONS\];
     /// - return 6 (\b110) => \[SQL_ELEMENT_IN_INDEX_DEFINITIONS, SQL_ELEMENT_IN_PRIVILEGE_DEFINITIONS\];
     /// - return 7 (\b111) => \[SQL_ELEMENT_IN_PROCEDURE_CALLS, SQL_ELEMENT_IN_INDEX_DEFINITIONS, SQL_ELEMENT_IN_PRIVILEGE_DEFINITIONS\].
-    /// Valid actions for a SQL schema described under `arrow.flight.protocol.sql.SqlSupportedElementActions`.
+    /// Valid actions for a SQL schema are described under `arrow.flight.protocol.sql.SqlSupportedElementActions`.
     SqlSchemasSupportedActions = 533,
     ///
-    /// Retrieves the supported actions for a SQL schema.
+    /// Retrieves the supported actions for a SQL catalog.
     ///
     /// Returns an int32 bitmask value representing the supported actions for a SQL catalog.
     /// The returned bitmask should be parsed in order to retrieve the supported actions for a SQL catalog.
@@ -1418,43 +1422,43 @@ pub enum SqlInfo {
     /// The returned bitmask should be parsed in order to retrieve the supported SQL UNIONs.
     ///
     /// For instance:
-    /// - return 0 (\b0)   => \[\] (no supported SQL positioned commands);
+    /// - return 0 (\b0)   => \[\] (no supported SQL UNIONs);
     /// - return 1 (\b1)   => \[SQL_UNION\];
     /// - return 2 (\b10)  => \[SQL_UNION_ALL\];
     /// - return 3 (\b11)  => \[SQL_UNION, SQL_UNION_ALL\].
-    /// Valid SQL positioned commands are described under `arrow.flight.protocol.sql.SqlSupportedUnions`.
+    /// Valid SQL UNIONs are described under `arrow.flight.protocol.sql.SqlSupportedUnions`.
     SqlSupportedUnions = 540,
-    /// Retrieves a int64 value representing the maximum number of hex characters allowed in an inline binary literal.
+    /// Retrieves an int64 value representing the maximum number of hex characters allowed in an inline binary literal.
     SqlMaxBinaryLiteralLength = 541,
-    /// Retrieves a int64 value representing the maximum number of characters allowed for a character literal.
+    /// Retrieves an int64 value representing the maximum number of characters allowed for a character literal.
     SqlMaxCharLiteralLength = 542,
-    /// Retrieves a int64 value representing the maximum number of characters allowed for a column name.
+    /// Retrieves an int64 value representing the maximum number of characters allowed for a column name.
     SqlMaxColumnNameLength = 543,
-    /// Retrieves a int64 value representing the maximum number of columns allowed in a GROUP BY clause.
+    /// Retrieves an int64 value representing the maximum number of columns allowed in a GROUP BY clause.
     SqlMaxColumnsInGroupBy = 544,
-    /// Retrieves a int64 value representing the maximum number of columns allowed in an index.
+    /// Retrieves an int64 value representing the maximum number of columns allowed in an index.
     SqlMaxColumnsInIndex = 545,
-    /// Retrieves a int64 value representing the maximum number of columns allowed in an ORDER BY clause.
+    /// Retrieves an int64 value representing the maximum number of columns allowed in an ORDER BY clause.
     SqlMaxColumnsInOrderBy = 546,
-    /// Retrieves a int64 value representing the maximum number of columns allowed in a SELECT list.
+    /// Retrieves an int64 value representing the maximum number of columns allowed in a SELECT list.
     SqlMaxColumnsInSelect = 547,
-    /// Retrieves a int64 value representing the maximum number of columns allowed in a table.
+    /// Retrieves an int64 value representing the maximum number of columns allowed in a table.
     SqlMaxColumnsInTable = 548,
-    /// Retrieves a int64 value representing the maximum number of concurrent connections possible.
+    /// Retrieves an int64 value representing the maximum number of concurrent connections possible.
     SqlMaxConnections = 549,
-    /// Retrieves a int64 value the maximum number of characters allowed in a cursor name.
+    /// Retrieves an int64 value representing the maximum number of characters allowed in a cursor name.
     SqlMaxCursorNameLength = 550,
     ///
-    /// Retrieves a int64 value representing the maximum number of bytes allowed for an index,
+    /// Retrieves an int64 value representing the maximum number of bytes allowed for an index,
     /// including all of the parts of the index.
     SqlMaxIndexLength = 551,
-    /// Retrieves a int64 value representing the maximum number of characters allowed in a schema name.
+    /// Retrieves an int64 value representing the maximum number of characters allowed in a schema name.
     SqlDbSchemaNameLength = 552,
-    /// Retrieves a int64 value representing the maximum number of characters allowed in a procedure name.
+    /// Retrieves an int64 value representing the maximum number of characters allowed in a procedure name.
     SqlMaxProcedureNameLength = 553,
-    /// Retrieves a int64 value representing the maximum number of characters allowed in a catalog name.
+    /// Retrieves an int64 value representing the maximum number of characters allowed in a catalog name.
     SqlMaxCatalogNameLength = 554,
-    /// Retrieves a int64 value representing the maximum number of bytes allowed in a single row.
+    /// Retrieves an int64 value representing the maximum number of bytes allowed in a single row.
     SqlMaxRowSize = 555,
     ///
     /// Retrieves a boolean indicating whether the return value for the JDBC method getMaxRowSize includes the SQL
@@ -1467,22 +1471,22 @@ pub enum SqlInfo {
     ///          the SQL data types LONGVARCHAR and LONGVARBINARY.
     SqlMaxRowSizeIncludesBlobs = 556,
     ///
-    /// Retrieves a int64 value representing the maximum number of characters allowed for an SQL statement;
+    /// Retrieves an int64 value representing the maximum number of characters allowed for an SQL statement;
     /// a result of 0 (zero) means that there is no limit or the limit is not known.
     SqlMaxStatementLength = 557,
-    /// Retrieves a int64 value representing the maximum number of active statements that can be open at the same time.
+    /// Retrieves an int64 value representing the maximum number of active statements that can be open at the same time.
     SqlMaxStatements = 558,
-    /// Retrieves a int64 value representing the maximum number of characters allowed in a table name.
+    /// Retrieves an int64 value representing the maximum number of characters allowed in a table name.
     SqlMaxTableNameLength = 559,
-    /// Retrieves a int64 value representing the maximum number of tables allowed in a SELECT statement.
+    /// Retrieves an int64 value representing the maximum number of tables allowed in a SELECT statement.
     SqlMaxTablesInSelect = 560,
-    /// Retrieves a int64 value representing the maximum number of characters allowed in a user name.
+    /// Retrieves an int64 value representing the maximum number of characters allowed in a user name.
     SqlMaxUsernameLength = 561,
     ///
     /// Retrieves this database's default transaction isolation level as described in
     /// `arrow.flight.protocol.sql.SqlTransactionIsolationLevel`.
     ///
-    /// Returns a int32 ordinal for the SQL transaction isolation level.
+    /// Returns an int32 ordinal for the SQL transaction isolation level.
     SqlDefaultTransactionIsolation = 562,
     ///
     /// Retrieves a boolean value indicating whether transactions are supported. If not, invoking the method commit is a
@@ -1503,21 +1507,21 @@ pub enum SqlInfo {
     /// - return 1   (\b1)     => \[SQL_TRANSACTION_NONE\];
     /// - return 2   (\b10)    => \[SQL_TRANSACTION_READ_UNCOMMITTED\];
     /// - return 3   (\b11)    => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_READ_UNCOMMITTED\];
-    /// - return 4   (\b100)   => \[SQL_TRANSACTION_REPEATABLE_READ\];
-    /// - return 5   (\b101)   => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_REPEATABLE_READ\];
-    /// - return 6   (\b110)   => \[SQL_TRANSACTION_READ_UNCOMMITTED, SQL_TRANSACTION_REPEATABLE_READ\];
-    /// - return 7   (\b111)   => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_READ_UNCOMMITTED, SQL_TRANSACTION_REPEATABLE_READ\];
+    /// - return 4   (\b100)   => \[SQL_TRANSACTION_READ_COMMITTED\];
+    /// - return 5   (\b101)   => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_READ_COMMITTED\];
+    /// - return 6   (\b110)   => \[SQL_TRANSACTION_READ_UNCOMMITTED, SQL_TRANSACTION_READ_COMMITTED\];
+    /// - return 7   (\b111)   => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_READ_UNCOMMITTED, SQL_TRANSACTION_READ_COMMITTED\];
     /// - return 8   (\b1000)  => \[SQL_TRANSACTION_REPEATABLE_READ\];
     /// - return 9   (\b1001)  => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_REPEATABLE_READ\];
     /// - return 10  (\b1010)  => \[SQL_TRANSACTION_READ_UNCOMMITTED, SQL_TRANSACTION_REPEATABLE_READ\];
     /// - return 11  (\b1011)  => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_READ_UNCOMMITTED, SQL_TRANSACTION_REPEATABLE_READ\];
-    /// - return 12  (\b1100)  => \[SQL_TRANSACTION_REPEATABLE_READ, SQL_TRANSACTION_REPEATABLE_READ\];
-    /// - return 13  (\b1101)  => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_REPEATABLE_READ, SQL_TRANSACTION_REPEATABLE_READ\];
-    /// - return 14  (\b1110)  => \[SQL_TRANSACTION_READ_UNCOMMITTED, SQL_TRANSACTION_REPEATABLE_READ, SQL_TRANSACTION_REPEATABLE_READ\];
-    /// - return 15  (\b1111)  => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_READ_UNCOMMITTED, SQL_TRANSACTION_REPEATABLE_READ, SQL_TRANSACTION_REPEATABLE_READ\];
+    /// - return 12  (\b1100)  => \[SQL_TRANSACTION_READ_COMMITTED, SQL_TRANSACTION_REPEATABLE_READ\];
+    /// - return 13  (\b1101)  => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_READ_COMMITTED, SQL_TRANSACTION_REPEATABLE_READ\];
+    /// - return 14  (\b1110)  => \[SQL_TRANSACTION_READ_UNCOMMITTED, SQL_TRANSACTION_READ_COMMITTED, SQL_TRANSACTION_REPEATABLE_READ\];
+    /// - return 15  (\b1111)  => \[SQL_TRANSACTION_NONE, SQL_TRANSACTION_READ_UNCOMMITTED, SQL_TRANSACTION_READ_COMMITTED, SQL_TRANSACTION_REPEATABLE_READ\];
     /// - return 16  (\b10000) => \[SQL_TRANSACTION_SERIALIZABLE\];
     /// - ...
-    /// Valid SQL positioned commands are described under `arrow.flight.protocol.sql.SqlTransactionIsolationLevel`.
+    /// Valid SQL transaction isolation levels are described under `arrow.flight.protocol.sql.SqlTransactionIsolationLevel`.
     SqlSupportedTransactionsIsolationLevels = 564,
     ///
     /// Retrieves a boolean value indicating whether a data definition statement within a transaction forces
@@ -1552,7 +1556,7 @@ pub enum SqlInfo {
     /// Valid result set types are described under `arrow.flight.protocol.sql.SqlSupportedResultSetType`.
     SqlSupportedResultSetTypes = 567,
     ///
-    /// Returns an int32 bitmask value concurrency types supported for
+    /// Returns an int32 bitmask value representing the concurrency types supported for
     /// `arrow.flight.protocol.sql.SqlSupportedResultSetType.SQL_RESULT_SET_TYPE_UNSPECIFIED`.
     ///
     /// For instance:
@@ -1564,10 +1568,10 @@ pub enum SqlInfo {
     /// - return 5 (\b101) => \[SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
     /// - return 6 (\b110)  => \[SQL_RESULT_SET_CONCURRENCY_READ_ONLY, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
     /// - return 7 (\b111)  => \[SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED, SQL_RESULT_SET_CONCURRENCY_READ_ONLY, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
-    /// Valid result set types are described under `arrow.flight.protocol.sql.SqlSupportedResultSetConcurrency`.
+    /// Valid result set concurrency types are described under `arrow.flight.protocol.sql.SqlSupportedResultSetConcurrency`.
     SqlSupportedConcurrenciesForResultSetUnspecified = 568,
     ///
-    /// Returns an int32 bitmask value concurrency types supported for
+    /// Returns an int32 bitmask value representing the concurrency types supported for
     /// `arrow.flight.protocol.sql.SqlSupportedResultSetType.SQL_RESULT_SET_TYPE_FORWARD_ONLY`.
     ///
     /// For instance:
@@ -1579,10 +1583,10 @@ pub enum SqlInfo {
     /// - return 5 (\b101) => \[SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
     /// - return 6 (\b110)  => \[SQL_RESULT_SET_CONCURRENCY_READ_ONLY, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
     /// - return 7 (\b111)  => \[SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED, SQL_RESULT_SET_CONCURRENCY_READ_ONLY, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
-    /// Valid result set types are described under `arrow.flight.protocol.sql.SqlSupportedResultSetConcurrency`.
+    /// Valid result set concurrency types are described under `arrow.flight.protocol.sql.SqlSupportedResultSetConcurrency`.
     SqlSupportedConcurrenciesForResultSetForwardOnly = 569,
     ///
-    /// Returns an int32 bitmask value concurrency types supported for
+    /// Returns an int32 bitmask value representing the concurrency types supported for
     /// `arrow.flight.protocol.sql.SqlSupportedResultSetType.SQL_RESULT_SET_TYPE_SCROLL_SENSITIVE`.
     ///
     /// For instance:
@@ -1594,10 +1598,10 @@ pub enum SqlInfo {
     /// - return 5 (\b101) => \[SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
     /// - return 6 (\b110)  => \[SQL_RESULT_SET_CONCURRENCY_READ_ONLY, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
     /// - return 7 (\b111)  => \[SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED, SQL_RESULT_SET_CONCURRENCY_READ_ONLY, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
-    /// Valid result set types are described under `arrow.flight.protocol.sql.SqlSupportedResultSetConcurrency`.
+    /// Valid result set concurrency types are described under `arrow.flight.protocol.sql.SqlSupportedResultSetConcurrency`.
     SqlSupportedConcurrenciesForResultSetScrollSensitive = 570,
     ///
-    /// Returns an int32 bitmask value concurrency types supported for
+    /// Returns an int32 bitmask value representing the concurrency types supported for
     /// `arrow.flight.protocol.sql.SqlSupportedResultSetType.SQL_RESULT_SET_TYPE_SCROLL_INSENSITIVE`.
     ///
     /// For instance:
@@ -1609,7 +1613,7 @@ pub enum SqlInfo {
     /// - return 5 (\b101) => \[SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
     /// - return 6 (\b110)  => \[SQL_RESULT_SET_CONCURRENCY_READ_ONLY, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
     /// - return 7 (\b111)  => \[SQL_RESULT_SET_CONCURRENCY_UNSPECIFIED, SQL_RESULT_SET_CONCURRENCY_READ_ONLY, SQL_RESULT_SET_CONCURRENCY_UPDATABLE\]
-    /// Valid result set types are described under `arrow.flight.protocol.sql.SqlSupportedResultSetConcurrency`.
+    /// Valid result set concurrency types are described under `arrow.flight.protocol.sql.SqlSupportedResultSetConcurrency`.
     SqlSupportedConcurrenciesForResultSetScrollInsensitive = 571,
     ///
     /// Retrieves a boolean value indicating whether this database supports batch updates.
@@ -2717,7 +2721,7 @@ impl XdbcDatetimeSubcode {
 #[repr(i32)]
 pub enum Nullable {
     /// *
-    /// Indicates that the fields does not allow the use of null values.
+    /// Indicates that the field does not allow the use of null values.
     NullabilityNoNulls = 0,
     /// *
     /// Indicates that the fields allow the use of null values.
