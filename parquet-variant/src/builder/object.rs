@@ -35,7 +35,7 @@ struct ObjectHeaderWriter<const OFFSET_SIZE: u8, const ID_SIZE: u8>();
 
 impl<const OFFSET_SIZE: u8, const ID_SIZE: u8> ObjectHeaderWriter<OFFSET_SIZE, ID_SIZE> {
     fn write(
-        dst: &mut Vec<u8>,
+        mut dst: &mut [u8],
         num_fields: usize,
         field_ids: impl Iterator<Item = u32>,
         offsets: impl Iterator<Item = usize>,
@@ -44,28 +44,33 @@ impl<const OFFSET_SIZE: u8, const ID_SIZE: u8> ObjectHeaderWriter<OFFSET_SIZE, I
         let is_large = num_fields > u8::MAX as usize;
         // num_fields will consume 4 bytes when it is larger than u8::MAX
         if is_large {
-            dst.push(object_header::<1, { ID_SIZE }, { OFFSET_SIZE }>());
-            append_packed_u32::<4>(dst, num_fields);
+            dst[0] = object_header::<1, { ID_SIZE }, { OFFSET_SIZE }>();
+            dst = &mut dst[1..];
+            dst = append_packed_u32::<4>(dst, num_fields);
         } else {
-            dst.push(object_header::<0, { ID_SIZE }, { OFFSET_SIZE }>());
-            append_packed_u32::<1>(dst, num_fields);
+            dst[0] = object_header::<0, { ID_SIZE }, { OFFSET_SIZE }>();
+            dst = &mut dst[1..];
+            dst = append_packed_u32::<1>(dst, num_fields);
         }
 
         for id in field_ids {
-            append_packed_u32::<ID_SIZE>(dst, id as usize);
+            dst = append_packed_u32::<ID_SIZE>(dst, id as usize);
         }
 
         for off in offsets {
-            append_packed_u32::<OFFSET_SIZE>(dst, off);
+            dst = append_packed_u32::<OFFSET_SIZE>(dst, off);
         }
 
-        append_packed_u32::<OFFSET_SIZE>(dst, data_size);
+        dst = append_packed_u32::<OFFSET_SIZE>(dst, data_size);
+        debug_assert!(dst.is_empty());
     }
 }
 
 #[inline(always)]
-fn append_packed_u32<const SIZE: u8>(dest: &mut Vec<u8>, value: usize) {
-    dest.extend_from_slice(&value.to_le_bytes()[..SIZE as usize]);
+fn append_packed_u32<const SIZE: u8>(dest: &mut [u8], value: usize) -> &mut [u8] {
+    let (head, tail) = dest.split_at_mut(SIZE as usize);
+    head.copy_from_slice(&value.to_le_bytes()[..SIZE as usize]);
+    tail
 }
 
 /// A builder for creating [`Variant::Object`] values.
@@ -285,12 +290,18 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
             (num_fields * id_size as usize) + // field IDs
             ((num_fields + 1) * offset_size as usize); // field offsets + data_size
 
-        let mut bytes_to_splice = Vec::with_capacity(header_size);
+        let buffer = value_builder.inner_mut();
+        buffer.resize(current_offset + header_size, 0);
+        buffer.copy_within(
+            starting_offset..current_offset,
+            starting_offset + header_size,
+        );
+        let header = &mut buffer[starting_offset..starting_offset + header_size];
 
         macro_rules! write_header {
             ($offset_size:expr, $id_size:expr) => {
                 ObjectHeaderWriter::<{ $offset_size as u8 }, { $id_size as u8 }>::write(
-                    &mut bytes_to_splice,
+                    header,
                     num_fields,
                     self.fields.keys().copied(),
                     self.fields.values().copied(),
@@ -318,11 +329,6 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
             (Four, Three) => write_header!(Four, Three),
             (Four, Four) => write_header!(Four, Four),
         }
-
-        // Shift existing data to make room for the header
-        value_builder
-            .inner_mut()
-            .splice(starting_offset..starting_offset, bytes_to_splice);
 
         self.parent_state.finish();
     }
@@ -479,6 +485,46 @@ mod tests {
 
         // apple(1), banana(2), zebra(0)
         assert_eq!(field_ids, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn test_nested_object_header_widths() {
+        for (num_fields, payload_len) in [
+            (0, 0),
+            (1, 250),
+            (1, 251),
+            (255, 0),
+            (256, 0),
+            (256, 256),
+            (1, 65_532),
+        ] {
+            let payload = vec![42; payload_len];
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(42_i32);
+            let mut object = list.new_object();
+            for field in 0..num_fields {
+                object.insert(&format!("field_{field}"), payload.as_slice());
+            }
+            object.finish();
+            list.append_value(99_i32);
+            list.finish();
+
+            let (metadata, value) = builder.finish();
+            let variant = Variant::try_new(&metadata, &value).unwrap();
+            let list = variant.as_list().unwrap();
+            assert_eq!(list.get(0), Some(Variant::Int32(42)));
+            assert_eq!(list.get(2), Some(Variant::Int32(99)));
+            let object = list.get(1).unwrap();
+            let object = object.as_object().unwrap();
+            assert_eq!(object.len(), num_fields);
+            for field in 0..num_fields {
+                assert_eq!(
+                    object.get(&format!("field_{field}")),
+                    Some(Variant::Binary(&payload)),
+                );
+            }
+        }
     }
 
     #[test]
