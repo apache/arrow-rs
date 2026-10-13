@@ -605,45 +605,40 @@ impl RleDecoder {
                         self.bit_packed_left = 0;
                         break;
                     }
-                    {
+
+                    let idx = &index_buf[..num_values];
+                    let dict_len = dict.len();
+                    // Negative i32 cast to u32 becomes a large value so the bounds check still
+                    // rejects it.
+                    let max_idx = idx.iter().fold(0u32, |acc, &i| acc.max(i as u32)) as usize;
+                    if max_idx >= dict_len {
                         #[cold]
                         #[inline(never)]
-                        fn oob(max_idx: u32, dict_len: usize) -> ParquetError {
+                        fn oob(max_idx: usize, dict_len: usize) -> ParquetError {
                             general_err!(
                                 "dictionary index out of bounds: the len is {} but the index is {}",
                                 dict_len,
                                 max_idx
                             )
                         }
-                        const CHUNK: usize = 16;
-                        let out = &mut buffer[values_read..values_read + num_values];
-                        let idx = &index_buf[..num_values];
-                        let dict_len = dict.len();
-                        let (out_chunks, out_chunks_remainder) = out.as_chunks_mut::<CHUNK>();
-                        let (idx_chunks, idx_chunks_remainder) = idx.as_chunks::<CHUNK>();
-                        for (out_chunk, idx_chunk) in out_chunks.iter_mut().zip(idx_chunks) {
-                            // u32 max-reduction instead of `.all(|&i| ..)`: `.all`
-                            // short-circuits and blocks autovectorisation. Negative
-                            // i32 cast to u32 becomes a large value so the bounds
-                            // check still rejects it.
-                            let max_idx = idx_chunk.iter().fold(0u32, |acc, &i| acc.max(i as u32));
-                            if (max_idx as usize) >= dict_len {
-                                return Err(oob(max_idx, dict_len));
-                            }
-                            for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
-                                // SAFETY: all indices checked above to be in bounds
-                                b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
-                            }
-                        }
-                        for (b, i) in out_chunks_remainder.iter_mut().zip(idx_chunks_remainder) {
-                            let dict_idx = *i as usize;
-                            if dict_idx >= dict_len {
-                                return Err(oob(*i as u32, dict_len));
-                            }
-                            // SAFETY: bounds checked above
-                            b.clone_from(unsafe { dict.get_unchecked(dict_idx) });
+                        return Err(oob(max_idx, dict_len));
+                    }
+
+                    const CHUNK: usize = 16;
+                    let out = &mut buffer[values_read..values_read + num_values];
+                    let (idx_chunks, idx_chunks_remainder) = idx.as_chunks::<CHUNK>();
+                    let (out_chunks, out_chunks_remainder) = out.as_chunks_mut::<CHUNK>();
+                    for (out_chunk, idx_chunk) in out_chunks.iter_mut().zip(idx_chunks) {
+                        for (b, i) in out_chunk.iter_mut().zip(idx_chunk.iter()) {
+                            // SAFETY: all indices checked above to be in bounds
+                            b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
                         }
                     }
+                    for (b, i) in out_chunks_remainder.iter_mut().zip(idx_chunks_remainder) {
+                        // SAFETY: bounds checked above
+                        b.clone_from(unsafe { dict.get_unchecked(*i as usize) });
+                    }
+
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
                     if num_values < to_read {
