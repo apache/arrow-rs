@@ -529,6 +529,86 @@ impl VariantArray {
         }
     }
 
+    /// Returns a row as a [`Variant`], reconstructing shredded objects and lists
+    /// into a caller-owned buffer when necessary.
+    ///
+    /// Unlike [`Self::try_value`], this can read composite `typed_value` columns.
+    /// Only the requested row is unshredded. The returned value borrows from this
+    /// array and, for reconstructed values, from `buffer`. The buffer is replaced
+    /// for composite values and is unchanged for values that can be borrowed
+    /// directly. It can be reused after the returned value is dropped.
+    ///
+    /// For reading many rows, [`crate::unshred_variant`] avoids repeatedly
+    /// initializing the recursive row builders.
+    ///
+    /// # Example
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow::array::{ArrayRef, StringArray};
+    /// use arrow_schema::{DataType, Field};
+    /// use parquet_variant::Variant;
+    /// use parquet_variant_compute::{json_to_variant, shred_variant};
+    ///
+    /// let json: ArrayRef = Arc::new(StringArray::from(vec![r#"{"a": 1}"#]));
+    /// let input = json_to_variant(&json)?;
+    /// let schema = DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into());
+    /// let shredded = shred_variant(&input, &schema)?;
+    /// let mut buffer = Vec::new();
+    /// let value = shredded.try_value_with_buffer(0, &mut buffer)?;
+    /// assert_eq!(value.as_object().unwrap().get("a"), Some(Variant::Int64(1)));
+    /// # Ok::<(), arrow_schema::ArrowError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns an error for an out-of-bounds index, an array-level null row,
+    /// invalid shredded data, or a conversion error from [`Self::try_value`].
+    ///
+    /// # Panics
+    /// For directly borrowed values, has the same validation requirements as
+    /// [`Self::try_value`]. Invalid unshredded bytes may panic.
+    pub fn try_value_with_buffer<'a>(
+        &'a self,
+        index: usize,
+        buffer: &'a mut Vec<u8>,
+    ) -> Result<Variant<'a, 'a>> {
+        if index >= self.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Index {index} out of bounds for VariantArray of length {}",
+                self.len()
+            )));
+        }
+        if self.is_null(index) {
+            return Err(ArrowError::InvalidArgumentError(
+                "Cannot read a null Variant row".into(),
+            ));
+        }
+        let needs_buffer = self.typed_value_column().is_some_and(|typed_value| {
+            typed_value.is_valid(index)
+                && matches!(
+                    typed_value.data_type(),
+                    DataType::Struct(_)
+                        | DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::ListView(_)
+                        | DataType::LargeListView(_)
+                )
+        });
+        if !needs_buffer {
+            return self.try_value(index);
+        }
+
+        let row = crate::unshred_variant(&self.slice(index, 1))?;
+        let metadata = binary_array_value(self.metadata.as_ref(), index).ok_or_else(|| {
+            ArrowError::InvalidArgumentError("metadata field must be a binary-like array".into())
+        })?;
+        let value = binary_array_value(row.value_column().as_ref(), 0).ok_or_else(|| {
+            ArrowError::InvalidArgumentError("value field must be a binary-like array".into())
+        })?;
+        buffer.clear();
+        buffer.extend_from_slice(value);
+        Variant::try_new(metadata, buffer)
+    }
+
     /// Return a reference to the `metadata` column of the [`StructArray`]
     pub fn metadata_column(&self) -> &ArrayRef {
         &self.metadata
@@ -1376,6 +1456,7 @@ mod test {
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::{Field, Fields};
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, ShortString};
+    use parquet_variant_json::VariantToJson;
 
     #[test]
     fn invalid_not_a_struct_array() {
@@ -2016,5 +2097,144 @@ mod test {
             ),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn try_value_with_buffer_reads_nested_objects() {
+        let json: ArrayRef = Arc::new(StringArray::from(vec![
+            r#"{"a":[{"b":1,"c":"x"},null,{}],"tail":true}"#,
+            r#"{"a":[],"tail":false}"#,
+            "{}",
+            r#"{"a":null}"#,
+            "null",
+        ]));
+        let original = crate::json_to_variant(&json).unwrap();
+        for fully_shredded in [false, true] {
+            let mut element_fields = vec![Field::new("b", DataType::Int64, true)];
+            if fully_shredded {
+                element_fields.push(Field::new("c", DataType::Utf8, true));
+            }
+            let list_type = DataType::List(Arc::new(Field::new_list_field(
+                DataType::Struct(element_fields.into()),
+                true,
+            )));
+            let mut fields = vec![Field::new("a", list_type, true)];
+            if fully_shredded {
+                fields.push(Field::new("tail", DataType::Boolean, true));
+            }
+            let shredded =
+                crate::shred_variant(&original, &DataType::Struct(fields.into())).unwrap();
+            let mut buffer = Vec::new();
+            for index in 0..original.len() {
+                assert_eq!(
+                    shredded
+                        .try_value_with_buffer(index, &mut buffer)
+                        .unwrap()
+                        .to_json_string()
+                        .unwrap(),
+                    original.value(index).to_json_string().unwrap(),
+                );
+            }
+            let sliced = shredded.slice(1, shredded.len() - 1);
+            assert_eq!(
+                sliced
+                    .try_value_with_buffer(0, &mut buffer)
+                    .unwrap()
+                    .to_json_string()
+                    .unwrap(),
+                original.value(1).to_json_string().unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn try_value_with_buffer_reads_list_types() {
+        let json: ArrayRef = Arc::new(StringArray::from(vec![
+            "[1,null,3]",
+            "[]",
+            "null",
+            r#"{"a":1}"#,
+        ]));
+        let original = crate::json_to_variant(&json).unwrap();
+        let item = Arc::new(Field::new_list_field(DataType::Int64, true));
+        for schema in [
+            DataType::List(item.clone()),
+            DataType::LargeList(item.clone()),
+            DataType::ListView(item.clone()),
+            DataType::LargeListView(item),
+        ] {
+            let shredded = crate::shred_variant(&original, &schema).unwrap();
+            let sliced = shredded.slice(1, 3);
+            let mut buffer = Vec::new();
+            for index in 0..original.len() {
+                assert_eq!(
+                    shredded
+                        .try_value_with_buffer(index, &mut buffer)
+                        .unwrap()
+                        .to_json_string()
+                        .unwrap(),
+                    original.value(index).to_json_string().unwrap(),
+                );
+            }
+            assert_eq!(
+                sliced
+                    .try_value_with_buffer(0, &mut buffer)
+                    .unwrap()
+                    .to_json_string()
+                    .unwrap(),
+                original.value(1).to_json_string().unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn try_value_with_buffer_borrows_primitives_and_checks_indices() {
+        let original = VariantArray::from_iter([Some(42_i64), None]);
+        let shredded = crate::shred_variant(&original, &DataType::Int64).unwrap();
+        let mut buffer = vec![1, 2, 3];
+        for input in [&original, &shredded] {
+            assert_eq!(
+                input.try_value_with_buffer(0, &mut buffer).unwrap(),
+                Variant::Int64(42),
+            );
+            assert_eq!(buffer, [1, 2, 3]);
+            assert!(input.try_value_with_buffer(1, &mut buffer).is_err());
+            assert!(input.try_value_with_buffer(2, &mut buffer).is_err());
+        }
+    }
+
+    #[test]
+    fn try_value_with_buffer_only_reads_selected_row() {
+        let json: ArrayRef = Arc::new(StringArray::from(vec![r#"{"a":1}"#, r#"{"a":2}"#]));
+        let original = crate::json_to_variant(&json).unwrap();
+        let schema = DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into());
+        let shredded = crate::shred_variant(&original, &schema).unwrap();
+        let metadata: ArrayRef = Arc::new(BinaryViewArray::from_iter_values([
+            &b""[..],
+            binary_array_value(shredded.metadata_column().as_ref(), 1).unwrap(),
+        ]));
+        let input = VariantArray::from_parts(
+            metadata,
+            shredded.value_column().clone(),
+            shredded.typed_value_column().cloned(),
+            None,
+        );
+        let mut buffer = Vec::new();
+        assert_eq!(
+            input
+                .try_value_with_buffer(1, &mut buffer)
+                .unwrap()
+                .to_json_string()
+                .unwrap(),
+            original.value(1).to_json_string().unwrap(),
+        );
+        assert!(input.try_value_with_buffer(0, &mut buffer).is_err());
+        let conflicting = VariantArray::from_parts(
+            shredded.metadata_column().clone(),
+            original.value_column().clone(),
+            shredded.typed_value_column().cloned(),
+            None,
+        );
+        assert!(conflicting.try_value_with_buffer(0, &mut buffer).is_err());
     }
 }
