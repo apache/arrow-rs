@@ -405,7 +405,14 @@ impl ChunkReader for ColumnChunkData {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> crate::errors::Result<Bytes> {
-        Ok(self.get(start)?.slice(..length))
+        let data = self.get(start)?;
+        if data.len() < length {
+            return Err(general_err!(
+                "column chunk data at offset {start} has {} bytes, expected {length}",
+                data.len()
+            ));
+        }
+        Ok(data.slice(..length))
     }
 }
 
@@ -423,3 +430,22 @@ impl Iterator for ColumnChunkIterator {
 }
 
 impl PageIterator for ColumnChunkIterator {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_bytes_errors_on_short_data() {
+        let dense = ColumnChunkData::Dense {
+            offset: 100,
+            data: Bytes::from_static(b"0123456789"),
+        };
+        assert_eq!(
+            dense.get_bytes(105, 5).unwrap(),
+            Bytes::from_static(b"56789")
+        );
+        let err = dense.get_bytes(105, 6).unwrap_err().to_string();
+        assert!(err.contains("has 5 bytes, expected 6"), "{err}");
+    }
+}
