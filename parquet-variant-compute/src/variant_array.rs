@@ -564,8 +564,9 @@ impl VariantArray {
     /// invalid shredded data, or a conversion error from [`Self::try_value`].
     ///
     /// # Panics
-    /// For directly borrowed values, has the same validation requirements as
-    /// [`Self::try_value`]. Invalid unshredded bytes may panic.
+    /// Has the same validation requirements as [`Self::try_value`] and
+    /// [`crate::unshred_variant`]. Malformed inputs may panic in their readers
+    /// or builders.
     pub fn try_value_with_buffer<'a>(
         &'a self,
         index: usize,
