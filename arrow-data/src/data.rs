@@ -1675,11 +1675,19 @@ impl ArrayData {
                 }
             }
             DataType::RunEndEncoded(run_ends, _values) => {
+                let len_plus_offset =
+                    checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
                 let run_ends_data = self.child_at(0)?;
                 match run_ends.data_type() {
-                    DataType::Int16 => run_ends_data.check_run_ends::<i16>(),
-                    DataType::Int32 => run_ends_data.check_run_ends::<i32>(),
-                    DataType::Int64 => run_ends_data.check_run_ends::<i64>(),
+                    DataType::Int16 => {
+                        run_ends_data.check_run_ends::<i16>(self.len, len_plus_offset)
+                    }
+                    DataType::Int32 => {
+                        run_ends_data.check_run_ends::<i32>(self.len, len_plus_offset)
+                    }
+                    DataType::Int64 => {
+                        run_ends_data.check_run_ends::<i64>(self.len, len_plus_offset)
+                    }
                     data_type => Err(ArrowError::InvalidArgumentError(format!(
                         "Run end type must be Int16, Int32 or Int64, got {data_type}"
                     ))),
@@ -1829,7 +1837,11 @@ impl ArrayData {
     }
 
     /// Validates that each value in run_ends array is positive and strictly increasing.
-    fn check_run_ends<T>(&self) -> Result<(), ArrowError>
+    fn check_run_ends<T>(
+        &self,
+        parent_len: usize,
+        parent_len_plus_offset: usize,
+    ) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
@@ -1856,10 +1868,9 @@ impl ArrayData {
             Ok(())
         })?;
 
-        let len_plus_offset = checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
-        if prev_value.as_usize() < len_plus_offset {
+        if parent_len > 0 && prev_value.as_usize() < parent_len_plus_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {len_plus_offset}."
+                "The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is {prev_value} and offset + length of array is {parent_len_plus_offset}."
             )));
         }
         Ok(())
@@ -3527,6 +3538,79 @@ mod tests {
             err.to_string(),
             "Invalid argument error: Run end type must be Int16, Int32 or Int64, got Utf8"
         );
+    }
+
+    #[test]
+    fn test_run_array_validates_last_run() {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Float32,
+                true,
+            )),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .add_buffer(vec![1_i32, 3].into())
+            .build()
+            .unwrap();
+        let values = ArrayData::builder(DataType::Float32)
+            .len(2)
+            .add_buffer(vec![1.5_f32, 2.5].into())
+            .build()
+            .unwrap();
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(4)
+            .offset(0)
+            .child_data(vec![runs, values])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is 3 and offset + length of array is 4."
+        );
+    }
+
+    #[test]
+    fn test_run_array_empty_validates() {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Float32,
+                true,
+            )),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .add_buffer(vec![1_i32, 3].into())
+            .build()
+            .unwrap();
+        let values = ArrayData::builder(DataType::Float32)
+            .len(2)
+            .add_buffer(vec![1.5_f32, 2.5].into())
+            .build()
+            .unwrap();
+
+        let data = ArrayDataBuilder::new(dt)
+            .len(0)
+            .offset(4)
+            .child_data(vec![runs, values])
+            .build()
+            .unwrap();
+        assert_eq!(data.len(), 0);
     }
 
     /// `validate_values` must report missing children rather than index out of bounds.
