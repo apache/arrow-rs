@@ -60,8 +60,8 @@ use crate::bit_chunk_iterator::BitChunks;
 // <https://github.com/rust-lang/rust/blob/main/library/core/src/num/imp/int_bits.rs>).
 // The fallback here does less work on sparse and dense masks, and on x86 also
 // in between (three stages inside each byte plus one multiply, fewer shifts in
-// total); on big AArch64 cores the six-stage version is faster in that middle
-// band.
+// total); on Neoverse the six-stage version may be faster in that middle
+// band, see <https://github.com/apache/arrow-rs/issues/11542>.
 #[inline]
 pub fn compress(value: u64, mask: u64) -> u64 {
     #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
