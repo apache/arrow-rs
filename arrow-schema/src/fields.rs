@@ -621,7 +621,10 @@ impl UnionFields {
                 output.push((field_type_id, from_field.clone()))
             }
         }
-        *self = output.into_iter().collect();
+        // TODO: see above comment; can we remove the need to go through try_new
+        //       and just validate in this function ourselves?
+        let (type_ids, fields): (Vec<i8>, Vec<FieldRef>) = output.into_iter().unzip();
+        *self = Self::try_new(type_ids, fields)?;
         Ok(())
     }
 }
