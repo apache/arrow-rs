@@ -76,6 +76,22 @@ impl ArrayReader for StructArrayReader {
             match read {
                 Some(expected) => {
                     if expected != child_read {
+                        if self.stopped_for_capacity() {
+                            // One column ran out of offset range part way
+                            // through the batch, but the other columns have
+                            // already decoded past that point and cannot be
+                            // rewound. Fail loudly rather than emit misaligned
+                            // columns. Reading such a column on its own works,
+                            // see https://github.com/apache/arrow-rs/issues/7973
+                            return Err(general_err!(
+                                "cannot split a batch across multiple columns: a byte array \
+                                 column exceeded the 2GB limit of 32 bit offsets after {} of \
+                                 {} rows. Read this column as LargeUtf8, LargeBinary or a \
+                                 view type, or reduce the batch size",
+                                child_read.min(expected),
+                                batch_size
+                            ));
+                        }
                         return Err(general_err!(
                             "StructArrayReader out of sync in read_records, expected {} read, got {}",
                             expected,
@@ -87,6 +103,12 @@ impl ArrayReader for StructArrayReader {
             }
         }
         Ok(read.unwrap_or(0))
+    }
+
+    fn stopped_for_capacity(&self) -> bool {
+        self.children
+            .iter()
+            .any(|child| child.stopped_for_capacity())
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
