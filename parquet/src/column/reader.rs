@@ -234,6 +234,11 @@ where
         // Pages decompressed from here on are being decoded, not walked past.
         self.page_reader
             .set_decompression_phase(DecompressionPhase::Read);
+        // A page loaded by an earlier skip that still has values is about to be
+        // read from, so its decompression was not wasted.
+        if self.num_decoded_values < self.num_buffered_values {
+            self.page_reader.current_page_read();
+        }
         let mut total_records_read = 0;
         let mut total_levels_read = 0;
         let mut total_values_read = 0;

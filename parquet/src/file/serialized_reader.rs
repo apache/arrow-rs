@@ -27,7 +27,9 @@ use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::thrift::PageHeader;
-use crate::file::metrics::{DecompressionMetrics, DecompressionPhase, PageKind};
+use crate::file::metrics::{
+    DecompressionMetrics, DecompressionPhase, DecompressionRecorder, PageKind,
+};
 use crate::file::page_index::offset_index::PageLocation;
 use crate::file::statistics;
 use crate::file::{
@@ -403,8 +405,7 @@ pub(crate) fn decode_page(
     buffer: Bytes,
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
-    metrics: &DecompressionMetrics,
-    phase: DecompressionPhase,
+    recorder: &mut DecompressionRecorder,
 ) -> Result<Page> {
     // Verify the 32-bit CRC checksum of the page
     #[cfg(feature = "crc")]
@@ -465,7 +466,7 @@ pub(crate) fn decode_page(
                 let compressed = &buffer[offset..];
                 // Reading a clock per page is not free, so only do it when the
                 // caller asked for these numbers. Disabled is one enum test.
-                if metrics.is_enabled() {
+                if recorder.is_enabled() {
                     let started = std::time::Instant::now();
                     decompressor.decompress(
                         compressed,
@@ -477,7 +478,7 @@ pub(crate) fn decode_page(
                     } else {
                         PageKind::Data
                     };
-                    metrics.record(kind, phase, started.elapsed(), decompressed_size);
+                    recorder.record(kind, started.elapsed(), decompressed_size);
                 } else {
                     decompressor.decompress(
                         compressed,
@@ -610,12 +611,9 @@ pub struct SerializedPageReader<R: ChunkReader> {
 
     context: SerializedPageReaderContext,
 
-    /// Where decompression timings go. Disabled unless the caller asked.
-    decompression_metrics: DecompressionMetrics,
-
-    /// Whether the pages being decompressed now are read or skipped. Set by
-    /// the column reader, which is the layer that knows.
-    decompression_phase: DecompressionPhase,
+    /// Where decompression timings go, attributed to read or skip by what
+    /// the column reader does with each page. Disabled unless the caller asked.
+    decompression: DecompressionRecorder,
 }
 
 impl<R: ChunkReader> SerializedPageReader<R> {
@@ -625,7 +623,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     /// decompressing. Pass a clone of one handle to every column's page reader
     /// to total a whole read.
     pub fn with_decompression_metrics(mut self, metrics: DecompressionMetrics) -> Self {
-        self.decompression_metrics = metrics;
+        self.decompression = DecompressionRecorder::new(metrics);
         self
     }
     /// Creates a new serialized page reader from a chunk reader and metadata
@@ -727,8 +725,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             state,
             physical_type: meta.column_type(),
             context,
-            decompression_metrics: DecompressionMetrics::disabled(),
-            decompression_phase: DecompressionPhase::Read,
+            decompression: DecompressionRecorder::default(),
         })
     }
 
@@ -977,7 +974,11 @@ pub(crate) fn verify_page_size(
 
 impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
     fn set_decompression_phase(&mut self, phase: DecompressionPhase) {
-        self.decompression_phase = phase;
+        self.decompression.set_phase(phase);
+    }
+
+    fn current_page_read(&mut self) {
+        self.decompression.current_page_read();
     }
 
     fn get_next_page(&mut self) -> Result<Option<Page>> {
@@ -1034,8 +1035,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         buffer,
                         self.physical_type,
                         self.decompressor.as_mut(),
-                        &self.decompression_metrics,
-                        self.decompression_phase,
+                        &mut self.decompression,
                     )?;
                     if page.is_data_page() {
                         *page_index += 1;
@@ -1080,8 +1080,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         bytes,
                         self.physical_type,
                         self.decompressor.as_mut(),
-                        &self.decompression_metrics,
-                        self.decompression_phase,
+                        &mut self.decompression,
                     )?
                 }
             };
@@ -1289,8 +1288,7 @@ mod tests {
             buffer,
             Type::INT32,
             None,
-            &DecompressionMetrics::disabled(),
-            DecompressionPhase::Read,
+            &mut DecompressionRecorder::default(),
         )
         .unwrap_err();
         assert!(
@@ -1317,8 +1315,7 @@ mod tests {
             buffer.clone(),
             Type::INT32,
             None,
-            &DecompressionMetrics::disabled(),
-            DecompressionPhase::Read,
+            &mut DecompressionRecorder::default(),
         )
         .unwrap_err();
         assert_eq!(
@@ -1341,8 +1338,7 @@ mod tests {
             buffer,
             Type::INT32,
             None,
-            &DecompressionMetrics::disabled(),
-            DecompressionPhase::Read,
+            &mut DecompressionRecorder::default(),
         )
         .unwrap_err();
         assert!(

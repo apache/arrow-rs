@@ -21,18 +21,26 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-/// Whether a page was decompressed to decode its values or to skip past them.
+/// Whether a decompressed page was used to return values or only walked past.
 ///
 /// Both paths decompress: a page has to be turned back into plaintext before
 /// it can be walked, whether its values are then decoded or thrown away. Only
 /// a page skipped whole is free. Splitting the two says how much of the cost
 /// was paid for rows that were never returned.
+///
+/// The phase is decided by what happens to the page, not by which call loaded
+/// it. A page first loaded while skipping counts as [`Self::Read`] once any of
+/// its values is read, and as [`Self::Skip`] only if the reader moves past it
+/// without reading. A dictionary page counts as [`Self::Read`] once any value of
+/// its column chunk is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DecompressionPhase {
-    /// Decompressed while decoding values.
+    /// At least one value of the page (or of the dictionary's column chunk) was
+    /// read.
     #[default]
     Read,
-    /// Decompressed while skipping past values, so the work was thrown away.
+    /// The page was decompressed and then walked past without reading any of
+    /// its values, so the work was thrown away.
     Skip,
 }
 
@@ -206,6 +214,109 @@ impl DecompressionMetrics {
     }
 }
 
+/// One page's decompression cost, held until it is known whether the page was
+/// read or only walked past.
+#[derive(Debug, Clone, Copy)]
+struct Sample {
+    elapsed: Duration,
+    bytes: usize,
+}
+
+/// Attributes one page reader's decompression to [`DecompressionPhase::Read`]
+/// or [`DecompressionPhase::Skip`] by what happens to each page afterwards.
+///
+/// A page decompressed while reading is recorded as read at once. A page
+/// decompressed while skipping is held back: it becomes read if values are then
+/// read from it ([`Self::current_page_read`]) and skip if the reader moves on to
+/// the next page, or is dropped, first. The column chunk's dictionary is held
+/// the same way and becomes read as soon as any value of the chunk is read.
+#[derive(Debug, Default)]
+pub(crate) struct DecompressionRecorder {
+    metrics: DecompressionMetrics,
+    phase: DecompressionPhase,
+    pending_dictionary: Option<Sample>,
+    pending_data: Option<Sample>,
+}
+
+impl DecompressionRecorder {
+    /// A recorder that writes into `metrics`.
+    pub(crate) fn new(metrics: DecompressionMetrics) -> Self {
+        Self {
+            metrics,
+            ..Self::default()
+        }
+    }
+
+    /// Whether decompression should be timed at all.
+    #[inline]
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.metrics.is_enabled()
+    }
+
+    /// Whether the pages loaded from now on are loaded to read or to skip.
+    pub(crate) fn set_phase(&mut self, phase: DecompressionPhase) {
+        self.phase = phase;
+    }
+
+    /// Records one decompressed page of `kind`.
+    pub(crate) fn record(&mut self, kind: PageKind, elapsed: Duration, bytes: usize) {
+        let sample = Sample { elapsed, bytes };
+        match (kind, self.phase) {
+            (PageKind::Data, DecompressionPhase::Read) => {
+                // The previous page was left without being read, and a value of
+                // this chunk is about to be read, so its dictionary is used.
+                self.flush_data(DecompressionPhase::Skip);
+                self.flush_dictionary(DecompressionPhase::Read);
+                self.commit(PageKind::Data, DecompressionPhase::Read, sample);
+            }
+            (PageKind::Data, DecompressionPhase::Skip) => {
+                self.flush_data(DecompressionPhase::Skip);
+                self.pending_data = Some(sample);
+            }
+            (PageKind::Dictionary, DecompressionPhase::Read) => {
+                self.flush_dictionary(DecompressionPhase::Skip);
+                self.commit(PageKind::Dictionary, DecompressionPhase::Read, sample);
+            }
+            (PageKind::Dictionary, DecompressionPhase::Skip) => {
+                self.flush_dictionary(DecompressionPhase::Skip);
+                self.pending_dictionary = Some(sample);
+            }
+        }
+    }
+
+    /// Values are about to be read from the page currently loaded, so neither
+    /// that page nor the chunk's dictionary was decompressed for nothing.
+    pub(crate) fn current_page_read(&mut self) {
+        self.flush_data(DecompressionPhase::Read);
+        self.flush_dictionary(DecompressionPhase::Read);
+    }
+
+    fn flush_data(&mut self, phase: DecompressionPhase) {
+        if let Some(sample) = self.pending_data.take() {
+            self.commit(PageKind::Data, phase, sample);
+        }
+    }
+
+    fn flush_dictionary(&mut self, phase: DecompressionPhase) {
+        if let Some(sample) = self.pending_dictionary.take() {
+            self.commit(PageKind::Dictionary, phase, sample);
+        }
+    }
+
+    fn commit(&self, kind: PageKind, phase: DecompressionPhase, sample: Sample) {
+        self.metrics
+            .record(kind, phase, sample.elapsed, sample.bytes);
+    }
+}
+
+impl Drop for DecompressionRecorder {
+    /// Whatever is still held was walked past without being read.
+    fn drop(&mut self) {
+        self.flush_data(DecompressionPhase::Skip);
+        self.flush_dictionary(DecompressionPhase::Skip);
+    }
+}
+
 /// One cell of the page kind by phase matrix.
 #[derive(Debug, Default)]
 struct PageCounters {
@@ -327,6 +438,75 @@ mod tests {
         assert_eq!(metrics.dictionary_decompressed_bytes(), Some(12288));
     }
 
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    fn pages(m: &DecompressionMetrics, kind: PageKind, phase: DecompressionPhase) -> u64 {
+        m.pages_decompressed(kind, phase).unwrap()
+    }
+
+    #[test]
+    fn a_page_loaded_by_a_skip_and_then_read_counts_as_read() {
+        let metrics = DecompressionMetrics::enabled();
+        let mut r = DecompressionRecorder::new(metrics.clone());
+        r.set_phase(DecompressionPhase::Skip);
+        r.record(PageKind::Dictionary, ms(1), 10);
+        r.record(PageKind::Data, ms(1), 100);
+        r.set_phase(DecompressionPhase::Read);
+        r.current_page_read();
+        drop(r);
+        assert_eq!(pages(&metrics, PageKind::Data, DecompressionPhase::Read), 1);
+        assert_eq!(pages(&metrics, PageKind::Data, DecompressionPhase::Skip), 0);
+        assert_eq!(
+            pages(&metrics, PageKind::Dictionary, DecompressionPhase::Read),
+            1
+        );
+        assert_eq!(
+            pages(&metrics, PageKind::Dictionary, DecompressionPhase::Skip),
+            0
+        );
+    }
+
+    #[test]
+    fn a_page_walked_past_counts_as_skip_and_a_later_read_saves_the_dictionary() {
+        let metrics = DecompressionMetrics::enabled();
+        let mut r = DecompressionRecorder::new(metrics.clone());
+        r.set_phase(DecompressionPhase::Skip);
+        r.record(PageKind::Dictionary, ms(1), 10);
+        r.record(PageKind::Data, ms(1), 100); // walked past
+        r.set_phase(DecompressionPhase::Read);
+        r.record(PageKind::Data, ms(1), 100); // loaded and read
+        drop(r);
+        assert_eq!(pages(&metrics, PageKind::Data, DecompressionPhase::Skip), 1);
+        assert_eq!(pages(&metrics, PageKind::Data, DecompressionPhase::Read), 1);
+        assert_eq!(
+            pages(&metrics, PageKind::Dictionary, DecompressionPhase::Read),
+            1
+        );
+    }
+
+    #[test]
+    fn a_chunk_that_is_only_skipped_counts_everything_as_skip() {
+        let metrics = DecompressionMetrics::enabled();
+        let mut r = DecompressionRecorder::new(metrics.clone());
+        r.set_phase(DecompressionPhase::Skip);
+        r.record(PageKind::Dictionary, ms(1), 10);
+        r.record(PageKind::Data, ms(1), 100);
+        r.record(PageKind::Data, ms(1), 100);
+        drop(r);
+        assert_eq!(pages(&metrics, PageKind::Data, DecompressionPhase::Skip), 2);
+        assert_eq!(
+            pages(&metrics, PageKind::Dictionary, DecompressionPhase::Skip),
+            1
+        );
+        assert_eq!(pages(&metrics, PageKind::Data, DecompressionPhase::Read), 0);
+        assert_eq!(
+            pages(&metrics, PageKind::Dictionary, DecompressionPhase::Read),
+            0
+        );
+    }
+
     #[test]
     fn a_clone_shares_the_counters() {
         let metrics = DecompressionMetrics::enabled();
@@ -359,7 +539,8 @@ mod tests {
 mod end_to_end_tests {
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+    use arrow_array::types::Int32Type;
+    use arrow_array::{ArrayRef, Int64Array, ListArray, RecordBatch, StringArray};
     use bytes::Bytes;
 
     use super::*;
@@ -370,7 +551,7 @@ mod end_to_end_tests {
     use crate::arrow::push_decoder::ParquetPushDecoderBuilder;
     use crate::basic::{Compression, ZstdLevel};
     use crate::file::metadata::ParquetMetaDataPushDecoder;
-    use crate::file::properties::WriterProperties;
+    use crate::file::properties::{EnabledStatistics, WriterProperties};
 
     const ROWS: usize = 40_000;
     const DISTINCT: usize = 4_000;
@@ -448,9 +629,65 @@ mod end_to_end_tests {
     }
 
     #[test]
-    fn a_selective_read_attributes_walked_pages_to_the_skip_phase() {
-        // Keep one row in every 5000, so every page has to be walked through
-        // and none can be skipped whole.
+    fn skipping_one_row_then_reading_the_rest_counts_as_read() {
+        // The first page is loaded by the skip, but all its other values are
+        // returned, so none of its decompression was thrown away.
+        let metrics = ArrowReaderMetrics::enabled();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file())
+            .unwrap()
+            .with_metrics(metrics.clone())
+            .with_row_selection(RowSelection::from(vec![
+                RowSelector::skip(1),
+                RowSelector::select(ROWS - 1),
+            ]))
+            .build()
+            .unwrap();
+        let rows: usize = reader.map(|b| b.unwrap().num_rows()).sum();
+        assert_eq!(rows, ROWS - 1);
+
+        let d = metrics.decompression();
+        for kind in [PageKind::Dictionary, PageKind::Data] {
+            assert_eq!(
+                d.pages_decompressed(kind, DecompressionPhase::Skip),
+                Some(0),
+                "{kind:?}"
+            );
+            assert!(
+                d.pages_decompressed(kind, DecompressionPhase::Read)
+                    .unwrap()
+                    > 0
+            );
+        }
+    }
+
+    /// A zstd file with one list column and no offset index, so skipping rows
+    /// cannot jump over whole pages: every page on the way has to be
+    /// decompressed to walk its repetition levels.
+    fn list_file() -> Bytes {
+        let lists: Vec<Option<Vec<Option<i32>>>> = (0..ROWS)
+            .map(|i| Some((0..(i % 4) as i32).map(Some).collect()))
+            .collect();
+        let tags: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(lists));
+        let batch = RecordBatch::try_from_iter(vec![("tags", tags)]).unwrap();
+        let props = WriterProperties::builder()
+            .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap()))
+            .set_offset_index_disabled(true)
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .set_data_page_row_count_limit(2_000)
+            .set_write_batch_size(2_000)
+            .build();
+        let mut out = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut out, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        Bytes::from(out)
+    }
+
+    #[test]
+    fn a_selective_read_splits_pages_by_whether_any_value_was_read() {
+        // Keep one row in every 5000. A page holding a kept row is decompressed
+        // and read from; a page between kept rows is decompressed only to walk
+        // past it.
         let mut selectors = Vec::new();
         let mut left = ROWS;
         while left > 0 {
@@ -465,7 +702,7 @@ mod end_to_end_tests {
         }
 
         let metrics = ArrowReaderMetrics::enabled();
-        let reader = ParquetRecordBatchReaderBuilder::try_new(file())
+        let reader = ParquetRecordBatchReaderBuilder::try_new(list_file())
             .unwrap()
             .with_metrics(metrics.clone())
             .with_row_selection(RowSelection::from(selectors))
@@ -474,19 +711,17 @@ mod end_to_end_tests {
         let rows: usize = reader.map(|b| b.unwrap().num_rows()).sum();
         assert!(rows > 0 && rows < ROWS / 100, "a few rows out of many");
 
-        let data_skip = metrics
-            .decompression()
+        let d = metrics.decompression();
+        let read = d
+            .pages_decompressed(PageKind::Data, DecompressionPhase::Read)
+            .unwrap();
+        let skip = d
             .pages_decompressed(PageKind::Data, DecompressionPhase::Skip)
             .unwrap();
+        assert_eq!(read, rows as u64, "one page per kept row, each read from");
+        assert!(skip > 0, "pages between kept rows were walked past");
         assert!(
-            data_skip > 0,
-            "walking to a selected row inside a page decompresses that page, \
-             and that cost belongs to skipping"
-        );
-        assert!(
-            metrics
-                .decompression()
-                .decompress_bytes(PageKind::Data, DecompressionPhase::Skip)
+            d.decompress_bytes(PageKind::Data, DecompressionPhase::Skip)
                 .unwrap()
                 > 0
         );

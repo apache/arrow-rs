@@ -412,6 +412,13 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// every implementation outside this crate, needs no change.
     fn set_decompression_phase(&mut self, _phase: DecompressionPhase) {}
 
+    /// Tell the reader that values are about to be read from the page it
+    /// loaded last, so a page (and dictionary) decompressed while skipping
+    /// was not decompressed for nothing.
+    ///
+    /// Default is a no-op, like [`Self::set_decompression_phase`].
+    fn current_page_read(&mut self) {}
+
     /// Returns `true` if the next page can be assumed to contain the start of a new record
     ///
     /// Prior to parquet V2 the specification was ambiguous as to whether a single record

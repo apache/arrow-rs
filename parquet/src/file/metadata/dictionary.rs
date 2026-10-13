@@ -35,7 +35,7 @@ use crate::errors::{ParquetError, Result};
 #[cfg(feature = "encryption")]
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::metadata::ParquetMetaData;
-use crate::file::metrics::{DecompressionMetrics, DecompressionPhase};
+use crate::file::metrics::DecompressionRecorder;
 use crate::file::serialized_reader::{
     SerializedPageReaderContext, decode_page, read_page_header_len_from_bytes, verify_page_size,
 };
@@ -124,8 +124,7 @@ pub(crate) fn decode_dictionary_page(
         page_buf,
         column_descriptor.physical_type(),
         decompressor.as_mut(),
-        &DecompressionMetrics::disabled(),
-        DecompressionPhase::Read,
+        &mut DecompressionRecorder::default(),
     )?;
     let Page::DictionaryPage {
         buf,
