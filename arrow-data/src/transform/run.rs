@@ -16,7 +16,7 @@
 // under the License.
 
 use super::{_MutableArrayData, ArrayData, Extend};
-use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
+use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
 use num_traits::CheckedAdd;
 
@@ -58,8 +58,9 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), A
     macro_rules! extend_nulls_impl {
         ($run_end_type:ty) => {{
             let last_run_end = get_last_run_end::<$run_end_type>(&mutable.child_data[0]);
-            let new_value = last_run_end
-                .checked_add(<$run_end_type as ArrowNativeType>::usize_as(len))
+            let len = <$run_end_type as ArrowNativeType>::from_usize(len);
+            let new_value = len
+                .and_then(|len| last_run_end.checked_add(len))
                 .ok_or_else(|| {
                     ArrowError::InvalidArgumentError(
                         "run end overflow when extending RunEndEncoded array: \
@@ -92,7 +93,7 @@ type ExtendArrays = (Vec<u8>, Option<(usize, usize)>);
 
 /// Build run ends bytes and values range directly for batch processing
 fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedAdd>(
-    buffer: &Buffer,
+    typed_slice: &[T],
     length: usize,
     start: usize,
     len: usize,
@@ -103,9 +104,6 @@ fn build_extend_arrays<T: ArrowNativeType + std::ops::Add<Output = T> + CheckedA
     let end = start + len;
     let mut prev_end = 0;
     let mut current_run_end = dest_last_run_end;
-
-    // Convert buffer to typed slice once
-    let typed_slice: &[T] = buffer.typed_data();
 
     for i in 0..length {
         if i < typed_slice.len() {
@@ -217,6 +215,8 @@ pub fn build_extend(array: &ArrayData) -> Extend<'_> {
 
             // We need to analyze the source array's run structure
             let source_run_ends = &array.child_data()[0];
+            let source_buffer_offset = source_run_ends.offset();
+            let source_buffer_len = source_run_ends.len();
             let source_buffer = &source_run_ends.buffers()[0];
 
             // Get the run end type from the mutable array
@@ -230,6 +230,8 @@ pub fn build_extend(array: &ArrayData) -> Extend<'_> {
             // Build run ends and values indices directly for batch processing
             macro_rules! build_and_process_impl {
                 ($run_end_type:ty) => {{
+                    let source_buffer = &source_buffer.typed_data()
+                        [source_buffer_offset..source_buffer_offset + source_buffer_len];
                     let dest_last_run_end =
                         get_last_run_end::<$run_end_type>(&mutable.child_data[0]);
                     let (run_ends_bytes, values_range) = build_extend_arrays::<$run_end_type>(
@@ -566,7 +568,7 @@ mod tests {
     fn test_build_extend_arrays_int16() {
         let buffer = Buffer::from_vec(vec![3i16, 5i16, 8i16]);
         let (run_ends_bytes, values_range) =
-            build_extend_arrays::<i16>(&buffer, 3, 2, 4, 0i16).unwrap();
+            build_extend_arrays::<i16>(buffer.typed_data(), 3, 2, 4, 0i16).unwrap();
 
         // Logical array: [A, A, A, B, B, C, C, C]
         // Requesting indices 2-6 should give us:
@@ -589,7 +591,7 @@ mod tests {
     fn test_build_extend_arrays_int64() {
         let buffer = Buffer::from_vec(vec![3i64, 5i64, 8i64]);
         let (run_ends_bytes, values_range) =
-            build_extend_arrays::<i64>(&buffer, 3, 2, 4, 0i64).unwrap();
+            build_extend_arrays::<i64>(buffer.typed_data(), 3, 2, 4, 0i64).unwrap();
 
         // Same logic as above but with i64
         assert_eq!(run_ends_bytes.len(), 3 * std::mem::size_of::<i64>());
@@ -711,5 +713,57 @@ mod tests {
             err.to_string().contains("run end overflow"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_extend_nulls_overflow() {
+        let values = create_int32_array_data(vec![10]);
+        let array = create_run_array_data_int16(vec![100], values);
+
+        let mut mutable = MutableArrayData::new(vec![&array], true, 10);
+        let err = mutable.try_extend_nulls(i16::MAX as usize + 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: run end overflow when extending RunEndEncoded array: use a larger run-end type (e.g. Int64 instead of Int32)"
+        );
+    }
+
+    #[test]
+    fn test_extend_accounts_for_offset() {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Float32,
+                true,
+            )),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .offset(2)
+            .add_buffer(vec![-10_i32, -20, 1_i32, 3, 0, 100].into())
+            .build()
+            .unwrap();
+        let values = ArrayData::builder(DataType::Float32)
+            .len(2)
+            .add_buffer(vec![1.5, 2.5].into())
+            .build()
+            .unwrap();
+
+        let source_data = ArrayDataBuilder::new(dt)
+            .len(3)
+            .child_data(vec![runs, values])
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&source_data], true, 10);
+        mutable.try_extend(0, 0, 1).unwrap();
+        let data = mutable.freeze();
+        assert_eq!(data, source_data.slice(0, 1));
     }
 }
