@@ -50,6 +50,7 @@
 //!
 //! [`external_metadata.rs`]: https://github.com/apache/arrow-rs/tree/master/parquet/examples/external_metadata.rs
 //!
+mod column_chunk;
 #[cfg(feature = "arrow")]
 mod dictionary;
 mod footer_tail;
