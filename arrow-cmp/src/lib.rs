@@ -896,17 +896,20 @@ mod tests {
         assert_eq!(descending(1, 1), Ordering::Greater);
     }
 
-    #[test]
-    fn dict_bytes_fast_path_derefs_values_both_directions() {
+    fn dict_bytes_fast_path_derefs_values_both_directions_impl<T: ByteArrayType>() {
         let shared_keys = || Int32Array::from(vec![0_i32, 1]);
-        let left = DictionaryArray::<Int32Type>::new(
-            shared_keys(),
-            Arc::new(StringArray::from(vec!["z", "a"])),
+        let left_values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([1, 1]),
+            b"za".into(),
+            None,
         );
-        let right = DictionaryArray::<Int32Type>::new(
-            shared_keys(),
-            Arc::new(StringArray::from(vec!["a", "z"])),
+        let right_values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([1, 1]),
+            b"az".into(),
+            None,
         );
+        let left = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(left_values));
+        let right = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(right_values));
 
         let ascending = make_comparator(&left, &right, SortOptions::default()).unwrap();
         assert_eq!(ascending(0, 0), Ordering::Greater);
@@ -926,16 +929,31 @@ mod tests {
     }
 
     #[test]
-    fn dict_bytes_fallback_handles_key_and_value_nulls() {
+    fn dict_bytes_fast_path_derefs_values_both_directions() {
+        dict_bytes_fast_path_derefs_values_both_directions_impl::<Utf8Type>();
+        dict_bytes_fast_path_derefs_values_both_directions_impl::<LargeUtf8Type>();
+        dict_bytes_fast_path_derefs_values_both_directions_impl::<BinaryType>();
+        dict_bytes_fast_path_derefs_values_both_directions_impl::<LargeBinaryType>();
+    }
+
+    fn dict_bytes_handles_key_and_value_nulls_impl<T: ByteArrayType>() {
         // Left carries a logical null via a null KEY at row 1.
         let left_keys = Int32Array::from(vec![Some(0_i32), None, Some(1)]);
-        let left_values = Arc::new(StringArray::from(vec!["apple", "banana"]));
-        let left = DictionaryArray::<Int32Type>::new(left_keys, left_values);
+        let left_values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([5, 6]),
+            b"applebanana".into(),
+            None,
+        );
+        let left = DictionaryArray::<Int32Type>::new(left_keys, Arc::new(left_values));
 
         // Right carries a logical null via a null VALUE referenced at row 1.
         let right_keys = Int32Array::from(vec![Some(0_i32), Some(1), Some(0)]);
-        let right_values = Arc::new(StringArray::from(vec![Some("apple"), None]));
-        let right = DictionaryArray::<Int32Type>::new(right_keys, right_values);
+        let right_values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([5, 0]),
+            b"apple".into(),
+            Some(NullBuffer::from(vec![true, false])),
+        );
+        let right = DictionaryArray::<Int32Type>::new(right_keys, Arc::new(right_values));
 
         let cmp = make_comparator(&left, &right, SortOptions::default()).unwrap();
         assert_eq!(cmp(0, 0), Ordering::Equal); // apple vs apple
@@ -945,15 +963,31 @@ mod tests {
     }
 
     #[test]
-    fn dict_bytes_fallback_sort_options_with_nulls() {
+    fn dict_bytes_handles_key_and_value_nulls() {
+        dict_bytes_handles_key_and_value_nulls_impl::<Utf8Type>();
+        dict_bytes_handles_key_and_value_nulls_impl::<LargeUtf8Type>();
+        dict_bytes_handles_key_and_value_nulls_impl::<BinaryType>();
+        dict_bytes_handles_key_and_value_nulls_impl::<LargeBinaryType>();
+    }
+
+    fn dict_bytes_sort_options_with_nulls_impl<T: ByteArrayType>() {
         // row 1 is null on both sides (null key on left, null value on right)
         let null_row_on_left = Int32Array::from(vec![Some(0_i32), None, Some(1)]);
-        let left_values = Arc::new(StringArray::from(vec!["apple", "banana"]));
-        let left = DictionaryArray::<Int32Type>::new(null_row_on_left, left_values);
+        let left_values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([5, 6]),
+            b"applebanana".into(),
+            None,
+        );
+        let left = DictionaryArray::<Int32Type>::new(null_row_on_left, Arc::new(left_values));
 
         let keys_pointing_at_null = Int32Array::from(vec![Some(0_i32), Some(1), Some(0)]);
-        let right_values = Arc::new(StringArray::from(vec![Some("cherry"), None]));
-        let right = DictionaryArray::<Int32Type>::new(keys_pointing_at_null, right_values);
+        let right_values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([6, 0]),
+            b"cherry".into(),
+            Some(NullBuffer::from(vec![true, false])),
+        );
+        let right =
+            DictionaryArray::<Int32Type>::new(keys_pointing_at_null, Arc::new(right_values));
 
         let asc_nulls_last = SortOptions {
             descending: false,
@@ -988,10 +1022,58 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "index out of bounds")]
-    fn dict_bytes_fast_path_panics_on_out_of_bounds_row() {
+    fn dict_bytes_sort_options_with_nulls() {
+        dict_bytes_sort_options_with_nulls_impl::<Utf8Type>();
+        dict_bytes_sort_options_with_nulls_impl::<LargeUtf8Type>();
+        dict_bytes_sort_options_with_nulls_impl::<BinaryType>();
+        dict_bytes_sort_options_with_nulls_impl::<LargeBinaryType>();
+    }
+
+    fn dict_bytes_fast_path_panics_on_out_of_bounds_row_impl<T: ByteArrayType>() {
         let two_row_keys = Int32Array::from(vec![0_i32, 1]);
-        let values = Arc::new(StringArray::from(vec!["a", "b"]));
+        let values = GenericByteArray::<T>::new(
+            OffsetBuffer::from_lengths([1, 1]),
+            b"ab".into(),
+            None,
+        );
+        let dict = DictionaryArray::<Int32Type>::new(two_row_keys, Arc::new(values));
+
+        let cmp = make_comparator(&dict, &dict, SortOptions::default()).unwrap();
+        cmp(2, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn dict_utf8_fast_path_panics_on_out_of_bounds_row() {
+        dict_bytes_fast_path_panics_on_out_of_bounds_row_impl::<Utf8Type>();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn dict_large_utf8_fast_path_panics_on_out_of_bounds_row() {
+        dict_bytes_fast_path_panics_on_out_of_bounds_row_impl::<LargeUtf8Type>();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn dict_binary_fast_path_panics_on_out_of_bounds_row() {
+        dict_bytes_fast_path_panics_on_out_of_bounds_row_impl::<BinaryType>();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn dict_large_binary_fast_path_panics_on_out_of_bounds_row() {
+        dict_bytes_fast_path_panics_on_out_of_bounds_row_impl::<LargeBinaryType>();
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn dict_fixed_size_binary_fast_path_panics_on_out_of_bounds_row() {
+        let two_row_keys = Int32Array::from(vec![0_i32, 1]);
+        let values = Arc::new(
+            FixedSizeBinaryArray::try_from_iter([b"aa".as_ref(), b"bb".as_ref()].into_iter())
+                .unwrap(),
+        );
         let dict = DictionaryArray::<Int32Type>::new(two_row_keys, values);
 
         let cmp = make_comparator(&dict, &dict, SortOptions::default()).unwrap();
@@ -999,7 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn dict_fixed_size_binary_fallback_sort_options_with_nulls() {
+    fn dict_fixed_size_binary_sort_options_with_nulls() {
         let null_row_on_left = Int32Array::from(vec![Some(0_i32), None, Some(1)]);
         let left_values =
             FixedSizeBinaryArray::try_from_iter([b"aa".as_ref(), b"bb".as_ref()].into_iter())
