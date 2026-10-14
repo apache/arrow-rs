@@ -309,6 +309,9 @@ fn compress_lz4(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> 
 #[cfg(feature = "lz4")]
 fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, ArrowError> {
     use std::io::Read;
+    if let Some(output) = decompress_lz4_frame(input, decompressed_size)? {
+        return Ok(output);
+    }
     let mut output = Vec::with_capacity(decompressed_size);
     let mut decoder = lz4_flex::frame::FrameDecoder::new(input);
     decoder
@@ -323,6 +326,125 @@ fn decompress_lz4(input: &[u8], decompressed_size: usize) -> Result<Vec<u8>, Arr
         )));
     }
     Ok(output)
+}
+
+/// Decodes a single LZ4 frame straight into an output of the advertised size, avoiding the
+/// per-buffer scratch allocations and copies of [`lz4_flex::frame::FrameDecoder`].
+///
+/// Returns `None` for frames this does not handle (checksums, dictionary ids, legacy or
+/// concatenated frames), which then go through the `FrameDecoder`.
+#[cfg(feature = "lz4")]
+fn decompress_lz4_frame(
+    input: &[u8],
+    decompressed_size: usize,
+) -> Result<Option<Vec<u8>>, ArrowError> {
+    const MAGIC: u32 = 0x184D2204;
+    const FLG_INDEPENDENT_BLOCKS: u8 = 0x20;
+    const FLG_BLOCK_CHECKSUMS: u8 = 0x10;
+    const FLG_CONTENT_SIZE: u8 = 0x08;
+    const FLG_CONTENT_CHECKSUM: u8 = 0x04;
+    const FLG_DICT_ID: u8 = 0x01;
+    const BLOCK_UNCOMPRESSED: u32 = 0x8000_0000;
+    const WINDOW_SIZE: usize = 64 * 1024;
+
+    let invalid = |msg: &str| ArrowError::IpcError(format!("Invalid LZ4 frame: {msg}"));
+
+    let Some(&[m0, m1, m2, m3, flg, bd]) = input.first_chunk::<6>() else {
+        return Ok(None);
+    };
+    if u32::from_le_bytes([m0, m1, m2, m3]) != MAGIC
+        || flg >> 6 != 0b01
+        || flg & (FLG_BLOCK_CHECKSUMS | FLG_CONTENT_CHECKSUM | FLG_DICT_ID) != 0
+    {
+        return Ok(None);
+    }
+    let max_block_size = match (bd >> 4) & 0x7 {
+        4 => 64 << 10,
+        5 => 256 << 10,
+        6 => 1 << 20,
+        7 => 4 << 20,
+        _ => return Ok(None),
+    };
+    let descriptor_end = if flg & FLG_CONTENT_SIZE != 0 { 14 } else { 6 };
+    let header_checksum = *input
+        .get(descriptor_end)
+        .ok_or_else(|| invalid("truncated header"))?;
+    if header_checksum != xxh32(&input[4..descriptor_end]).to_le_bytes()[1] {
+        return Err(invalid("header checksum mismatch"));
+    }
+    let linked = flg & FLG_INDEPENDENT_BLOCKS == 0;
+
+    let mut output = vec![0u8; decompressed_size];
+    let mut written = 0;
+    let mut pos = descriptor_end + 1;
+    loop {
+        let block_info = input
+            .get(pos..pos + 4)
+            .ok_or_else(|| invalid("truncated block"))?;
+        let block_info = u32::from_le_bytes(block_info.try_into().unwrap());
+        pos += 4;
+        if block_info == 0 {
+            break;
+        }
+        let len = (block_info & !BLOCK_UNCOMPRESSED) as usize;
+        if len > max_block_size {
+            return Err(invalid("block larger than the maximum block size"));
+        }
+        let block = input
+            .get(pos..pos + len)
+            .ok_or_else(|| invalid("truncated block"))?;
+        pos += len;
+
+        let (decoded, remaining) = output.split_at_mut(written);
+        written += if block_info & BLOCK_UNCOMPRESSED != 0 {
+            remaining
+                .get_mut(..len)
+                .ok_or_else(|| exceeds_advertised_size(decompressed_size))?
+                .copy_from_slice(block);
+            len
+        } else if linked && !decoded.is_empty() {
+            let dict = &decoded[decoded.len().saturating_sub(WINDOW_SIZE)..];
+            lz4_flex::block::decompress_into_with_dict(block, remaining, dict)
+                .map_err(|e| lz4_block_error(e, decompressed_size))?
+        } else {
+            lz4_flex::block::decompress_into(block, remaining)
+                .map_err(|e| lz4_block_error(e, decompressed_size))?
+        };
+    }
+    if pos != input.len() {
+        return Ok(None);
+    }
+    if written != decompressed_size {
+        return Err(ArrowError::IpcError(format!(
+            "Expected compressed length of {decompressed_size} got {written}"
+        )));
+    }
+    Ok(Some(output))
+}
+
+#[cfg(feature = "lz4")]
+fn lz4_block_error(e: lz4_flex::block::DecompressError, decompressed_size: usize) -> ArrowError {
+    match e {
+        lz4_flex::block::DecompressError::OutputTooSmall { .. } => {
+            exceeds_advertised_size(decompressed_size)
+        }
+        e => ArrowError::ExternalError(Box::new(e)),
+    }
+}
+
+#[cfg(feature = "lz4")]
+fn exceeds_advertised_size(decompressed_size: usize) -> ArrowError {
+    ArrowError::IpcError(format!(
+        "LZ4 decompressed buffer exceeds advertised size of {decompressed_size}"
+    ))
+}
+
+#[cfg(feature = "lz4")]
+fn xxh32(data: &[u8]) -> u32 {
+    use std::hash::Hasher;
+    let mut hasher = twox_hash::XxHash32::with_seed(0);
+    hasher.write(data);
+    hasher.finish() as u32
 }
 
 #[cfg(not(feature = "lz4"))]
@@ -442,6 +564,79 @@ mod tests {
             err.to_string().contains("exceeds advertised size"),
             "unexpected error: {err}"
         );
+    }
+
+    /// Encodes `input` as one LZ4 frame with the given layout.
+    #[cfg(feature = "lz4")]
+    fn lz4_frame(input: &[u8], info: lz4_flex::frame::FrameInfo) -> Vec<u8> {
+        use std::io::Write;
+        let mut encoder = lz4_flex::frame::FrameEncoder::with_frame_info(info, Vec::new());
+        encoder.write_all(input).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    /// Compressible data with matches that cross 64 KiB block boundaries, then a stretch
+    /// of noise that LZ4 stores in uncompressed blocks.
+    #[cfg(feature = "lz4")]
+    fn lz4_test_input(len: usize) -> Vec<u8> {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        (0..len)
+            .map(|i| {
+                if i < len / 2 {
+                    b"arrow ipc lz4 frame "[i % 20] ^ (i / 7000) as u8
+                } else {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    state as u8
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    #[cfg(feature = "lz4")]
+    fn test_lz4_frame_layouts_round_trip() {
+        use lz4_flex::frame::{BlockMode, BlockSize, FrameInfo};
+
+        let codec = super::CompressionCodec::Lz4Frame;
+        for len in [0, 1, 1000, 64 * 1024, 300 * 1024] {
+            let input = lz4_test_input(len);
+            for block_mode in [BlockMode::Independent, BlockMode::Linked] {
+                for (block_checksums, content_checksum) in
+                    [(false, false), (true, false), (false, true)]
+                {
+                    let info = FrameInfo::new()
+                        .block_size(BlockSize::Max64KB)
+                        .block_mode(block_mode)
+                        .block_checksums(block_checksums)
+                        .content_checksum(content_checksum);
+                    let frame = lz4_frame(&input, info);
+                    let in_place = super::decompress_lz4_frame(&frame, input.len()).unwrap();
+                    assert_eq!(in_place.is_some(), !block_checksums && !content_checksum);
+                    let output = codec
+                        .decompress(&frame, input.len(), &mut Default::default())
+                        .unwrap();
+                    assert_eq!(
+                        output, input,
+                        "len {len}, {block_mode:?}, checksums {block_checksums}/{content_checksum}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "lz4")]
+    fn test_lz4_frame_rejects_truncated_input() {
+        let codec = super::CompressionCodec::Lz4Frame;
+        let input = lz4_test_input(200 * 1024);
+        let frame = lz4_frame(&input, lz4_flex::frame::FrameInfo::new());
+        for cut in [5, 7, frame.len() / 2, frame.len() - 1] {
+            codec
+                .decompress(&frame[..cut], input.len(), &mut Default::default())
+                .expect_err("truncated frame should fail");
+        }
     }
 
     #[test]

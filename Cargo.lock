@@ -437,6 +437,7 @@ dependencies = [
  "memmap2",
  "tempfile",
  "tokio",
+ "twox-hash",
  "zstd 0.14.0",
 ]
 

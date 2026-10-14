@@ -42,11 +42,12 @@ arrow-schema = { workspace = true }
 arrow-select = { workspace = true}
 flatbuffers = { version = "25.2.10", default-features = false }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame"], optional = true }
+twox-hash = { version = "2", default-features = false, features = ["xxhash32"], optional = true }
 zstd = { version = "0.14.0", default-features = false, optional = true }
 
 [features]
 default = []
-lz4 = ["lz4_flex"]
+lz4 = ["lz4_flex", "twox-hash"]
 
 [dev-dependencies]
 criterion = { workspace = true }
