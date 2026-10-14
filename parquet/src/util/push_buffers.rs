@@ -79,10 +79,6 @@ pub struct PushBuffers {
     /// The sum of the lengths of `ranges`, kept up to date so that
     /// [`Self::buffered_bytes`] does not scan all ranges.
     buffered_bytes: u64,
-    /// The number of empty ranges in `ranges`. [`Self::push_range`] accepts
-    /// them, and [`Self::release_ranges`] removes them. The count tells
-    /// `release_ranges` when it must look for them in all buffers.
-    empty: usize,
 }
 
 impl Display for PushBuffers {
@@ -124,7 +120,6 @@ impl PushBuffers {
             max_len: 0,
             max_len_count: 0,
             buffered_bytes: 0,
-            empty: 0,
         }
     }
 
@@ -154,6 +149,9 @@ impl PushBuffers {
 
     /// Push a new range and its associated buffer
     ///
+    /// An empty range adds no bytes, so it is not stored. An empty range is
+    /// always available (see [`Self::has_range`]).
+    ///
     /// # Errors
     /// Returns an error if the buffer's length does not match the range's
     /// length, e.g. when a truncated (short) read is pushed.
@@ -168,6 +166,9 @@ impl PushBuffers {
                 range.end
             ));
         }
+        if expected == 0 {
+            return Ok(());
+        }
         // Insert after all buffers that start at or before `range.start`.
         // Thus, ranges pushed in file order go at the end.
         let idx = self.ranges.partition_point(|r| r.start <= range.start);
@@ -177,15 +178,16 @@ impl PushBuffers {
             Ordering::Less => {}
         }
         self.buffered_bytes += expected;
-        self.empty += usize::from(expected == 0);
         self.ranges.insert(idx, range);
         self.buffers.insert(idx, buffer);
         Ok(())
     }
 
     /// Returns true if the Buffers contains data for the given range
+    ///
+    /// An empty range needs no bytes, so it is always available.
     pub(crate) fn has_range(&self, range: &Range<u64>) -> bool {
-        self.find(range.start, range.end).is_some()
+        range.is_empty() || self.find(range.start, range.end).is_some()
     }
 
     /// Returns the index of a buffer that contains all bytes of `start..end`,
@@ -287,7 +289,6 @@ impl PushBuffers {
             if remove.next_if_eq(&idx).is_some() {
                 let len = self.ranges[idx].end.saturating_sub(self.ranges[idx].start);
                 self.buffered_bytes -= len;
-                self.empty -= usize::from(len == 0);
                 if len == self.max_len {
                     self.max_len_count -= 1;
                 }
@@ -429,15 +430,9 @@ impl PushBuffers {
                 }
             }
         }
-        if emptied || self.empty > 0 {
-            // Remove the released buffers. As before, this also removes empty
-            // buffers that were pushed. The released buffers are all in
-            // `first..=last`, so look at all buffers only if empty buffers
-            // were pushed.
-            let span = match self.empty {
-                0 => first..last + 1,
-                _ => 0..self.ranges.len(),
-            };
+        if emptied {
+            // Remove the released buffers. They are all in `first..=last`.
+            let span = first..last + 1;
             let mut kept = span.start;
             for idx in span.clone() {
                 if !self.ranges[idx].is_empty() {
@@ -448,7 +443,6 @@ impl PushBuffers {
             }
             self.ranges.drain(kept..span.end);
             self.buffers.drain(kept..span.end);
-            self.empty = 0;
         }
         // A trim moves the start of a buffer only past released bytes. Each
         // other buffer that starts in those bytes is trimmed past them too,
@@ -495,7 +489,6 @@ impl PushBuffers {
         self.max_len = 0;
         self.max_len_count = 0;
         self.buffered_bytes = 0;
-        self.empty = 0;
     }
 
     /// Panics if `ranges`, `buffers` and `max_len` do not agree, or if the
@@ -524,8 +517,11 @@ impl PushBuffers {
             self.max_len_count,
             self.ranges.iter().filter(is_longest).count()
         );
-        let empty = self.ranges.iter().filter(|r| r.is_empty()).count();
-        assert_eq!(self.empty, empty);
+        assert!(
+            self.ranges.iter().all(|r| !r.is_empty()),
+            "empty buffer: {:?}",
+            self.ranges
+        );
     }
 }
 
@@ -554,6 +550,9 @@ impl Length for PushBuffers {
 /// less efficient implementation of Read for Buffers
 impl std::io::Read for PushBuffers {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
         // Find the range that contains the start offset
         let found = self.find(self.offset, self.offset + buf.len() as u64);
         if let Some(idx) = found {
@@ -582,6 +581,10 @@ impl ChunkReader for PushBuffers {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes, ParquetError> {
+        // An empty range needs no bytes (see `has_range`)
+        if length == 0 {
+            return Ok(Bytes::new());
+        }
         // find the range that contains the start offset
         if let Some(idx) = self.find(start, start + length as u64) {
             // Found the range, figure out the starting offset in the buffer
@@ -860,7 +863,10 @@ mod tests {
                     0..4 => {
                         let range = random_range(&mut rng);
                         push(&mut buffers, range.clone());
-                        model.push(range);
+                        // An empty push is not stored.
+                        if !range.is_empty() {
+                            model.push(range);
+                        }
                     }
                     4..6 => {
                         // Clear some pushed ranges and some other ranges.
@@ -875,9 +881,10 @@ mod tests {
                     }
                     _ => {
                         let range = random_range(&mut rng);
-                        let expected = model
-                            .iter()
-                            .any(|r| r.start <= range.start && r.end >= range.end);
+                        let expected = range.is_empty()
+                            || model
+                                .iter()
+                                .any(|r| r.start <= range.start && r.end >= range.end);
                         assert_eq!(buffers.has_range(&range), expected, "seed {seed} {range:?}");
                         if expected {
                             let len = (range.end - range.start) as usize;
@@ -941,6 +948,40 @@ mod tests {
         }
         parts.sort_by_key(|(range, _)| range.start);
         parts
+    }
+
+    #[test]
+    #[expect(clippy::reversed_empty_ranges)]
+    fn empty_ranges() {
+        use std::io::Read;
+        // An empty range is available without any buffers.
+        let mut buffers = PushBuffers::new(100);
+        assert!(buffers.has_range(&(50..50)));
+        assert_eq!(buffers.get_bytes(50, 0).unwrap(), Bytes::new());
+        assert_eq!(buffers.get_read(50).unwrap().read(&mut []).unwrap(), 0);
+
+        // Pushing an empty or an inverted range is a no-op.
+        buffers.push_range(30..30, Bytes::new()).unwrap();
+        buffers.push_range(10..5, Bytes::new()).unwrap();
+        assert!(buffers.ranges.is_empty());
+        assert!(buffers.buffers.is_empty());
+        buffers.assert_invariants();
+
+        // Reads of real data still work after an empty push.
+        buffers
+            .push_range(20..25, Bytes::from_static(b"abcde"))
+            .unwrap();
+        buffers.push_range(22..22, Bytes::new()).unwrap();
+        buffers.assert_invariants();
+        assert_eq!(buffers.ranges, vec![20..25]);
+        assert!(buffers.has_range(&(21..24)));
+        assert_eq!(
+            buffers.get_bytes(21, 3).unwrap(),
+            Bytes::from_static(b"bcd")
+        );
+        let mut buf = [0; 2];
+        buffers.get_read(23).unwrap().read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"de");
     }
 
     #[test]
