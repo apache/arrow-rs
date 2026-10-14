@@ -439,6 +439,23 @@ fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanB
 /// `mask_word`, and that count.
 #[inline]
 fn deposit(source: u64, mask_word: u64) -> (u64, usize) {
+    // Without `pdep`, `expand` loops over bits. Filters on row groups and pages leave whole
+    // words set or clear, in `mask_word` or in the taken bits of `source`, and those skip it.
+    // With `pdep` these branches cost more than they save.
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        if mask_word == u64::MAX {
+            return (source, 64);
+        }
+        let count = mask_word.count_ones();
+        // `count < 64` here, so the shift cannot overflow
+        let taken_mask = (1 << count) - 1;
+        match source & taken_mask {
+            0 => return (0, count as usize),
+            taken if taken == taken_mask => return (mask_word, count as usize),
+            _ => {}
+        }
+    }
     (
         bit_util::expand(source, mask_word),
         mask_word.count_ones() as usize,
