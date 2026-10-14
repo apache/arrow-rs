@@ -559,8 +559,14 @@ impl ParquetMetaDataPushDecoder {
             return Ok(DecodeResult::NeedsData(vec![page_index_range]));
         }
 
-        let buffer = self.get_bytes(&page_index_range)?;
-        let page_index = parse_page_index(
+        let buffer = match self.get_bytes(&page_index_range) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                self.state = DecodeState::ReadingPageIndex(metadata);
+                return Err(error);
+            }
+        };
+        let page_index = match parse_page_index(
             &metadata,
             self.column_index_policy,
             self.offset_index_policy,
@@ -568,7 +574,13 @@ impl ParquetMetaDataPushDecoder {
             &self.offset_index_mask,
             &buffer,
             page_index_range.start,
-        )?;
+        ) {
+            Ok(page_index) => page_index,
+            Err(error) => {
+                self.state = DecodeState::ReadingPageIndex(metadata);
+                return Err(error);
+            }
+        };
 
         self.state = DecodeState::Finished;
         Ok(DecodeResult::Data((metadata, page_index)))
@@ -771,6 +783,29 @@ mod tests {
                 .contains("requires a decoder created with try_new_with_metadata"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_page_index_decoder_restores_state_after_decode_error() {
+        let metadata = test_metadata_without_page_index();
+        let mut decoder =
+            ParquetMetaDataPushDecoder::try_new_with_metadata(test_file_len(), metadata)
+                .unwrap()
+                .with_page_index_policy(PageIndexPolicy::Required);
+
+        let ranges = expect_needs_data(decoder.try_decode_page_index());
+        let invalid_data = ranges
+            .iter()
+            .map(|range| Bytes::from(vec![0; (range.end - range.start) as usize]))
+            .collect();
+        decoder.push_ranges(ranges.clone(), invalid_data).unwrap();
+        decoder.try_decode_page_index().unwrap_err();
+
+        decoder.clear_all_ranges();
+        push_ranges_to_metadata_decoder(&mut decoder, ranges);
+        let (metadata, page_index) = expect_data(decoder.try_decode_page_index());
+        assert!(metadata.page_index().is_none());
+        assert!(page_index.is_some_and(|index| index.is_complete()));
     }
 
     /// A failed call to `try_decode_page_index` must not leave the decoder in
