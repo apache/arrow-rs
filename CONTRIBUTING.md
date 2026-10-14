@@ -67,8 +67,7 @@ ideas with the community to get feedback on implementation.
 With coding agents, the number of open PRs now far exceeds our review capacity.
 To encourage submitters to curate and prepare a small number of high quality PRs,
 and to help reviewers focus on them, users without write access are limited to
-**3 open, non-draft PRs** at a time. If you reach the limit, wait for existing PRs
-to be merged or close them until you have fewer than 3 before opening another.
+**3 open, non-draft PRs** at a time. 
 
 When possible, we recommend splitting your contributions into multiple smaller
 focused PRs rather than large PRs, because they are more likely to be reviewed

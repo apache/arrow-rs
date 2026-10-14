@@ -84,10 +84,9 @@ github:
     allow_auto_merge: true
     # Limit open pull requests per user without write access.
     #
-    # With coding agents, the number of open PRs now far exceeds our review
-    # capacity. Setting a limit encourages submitters to curate and prepare a
-    # small number of high quality PRs, and helps reviewers focus on them.
-    # Follows apache/datafusion#25973.
+    # The number of open PRs far exceeds our review capacity. We limit non
+    # committers to 3 open, non draft PRs, to help us curate and focus on a
+    # smaller number of higher quality PRs.
     creation_cap:
       enabled: true
       max_open_pull_requests: 3
