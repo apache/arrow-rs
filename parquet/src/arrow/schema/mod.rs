@@ -978,18 +978,46 @@ mod tests {
     }
 
     #[test]
-    fn test_decimal_precision_one_uses_int32() {
-        let arrow_schema = Schema::new(vec![Field::new(
-            "decimal",
-            DataType::Decimal128(1, 0),
-            false,
-        )]);
-        let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema).unwrap();
+    fn test_decimal_precision_physical_types() {
+        let cases = [
+            (1, PhysicalType::INT32, None),
+            (9, PhysicalType::INT32, None),
+            (10, PhysicalType::INT64, None),
+            (18, PhysicalType::INT64, None),
+            (
+                19,
+                PhysicalType::FIXED_LEN_BYTE_ARRAY,
+                Some(decimal_length_from_precision(19) as i32),
+            ),
+            (
+                38,
+                PhysicalType::FIXED_LEN_BYTE_ARRAY,
+                Some(decimal_length_from_precision(38) as i32),
+            ),
+        ];
 
-        assert_eq!(
-            parquet_schema.column(0).physical_type(),
-            PhysicalType::INT32
-        );
+        for (precision, expected_type, expected_length) in cases {
+            let arrow_schema = Schema::new(vec![Field::new(
+                "decimal",
+                DataType::Decimal128(precision, 0),
+                false,
+            )]);
+            let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema).unwrap();
+            let column = parquet_schema.column(0);
+
+            assert_eq!(
+                column.physical_type(),
+                expected_type,
+                "precision {precision}"
+            );
+            if let Some(expected_length) = expected_length {
+                assert_eq!(
+                    column.type_length(),
+                    expected_length,
+                    "precision {precision}"
+                );
+            }
+        }
     }
 
     #[test]
