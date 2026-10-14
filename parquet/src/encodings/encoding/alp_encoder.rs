@@ -601,7 +601,7 @@ impl<F: AlpFloat> StreamingPage<F> {
 /// The first page is buffered whole: ALP samples it to choose the column chunk's
 /// candidate `(exponent, factor)` set, which needs all of the page's data. Once
 /// that preset is fixed, later pages are encoded incrementally, a vector at a
-/// time, without ever holding the whole page of raw floats (see [`StreamingPage`]).
+/// time, without ever holding the whole page of raw floats.
 pub struct AlpEncoder<T: DataType>
 where
     T::T: AlpFloat,
