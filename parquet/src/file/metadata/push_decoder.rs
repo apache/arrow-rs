@@ -689,8 +689,10 @@ mod tests {
     }
 
     #[test]
-    fn test_page_index_decoder_incremental() {
+    fn test_decode_page_index_after_metadata() {
         let metadata = test_metadata_without_page_index();
+        assert!(metadata.page_index().is_none());
+
         let mut decoder =
             ParquetMetaDataPushDecoder::try_new_with_metadata(test_file_len(), metadata)
                 .unwrap()
@@ -703,7 +705,9 @@ mod tests {
         assert_eq!(ranges.len(), 1);
         push_ranges_to_metadata_decoder(&mut decoder, ranges);
 
-        let page_index = expect_data(decoder.try_decode_page_index()).1.unwrap();
+        let (metadata, page_index) = expect_data(decoder.try_decode_page_index());
+        assert!(metadata.page_index().is_none());
+        let page_index = page_index.unwrap();
         expect_finished(decoder.try_decode_page_index());
 
         for row_group_idx in 0..2 {
