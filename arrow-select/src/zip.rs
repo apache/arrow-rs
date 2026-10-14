@@ -34,7 +34,7 @@ use arrow_schema::{ArrowError, DataType};
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::ops::Not;
+use std::ops::{BitAnd, BitOr, Not};
 use std::sync::{Arc, OnceLock};
 
 /// Zip two arrays by some boolean mask.
@@ -139,10 +139,172 @@ pub fn zip(
         ));
     }
 
+    if truthy_is_scalar != falsy_is_scalar {
+        let (array, scalar) = if truthy_is_scalar {
+            (falsy, truthy)
+        } else {
+            (truthy, falsy)
+        };
+        if let Some(output) = zip_primitive_with_scalar(mask, array, scalar, truthy_is_scalar) {
+            return output;
+        }
+    }
+
     let falsy = falsy.to_data();
     let truthy = truthy.to_data();
 
     zip_impl(mask, &truthy, truthy_is_scalar, &falsy, falsy_is_scalar)
+}
+
+/// [`zip`] of a primitive `array` with a `scalar` on the other side, or `None` for the types it
+/// does not handle. `scalar_is_truthy` says which side the scalar is on.
+///
+/// The output values are a select per row between the array's value and the scalar's, and its
+/// null buffer has a closed form, so no row goes through [`MutableArrayData`]. With a null
+/// scalar the values under the scalar's rows are never read, so the array's values buffer is
+/// shared as it is.
+fn zip_primitive_with_scalar(
+    mask: &BooleanArray,
+    array: &dyn Array,
+    scalar: &dyn Array,
+    scalar_is_truthy: bool,
+) -> Option<Result<ArrayRef, ArrowError>> {
+    let width = array.data_type().primitive_width()?;
+    let array = array.to_data();
+    let scalar = scalar.to_data();
+    let len = array.len();
+
+    // The rows that take the array's value
+    let mut from_array = maybe_prep_null_mask_filter(mask);
+    if scalar_is_truthy {
+        from_array = !&from_array;
+    }
+
+    let scalar_valid = scalar.is_valid(0);
+    let nulls = match (scalar_valid, array.nulls()) {
+        (true, None) => None,
+        (true, Some(nulls)) => Some(nulls.inner() | &!&from_array),
+        (false, None) => Some(from_array.clone()),
+        (false, Some(nulls)) => Some(nulls.inner() & &from_array),
+    };
+
+    let values = if scalar_valid {
+        match width {
+            1 => blend::<i8, 1>(&from_array, &array, &scalar)?,
+            2 => blend::<i16, 1>(&from_array, &array, &scalar)?,
+            4 => blend::<i32, 1>(&from_array, &array, &scalar)?,
+            8 => blend::<i64, 1>(&from_array, &array, &scalar)?,
+            16 => blend::<i64, 2>(&from_array, &array, &scalar)?,
+            32 => blend::<i64, 4>(&from_array, &array, &scalar)?,
+            _ => return None,
+        }
+    } else {
+        array.buffers()[0].slice_with_length(array.offset() * width, len * width)
+    };
+
+    let data = ArrayData::builder(array.data_type().clone())
+        .len(len)
+        .add_buffer(values)
+        .nulls(nulls.map(NullBuffer::new));
+    Some(data.build().map(make_array))
+}
+
+/// An integer lane that [`blend`] selects with.
+trait BlendLane:
+    ArrowNativeType + BitAnd<Output = Self> + BitOr<Output = Self> + Not<Output = Self>
+{
+    /// `mask` (0 or -1) at this width.
+    fn from_mask(mask: i32) -> Self;
+}
+
+macro_rules! blend_lane {
+    ($($t:ty),*) => {
+        $(impl BlendLane for $t {
+            #[inline]
+            fn from_mask(mask: i32) -> Self {
+                mask as $t
+            }
+        })*
+    };
+}
+blend_lane!(i8, i16, i64);
+
+impl BlendLane for i32 {
+    #[inline]
+    fn from_mask(mask: i32) -> Self {
+        mask
+    }
+}
+
+/// For each bit of `word`, an `i32` with all bits set if it is set, else clear.
+#[inline]
+fn lane_masks(word: u64) -> [i32; 64] {
+    // Each mask tests a constant bit of one byte of the word. This compiles without a branch per
+    // bit on x86_64 (SSE2) and aarch64.
+    let mut masks = [0; 64];
+    let (mask_bytes, _) = masks.as_chunks_mut::<8>();
+    for (masks, byte) in mask_bytes.iter_mut().zip(word.to_le_bytes()) {
+        let byte = i32::from(byte);
+        for (j, mask) in masks.iter_mut().enumerate() {
+            let bit = 1 << j;
+            *mask = -i32::from(byte & bit == bit);
+        }
+    }
+    masks
+}
+
+/// The values of `array` where `from_array` is set and the scalar's value elsewhere. Each value
+/// is read as `K` integers `U`, so a 16 or 32 byte value is 2 or 4 lanes of `i64` under one mask.
+/// `None` if either values buffer is not aligned to `U`.
+fn blend<U: BlendLane, const K: usize>(
+    from_array: &BooleanBuffer,
+    array: &ArrayData,
+    scalar: &ArrayData,
+) -> Option<Buffer> {
+    fn rows<U: ArrowNativeType, const K: usize>(data: &ArrayData) -> Option<&[[U; K]]> {
+        let buffer = &data.buffers()[0];
+        let aligned = buffer.as_ptr().align_offset(align_of::<U>()) == 0;
+        aligned.then(|| {
+            let values = &buffer.typed_data::<U>()[data.offset() * K..][..data.len() * K];
+            values.as_chunks::<K>().0
+        })
+    }
+    let values = rows::<U, K>(array)?;
+    let scalar = rows::<U, K>(scalar)?[0];
+
+    // Each block of 64 rows is appended as a whole, so the output is written once and never
+    // zeroed first.
+    let mut output = MutableBuffer::with_capacity(values.len() * K * size_of::<U>());
+    let (value_blocks, value_rest) = values.as_chunks::<64>();
+    let mut words = from_array.bit_chunks().iter_padded();
+    let fill = [scalar; 64];
+    let mut blended = fill;
+
+    for (values, word) in value_blocks.iter().zip(&mut words) {
+        let block = match word {
+            u64::MAX => values,
+            0 => &fill,
+            _ => {
+                // The lane masks go to an array first. Computed inside the select, they let LLVM
+                // turn it into a branch per row around a conditional load, which mispredicts on
+                // every other row of a random mask.
+                let masks = lane_masks(word);
+                for ((output, values), &mask) in blended.iter_mut().zip(values).zip(&masks) {
+                    let lane = U::from_mask(mask);
+                    for ((output, &value), &scalar) in output.iter_mut().zip(values).zip(&scalar) {
+                        *output = (value & lane) | (scalar & !lane);
+                    }
+                }
+                &blended
+            }
+        };
+        output.extend_from_slice(block.as_flattened());
+    }
+    let word = words.next().unwrap_or_default();
+    for (j, value) in value_rest.iter().enumerate() {
+        output.extend_from_slice(if (word >> j) & 1 != 0 { value } else { &scalar });
+    }
+    Some(output.into())
 }
 
 fn count_true_runs(mask: &BooleanBuffer) -> usize {
@@ -924,6 +1086,9 @@ impl<T: ByteViewType> ZipImpl for ByteViewScalarImpl<T> {
 mod test {
     use super::*;
     use arrow_array::types::Int32Type;
+    use arrow_schema::{IntervalUnit, TimeUnit};
+    use rand::rngs::StdRng;
+    use rand::{RngExt, SeedableRng};
 
     #[test]
     fn test_count_true_runs() {
@@ -1799,5 +1964,99 @@ mod test {
         let actual = out.as_binary_view();
         let expected = BinaryViewArray::from_iter_values([b"x".as_slice(), &[0xFFu8; 12]]);
         assert_eq!(actual, &expected);
+    }
+
+    /// Primitive data of `data_type` with random bytes and nulls, sliced at `offset`.
+    fn random_primitive(
+        rng: &mut StdRng,
+        data_type: &DataType,
+        len: usize,
+        offset: usize,
+        null_fraction: f64,
+    ) -> ArrayRef {
+        let width = data_type.primitive_width().unwrap();
+        let total = len + offset;
+        let mut bytes = MutableBuffer::from_len_zeroed(total * width);
+        bytes.iter_mut().for_each(|byte| *byte = rng.random());
+        let nulls = (null_fraction > 0.0)
+            .then(|| NullBuffer::from_iter((0..total).map(|_| !rng.random_bool(null_fraction))));
+        let data = ArrayData::builder(data_type.clone())
+            .len(total)
+            .add_buffer(bytes.into())
+            .nulls(nulls)
+            .build()
+            .unwrap();
+        make_array(data).slice(offset, len)
+    }
+
+    #[test]
+    fn test_zip_primitive_with_scalar_matches_general_path() {
+        let mut rng = StdRng::seed_from_u64(0x5ca1_ab1e_0dd5_f00d);
+        let data_types = [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Float32,
+            DataType::Int64,
+            DataType::Timestamp(TimeUnit::Millisecond, Some("+01:00".into())),
+            DataType::Decimal128(38, 2),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            DataType::Decimal256(76, 3),
+        ];
+        for data_type in &data_types {
+            for len in [0, 1, 63, 64, 65, 130, 1000] {
+                for mask_shape in 0..5 {
+                    let mask_offset = rng.random_range(0..9);
+                    let mask_bits: Vec<Option<bool>> = (0..len + mask_offset)
+                        .map(|i| match mask_shape {
+                            0 => Some(rng.random_bool(0.5)),
+                            1 => Some(true),
+                            2 => Some(false),
+                            3 => Some(i / 100 % 2 == 0),
+                            _ => rng.random_bool(0.8).then(|| rng.random_bool(0.5)),
+                        })
+                        .collect();
+                    let mask = BooleanArray::from(mask_bits).slice(mask_offset, len);
+
+                    for array_nulls in [0.0, 0.3] {
+                        let array_offset = rng.random_range(0..5);
+                        let array =
+                            random_primitive(&mut rng, data_type, len, array_offset, array_nulls);
+                        for scalar_null in [false, true] {
+                            let scalar = random_primitive(
+                                &mut rng,
+                                data_type,
+                                1,
+                                1,
+                                if scalar_null { 1.0 } else { 0.0 },
+                            );
+                            for scalar_is_truthy in [false, true] {
+                                let scalar_datum = Scalar::new(Arc::clone(&scalar));
+                                let (truthy, falsy): (&dyn Datum, &dyn Datum) = if scalar_is_truthy
+                                {
+                                    (&scalar_datum, &array)
+                                } else {
+                                    (&array, &scalar_datum)
+                                };
+                                let actual = zip(&mask, truthy, falsy).unwrap();
+                                let expected = zip_impl(
+                                    &mask,
+                                    &truthy.get().0.to_data(),
+                                    scalar_is_truthy,
+                                    &falsy.get().0.to_data(),
+                                    !scalar_is_truthy,
+                                )
+                                .unwrap();
+                                assert_eq!(
+                                    &actual, &expected,
+                                    "{data_type} len {len} mask shape {mask_shape} array nulls \
+                                     {array_nulls} scalar null {scalar_null} scalar truthy \
+                                     {scalar_is_truthy}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
