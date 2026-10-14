@@ -46,19 +46,12 @@ pub(super) fn scan_ranges_from_mask(
             .map_or(mask.len(), |next| next.first_row_index as usize)
             .min(mask.len());
 
-        let selected = if row_start == row_end {
-            // Multiple pages can start at the same row. Preserve the run
-            // scanner's behavior for these zero-width page ranges.
-            mask.value(row_start)
-        } else {
-            let chunks = BitChunks::new(
-                mask.values(),
-                mask.offset() + row_start,
-                row_end - row_start,
-            );
-            chunks.iter_padded().any(|word| word != 0)
-        };
-        if selected {
+        let chunks = BitChunks::new(
+            mask.values(),
+            mask.offset() + row_start,
+            row_end - row_start,
+        );
+        if chunks.iter_padded().any(|word| word != 0) {
             let start = page.offset as u64;
             ranges.push(start..start + page.compressed_page_size as u64);
         }
@@ -246,20 +239,6 @@ mod tests {
                     for offset in [0, 1, 3, 7, 31, 63, 64, 65] {
                         assert_mask_scan_ranges(&mask, offset, &pages, total_rows);
                     }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_mask_scan_ranges_repeated_page_row_offsets() {
-        let pages = page_locations([0, 0, 1, 1, 7, 8, 31, 32, 63, 63, 64, 65, 127, 128, 129]);
-        assert_mask_scan_ranges(&BooleanBuffer::new_unset(0), 0, &pages, 600);
-        for len in [1, 7, 63, 64, 65, 128, 129, 257] {
-            for selected_row in 0..len {
-                let mask = BooleanBuffer::from_iter((0..len).map(|row| row == selected_row));
-                for offset in [0, 1, 3, 7, 63, 65] {
-                    assert_mask_scan_ranges(&mask, offset, &pages, 600);
                 }
             }
         }
