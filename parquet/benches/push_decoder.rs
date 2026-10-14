@@ -210,7 +210,13 @@ fn make_paged_test_file(num_columns: usize, pages_per_column: usize) -> Bytes {
 fn bench_scan_plan(c: &mut Criterion) {
     let mut group = c.benchmark_group("push_decoder/scan_plan");
 
-    for (num_cols, pages) in [(100, 10), (1_000, 10), (10_000, 10), (1_000, 100)] {
+    for (num_cols, pages) in [
+        (100, 10),
+        (1_000, 10),
+        (10_000, 10),
+        (100_000, 10),
+        (1_000, 100),
+    ] {
         let file_data = make_paged_test_file(num_cols, pages);
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let metadata = ArrowReaderMetadata::load(&file_data, options).unwrap();
