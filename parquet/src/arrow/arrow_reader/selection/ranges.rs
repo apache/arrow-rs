@@ -56,7 +56,7 @@ pub(super) fn scan_ranges_from_mask(
                 mask.offset() + row_start,
                 row_end - row_start,
             );
-            chunks.iter().any(|word| word != 0) || chunks.remainder_bits() != 0
+            chunks.iter_padded().any(|word| word != 0)
         };
         if selected {
             let start = page.offset as u64;
