@@ -112,8 +112,7 @@ jobs:
 
   miri:
     needs: changes
-    # if: contains(fromJSON(needs.changes.outputs.suites), 'miri')
-    if: always()
+    if: contains(fromJSON(needs.changes.outputs.suites), 'miri')
     uses: ./.github/workflows/miri.yaml
 
   required-checks:
