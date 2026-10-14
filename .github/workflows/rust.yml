@@ -41,6 +41,12 @@ jobs:
         run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
+      - name: Build Arrow writer benchmark with mimalloc
+        run: cargo bench -p parquet --bench arrow_writer --locked --no-run
+      - name: Smoke test Arrow writer benchmark with mimalloc
+        env:
+          MIMALLOC_VERBOSE: "1"
+        run: cargo bench -p parquet --bench arrow_writer --locked -- '^primitive/default$' --test
       - name: Run tests
         shell: bash
         run: |
@@ -72,6 +78,12 @@ jobs:
         run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
+      - name: Build Arrow writer benchmark with mimalloc
+        run: cargo bench -p parquet --bench arrow_writer --locked --no-run
+      - name: Smoke test Arrow writer benchmark with mimalloc
+        env:
+          MIMALLOC_VERBOSE: "1"
+        run: cargo bench -p parquet --bench arrow_writer --locked -- '^primitive/default$' --test
       - name: Run tests
         shell: bash
         run: |
