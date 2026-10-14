@@ -33,6 +33,7 @@ use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
 use std::collections::BTreeMap;
+use std::ptr;
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -244,23 +245,56 @@ fn interleave_bytes<T: ByteArrayType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, GenericByteArray<T>>::new(values, indices);
 
+    // Resolve the offsets and value buffers once rather than per value
+    let sources: Vec<(&[T::Offset], &[u8])> = interleaved
+        .arrays
+        .iter()
+        .map(|a| (a.value_offsets(), a.value_data()))
+        .collect();
+    let distance = prefetch_distance();
+
     let mut capacity = 0;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
+    // The start of each value in its source and the number of bytes readable
+    // from there, so the copy pass does not need to read the offsets again
+    let mut starts: Vec<(*const u8, usize)> = Vec::with_capacity(indices.len());
+    let mut max_element_len = 0;
+    let mut min_element_len = usize::MAX;
     offsets.push(T::Offset::from_usize(0).unwrap());
-    for (a, b) in indices {
-        let o = interleaved.arrays[*a].value_offsets();
-        let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
+    for (i, &(a, b)) in indices.iter().enumerate() {
+        // The offsets of each value are in one of many source arrays, so they
+        // are likely not in cache, request the ones needed a few values ahead
+        if let Some(&(pa, pb)) = indices.get(i + distance).filter(|_| distance > 0) {
+            prefetch_read(sources[pa].0.as_ptr().wrapping_add(pb));
+        }
+        let (o, data) = sources[a];
+        let start = o[b].as_usize();
+        let element_len = o[b + 1].as_usize() - start;
+        debug_assert!(start + element_len <= data.len());
+        // Offsets of a valid array are in bounds of its values
+        starts.push((data.as_ptr().wrapping_add(start), data.len() - start));
         capacity += element_len;
+        max_element_len = max_element_len.max(element_len);
+        min_element_len = min_element_len.min(element_len);
         offsets.push(
             T::Offset::from_usize(capacity)
                 .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
         );
     }
 
-    let mut values = Vec::with_capacity(capacity);
-    for (a, b) in indices {
-        values.extend_from_slice(interleaved.arrays[*a].value(*b).as_ref());
-    }
+    let values = if max_element_len == 0 {
+        // All values are empty, nothing to copy
+        Vec::new()
+    } else {
+        copy_byte_values::<T>(
+            &starts,
+            &offsets,
+            capacity,
+            min_element_len,
+            max_element_len,
+            distance,
+        )
+    };
 
     // Safety: safe by construction
     let array = unsafe {
@@ -268,6 +302,205 @@ fn interleave_bytes<T: ByteArrayType>(
         GenericByteArray::<T>::new_unchecked(offsets, values.into(), interleaved.nulls)
     };
     Ok(Arc::new(array))
+}
+
+/// Largest fixed copy width used by the over-copy strategy, values longer
+/// than this fall back to a variable length copy (`memcpy`)
+const MAX_FIXED_COPY_WIDTH: usize = 64;
+
+/// Copy the values starting at `starts` with lengths given by `offsets` into a
+/// new contiguous buffer of `capacity` bytes.
+///
+/// `min_len` and `max_len` are the minimum and maximum lengths of the copied
+/// values and are used to pick a copy strategy that avoids calling `memcpy`
+/// for every value, which dominates the cost for short values:
+///
+/// 1. If all lengths are in `[H, 2H]` for some power of two `H`, every value
+///    is copied exactly with two (possibly overlapping) `H` byte copies of
+///    its head and tail.
+/// 2. Otherwise, if `max_len <= MAX_FIXED_COPY_WIDTH`, every value is copied
+///    with a fixed `N >= max_len` byte copy. The extra bytes written past the
+///    end of a value are overwritten by the next value (values are written in
+///    order), and the output has `N` bytes of slack for the last value. Values
+///    too close to the end of their source buffer to read `N` bytes are copied
+///    exactly instead.
+/// 3. Otherwise each value is copied with a variable length copy.
+fn copy_byte_values<T: ByteArrayType>(
+    starts: &[(*const u8, usize)],
+    offsets: &[T::Offset],
+    capacity: usize,
+    min_len: usize,
+    max_len: usize,
+    distance: usize,
+) -> Vec<u8> {
+    // Exact head/tail copy: find a power of two `H` such that `H <= min_len`
+    // and `max_len <= 2 * H`
+    if min_len > 0 {
+        let h = 1 << min_len.ilog2();
+        if max_len <= 2 * h {
+            return match h {
+                1 => copy_values::<T, HeadTail<1>>(starts, offsets, capacity, distance),
+                2 => copy_values::<T, HeadTail<2>>(starts, offsets, capacity, distance),
+                4 => copy_values::<T, HeadTail<4>>(starts, offsets, capacity, distance),
+                8 => copy_values::<T, HeadTail<8>>(starts, offsets, capacity, distance),
+                16 => copy_values::<T, HeadTail<16>>(starts, offsets, capacity, distance),
+                32 => copy_values::<T, HeadTail<32>>(starts, offsets, capacity, distance),
+                _ => copy_values::<T, Exact>(starts, offsets, capacity, distance),
+            };
+        }
+    }
+
+    match max_len {
+        0..=16 => copy_values::<T, Fixed<16>>(starts, offsets, capacity, distance),
+        17..=32 => copy_values::<T, Fixed<32>>(starts, offsets, capacity, distance),
+        33..=MAX_FIXED_COPY_WIDTH => {
+            copy_values::<T, Fixed<MAX_FIXED_COPY_WIDTH>>(starts, offsets, capacity, distance)
+        }
+        _ => copy_values::<T, Exact>(starts, offsets, capacity, distance),
+    }
+}
+
+/// Strategy for copying a single value in [`copy_values`]
+trait CopyValue {
+    /// Number of bytes [`Self::copy`] may write past `dst + len`
+    const SLACK: usize;
+
+    /// Copy `len` bytes from `src` to `dst`.
+    ///
+    /// # Safety
+    ///
+    /// `src_readable >= len` bytes must be readable from `src`, and
+    /// `len + Self::SLACK` bytes must be writable at `dst`.
+    unsafe fn copy(src: *const u8, src_readable: usize, dst: *mut u8, len: usize);
+}
+
+/// Copy `len` bytes, where `H <= len <= 2 * H`, using two (possibly
+/// overlapping) `H` byte copies of the head and the tail. Never reads or
+/// writes outside of `len` bytes.
+struct HeadTail<const H: usize>;
+
+impl<const H: usize> CopyValue for HeadTail<H> {
+    const SLACK: usize = 0;
+
+    #[inline(always)]
+    unsafe fn copy(src: *const u8, _: usize, dst: *mut u8, len: usize) {
+        debug_assert!(H <= len && len <= 2 * H);
+        // SAFETY: caller guarantees `len >= H` bytes are readable from `src`
+        // and writable at `dst`
+        unsafe {
+            let head = ptr::read_unaligned(src.cast::<[u8; H]>());
+            let tail = ptr::read_unaligned(src.add(len - H).cast::<[u8; H]>());
+            ptr::write_unaligned(dst.cast::<[u8; H]>(), head);
+            ptr::write_unaligned(dst.add(len - H).cast::<[u8; H]>(), tail);
+        }
+    }
+}
+
+/// Copy `len <= N` bytes by copying `N` bytes when `N` bytes are readable from
+/// `src`, writing up to `N - len` garbage bytes past `dst + len`
+struct Fixed<const N: usize>;
+
+impl<const N: usize> CopyValue for Fixed<N> {
+    const SLACK: usize = N;
+
+    #[inline(always)]
+    unsafe fn copy(src: *const u8, src_readable: usize, dst: *mut u8, len: usize) {
+        debug_assert!(len <= N);
+        // SAFETY: caller guarantees `src_readable` bytes are readable from
+        // `src` and `len + N` bytes are writable at `dst`
+        unsafe {
+            if src_readable >= N {
+                let bytes = ptr::read_unaligned(src.cast::<[u8; N]>());
+                ptr::write_unaligned(dst.cast::<[u8; N]>(), bytes);
+            } else {
+                ptr::copy_nonoverlapping(src, dst, len);
+            }
+        }
+    }
+}
+
+/// Copy exactly `len` bytes
+struct Exact;
+
+impl CopyValue for Exact {
+    const SLACK: usize = 0;
+
+    #[inline(always)]
+    unsafe fn copy(src: *const u8, _: usize, dst: *mut u8, len: usize) {
+        // SAFETY: caller guarantees `len` bytes are readable from `src` and
+        // writable at `dst`
+        unsafe { ptr::copy_nonoverlapping(src, dst, len) }
+    }
+}
+
+/// Copy the values starting at `starts`, with the lengths given by `offsets`,
+/// into a new buffer of `capacity` bytes (the sum of their lengths) using `C`
+/// for each value, prefetching the value `distance` values ahead
+fn copy_values<T: ByteArrayType, C: CopyValue>(
+    starts: &[(*const u8, usize)],
+    offsets: &[T::Offset],
+    capacity: usize,
+    distance: usize,
+) -> Vec<u8> {
+    debug_assert_eq!(starts.len() + 1, offsets.len());
+    let mut values = Vec::<u8>::with_capacity(capacity + C::SLACK);
+    let mut dst = values.as_mut_ptr();
+    for (i, &(src, src_readable)) in starts.iter().enumerate() {
+        // Values are scattered across many source arrays, so they are likely
+        // not in cache, request the one needed a few values ahead
+        if let Some(&(next, _)) = starts.get(i + distance).filter(|_| distance > 0) {
+            prefetch_read(next);
+        }
+        let len = offsets[i + 1].as_usize() - offsets[i].as_usize();
+        // SAFETY: `src` points to a value of `len <= src_readable` bytes
+        // within its source values (see `interleave_bytes`). The lengths of the
+        // values sum to `capacity`, so at this point there is room for
+        // `len + C::SLACK` bytes at `dst`
+        unsafe {
+            C::copy(src, src_readable, dst, len);
+            dst = dst.add(len);
+        }
+    }
+    // SAFETY: the loop above initialized exactly `capacity` bytes
+    unsafe { values.set_len(capacity) };
+    values
+}
+
+/// How many values ahead [`interleave_bytes`] prefetches, `0` disables it.
+///
+/// TEMPORARY: read from the `ARROW_INTERLEAVE_PREFETCH` environment variable
+/// to tune the distance, defaults to 16
+fn prefetch_distance() -> usize {
+    static DISTANCE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *DISTANCE.get_or_init(|| {
+        std::env::var("ARROW_INTERLEAVE_PREFETCH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(16)
+    })
+}
+
+/// Hint the CPU to load the cache line containing `ptr` into the L1 cache.
+///
+/// This never faults, `ptr` does not need to be valid
+#[inline(always)]
+fn prefetch_read<P>(ptr: *const P) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: prefetching is only a hint and never faults
+    unsafe {
+        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(ptr.cast::<i8>())
+    }
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: prefetching is only a hint and never faults
+    unsafe {
+        std::arch::asm!(
+            "prfm pldl1keep, [{ptr}]",
+            ptr = in(reg) ptr,
+            options(nostack, preserves_flags, readonly)
+        )
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let _ = ptr;
 }
 
 fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
@@ -1099,6 +1332,72 @@ mod tests {
                 Some("b")
             ]
         )
+    }
+
+    /// Exercise every byte copy strategy of `interleave_bytes` against a naive
+    /// implementation, including sliced inputs and values at the very end of
+    /// their source buffer (which can't be over-read)
+    #[test]
+    fn test_interleave_bytes_copy_strategies() {
+        use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+        fn random_array(rng: &mut StdRng, len: usize, lens: (usize, usize)) -> StringArray {
+            (0..len)
+                .map(|_| {
+                    rng.random_bool(0.9).then(|| {
+                        let n = rng.random_range(lens.0..=lens.1);
+                        (0..n)
+                            .map(|_| rng.random_range(b'a'..=b'z') as char)
+                            .collect::<String>()
+                    })
+                })
+                .collect()
+        }
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let length_ranges = [
+            (0, 0),
+            (1, 1),
+            (1, 2),
+            (2, 4),
+            (3, 7),
+            (5, 8),
+            (8, 16),
+            (12, 16),
+            (16, 32),
+            (32, 64),
+            (64, 64),
+            (65, 128),
+            (0, 16),
+            (0, 32),
+            (17, 64),
+            (1, 64),
+            (0, 200),
+        ];
+
+        for lens in length_ranges {
+            let arrays: Vec<StringArray> =
+                (0..5).map(|_| random_array(&mut rng, 40, lens)).collect();
+            // Slices that end at the end of the source buffer
+            let sliced: Vec<StringArray> = arrays.iter().map(|a| a.slice(30, 10)).collect();
+
+            for sources in [&arrays, &sliced] {
+                let values: Vec<&dyn Array> = sources.iter().map(|a| a as &dyn Array).collect();
+                let indices: Vec<(usize, usize)> = (0..200)
+                    .map(|_| {
+                        let a = rng.random_range(0..sources.len());
+                        (a, rng.random_range(0..sources[a].len()))
+                    })
+                    .collect();
+
+                let result = interleave(&values, &indices).unwrap();
+                let expected: StringArray = indices
+                    .iter()
+                    .map(|&(a, b)| sources[a].is_valid(b).then(|| sources[a].value(b)))
+                    .collect();
+                assert_eq!(result.as_string::<i32>(), &expected, "lengths {lens:?}");
+            }
+        }
     }
 
     #[test]

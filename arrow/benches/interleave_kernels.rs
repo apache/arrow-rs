@@ -27,7 +27,8 @@ use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
 use arrow_buffer::ScalarBuffer;
-use arrow_select::interleave::interleave;
+use arrow_select::interleave::{interleave, interleave_record_batch};
+use std::cell::Cell;
 use std::hint;
 use std::sync::Arc;
 
@@ -64,6 +65,130 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
     c.bench_function(name, |b| {
         b.iter(|| hint::black_box(interleave(values, &indices).unwrap()))
     });
+}
+
+/// Number of sources (sorted runs) in the merge-like benchmarks
+const MERGE_SOURCES: usize = 128;
+/// Number of rows in each source of the merge-like benchmarks
+const MERGE_SOURCE_LEN: usize = 8192;
+/// Number of rows interleaved in each call of the merge-like benchmarks
+const MERGE_BATCH_SIZE: usize = 8192;
+
+/// Indices of a k-way merge of `num_sources` sources of `source_len` rows,
+/// split into windows of `batch_size` rows (one window per output batch).
+///
+/// Like a sort preserving merge, each output row takes the next row of a random
+/// (not yet exhausted) source, so the rows taken from each source are always
+/// advancing.
+fn merge_windows(
+    num_sources: usize,
+    source_len: usize,
+    batch_size: usize,
+) -> Vec<Vec<(usize, usize)>> {
+    let mut rng = seedable_rng();
+    let mut cursors = vec![0; num_sources];
+    let mut active: Vec<usize> = (0..num_sources).collect();
+    let mut indices = Vec::with_capacity(num_sources * source_len);
+    while !active.is_empty() {
+        let i = rng.random_range(0..active.len());
+        let source = active[i];
+        indices.push((source, cursors[source]));
+        cursors[source] += 1;
+        if cursors[source] == source_len {
+            active.swap_remove(i);
+        }
+    }
+    indices.chunks(batch_size).map(|w| w.to_vec()).collect()
+}
+
+/// `MERGE_SOURCES` string arrays of `MERGE_SOURCE_LEN` rows each
+fn merge_sources(null_density: f32, min_len: usize, max_len: usize, seed: u64) -> Vec<ArrayRef> {
+    (0..MERGE_SOURCES as u64)
+        .map(|i| {
+            Arc::new(
+                create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                    MERGE_SOURCE_LEN,
+                    null_density,
+                    min_len,
+                    max_len,
+                    "",
+                    seed * MERGE_SOURCES as u64 + i,
+                ),
+            ) as ArrayRef
+        })
+        .collect()
+}
+
+/// Benchmark interleaving successive output batches of a large k-way merge,
+/// each call interleaves the next window so it reads memory that was not
+/// recently touched, as in a real merge
+fn bench_merge_like(c: &mut Criterion, name: &str, values: &[&dyn Array]) {
+    let windows = merge_windows(values.len(), MERGE_SOURCE_LEN, MERGE_BATCH_SIZE);
+    let next = Cell::new(0);
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            let i = next.get();
+            next.set((i + 1) % windows.len());
+            hint::black_box(interleave(values, &windows[i]).unwrap())
+        })
+    });
+}
+
+/// Like [`bench_merge_like`] but for record batches with multiple columns
+fn bench_merge_like_record_batch(c: &mut Criterion, name: &str, batches: &[RecordBatch]) {
+    let batches: Vec<&RecordBatch> = batches.iter().collect();
+    let windows = merge_windows(batches.len(), MERGE_SOURCE_LEN, MERGE_BATCH_SIZE);
+    let next = Cell::new(0);
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            let i = next.get();
+            next.set((i + 1) % windows.len());
+            hint::black_box(interleave_record_batch(&batches, &windows[i]).unwrap())
+        })
+    });
+}
+
+fn add_merge_like_benchmark(c: &mut Criterion) {
+    let label = format!("{MERGE_SOURCES}x{MERGE_SOURCE_LEN} merge {MERGE_BATCH_SIZE}");
+
+    // (name, null density, min len, max len)
+    let string_cases = [
+        ("str(20, 0.0)", 0.0, 20, 20),
+        ("str(4..=40, 0.1)", 0.1, 4, 40),
+        ("str(36, 0.0)", 0.0, 36, 36),
+        ("str(2, 0.0)", 0.0, 2, 2),
+        ("str(4..=7, 0.0)", 0.0, 4, 7),
+        ("str(1..=7, 0.0)", 0.0, 1, 7),
+        ("str(0..=7, 0.1)", 0.1, 0, 7),
+    ];
+    for (seed, (name, null_density, min_len, max_len)) in string_cases.into_iter().enumerate() {
+        let arrays = merge_sources(null_density, min_len, max_len, seed as u64);
+        let values: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+        bench_merge_like(c, &format!("interleave {name} {label}"), &values);
+    }
+
+    // Multiple string columns, so consecutive columns evict each other from
+    // the caches and TLB
+    let num_columns = 16;
+    let columns: Vec<Vec<ArrayRef>> = (0..num_columns)
+        .map(|i| merge_sources(0.1, 4, 40, 100 + i as u64))
+        .collect();
+    let schema = Arc::new(Schema::new(
+        (0..num_columns)
+            .map(|i| Field::new(format!("c{i}"), DataType::Utf8, true))
+            .collect::<Vec<_>>(),
+    ));
+    let batches: Vec<RecordBatch> = (0..MERGE_SOURCES)
+        .map(|source| {
+            let columns = columns.iter().map(|c| Arc::clone(&c[source])).collect();
+            RecordBatch::try_new(Arc::clone(&schema), columns).unwrap()
+        })
+        .collect();
+    bench_merge_like_record_batch(
+        c,
+        &format!("interleave_record_batch {num_columns} x str(4..=40, 0.1) {label}"),
+        &batches,
+    );
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -222,5 +347,5 @@ fn add_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, add_benchmark);
+criterion_group!(benches, add_benchmark, add_merge_like_benchmark);
 criterion_main!(benches);
