@@ -135,8 +135,6 @@ flate2-zlib-rs = ["flate2/zlib-rs"]
 variant_experimental = ["arrow", "parquet-variant", "parquet-variant-compute"]
 # Enable geospatial support
 geospatial = ["parquet-geospatial"]
-# Alias for typo. TODO: Remove in future major version bump.
-flate2-rust_backened = ["flate2-rust_backend"]
 
 
 [[example]]
