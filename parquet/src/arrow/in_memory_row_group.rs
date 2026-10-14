@@ -179,6 +179,7 @@ impl InMemoryRowGroup<'_> {
 ///
 /// A decoding stage of a row group does not fetch a column that an earlier
 /// stage of the same row group read.
+#[inline]
 pub(crate) fn columns_to_fetch<'a>(
     projection: &'a ProjectionMask,
     num_columns: usize,
@@ -190,6 +191,7 @@ pub(crate) fn columns_to_fetch<'a>(
 /// The selection that [`InMemoryRowGroup::fetch_ranges`] uses to choose the
 /// pages of column `idx`: `expanded_selection` (the selection expanded to
 /// batch boundaries) if `cache_mask` includes the column, else `selection`.
+#[inline]
 pub(crate) fn column_selection<'a>(
     selection: Option<&'a RowSelection>,
     expanded_selection: Option<&'a RowSelection>,
@@ -230,6 +232,7 @@ impl<'a> ColumnFetch<'a> {
     /// The fetch of the column chunk at byte range `chunk`, with page
     /// locations `locations` from its offset index, if any, and row
     /// selection `selection`, if any.
+    #[inline]
     pub(crate) fn new(
         chunk: Range<u64>,
         locations: Option<&'a [PageLocation]>,
@@ -278,6 +281,7 @@ impl<'a> ColumnFetch<'a> {
 
 /// Byte range of the dictionary page of a column chunk that starts at
 /// `chunk_start`: the bytes before the first data page, if any.
+#[inline]
 pub(crate) fn dictionary_range(chunk_start: u64, locations: &[PageLocation]) -> Option<Range<u64>> {
     match locations.first() {
         Some(first) if first.offset as u64 != chunk_start => Some(chunk_start..first.offset as u64),
@@ -286,6 +290,7 @@ pub(crate) fn dictionary_range(chunk_start: u64, locations: &[PageLocation]) -> 
 }
 
 /// Byte range of a data page.
+#[inline]
 pub(crate) fn page_range(location: &PageLocation) -> Range<u64> {
     let start = location.offset as u64;
     start..start + location.compressed_page_size as u64
@@ -400,7 +405,14 @@ impl ChunkReader for ColumnChunkData {
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> crate::errors::Result<Bytes> {
-        Ok(self.get(start)?.slice(..length))
+        let data = self.get(start)?;
+        if data.len() < length {
+            return Err(general_err!(
+                "column chunk data at offset {start} has {} bytes, expected {length}",
+                data.len()
+            ));
+        }
+        Ok(data.slice(..length))
     }
 }
 
@@ -418,3 +430,22 @@ impl Iterator for ColumnChunkIterator {
 }
 
 impl PageIterator for ColumnChunkIterator {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_bytes_errors_on_short_data() {
+        let dense = ColumnChunkData::Dense {
+            offset: 100,
+            data: Bytes::from_static(b"0123456789"),
+        };
+        assert_eq!(
+            dense.get_bytes(105, 5).unwrap(),
+            Bytes::from_static(b"56789")
+        );
+        let err = dense.get_bytes(105, 6).unwrap_err().to_string();
+        assert!(err.contains("has 5 bytes, expected 6"), "{err}");
+    }
+}
