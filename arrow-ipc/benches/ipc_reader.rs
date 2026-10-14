@@ -95,6 +95,42 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("StreamReader/read_10/lz4", |b| {
+        let buffer = ipc_stream(
+            IpcWriteOptions::default()
+                .try_with_compression(Some(CompressionType::LZ4_FRAME))
+                .unwrap(),
+        );
+        b.iter(move || {
+            let projection = None;
+            let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
+            for _ in 0..10 {
+                reader.next().unwrap().unwrap();
+            }
+            assert!(reader.next().is_none());
+        })
+    });
+
+    group.bench_function("StreamReader/no_validation/read_10/lz4", |b| {
+        let buffer = ipc_stream(
+            IpcWriteOptions::default()
+                .try_with_compression(Some(CompressionType::LZ4_FRAME))
+                .unwrap(),
+        );
+        b.iter(move || {
+            let projection = None;
+            let mut reader = StreamReader::try_new(buffer.as_slice(), projection).unwrap();
+            unsafe {
+                // safety: we created a valid IPC file
+                reader = reader.with_skip_validation(true);
+            }
+            for _ in 0..10 {
+                reader.next().unwrap().unwrap();
+            }
+            assert!(reader.next().is_none());
+        })
+    });
+
     // --- Create IPC File ---
     group.bench_function("FileReader/read_10", |b| {
         let buffer = ipc_file();
