@@ -744,7 +744,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
-            let (physical_type, length) = if *precision > 1 && *precision <= 9 {
+            let (physical_type, length) = if *precision >= 1 && *precision <= 9 {
                 (PhysicalType::INT32, -1)
             } else if *precision <= 18 {
                 (PhysicalType::INT64, -1)
