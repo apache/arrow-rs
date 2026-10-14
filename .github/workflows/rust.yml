@@ -103,12 +103,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
-        run: rustup install
+        uses: ./.github/actions/setup-builder
       - name: Install cargo-shear
         id: install-shear
         uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7  # v2.87.23
         with:
-          tool: cargo-shear@1.14.0
+          tool: cargo-shear
       - name: Check workspace dependencies
         run: cargo shear --deny-warnings
       - name: Check arrow-pyarrow-testing dependencies
