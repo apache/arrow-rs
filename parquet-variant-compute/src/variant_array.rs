@@ -538,7 +538,7 @@ impl VariantArray {
     /// for composite values and is unchanged for values that can be borrowed
     /// directly. It can be reused after the returned value is dropped.
     ///
-    /// For reading many rows, [`crate::unshred_variant`] avoids repeatedly
+    /// For reading many rows, [`crate::unshred_variant()`] avoids repeatedly
     /// initializing the recursive row builders.
     ///
     /// # Example
@@ -565,7 +565,7 @@ impl VariantArray {
     ///
     /// # Panics
     /// Has the same validation requirements as [`Self::try_value`] and
-    /// [`crate::unshred_variant`]. Malformed inputs may panic in their readers
+    /// [`crate::unshred_variant()`]. Malformed inputs may panic in their readers
     /// or builders.
     pub fn try_value_with_buffer<'a>(
         &'a self,
