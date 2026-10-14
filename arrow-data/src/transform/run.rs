@@ -746,7 +746,7 @@ mod tests {
         let runs = ArrayData::builder(DataType::Int32)
             .len(2)
             .offset(2)
-            .add_buffer(vec![-10_i32, -20, 1_i32, 3, 0, 100].into())
+            .add_buffer(vec![-10_i32, -20, 1_i32, 4, 0, 100].into())
             .build()
             .unwrap();
         let values = ArrayData::builder(DataType::Float32)
