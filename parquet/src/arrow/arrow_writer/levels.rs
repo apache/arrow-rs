@@ -206,6 +206,18 @@ impl LevelInfoBuilder {
             }
             DataType::Dictionary(_, v) if is_leaf(v.as_ref()) => {
                 let levels = ArrayLevels::new(parent_ctx, is_nullable, array.clone());
+                // Without definition levels, nulls from the dictionary values
+                // would be written as values
+                if let Some(nulls) = &levels.logical_nulls
+                    && levels.max_def_level == 0
+                    && nulls.null_count() != 0
+                {
+                    return Err(arrow_err!(
+                        "Found {} nulls in non-nullable field '{}'",
+                        nulls.null_count(),
+                        field.name()
+                    ));
+                }
                 Ok(Self::Primitive(levels))
             }
             DataType::RunEndEncoded(_, value_field) => {
