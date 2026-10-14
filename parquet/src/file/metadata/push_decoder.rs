@@ -275,10 +275,16 @@ impl ParquetMetaDataPushDecoder {
     /// This can be used to parse and populate the page index structures
     /// after the metadata has already been decoded.
     ///
-    /// When decoding page indexes, any existing page indexes in `metadata` will be
-    /// replaced based on the configured policies. See
-    /// [`crate::file::metadata::ParquetMetaDataReader::read_page_indexes`] for details
-    /// on the replacement behavior.
+    /// The page indexes can then be decoded in one of two ways:
+    ///
+    /// * [`Self::try_decode`] attaches the decoded page indexes to the returned
+    ///   metadata, replacing (or clearing) any existing page indexes
+    ///   See [`ParquetMetaDataReader::read_page_indexes`] for details.
+    /// * [`Self::try_decode_page_index`] returns the decoded page indexes
+    ///   separately and leaves any page indexes already attached to `metadata`
+    ///   unchanged.
+    ///
+    /// [`ParquetMetaDataReader::read_page_indexes`]: [`crate::file::metadata::ParquetMetaDataReader::read_page_indexes`]
     pub fn try_new_with_metadata(file_len: u64, metadata: ParquetMetaData) -> Result<Self> {
         let mut new_self = Self::try_new(file_len)?;
         new_self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
@@ -471,8 +477,10 @@ impl ParquetMetaDataPushDecoder {
     /// Try to decode the page indexes from the pushed data, returning the stored
     /// [`ParquetMetaData`] together with the decoded [`PageIndex`].
     ///
-    /// This method can only be called after [`Self::try_new_with_metadata`],
-    /// which initializes the decoder with previously decoded metadata.
+    /// This method can only be called once the footer metadata is known: either
+    /// after [`Self::try_new_with_metadata`], or after [`Self::try_decode`] has
+    /// decoded the footer metadata and requested page index data. Calling it
+    /// earlier returns an error and leaves the decoder unchanged.
     ///
     /// This method is useful when you want to:
     /// 1. First decode the footer metadata without reading the page indexes
@@ -515,10 +523,17 @@ impl ParquetMetaDataPushDecoder {
                     DecodeResult::Finished => DecodeResult::Finished,
                 })
             }
-            DecodeState::Finished => Ok(DecodeResult::Finished),
-            _ => Err(general_err!(
-                "ParquetMetaDataPushDecoder: internal error, invalid state"
-            )),
+            DecodeState::Finished => {
+                self.state = DecodeState::Finished;
+                Ok(DecodeResult::Finished)
+            }
+            other => {
+                // Restore the original state so the decoder remains usable
+                self.state = other;
+                Err(general_err!(
+                    "ParquetMetaDataPushDecoder: try_decode_page_index requires a decoder created with try_new_with_metadata"
+                ))
+            }
         }
     }
 
@@ -751,7 +766,53 @@ mod tests {
     fn test_page_index_decoder_requires_metadata() {
         let mut decoder = ParquetMetaDataPushDecoder::try_new(test_file_len()).unwrap();
         let err = decoder.try_decode_page_index().unwrap_err();
-        assert!(err.to_string().contains("invalid state"));
+        assert!(
+            err.to_string()
+                .contains("requires a decoder created with try_new_with_metadata"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// A failed call to `try_decode_page_index` must not leave the decoder in
+    /// an unusable state: decoding the metadata via `try_decode` should still
+    /// work afterwards, at every stage of the footer decoding state machine.
+    #[test]
+    fn test_decode_after_failed_page_index_decode() {
+        let file_len = test_file_len();
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(file_len).unwrap();
+
+        // Before any data is pushed, the decoder is waiting for the footer
+        decoder.try_decode_page_index().unwrap_err();
+        let footer_ranges = expect_needs_data(decoder.try_decode());
+        assert_eq!(footer_ranges.len(), 1);
+        push_ranges_to_metadata_decoder(&mut decoder, footer_ranges);
+
+        // The footer is available but not yet decoded
+        decoder.try_decode_page_index().unwrap_err();
+        let metadata_ranges = expect_needs_data(decoder.try_decode());
+        assert_eq!(metadata_ranges.len(), 1);
+        push_ranges_to_metadata_decoder(&mut decoder, metadata_ranges);
+
+        // The metadata is available but not yet decoded
+        decoder.try_decode_page_index().unwrap_err();
+        let index_ranges = expect_needs_data(decoder.try_decode());
+        assert_eq!(index_ranges.len(), 1);
+
+        // The metadata is decoded and the decoder is waiting for page index
+        // data, so try_decode_page_index is now valid and asks for the same range
+        let index_ranges_again = expect_needs_data(decoder.try_decode_page_index());
+        assert_eq!(index_ranges, index_ranges_again);
+        push_ranges_to_metadata_decoder(&mut decoder, index_ranges);
+
+        // The regular decode path still works and attaches the page index
+        let metadata = expect_data(decoder.try_decode());
+        assert_eq!(metadata.num_row_groups(), 2);
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
+
+        // Once finished, both entry points keep reporting Finished
+        expect_finished(decoder.try_decode_page_index());
+        expect_finished(decoder.try_decode_page_index());
+        expect_finished(decoder.try_decode());
     }
 
     /// It is possible to feed some, but not all, of the footer into the metadata decoder
