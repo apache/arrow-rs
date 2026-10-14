@@ -158,7 +158,7 @@ impl TimestampParser {
 /// * `1997-01-31 092656+04:00`         # close to RCF3339, no fractional seconds or time separator
 /// * `1997-01-31`                      # close to RCF3339, only date no time
 ///
-/// [IANA timezones] are only supported if the `arrow-array/chrono-tz` feature is enabled
+/// [IANA timezones] are only supported if the `arrow-array/chrono-tz` or `arrow-array/jiff` feature is enabled
 ///
 /// * `2023-01-01 040506 America/Los_Angeles`
 ///
