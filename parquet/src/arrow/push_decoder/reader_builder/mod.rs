@@ -17,6 +17,7 @@
 
 mod data;
 mod filter;
+mod incremental;
 mod stages;
 
 use crate::arrow::ProjectionMask;
@@ -28,6 +29,7 @@ use crate::arrow::arrow_reader::{
     RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
+use crate::arrow::push_decoder::FetchGranularity;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::push_decoder::scan_plan::{
@@ -42,6 +44,8 @@ use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
+pub(crate) use incremental::IncrementalResult;
+use incremental::{IncrementalConfig, IncrementalRowGroup};
 pub(crate) use stages::{Stage, StageSchedule};
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
@@ -89,6 +93,9 @@ enum RowGroupDecoderState {
         /// Any cached filter results
         cache_info: Option<CacheInfo>,
     },
+    /// Decode this row group one batch at a time. Only
+    /// [`RowGroupReaderBuilder::try_build_incremental`] sets this state.
+    Incremental(Box<IncrementalRowGroup>),
     /// Finished (or not yet started) reading this group
     Finished,
 }
@@ -102,6 +109,7 @@ impl RowGroupDecoderState {
             | Self::WaitingOnFilterData { row_group_info, .. }
             | Self::StartData { row_group_info, .. }
             | Self::WaitingOnData { row_group_info, .. } => Some(row_group_info.row_group_idx),
+            Self::Incremental(row_group) => Some(row_group.row_group_idx()),
             Self::Finished => None,
         }
     }
@@ -206,6 +214,8 @@ pub(crate) struct RowGroupReaderBuilder {
     /// What each decoding stage fetches. Kept here because the filter is
     /// moved out of the builder while a row group is decoded.
     stages: Arc<StageSchedule>,
+    /// How [`Self::try_build_incremental`] fetches and decodes row groups.
+    fetch_granularity: FetchGranularity,
 }
 
 /// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
@@ -225,6 +235,7 @@ pub(crate) struct RowGroupReaderBuilderParts {
     /// Bytes already pushed into the decoder, carried across a rebuild so they
     /// are not re-requested.
     pub buffers: PushBuffers,
+    pub fetch_granularity: FetchGranularity,
 }
 
 impl RowGroupReaderBuilder {
@@ -240,6 +251,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        fetch_granularity: FetchGranularity,
     ) -> Self {
         let (predicate_projections, cache_projection) = match &filter {
             Some(filter) => (
@@ -271,6 +283,7 @@ impl RowGroupReaderBuilder {
             state: Some(RowGroupDecoderState::Finished),
             buffers,
             stages: Arc::new(stages),
+            fetch_granularity,
         }
     }
 
@@ -293,6 +306,7 @@ impl RowGroupReaderBuilder {
             buffers,
             // Recomputed from `filter` when the builder is rebuilt.
             stages: _,
+            fetch_granularity,
         } = self;
         RowGroupReaderBuilderParts {
             batch_size,
@@ -303,6 +317,7 @@ impl RowGroupReaderBuilder {
             metrics,
             row_selection_policy,
             buffers,
+            fetch_granularity,
         }
     }
 
@@ -324,8 +339,114 @@ impl RowGroupReaderBuilder {
     }
 
     /// Returns the total number of buffered bytes available
+    ///
+    /// This includes the pages in the [`PageStore`] of a row group that is
+    /// decoded one batch at a time. The decoder moved these pages out of the
+    /// [`PushBuffers`], but it holds them.
+    ///
+    /// [`PageStore`]: crate::arrow::push_decoder::page_store::PageStore
     pub fn buffered_bytes(&self) -> u64 {
-        self.buffers.buffered_bytes()
+        let incremental = match &self.state {
+            Some(RowGroupDecoderState::Incremental(row_group)) => row_group.buffered_bytes(),
+            _ => 0,
+        };
+        self.buffers.buffered_bytes() + incremental
+    }
+
+    /// How [`ParquetPushDecoder::try_decode`] fetches and decodes row groups.
+    ///
+    /// [`ParquetPushDecoder::try_decode`]: crate::arrow::push_decoder::ParquetPushDecoder::try_decode
+    pub(crate) fn fetch_granularity(&self) -> FetchGranularity {
+        self.fetch_granularity
+    }
+
+    /// Returns true if `try_decode` decodes the active row group one batch at
+    /// a time. While this is true, `try_next_reader` returns an error.
+    pub(crate) fn is_incremental(&self) -> bool {
+        matches!(self.state, Some(RowGroupDecoderState::Incremental(_)))
+    }
+
+    /// Decode the active row group one batch at a time. See
+    /// [`FetchGranularity::Batch`].
+    ///
+    /// The caller must not call this method if [`Self::try_build`] started
+    /// the active row group.
+    pub(crate) fn try_build_incremental(&mut self) -> Result<IncrementalResult, ParquetError> {
+        let mut row_group = match self.take_state()? {
+            RowGroupDecoderState::Start { row_group_info } => {
+                let RowGroupInfo {
+                    row_group_idx,
+                    row_count,
+                    plan_builder,
+                    budget,
+                } = row_group_info;
+                debug_assert!(!budget.is_exhausted());
+                let cache_projection = match &self.filter {
+                    Some(filter) => self.compute_cache_projection(row_group_idx, filter),
+                    None => {
+                        ProjectionMask::none(self.metadata.row_group(row_group_idx).columns().len())
+                    }
+                };
+                let config = IncrementalConfig {
+                    batch_size: self.batch_size,
+                    projection: self.projection.clone(),
+                    metadata: Arc::clone(&self.metadata),
+                    fields: self.fields.clone(),
+                    metrics: self.metrics.clone(),
+                    cache_projection,
+                    max_predicate_cache_size: self.max_predicate_cache_size,
+                    row_selection_policy: self.row_selection_policy,
+                };
+                match IncrementalRowGroup::new(
+                    config,
+                    row_group_idx,
+                    row_count,
+                    plan_builder.selection().cloned(),
+                    budget,
+                    &mut self.filter,
+                ) {
+                    Ok(row_group) => Box::new(row_group),
+                    Err(e) => {
+                        self.state = Some(RowGroupDecoderState::Finished);
+                        return Err(e);
+                    }
+                }
+            }
+            RowGroupDecoderState::Incremental(row_group) => row_group,
+            RowGroupDecoderState::Finished => {
+                self.state = Some(RowGroupDecoderState::Finished);
+                return Err(general_err!(
+                    "Internal Error: try_build_incremental called without an active row group"
+                ));
+            }
+            other => {
+                // `ParquetPushDecoder::try_decode` checks this before it
+                // calls this method.
+                self.state = Some(other);
+                return Err(general_err!(
+                    "Internal Error: try_build_incremental called for a row group of try_build"
+                ));
+            }
+        };
+
+        let result = row_group.try_next(&mut self.buffers);
+        let finished = matches!(
+            result,
+            Err(_)
+                | Ok(IncrementalResult::Finished { .. }
+                    | IncrementalResult::Batch {
+                        remaining_budget: Some(_),
+                        ..
+                    })
+        );
+        if finished {
+            debug_assert!(self.filter.is_none());
+            self.filter = row_group.take_filter();
+            self.state = Some(RowGroupDecoderState::Finished);
+        } else {
+            self.state = Some(RowGroupDecoderState::Incremental(row_group));
+        }
+        result
     }
 
     /// Clear any staged ranges currently buffered for future decode work.
@@ -768,6 +889,14 @@ impl RowGroupReaderBuilder {
                         remaining_budget: budget,
                     },
                 )
+            }
+            RowGroupDecoderState::Incremental(row_group) => {
+                // Put the state back. The decoder can continue.
+                self.state = Some(RowGroupDecoderState::Incremental(row_group));
+                return Err(general_err!(
+                    "try_next_reader called while try_decode is decoding a row group a batch \
+                     at a time; call try_decode until the row group is done",
+                ));
             }
             RowGroupDecoderState::Finished => {
                 return Err(ParquetError::General(String::from(
