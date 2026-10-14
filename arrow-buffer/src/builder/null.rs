@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::bit_util::normalize_range;
 use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
+use std::ops::RangeBounds;
 
 /// Builder for creating [`NullBuffer`]s (bitmaps indicating validity/nulls).
 ///
@@ -214,6 +216,37 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Copies validity bits `src` of `data` to position `dest`
+    ///
+    /// # Arguments
+    /// * `src` - The source range of bits to copy
+    /// * `dest` - The destination bit index to copy to
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::NullBufferBuilder;
+    /// let mut builder = NullBufferBuilder::new(0);
+    /// builder.append_slice(&[true, false, false, false, false, true]);
+    /// // Copy values 4.. to position 1
+    /// builder.copy_within(4.., 1);
+    ///
+    /// let output = builder.build().unwrap().iter().collect::<Vec<_>>();
+    /// assert_eq!(output, vec![true, false, true, false, false, true]);
+    /// ```
+    pub fn copy_within<R: RangeBounds<usize>>(&mut self, src: R, dest: usize) {
+        if let Some(buf) = self.bitmap_builder.as_mut() {
+            buf.copy_within(src, dest)
+        } else {
+            // Only validate args, nothing else to do since all values are the same
+            let normalized_range = normalize_range(src, self.len());
+            assert!(
+                dest <= self.len - normalized_range.len(),
+                "dest {dest} is out of bounds for range of length {}",
+                normalized_range.len()
+            );
+        }
+    }
+
     /// Builds the [`NullBuffer`] and resets the builder.
     ///
     /// Returns `None` if the builder only contains `true`s. Use [`Self::build`]
@@ -281,6 +314,8 @@ impl NullBufferBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::prelude::StdRng;
+    use rand::{RngExt, SeedableRng};
 
     #[test]
     fn test_null_buffer_builder() {
@@ -427,5 +462,40 @@ mod tests {
         builder.append_buffer(&buffer);
 
         assert_eq!(builder.finish(), None);
+    }
+
+    #[test]
+    fn copy_within_in_materialized() {
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let input = (0..100).map(|_| rng.random_bool(0.3)).collect::<Vec<_>>();
+
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_slice(&input);
+
+        assert!(builder.as_slice().is_some(), "should be materialized");
+
+        builder.copy_within(10..20, 30);
+
+        let expected = {
+            let mut expected = input.clone();
+            expected.copy_within(10..20, 30);
+            let mut builder = NullBufferBuilder::new(0);
+            builder.append_slice(&expected);
+            builder
+        };
+        assert_eq!(builder.build(), expected.build());
+    }
+
+    #[test]
+    fn copy_within_in_non_materialized() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_n_non_nulls(100);
+
+        assert!(builder.as_slice().is_none(), "should be non-materialized");
+
+        builder.copy_within(10..20, 30);
+        let finished = builder.finish();
+        assert!(finished.is_none(), "should be kept as non-materialized");
     }
 }
