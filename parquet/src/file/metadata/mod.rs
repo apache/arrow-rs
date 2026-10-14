@@ -148,7 +148,10 @@ impl ParquetMetaData {
         }
     }
 
-    /// Convert this ParquetMetaData into a [`ParquetMetaDataBuilder`]
+    /// Convert this ParquetMetaData into a [`ParquetMetaDataBuilder`].
+    ///
+    /// The builder initially shares any reference-counted metadata. Mutating shared
+    /// fields may clone their contents using copy-on-write.
     pub fn into_builder(self) -> ParquetMetaDataBuilder {
         self.into()
     }
@@ -343,6 +346,9 @@ impl ParquetMetaDataBuilder {
     }
 
     /// Adds a row group to the metadata
+    ///
+    /// If the row groups are shared with another `ParquetMetaData`, this clones
+    /// the existing row groups before appending.
     pub fn add_row_group(mut self, row_group: RowGroupMetaData) -> Self {
         Arc::make_mut(&mut self.0.row_groups).push(row_group);
         self
@@ -359,6 +365,9 @@ impl ParquetMetaDataBuilder {
     ///
     /// This can be used for more efficient creation of a new ParquetMetaData
     /// from an existing one.
+    ///
+    /// Returns the existing allocation when uniquely owned; otherwise clones the
+    /// shared row groups.
     pub fn take_row_groups(&mut self) -> Vec<RowGroupMetaData> {
         Arc::unwrap_or_clone(std::mem::take(&mut self.0.row_groups))
     }
