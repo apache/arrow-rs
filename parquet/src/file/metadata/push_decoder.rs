@@ -483,7 +483,9 @@ impl ParquetMetaDataPushDecoder {
     /// When the data can be accessed through a [`ChunkReader`], prefer
     /// [`ParquetMetaDataReader::read_page_index_and_finish`] (or
     /// [`ParquetMetaDataReader::load_page_index_and_finish`] for asynchronous
-    /// I/O), which handles the decoder state machine and I/O requests.
+    /// I/O), which handles the decoder state machine and I/O requests. See the
+    /// [`read_page_index_and_finish` example][`ParquetMetaDataReader::read_page_index_and_finish`]
+    /// for the complete two-stage workflow.
     ///
     /// # Returns
     ///

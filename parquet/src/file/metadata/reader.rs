@@ -585,6 +585,42 @@ impl ParquetMetaDataReader {
     ///
     /// This operation consumes `self`, but returns the stored [`ParquetMetaData`] as the first
     /// tuple element. Use [`Self::new_with_metadata`] to construct the reader.
+    ///
+    /// # Example
+    ///
+    /// Read the footer metadata first, then load selected page indexes separately when they are
+    /// needed:
+    ///
+    /// ```no_run
+    /// # use parquet::errors::Result;
+    /// use parquet::file::metadata::page_index::PageIndexProvider;
+    /// use parquet::file::metadata::{
+    ///     ColumnChunkMask, PageIndexPolicy, ParquetMetaDataReader,
+    /// };
+    /// # fn open_parquet_file() -> std::fs::File { unimplemented!() }
+    /// # fn example() -> Result<()> {
+    /// let file = open_parquet_file();
+    /// let metadata = ParquetMetaDataReader::new()
+    ///     .with_page_index_policy(PageIndexPolicy::Skip)
+    ///     .parse_and_finish(&file)?;
+    /// assert!(metadata.page_index().is_none());
+    ///
+    /// let mask = ColumnChunkMask::columns([0]);
+    /// let (metadata, page_index) = ParquetMetaDataReader::new_with_metadata(metadata)
+    ///     .with_column_index_policy(PageIndexPolicy::Required)
+    ///     .with_offset_index_policy(PageIndexPolicy::Required)
+    ///     .with_column_index_mask(mask.clone())
+    ///     .with_offset_index_mask(mask)
+    ///     .read_page_index_and_finish(&file)?;
+    ///
+    /// // The metadata is returned unchanged and the selected indexes can be cached separately.
+    /// assert!(metadata.page_index().is_none());
+    /// let page_index = page_index.expect("page indexes are required");
+    /// assert!(page_index.column_index(0, 0).is_some());
+    /// assert!(page_index.offset_index(0, 0).is_some());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn read_page_index_and_finish<R: ChunkReader>(
         self,
         reader: &R,
