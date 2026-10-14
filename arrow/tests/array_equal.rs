@@ -1572,7 +1572,7 @@ fn test_from_run_array_array_data_offset() {
         let runs = ArrayData::builder(DataType::Int32)
             .len(3)
             .offset(1)
-            .add_buffer(vec![-20_i32, 1_i32, 2, 3, 0].into())
+            .add_buffer(vec![-20_i32, 1_i32, 2, 4, 0].into())
             .build()
             .unwrap();
         let values = Float32Array::from(vec![1.5, 2.5, 2.5]);
