@@ -1210,6 +1210,7 @@ impl CheckedDiv for i256 {
 }
 
 impl CheckedMul for i256 {
+    #[inline]
     fn checked_mul(&self, v: &i256) -> Option<Self> {
         (*self).checked_mul(*v)
     }
