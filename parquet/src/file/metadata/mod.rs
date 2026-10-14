@@ -334,46 +334,17 @@ impl PartialEq for ParquetMetaData {
 ///   .add_row_group(last_row_group)
 ///   .build();
 /// ```
-pub struct ParquetMetaDataBuilder {
-    /// File level metadata
-    file_metadata: Arc<FileMetaData>,
-    /// Row group metadata
-    row_groups: Arc<Vec<RowGroupMetaData>>,
-    /// Page level index for each page in each column chunk
-    page_index: Option<Arc<dyn PageIndexProvider>>,
-    /// Optional file decryptor
-    #[cfg(feature = "encryption")]
-    file_decryptor: Option<Box<FileDecryptor>>,
-}
+pub struct ParquetMetaDataBuilder(ParquetMetaData);
 
 impl ParquetMetaDataBuilder {
     /// Create a new builder from a file metadata, with no row groups
     pub fn new(file_meta_data: FileMetaData) -> Self {
-        Self {
-            file_metadata: Arc::new(file_meta_data),
-            row_groups: Arc::new(vec![]),
-            page_index: None,
-            #[cfg(feature = "encryption")]
-            file_decryptor: None,
-        }
+        Self(ParquetMetaData::new(file_meta_data, vec![]))
     }
 
     /// Create a new builder from an existing ParquetMetaData
     pub fn new_from_metadata(metadata: ParquetMetaData) -> Self {
-        let ParquetMetaData {
-            file_metadata,
-            row_groups,
-            page_index,
-            #[cfg(feature = "encryption")]
-            file_decryptor,
-        } = metadata;
-        Self {
-            file_metadata,
-            row_groups,
-            page_index,
-            #[cfg(feature = "encryption")]
-            file_decryptor,
-        }
+        Self(metadata)
     }
 
     /// Adds a row group to the metadata
@@ -405,7 +376,7 @@ impl ParquetMetaDataBuilder {
 
     /// Return a reference to the current row groups
     pub fn row_groups(&self) -> &[RowGroupMetaData] {
-        &self.row_groups
+        &self.0.row_groups
     }
 
     /// Sets the [`PageIndexProvider`]
@@ -417,18 +388,18 @@ impl ParquetMetaDataBuilder {
     ///
     /// [`custom_page_index.rs`]: https://github.com/apache/arrow-rs/blob/main/parquet/examples/custom_page_index.rs
     pub fn set_page_index(mut self, page_index: Option<Arc<dyn PageIndexProvider>>) -> Self {
-        self.page_index = page_index;
+        self.0.page_index = page_index;
         self
     }
 
     /// Returns the current [`PageIndexProvider`] from the builder, replacing it with `None`
     pub fn take_page_index(&mut self) -> Option<Arc<dyn PageIndexProvider>> {
-        std::mem::take(&mut self.page_index)
+        std::mem::take(&mut self.0.page_index)
     }
 
     /// Return a reference to the current [`PageIndexProvider`], if any
     pub fn page_index(&self) -> Option<&dyn PageIndexProvider> {
-        self.page_index.as_ref().map(|arc| arc.as_ref())
+        self.0.page_index.as_ref().map(|arc| arc.as_ref())
     }
 
     /// Sets the file decryptor needed to decrypt this metadata.
@@ -440,19 +411,14 @@ impl ParquetMetaDataBuilder {
 
     /// Creates a new ParquetMetaData from the builder
     pub fn build(self) -> ParquetMetaData {
-        ParquetMetaData {
-            file_metadata: self.file_metadata,
-            row_groups: self.row_groups,
-            page_index: self.page_index,
-            #[cfg(feature = "encryption")]
-            file_decryptor: self.file_decryptor,
-        }
+        let Self(metadata) = self;
+        metadata
     }
 }
 
 impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     fn from(meta_data: ParquetMetaData) -> Self {
-        Self::new_from_metadata(meta_data)
+        Self(meta_data)
     }
 }
 
