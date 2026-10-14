@@ -27,7 +27,8 @@ use arrow_array::builder::{
 };
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    DictionaryArray, FixedSizeListArray, GenericListViewArray, PrimitiveArray, StringViewArray,
+    DictionaryArray, FixedSizeListArray, Float32Array, GenericListViewArray, PrimitiveArray,
+    RunArray, StringViewArray,
 };
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -1441,5 +1442,50 @@ fn test_list_excess_children_equal() {
 
     assert_eq!(a.value_offsets(), &[0, 1, 3]);
     assert_eq!(b.value_offsets(), &[0, 0, 2]);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn test_from_run_array_array_data_offset() {
+    let a = RunArray::try_new(
+        &Int32Array::from(vec![1, 3]),
+        &Float32Array::from(vec![1.5, 2.5]),
+    )
+    .unwrap()
+    .to_data();
+
+    // ensure if run_ends child has a physical offset, it is respected
+    // we construct & compare with ArrayData as other APIs will usually normalize
+    // this physical offset to 0
+    let b = {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Float32,
+                true,
+            )),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(3)
+            .offset(1)
+            .add_buffer(vec![-20_i32, 1_i32, 2, 4, 0].into())
+            .build()
+            .unwrap();
+        let values = Float32Array::from(vec![1.5, 2.5, 2.5]);
+
+        ArrayDataBuilder::new(dt)
+            .len(3)
+            .offset(0)
+            .child_data(vec![runs, values.to_data()])
+            .build()
+            .unwrap()
+    };
+
     assert_eq!(a, b);
 }
