@@ -251,7 +251,6 @@ fn interleave_bytes<T: ByteArrayType>(
         .iter()
         .map(|a| (a.value_offsets(), a.value_data()))
         .collect();
-    let distance = prefetch_distance();
 
     let mut capacity = 0;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
@@ -261,12 +260,7 @@ fn interleave_bytes<T: ByteArrayType>(
     let mut max_element_len = 0;
     let mut min_element_len = usize::MAX;
     offsets.push(T::Offset::from_usize(0).unwrap());
-    for (i, &(a, b)) in indices.iter().enumerate() {
-        // The offsets of each value are in one of many source arrays, so they
-        // are likely not in cache, request the ones needed a few values ahead
-        if let Some(&(pa, pb)) = indices.get(i + distance).filter(|_| distance > 0) {
-            prefetch_read(sources[pa].0.as_ptr().wrapping_add(pb));
-        }
+    for &(a, b) in indices {
         let (o, data) = sources[a];
         let start = o[b].as_usize();
         let element_len = o[b + 1].as_usize() - start;
@@ -292,7 +286,6 @@ fn interleave_bytes<T: ByteArrayType>(
             capacity,
             min_element_len,
             max_element_len,
-            distance,
         )
     };
 
@@ -331,7 +324,6 @@ fn copy_byte_values<T: ByteArrayType>(
     capacity: usize,
     min_len: usize,
     max_len: usize,
-    distance: usize,
 ) -> Vec<u8> {
     // Exact head/tail copy: find a power of two `H` such that `H <= min_len`
     // and `max_len <= 2 * H`
@@ -339,24 +331,24 @@ fn copy_byte_values<T: ByteArrayType>(
         let h = 1 << min_len.ilog2();
         if max_len <= 2 * h {
             return match h {
-                1 => copy_values::<T, HeadTail<1>>(starts, offsets, capacity, distance),
-                2 => copy_values::<T, HeadTail<2>>(starts, offsets, capacity, distance),
-                4 => copy_values::<T, HeadTail<4>>(starts, offsets, capacity, distance),
-                8 => copy_values::<T, HeadTail<8>>(starts, offsets, capacity, distance),
-                16 => copy_values::<T, HeadTail<16>>(starts, offsets, capacity, distance),
-                32 => copy_values::<T, HeadTail<32>>(starts, offsets, capacity, distance),
-                _ => copy_values::<T, Exact>(starts, offsets, capacity, distance),
+                1 => copy_values::<T, HeadTail<1>>(starts, offsets, capacity),
+                2 => copy_values::<T, HeadTail<2>>(starts, offsets, capacity),
+                4 => copy_values::<T, HeadTail<4>>(starts, offsets, capacity),
+                8 => copy_values::<T, HeadTail<8>>(starts, offsets, capacity),
+                16 => copy_values::<T, HeadTail<16>>(starts, offsets, capacity),
+                32 => copy_values::<T, HeadTail<32>>(starts, offsets, capacity),
+                _ => copy_values::<T, Exact>(starts, offsets, capacity),
             };
         }
     }
 
     match max_len {
-        0..=16 => copy_values::<T, Fixed<16>>(starts, offsets, capacity, distance),
-        17..=32 => copy_values::<T, Fixed<32>>(starts, offsets, capacity, distance),
+        0..=16 => copy_values::<T, Fixed<16>>(starts, offsets, capacity),
+        17..=32 => copy_values::<T, Fixed<32>>(starts, offsets, capacity),
         33..=MAX_FIXED_COPY_WIDTH => {
-            copy_values::<T, Fixed<MAX_FIXED_COPY_WIDTH>>(starts, offsets, capacity, distance)
+            copy_values::<T, Fixed<MAX_FIXED_COPY_WIDTH>>(starts, offsets, capacity)
         }
-        _ => copy_values::<T, Exact>(starts, offsets, capacity, distance),
+        _ => copy_values::<T, Exact>(starts, offsets, capacity),
     }
 }
 
@@ -435,22 +427,16 @@ impl CopyValue for Exact {
 
 /// Copy the values starting at `starts`, with the lengths given by `offsets`,
 /// into a new buffer of `capacity` bytes (the sum of their lengths) using `C`
-/// for each value, prefetching the value `distance` values ahead
+/// for each value
 fn copy_values<T: ByteArrayType, C: CopyValue>(
     starts: &[(*const u8, usize)],
     offsets: &[T::Offset],
     capacity: usize,
-    distance: usize,
 ) -> Vec<u8> {
     debug_assert_eq!(starts.len() + 1, offsets.len());
     let mut values = Vec::<u8>::with_capacity(capacity + C::SLACK);
     let mut dst = values.as_mut_ptr();
     for (i, &(src, src_readable)) in starts.iter().enumerate() {
-        // Values are scattered across many source arrays, so they are likely
-        // not in cache, request the one needed a few values ahead
-        if let Some(&(next, _)) = starts.get(i + distance).filter(|_| distance > 0) {
-            prefetch_read(next);
-        }
         let len = offsets[i + 1].as_usize() - offsets[i].as_usize();
         // SAFETY: `src` points to a value of `len <= src_readable` bytes
         // within its source values (see `interleave_bytes`). The lengths of the
@@ -464,43 +450,6 @@ fn copy_values<T: ByteArrayType, C: CopyValue>(
     // SAFETY: the loop above initialized exactly `capacity` bytes
     unsafe { values.set_len(capacity) };
     values
-}
-
-/// How many values ahead [`interleave_bytes`] prefetches, `0` disables it.
-///
-/// TEMPORARY: read from the `ARROW_INTERLEAVE_PREFETCH` environment variable
-/// to tune the distance, defaults to 16
-fn prefetch_distance() -> usize {
-    static DISTANCE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *DISTANCE.get_or_init(|| {
-        std::env::var("ARROW_INTERLEAVE_PREFETCH")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(16)
-    })
-}
-
-/// Hint the CPU to load the cache line containing `ptr` into the L1 cache.
-///
-/// This never faults, `ptr` does not need to be valid
-#[inline(always)]
-fn prefetch_read<P>(ptr: *const P) {
-    #[cfg(target_arch = "x86_64")]
-    // SAFETY: prefetching is only a hint and never faults
-    unsafe {
-        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(ptr.cast::<i8>())
-    }
-    #[cfg(target_arch = "aarch64")]
-    // SAFETY: prefetching is only a hint and never faults
-    unsafe {
-        std::arch::asm!(
-            "prfm pldl1keep, [{ptr}]",
-            ptr = in(reg) ptr,
-            options(nostack, preserves_flags, readonly)
-        )
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    let _ = ptr;
 }
 
 fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
