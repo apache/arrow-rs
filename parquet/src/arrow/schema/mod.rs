@@ -984,16 +984,8 @@ mod tests {
             (9, PhysicalType::INT32, None),
             (10, PhysicalType::INT64, None),
             (18, PhysicalType::INT64, None),
-            (
-                19,
-                PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                Some(decimal_length_from_precision(19) as i32),
-            ),
-            (
-                38,
-                PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                Some(decimal_length_from_precision(38) as i32),
-            ),
+            (19, PhysicalType::FIXED_LEN_BYTE_ARRAY, Some(9)),
+            (38, PhysicalType::FIXED_LEN_BYTE_ARRAY, Some(16)),
         ];
 
         for (precision, expected_type, expected_length) in cases {
