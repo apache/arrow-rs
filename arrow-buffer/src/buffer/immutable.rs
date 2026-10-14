@@ -789,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::float_cmp)]
+    #[expect(clippy::float_cmp_const)]
     fn test_as_typed_data() {
         check_as_typed_data!(&[1i8, 3i8, 6i8], i8);
         check_as_typed_data!(&[1u8, 3u8, 6u8], u8);

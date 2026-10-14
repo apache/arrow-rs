@@ -28,7 +28,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, TimeUnit};
-use num_traits::ToPrimitive;
+use num_traits::{CheckedMul, ToPrimitive};
 
 use crate::arity::{binary, try_binary};
 
@@ -1026,7 +1026,10 @@ fn decimal_op<T: DecimalType>(
     l_s: bool,
     r: &dyn Array,
     r_s: bool,
-) -> Result<ArrayRef, ArrowError> {
+) -> Result<ArrayRef, ArrowError>
+where
+    T::Native: CheckedMul,
+{
     let l = l.as_primitive::<T>();
     let r = r.as_primitive::<T>();
 
@@ -1116,7 +1119,10 @@ fn decimal_op<T: DecimalType>(
             let mul_pow = result_scale - s1 + s2;
 
             // p1 - s1 + s2 + result_scale
-            let result_precision = (mul_pow.saturating_add(*p1 as i8) as u8).min(T::MAX_PRECISION);
+            // Precision must be positive and at least the output scale.
+            let result_precision = (mul_pow as i16 + *p1 as i16)
+                .clamp(result_scale.max(1) as i16, T::MAX_PRECISION as i16)
+                as u8;
 
             let (l_mul, r_mul) = match mul_pow.cmp(&0) {
                 Ordering::Greater => (
@@ -1135,9 +1141,9 @@ fn decimal_op<T: DecimalType>(
                 l_s,
                 r,
                 r_s,
-                match l.mul_checked(l_mul) {
-                    Ok(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
-                    Err(_) => scaled_div::<T>(l, r, mul_pow),
+                match l.checked_mul(&l_mul) {
+                    Some(scaled) => scaled.div_checked(r.mul_checked(r_mul)?),
+                    None => scaled_div::<T>(l, r, mul_pow),
                 }
             )
             .with_precision_and_scale(result_precision, result_scale)?
@@ -1648,6 +1654,107 @@ mod tests {
             mul(&a, &b).unwrap_err().to_string(),
             "Invalid argument error: Output scale of Decimal256(76, -64) * Decimal256(76, -65) would be less than min scale of -128"
         );
+    }
+
+    #[test]
+    fn test_decimal_div_precision_at_least_scale() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            let a: PrimitiveArray<T> = [Some(1), Some(-1), Some(0), None]
+                .into_iter()
+                .map(|v| v.map(T::Native::from))
+                .collect();
+            let a = a.with_precision_and_scale(1, 1).unwrap();
+            for (scale, coefficient) in [(0, 10000), (-1, 1000), (-4, 1), (-5, 0), (-6, 0)] {
+                let b = PrimitiveArray::<T>::from_iter_values(
+                    [1, 1, 1, 0].into_iter().map(T::Native::from),
+                )
+                .with_precision_and_scale(1, scale)
+                .unwrap();
+                let expected: PrimitiveArray<T> =
+                    [Some(coefficient), Some(-coefficient), Some(0), None]
+                        .into_iter()
+                        .map(|v| v.map(T::Native::from))
+                        .collect();
+                let expected = expected.with_precision_and_scale(5, 5).unwrap();
+                assert_eq!(div(&a, &b).unwrap().as_ref(), &expected);
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_decimal_div_precision_at_least_one() {
+        fn check<T: DecimalType>()
+        where
+            T::Native: From<i32>,
+        {
+            for scale in [-4, -5] {
+                let a: PrimitiveArray<T> = [Some(1), Some(-1), Some(0), None]
+                    .into_iter()
+                    .map(|v| v.map(T::Native::from))
+                    .collect();
+                let a = a.with_precision_and_scale(1, scale).unwrap();
+                for (divisor_scale, coefficient) in [(-4, 1), (-5, 0), (-6, 0)] {
+                    let b = PrimitiveArray::<T>::from_iter_values(
+                        [1, 1, 1, 0].into_iter().map(T::Native::from),
+                    )
+                    .with_precision_and_scale(1, divisor_scale)
+                    .unwrap();
+                    let expected: PrimitiveArray<T> =
+                        [Some(coefficient), Some(-coefficient), Some(0), None]
+                            .into_iter()
+                            .map(|v| v.map(T::Native::from))
+                            .collect();
+                    let expected = expected.with_precision_and_scale(1, scale + 4).unwrap();
+                    assert_eq!(div(&a, &b).unwrap().as_ref(), &expected);
+                }
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_decimal_div_scaling_overflow_boundary() {
+        // `div` scales `l` by 10^6, which overflows just past `MAX / 10^6` and `MIN / 10^6`.
+        // Dividing by 10^6 returns each value, on either side of the boundary.
+        fn check<T: DecimalType>() {
+            let one = T::Native::ONE;
+            let pow = T::Native::usize_as(1_000_000);
+            let max = T::Native::MAX_TOTAL_ORDER.div_wrapping(pow);
+            let min = T::Native::MIN_TOTAL_ORDER.div_wrapping(pow);
+            let values = [
+                max,
+                max.add_wrapping(one),
+                min,
+                min.sub_wrapping(one),
+                T::Native::MAX_TOTAL_ORDER,
+                T::Native::MIN_TOTAL_ORDER.add_wrapping(one),
+            ];
+            let a = PrimitiveArray::<T>::from_iter_values(values)
+                .with_precision_and_scale(T::MAX_PRECISION, 2)
+                .unwrap();
+            for (divisor, negate) in [(pow, false), (pow.neg_wrapping(), true)] {
+                let b = PrimitiveArray::<T>::from_iter_values([divisor])
+                    .with_precision_and_scale(T::MAX_PRECISION, 2)
+                    .unwrap();
+                let result = div(&a, &Scalar::new(b)).unwrap();
+                let expected = values.map(|v| if negate { v.neg_wrapping() } else { v });
+                assert_eq!(result.as_primitive::<T>().values().as_ref(), expected);
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
     }
 
     #[test]

@@ -282,13 +282,18 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// Returns the values of this array
     ///
     /// Unlike [`Self::value_data`] this returns the [`Buffer`]
-    /// allowing for zero-copy cloning
+    /// allowing for zero-copy cloning. Like [`Self::value_data`], it can
+    /// include bytes that are not part of any value.
     #[inline]
     pub fn values(&self) -> &Buffer {
         &self.value_data
     }
 
     /// Returns the raw value data
+    ///
+    /// This can include bytes before the first offset or after the last one,
+    /// for example when the array is a slice of a larger array. Those bytes are
+    /// not part of any value, and in a string array they need not be valid UTF-8.
     pub fn value_data(&self) -> &[u8] {
         self.value_data.as_slice()
     }

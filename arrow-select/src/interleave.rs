@@ -101,6 +101,7 @@ pub fn interleave(
 
     downcast_primitive! {
         data_type => (primitive_helper, values, indices, data_type),
+        DataType::Boolean => interleave_boolean(values, indices),
         DataType::Utf8 => interleave_bytes::<Utf8Type>(values, indices),
         DataType::LargeUtf8 => interleave_bytes::<LargeUtf8Type>(values, indices),
         DataType::Binary => interleave_bytes::<BinaryType>(values, indices),
@@ -218,6 +219,23 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 
     let array = PrimitiveArray::<T>::try_new(output.into(), interleaved.nulls)?;
     Ok(Arc::new(array.with_data_type(data_type.clone())))
+}
+
+fn interleave_boolean(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, BooleanArray>::new(values, indices);
+    let arrays = &interleaved.arrays;
+
+    let mut values_builder = BooleanBufferBuilder::new(indices.len());
+
+    for &(array_idx, row_idx) in indices {
+        values_builder.append(arrays[array_idx].value(row_idx));
+    }
+
+    let array = BooleanArray::new(values_builder.build(), interleaved.nulls);
+    Ok(Arc::new(array))
 }
 
 fn interleave_bytes<T: ByteArrayType>(
@@ -992,6 +1010,68 @@ mod tests {
         let values = interleave(&[&a, &b], &[(0, 1), (1, 2), (1, 2), (0, 3), (0, 2)]).unwrap();
         let v: Vec<_> = values.as_primitive::<Int32Type>().into_iter().collect();
         assert_eq!(&v, &[Some(2), None, None, Some(4), Some(3)])
+    }
+
+    #[test]
+    fn test_interleave_boolean() {
+        let a = BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
+        let b = BooleanArray::from(vec![Some(false), Some(true), Some(true), None]);
+
+        let values = interleave(&[&a, &b], &[(0, 0), (1, 1), (0, 2), (1, 3), (1, 2)]).unwrap();
+
+        let result = values.as_boolean();
+
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), None, None, Some(true),]
+        );
+    }
+
+    #[test]
+    fn test_interleave_boolean_sliced() {
+        let original = BooleanArray::from(vec![
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+        ]);
+
+        let sliced_array = original.slice(1, 5);
+        let sliced = sliced_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        let other = BooleanArray::from(vec![Some(false), Some(false), Some(true)]);
+
+        let values =
+            interleave(&[sliced, &other], &[(0, 0), (1, 2), (0, 3), (0, 4), (1, 0)]).unwrap();
+
+        let result = values.as_boolean();
+
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), None, Some(false), Some(false),]
+        );
+    }
+
+    #[test]
+    fn test_interleave_boolean_fallback_matches_specialized() {
+        let a = BooleanArray::from_iter(
+            (0..1024).map(|i| if i % 10 == 0 { None } else { Some(i % 2 == 0) }),
+        );
+        let b = BooleanArray::from_iter((0..1024).map(|i| Some(i % 3 == 0)));
+
+        let indices: Vec<_> = (0..1024).map(|i| (i % 2, (i * 37) % 1024)).collect();
+
+        let values: [&dyn Array; 2] = [&a, &b];
+
+        let specialized = interleave_boolean(&values, &indices).unwrap();
+        let fallback = interleave_fallback(&values, &indices).unwrap();
+
+        assert_eq!(specialized.as_ref(), fallback.as_ref());
     }
 
     #[test]
