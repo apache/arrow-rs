@@ -699,6 +699,7 @@ where
 /// Scales the input by `10^scale` and rounds half away from zero. Returns an error
 /// if the precision or scale is invalid, or the result does not fit the native
 /// type or the requested precision. Non-finite inputs are rejected.
+/// Use [`float_to_decimal_opt`] when the reason for failure is not needed.
 ///
 /// ```
 /// use arrow_array::types::Decimal32Type;
@@ -718,7 +719,26 @@ where
         .map_err(|e| e.into_arrow_error(input, precision, scale))
 }
 
-// Keep failure reporting allocation-free for safe array casts, which discard errors.
+/// Like [`float_to_decimal`], but returns `None` on failure.
+/// With valid precision and scale, conversion failures do not allocate an error message.
+///
+/// ```
+/// use arrow_array::types::Decimal32Type;
+/// use arrow_cast::cast::float_to_decimal_opt;
+///
+/// assert_eq!(float_to_decimal_opt::<Decimal32Type>(12.345, 5, 2), Some(1235));
+/// assert_eq!(float_to_decimal_opt::<Decimal32Type>(12345.678, 5, 2), None);
+/// ```
+pub fn float_to_decimal_opt<D>(input: f64, precision: u8, scale: i8) -> Option<D::Native>
+where
+    D: DecimalType,
+    D::Native: DecimalCast,
+{
+    validate_decimal_precision_and_scale::<D>(precision, scale).ok()?;
+    float_to_decimal_checked::<D>(input, 10_f64.powi(scale as i32), precision).ok()
+}
+
+// Keep failure reporting allocation-free for scalar Option and safe array casts.
 enum FloatToDecimalError<D: DecimalType> {
     NativeOverflow,
     PrecisionOverflow(D::Native),
@@ -913,6 +933,10 @@ mod tests {
                 (0.0, 2, 0),
             ] {
                 assert_eq!(
+                    float_to_decimal_opt::<D>(input, 5, scale),
+                    float_to_decimal::<D>(input, 5, scale).ok(),
+                );
+                assert_eq!(
                     float_to_decimal::<D>(input, 5, scale)
                         .unwrap()
                         .to_i128()
@@ -935,9 +959,11 @@ mod tests {
                 (f64::MAX, 0),
             ] {
                 assert!(float_to_decimal::<D>(input, 5, scale).is_err());
+                assert!(float_to_decimal_opt::<D>(input, 5, scale).is_none());
             }
             for (precision, scale) in [(0, 0), (D::MAX_PRECISION + 1, 0), (5, 6)] {
                 assert!(float_to_decimal::<D>(0.0, precision, scale).is_err());
+                assert!(float_to_decimal_opt::<D>(0.0, precision, scale).is_none());
             }
         }
         check::<Decimal32Type>();
