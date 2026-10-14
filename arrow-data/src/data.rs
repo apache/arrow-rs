@@ -4046,10 +4046,22 @@ mod tests {
             .build()
             .unwrap();
 
+        let err = ArrayDataBuilder::new(dt.clone())
+            .len(2)
+            // 2nd offset '10' is out of bounds
+            .buffers(vec![vec![5_i8, 5].into(), vec![0_i32, 10].into()])
+            .child_data(vec![child.clone()])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offsets must be non-negative and within the length of the child array"
+        );
+
         let err = ArrayDataBuilder::new(dt)
             .len(2)
-            .offset(0)
-            .buffers(vec![vec![5_i8, 5].into(), vec![0_i32, 10].into()])
+            // 2nd offset is negative
+            .buffers(vec![vec![5_i8, 5].into(), vec![0_i32, -1].into()])
             .child_data(vec![child])
             .build()
             .unwrap_err();
