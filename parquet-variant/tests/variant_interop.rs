@@ -206,6 +206,55 @@ fn variant_primitive() {
     }
 }
 #[test]
+fn variant_child_value_bytes_preserve_scalar_encodings() {
+    let cases = get_primitive_cases();
+    let mut object_builder = VariantBuilder::new();
+    let mut object = object_builder.new_object();
+    // Reverse insertion order to ensure field-table offsets are not monotonic.
+    for (name, value) in cases.iter().rev() {
+        object.insert(name, value.clone());
+    }
+    object.finish();
+    let (metadata, value) = object_builder.finish();
+    let Variant::Object(object) = Variant::try_new(&metadata, &value).unwrap() else {
+        panic!()
+    };
+    for (index, (name, value)) in object.iter().enumerate() {
+        let mut scalar = VariantBuilder::new();
+        scalar.append_value(value);
+        assert_eq!(
+            object.field_value_bytes(index).unwrap(),
+            scalar.finish().1,
+            "{name}"
+        );
+    }
+    assert!(object.field_value_bytes(object.len()).is_err());
+    assert!(object.field_value_bytes(usize::MAX).is_err());
+
+    let mut builder = VariantBuilder::new();
+    let mut list = builder.new_list();
+    for (_, value) in &cases {
+        list.append_value(value.clone());
+    }
+    list.finish();
+    let (metadata, value) = builder.finish();
+    let Variant::List(list) = Variant::try_new(&metadata, &value).unwrap() else {
+        panic!()
+    };
+    for (index, (name, value)) in cases.into_iter().enumerate() {
+        let mut scalar = VariantBuilder::new();
+        scalar.append_value(value);
+        assert_eq!(
+            list.element_value_bytes(index).unwrap(),
+            scalar.finish().1,
+            "{name}"
+        );
+    }
+    assert!(list.element_value_bytes(list.len()).is_err());
+    assert!(list.element_value_bytes(usize::MAX).is_err());
+}
+
+#[test]
 fn variant_object_empty() {
     let case = Case::load("object_empty");
     let Variant::Object(variant_object) = case.variant() else {
