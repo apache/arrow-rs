@@ -327,7 +327,7 @@ required-features = ["arrow"]
 [[bench]]
 name = "row_selector_boolean_buffer"
 harness = false
-required-features = ["arrow"]
+required-features = ["arrow", "async"]
 
 [[bench]]
 name = "row_group_index_reader"
