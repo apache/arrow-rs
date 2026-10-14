@@ -21,7 +21,7 @@
 /// `arrow-rs/parquet/tests/arrow_reader/statistics.rs`.
 use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::arrow::parquet_column;
-use crate::basic::Type as PhysicalType;
+use crate::basic::{ColumnOrder, Type as PhysicalType};
 use crate::data_type::Int96;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaData;
@@ -1568,12 +1568,11 @@ where
 ///
 /// # Statistics ordering
 ///
-/// This converter does not validate the file's column orders. Before using
-/// INT96 timestamp bounds for pruning, the caller must check that the column's
-/// footer entry is [`ColumnOrder::INT96_TIMESTAMP_ORDER`]. Legacy INT96 bounds
-/// may use a different order and are not safe for timestamp pruning.
-///
-/// [`ColumnOrder::INT96_TIMESTAMP_ORDER`]: crate::basic::ColumnOrder::INT96_TIMESTAMP_ORDER
+/// INT96 timestamp bounds are returned only when [`Self::with_column_orders`]
+/// supplies [`ColumnOrder::INT96_TIMESTAMP_ORDER`] for the selected Parquet leaf
+/// column. Without this order, INT96 minimum and maximum values are null, since
+/// legacy bounds may use a different order and are not safe for timestamp pruning.
+/// Null counts are unaffected.
 ///
 /// # Schemas
 ///
@@ -1600,6 +1599,8 @@ pub struct StatisticsConverter<'a> {
     missing_null_counts_as_zero: bool,
     /// The physical type of the matched column in the Parquet schema
     physical_type: Option<PhysicalType>,
+    /// The column order of the matched Parquet leaf column, if provided
+    column_order: Option<ColumnOrder>,
 }
 
 impl<'a> StatisticsConverter<'a> {
@@ -1630,6 +1631,24 @@ impl<'a> StatisticsConverter<'a> {
     /// no nulls, and don't write unknown values to the null count field.
     pub fn with_missing_null_counts_as_zero(mut self, missing_null_counts_as_zero: bool) -> Self {
         self.missing_null_counts_as_zero = missing_null_counts_as_zero;
+        self
+    }
+
+    /// Set the file's column orders, as returned by
+    /// [`FileMetaData::column_orders`](crate::file::metadata::FileMetaData::column_orders).
+    ///
+    /// The orders must correspond to the Parquet schema's leaf columns. This
+    /// converter selects the order using its resolved Parquet column index.
+    /// INT96 min/max statistics are returned only when that order is
+    /// [`ColumnOrder::INT96_TIMESTAMP_ORDER`]. Missing or other orders leave
+    /// INT96 bounds unknown. Statistics for other physical types and null counts
+    /// are unaffected.
+    ///
+    /// Only the selected order is copied, so the slice need not outlive the converter.
+    pub fn with_column_orders(mut self, column_orders: Option<&[ColumnOrder]>) -> Self {
+        self.column_order = self
+            .parquet_column_index
+            .and_then(|index| column_orders?.get(index).copied());
         self
     }
 
@@ -1731,6 +1750,7 @@ impl<'a> StatisticsConverter<'a> {
             arrow_field,
             missing_null_counts_as_zero: true,
             physical_type: parquet_index.map(|idx| parquet_schema.column(idx).physical_type()),
+            column_order: None,
         })
     }
 
@@ -1775,6 +1795,7 @@ impl<'a> StatisticsConverter<'a> {
             arrow_field,
             missing_null_counts_as_zero: true,
             physical_type: Some(physical_type),
+            column_order: None,
         })
     }
 
@@ -1831,9 +1852,11 @@ impl<'a> StatisticsConverter<'a> {
             return Ok(self.make_null_array(data_type, metadatas));
         };
 
-        let iter = metadatas
-            .into_iter()
-            .map(|x| x.column(parquet_index).statistics());
+        let iter = metadatas.into_iter().map(|x| {
+            x.column(parquet_index)
+                .statistics()
+                .filter(|_| self.is_min_max_order_supported())
+        });
         min_statistics(data_type, iter, self.physical_type)
     }
 
@@ -1850,9 +1873,11 @@ impl<'a> StatisticsConverter<'a> {
             return Ok(self.make_null_array(data_type, metadatas));
         };
 
-        let iter = metadatas
-            .into_iter()
-            .map(|x| x.column(parquet_index).statistics());
+        let iter = metadatas.into_iter().map(|x| {
+            x.column(parquet_index)
+                .statistics()
+                .filter(|_| self.is_min_max_order_supported())
+        });
         max_statistics(data_type, iter, self.physical_type)
     }
 
@@ -2037,8 +2062,9 @@ impl<'a> StatisticsConverter<'a> {
         };
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
-            let column_page_index_per_row_group_per_column =
-                page_index.column_index(*rg_index, parquet_index);
+            let column_page_index_per_row_group_per_column = page_index
+                .column_index(*rg_index, parquet_index)
+                .filter(|_| self.is_min_max_order_supported());
             let num_data_pages = page_index
                 .num_data_pages(*rg_index, parquet_index)
                 .unwrap_or(0);
@@ -2067,8 +2093,9 @@ impl<'a> StatisticsConverter<'a> {
         };
 
         let iter = row_group_indices.into_iter().map(|rg_index| {
-            let column_page_index_per_row_group_per_column =
-                page_index.column_index(*rg_index, parquet_index);
+            let column_page_index_per_row_group_per_column = page_index
+                .column_index(*rg_index, parquet_index)
+                .filter(|_| self.is_min_max_order_supported());
             let num_data_pages = page_index
                 .num_data_pages(*rg_index, parquet_index)
                 .unwrap_or(0);
@@ -2198,6 +2225,11 @@ impl<'a> StatisticsConverter<'a> {
         }
 
         Ok(Some(UInt64Array::new(row_counts.into(), nulls.build())))
+    }
+
+    fn is_min_max_order_supported(&self) -> bool {
+        self.physical_type != Some(PhysicalType::INT96)
+            || self.column_order == Some(ColumnOrder::INT96_TIMESTAMP_ORDER)
     }
 
     /// Returns a null array of data_type with one element per row group

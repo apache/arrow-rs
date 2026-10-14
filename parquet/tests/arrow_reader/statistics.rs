@@ -46,6 +46,7 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
+use parquet::basic::ColumnOrder;
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
@@ -386,7 +387,6 @@ fn int96_from_nanos(nanos: i128) -> parquet::data_type::Int96 {
 #[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
 #[test]
 fn test_int96_timestamp_statistics() {
-    use parquet::basic::ColumnOrder;
     use parquet::data_type::Int96Type;
     use parquet::file::writer::SerializedFileWriter;
     use parquet::schema::parser::parse_message_type;
@@ -464,7 +464,14 @@ fn test_int96_timestamp_statistics() {
             );
             let converter =
                 StatisticsConverter::try_new("ts", reader.schema(), reader.parquet_schema())
-                    .unwrap();
+                    .unwrap()
+                    .with_column_orders(
+                        reader
+                            .metadata()
+                            .file_metadata()
+                            .column_orders()
+                            .map(Vec::as_slice),
+                    );
             let divisor = match unit {
                 TimeUnit::Second => 1_000_000_000,
                 TimeUnit::Millisecond => 1_000_000,
@@ -568,6 +575,177 @@ fn test_int96_timestamp_statistics() {
     }
 }
 
+#[cfg_attr(miri, ignore)] // tempfile::reopen triggers an unsupported Miri/rustix fstat path
+#[test]
+fn test_int96_statistics_column_orders() {
+    use parquet::basic::SortOrder;
+    use parquet::data_type::{Int32Type, Int96Type};
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
+
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let schema = Arc::new(
+        parse_message_type(
+            "message test {
+                REQUIRED GROUP ids { REQUIRED INT32 first; REQUIRED INT32 second; }
+                OPTIONAL INT96 ts;
+            }",
+        )
+        .unwrap(),
+    );
+    let props = Arc::new(
+        WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_dictionary_enabled(false)
+            .set_data_page_row_count_limit(2)
+            .set_write_batch_size(2)
+            .build(),
+    );
+    let mut writer = SerializedFileWriter::new(file.reopen().unwrap(), schema, props).unwrap();
+    for start in [1, 5] {
+        let mut row_group = writer.next_row_group().unwrap();
+        for _ in 0..2 {
+            let mut column = row_group.next_column().unwrap().unwrap();
+            column
+                .typed::<Int32Type>()
+                .write_batch(&[0, 1, 2, 3], None, None)
+                .unwrap();
+            column.close().unwrap();
+        }
+        let mut column = row_group.next_column().unwrap().unwrap();
+        let values: Vec<_> = (start..start + 3)
+            .map(|value| int96_from_nanos(value * 1_000_000_000))
+            .collect();
+        column
+            .typed::<Int96Type>()
+            .write_batch(&values, Some(&[1, 0, 1, 1]), None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+    }
+    writer.close().unwrap();
+
+    let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+        file.reopen().unwrap(),
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+    )
+    .unwrap();
+    let metadata = reader.metadata();
+    let row_groups = metadata.row_groups();
+    let page_index = metadata.page_index().unwrap().as_ref();
+    let indices = [0, 1];
+    let orders = metadata.file_metadata().column_orders().unwrap();
+    assert_eq!(orders[2], ColumnOrder::INT96_TIMESTAMP_ORDER);
+    let unsupported_orders = [
+        None,
+        Some(vec![]),
+        Some(vec![ColumnOrder::INT96_TIMESTAMP_ORDER; 2]),
+        Some(vec![
+            ColumnOrder::INT96_TIMESTAMP_ORDER,
+            ColumnOrder::INT96_TIMESTAMP_ORDER,
+            ColumnOrder::UNDEFINED,
+        ]),
+        Some(vec![
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::UNKNOWN,
+        ]),
+        Some(vec![
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+        ]),
+        Some(vec![
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
+        ]),
+        Some(vec![
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
+        ]),
+    ];
+    for unit in [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ] {
+        let data_type = DataType::Timestamp(unit, None);
+        // The struct has two leaves, so the INT96 column's Parquet leaf index
+        // differs from its Arrow field index.
+        let schema = Schema::new(vec![
+            Field::new(
+                "ids",
+                DataType::Struct(
+                    vec![
+                        Field::new("first", DataType::Int32, false),
+                        Field::new("second", DataType::Int32, false),
+                    ]
+                    .into(),
+                ),
+                false,
+            ),
+            Field::new("ts", data_type.clone(), true),
+        ]);
+        let converters = || {
+            [
+                StatisticsConverter::try_new("ts", &schema, reader.parquet_schema()).unwrap(),
+                StatisticsConverter::from_column_index(2, schema.field(1), reader.parquet_schema())
+                    .unwrap(),
+            ]
+        };
+        let check = |converter: &StatisticsConverter<'_>, enabled: bool| {
+            assert_eq!(converter.parquet_column_index(), Some(2));
+            let expected = |values: &[i64]| -> ArrayRef {
+                if !enabled {
+                    return new_null_array(&data_type, values.len());
+                }
+                let seconds = TimestampSecondArray::from(values.to_vec());
+                arrow::compute::cast(&seconds, &data_type).unwrap()
+            };
+            for (actual, values) in [
+                (converter.row_group_mins(row_groups).unwrap(), vec![1, 5]),
+                (converter.row_group_maxes(row_groups).unwrap(), vec![3, 7]),
+                (
+                    converter.data_page_mins(page_index, &indices).unwrap(),
+                    vec![1, 2, 5, 6],
+                ),
+                (
+                    converter.data_page_maxes(page_index, &indices).unwrap(),
+                    vec![1, 3, 5, 7],
+                ),
+            ] {
+                assert_eq!(actual.as_ref(), expected(&values).as_ref());
+            }
+            assert_eq!(
+                converter.row_group_null_counts(row_groups).unwrap(),
+                UInt64Array::from(vec![1, 1])
+            );
+            assert_eq!(
+                converter
+                    .data_page_null_counts(page_index, &indices)
+                    .unwrap(),
+                UInt64Array::from(vec![1, 0, 1, 0])
+            );
+        };
+        for converter in converters() {
+            check(&converter, false);
+            check(&converter.with_column_orders(Some(orders)), true);
+        }
+        for column_orders in &unsupported_orders {
+            for converter in converters() {
+                // Replacing the orders must also clear an earlier valid order.
+                let converter = converter
+                    .with_column_orders(Some(orders))
+                    .with_column_orders(column_orders.as_deref());
+                check(&converter, false);
+            }
+        }
+    }
+}
+
 #[test]
 fn test_int96_unusable_statistics() {
     use parquet::schema::parser::parse_message_type;
@@ -613,7 +791,9 @@ fn test_int96_unusable_statistics() {
     ] {
         let data_type = DataType::Timestamp(unit, None);
         let schema = Schema::new(vec![Field::new("ts", data_type.clone(), true)]);
-        let converter = StatisticsConverter::try_new("ts", &schema, &parquet_schema).unwrap();
+        let converter = StatisticsConverter::try_new("ts", &schema, &parquet_schema)
+            .unwrap()
+            .with_column_orders(Some(&[ColumnOrder::INT96_TIMESTAMP_ORDER]));
         let expected = new_null_array(&data_type, row_groups.len());
         assert_eq!(
             converter.row_group_mins(&row_groups).unwrap().as_ref(),
