@@ -251,9 +251,8 @@ impl PushBuffers {
 
     /// Clear any range and corresponding buffer that is exactly in the ranges_to_clear
     ///
-    /// A binary search finds the buffers that start at the start of each
-    /// range to clear, as in [`Self::find`]. Thus, a call does not visit the
-    /// other buffers.
+    /// The cost is `O(log N)` in the number of buffers for each range to
+    /// clear.
     #[cfg(feature = "arrow")]
     pub(crate) fn clear_ranges(&mut self, ranges_to_clear: &[Range<u64>]) {
         // The indexes of the buffers to remove. The buffers are sorted by
@@ -336,8 +335,8 @@ impl PushBuffers {
     /// [`Self::find`]). If no buffer overlaps `ranges`, the buffers do not
     /// change.
     ///
-    /// A binary search finds the buffers that can overlap `ranges`, as in
-    /// [`Self::find`]. Thus, a call does not visit the other buffers.
+    /// The cost is `O(log N)` in the number of buffers for each range in
+    /// `ranges`, plus the number of buffers that overlap `ranges`.
     #[cfg(feature = "arrow")]
     pub(crate) fn release_ranges(&mut self, ranges: &[Range<u64>]) {
         let release = merge_ranges(ranges);
@@ -434,9 +433,7 @@ impl PushBuffers {
             // Remove the released buffers. As before, this also removes empty
             // buffers that were pushed. The released buffers are all in
             // `first..=last`, so look at all buffers only if empty buffers
-            // were pushed. `drain` moves the buffers on the shorter side of
-            // the removed ones, so a release at the start or at the end of
-            // the buffers moves none.
+            // were pushed.
             let span = match self.empty {
                 0 => first..last + 1,
                 _ => 0..self.ranges.len(),
@@ -457,7 +454,7 @@ impl PushBuffers {
         // other buffer that starts in those bytes is trimmed past them too,
         // or is empty and removed. Thus, the buffers are still sorted, except
         // for the split parts, which are appended. Splits are rare, so sort
-        // all buffers then. The sort is stable.
+        // all buffers then.
         if !split.is_empty() {
             let mut parts: Vec<_> = std::mem::take(&mut self.ranges)
                 .into_iter()
