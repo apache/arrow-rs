@@ -1001,10 +1001,9 @@ mod tests {
     #[test]
     fn dict_fixed_size_binary_fallback_sort_options_with_nulls() {
         let null_row_on_left = Int32Array::from(vec![Some(0_i32), None, Some(1)]);
-        let left_values = FixedSizeBinaryArray::try_from_iter(
-            [b"aa".as_ref(), b"bb".as_ref()].into_iter(),
-        )
-        .unwrap();
+        let left_values =
+            FixedSizeBinaryArray::try_from_iter([b"aa".as_ref(), b"bb".as_ref()].into_iter())
+                .unwrap();
         let left = DictionaryArray::<Int32Type>::new(null_row_on_left, Arc::new(left_values));
 
         let keys_pointing_at_null = Int32Array::from(vec![Some(0_i32), Some(1), Some(0)]);
