@@ -484,38 +484,92 @@ fn and_then_sparse_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> Boolean
 fn and_then_dense_masks(mask: &BooleanBuffer, other: &BooleanBuffer) -> BooleanBuffer {
     debug_assert_eq!(other.len(), mask.count_set_bits());
 
-    let mut other_chunks = other.bit_chunks().iter_padded();
-    let mut other_remaining = other.len();
-    let mut pending = 0_u128;
-    let mut pending_len = 0;
-    let mut output = MutableBuffer::with_capacity(mask.len().div_ceil(8));
+    let other_bits = BitReader::new(other);
+    let mut output = MutableBuffer::from_len_zeroed(mask.len().div_ceil(64) * 8);
+    let mut words = output
+        .typed_data_mut::<u64>()
+        .iter_mut()
+        .zip(mask.bit_chunks().iter_padded());
+    let mut position = 0;
 
-    for mask_word in mask
-        .bit_chunks()
-        .iter_padded()
-        .take(mask.len().div_ceil(64))
-    {
-        let selected = mask_word.count_ones() as usize;
-        while pending_len < selected {
-            let chunk = other_chunks
-                .next()
-                .expect("validated other length matches selected row count");
-            let chunk_len = other_remaining.min(64);
-            pending |= (chunk as u128) << pending_len;
-            pending_len += chunk_len;
-            other_remaining -= chunk_len;
-        }
-
-        let values = pending as u64;
-        output.extend_from_slice(&bit_util::expand(values, mask_word).to_le_bytes());
-        pending >>= selected;
-        pending_len -= selected;
+    // A word's read depends only on `position`, not on the previous deposit, so consecutive
+    // words overlap. Bits of `source` past the `count` taken ones are ignored by `deposit`.
+    // Reads that would run past the backing bytes go to the loop below.
+    while let Some(source) = other_bits.read(position) {
+        let Some((slot, mask_word)) = words.next() else {
+            break;
+        };
+        let (word, count) = deposit(source, mask_word);
+        *slot = word;
+        position += count;
+    }
+    for (slot, mask_word) in words {
+        let (word, count) = deposit(other_bits.read_padded(position), mask_word);
+        *slot = word;
+        position += count;
     }
 
-    debug_assert_eq!(other_remaining, 0);
-    debug_assert_eq!(pending_len, 0);
+    debug_assert_eq!(position, other.len());
     output.truncate(mask.len().div_ceil(8));
     BooleanBuffer::new(output.into(), 0, mask.len())
+}
+
+/// Returns the low `mask_word.count_ones()` bits of `source` scattered into the set bits of
+/// `mask_word`, and that count.
+#[inline]
+fn deposit(source: u64, mask_word: u64) -> (u64, usize) {
+    (
+        bit_util::expand(source, mask_word),
+        mask_word.count_ones() as usize,
+    )
+}
+
+/// Reads 64 bits of a [`BooleanBuffer`] from any bit position.
+struct BitReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+    /// The last 16 backing bytes followed by zeros, for the reads that run past the end. These
+    /// can be many: once a mask runs out of set bits, every remaining word reads at the end.
+    tail: [u8; 32],
+    tail_start: usize,
+}
+
+impl<'a> BitReader<'a> {
+    fn new(buffer: &'a BooleanBuffer) -> Self {
+        let bytes = buffer.values();
+        let tail_start = bytes.len().saturating_sub(16);
+        let mut tail = [0; 32];
+        tail[..bytes.len() - tail_start].copy_from_slice(&bytes[tail_start..]);
+        Self {
+            bytes,
+            offset: buffer.offset(),
+            tail,
+            tail_start,
+        }
+    }
+
+    /// The 64 bits from `position` on, or `None` if the 16 bytes holding them run past the
+    /// backing bytes. Bits past the buffer's length are whatever the backing bytes hold.
+    #[inline]
+    fn read(&self, position: usize) -> Option<u64> {
+        let position = self.offset + position;
+        // 16 bytes from the byte holding `position` cover 64 bits past any shift of up to 7.
+        let window = self.bytes.get(position / 8..)?.first_chunk::<16>()?;
+        Some((u128::from_le_bytes(*window) >> (position % 8)) as u64)
+    }
+
+    /// Same as [`Self::read`] for the positions it refuses, with bits past the backing bytes
+    /// read as zero.
+    #[inline]
+    fn read_padded(&self, position: usize) -> u64 {
+        let position = self.offset + position;
+        let window = self
+            .tail
+            .get(position / 8 - self.tail_start..)
+            .and_then(<[u8]>::first_chunk::<16>)
+            .unwrap_or(&[0; 16]);
+        (u128::from_le_bytes(*window) >> (position % 8)) as u64
+    }
 }
 
 #[cfg(test)]
@@ -903,6 +957,63 @@ mod tests {
                 dense_mask_expected: true,
             }
             .run();
+        }
+    }
+
+    /// Runs of set and clear bits with lengths uniform in `1..=2 * mean`.
+    fn runs(rng: &mut StdRng, len: usize, mean: usize) -> Vec<bool> {
+        let mut bits = Vec::with_capacity(len);
+        let mut value = rng.random_bool(0.5);
+        while bits.len() < len {
+            let run = rng.random_range(1..=2 * mean).min(len - bits.len());
+            bits.extend(std::iter::repeat_n(value, run));
+            value = !value;
+        }
+        bits
+    }
+
+    #[test]
+    fn test_dense_mask_and_then_mask_shapes() {
+        let mut rng = StdRng::seed_from_u64(0x2b1f_d3c4_9a07_e615);
+
+        for len in [1, 63, 64, 65, 200, 8192, 8195] {
+            for outer_shape in 0..4 {
+                for inner_shape in 0..3 {
+                    let outer_offset = rng.random_range(0..70);
+                    let mut outer: Vec<bool> = match outer_shape {
+                        0 => (0..len).map(|_| rng.random_bool(0.8)).collect(),
+                        1 => runs(&mut rng, len, 300),
+                        2 => vec![true; len],
+                        _ => (0..len).map(|_| rng.random_bool(0.02)).collect(),
+                    };
+                    outer.splice(0..0, (0..outer_offset).map(|_| rng.random_bool(0.5)));
+                    let outer = BooleanBuffer::from(outer).slice(outer_offset, len);
+
+                    // Bits around the inner slice are random, so a read past either end shows.
+                    let inner_len = outer.count_set_bits();
+                    let inner_offset = rng.random_range(0..70);
+                    let mut inner: Vec<bool> = match inner_shape {
+                        0 => (0..inner_len).map(|_| rng.random_bool(0.5)).collect(),
+                        1 => runs(&mut rng, inner_len, 100),
+                        _ => vec![rng.random_bool(0.5); inner_len],
+                    };
+                    inner.splice(0..0, (0..inner_offset).map(|_| rng.random_bool(0.5)));
+                    inner.extend((0..rng.random_range(0..200)).map(|_| rng.random_bool(0.5)));
+                    let inner = BooleanBuffer::from(inner).slice(inner_offset, inner_len);
+
+                    let mut inner_values = inner.iter();
+                    let expected = BooleanBuffer::from_iter(
+                        outer
+                            .iter()
+                            .map(|selected| selected && inner_values.next().unwrap()),
+                    );
+                    assert_eq!(
+                        and_then_dense_masks(&outer, &inner),
+                        expected,
+                        "len {len} outer shape {outer_shape} inner shape {inner_shape}"
+                    );
+                }
+            }
         }
     }
 
