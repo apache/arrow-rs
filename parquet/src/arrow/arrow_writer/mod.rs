@@ -28,7 +28,6 @@ use std::vec::IntoIter;
 use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchWriter};
 use arrow_array::{PrimitiveArray, types::*};
-use arrow_buffer::ScalarBuffer;
 use arrow_schema::{
     ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef, TimeUnit,
 };
@@ -42,9 +41,9 @@ use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
 use crate::column::writer::encoder::ColumnValueEncoder;
 use crate::column::writer::{
-    ColumnCloseResult, ColumnWriter, GenericColumnWriter, get_column_writer,
+    ColumnCloseResult, ColumnWriter, ColumnWriterImpl, GenericColumnWriter, get_column_writer,
 };
-use crate::data_type::{ByteArray, FixedLenByteArray};
+use crate::data_type::{ByteArray, FixedLenByteArray, FixedLenByteArrayType};
 use std::collections::HashSet;
 type DistinctValuesSet = HashSet<u64>;
 #[cfg(feature = "encryption")]
@@ -1558,10 +1557,13 @@ fn write_leaf(
 
     match writer {
         // Note: this should match the contents of arrow_to_parquet_type
-        ColumnWriter::Int32ColumnWriter(typed) => {
-            let values = coerce_to_i32(column)?;
-            write_primitive(typed, &values, levels)
-        }
+        ColumnWriter::Int32ColumnWriter(typed) => visit_i32(
+            column,
+            WritePrimitive {
+                writer: typed,
+                levels,
+            },
+        )?,
         ColumnWriter::BoolColumnWriter(typed) => {
             let array = column.as_boolean();
             let values = get_bool_array_slice(array, indices.iter().copied());
@@ -1575,10 +1577,13 @@ fn write_leaf(
                 None,
             )
         }
-        ColumnWriter::Int64ColumnWriter(typed) => {
-            let values = coerce_to_i64(column)?;
-            write_primitive(typed, &values, levels)
-        }
+        ColumnWriter::Int64ColumnWriter(typed) => visit_i64(
+            column,
+            WritePrimitive {
+                writer: typed,
+                levels,
+            },
+        )?,
         ColumnWriter::Int96ColumnWriter(_typed) => {
             unreachable!("Currently unreachable because data type not supported")
         }
@@ -1593,216 +1598,238 @@ fn write_leaf(
         ColumnWriter::ByteArrayColumnWriter(_) => {
             unreachable!("should use ByteArrayWriter")
         }
-        ColumnWriter::FixedLenByteArrayColumnWriter(typed) => {
-            let bytes = coerce_to_fixed_len_byte_array(column, indices.iter().copied())?;
-            typed.write_batch_internal(
-                bytes.as_slice(),
-                None,
-                levels.def_level_data().as_ref(),
-                levels.rep_level_data().as_ref(),
-                None,
-                None,
-                None,
-            )
-        }
+        ColumnWriter::FixedLenByteArrayColumnWriter(typed) => visit_fixed_len_byte_array(
+            column,
+            WriteFixedLenByteArray {
+                writer: typed,
+                levels,
+            },
+        )?,
     }
 }
 
-/// Returns the values [`ArrowWriter`] stores for `column` in an `INT32` column
+/// Receives the values [`ArrowWriter`] stores for an Arrow array in an `INT32`
+/// (`T = i32`) or `INT64` (`T = i64`) column, which are also the values hashed
+/// into the column's bloom filter
 ///
-/// These are also the values hashed into the column's bloom filter
-pub(crate) fn coerce_to_i32(column: &dyn arrow_array::Array) -> Result<ScalarBuffer<i32>> {
+/// [`visit_i32`] and [`visit_i64`] hold the conversion from each Arrow type, and
+/// call [`Self::slice`] when the Arrow values are stored as they are, or
+/// [`Self::map`] when each value is converted. This lets the writer borrow the
+/// Arrow buffer when no conversion is needed, and lets
+/// [`ArrowSbbf`](crate::arrow::bloom_filter::ArrowSbbf) check converted values
+/// one at a time without collecting them.
+pub(crate) trait PrimitiveVisitor<T> {
+    type Output;
+
+    /// Receives values that are stored as they are
+    fn slice(self, values: &[T]) -> Self::Output;
+
+    /// Receives values that are each stored as `convert(value)`
+    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Self::Output;
+}
+
+/// Passes the values [`ArrowWriter`] stores for `column` in an `INT32` column to `visitor`
+pub(crate) fn visit_i32<V: PrimitiveVisitor<i32>>(
+    column: &dyn arrow_array::Array,
+    visitor: V,
+) -> Result<V::Output> {
     // Note: this should match the contents of arrow_to_parquet_type
-    let values = match column.data_type() {
-        ArrowDataType::Null => Int32Array::new_null(column.len()).values().clone(),
-        ArrowDataType::Int8 => column
-            .as_primitive::<Int8Type>()
-            .unary::<_, Int32Type>(|x| x as i32)
-            .values()
-            .clone(),
-        ArrowDataType::Int16 => column
-            .as_primitive::<Int16Type>()
-            .unary::<_, Int32Type>(|x| x as i32)
-            .values()
-            .clone(),
-        ArrowDataType::Int32 => column.as_primitive::<Int32Type>().values().clone(),
-        ArrowDataType::UInt8 => column
-            .as_primitive::<UInt8Type>()
-            .unary::<_, Int32Type>(|x| x as i32)
-            .values()
-            .clone(),
-        ArrowDataType::UInt16 => column
-            .as_primitive::<UInt16Type>()
-            .unary::<_, Int32Type>(|x| x as i32)
-            .values()
-            .clone(),
+    let output = match column.data_type() {
+        ArrowDataType::Null => visitor.slice(Int32Array::new_null(column.len()).values()),
+        ArrowDataType::Int8 => {
+            visitor.map(column.as_primitive::<Int8Type>().values(), |x| x as i32)
+        }
+        ArrowDataType::Int16 => {
+            visitor.map(column.as_primitive::<Int16Type>().values(), |x| x as i32)
+        }
+        ArrowDataType::Int32 => visitor.slice(column.as_primitive::<Int32Type>().values()),
+        ArrowDataType::UInt8 => {
+            visitor.map(column.as_primitive::<UInt8Type>().values(), |x| x as i32)
+        }
+        ArrowDataType::UInt16 => {
+            visitor.map(column.as_primitive::<UInt16Type>().values(), |x| x as i32)
+        }
         ArrowDataType::UInt32 => {
             // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
             // `(i32::MAX as u32)..u32::MAX` to `i32::MIN..0`
-            column
-                .as_primitive::<UInt32Type>()
-                .values()
-                .inner()
-                .clone()
-                .into()
+            let values = column.as_primitive::<UInt32Type>().values();
+            visitor.slice(values.inner().typed_data())
         }
-        ArrowDataType::Date32 => column.as_primitive::<Date32Type>().values().clone(),
+        ArrowDataType::Date32 => visitor.slice(column.as_primitive::<Date32Type>().values()),
         ArrowDataType::Time32(TimeUnit::Second) => {
-            column.as_primitive::<Time32SecondType>().values().clone()
+            visitor.slice(column.as_primitive::<Time32SecondType>().values())
         }
-        ArrowDataType::Time32(TimeUnit::Millisecond) => column
-            .as_primitive::<Time32MillisecondType>()
-            .values()
-            .clone(),
+        ArrowDataType::Time32(TimeUnit::Millisecond) => {
+            visitor.slice(column.as_primitive::<Time32MillisecondType>().values())
+        }
         ArrowDataType::Date64 => {
             // If the column is a Date64, we truncate it
-            column
-                .as_primitive::<Date64Type>()
-                .unary::<_, Int32Type>(|x| (x / 86_400_000) as _)
-                .values()
-                .clone()
+            visitor.map(column.as_primitive::<Date64Type>().values(), |x| {
+                (x / 86_400_000) as i32
+            })
         }
-        ArrowDataType::Decimal32(_, _) => column
-            .as_primitive::<Decimal32Type>()
-            .unary::<_, Int32Type>(|v| v)
-            .values()
-            .clone(),
+        ArrowDataType::Decimal32(_, _) => {
+            visitor.slice(column.as_primitive::<Decimal32Type>().values())
+        }
         ArrowDataType::Decimal64(_, _) => {
             // use the int32 to represent the decimal with low precision
-            column
-                .as_primitive::<Decimal64Type>()
-                .unary::<_, Int32Type>(|v| v as i32)
-                .values()
-                .clone()
+            visitor.map(column.as_primitive::<Decimal64Type>().values(), |v| {
+                v as i32
+            })
         }
         ArrowDataType::Decimal128(_, _) => {
             // use the int32 to represent the decimal with low precision
-            column
-                .as_primitive::<Decimal128Type>()
-                .unary::<_, Int32Type>(|v| v as i32)
-                .values()
-                .clone()
+            visitor.map(column.as_primitive::<Decimal128Type>().values(), |v| {
+                v as i32
+            })
         }
         ArrowDataType::Decimal256(_, _) => {
             // use the int32 to represent the decimal with low precision
-            column
-                .as_primitive::<Decimal256Type>()
-                .unary::<_, Int32Type>(|v| v.as_i128() as i32)
-                .values()
-                .clone()
+            visitor.map(column.as_primitive::<Decimal256Type>().values(), |v| {
+                v.as_i128() as i32
+            })
         }
         d => return Err(ParquetError::General(format!("Cannot coerce {d} to I32"))),
     };
-    Ok(values)
+    Ok(output)
 }
 
-/// Returns the values [`ArrowWriter`] stores for `column` in an `INT64` column
-///
-/// These are also the values hashed into the column's bloom filter
-pub(crate) fn coerce_to_i64(column: &dyn arrow_array::Array) -> Result<ScalarBuffer<i64>> {
-    let values = match column.data_type() {
-        ArrowDataType::Date64 => column
-            .as_primitive::<Date64Type>()
-            .values()
-            .inner()
-            .clone()
-            .into(),
-        ArrowDataType::Int64 => column.as_primitive::<Int64Type>().values().clone(),
+/// Passes the values [`ArrowWriter`] stores for `column` in an `INT64` column to `visitor`
+pub(crate) fn visit_i64<V: PrimitiveVisitor<i64>>(
+    column: &dyn arrow_array::Array,
+    visitor: V,
+) -> Result<V::Output> {
+    // Note: this should match the contents of arrow_to_parquet_type
+    let output = match column.data_type() {
+        ArrowDataType::Date64 => visitor.slice(column.as_primitive::<Date64Type>().values()),
+        ArrowDataType::Int64 => visitor.slice(column.as_primitive::<Int64Type>().values()),
         ArrowDataType::UInt64 => {
             // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
             // `(i64::MAX as u64)..u64::MAX` to `i64::MIN..0`
-            column
-                .as_primitive::<UInt64Type>()
-                .values()
-                .inner()
-                .clone()
-                .into()
+            let values = column.as_primitive::<UInt64Type>().values();
+            visitor.slice(values.inner().typed_data())
         }
-        ArrowDataType::Time64(TimeUnit::Microsecond) => column
-            .as_primitive::<Time64MicrosecondType>()
-            .values()
-            .clone(),
-        ArrowDataType::Time64(TimeUnit::Nanosecond) => column
-            .as_primitive::<Time64NanosecondType>()
-            .values()
-            .clone(),
+        ArrowDataType::Time64(TimeUnit::Microsecond) => {
+            visitor.slice(column.as_primitive::<Time64MicrosecondType>().values())
+        }
+        ArrowDataType::Time64(TimeUnit::Nanosecond) => {
+            visitor.slice(column.as_primitive::<Time64NanosecondType>().values())
+        }
         ArrowDataType::Timestamp(unit, _) => match unit {
-            TimeUnit::Second => column
-                .as_primitive::<TimestampSecondType>()
-                .values()
-                .clone(),
-            TimeUnit::Millisecond => column
-                .as_primitive::<TimestampMillisecondType>()
-                .values()
-                .clone(),
-            TimeUnit::Microsecond => column
-                .as_primitive::<TimestampMicrosecondType>()
-                .values()
-                .clone(),
-            TimeUnit::Nanosecond => column
-                .as_primitive::<TimestampNanosecondType>()
-                .values()
-                .clone(),
+            TimeUnit::Second => {
+                visitor.slice(column.as_primitive::<TimestampSecondType>().values())
+            }
+            TimeUnit::Millisecond => {
+                visitor.slice(column.as_primitive::<TimestampMillisecondType>().values())
+            }
+            TimeUnit::Microsecond => {
+                visitor.slice(column.as_primitive::<TimestampMicrosecondType>().values())
+            }
+            TimeUnit::Nanosecond => {
+                visitor.slice(column.as_primitive::<TimestampNanosecondType>().values())
+            }
         },
         ArrowDataType::Duration(unit) => match unit {
-            TimeUnit::Second => column.as_primitive::<DurationSecondType>().values().clone(),
-            TimeUnit::Millisecond => column
-                .as_primitive::<DurationMillisecondType>()
-                .values()
-                .clone(),
-            TimeUnit::Microsecond => column
-                .as_primitive::<DurationMicrosecondType>()
-                .values()
-                .clone(),
-            TimeUnit::Nanosecond => column
-                .as_primitive::<DurationNanosecondType>()
-                .values()
-                .clone(),
+            TimeUnit::Second => visitor.slice(column.as_primitive::<DurationSecondType>().values()),
+            TimeUnit::Millisecond => {
+                visitor.slice(column.as_primitive::<DurationMillisecondType>().values())
+            }
+            TimeUnit::Microsecond => {
+                visitor.slice(column.as_primitive::<DurationMicrosecondType>().values())
+            }
+            TimeUnit::Nanosecond => {
+                visitor.slice(column.as_primitive::<DurationNanosecondType>().values())
+            }
         },
-        ArrowDataType::Decimal64(_, _) => column
-            .as_primitive::<Decimal64Type>()
-            .values()
-            .inner()
-            .clone()
-            .into(),
+        ArrowDataType::Decimal64(_, _) => {
+            visitor.slice(column.as_primitive::<Decimal64Type>().values())
+        }
         ArrowDataType::Decimal128(_, _) => {
             // use the int64 to represent the decimal with low precision
-            column
-                .as_primitive::<Decimal128Type>()
-                .unary::<_, Int64Type>(|v| v as i64)
-                .values()
-                .clone()
+            visitor.map(column.as_primitive::<Decimal128Type>().values(), |v| {
+                v as i64
+            })
         }
         ArrowDataType::Decimal256(_, _) => {
             // use the int64 to represent the decimal with low precision
-            column
-                .as_primitive::<Decimal256Type>()
-                .unary::<_, Int64Type>(|v| v.as_i128() as i64)
-                .values()
-                .clone()
+            visitor.map(column.as_primitive::<Decimal256Type>().values(), |v| {
+                v.as_i128() as i64
+            })
         }
         d => return Err(ParquetError::General(format!("Cannot coerce {d} to I64"))),
     };
-    Ok(values)
+    Ok(output)
 }
 
-/// Returns the values [`ArrowWriter`] stores for the rows of `column` at `indices`
-/// in a `FIXED_LEN_BYTE_ARRAY` column
+/// Writes the values passed to it to an `INT32` or `INT64` column
+struct WritePrimitive<'a, 'b, E: ColumnValueEncoder> {
+    writer: &'a mut GenericColumnWriter<'b, E>,
+    levels: &'a ArrayLevels,
+}
+
+impl<T, E> PrimitiveVisitor<T> for WritePrimitive<'_, '_, E>
+where
+    E: ColumnValueEncoder<Values = [T]>,
+{
+    type Output = Result<usize>;
+
+    fn slice(self, values: &[T]) -> Result<usize> {
+        write_primitive(self.writer, values, self.levels)
+    }
+
+    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Result<usize> {
+        let values: Vec<T> = values.iter().map(|v| convert(*v)).collect();
+        write_primitive(self.writer, &values, self.levels)
+    }
+}
+
+/// Receives the values [`ArrowWriter`] stores for an Arrow array in a
+/// `FIXED_LEN_BYTE_ARRAY` column, which are also the values hashed into the
+/// column's bloom filter
 ///
-/// These are also the values hashed into the column's bloom filter
-pub(crate) fn coerce_to_fixed_len_byte_array(
+/// [`visit_fixed_len_byte_array`] holds the conversion from each Arrow type
+pub(crate) trait FixedLenByteArrayVisitor {
+    type Output;
+
+    /// Returns the length of the values that decimals of `precision` are stored as
+    fn decimal_length(&self, precision: u8) -> usize;
+
+    /// Receives values that are `length` bytes long
+    ///
+    /// `fill(i, value)` writes the value at index `i` of the array to `value`,
+    /// which is `length` zeroed bytes. It returns `false` if the value does not
+    /// fit in `length` bytes, which can only happen for decimals.
+    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8]) -> bool) -> Self::Output;
+}
+
+/// Passes the values [`ArrowWriter`] stores for `column` in a `FIXED_LEN_BYTE_ARRAY`
+/// column to `visitor`
+pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
     column: &dyn arrow_array::Array,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Result<Vec<FixedLenByteArray>> {
-    let bytes = match column.data_type() {
+    visitor: V,
+) -> Result<V::Output> {
+    let output = match column.data_type() {
         ArrowDataType::Interval(interval_unit) => match interval_unit {
             IntervalUnit::YearMonth => {
+                // 12 bytes of months, days and milliseconds (4 bytes each). An Arrow
+                // YearMonth interval only stores months, so only the first 4 bytes are set.
                 let array = column.as_primitive::<IntervalYearMonthType>();
-                get_interval_ym_array_slice(array, indices)
+                visitor.values(12, |i, value| {
+                    value[0..4].copy_from_slice(&array.value(i).to_le_bytes());
+                    true
+                })
             }
             IntervalUnit::DayTime => {
+                // 12 bytes of months, days and milliseconds (4 bytes each). An Arrow
+                // DayTime interval only stores days and milliseconds, so the first 4
+                // bytes are not set.
                 let array = column.as_primitive::<IntervalDayTimeType>();
-                get_interval_dt_array_slice(array, indices)
+                visitor.values(12, |i, value| {
+                    let interval = array.value(i);
+                    value[4..8].copy_from_slice(&interval.days.to_le_bytes());
+                    value[8..12].copy_from_slice(&interval.milliseconds.to_le_bytes());
+                    true
+                })
             }
             IntervalUnit::MonthDayNano => {
                 return Err(ParquetError::NYI(format!(
@@ -1812,27 +1839,29 @@ pub(crate) fn coerce_to_fixed_len_byte_array(
         },
         ArrowDataType::FixedSizeBinary(_) => {
             let array = column.as_fixed_size_binary();
-            get_fsb_array_slice(array, indices)
+            visitor.values(array.value_size(), |i, value| {
+                value.copy_from_slice(array.value(i));
+                true
+            })
         }
         ArrowDataType::Decimal32(_, _) => {
-            let array = column.as_primitive::<Decimal32Type>();
-            get_decimal_array_slice(array, indices)
+            visit_decimal(column.as_primitive::<Decimal32Type>(), visitor)
         }
         ArrowDataType::Decimal64(_, _) => {
-            let array = column.as_primitive::<Decimal64Type>();
-            get_decimal_array_slice(array, indices)
+            visit_decimal(column.as_primitive::<Decimal64Type>(), visitor)
         }
         ArrowDataType::Decimal128(_, _) => {
-            let array = column.as_primitive::<Decimal128Type>();
-            get_decimal_array_slice(array, indices)
+            visit_decimal(column.as_primitive::<Decimal128Type>(), visitor)
         }
         ArrowDataType::Decimal256(_, _) => {
-            let array = column.as_primitive::<Decimal256Type>();
-            get_decimal_array_slice(array, indices)
+            visit_decimal(column.as_primitive::<Decimal256Type>(), visitor)
         }
         ArrowDataType::Float16 => {
             let array = column.as_primitive::<Float16Type>();
-            get_float_16_array_slice(array, indices)
+            visitor.values(2, |i, value| {
+                value.copy_from_slice(&array.value(i).to_le_bytes());
+                true
+            })
         }
         _ => {
             return Err(ParquetError::NYI(
@@ -1840,7 +1869,86 @@ pub(crate) fn coerce_to_fixed_len_byte_array(
             ));
         }
     };
-    Ok(bytes)
+    Ok(output)
+}
+
+/// Passes the big-endian two's complement bytes of the values of `array` to `visitor`
+fn visit_decimal<T: NativeDecimalType, V: FixedLenByteArrayVisitor>(
+    array: &PrimitiveArray<T>,
+    visitor: V,
+) -> V::Output {
+    let length = visitor.decimal_length(array.precision());
+    visitor.values(length, |i, value| {
+        resize_twos_complement(T::to_be_bytes(array.value(i)).as_ref(), value)
+    })
+}
+
+/// Writes the big-endian two's complement integer `bytes` to `out`, which may be
+/// shorter or longer than `bytes`
+///
+/// Drops leading bytes when `out` is shorter and sign-extends when it is longer.
+/// Returns `false` if a dropped byte was not sign extension, that is, if the
+/// integer does not fit in `out`.
+#[inline]
+fn resize_twos_complement(bytes: &[u8], out: &mut [u8]) -> bool {
+    match out.len().checked_sub(bytes.len()) {
+        // Same length, which lets the compiler inline the copy
+        Some(0) => {
+            out.copy_from_slice(bytes);
+            true
+        }
+        Some(extension) => {
+            let sign = if bytes.first().is_some_and(|b| (*b as i8) < 0) {
+                0xFF
+            } else {
+                0
+            };
+            out[..extension].fill(sign);
+            out[extension..].copy_from_slice(bytes);
+            true
+        }
+        None => {
+            let (dropped, kept) = bytes.split_at(bytes.len() - out.len());
+            out.copy_from_slice(kept);
+            let sign = if kept.first().is_some_and(|b| (*b as i8) < 0) {
+                0xFF
+            } else {
+                0
+            };
+            dropped.iter().all(|b| *b == sign)
+        }
+    }
+}
+
+/// Writes the values passed to it to a `FIXED_LEN_BYTE_ARRAY` column
+struct WriteFixedLenByteArray<'a, 'b> {
+    writer: &'a mut ColumnWriterImpl<'b, FixedLenByteArrayType>,
+    levels: &'a ArrayLevels,
+}
+
+impl FixedLenByteArrayVisitor for WriteFixedLenByteArray<'_, '_> {
+    type Output = Result<usize>;
+
+    fn decimal_length(&self, precision: u8) -> usize {
+        decimal_length_from_precision(precision)
+    }
+
+    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8]) -> bool) -> Result<usize> {
+        let indices = self.levels.non_null_indices().iter().copied();
+        // A value that does not fit is truncated, as the writer has always done
+        let values = chunk_array_slice(length, indices, |i, value| {
+            fill(i, value);
+        });
+        self.writer.write_batch_internal(
+            values.as_slice(),
+            None,
+            self.levels.def_level_data().as_ref(),
+            self.levels.rep_level_data().as_ref(),
+            None,
+            None,
+            None,
+        )
+    }
 }
 
 fn write_primitive<E: ColumnValueEncoder>(
@@ -1868,31 +1976,6 @@ fn get_bool_array_slice(
         values.push(array.value(i))
     }
     values
-}
-
-/// Returns 12-byte values representing 3 values of months, days and milliseconds (4-bytes each).
-/// An Arrow YearMonth interval only stores months, thus only the first 4 bytes are populated.
-fn get_interval_ym_array_slice(
-    array: &arrow_array::IntervalYearMonthArray,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    chunk_array_slice(12, indices, move |i, chunk| {
-        let value = array.value(i);
-        chunk[0..4].copy_from_slice(&value.to_le_bytes());
-    })
-}
-
-/// Returns 12-byte values representing 3 values of months, days and milliseconds (4-bytes each).
-/// An Arrow DayTime interval only stores days and millis, thus the first 4 bytes are not populated.
-fn get_interval_dt_array_slice(
-    array: &arrow_array::IntervalDayTimeArray,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    chunk_array_slice(12, indices, move |i, chunk| {
-        let value = array.value(i);
-        chunk[4..8].copy_from_slice(&value.days.to_le_bytes());
-        chunk[8..12].copy_from_slice(&value.milliseconds.to_le_bytes());
-    })
 }
 
 trait NativeDecimalType: DecimalType {
@@ -1927,48 +2010,6 @@ impl NativeDecimalType for Decimal256Type {
     fn to_be_bytes(value: Self::Native) -> Self::NativeBytes {
         value.to_be_bytes()
     }
-}
-
-fn get_decimal_array_slice<T: NativeDecimalType>(
-    array: &PrimitiveArray<T>,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    let chunk_size = decimal_length_from_precision(array.precision());
-    assert!(chunk_size <= T::BYTE_LENGTH);
-
-    if chunk_size == T::BYTE_LENGTH {
-        // Special-case that allows inlining memcpy.
-        chunk_array_slice(chunk_size, indices, move |i, chunk| {
-            let as_be_bytes = T::to_be_bytes(array.value(i));
-            chunk.copy_from_slice(as_be_bytes.as_ref());
-        })
-    } else {
-        chunk_array_slice(chunk_size, indices, move |i, chunk| {
-            let as_be_bytes = T::to_be_bytes(array.value(i));
-            let resized_value = &as_be_bytes.as_ref()[(T::BYTE_LENGTH - chunk.len())..];
-            chunk.copy_from_slice(resized_value);
-        })
-    }
-}
-
-fn get_float_16_array_slice(
-    array: &arrow_array::Float16Array,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    chunk_array_slice(2, indices, move |i, chunk| {
-        let value = array.value(i).to_le_bytes();
-        chunk.copy_from_slice(&value);
-    })
-}
-
-fn get_fsb_array_slice(
-    array: &arrow_array::FixedSizeBinaryArray,
-    indices: impl ExactSizeIterator<Item = usize>,
-) -> Vec<FixedLenByteArray> {
-    chunk_array_slice(array.value_size(), indices, move |i, chunk| {
-        let value = array.value(i);
-        chunk.copy_from_slice(value);
-    })
 }
 
 #[inline]
