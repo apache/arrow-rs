@@ -978,6 +978,21 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_precision_one_uses_int32() {
+        let arrow_schema = Schema::new(vec![Field::new(
+            "decimal",
+            DataType::Decimal128(1, 0),
+            false,
+        )]);
+        let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema).unwrap();
+
+        assert_eq!(
+            parquet_schema.column(0).physical_type(),
+            PhysicalType::INT32
+        );
+    }
+
+    #[test]
     fn test_byte_array_fields() {
         let message_type = "
         message test_schema {
