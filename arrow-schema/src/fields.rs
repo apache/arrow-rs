@@ -630,6 +630,13 @@ impl UnionFields {
 }
 
 impl FromIterator<(i8, FieldRef)> for UnionFields {
+    /// # Panics
+    ///
+    /// This will panic on invalid inputs:
+    /// - Duplicate type IDs
+    /// - Negative type IDs
+    ///
+    /// Prefer using [`UnionFields::try_new`] for a fallible construction method.
     fn from_iter<T: IntoIterator<Item = (i8, FieldRef)>>(iter: T) -> Self {
         let iter = iter.into_iter();
         let (type_ids, fields): (Vec<i8>, Vec<FieldRef>) = iter.unzip();
