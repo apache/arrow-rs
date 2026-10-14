@@ -1865,9 +1865,26 @@ impl ParquetRecordBatchReader {
         }
     }
 
+    /// Returns the inner [`ArrayReader`], which keeps its position, so that
+    /// the caller can continue with a new [`ReadPlan`].
+    pub(crate) fn into_array_reader(self) -> Box<dyn ArrayReader> {
+        self.array_reader
+    }
+
     #[inline(always)]
     pub(crate) fn batch_size(&self) -> usize {
         self.read_plan.batch_size()
+    }
+
+    /// Returns `true` if the read plan has no rows left, so that
+    /// [`Iterator::next`] returns `None` without reading or skipping records.
+    /// Conservative: always `false` for a plan without a selection.
+    pub(crate) fn is_exhausted(&self) -> bool {
+        match self.read_plan.row_selection_cursor() {
+            RowSelectionCursor::All => false,
+            RowSelectionCursor::Mask(cursor) => cursor.is_empty(),
+            RowSelectionCursor::Selectors(cursor) => cursor.is_empty(),
+        }
     }
 }
 
