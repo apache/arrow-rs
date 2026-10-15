@@ -20,11 +20,17 @@ use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use futures::StreamExt;
 use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::{ParquetRecordBatchReaderBuilder, RowSelection};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
+};
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
+use parquet::file::metadata::PageIndexPolicy;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use std::hint;
+use std::io::Cursor;
 use std::sync::Arc;
 
 const TOTAL_ROWS: usize = 3_000_000;
@@ -78,62 +84,55 @@ fn boolean_array(mask: &BooleanBuffer) -> BooleanArray {
 
 fn criterion_benchmark(c: &mut Criterion) {
     let patterns = build_patterns();
-
-    let mut construction = c.benchmark_group("row_selector_boolean_buffer/construction");
-    for case in &patterns {
-        construction.bench_with_input(
-            BenchmarkId::new("from_filters", case.label()),
-            &case.mask,
-            |b, mask| {
-                b.iter(|| {
-                    let array = boolean_array(mask);
-                    let selection = RowSelection::from_filters(&[array]);
-                    hint::black_box(selection);
-                })
-            },
-        );
-
-        construction.bench_with_input(
-            BenchmarkId::new("from_boolean_buffer", case.label()),
-            &case.mask,
-            |b, mask| {
-                b.iter(|| {
-                    let selection = RowSelection::from_boolean_buffer(mask.clone());
-                    hint::black_box(selection);
-                })
-            },
-        );
-    }
-    construction.finish();
+    benchmark_selections(c, "construction", &patterns, |selection| selection);
 
     let parquet_data = write_parquet_file(TOTAL_ROWS);
-    let mut reader = c.benchmark_group("row_selector_boolean_buffer/reader");
-    for case in &patterns {
-        reader.bench_with_input(
+    benchmark_selections(c, "reader", &patterns, |selection| {
+        read_rows(&parquet_data, selection)
+    });
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    benchmark_selections(c, "reader_async", &patterns, |selection| {
+        runtime.block_on(read_rows_async(&parquet_data, selection))
+    });
+}
+
+/// Each iteration times constructing a `RowSelection` from a precomputed mask
+/// and calling `run` with it. `run` returns the selection for construction-only
+/// benchmarks, or reads the selected rows for sync and async reader benchmarks.
+/// Generating the masks and writing the Parquet data happen outside the timed loop.
+fn benchmark_selections<T>(
+    c: &mut Criterion,
+    name: &str,
+    patterns: &[BenchCase],
+    mut run: impl FnMut(RowSelection) -> T,
+) {
+    let mut group = c.benchmark_group(format!("row_selector_boolean_buffer/{name}"));
+    for case in patterns {
+        group.bench_with_input(
             BenchmarkId::new("from_filters", case.label()),
             &case.mask,
             |b, mask| {
                 b.iter(|| {
                     let selection = RowSelection::from_filters(&[boolean_array(mask)]);
-                    let rows = read_rows(&parquet_data, selection);
-                    hint::black_box(rows);
+                    hint::black_box(run(selection));
                 })
             },
         );
-
-        reader.bench_with_input(
+        group.bench_with_input(
             BenchmarkId::new("from_boolean_buffer", case.label()),
             &case.mask,
             |b, mask| {
                 b.iter(|| {
                     let selection = RowSelection::from_boolean_buffer(mask.clone());
-                    let rows = read_rows(&parquet_data, selection);
-                    hint::black_box(rows);
+                    hint::black_box(run(selection));
                 })
             },
         );
     }
-    reader.finish();
+    group.finish();
 }
 
 fn build_patterns() -> Vec<BenchCase> {
@@ -182,6 +181,25 @@ fn read_rows(parquet_data: &Bytes, selection: RowSelection) -> usize {
         .unwrap();
 
     reader.map(|batch| batch.unwrap().num_rows()).sum::<usize>()
+}
+
+async fn read_rows_async(parquet_data: &Bytes, selection: RowSelection) -> usize {
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+    let mut reader = ParquetRecordBatchStreamBuilder::new_with_options(
+        Cursor::new(parquet_data.clone()),
+        options,
+    )
+    .await
+    .unwrap()
+    .with_row_selection(selection)
+    .build()
+    .unwrap();
+
+    let mut rows = 0;
+    while let Some(batch) = reader.next().await {
+        rows += batch.unwrap().num_rows();
+    }
+    rows
 }
 
 struct BenchCase {
