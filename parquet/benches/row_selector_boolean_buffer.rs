@@ -99,6 +99,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
+/// Each iteration times constructing a `RowSelection` from a precomputed mask
+/// and calling `run` with it. `run` returns the selection for construction-only
+/// benchmarks, or reads the selected rows for sync and async reader benchmarks.
+/// Generating the masks and writing the Parquet data happen outside the timed loop.
 fn benchmark_selections<T>(
     c: &mut Criterion,
     name: &str,
