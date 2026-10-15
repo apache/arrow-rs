@@ -744,7 +744,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
-            let (physical_type, length) = if *precision > 1 && *precision <= 9 {
+            let (physical_type, length) = if *precision >= 1 && *precision <= 9 {
                 (PhysicalType::INT32, -1)
             } else if *precision <= 18 {
                 (PhysicalType::INT64, -1)
@@ -975,6 +975,41 @@ mod tests {
             Field::new("decimal7", DataType::Decimal256(39, 2), false),
         ]);
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
+    }
+
+    #[test]
+    fn test_decimal_precision_physical_types() {
+        let cases = [
+            (1, PhysicalType::INT32, None),
+            (9, PhysicalType::INT32, None),
+            (10, PhysicalType::INT64, None),
+            (18, PhysicalType::INT64, None),
+            (19, PhysicalType::FIXED_LEN_BYTE_ARRAY, Some(9)),
+            (38, PhysicalType::FIXED_LEN_BYTE_ARRAY, Some(16)),
+        ];
+
+        for (precision, expected_type, expected_length) in cases {
+            let arrow_schema = Schema::new(vec![Field::new(
+                "decimal",
+                DataType::Decimal128(precision, 0),
+                false,
+            )]);
+            let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema).unwrap();
+            let column = parquet_schema.column(0);
+
+            assert_eq!(
+                column.physical_type(),
+                expected_type,
+                "precision {precision}"
+            );
+            if let Some(expected_length) = expected_length {
+                assert_eq!(
+                    column.type_length(),
+                    expected_length,
+                    "precision {precision}"
+                );
+            }
+        }
     }
 
     #[test]
