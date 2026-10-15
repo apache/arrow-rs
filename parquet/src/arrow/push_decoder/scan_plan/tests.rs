@@ -162,11 +162,10 @@ fn collect_with_stages(mut plan: ScanPlan) -> (Vec<PlannedRange>, Vec<ScanStage>
         let planner = plan.planner.as_ref().unwrap();
         let all_stages: Vec<_> = planner.columns.stages.stages().map(|(s, _)| s).collect();
         // The planner starts the next stage only when it is asked for a range
-        // of it. Thus the stages that it has not started are the stages after
-        // the stage of `range`.
-        let later_stages = planner.current.as_ref().unwrap().stages.len();
+        // of it. Thus the stage of `range` is the last started stage.
+        let next_stage = planner.current.as_ref().unwrap().next_stage;
         ranges.push(range);
-        stages.push(all_stages[all_stages.len() - 1 - later_stages]);
+        stages.push(all_stages[next_stage - 1]);
     }
     (ranges, stages)
 }

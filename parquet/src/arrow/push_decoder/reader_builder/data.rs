@@ -19,7 +19,9 @@
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::arrow_reader::RowSelection;
-use crate::arrow::in_memory_row_group::{ColumnChunkData, FetchRanges, InMemoryRowGroup};
+use crate::arrow::in_memory_row_group::{
+    ColumnChunkData, ColumnFetch, InMemoryRowGroup, column_fetches, offset_index_for_row_group,
+};
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::ChunkReader;
@@ -91,22 +93,13 @@ impl DataRequest {
             page_start_offsets,
         } = self;
 
-        let page_index = if parquet_metadata
-            .page_index()
-            .is_some_and(|pi| pi.has_offset_indexes())
-        {
-            Some(parquet_metadata.page_index_for_row_group(row_group_idx))
-        } else {
-            None
-        };
-
         // Create an InMemoryRowGroup to hold the column chunks, this is a
         // temporary structure used to tell the ArrowReaders what pages are
         // needed for decoding
         let mut in_memory_row_group = InMemoryRowGroup {
             row_count,
             column_chunks,
-            page_index,
+            page_index: offset_index_for_row_group(parquet_metadata, row_group_idx),
             row_group_idx,
             metadata: parquet_metadata,
         };
@@ -198,40 +191,47 @@ impl<'a> DataRequestBuilder<'a> {
             column_chunks,
         } = self;
 
-        let row_group_meta_data = parquet_metadata.row_group(row_group_idx);
+        let row_group = parquet_metadata.row_group(row_group_idx);
 
         // If no previously read column chunks are provided, create a new location to hold them
-        let column_chunks =
-            column_chunks.unwrap_or_else(|| vec![None; row_group_meta_data.columns().len()]);
+        let column_chunks = column_chunks.unwrap_or_else(|| vec![None; row_group.columns().len()]);
 
-        let page_index = if parquet_metadata
-            .page_index()
-            .is_some_and(|pi| pi.has_offset_indexes())
-        {
-            Some(parquet_metadata.page_index_for_row_group(row_group_idx))
-        } else {
-            None
-        };
+        // With a `RowSelection` and an `OffsetIndex`, only fetch the pages
+        // required for the `RowSelection`
+        let page_index = offset_index_for_row_group(parquet_metadata, row_group_idx)
+            .filter(|_| selection.is_some());
 
-        // Create an InMemoryRowGroup to hold the column chunks, this is a
-        // temporary structure used to tell the ArrowReaders what pages are
-        // needed for decoding
-        let row_group = InMemoryRowGroup {
+        // Consider preallocating outer vec: https://github.com/apache/arrow-rs/issues/8667
+        let mut page_start_offsets: Option<Vec<Option<Vec<u64>>>> =
+            page_index.as_ref().map(|_| vec![]);
+        let mut ranges = vec![];
+        let fetches = column_fetches(
+            row_group,
             row_count,
-            column_chunks,
-            page_index,
-            row_group_idx,
-            metadata: parquet_metadata,
-        };
-
-        let FetchRanges {
-            ranges,
-            page_start_offsets,
-        } = row_group.fetch_ranges(projection, selection, batch_size, cache_projection);
+            page_index.as_ref(),
+            projection,
+            selection,
+            batch_size,
+            cache_projection,
+            |idx| column_chunks[idx].is_some(),
+        );
+        for (_, fetch) in fetches {
+            let first = ranges.len();
+            ranges.extend(fetch.ranges());
+            if let Some(page_start_offsets) = page_start_offsets.as_mut() {
+                page_start_offsets.push(match fetch {
+                    // No offset index for this column, fetch the entire column
+                    ColumnFetch::Chunk { .. } => None,
+                    ColumnFetch::Pages { .. } => {
+                        Some(ranges[first..].iter().map(|range| range.start).collect())
+                    }
+                });
+            }
+        }
 
         DataRequest {
             // Save any previously read column chunks
-            column_chunks: row_group.column_chunks,
+            column_chunks,
             ranges,
             page_start_offsets,
         }

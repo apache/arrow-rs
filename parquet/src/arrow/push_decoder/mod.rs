@@ -1021,7 +1021,7 @@ mod test {
     use super::*;
     use crate::DecodeResult;
     use crate::arrow::arrow_reader::{ArrowPredicateFn, RowFilter, RowSelection, RowSelector};
-    use crate::arrow::push_decoder::reader_builder::column_chunk_range;
+    use crate::arrow::in_memory_row_group::column_chunk_range;
     use crate::arrow::push_decoder::{
         ParquetPushDecoder, ParquetPushDecoderBuilder, RowGroupSelection,
     };
