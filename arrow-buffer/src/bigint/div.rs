@@ -59,19 +59,28 @@ fn bits(arr: &[u64]) -> usize {
 
 /// Division of numerator by a u64 divisor
 fn div_rem_small<const N: usize>(numerator: &[u64; N], divisor: u64) -> ([u64; N], [u64; N]) {
-    #[cfg(all(target_arch = "x86_64", not(miri)))]
+    // x86_64 divides by one word with `div`. On 32-bit targets, including wasm32, each
+    // 64x64-to-128-bit product in the reciprocal path would call `__multi3`
+    #[cfg(any(
+        all(target_arch = "x86_64", not(miri)),
+        not(target_pointer_width = "64")
+    ))]
     {
         div_rem_small_word(numerator, divisor)
     }
 
     // Here `div_rem_word` would call `__udivti3` for every digit
-    #[cfg(any(not(target_arch = "x86_64"), miri))]
+    #[cfg(all(target_pointer_width = "64", any(not(target_arch = "x86_64"), miri)))]
     {
         div_rem_small_reciprocal(numerator, divisor)
     }
 }
 
-#[cfg(any(test, all(target_arch = "x86_64", not(miri))))]
+#[cfg(any(
+    test,
+    all(target_arch = "x86_64", not(miri)),
+    not(target_pointer_width = "64")
+))]
 fn div_rem_small_word<const N: usize>(numerator: &[u64; N], divisor: u64) -> ([u64; N], [u64; N]) {
     let mut rem = 0u64;
     let mut numerator = *numerator;
@@ -88,7 +97,10 @@ fn div_rem_small_word<const N: usize>(numerator: &[u64; N], divisor: u64) -> ([u
 
 /// Like [`div_rem_small_word`], but divides each digit by multiplying with a
 /// reciprocal of the divisor, computed once
-#[cfg(any(test, not(target_arch = "x86_64"), miri))]
+#[cfg(any(
+    test,
+    all(target_pointer_width = "64", any(not(target_arch = "x86_64"), miri))
+))]
 fn div_rem_small_reciprocal<const N: usize>(
     numerator: &[u64; N],
     divisor: u64,
@@ -116,8 +128,11 @@ fn div_rem_small_reciprocal<const N: usize>(
 /// Returns `floor((2^128 - 1) / divisor) - 2^64` for a divisor with its top bit set
 ///
 /// This is algorithm 2 of [Möller and Granlund (2011)](https://gmplib.org/~tege/division-paper.pdf),
-/// which avoids the `u128` division that `__udivti3` would do outside x86_64
-#[cfg(any(test, not(target_arch = "x86_64"), miri))]
+/// which avoids a `u128` division
+#[cfg(any(
+    test,
+    all(target_pointer_width = "64", any(not(target_arch = "x86_64"), miri))
+))]
 fn reciprocal_word(divisor: u64) -> u64 {
     debug_assert_eq!(divisor >> 63, 1);
 
@@ -153,7 +168,10 @@ fn reciprocal_word(divisor: u64) -> u64 {
 /// Divides `hi:lo` by a divisor with its top bit set, given its [`reciprocal_word`]
 ///
 /// This is algorithm 4 of [Möller and Granlund (2011)](https://gmplib.org/~tege/division-paper.pdf)
-#[cfg(any(test, not(target_arch = "x86_64"), miri))]
+#[cfg(any(
+    test,
+    all(target_pointer_width = "64", any(not(target_arch = "x86_64"), miri))
+))]
 #[inline]
 fn div_rem_word_reciprocal(hi: u64, lo: u64, divisor: u64, reciprocal: u64) -> (u64, u64) {
     debug_assert!(hi < divisor);
