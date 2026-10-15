@@ -137,8 +137,9 @@ fn reciprocal_word(divisor: u64) -> u64 {
     let d40 = (divisor >> 24) + 1;
     let d63 = (divisor >> 1) + d0;
 
+    // `d9` is in 256..512, so masking gives `d9 - 256` without a bounds check
+    let v0 = u64::from(TABLE[(d9 & 0xff) as usize]);
     // Two Newton iterations, each about doubling the bits of precision
-    let v0 = u64::from(TABLE[d9 as usize - 256]);
     let v1 = (v0 << 11) - ((v0 * v0 * d40) >> 40) - 1;
     let v2 = (v1 << 13) + ((v1 * ((1 << 60) - v1 * d40)) >> 47);
     // `2^96 - v2 * d63 + floor(v2 / 2) * d0`, which the paper shows fits in 64 bits
