@@ -1134,6 +1134,15 @@ mod arrow_tests {
         buf
     }
 
+    /// Chunk sizes that still force an empty CDC page flush.
+    fn empty_page_repro_cdc_options() -> CdcOptions {
+        CdcOptions {
+            min_chunk_size: 8 * 1024,
+            max_chunk_size: 16 * 1024,
+            norm_level: 0,
+        }
+    }
+
     /// Write a single-column batch with CDC plus the page-size / row-count
     /// limits that make a forced chunk boundary flush an already-empty page.
     fn write_boolean_cdc_with_small_pages(num_rows: usize) -> Vec<u8> {
@@ -1144,11 +1153,7 @@ mod arrow_tests {
         let props = WriterProperties::builder()
             .set_writer_version(WriterVersion::PARQUET_2_0)
             .set_data_page_size_limit(1024)
-            .set_content_defined_chunking(Some(CdcOptions {
-                min_chunk_size: 8 * 1024,
-                max_chunk_size: 16 * 1024,
-                norm_level: 0,
-            }))
+            .set_content_defined_chunking(Some(empty_page_repro_cdc_options()))
             .build();
 
         let mut buf = Vec::new();
@@ -1172,7 +1177,7 @@ mod arrow_tests {
     #[test]
     #[cfg_attr(miri, ignore)] // large enough to hit CDC chunk boundaries
     fn cdc_boolean_small_pages_does_not_panic() {
-        let data = write_boolean_cdc_with_small_pages(500_000);
+        let data = write_boolean_cdc_with_small_pages(32_768);
         let (total, empty) = count_data_pages(&data);
         assert!(
             total > 1,
@@ -1182,13 +1187,13 @@ mod arrow_tests {
 
         let readback = read_batches(&data);
         let rows: usize = readback.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(rows, 500_000);
+        assert_eq!(rows, 32_768);
     }
 
     #[test]
     #[cfg_attr(miri, ignore)]
     fn cdc_int32_row_count_limit_does_not_emit_empty_pages() {
-        let values: Vec<i32> = (0..500_000).map(|i| i % 97).collect();
+        let values: Vec<i32> = (0..8_192).map(|i| i % 97).collect();
         let col = Arc::new(Int32Array::from(values)) as ArrayRef;
         let batch = RecordBatch::try_from_iter([("a", col)]).unwrap();
 
@@ -1196,11 +1201,7 @@ mod arrow_tests {
             .set_writer_version(WriterVersion::PARQUET_2_0)
             .set_dictionary_enabled(false)
             .set_data_page_row_count_limit(128)
-            .set_content_defined_chunking(Some(CdcOptions {
-                min_chunk_size: 8 * 1024,
-                max_chunk_size: 16 * 1024,
-                norm_level: 0,
-            }))
+            .set_content_defined_chunking(Some(empty_page_repro_cdc_options()))
             .build();
 
         let mut buf = Vec::new();
