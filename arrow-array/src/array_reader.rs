@@ -56,7 +56,8 @@ impl<R: ArrayReader + ?Sized> ArrayReader for Box<R> {
 /// let b: ArrayRef = Arc::new(Int32Array::from(vec![3, 4]));
 ///
 /// let field = Arc::new(Field::new("values", DataType::Int32, false));
-/// let mut reader = ArrayIterator::new(vec![a.clone(), b.clone()].into_iter().map(Ok), field.clone());
+/// let iter = vec![a.clone(), b.clone()].into_iter().map(Ok);
+/// let mut reader = ArrayIterator::new(iter, field.clone());
 ///
 /// assert_eq!(reader.field(), &field);
 /// assert_eq!(&reader.next().unwrap().unwrap(), &a);
