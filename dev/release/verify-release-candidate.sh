@@ -117,7 +117,12 @@ test_source_distribution() {
   export ARROW_TEST_DATA=$PWD/arrow-testing-data/data
   export PARQUET_TEST_DATA=$PWD/parquet-testing-data/data
 
-  cargo test --all
+  # Run all tests but skip the invalid files test, as this
+  # checks for files without an associated test, and can fail if
+  # new bad files have been added to praquet-testing since the
+  # commit referenced by the arrow-rs source repository in the
+  # release version.
+  cargo test --all  -- --skip "bad_data::test_invalid_files"
 
   # verify that the leaf crates can be published to crates.io
   # we can't verify crates that depend on others
