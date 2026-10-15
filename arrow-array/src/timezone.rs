@@ -434,6 +434,47 @@ mod private {
 /// This returns useful information that can be used when converting a local [`NaiveDateTime`]
 /// to a timezone-aware [`DateTime`] with [`chrono::TimeZone::from_local_datetime`] and a gap
 /// ([`chrono::LocalResult::None`]) is found.
+///
+/// # Examples
+///
+/// In the `America/New_York` timezone the clocks went forward one hour at `2026-03-08T02:00:00`.
+/// The local time `2026-03-08T01:30:00` exists, but `2026-03-08T02:30:00` falls in the gap and
+/// does not.
+///
+/// ```
+/// # #[cfg(feature = "chrono-tz")]
+/// # {
+/// use arrow_array::timezone::{GapInfo, Tz};
+/// use chrono::{DateTime, FixedOffset, LocalResult, NaiveDateTime, Offset, TimeZone};
+///
+/// let tz: Tz = "America/New_York".parse().unwrap();
+/// let expect_offset: FixedOffset = "-0500".parse().unwrap();
+///
+/// // A local time before the gap has a single offset, and is not in a gap.
+/// let exists: NaiveDateTime = "2026-03-08T01:30:00".parse().unwrap();
+/// let offset = tz.offset_from_local_datetime(&exists).single().unwrap();
+/// assert_eq!(offset.fix(), expect_offset);
+/// assert!(GapInfo::new(&exists, &tz).is_none());
+///
+/// // A local time inside the gap has no offset...
+/// let not_exist: NaiveDateTime = "2026-03-08T02:30:00".parse().unwrap();
+/// let offset = tz.offset_from_local_datetime(&not_exist);
+/// assert!(matches!(offset, LocalResult::None));
+///
+/// // ...but `GapInfo` describes the gap it falls in.
+/// let GapInfo { begin, end } = GapInfo::new(&not_exist, &tz).unwrap();
+///
+/// // The gap begins at 02:00 local time. The offset is the one in effect before the gap.
+/// let (begin_datetime, begin_offset) = begin.unwrap();
+/// let expect_begin: NaiveDateTime = "2026-03-08T02:00:00".parse().unwrap();
+/// assert_eq!(begin_datetime, expect_begin);
+/// assert_eq!(begin_offset.fix(), expect_offset);
+///
+/// // The gap ends at 03:00 local time, with the offset in effect after the gap.
+/// let expect_end: DateTime<FixedOffset> = "2026-03-08T03:00:00-0400".parse().unwrap();
+/// assert_eq!(end.unwrap(), expect_end.with_timezone(&tz));
+/// # }
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct GapInfo {
     /// When available it contains information about the beginning of the gap.
