@@ -1140,7 +1140,7 @@ impl Date32Type {
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> Option<<Date32Type as ArrowPrimitiveType>::Native> {
         let prior = Date32Type::to_naive_date_opt(date)?;
-        let months = IntervalYearMonthType::to_months(-delta);
+        let months = IntervalYearMonthType::to_months(delta.checked_neg()?);
         let posterior = add_months_date(prior, months)?;
         Some(Date32Type::from_naive_date(posterior))
     }
@@ -1226,7 +1226,7 @@ impl Date32Type {
     ) -> Option<<Date32Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date32Type::to_naive_date_opt(date)?;
-        let res = add_months_date(res, -months)?;
+        let res = add_months_date(res, months.checked_neg()?)?;
         let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
         let res = res.checked_sub_signed(Duration::nanoseconds(nanos))?;
         Some(Date32Type::from_naive_date(res))
@@ -1330,7 +1330,7 @@ impl Date64Type {
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let prior = Date64Type::to_naive_date_opt(date)?;
-        let months = IntervalYearMonthType::to_months(-delta);
+        let months = IntervalYearMonthType::to_months(delta.checked_neg()?);
         let posterior = add_months_date(prior, months)?;
         Some(Date64Type::from_naive_date(posterior))
     }
@@ -1368,7 +1368,7 @@ impl Date64Type {
     ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date64Type::to_naive_date_opt(date)?;
-        let res = add_months_date(res, -months)?;
+        let res = add_months_date(res, months.checked_neg()?)?;
         let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
         let res = res.checked_sub_signed(Duration::nanoseconds(nanos))?;
         Some(Date64Type::from_naive_date(res))
