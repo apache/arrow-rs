@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! JSON writing with a reused output buffer; allocation is amortized during warmup.
+
 use arrow_array::builder::{FixedSizeListBuilder, Int64Builder, ListBuilder};
 use arrow_array::{Array, RecordBatch};
 use arrow_json::LineDelimitedWriter;
 use arrow_schema::{Field, Schema};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::sync::Arc;
 
 #[global_allocator]
@@ -52,7 +55,7 @@ fn bench_write_list(c: &mut Criterion) {
     let short_batch = build_list_batch(ROWS, LIST_SHORT_ELEMENTS);
     let long_batch = build_list_batch(ROWS, LIST_LONG_ELEMENTS);
 
-    let mut group = c.benchmark_group("write_list_i64");
+    let mut group = c.benchmark_group("reused_buffer/write_list_i64");
     // Short lists: tests per-list overhead (few elements per row)
     group.throughput(Throughput::Elements(ROWS as u64));
     group.bench_function("short", |b| {
@@ -62,6 +65,7 @@ fn bench_write_list(c: &mut Criterion) {
             let mut writer = LineDelimitedWriter::new(&mut buf);
             writer.write(&short_batch).unwrap();
             writer.finish().unwrap();
+            black_box(&buf);
         })
     });
 
@@ -73,6 +77,7 @@ fn bench_write_list(c: &mut Criterion) {
             let mut writer = LineDelimitedWriter::new(&mut buf);
             writer.write(&long_batch).unwrap();
             writer.finish().unwrap();
+            black_box(&buf);
         })
     });
 
@@ -102,7 +107,7 @@ fn bench_write_fixed_size_list(c: &mut Criterion) {
     let short_batch = build_fixed_size_list_batch(ROWS, LIST_SHORT_ELEMENTS);
     let long_batch = build_fixed_size_list_batch(ROWS, LIST_LONG_ELEMENTS);
 
-    let mut group = c.benchmark_group("write_fixed_size_list_i64");
+    let mut group = c.benchmark_group("reused_buffer/write_fixed_size_list_i64");
     group.throughput(Throughput::Elements(ROWS as u64));
 
     group.bench_function("short", |b| {
@@ -112,6 +117,7 @@ fn bench_write_fixed_size_list(c: &mut Criterion) {
             let mut writer = LineDelimitedWriter::new(&mut buf);
             writer.write(&short_batch).unwrap();
             writer.finish().unwrap();
+            black_box(&buf);
         })
     });
 
@@ -122,6 +128,7 @@ fn bench_write_fixed_size_list(c: &mut Criterion) {
             let mut writer = LineDelimitedWriter::new(&mut buf);
             writer.write(&long_batch).unwrap();
             writer.finish().unwrap();
+            black_box(&buf);
         })
     });
 

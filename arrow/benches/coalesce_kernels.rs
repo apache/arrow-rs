@@ -18,6 +18,7 @@
 //! Benchmarks for the `coalesce` kernels in Arrow.
 
 use arrow::util::bench_util::*;
+use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -803,7 +804,8 @@ impl<'a> TakeBenchmarkBuilder<'a> {
 
 /// Pull RecordBatches from a data stream and apply a sequence of
 /// filters from a filter stream until we have a specified number of output
-/// batches.
+/// batches. Timing includes coalescer construction, input batch cloning, and
+/// output destruction, modeling the full stream-processing lifecycle.
 fn filter_streams(
     mut num_output_batches: usize,
     mut filter_stream: FilterStream,
@@ -819,13 +821,14 @@ fn filter_streams(
         coalescer
             .push_batch_with_filter(batch.clone(), filter)
             .unwrap();
-        // consume (but discard) the output batch
-        if coalescer.next_completed_batch().is_some() {
+        if let Some(batch) = coalescer.next_completed_batch() {
+            black_box(batch);
             num_output_batches -= 1;
         }
     }
 }
 
+/// Like `filter_streams`, includes setup, input cloning, and output destruction.
 fn take_streams(
     mut num_output_batches: usize,
     mut index_stream: IndexStream,
@@ -845,10 +848,15 @@ fn take_streams(
             .push_batch_with_indices(batch.clone(), indices)
             .unwrap();
         if drain_all_completed_batches {
-            while num_output_batches > 0 && coalescer.next_completed_batch().is_some() {
+            while num_output_batches > 0 {
+                let Some(batch) = coalescer.next_completed_batch() else {
+                    break;
+                };
+                black_box(batch);
                 num_output_batches -= 1;
             }
-        } else if coalescer.next_completed_batch().is_some() {
+        } else if let Some(batch) = coalescer.next_completed_batch() {
+            black_box(batch);
             num_output_batches -= 1;
         }
     }
@@ -940,7 +948,9 @@ impl FilterStreamBuilder {
             true_density,
         } = self;
         let batches = (0..num_batches)
-            .map(|_| create_boolean_array(batch_size, null_density, true_density))
+            .map(|seed| {
+                create_boolean_array_with_seed(batch_size, null_density, true_density, seed as u64)
+            })
             .collect::<Vec<_>>();
 
         FilterStream {
@@ -1082,7 +1092,7 @@ impl DataStreamBuilder {
         self
     }
 
-    /// build the data stream (not implemented yet)
+    /// Build the data stream with a reproducible seed for each batch.
     fn build(self) -> DataStream {
         let batches = (0..self.num_batches)
             .map(|seed| {
@@ -1132,10 +1142,16 @@ impl DataStreamBuilder {
                 )
                 .with_timezone(Arc::clone(tz)),
             ),
-            DataType::Utf8 => Arc::new(create_string_array::<i32>(
-                self.batch_size,
-                self.null_density,
-            )), // TODO seed
+            DataType::Utf8 => Arc::new(
+                create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                    self.batch_size,
+                    self.null_density,
+                    0,
+                    self.max_string_len,
+                    "",
+                    seed,
+                ),
+            ),
             DataType::Binary => Arc::new(create_binary_array_with_len_range_and_prefix_and_seed::<
                 i32,
             >(
@@ -1146,13 +1162,12 @@ impl DataStreamBuilder {
                 b"",
                 seed,
             )),
-            DataType::Utf8View => {
-                Arc::new(create_string_view_array_with_max_len(
-                    self.batch_size,
-                    self.null_density,
-                    self.max_string_len,
-                )) // TODO seed
-            }
+            DataType::Utf8View => Arc::new(create_string_view_array_with_len_range_and_seed(
+                self.batch_size,
+                self.null_density,
+                0..self.max_string_len,
+                seed,
+            )),
             DataType::BinaryView => Arc::new(BinaryViewArray::from_iter(
                 create_binary_array_with_len_range_and_prefix_and_seed::<i32>(
                     self.batch_size,
@@ -1168,11 +1183,15 @@ impl DataStreamBuilder {
                 if key_type.as_ref() == &DataType::Int32
                     && value_type.as_ref() == &DataType::Utf8 =>
             {
-                Arc::new(create_string_dict_array::<Int32Type>(
+                let values = create_string_array_with_len_range_and_prefix_and_seed::<i32>(
                     self.batch_size,
                     self.null_density,
                     self.max_string_len,
-                )) // TODO seed
+                    self.max_string_len,
+                    "",
+                    seed,
+                );
+                Arc::new(values.iter().collect::<DictionaryArray<Int32Type>>())
             }
             DataType::FixedSizeBinary(size) => Arc::new(create_fixed_size_binary_array(
                 self.batch_size,
@@ -1187,11 +1206,24 @@ impl DataStreamBuilder {
                 seed,
             )),
             DataType::FixedSizeList(_, list_size) => {
-                Arc::new(create_primitive_fixed_size_list_array::<Int32Type>(
-                    self.batch_size,
-                    self.null_density,
+                let values = create_primitive_array_with_seed::<Int32Type>(
+                    self.batch_size * *list_size as usize,
                     0.0,
+                    seed,
+                );
+                let nulls = (self.null_density > 0.0).then(|| {
+                    let mut rng = StdRng::seed_from_u64(seed);
+                    arrow_buffer::NullBuffer::from(
+                        (0..self.batch_size)
+                            .map(|_| rng.random::<f32>() >= self.null_density)
+                            .collect::<Vec<_>>(),
+                    )
+                });
+                Arc::new(FixedSizeListArray::new(
+                    Arc::new(Field::new("item", DataType::Int32, false)),
                     *list_size,
+                    Arc::new(values),
+                    nulls,
                 ))
             }
             DataType::List(_) => Arc::new(create_primitive_list_array_with_seed::<i32, Int32Type>(

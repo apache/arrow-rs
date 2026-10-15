@@ -232,6 +232,11 @@ harness = false
 required-features = ["test_utils", "json"]
 
 [[bench]]
+name = "json_decoder"
+harness = false
+required-features = ["test_utils", "json"]
+
+[[bench]]
 name = "json_writer"
 harness = false
 required-features = ["test_utils", "json"]
