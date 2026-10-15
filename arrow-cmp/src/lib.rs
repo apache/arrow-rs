@@ -898,16 +898,10 @@ mod tests {
 
     fn dict_bytes_fast_path_derefs_values_both_directions_impl<T: ByteArrayType>() {
         let shared_keys = || Int32Array::from(vec![0_i32, 1]);
-        let left_values = GenericByteArray::<T>::new(
-            OffsetBuffer::from_lengths([1, 1]),
-            b"za".into(),
-            None,
-        );
-        let right_values = GenericByteArray::<T>::new(
-            OffsetBuffer::from_lengths([1, 1]),
-            b"az".into(),
-            None,
-        );
+        let left_values =
+            GenericByteArray::<T>::new(OffsetBuffer::from_lengths([1, 1]), b"za".into(), None);
+        let right_values =
+            GenericByteArray::<T>::new(OffsetBuffer::from_lengths([1, 1]), b"az".into(), None);
         let left = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(left_values));
         let right = DictionaryArray::<Int32Type>::new(shared_keys(), Arc::new(right_values));
 
@@ -1031,11 +1025,8 @@ mod tests {
 
     fn dict_bytes_fast_path_panics_on_out_of_bounds_row_impl<T: ByteArrayType>() {
         let two_row_keys = Int32Array::from(vec![0_i32, 1]);
-        let values = GenericByteArray::<T>::new(
-            OffsetBuffer::from_lengths([1, 1]),
-            b"ab".into(),
-            None,
-        );
+        let values =
+            GenericByteArray::<T>::new(OffsetBuffer::from_lengths([1, 1]), b"ab".into(), None);
         let dict = DictionaryArray::<Int32Type>::new(two_row_keys, Arc::new(values));
 
         let cmp = make_comparator(&dict, &dict, SortOptions::default()).unwrap();
