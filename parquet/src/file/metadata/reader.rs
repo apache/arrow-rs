@@ -15,10 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "arrow")]
+use crate::arrow::ProjectionMask;
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
+#[cfg(feature = "arrow")]
+use crate::file::metadata::dictionary::decode_dictionary_page;
 use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::thrift::parquet_schema_from_bytes;
 use crate::file::metadata::{
@@ -26,7 +30,12 @@ use crate::file::metadata::{
 };
 use crate::file::reader::ChunkReader;
 use crate::schema::types::SchemaDescriptor;
+#[cfg(feature = "arrow")]
+use arrow_array::ArrayRef;
 use bytes::Bytes;
+use std::collections::BTreeSet;
+use std::iter::FusedIterator;
+use std::slice::Iter;
 use std::sync::Arc;
 use std::{io::Read, ops::Range};
 
@@ -71,6 +80,8 @@ pub struct ParquetMetaDataReader {
     metadata: Option<ParquetMetaData>,
     column_index: PageIndexPolicy,
     offset_index: PageIndexPolicy,
+    column_index_mask: ColumnChunkMask,
+    offset_index_mask: ColumnChunkMask,
     prefetch_hint: Option<usize>,
     metadata_options: Option<Arc<ParquetMetaDataOptions>>,
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
@@ -80,6 +91,10 @@ pub struct ParquetMetaDataReader {
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
+// TODO: https://github.com/apache/arrow-rs/issues/11395 is tracking unifying PageIndexPolicy
+// with the ColumnChunkMask to reduce the dizzying number of APIs that exist to control reading
+// the page indexes.
+
 /// Describes the policy for reading page indexes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PageIndexPolicy {
@@ -88,10 +103,12 @@ pub enum PageIndexPolicy {
     Skip,
     /// Read the page index if it exists, otherwise do not error.
     Optional,
-    /// Require the page index to exist, and error if it does not.
+    /// Require offset indexes for every selected column chunk when any selected
+    /// page index ranges exist.
     ///
-    /// Only enforced for the offset index; this is the same as [`Self::Optional`]
-    /// for the column index.
+    /// For compatibility, a file with no page index ranges is accepted. This is only
+    /// enforced for the offset index; this is the same as [`Self::Optional`] for the
+    /// column index.
     Required,
 }
 
@@ -103,6 +120,203 @@ impl From<bool> for PageIndexPolicy {
         }
     }
 }
+
+/// A cheaply cloneable struct to specify column chunks for which metadata is required.
+///
+/// Column chunks are identified by row group index and leaf column index (the index of the
+/// column in [`SchemaDescriptor::columns`], not the index of a root or Arrow field). This struct
+/// allows for specifying vertical slices of column chunk data (via [`Self::columns`]),
+/// horizontal slices (via [`Self::row_groups`]), or the intersection of the two
+/// (via [`Self::row_groups_and_columns`]).
+///
+/// Because Parquet collection cannot contain more than [`i32::MAX`] values, user provided indices
+/// outside that range will be discarded.
+///
+/// At present this is only used to select elements of the [Page Index] for decoding.
+///
+/// # Examples
+///
+/// To select columns 0 and 1 from all row groups:
+/// ```rust
+/// # use parquet::file::metadata::ColumnChunkMask;
+/// let mask = ColumnChunkMask::columns([0, 1]);
+/// ```
+///
+/// To select all columns from row group 2:
+/// ```rust
+/// # use parquet::file::metadata::ColumnChunkMask;
+/// let mask = ColumnChunkMask::row_groups([2]);
+/// ```
+///
+/// To select columns 1 and 3 from row group 0:
+/// ```rust
+/// # use parquet::file::metadata::ColumnChunkMask;
+/// let mask = ColumnChunkMask::row_groups_and_columns([0], [1, 3]);
+/// ```
+///
+/// [Page Index]: https://parquet.apache.org/docs/file-format/pageindex/
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct ColumnChunkMask {
+    // `row_groups` and `columns` are optional `u32` slices, with elements
+    // sorted in ascending order (to permit binary searching for member indices).
+    // `None` means all indices are included, while an empty slice means none are.
+    // Indices are stored as `u32` because Parquet/Thrift collections cannot contain
+    // more than i32::MAX entries.
+    row_groups: Option<Arc<[u32]>>,
+    columns: Option<Arc<[u32]>>,
+}
+
+impl ColumnChunkMask {
+    /// Select all row groups and columns.
+    pub fn all() -> Self {
+        Self::default()
+    }
+
+    /// Select no row groups or columns.
+    pub fn none() -> Self {
+        Self {
+            row_groups: Some(Arc::from([])),
+            columns: Some(Arc::from([])),
+        }
+    }
+
+    /// Select only the listed columns.
+    ///
+    /// Passing an empty iterator selects no columns.
+    pub fn columns(columns: impl IntoIterator<Item = usize>) -> Self {
+        Self {
+            row_groups: None,
+            columns: Self::iter_to_set(columns),
+        }
+    }
+
+    /// Select only the listed row groups.
+    ///
+    /// Passing an empty iterator selects no row groups.
+    pub fn row_groups(row_groups: impl IntoIterator<Item = usize>) -> Self {
+        Self {
+            row_groups: Self::iter_to_set(row_groups),
+            columns: None,
+        }
+    }
+
+    /// Select only the listed row groups and columns.
+    ///
+    /// An empty iterator for either dimension selects no column chunks.
+    pub fn row_groups_and_columns(
+        row_groups: impl IntoIterator<Item = usize>,
+        columns: impl IntoIterator<Item = usize>,
+    ) -> Self {
+        Self {
+            row_groups: Self::iter_to_set(row_groups),
+            columns: Self::iter_to_set(columns),
+        }
+    }
+
+    /// Returns whether row group `idx` is selected and within the bounds `[0, num_row_groups)`.
+    pub fn includes_row_group(&self, idx: usize, num_row_groups: usize) -> bool {
+        idx < num_row_groups && Self::includes_index(self.row_groups.as_ref(), idx)
+    }
+
+    /// Returns whether column `idx` is selected and within the bounds `[0, num_columns)`.
+    pub fn includes_column(&self, idx: usize, num_columns: usize) -> bool {
+        idx < num_columns && Self::includes_index(self.columns.as_ref(), idx)
+    }
+
+    fn includes_index(keep: Option<&Arc<[u32]>>, idx: usize) -> bool {
+        // return false for out-of-bounds index
+        let Ok(idx) = i32::try_from(idx) else {
+            return false;
+        };
+        let idx = idx as u32;
+        keep.is_none_or(|keep| keep.binary_search(&idx).is_ok())
+    }
+
+    /// Returns `true` when this mask selects every column chunk.
+    pub fn is_all(&self) -> bool {
+        self.row_groups.is_none() && self.columns.is_none()
+    }
+
+    /// Returns `true` when either configured axis is empty (and thus would select no column chunks).
+    ///
+    /// This does not consider the dimensions of a particular Parquet file, so may return `false`
+    /// when [`Self::column_indices`] or [`Self::row_group_indices`] returns an empty iterator due
+    /// to all elements exceeding the provided upper bound.
+    pub fn is_none(&self) -> bool {
+        self.row_groups.as_ref().is_some_and(|i| i.is_empty())
+            || self.columns.as_ref().is_some_and(|i| i.is_empty())
+    }
+
+    /// Creates a mask selecting the leaf columns in an Arrow projection.
+    #[cfg(feature = "arrow")]
+    pub fn from_projection(projection: &ProjectionMask, schema: &SchemaDescriptor) -> Self {
+        Self::columns((0..schema.num_columns()).filter(|&i| projection.leaf_included(i)))
+    }
+
+    /// Returns an iterator over the row group indices selected by this mask. If the mask is `all`
+    /// then all indices in the range `[0, num_row_groups)` are returned.
+    pub fn row_group_indices(&self, num_row_groups: usize) -> impl Iterator<Item = usize> + '_ {
+        Self::axis_indices(self.row_groups.as_deref(), num_row_groups)
+    }
+
+    /// Returns an iterator over the column indices selected by this mask. If the mask is `all`
+    /// then all indices in the range `[0, num_columns)` are returned.
+    pub fn column_indices(&self, num_columns: usize) -> impl Iterator<Item = usize> + '_ {
+        Self::axis_indices(self.columns.as_deref(), num_columns)
+    }
+
+    fn axis_indices(axis: Option<&[u32]>, len: usize) -> AxisIndices<'_> {
+        match axis {
+            None => AxisIndices::All(0..len),
+            Some(indices) => {
+                let end = indices.partition_point(|&i| (i as usize) < len);
+                AxisIndices::Selected(indices[..end].iter())
+            }
+        }
+    }
+
+    // Used during initialization, this helper takes an iterator over `usize` elements,
+    // discards out-of-range values and then sorts.
+    fn iter_to_set(indices: impl IntoIterator<Item = usize>) -> Option<Arc<[u32]>> {
+        Some(
+            indices
+                .into_iter()
+                .filter_map(|i| i32::try_from(i).ok()) // remove out-of-bounds values
+                .map(|i| i as u32) // store as u32. safe because 0 <= i <= i32::MAX
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into(),
+        )
+    }
+}
+
+// helper for ColumnChunkMask selected index traversal
+enum AxisIndices<'a> {
+    All(Range<usize>),
+    Selected(Iter<'a, u32>),
+}
+
+impl Iterator for AxisIndices<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::All(indices) => indices.next(),
+            Self::Selected(indices) => indices.next().map(|&i| i as usize),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::All(indices) => indices.size_hint(),
+            Self::Selected(indices) => indices.size_hint(),
+        }
+    }
+}
+
+impl ExactSizeIterator for AxisIndices<'_> {}
+impl FusedIterator for AxisIndices<'_> {}
 
 impl ParquetMetaDataReader {
     /// Create a new [`ParquetMetaDataReader`]
@@ -134,6 +348,36 @@ impl ParquetMetaDataReader {
     /// Sets the [`PageIndexPolicy`] for the offset index
     pub fn with_offset_index_policy(mut self, policy: PageIndexPolicy) -> Self {
         self.offset_index = policy;
+        self
+    }
+
+    // TODO: deprecate the following as part of https://github.com/apache/arrow-rs/issues/11395
+
+    /// Selects the row groups and leaf columns for which both page index structures are read.
+    ///
+    /// The mask applies only to index structures whose policy is not [`PageIndexPolicy::Skip`].
+    /// This reader fetches one byte range covering the selected indexes, so a sparse mask
+    /// primarily reduces decoding and memory rather than necessarily reducing I/O.
+    pub fn with_page_index_mask(self, mask: ColumnChunkMask) -> Self {
+        self.with_column_index_mask(mask.clone())
+            .with_offset_index_mask(mask)
+    }
+
+    /// Selects the row groups and leaf columns for which column indexes are read.
+    ///
+    /// The mask applies only when the column index policy is not [`PageIndexPolicy::Skip`].
+    /// [`PageIndexPolicy::Required`] validates only selected column chunks.
+    pub fn with_column_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.column_index_mask = mask;
+        self
+    }
+
+    /// Selects the row groups and leaf columns for which offset indexes are read.
+    ///
+    /// The mask applies only when the offset index policy is not [`PageIndexPolicy::Skip`].
+    /// [`PageIndexPolicy::Required`] validates only selected column chunks.
+    pub fn with_offset_index_mask(mut self, mask: ColumnChunkMask) -> Self {
+        self.offset_index_mask = mask;
         self
     }
 
@@ -318,6 +562,13 @@ impl ParquetMetaDataReader {
 
     /// Read the page index structures when a [`ParquetMetaData`] has already been obtained.
     /// See [`Self::new_with_metadata()`] and [`Self::has_metadata()`].
+    ///
+    /// # Behavior on multiple calls
+    ///
+    /// On success, this method replaces any existing page index in the metadata. Index types
+    /// configured as [`PageIndexPolicy::Skip`] are cleared; other index types contain only the
+    /// indexes selected by their configured masks and available according to their policies. If
+    /// neither index type is populated, the page index is cleared.
     pub fn read_page_indexes<R: ChunkReader>(&mut self, reader: &R) -> Result<()> {
         self.read_page_indexes_sized(reader, reader.len())
     }
@@ -327,6 +578,9 @@ impl ParquetMetaDataReader {
     /// a [`Bytes`] struct containing the tail of the file).
     /// See [`Self::new_with_metadata()`] and [`Self::has_metadata()`]. Like
     /// [`Self::try_parse_sized()`] this function may return [`ParquetError::NeedMoreData`].
+    ///
+    /// See [`Self::read_page_indexes()`] for a description of the replacement behavior on
+    /// multiple calls.
     pub fn read_page_indexes_sized<R: ChunkReader>(
         &mut self,
         reader: &R,
@@ -341,6 +595,8 @@ impl ParquetMetaDataReader {
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
             .with_column_index_policy(self.column_index)
+            .with_offset_index_mask(self.offset_index_mask.clone())
+            .with_column_index_mask(self.column_index_mask.clone())
             .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
@@ -452,7 +708,7 @@ impl ParquetMetaDataReader {
         &mut self,
         mut fetch: F,
     ) -> Result<()> {
-        let (metadata, remainder) = self.load_metadata_via_suffix(&mut fetch).await?;
+        let metadata = self.load_metadata_via_suffix(&mut fetch).await?;
 
         self.metadata = Some(metadata);
 
@@ -462,14 +718,64 @@ impl ParquetMetaDataReader {
             return Ok(());
         }
 
-        self.load_page_index_with_remainder(fetch, remainder).await
+        self.load_page_index_with_remainder(fetch, None).await
     }
 
     /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
     /// been obtained. See [`Self::new_with_metadata()`].
+    ///
+    /// See [`Self::read_page_indexes()`] for a description of the replacement behavior on
+    /// multiple calls.
     #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn load_page_index<F: MetadataFetch>(&mut self, fetch: F) -> Result<()> {
         self.load_page_index_with_remainder(fetch, None).await
+    }
+
+    /// Reads and decodes the dictionary page of a column chunk into an Arrow array.
+    ///
+    /// Returns `Ok(None)` if the column chunk has no dictionary page, or if
+    /// its physical type is not `BYTE_ARRAY` (the only physical type
+    /// currently supported).
+    ///
+    /// The returned array contains raw `Binary` values, even for columns
+    /// annotated as strings. Callers can compare byte slices directly or
+    /// convert values to UTF-8 explicitly.
+    ///
+    /// This can be used to inspect dictionary values when selecting or pruning
+    /// row groups before reading their data pages.
+    ///
+    /// Note this does not verify that the *entire* column chunk is
+    /// dictionary-encoded (i.e. that the dictionary contains every value in
+    /// the chunk) -- callers that need that guarantee should check
+    /// [`crate::file::metadata::ColumnChunkMetaData::page_encoding_stats_mask`].
+    #[cfg(feature = "arrow")]
+    pub fn read_column_dictionary<R: ChunkReader>(
+        reader: &R,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<ArrayRef>> {
+        let Some(range) = dictionary_page_byte_range(metadata, row_group_idx, column_idx)? else {
+            return Ok(None);
+        };
+        let length = usize::try_from(range.end - range.start)?;
+        let buffer = reader.get_bytes(range.start, length)?;
+        decode_dictionary_page(buffer, metadata, row_group_idx, column_idx).map(Some)
+    }
+
+    /// Asynchronous version of [`Self::read_column_dictionary`].
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    pub async fn read_column_dictionary_async<F: MetadataFetch>(
+        mut fetch: F,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<ArrayRef>> {
+        let Some(range) = dictionary_page_byte_range(metadata, row_group_idx, column_idx)? else {
+            return Ok(None);
+        };
+        let buffer = fetch.fetch(range).await?;
+        decode_dictionary_page(buffer, metadata, row_group_idx, column_idx).map(Some)
     }
 
     #[cfg(all(feature = "async", feature = "arrow"))]
@@ -488,6 +794,8 @@ impl ParquetMetaDataReader {
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
             .with_column_index_policy(self.column_index)
+            .with_offset_index_mask(self.offset_index_mask.clone())
+            .with_column_index_mask(self.column_index_mask.clone())
             .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
@@ -643,10 +951,13 @@ impl ParquetMetaDataReader {
     }
 
     #[cfg(all(feature = "async", feature = "arrow"))]
+    // Unlike load_metadata, the file size is not known so it is not safe
+    // to use any leftover bytes that may have been pre-fetched. Thus this
+    // returns only the metadata.
     async fn load_metadata_via_suffix<F: MetadataSuffixFetch>(
         &self,
         fetch: &mut F,
-    ) -> Result<(ParquetMetaData, Option<(usize, Bytes)>)> {
+    ) -> Result<ParquetMetaData> {
         let prefetch = self.get_prefetch_size();
 
         let suffix = fetch.fetch_suffix(prefetch).await?;
@@ -684,14 +995,11 @@ impl ParquetMetaDataReader {
 
             // need to slice off the footer or decryption fails
             let meta = meta.slice(0..length);
-            Ok((self.decode_footer_metadata(meta, file_size, footer)?, None))
+            Ok(self.decode_footer_metadata(meta, file_size, footer)?)
         } else {
             let metadata_start = suffix_len - metadata_offset;
             let slice = suffix.slice(metadata_start..suffix_len - FOOTER_SIZE);
-            Ok((
-                self.decode_footer_metadata(slice, file_size, footer)?,
-                Some((0, suffix.slice(..metadata_start))),
-            ))
+            Ok(self.decode_footer_metadata(slice, file_size, footer)?)
         }
     }
 
@@ -841,6 +1149,41 @@ fn parse_index_data(push_decoder: &mut ParquetMetaDataPushDecoder) -> Result<Par
     }
 }
 
+/// Returns the `[start, end)` byte range of a column chunk's dictionary
+/// page, or `None` if the column chunk has no dictionary page or is not a
+/// `BYTE_ARRAY` column (the only physical type [`decode_dictionary_page`]
+/// currently supports).
+#[cfg(feature = "arrow")]
+fn dictionary_page_byte_range(
+    metadata: &ParquetMetaData,
+    row_group_idx: usize,
+    column_idx: usize,
+) -> Result<Option<Range<u64>>> {
+    let column_metadata = metadata.row_group(row_group_idx).column(column_idx);
+    let column_descriptor = column_metadata.column_descr();
+
+    if column_descriptor.physical_type() != crate::basic::Type::BYTE_ARRAY {
+        return Ok(None);
+    }
+    let Some(start) = column_metadata.dictionary_page_offset() else {
+        return Ok(None);
+    };
+    let start: u64 = start
+        .try_into()
+        .map_err(|_| ParquetError::General("Dictionary page offset is invalid".to_string()))?;
+    let end: u64 = column_metadata
+        .data_page_offset()
+        .try_into()
+        .map_err(|_| ParquetError::General("Data page offset is invalid".to_string()))?;
+    if end < start {
+        return Err(ParquetError::General(
+            "Data page offset precedes dictionary page offset".to_string(),
+        ));
+    }
+
+    Ok(Some(start..end))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -986,6 +1329,35 @@ mod tests {
             reader_result.to_string(),
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
+    }
+
+    #[test]
+    fn test_chunk_mask() {
+        let mask = ColumnChunkMask::row_groups_and_columns([0], [1]);
+        assert!(mask.includes_row_group(0, 1));
+        assert!(!mask.includes_row_group(1, 1));
+        assert!(!mask.includes_column(0, 2));
+        assert!(mask.includes_column(1, 2));
+
+        let mask = ColumnChunkMask::columns([]);
+        assert!(!mask.includes_column(0, 3));
+        assert_eq!(mask.column_indices(3).count(), 0);
+
+        let all = ColumnChunkMask::all();
+        assert!(all.is_all());
+        assert!(all.includes_column(2, 3));
+        assert!(!all.includes_column(3, 3));
+
+        assert_eq!(all.row_group_indices(3).collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(all.column_indices(2).collect::<Vec<_>>(), [0, 1]);
+
+        let none = ColumnChunkMask::none();
+        assert_eq!(none.row_group_indices(3).count(), 0);
+        assert_eq!(none.column_indices(3).count(), 0);
+
+        let sparse = ColumnChunkMask::row_groups_and_columns([0, 2, 4], [1, 3, 5]);
+        assert_eq!(sparse.row_group_indices(3).collect::<Vec<_>>(), [0, 2]);
+        assert_eq!(sparse.column_indices(4).collect::<Vec<_>>(), [1, 3]);
     }
 }
 
@@ -1343,6 +1715,36 @@ mod async_tests {
             .load_and_finish(f, len)
             .await
             .unwrap();
+        assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
+        assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
+    }
+
+    #[tokio::test]
+    async fn test_page_index_via_suffix_with_prefetch() {
+        let mut file = get_test_file("alltypes_tiny_pages.parquet");
+        let mut suffix_file = file.try_clone().unwrap();
+        let len = file.len();
+        let fetch_count = AtomicUsize::new(0);
+        let suffix_fetch_count = AtomicUsize::new(0);
+
+        let mut fetch = |range| {
+            fetch_count.fetch_add(1, Ordering::SeqCst);
+            futures::future::ready(read_range(&mut file, range))
+        };
+        let mut suffix_fetch = |suffix| {
+            suffix_fetch_count.fetch_add(1, Ordering::SeqCst);
+            futures::future::ready(read_suffix(&mut suffix_file, suffix))
+        };
+
+        let input = MetadataSuffixFetchFn(&mut fetch, &mut suffix_fetch);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Required)
+            .with_prefetch_hint(Some((len - 1000) as usize))
+            .load_via_suffix_and_finish(input)
+            .await
+            .unwrap();
+
+        assert_eq!(suffix_fetch_count.load(Ordering::SeqCst), 1);
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         assert!(metadata.page_index().is_some_and(|idx| idx.is_complete()));
     }

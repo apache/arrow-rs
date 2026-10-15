@@ -34,16 +34,25 @@ use half::f16;
 use num_traits::NumCast;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
+/// Controls the conversions allowed when extracting a typed value from a variant.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum VariantCastMode {
+    /// Use the conversions permitted by the variant shredding specification.
+    Shred,
+    /// Allow casts when extracting a value with `variant_get`.
+    Get,
+}
+
 /// Extension trait for Arrow primitive types that can extract their native value from a Variant
 pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
-    fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native>;
+    fn from_variant(variant: &Variant<'_, '_>, cast_mode: VariantCastMode) -> Option<Self::Native>;
 }
 
 /// Extension trait for Arrow timestamp types that can extract their native value from a Variant
 /// We can't use [`PrimitiveFromVariant`] directly because we need _two_ implementations for each
 /// timestamp type -- the `NTZ` param here.
 pub(crate) trait TimestampFromVariant<const NTZ: bool>: ArrowTimestampType {
-    fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native>;
+    fn from_variant(variant: &Variant<'_, '_>, cast_mode: VariantCastMode) -> Option<Self::Native>;
 }
 
 /// Cast a single `Variant` value with safe/strict semantics.
@@ -71,10 +80,10 @@ pub(crate) fn variant_cast_with_options<'a, 'm, 'v, T>(
 macro_rules! impl_primitive_from_variant {
     ($arrow_type:ty, $shred_fun:expr, $get_method:ident $(, $cast_fn:expr)?) => {
         impl PrimitiveFromVariant for $arrow_type {
-            fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native> {
-                let value = match shred {
-                    true => $shred_fun(variant),
-                    false => $get_method(variant),
+            fn from_variant(variant: &Variant<'_, '_>, cast_mode: VariantCastMode) -> Option<Self::Native> {
+                let value = match cast_mode {
+                    VariantCastMode::Shred => $shred_fun(variant),
+                    VariantCastMode::Get => $get_method(variant),
                 };
                 $( let value = value.and_then($cast_fn); )?
                 value
@@ -86,10 +95,13 @@ macro_rules! impl_primitive_from_variant {
 macro_rules! impl_timestamp_from_variant {
     ($timestamp_type:ty, $shred_fun:expr, $variant_method:expr, ntz=$ntz:ident, $cast_fn:expr $(,)?) => {
         impl TimestampFromVariant<{ $ntz }> for $timestamp_type {
-            fn from_variant(variant: &Variant<'_, '_>, shred: bool) -> Option<Self::Native> {
-                let value = match shred {
-                    true => ($shred_fun)(variant),
-                    false => $variant_method(variant),
+            fn from_variant(
+                variant: &Variant<'_, '_>,
+                cast_mode: VariantCastMode,
+            ) -> Option<Self::Native> {
+                let value = match cast_mode {
+                    VariantCastMode::Shred => ($shred_fun)(variant),
+                    VariantCastMode::Get => $variant_method(variant),
                 };
 
                 value.and_then($cast_fn)
@@ -685,8 +697,11 @@ impl ShredDecimalVariant for Decimal256Type {
     }
 }
 
-pub(crate) fn variant_to_boolean(variant: &Variant<'_, '_>, shred: bool) -> Option<bool> {
-    if shred {
+pub(crate) fn variant_to_boolean(
+    variant: &Variant<'_, '_>,
+    cast_mode: VariantCastMode,
+) -> Option<bool> {
+    if matches!(cast_mode, VariantCastMode::Shred) {
         return variant.as_boolean();
     }
 

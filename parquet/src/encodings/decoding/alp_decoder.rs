@@ -338,8 +338,6 @@ fn decode_range<Value: AlpFloat>(
         cur.exception_positions.len() / std::mem::size_of::<u16>(),
         cur.exception_values.len() / Value::Exact::WIDTH,
     );
-    #[expect(clippy::chunks_exact_to_as_chunks)]
-    // Requires using generic parameters in const operations: generic_const_exprs
     let values_chunks = cur.exception_values.chunks_exact(Value::Exact::WIDTH);
     for (pos_chunk, value_chunk) in cur
         .exception_positions

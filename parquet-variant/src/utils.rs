@@ -157,6 +157,7 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
 /// - `\\` -> literal `\`
 /// - `\]` -> literal `]`
 /// - Any other `\x` -> literal `x`
+/// - An unescaped `]` inside a quoted field is literal
 ///
 /// Outside brackets, no escaping is supported.
 ///
@@ -169,6 +170,7 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
 /// - `"foo[1].bar"` -> field `foo`, index 1, field `bar`
 /// - `"['a.b']"` -> field `a.b` (dot is literal inside bracket)
 /// - `"['a\]b']"` -> field `a]b` (escaped `]`
+/// - `"['a]b']"` -> field `a]b` (`]` is literal inside quotes)
 /// - etc.
 ///
 /// # Errors
@@ -235,6 +237,7 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
     let mut unescaped = String::new();
     let mut chars = s[start..].char_indices();
     let mut end = None;
+    let mut quote = None;
 
     while let Some((offset, c)) = chars.next() {
         match c {
@@ -245,8 +248,16 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
                 }
                 // Trailing backslash will be handled as 'unclosed [' below
             }
-            ']' => {
-                // Unescaped ']' ends the bracket
+            '\'' | '"' if quote == Some(c) => {
+                quote = None;
+                unescaped.push(c);
+            }
+            '\'' | '"' if quote.is_none() && unescaped.is_empty() => {
+                quote = Some(c);
+                unescaped.push(c);
+            }
+            ']' if quote.is_none() => {
+                // An unescaped ']' outside quotes ends the bracket
                 end = Some(start + offset);
                 break;
             }
@@ -267,10 +278,12 @@ fn parse_in_bracket(s: &str, i: usize) -> Result<(VariantPathElement<'_>, usize)
     {
         // Quoted field name, e.g., ['field'] or ['123'] or ["123"]
         VariantPathElement::field(inner.to_string())
+    } else if unescaped == "*" {
+        VariantPathElement::list_element()
     } else {
         let Ok(idx) = unescaped.parse() else {
             return Err(ArrowError::ParseError(format!(
-                "Invalid token in bracket request: `{unescaped}`. Expected a quoted string or a number(e.g., `['field']` or `[123]`)"
+                "Invalid token in bracket request: `{unescaped}`. Expected `*`, a quoted string, or a number(e.g., `[*]`, `['field']`, or `[123]`)"
             )));
         };
         VariantPathElement::index(idx)

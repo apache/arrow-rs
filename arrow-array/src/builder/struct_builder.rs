@@ -26,6 +26,9 @@ use std::sync::Arc;
 /// Note that callers should make sure that methods of all the child field builders are
 /// properly called to maintain the consistency of the data structure.
 ///
+/// For assembling a [`StructArray`] from child arrays that are already built, see
+/// [`StructArrayAssembler`].
+///
 ///
 /// Handling arrays with complex layouts, such as `List<Struct<List<Struct>>>`, in Rust can be challenging due to its strong typing system.
 /// To construct a collection builder ([`ListBuilder`], [`LargeListBuilder`], or [`MapBuilder`]) using [`make_builder`], multiple calls are required. This complexity arises from the recursive approach utilized by [`StructBuilder::from_fields`].

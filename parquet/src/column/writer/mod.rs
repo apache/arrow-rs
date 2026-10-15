@@ -617,12 +617,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             update_max(&self.descr, max, &mut self.column_metrics.max_column_value);
         }
 
-        // We can only set the distinct count if there are no other writes
-        if self.encoder.num_values() == 0 {
-            self.column_metrics.column_distinct_count = distinct_count;
-        } else {
-            self.column_metrics.column_distinct_count = None;
-        }
+        // Encoder counts reset per page; row metrics retain column-wide history.
+        let has_prior_data = self.column_metrics.total_rows_written != 0
+            || self.page_metrics.num_buffered_values != 0;
+        self.column_metrics.column_distinct_count =
+            if has_prior_data { None } else { distinct_count };
 
         let mut values_offset = 0;
         let mut levels_offset = 0;
@@ -635,7 +634,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // materialized slice to split and the per-mini-batch work is O(1), so we
         // can safely use a much larger batch size.
         let base_batch_size = if both_levels_compact && has_levels {
-            self.props.data_page_row_count_limit()
+            self.column_props.data_page_row_count_limit
         } else {
             self.props.write_batch_size()
         };
@@ -1210,7 +1209,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             return false;
         }
 
-        self.page_metrics.num_buffered_rows as usize >= self.props.data_page_row_count_limit()
+        self.page_metrics.num_buffered_rows as usize >= self.column_props.data_page_row_count_limit
             || self
                 .encoder
                 .estimated_data_page_size()
@@ -1973,13 +1972,10 @@ fn fallback_encoding(kind: Type, props: &WriterProperties) -> Encoding {
 }
 
 /// Returns true if dictionary is supported for column writer, false otherwise.
-fn has_dictionary_support(kind: Type, props: &WriterProperties) -> bool {
-    match (kind, props.writer_version()) {
+fn has_dictionary_support(kind: Type) -> bool {
+    match kind {
         // Booleans do not support dict encoding and should use a fallback encoding.
-        (Type::BOOLEAN, _) => false,
-        // Dictionary encoding was not enabled in PARQUET 1.0
-        (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_1_0) => false,
-        (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_2_0) => true,
+        Type::BOOLEAN => false,
         _ => true,
     }
 }
@@ -2576,14 +2572,38 @@ mod tests {
 
     #[test]
     fn test_column_writer_default_encoding_support_fixed_len_byte_array() {
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let default_props = WriterProperties::builder()
+                .set_writer_version(version)
+                .build();
+            let meta = column_write_and_get_metadata::<FixedLenByteArrayType>(
+                default_props,
+                &[ByteArray::from(vec![1u8]).into()],
+            );
+            assert_eq!(meta.dictionary_page_offset(), Some(0));
+        }
+
         check_encoding_write_support::<FixedLenByteArrayType>(
             WriterVersion::PARQUET_1_0,
             true,
             &[ByteArray::from(vec![1u8]).into()],
-            None,
-            &[Encoding::PLAIN, Encoding::RLE],
-            &[encoding_stats(PageType::DATA_PAGE, Encoding::PLAIN, 1)],
+            Some(0),
+            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
+            &[
+                encoding_stats(PageType::DICTIONARY_PAGE, Encoding::PLAIN, 1),
+                encoding_stats(PageType::DATA_PAGE, Encoding::RLE_DICTIONARY, 1),
+            ],
         );
+        let column_props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_column_dictionary_enabled(ColumnPath::from("col"), true)
+            .build();
+        let meta = column_write_and_get_metadata::<FixedLenByteArrayType>(
+            column_props,
+            &[ByteArray::from(vec![1u8]).into()],
+        );
+        assert_eq!(meta.dictionary_page_offset(), Some(0));
         check_encoding_write_support::<FixedLenByteArrayType>(
             WriterVersion::PARQUET_1_0,
             false,
@@ -2822,6 +2842,7 @@ mod tests {
         let props = Arc::new(
             WriterProperties::builder()
                 .set_write_page_header_statistics(true)
+                .set_data_page_row_count_limit(4)
                 .build(),
         );
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
@@ -2855,22 +2876,18 @@ mod tests {
         .unwrap();
 
         let pages = reader.collect::<Result<Vec<_>>>().unwrap();
-        assert_eq!(pages.len(), 2);
+        assert_eq!(pages.len(), 3);
 
         assert_eq!(pages[0].page_type(), PageType::DICTIONARY_PAGE);
         assert_eq!(pages[1].page_type(), PageType::DATA_PAGE);
-
-        let page_statistics = pages[1].statistics().unwrap();
-        assert_eq!(
-            page_statistics.min_bytes_opt().unwrap(),
-            1_i32.to_le_bytes()
-        );
-        assert_eq!(
-            page_statistics.max_bytes_opt().unwrap(),
-            7_i32.to_le_bytes()
-        );
-        assert_eq!(page_statistics.null_count_opt(), Some(0));
-        assert!(page_statistics.distinct_count_opt().is_none());
+        assert_eq!(pages[2].page_type(), PageType::DATA_PAGE);
+        for (page, min, max) in [(&pages[1], 1_i32, 4_i32), (&pages[2], 5_i32, 7_i32)] {
+            let stats = page.statistics().unwrap();
+            assert_eq!(stats.min_bytes_opt().unwrap(), min.to_le_bytes());
+            assert_eq!(stats.max_bytes_opt().unwrap(), max.to_le_bytes());
+            assert_eq!(stats.null_count_opt(), Some(0));
+            assert!(stats.distinct_count_opt().is_none());
+        }
     }
 
     #[test]
@@ -3129,6 +3146,27 @@ mod tests {
                 .set_data_page_size_limit(1000)
                 .set_column_data_page_size_limit(ColumnPath::from("col"), 10)
                 .set_write_batch_size(3)
+                .build(),
+        );
+        let data = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+        let col_values =
+            write_and_collect_page_values(ColumnPath::from("col"), Arc::clone(&props), data);
+        let other_values = write_and_collect_page_values(ColumnPath::from("other"), props, data);
+
+        assert_eq!(col_values, vec![3, 3, 3, 1]);
+        assert_eq!(other_values, vec![10]);
+    }
+
+    #[test]
+    fn test_column_writer_column_data_page_row_count_limit() {
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_writer_version(WriterVersion::PARQUET_1_0)
+                .set_dictionary_enabled(false)
+                .set_data_page_row_count_limit(100)
+                .set_column_data_page_row_count_limit(ColumnPath::from("col"), 3)
+                .set_write_batch_size(1)
                 .build(),
         );
         let data = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10];

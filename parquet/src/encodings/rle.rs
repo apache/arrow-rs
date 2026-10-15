@@ -39,7 +39,7 @@ use std::{cmp, mem::size_of};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::{self, BitReader, BitWriter, FromBitpacked};
+use crate::util::bit_util::{self, BitPacking, BitReader, BitWriter};
 
 /// Maximum bit width for dictionary page indices encoded with RLE / Bit-Packing hybrid encoding.
 ///
@@ -65,11 +65,11 @@ pub struct RleEncoder {
     // Underlying writer which holds an internal buffer.
     bit_writer: BitWriter,
 
-    // Buffered values for bit-packed runs.
-    buffered_values: [u64; BIT_PACK_GROUP_SIZE],
-
-    // Number of current buffered values. Must be less than BIT_PACK_GROUP_SIZE.
-    num_buffered_values: usize,
+    // Values of the current in-progress bit-packed run, including the partially
+    // filled trailing group. Only materialized into `bit_writer` when the run
+    // closes, so the whole run can be packed in one vectorised `put_batch` call.
+    // Bounded by `MAX_GROUPS_PER_BIT_PACKED_RUN * BIT_PACK_GROUP_SIZE` values.
+    pending_values: Vec<u64>,
 
     // The current (also last) value that was written and the count of how many
     // times in a row that value has been seen.
@@ -78,13 +78,6 @@ pub struct RleEncoder {
     // The number of repetitions for `current_value`. If this gets too high we'd
     // switch to use RLE encoding.
     repeat_count: usize,
-
-    // Number of bit-packed values in the current run. This doesn't include values
-    // in `buffered_values`.
-    bit_packed_count: usize,
-
-    // The position of the indicator byte in the `bit_writer`.
-    indicator_byte_pos: i64,
 }
 
 impl RleEncoder {
@@ -101,12 +94,9 @@ impl RleEncoder {
         RleEncoder {
             bit_width,
             bit_writer,
-            buffered_values: [0; BIT_PACK_GROUP_SIZE],
-            num_buffered_values: 0,
+            pending_values: Vec::new(),
             current_value: 0,
             repeat_count: 0,
-            bit_packed_count: 0,
-            indicator_byte_pos: -1,
         }
     }
 
@@ -174,19 +164,80 @@ impl RleEncoder {
         } else {
             if self.repeat_count >= BIT_PACK_GROUP_SIZE {
                 // The current RLE run has ended and we've gathered enough. Flush first.
-                debug_assert_eq!(self.bit_packed_count, 0);
+                debug_assert!(self.pending_values.is_empty());
                 self.flush_rle_run();
             }
             self.repeat_count = 1;
             self.current_value = value;
         }
 
-        self.buffered_values[self.num_buffered_values] = value;
-        self.num_buffered_values += 1;
-        if self.num_buffered_values == BIT_PACK_GROUP_SIZE {
-            // Buffered values are full. Flush them.
-            debug_assert_eq!(self.bit_packed_count % BIT_PACK_GROUP_SIZE, 0);
-            self.flush_buffered_values();
+        self.pending_values.push(value);
+        if self
+            .pending_values
+            .len()
+            .is_multiple_of(BIT_PACK_GROUP_SIZE)
+        {
+            // A group of values is complete. Decide its encoding.
+            self.commit_group();
+        }
+    }
+
+    /// Encodes `values`, each of which must be representable with `bit_width` bits.
+    ///
+    /// Produces output identical to calling [`Self::put`] for each value, but avoids
+    /// the per-value run tracking wherever a whole group of values can be examined at
+    /// once.
+    pub fn put_batch(&mut self, values: &[u64]) {
+        let mut i = 0;
+        while i < values.len() {
+            // Extend an active RLE run with its whole continuation at once
+            if self.repeat_count >= BIT_PACK_GROUP_SIZE && values[i] == self.current_value {
+                let run_len = values[i..]
+                    .iter()
+                    .take_while(|&&v| v == self.current_value)
+                    .count();
+                self.repeat_count += run_len;
+                i += run_len;
+                continue;
+            }
+
+            // Whole groups bypass the per-value state machine while the pending run is
+            // group-aligned and no RLE run is being accumulated. `repeat_count` is
+            // always 0 here: `commit_group` resets it whenever a group completes, and
+            // that is the only way to reach a group-aligned state
+            if self.repeat_count < BIT_PACK_GROUP_SIZE
+                && self
+                    .pending_values
+                    .len()
+                    .is_multiple_of(BIT_PACK_GROUP_SIZE)
+                && values.len() - i >= BIT_PACK_GROUP_SIZE
+            {
+                debug_assert_eq!(self.repeat_count, 0);
+                let group = &values[i..i + BIT_PACK_GROUP_SIZE];
+                i += BIT_PACK_GROUP_SIZE;
+                if group.iter().all(|&v| v == group[0]) {
+                    // The same decision `commit_group` makes for a group holding a
+                    // single repeated value, without appending it first
+                    if !self.pending_values.is_empty() {
+                        self.close_bit_packed_run();
+                    }
+                    self.current_value = group[0];
+                    self.repeat_count = BIT_PACK_GROUP_SIZE;
+                } else {
+                    self.pending_values.extend_from_slice(group);
+                    self.current_value = group[BIT_PACK_GROUP_SIZE - 1];
+                    let num_groups = self.pending_values.len() / BIT_PACK_GROUP_SIZE;
+                    if num_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
+                        self.close_bit_packed_run();
+                    }
+                }
+                continue;
+            }
+
+            // Ending an RLE run, filling up a partial group, or a trailing partial
+            // group: fall back to the per-value path
+            self.put(values[i]);
+            i += 1;
         }
     }
 
@@ -198,7 +249,13 @@ impl RleEncoder {
 
     #[inline]
     pub fn len(&self) -> usize {
-        self.bit_writer.bytes_written()
+        // Include the eventual size of the pending bit-packed run, so size estimates
+        // do not lag behind by up to a full run
+        let pending_bytes = match self.pending_values.len() {
+            0 => 0,
+            n => 1 + bit_util::ceil(n * self.bit_width as usize, u8::BITS as usize),
+        };
+        self.bit_writer.bytes_written() + pending_bytes
     }
 
     #[cfg_attr(not(feature = "experimental"), expect(unused))]
@@ -233,11 +290,9 @@ impl RleEncoder {
     #[inline]
     pub fn clear(&mut self) {
         self.bit_writer.clear();
-        self.num_buffered_values = 0;
+        self.pending_values.clear();
         self.current_value = 0;
         self.repeat_count = 0;
-        self.bit_packed_count = 0;
-        self.indicator_byte_pos = -1;
     }
 
     /// Advances the buffer by `num_bytes` zero bytes, delegating to the
@@ -251,21 +306,21 @@ impl RleEncoder {
     /// internal writer.
     #[inline]
     pub fn flush(&mut self) {
-        if self.bit_packed_count > 0 || self.repeat_count > 0 || self.num_buffered_values > 0 {
-            let all_repeat = self.bit_packed_count == 0
-                && (self.repeat_count == self.num_buffered_values || self.num_buffered_values == 0);
+        if !self.pending_values.is_empty() || self.repeat_count > 0 {
+            let tail = self.pending_values.len() % BIT_PACK_GROUP_SIZE;
+            let all_repeat =
+                self.pending_values.len() == tail && (self.repeat_count == tail || tail == 0);
             if self.repeat_count > 0 && all_repeat {
                 self.flush_rle_run();
             } else {
-                // Buffer the last group of bit-packed values to BIT_PACK_GROUP_SIZE by padding with 0s.
-                if self.num_buffered_values > 0 {
-                    while self.num_buffered_values < BIT_PACK_GROUP_SIZE {
-                        self.buffered_values[self.num_buffered_values] = 0;
-                        self.num_buffered_values += 1;
-                    }
+                // Pad the last group of bit-packed values to BIT_PACK_GROUP_SIZE with 0s.
+                if tail > 0 {
+                    self.pending_values
+                        .resize(self.pending_values.len() + BIT_PACK_GROUP_SIZE - tail, 0);
                 }
-                self.bit_packed_count += self.num_buffered_values;
-                self.flush_bit_packed_run(true);
+                if !self.pending_values.is_empty() {
+                    self.close_bit_packed_run();
+                }
                 self.repeat_count = 0;
             }
         }
@@ -279,65 +334,54 @@ impl RleEncoder {
             self.current_value,
             bit_util::ceil(self.bit_width as usize, u8::BITS as usize),
         );
-        self.num_buffered_values = 0;
+        self.pending_values.clear();
         self.repeat_count = 0;
     }
 
-    fn flush_bit_packed_run(&mut self, end_current_run: bool) {
-        if self.indicator_byte_pos < 0 {
-            self.indicator_byte_pos = self.bit_writer.skip(1) as i64;
-        }
-
-        // Write all buffered values as bit-packed literals
-        for v in &self.buffered_values[..self.num_buffered_values] {
-            self.bit_writer.put_value(*v, self.bit_width as usize);
-        }
-        self.num_buffered_values = 0;
-        if end_current_run {
-            self.finish_bit_packed_run();
-        }
-    }
-
-    // Called when ending a bit-packed run. Writes the indicator byte to the reserved
-    // position in `bit_writer`
-    fn finish_bit_packed_run(&mut self) {
-        let num_groups = self.bit_packed_count / BIT_PACK_GROUP_SIZE;
-        let indicator_byte = ((num_groups << 1) | 1) as u8;
-        self.bit_writer
-            .put_aligned_offset(indicator_byte, 1, self.indicator_byte_pos as usize);
-        self.indicator_byte_pos = -1;
-        self.bit_packed_count = 0;
-    }
-
-    fn flush_buffered_values(&mut self) {
+    // Called when a group of BIT_PACK_GROUP_SIZE values completes: either keeps it in
+    // the pending bit-packed run, or drops it and switches to RLE when it repeats a
+    // single value.
+    fn commit_group(&mut self) {
         if self.repeat_count >= BIT_PACK_GROUP_SIZE {
-            // Clear buffered values as they are not needed
-            self.num_buffered_values = 0;
-            if self.bit_packed_count > 0 {
+            // The group repeats a single value, drop it and let `repeat_count` track
+            // the run in RLE mode instead
+            self.pending_values
+                .truncate(self.pending_values.len() - BIT_PACK_GROUP_SIZE);
+            if !self.pending_values.is_empty() {
                 // In this case we have chosen to switch to RLE encoding. Close out the
                 // previous bit-packed run.
-                debug_assert_eq!(self.bit_packed_count % BIT_PACK_GROUP_SIZE, 0);
-                self.finish_bit_packed_run();
+                self.close_bit_packed_run();
             }
             return;
         }
 
-        self.bit_packed_count += self.num_buffered_values;
-        let num_groups = self.bit_packed_count / BIT_PACK_GROUP_SIZE;
+        let num_groups = self.pending_values.len() / BIT_PACK_GROUP_SIZE;
         if num_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
             // We've reached the maximum value that can be hold in a single bit-packed
             // run.
-            debug_assert!(self.indicator_byte_pos >= 0);
-            self.flush_bit_packed_run(true);
-        } else {
-            self.flush_bit_packed_run(false);
+            self.close_bit_packed_run();
         }
         self.repeat_count = 0;
     }
 
+    // Called when ending a bit-packed run. Writes the indicator byte followed by all
+    // pending values in packed form. Deferring the packing until here allows the whole
+    // run to go through the vectorised `put_batch` in one call.
+    fn close_bit_packed_run(&mut self) {
+        debug_assert_eq!(self.pending_values.len() % BIT_PACK_GROUP_SIZE, 0);
+        let num_groups = self.pending_values.len() / BIT_PACK_GROUP_SIZE;
+        let indicator_byte = ((num_groups << 1) | 1) as u8;
+        self.bit_writer.put_aligned(indicator_byte, 1);
+        self.bit_writer
+            .put_batch(&self.pending_values, self.bit_width as usize);
+        self.pending_values.clear();
+    }
+
     /// return the estimated memory size of this encoder.
     pub(crate) fn estimated_memory_size(&self) -> usize {
-        self.bit_writer.estimated_memory_size() + std::mem::size_of::<Self>()
+        self.bit_writer.estimated_memory_size()
+            + self.pending_values.capacity() * std::mem::size_of::<u64>()
+            + std::mem::size_of::<Self>()
     }
 }
 
@@ -401,7 +445,7 @@ impl RleDecoder {
     // that damage L1d-cache occupancy. This results in a ~18% performance drop
     #[inline(never)]
     #[cfg_attr(all(not(feature = "experimental"), not(test)), expect(unused))]
-    pub fn get<T: FromBitpacked>(&mut self) -> Result<Option<T>> {
+    pub fn get<T: BitPacking>(&mut self) -> Result<Option<T>> {
         assert!(size_of::<T>() <= size_of::<u64>());
 
         while self.rle_left == 0 && self.bit_packed_left == 0 {
@@ -434,7 +478,7 @@ impl RleDecoder {
     }
 
     #[inline(never)]
-    pub fn get_batch<T: FromBitpacked + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
+    pub fn get_batch<T: BitPacking + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
         assert!(size_of::<T>() <= size_of::<u64>());
 
         let mut values_read = 0;
@@ -502,6 +546,46 @@ impl RleDecoder {
         }
 
         Ok(values_skipped)
+    }
+
+    /// Skips up to `num_values`, returning the number equal to `value` and the
+    /// number skipped. Counts RLE runs directly, one-bit runs with popcount, and
+    /// wider packed values with the existing unpacker and bounded scratch space.
+    pub(crate) fn skip_and_count<T: BitPacking + Copy + PartialEq>(
+        &mut self,
+        num_values: usize,
+        value: T,
+    ) -> Result<(usize, usize)> {
+        let mut matching = 0;
+        let mut skipped = 0;
+        while skipped < num_values {
+            if self.rle_left > 0 {
+                let count = (num_values - skipped).min(self.rle_left as usize);
+                if T::from_u64(self.current_value.unwrap()) == value {
+                    matching += count;
+                }
+                self.rle_left -= count as u32;
+                skipped += count;
+            } else if self.bit_packed_left > 0 {
+                let count = (num_values - skipped).min(self.bit_packed_left as usize);
+                let reader = self
+                    .bit_reader
+                    .as_mut()
+                    .ok_or_else(|| general_err!("bit_reader should be set"))?;
+                let (matches, read) = reader.skip_and_count(count, self.bit_width as usize, value);
+                matching += matches;
+                if read == 0 {
+                    // Match get_batch's handling of truncated final packed runs.
+                    self.bit_packed_left = 0;
+                    continue;
+                }
+                self.bit_packed_left -= read as u32;
+                skipped += read;
+            } else if !self.reload()? {
+                break;
+            }
+        }
+        Ok((matching, skipped))
     }
 
     #[inline(never)]
@@ -685,6 +769,104 @@ mod tests {
             .expect("getting remaining");
         assert_eq!(remaining, 6);
         assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_skip_and_count() {
+        for width in [0, 1, 2, 15, 64] {
+            let max = if width == 64 {
+                u64::MAX
+            } else {
+                (1_u64 << width) - 1
+            };
+            let values: Vec<u64> = std::iter::repeat_n(0, 1024)
+                .chain((0..128).map(|i| i & max))
+                .chain(std::iter::repeat_n(max, 2056))
+                .collect();
+            let mut encoder = RleEncoder::new(width, 1024);
+            for &value in &values {
+                encoder.put(value);
+            }
+            let data = Bytes::from(encoder.consume());
+            for value in [0, max] {
+                for prefix in [0, 1, 1023, 1024, 1027, 1152] {
+                    for requested in [0, 1, 7, 1024, usize::MAX] {
+                        let mut decoder = RleDecoder::new(width);
+                        decoder.set_data(data.clone()).unwrap();
+                        let mut read = vec![0; prefix];
+                        assert_eq!(decoder.get_batch(&mut read).unwrap(), prefix);
+                        assert_eq!(read, values[..prefix]);
+                        let skipped = requested.min(values.len() - prefix);
+                        let count = values[prefix..prefix + skipped]
+                            .iter()
+                            .filter(|&&v| v == value)
+                            .count();
+                        assert_eq!(
+                            decoder.skip_and_count(requested, value).unwrap(),
+                            (count, skipped),
+                            "width={width}, value={value}, prefix={prefix}, requested={requested}"
+                        );
+                        let mut rest = vec![0; values.len() - prefix - skipped];
+                        assert_eq!(decoder.get_batch(&mut rest).unwrap(), rest.len());
+                        assert_eq!(rest, values[prefix + skipped..]);
+                        assert_eq!(decoder.skip_and_count(1, value).unwrap(), (0, 0));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_skip_and_count_signed() {
+        let data = Bytes::from_static(&[3, 255, 0, 128, 255, 1, 2, 254, 255]);
+        let mut decoder = RleDecoder::new(8);
+        decoder.set_data(data.clone()).unwrap();
+        assert_eq!(decoder.skip_and_count(8, -1_i8).unwrap(), (3, 8));
+        decoder.set_data(data.clone()).unwrap();
+        assert_eq!(decoder.skip_and_count(8, -1_i16).unwrap(), (0, 8));
+        decoder.set_data(data).unwrap();
+        assert_eq!(decoder.skip_and_count(8, 511_i16).unwrap(), (0, 8));
+    }
+
+    #[test]
+    fn test_skip_and_count_truncated() {
+        for width in [1, 8] {
+            // Header declares 24 values, but the final packed run is truncated.
+            let mut data = vec![7];
+            data.extend(std::iter::repeat_n(0xff, if width == 1 { 2 } else { 20 }));
+            let mut decoder = RleDecoder::new(width);
+            decoder.set_data(data.into()).unwrap();
+            let count = if width == 1 { 16 } else { 20 };
+            assert_eq!(
+                decoder
+                    .skip_and_count(usize::MAX, (1_u64 << width) - 1)
+                    .unwrap(),
+                (count, count)
+            );
+            assert_eq!(decoder.skip_and_count(1, 0_u64).unwrap(), (0, 0));
+        }
+        let mut decoder = RleDecoder::new(1);
+        // A valid two-value run followed by a missing RLE value.
+        decoder.set_data(Bytes::from_static(&[4, 1, 4])).unwrap();
+        assert!(decoder.skip_and_count(3, 1_u64).is_err());
+        decoder.set_data(Bytes::from_static(&[4, 1, 4])).unwrap();
+        assert_eq!(decoder.skip_and_count(2, 1_u64).unwrap(), (2, 2));
+        assert!(decoder.skip_and_count(1, 1_u64).is_err());
+    }
+
+    #[test]
+    fn test_skip_and_count_long_run() {
+        let mut writer = BitWriter::new(8);
+        writer.put_vlq_int(u64::from(u32::MAX) * 2);
+        writer.put_aligned(1_u8, 1);
+        let mut decoder = RleDecoder::new(1);
+        decoder.set_data(writer.consume().into()).unwrap();
+        // Must not expand this run or allocate scratch space proportional to it.
+        assert_eq!(
+            decoder.skip_and_count(usize::MAX, 1_u64).unwrap(),
+            (u32::MAX as usize, u32::MAX as usize)
+        );
+        assert_eq!(decoder.skip_and_count(1, 1_u64).unwrap(), (0, 0));
     }
 
     #[test]
@@ -951,6 +1133,69 @@ mod tests {
                 None,
                 1 + bit_util::ceil(width as i64 * num_values as i64, u8::BITS as i64) as i32,
             );
+        }
+    }
+
+    #[test]
+    fn test_rle_bit_packed_run_cap() {
+        // A bit-packed run holds at most MAX_GROUPS_PER_BIT_PACKED_RUN - 1 = 63 groups
+        // (504 values), which keeps every run header a single byte. 1024 alternating
+        // values must split into runs of 504, 504 and 16 values. A round-trip cannot
+        // pin this down (longer runs with multi-byte headers also decode fine), so
+        // check the exact bytes.
+        let values: Vec<i64> = (0..1024).map(|i| i % 2).collect();
+
+        let mut expected_buffer = Vec::new();
+        for num_groups in [63u8, 63, 2] {
+            expected_buffer.push((num_groups << 1) | 1);
+            expected_buffer.resize(expected_buffer.len() + num_groups as usize, 0b10101010);
+        }
+
+        validate_rle(&values, 1, Some(&expected_buffer), 131);
+    }
+
+    #[test]
+    fn test_put_batch_matches_put() {
+        // `put_batch` must produce byte-identical output to a `put` loop, for any
+        // input, any split of the input into batches, and mixed use of both APIs
+        let mut rng = rng();
+        for width in [1, 2, 5, 8, 17, 32] {
+            let mask = (1u64 << width) - 1;
+            for _ in 0..20 {
+                // Mix random stretches with runs long enough to trigger RLE, sized to
+                // also cross the bit-packed run cap
+                let mut values: Vec<u64> = Vec::new();
+                while values.len() < 1300 {
+                    let n = rng.random_range(1..40);
+                    if rng.random_bool(0.5) {
+                        let v = rng.random::<u64>() & mask;
+                        values.extend(std::iter::repeat_n(v, n));
+                    } else {
+                        values.extend((0..n).map(|_| rng.random::<u64>() & mask));
+                    }
+                }
+
+                let mut expected = RleEncoder::new(width as u8, 1024);
+                for &v in &values {
+                    expected.put(v);
+                }
+
+                let mut actual = RleEncoder::new(width as u8, 1024);
+                let mut remaining = &values[..];
+                while !remaining.is_empty() {
+                    let n = rng.random_range(1..=remaining.len().min(300));
+                    if rng.random_bool(0.25) {
+                        for &v in &remaining[..n] {
+                            actual.put(v);
+                        }
+                    } else {
+                        actual.put_batch(&remaining[..n]);
+                    }
+                    remaining = &remaining[n..];
+                }
+
+                assert_eq!(expected.consume(), actual.consume(), "width = {width}");
+            }
         }
     }
 

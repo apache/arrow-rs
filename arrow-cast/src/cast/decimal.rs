@@ -172,7 +172,7 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let delta_scale = output_scale - input_scale;
+    let delta_scale = output_scale as i16 - input_scale as i16;
 
     // O::MAX_FOR_EACH_PRECISION[k] stores 10^k - 1 (e.g., 9, 99, 999, ...).
     // Adding 1 yields exactly 10^k without computing a power at runtime.
@@ -188,7 +188,7 @@ where
     // then an increase of scale by 3 will have the following effect on the representation:
     // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
     // needs to provide at least 8 digits precision
-    let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
+    let is_infallible_cast = (input_precision as i16) + delta_scale <= (output_precision as i16);
     let f_infallible = is_infallible_cast
         .then_some(move |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul));
     Some((f_fallible, f_infallible))
@@ -221,7 +221,7 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let delta_scale = input_scale - output_scale;
+    let delta_scale = input_scale as i16 - output_scale as i16;
 
     // delta_scale is guaranteed to be > 0, but may also be larger than I::MAX_PRECISION. If so, the
     // scale change divides out more digits than the input has precision and the result of the cast
@@ -259,7 +259,7 @@ where
     // the output type needs to have at least 3 digits of precision.
     // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
     // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
-    let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
+    let is_infallible_cast = (input_precision as i16) - delta_scale < (output_precision as i16);
     let f_infallible = is_infallible_cast.then_some(move |x| f_fallible(x).unwrap());
     Some((f_fallible, f_infallible))
 }
@@ -717,7 +717,6 @@ where
 
 pub(crate) fn cast_decimal_to_integer<D, T>(
     array: &dyn Array,
-    base: D::Native,
     scale: i8,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
@@ -729,13 +728,16 @@ where
 {
     let array = array.as_primitive::<D>();
 
-    let div: D::Native = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
-        ArrowError::CastError(format!(
-            "Cannot cast to {:?}. The scale {} causes overflow.",
-            D::PREFIX,
-            scale,
-        ))
-    })?;
+    // div is always > 0, so div_wrapping(div) can never overflow/panic
+    let div: D::Native = D::Native::usize_as(10)
+        .pow_checked(scale.unsigned_abs() as u32)
+        .map_err(|_| {
+            ArrowError::CastError(format!(
+                "Cannot cast to {:?}. The scale {} causes overflow.",
+                D::PREFIX,
+                scale,
+            ))
+        })?;
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
 
@@ -783,11 +785,8 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array
-                            .value(i)
-                            .div_checked(div)
-                            .ok()
-                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        let v = array.value(i).div_wrapping(div);
+                        let v = <T::Native as NumCast>::from(v);
                         value_builder.append_option(v);
                     }
                 }
@@ -797,7 +796,7 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array.value(i).div_checked(div)?;
+                        let v = array.value(i).div_wrapping(div);
 
                         let value =
                             <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
@@ -908,6 +907,26 @@ mod tests {
     fn test_rescale_decimal_upscale_overflow_returns_none() {
         let result = rescale_decimal::<Decimal32Type, Decimal32Type>(9_999_i32, 4, 0, 5, 2);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_rescale_decimal256_extreme_scales() {
+        assert_eq!(
+            rescale_decimal::<Decimal256Type, Decimal256Type>(i256::ONE, 76, -76, 76, 0),
+            None
+        );
+        assert_eq!(
+            rescale_decimal::<Decimal256Type, Decimal256Type>(i256::ZERO, 76, -76, 76, 0),
+            Some(i256::ZERO)
+        );
+        assert_eq!(
+            rescale_decimal::<Decimal256Type, Decimal256Type>(i256::ONE, 76, i8::MIN, 76, 76),
+            None
+        );
+        assert_eq!(
+            rescale_decimal::<Decimal256Type, Decimal256Type>(i256::ONE, 76, 76, 76, i8::MIN),
+            Some(i256::ZERO)
+        );
     }
 
     #[test]

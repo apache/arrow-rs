@@ -19,7 +19,6 @@
 name = "arrow-avro"
 version = { workspace = true }
 description = "Support for parsing Avro format into the Arrow format"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -95,6 +94,7 @@ futures = "0.3.31"
 async-stream = "0.3.6"
 apache-avro = "0.22.0"
 object_store = { workspace = true, features = ["fs"] }
+opendal = { version = "0.59.1", default-features = false, features = ["services-memory"] }
 half = { version = "2.1", default-features = false }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 
@@ -102,6 +102,11 @@ tokio = { version = "1.0", default-features = false, features = ["macros", "rt-m
 name = "object_store"
 required-features = ["async"]
 path = "./examples/object_store.rs"
+
+[[example]]
+name = "opendal"
+required-features = ["async"]
+path = "./examples/opendal.rs"
 
 [[bench]]
 name = "avro_reader"

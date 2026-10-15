@@ -385,10 +385,14 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "test1",
             DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends".to_string(), DataType::Int32, false)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
                 #[expect(deprecated)]
                 Arc::new(Field::new_dict(
-                    "values".to_string(),
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     true,
                     0,
