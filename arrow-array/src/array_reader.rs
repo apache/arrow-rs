@@ -61,8 +61,8 @@ impl<R: ArrayReader + ?Sized> ArrayReader for Box<R> {
 ///
 /// assert_eq!(reader.field(), &field);
 /// assert_eq!(&reader.next().unwrap().unwrap(), &a);
-/// # assert_eq!(&reader.next().unwrap().unwrap(), &b);
-/// # assert!(reader.next().is_none());
+/// assert_eq!(&reader.next().unwrap().unwrap(), &b);
+/// assert!(reader.next().is_none());
 /// ```
 pub struct ArrayIterator<I>
 where
