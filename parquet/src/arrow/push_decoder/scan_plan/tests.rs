@@ -900,7 +900,7 @@ fn plan_is_lazy() {
     assert_eq!(current.row_group.row_group_idx, 0);
     assert_eq!(planner.next_row, 200);
     // One cursor per projected column, not one entry per page.
-    assert_eq!(current.stage.as_ref().unwrap().cursors.len(), 3);
+    assert_eq!(current.stage.as_ref().unwrap().heap.len(), 3);
 }
 
 #[test]
