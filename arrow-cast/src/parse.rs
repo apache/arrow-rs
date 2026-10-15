@@ -83,6 +83,7 @@ impl TimestampParser {
     }
 
     /// Parses a time of any of forms
+    /// - `09:26`
     /// - `09:26:56`
     /// - `09:26:56.123`
     /// - `09:26:56.123456`
