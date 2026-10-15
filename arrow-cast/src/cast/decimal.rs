@@ -654,11 +654,9 @@ pub(crate) fn cast_string_to_decimal<T: DecimalType, Offset: OffsetSizeTrait>(
             scale,
             cast_options,
         )?,
-        other => {
-            return Err(ArrowError::ComputeError(format!(
-                "Cannot cast {other:?} to decimal",
-            )));
-        }
+        _ => unreachable!(
+            "cast_to_decimal only calls cast_string_to_decimal for Utf8, LargeUtf8, or Utf8View"
+        ),
     };
 
     Ok(Arc::new(result))

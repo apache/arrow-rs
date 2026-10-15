@@ -90,7 +90,16 @@ pub(crate) fn resolve_child_array<'a>(
 /// and casts it to that type.
 ///
 /// Rows where a different child array is active become NULL.
-/// If no child array matches, returns an error.
+///
+/// # Errors
+///
+/// Returns [`ArrowError::NotYetImplemented`] if no child type can be selected for
+/// the target type, or conversion from the selected child type is unsupported.
+///
+/// [`ArrowError::CastError`] indicates that the conversion is supported, but a
+/// value in the selected child array cannot be converted, for example because
+/// of an invalid string format or numeric overflow. When [`CastOptions::safe`]
+/// is `true`, failed values are replaced with nulls where supported.
 ///
 /// # Example
 ///
@@ -136,7 +145,7 @@ pub fn union_extract_by_type(
     };
 
     let Some((type_id, _)) = resolve_child_array(fields, target_type) else {
-        return Err(ArrowError::CastError(format!(
+        return Err(ArrowError::NotYetImplemented(format!(
             "cannot cast Union with fields {} to {}",
             fields
                 .iter()

@@ -190,7 +190,7 @@ fn dictionary_to_dictionary_cast<K: ArrowDictionaryKeyType>(
         UInt32 => Arc::new(DictionaryArray::<UInt32Type>::from(data)),
         UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)),
         _ => {
-            return Err(ArrowError::CastError(format!(
+            return Err(ArrowError::NotYetImplemented(format!(
                 "Unsupported type {to_index_type} for dictionary index"
             )));
         }
@@ -481,7 +481,7 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             pack_byte_to_fixed_size_dictionary::<K>(array, cast_options, byte_size)
         }
         Struct(_) => pack_struct_to_dictionary::<K>(array, dict_value_type, cast_options),
-        _ => Err(ArrowError::CastError(format!(
+        _ => Err(ArrowError::NotYetImplemented(format!(
             "Unsupported output type for dictionary packing: {dict_value_type}"
         ))),
     }
@@ -566,14 +566,9 @@ where
 {
     let dict = pack_numeric_to_dictionary::<K, D>(array, dict_value_type, cast_options)?;
     let dict = dict.as_dictionary::<K>();
-    let typed = dict.downcast_dict::<PrimitiveArray<D>>().ok_or_else(|| {
-        ArrowError::ComputeError(format!(
-            "Internal Error: Cannot cast dict to {}Array",
-            D::PREFIX
-        ))
-    })?;
-    let value = typed
+    let value = dict
         .values()
+        .as_primitive::<D>()
         .clone()
         .with_precision_and_scale(precision, scale)?;
     Ok(Arc::new(dict.with_values(Arc::new(value))))
@@ -590,12 +585,7 @@ where
         1024,
         1024,
     );
-    let string_view = array
-        .as_any()
-        .downcast_ref::<StringViewArray>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Internal Error: Cannot cast to StringViewArray".to_string())
-        })?;
+    let string_view = array.as_string_view();
     for v in string_view {
         match v {
             Some(v) => {
@@ -621,12 +611,7 @@ where
         1024,
         1024,
     );
-    let binary_view = array
-        .as_any()
-        .downcast_ref::<BinaryViewArray>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Internal Error: Cannot cast to BinaryViewArray".to_string())
-        })?;
+    let binary_view = array.as_binary_view();
     for v in binary_view {
         match v {
             Some(v) => {
@@ -652,12 +637,7 @@ where
     T: ByteArrayType,
 {
     let cast_values = cast_with_options(array, &T::DATA_TYPE, cast_options)?;
-    let values = cast_values
-        .as_any()
-        .downcast_ref::<GenericByteArray<T>>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Internal Error: Cannot cast to GenericByteArray".to_string())
-        })?;
+    let values = cast_values.as_bytes::<T>();
     let mut b = GenericByteDictionaryBuilder::<K, T>::with_capacity(values.len(), 1024, 1024);
     b.append_array(values)?;
     Ok(Arc::new(b.finish()))
@@ -675,12 +655,7 @@ where
 {
     let cast_values =
         cast_with_options(array, &DataType::FixedSizeBinary(byte_width), cast_options)?;
-    let values = cast_values
-        .as_any()
-        .downcast_ref::<FixedSizeBinaryArray>()
-        .ok_or_else(|| {
-            ArrowError::ComputeError("Internal Error: Cannot cast to GenericByteArray".to_string())
-        })?;
+    let values = cast_values.as_fixed_size_binary();
     let mut b = FixedSizeBinaryDictionaryBuilder::<K>::with_capacity(1024, 1024, byte_width);
 
     // copy each element one at a time
