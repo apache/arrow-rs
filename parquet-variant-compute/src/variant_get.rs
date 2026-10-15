@@ -25,10 +25,11 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{VariantPath, VariantPathElement};
+use parquet_variant::view::{MetadataView, ValueView};
+use parquet_variant::{Variant, VariantPath, VariantPathElement};
 
 use crate::ShreddingState;
-use crate::variant_array::all_null_value_column;
+use crate::variant_array::{BinaryColumn, all_null_value_column};
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 use crate::{VariantArray, VariantType, unshred_variant};
 
@@ -188,6 +189,59 @@ pub(crate) fn follow_shredded_path_element(
     }
 }
 
+/// Extracts `path` from an unshredded variant column, reading each row's encoded bytes directly.
+///
+/// A row reads only the headers and field names along `path`, and decodes only the value it finds.
+fn get_path_from_bytes(
+    target: &VariantArray,
+    path: &[VariantPathElement<'_>],
+    as_type: Option<&DataType>,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    let mut builder = make_variant_to_arrow_row_builder(
+        target.metadata_column(),
+        VariantPath::default(),
+        as_type,
+        cast_options,
+        target.len(),
+    )?;
+    let metadata = BinaryColumn::new(target.metadata_column());
+    let value = BinaryColumn::new(target.value_column());
+
+    for i in 0..target.len() {
+        if target.is_null(i) {
+            builder.append_null()?;
+            continue;
+        }
+        // A row with neither `value` nor `typed_value` is `Variant::Null`, which has no fields.
+        let Some(value) = value.value(i) else {
+            match path.is_empty() {
+                true => builder.append_value(Variant::Null).map(drop)?,
+                false => builder.append_null()?,
+            }
+            continue;
+        };
+        let found = row_value(metadata.value(i), value)
+            .and_then(|row| row.get_path(path))
+            .and_then(|found| found.map(|found| found.to_variant()).transpose());
+        match found {
+            Ok(Some(found)) => builder.append_value(found).map(drop)?,
+            Ok(None) => builder.append_null()?,
+            Err(_) if cast_options.safe => builder.append_null()?,
+            Err(e) => return Err(e),
+        }
+    }
+    builder.finish()
+}
+
+/// Views a row of an unshredded variant column.
+fn row_value<'a>(metadata: Option<&'a [u8]>, value: &'a [u8]) -> Result<ValueView<'a, 'a>> {
+    let metadata = metadata.ok_or_else(|| {
+        ArrowError::InvalidArgumentError("Variant metadata is null in a non-null row".to_string())
+    })?;
+    ValueView::try_new(MetadataView::try_new(metadata)?, value)
+}
+
 /// Follows the given path as far as possible through shredded variant fields. If the path ends on a
 /// shredded field, return it directly. Otherwise, use a row shredder to follow the rest of the path
 /// and extract the requested value on a per-row basis.
@@ -245,6 +299,9 @@ fn shredded_get_path(
             } else {
                 as_field.map(|f| f.data_type())
             };
+            if target.typed_value_column().is_none() {
+                return get_path_from_bytes(&target, &path, as_type, cast_options);
+            }
             let mut builder = make_variant_to_arrow_row_builder(
                 target.metadata_column(),
                 path,

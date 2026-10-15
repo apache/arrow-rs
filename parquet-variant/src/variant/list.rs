@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
-use crate::utils::{
-    first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
-};
+use crate::utils::{slice_from_slice, slice_from_slice_at_offset};
+use crate::variant::view::ListView;
 use crate::variant::{MAX_NESTING_DEPTH, Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
@@ -26,26 +25,27 @@ use arrow_schema::ArrowError;
 const NUM_HEADER_BYTES: u32 = 1;
 
 /// A parsed version of the variant array value header byte.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct VariantListHeader {
-    num_elements_size: OffsetSizeBytes,
-    offset_size: OffsetSizeBytes,
+    pub(crate) num_elements_size: OffsetSizeBytes,
+    pub(crate) offset_size: OffsetSizeBytes,
 }
 
 impl VariantListHeader {
     // Hide the ugly casting
-    const fn num_elements_size(&self) -> u32 {
+    pub(crate) const fn num_elements_size(&self) -> u32 {
         self.num_elements_size as _
     }
-    const fn offset_size(&self) -> u32 {
+    pub(crate) const fn offset_size(&self) -> u32 {
         self.offset_size as _
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
-    const fn first_offset_byte(&self) -> u32 {
+    pub(crate) const fn first_offset_byte(&self) -> u32 {
         NUM_HEADER_BYTES + self.num_elements_size()
     }
 
+    #[inline]
     pub(crate) fn try_new(header_byte: u8) -> Result<Self, ArrowError> {
         // The 6 first bits to the left are the value_header and the 2 bits
         // to the right are the basic type, so we shift to get only the value_header
@@ -165,33 +165,17 @@ impl<'m, 'v> VariantList<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        let header_byte = first_byte_from_slice(value)?;
-        let header = VariantListHeader::try_new(header_byte)?;
+        ListView::try_new(metadata.view(), value)?.into_list(metadata)
+    }
 
-        // Skip the header byte to read the num_elements; the offset array immediately follows
-        let num_elements =
-            header
-                .num_elements_size
-                .unpack_u32_at_offset(value, NUM_HEADER_BYTES as _, 0)?;
-
-        // (num_elements + 1) * offset_size + first_offset_byte
-        let first_value_byte = num_elements
-            .checked_add(1)
-            .and_then(|n| n.checked_mul(header.offset_size()))
-            .and_then(|n| n.checked_add(header.first_offset_byte()))
-            .ok_or_else(|| overflow_error("offset of variant list values"))?;
-
-        let mut new_self = Self {
-            metadata,
-            value,
-            header,
-            num_elements,
-            first_value_byte,
-            validated: false,
-        };
-
-        // Validate just the first and last offset, ignoring the other offsets and all value bytes.
-        let first_offset = new_self.get_offset(0)?;
+    // Promotes a view by validating just the first and last offset, ignoring the other offsets
+    // and all value bytes.
+    #[inline]
+    pub(crate) fn try_from_view(
+        view: ListView<'m, 'v>,
+        metadata: VariantMetadata<'m>,
+    ) -> Result<Self, ArrowError> {
+        let first_offset = view.read_offset(0)?;
         if first_offset != 0 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "First offset is not zero: {first_offset}"
@@ -199,12 +183,28 @@ impl<'m, 'v> VariantList<'m, 'v> {
         }
 
         // Use the last offset to upper-bound the value buffer
-        let last_offset = new_self
-            .get_offset(num_elements as _)?
-            .checked_add(first_value_byte)
-            .ok_or_else(|| overflow_error("variant array size"))?;
-        new_self.value = slice_from_slice(value, ..last_offset as _)?;
-        Ok(new_self)
+        let last_offset = view.byte_len()?;
+        Ok(Self {
+            metadata,
+            value: slice_from_slice(view.value, ..last_offset)?,
+            header: view.header,
+            num_elements: view.num_elements,
+            first_value_byte: view.first_value_byte,
+            validated: false,
+        })
+    }
+
+    /// A view of this list, which reads only the elements it is asked for.
+    #[doc(hidden)]
+    #[inline]
+    pub fn view(&self) -> ListView<'m, 'v> {
+        ListView {
+            metadata: self.metadata.view(),
+            value: self.value,
+            header: self.header,
+            num_elements: self.num_elements,
+            first_value_byte: self.first_value_byte,
+        }
     }
 
     /// True if this instance is fully [validated] for panic-free infallible accesses.
@@ -300,9 +300,24 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
     // Fallible version of `get`, performing only basic (constant-time) validation.
     fn try_get_with_shallow_validation(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+        if index >= self.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Variant list index {index} is out of bounds for length {}",
+                self.len()
+            )));
+        }
+        self.element(&self.view(), index)
+    }
+
+    // Reads element `index`, which the caller has bounded by `self.len()`, through `view`.
+    fn element(
+        &self,
+        view: &ListView<'m, 'v>,
+        index: usize,
+    ) -> Result<Variant<'m, 'v>, ArrowError> {
         // Fetch the value bytes between the two offsets for this index, from the value array region
         // of the byte buffer
-        let byte_range = self.get_offset(index)? as _..self.get_offset(index + 1)? as _;
+        let byte_range = view.read_offset(index)? as _..view.read_offset(index + 1)? as _;
         let value_bytes =
             slice_from_slice_at_offset(self.value, self.first_value_byte as _, byte_range)?;
         Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
@@ -332,14 +347,9 @@ impl<'m, 'v> VariantList<'m, 'v> {
     fn iter_try_with_shallow_validation(
         &self,
     ) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
-        (0..self.len()).map(|i| self.try_get_with_shallow_validation(i))
-    }
-
-    // Attempts to retrieve the ith offset from the offset array region of the byte buffer.
-    fn get_offset(&self, index: usize) -> Result<u32, ArrowError> {
-        let byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
-        let offset_bytes = slice_from_slice(self.value, byte_range)?;
-        self.header.offset_size.unpack_u32(offset_bytes, index)
+        // One view serves every element, and the range bounds each element index.
+        let view = self.view();
+        (0..self.len()).map(move |i| self.element(&view, i))
     }
 }
 

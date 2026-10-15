@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use arrow_schema::ArrowError;
@@ -42,6 +43,13 @@ pub trait MetadataBuilder: std::fmt::Debug {
     /// Retrieves the field name for a given field id, which must be less than
     /// [`Self::num_field_names`]. Panics if the field id is out of bounds.
     fn field_name(&self, field_id: usize) -> &str;
+
+    /// Compares the field names of two field ids, which must be less than
+    /// [`Self::num_field_names`]. Panics if a field id is out of bounds.
+    fn cmp_field_names(&self, field_a_id: u32, field_b_id: u32) -> Ordering {
+        self.field_name(field_a_id as _)
+            .cmp(self.field_name(field_b_id as _))
+    }
 
     /// Returns the number of field names stored in this metadata builder. Any number less than this
     /// is a valid field id. The builder can be reverted back to this size later on (discarding any
@@ -86,8 +94,6 @@ pub struct ReadOnlyMetadataBuilder<'m> {
     metadata: &'m VariantMetadata<'m>,
     // A cache that tracks field names this builder has already seen, because finding the field id
     // for a given field name is expensive -- O(n) for a large and unsorted metadata dictionary.
-    // Field names borrowed from a sorted `metadata` bypass this cache; see
-    // `VariantMetadata::borrowed_field_id`.
     known_field_names: HashMap<&'m str, u32>,
 }
 
@@ -103,17 +109,6 @@ impl<'m> ReadOnlyMetadataBuilder<'m> {
 
 impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
     fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
-        // Callers that copy fields out of an object and back into the same metadata dictionary
-        // (unshredding, shredding, and projection all do this) pass field names that are slices of
-        // the dictionary itself. For a sorted dictionary those resolve without hashing or any
-        // string comparison, which matters because this builder is often created per row and so
-        // its `known_field_names` cache would otherwise be populated and discarded without ever
-        // serving a lookup. An unsorted dictionary may hold duplicate entries, so it keeps using
-        // the cache and the name-based search below.
-        if let Some(field_id) = self.metadata.borrowed_field_id(field_name) {
-            return Ok(field_id);
-        }
-
         if let Some(field_id) = self.known_field_names.get(field_name) {
             return Ok(*field_id);
         }
@@ -129,6 +124,15 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
     }
     fn field_name(&self, field_id: usize) -> &str {
         &self.metadata[field_id]
+    }
+    // Byte order is `str` order, so the comparison needs no UTF-8 validation.
+    fn cmp_field_names(&self, field_a_id: u32, field_b_id: u32) -> Ordering {
+        let view = self.metadata.view();
+        let name = |id: u32| {
+            view.entry(id as _)
+                .expect("Invalid metadata dictionary entry")
+        };
+        name(field_a_id).cmp(name(field_b_id))
     }
     fn num_field_names(&self) -> usize {
         self.metadata.len()
