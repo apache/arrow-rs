@@ -54,7 +54,9 @@ use boolean::{
 };
 pub(crate) use cursor::{LoadedRowRanges, MaskCursor, RowSelectionStrategy};
 pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
-use ranges::{expand_to_batch_boundaries_from_selectors, scan_ranges_from_selectors};
+use ranges::{
+    expand_to_batch_boundaries_from_selectors, scan_ranges_from_mask, scan_ranges_from_selectors,
+};
 pub use selector::RowSelector;
 use selector::{limit_selectors, offset_selectors, split_off_selectors};
 
@@ -443,9 +445,7 @@ impl RowSelection {
             RowSelectionInner::Selectors(selectors) => {
                 scan_ranges_from_selectors(selectors.iter().copied(), page_locations)
             }
-            RowSelectionInner::Mask(mask) => {
-                scan_ranges_from_selectors(MaskRunIter::new(mask.mask()), page_locations)
-            }
+            RowSelectionInner::Mask(mask) => scan_ranges_from_mask(mask.mask(), page_locations),
         }
     }
 
