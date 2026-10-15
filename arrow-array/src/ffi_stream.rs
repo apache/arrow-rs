@@ -874,7 +874,7 @@ mod tests {
             )
         };
 
-        let err = ArrowArrayStreamReader::try_new(stream).unwrap_err();
+        let err = RecordBatchStreamReader::try_new(stream).unwrap_err();
         assert!(matches!(err, ArrowError::CDataInterface(_)));
         assert!(err.to_string().contains("get_schema"));
     }
@@ -892,7 +892,7 @@ mod tests {
             )
         };
 
-        let err = ArrowArrayStreamReader::try_new(stream)
+        let err = RecordBatchStreamReader::try_new(stream)
             .unwrap()
             .next()
             .unwrap()
