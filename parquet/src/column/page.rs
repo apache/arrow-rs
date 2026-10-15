@@ -408,13 +408,12 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// [`Self::take_deferred_dictionary`].
     ///
     /// Implementations returning `true` must retain dictionary pages consumed by
-    /// [`Self::skip_next_page`]. The default preserves compatibility with existing
-    /// readers by requiring dictionaries to be decoded eagerly.
+    /// [`Self::skip_next_page`].
     fn supports_deferred_dictionary(&self) -> bool {
         false
     }
 
-    /// Decodes and returns a dictionary page this reader has previously
+    /// Returns the decoded dictionary [`Page`] this reader has previously
     /// skipped past, if any, removing it from the reader.
     ///
     /// [`Self::skip_next_page`] may skip a dictionary page without decoding
