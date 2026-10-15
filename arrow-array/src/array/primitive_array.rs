@@ -930,7 +930,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         F: Fn(T::Native) -> O::Native,
     {
         let nulls = self.nulls().cloned();
-        let values = self.values().into_iter().map(|v| op(*v));
+        // `move` puts `op`'s captures in the iterator rather than behind a reference, so the
+        // loop doesn't reload them for each value when `collect` isn't inlined
+        let values = self.values().into_iter().map(move |v| op(*v));
         let buffer: Vec<_> = values.collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
@@ -1190,7 +1192,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         };
 
         match try_mutable_buffers {
-            Ok(builder) => Ok(builder),
+            Ok(builder) => Ok(builder.with_data_type(data_type)),
             Err((buffer, null_bit_buffer)) => {
                 let builder = ArrayData::builder(data_type)
                     .len(len)
@@ -2937,14 +2939,22 @@ mod tests {
     }
 
     #[test]
-    fn test_into_builder_err_keeps_data_type() {
+    fn test_into_builder_keeps_data_type() {
         let array = Decimal128Array::from(vec![1, 2])
             .with_precision_and_scale(10, 2)
             .unwrap();
-        let shared = array.clone();
+        let data_type = array.data_type().clone();
 
-        let err_return = array.into_builder().unwrap_err();
-        assert_eq!(err_return.data_type(), shared.data_type());
+        // Shared buffers: the array is returned
+        let shared = array.clone();
+        let array = array.into_builder().unwrap_err();
+        assert_eq!(array.data_type(), &data_type);
+        drop(shared);
+
+        // Unshared buffers: the buffers are reused by the builder
+        let mut builder = array.into_builder().unwrap();
+        builder.append_value(3);
+        assert_eq!(builder.finish().data_type(), &data_type);
     }
 
     #[test]

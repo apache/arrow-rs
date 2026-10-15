@@ -26,6 +26,7 @@ use super::{RowSelection, RowSelector};
 use crate::errors::ParquetError;
 use arrow_array::BooleanArray;
 use arrow_buffer::BooleanBuffer;
+use arrow_buffer::bit_chunk_iterator::BitChunks;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
@@ -72,9 +73,7 @@ impl RowSelectionPolicy {
             (RowSelectionStrategy::Mask, true) | (RowSelectionStrategy::Selectors, false) => {
                 selection
             }
-            (RowSelectionStrategy::Mask, false) => {
-                RowSelection::from_boolean_buffer(selection.into_boolean_buffer())
-            }
+            (RowSelectionStrategy::Mask, false) => selection.force_mask(),
             (RowSelectionStrategy::Selectors, true) => {
                 RowSelection::from(Vec::<RowSelector>::from(selection))
             }
@@ -240,45 +239,73 @@ impl MaskCursor {
     /// Produces the next chunk for a non-empty, trailing-skip-free mask.
     fn next_mask_chunk_non_empty(&mut self, batch_size: usize) -> MaskChunk {
         debug_assert!(!self.is_empty());
+        let mask_start = self.next_selected_row().unwrap_or(self.mask.len());
+        debug_assert!(
+            mask_start < self.mask.len(),
+            "ReadPlan must remove trailing skips from Mask selections"
+        );
+        self.scan_chunk(mask_start, self.mask.len(), batch_size)
+    }
 
-        let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
-            let mask = &self.mask;
-            let start_position = self.position;
-            let mut cursor = start_position;
-            let mut initial_skip = 0;
+    /// Find the first selected row without inspecting every skipped bit.
+    fn next_selected_row(&self) -> Option<usize> {
+        let chunks = BitChunks::new(
+            self.mask.values(),
+            self.mask.offset() + self.position,
+            self.mask.len() - self.position,
+        );
+        chunks.iter_padded().enumerate().find_map(|(idx, word)| {
+            (word != 0).then(|| self.position + idx * 64 + word.trailing_zeros() as usize)
+        })
+    }
 
-            while cursor < mask.len() && !mask.value(cursor) {
-                initial_skip += 1;
-                cursor += 1;
-            }
-            debug_assert!(
-                cursor < mask.len(),
-                "ReadPlan must remove trailing skips from Mask selections"
-            );
+    /// Count whole words until the batch is full or the loaded range ends.
+    /// `BitChunks` normalizes words to little-endian and masks the remainder,
+    /// so padding and bits in an unloaded page cannot contribute to the count.
+    // Keep the scanning loop out of the reader's selection dispatch.
+    #[inline(never)]
+    fn scan_chunk(&mut self, mask_start: usize, end: usize, batch_size: usize) -> MaskChunk {
+        let chunks = BitChunks::new(
+            self.mask.values(),
+            self.mask.offset() + mask_start,
+            end - mask_start,
+        );
+        let mut selected_rows = 0;
+        let mut chunk_end = mask_start;
 
-            let mask_start = cursor;
-            let mut chunk_rows = 0;
-            let mut selected_rows = 0;
-
-            // Advance until enough rows have been selected to satisfy the batch size,
-            // or until the mask is exhausted. This mirrors the behaviour of the legacy
-            // `RowSelector` queue-based iteration.
-            while cursor < mask.len() && selected_rows < batch_size {
-                chunk_rows += 1;
-                if mask.value(cursor) {
-                    selected_rows += 1;
+        if batch_size > 0 {
+            for (idx, mut word) in chunks.iter_padded().enumerate() {
+                let count = word.count_ones() as usize;
+                if count == 0 {
+                    continue;
                 }
-                cursor += 1;
+
+                let remaining = batch_size - selected_rows;
+                let last_bit = if count <= remaining {
+                    selected_rows += count;
+                    63 - word.leading_zeros() as usize
+                } else {
+                    // Only the final word needs individual set-bit selection.
+                    for _ in 1..remaining {
+                        word &= word - 1;
+                    }
+                    selected_rows = batch_size;
+                    word.trailing_zeros() as usize
+                };
+                chunk_end = mask_start + idx * 64 + last_bit + 1;
+                if selected_rows == batch_size {
+                    break;
+                }
             }
+        }
 
-            (initial_skip, chunk_rows, selected_rows, mask_start, cursor)
-        };
-
-        self.position = end_position;
-
+        let initial_skip = mask_start - self.position;
+        // Stop immediately after the last selected row. Unset bits at the
+        // end of a loaded range belong to the next chunk's initial skip.
+        self.position = chunk_end;
         MaskChunk {
             initial_skip,
-            chunk_rows,
+            chunk_rows: chunk_end - mask_start,
             selected_rows,
             mask_start,
         }
@@ -300,48 +327,29 @@ impl MaskCursor {
             return Ok(self.next_mask_chunk_non_empty(batch_size));
         }
 
-        let start_position = self.position;
-        let mut cursor = start_position;
-        while cursor < self.mask.len() && !self.mask.value(cursor) {
-            cursor += 1;
-        }
-
-        if cursor == self.mask.len() {
-            return Err(ParquetError::General(
+        let mask_start = self.next_selected_row().ok_or_else(|| {
+            ParquetError::General(
                 "Internal Error: Mask cursor reached the end without finding a selected row; \
                  ReadPlan must remove trailing skips"
                     .to_string(),
-            ));
-        }
+            )
+        })?;
 
         let loaded_range_end = self
             .loaded_row_ranges
             .as_ref()
-            .and_then(|ranges| ranges.end_containing(cursor))
+            .and_then(|ranges| ranges.end_containing(mask_start))
             .ok_or_else(|| {
                 ParquetError::General(format!(
-                    "Internal Error: selected row {cursor} has no loaded page range"
+                    "Internal Error: selected row {mask_start} has no loaded page range"
                 ))
             })?;
 
-        let mask_start = cursor;
-        let mut selected_rows = 0;
-        let mut chunk_end = cursor;
-        while cursor < loaded_range_end && cursor < self.mask.len() && selected_rows < batch_size {
-            if self.mask.value(cursor) {
-                selected_rows += 1;
-                chunk_end = cursor + 1;
-            }
-            cursor += 1;
-        }
-
-        self.position = chunk_end;
-        Ok(MaskChunk {
-            initial_skip: mask_start - start_position,
-            chunk_rows: chunk_end - mask_start,
-            selected_rows,
+        Ok(self.scan_chunk(
             mask_start,
-        })
+            loaded_range_end.min(self.mask.len()),
+            batch_size,
+        ))
     }
 
     /// Materialise the boolean values for a mask-backed chunk
@@ -406,6 +414,154 @@ impl LoadedRowRanges {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compare chunks with the selected row positions, independently of how
+    /// the cursor scans the bitmap. A chunk may consume at most `batch_size`
+    /// selected rows and may not leave the loaded range containing its first.
+    fn assert_mask_chunks(mask: BooleanBuffer, loaded: Option<LoadedRowRanges>, batch_size: usize) {
+        let selected: Vec<_> = (0..mask.len()).filter(|&row| mask.value(row)).collect();
+        let loaded = loaded.map(Arc::new);
+        let selection = RowSelection::from_boolean_buffer(mask).trim();
+        let RowSelectionCursor::Mask(mut cursor) =
+            RowSelectionStrategy::Mask.build_cursor(selection, loaded.clone())
+        else {
+            unreachable!()
+        };
+        let mut next = 0;
+        let mut position = 0;
+        while next < selected.len() {
+            let first = selected[next];
+            let end = loaded
+                .as_ref()
+                .map_or(usize::MAX, |ranges| ranges.end_containing(first).unwrap());
+            let count = selected[next..]
+                .iter()
+                .take(batch_size)
+                .take_while(|&&row| row < end)
+                .count();
+            let last = selected[next + count - 1];
+            let chunk = cursor.next_chunk(batch_size).unwrap();
+            assert_eq!(chunk.initial_skip, first - position);
+            assert_eq!(chunk.mask_start, first);
+            assert_eq!(chunk.chunk_rows, last + 1 - first);
+            assert_eq!(chunk.selected_rows, count);
+            assert_eq!(cursor.position, last + 1);
+            let values = cursor.mask_values_for(&chunk).unwrap();
+            assert_eq!(values.true_count(), count);
+            assert!(values.value(0));
+            assert!(values.value(values.len() - 1));
+            next += count;
+            position = last + 1;
+        }
+        assert!(cursor.is_empty());
+        assert!(cursor.next_mask_chunk(batch_size).is_none());
+    }
+
+    #[test]
+    fn test_mask_chunks_sparse_aligned_words() {
+        // Distinct byte positions expose native-endian word interpretation
+        // on big-endian platforms. Both selections must form one-row chunks.
+        let mask = BooleanBuffer::from_iter((0..256).map(|row| row == 0 || row == 255));
+        assert_mask_chunks(mask, None, 1);
+    }
+
+    #[test]
+    fn test_mask_chunks_word_boundaries_and_offsets() {
+        use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+        for len in [0, 1, 7, 8, 63, 64, 65, 127, 128, 129, 511, 2049] {
+            for offset in [0, 1, 3, 7, 8, 31, 63, 64, 65] {
+                for pattern in 0..7 {
+                    let mut rng = StdRng::seed_from_u64(42);
+                    let mask = BooleanBuffer::from_iter((0..offset + len + 64).map(|row| {
+                        if !(offset..offset + len).contains(&row) {
+                            // Set padding on both sides to catch reads outside
+                            // the logical slice, including its final word.
+                            return true;
+                        }
+                        let row = row - offset;
+                        match pattern {
+                            0 => false,
+                            1 => true,
+                            2 => row % 2 == 0,
+                            3 => row % 129 == 128,
+                            4 => rng.random_bool(0.1),
+                            5 => rng.random_bool(0.5),
+                            _ => rng.random_bool(0.9),
+                        }
+                    }))
+                    .slice(offset, len);
+                    for batch_size in [1, 2, 3, 63, 64, 65, 1024] {
+                        assert_mask_chunks(mask.clone(), None, batch_size);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mask_chunks_loaded_ranges_word_boundaries() {
+        for page_rows in [1, 31, 63, 64, 65, 127, 257] {
+            let len = page_rows * 7 + 13;
+            let ranges: Vec<_> = (0..len)
+                .step_by(page_rows)
+                .enumerate()
+                .filter(|(page, _)| page % 3 != 1)
+                .map(|(_, start)| start..(start + page_rows).min(len))
+                .collect();
+            let loaded = LoadedRowRanges::from_selection(RowSelection::from_consecutive_ranges(
+                ranges.iter().cloned(),
+                len,
+            ));
+            for offset in [0, 1, 3, 7, 31, 63, 64, 65] {
+                for pattern in 0..4 {
+                    let mask = BooleanBuffer::from_iter((0..offset + len + 64).map(|row| {
+                        if !(offset..offset + len).contains(&row) {
+                            return true;
+                        }
+                        let row = row - offset;
+                        ranges.iter().any(|range| range.contains(&row))
+                            && match pattern {
+                                0 => true,
+                                1 => row % 2 == 0,
+                                // Leave an unset tail in every loaded range.
+                                2 => row % page_rows == 0,
+                                // Select directly on either side of page and
+                                // word boundaries, including the final page.
+                                _ => {
+                                    row % page_rows == page_rows - 1
+                                        || row % 64 == 0
+                                        || row % 64 == 63
+                                }
+                            }
+                    }))
+                    .slice(offset, len);
+                    for batch_size in [1, 2, 3, 63, 64, 65, 1024] {
+                        assert_mask_chunks(mask.clone(), Some(loaded.clone()), batch_size);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mask_chunk_does_not_read_selected_rows_outside_loaded_range() {
+        let mut cursor = MaskCursor {
+            mask: BooleanBuffer::new_set(130),
+            position: 0,
+            loaded_row_ranges: Some(Arc::new(LoadedRowRanges(vec![0..65, 66..130]))),
+        };
+        let chunk = cursor.next_chunk(1024).unwrap();
+        assert_eq!(chunk.chunk_rows, 65);
+        assert_eq!(chunk.selected_rows, 65);
+        assert_eq!(cursor.position, 65);
+        let err = cursor.next_chunk(1024).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("selected row 65 has no loaded page range")
+        );
+        assert_eq!(cursor.position, 65);
+    }
 
     #[test]
     fn selection_respects_policy() {

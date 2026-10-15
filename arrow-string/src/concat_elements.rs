@@ -277,23 +277,23 @@ where
         let null_buffer = NullBuffer::union(left.nulls(), right.nulls());
 
         // Compute the required data buffer size, excluding any elements that are null
-        // or are small enough to be stored inline.
-        let data_size = match &null_buffer {
+        // or are small enough to be stored inline. Both lengths are `u32`, and a
+        // pair of them can sum past that, so the addition is done in `usize`.
+        let inline_max = MAX_INLINE_VIEW_LEN as usize;
+        let data_size: usize = match &null_buffer {
             None => left
                 .lengths()
                 .zip(right.lengths())
-                .map(|(l, r)| l + r)
-                .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-                .map(|len| len as usize)
+                .map(|(l, r)| l as usize + r as usize)
+                .filter(|len| *len > inline_max)
                 .sum(),
             Some(nb) => left
                 .lengths()
                 .zip(right.lengths())
                 .zip(nb.iter())
                 .filter(|((_, _), not_null)| *not_null)
-                .map(|((l, r), _)| l + r)
-                .filter(|len| *len > MAX_INLINE_VIEW_LEN)
-                .map(|len| len as usize)
+                .map(|((l, r), _)| l as usize + r as usize)
+                .filter(|len| *len > inline_max)
                 .sum(),
         };
 

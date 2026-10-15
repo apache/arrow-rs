@@ -116,6 +116,11 @@ impl FilterInfo {
             .as_mut()
     }
 
+    /// Index in the [`RowFilter`] of the current predicate
+    pub(super) fn index(&self) -> usize {
+        self.next_predicate.get() - 1
+    }
+
     /// Return the current predicate to evaluate
     pub(super) fn current(&self) -> &dyn ArrowPredicate {
         self.filter
@@ -131,11 +136,6 @@ impl FilterInfo {
     /// [`AdvanceResult::Done`]).
     pub(super) fn is_last(&self) -> bool {
         self.next_predicate.get() == self.filter.predicates.len()
-    }
-
-    /// Return a reference to the cache projection
-    pub(super) fn cache_projection(&self) -> &ProjectionMask {
-        &self.cache_info.cache_projection
     }
 
     /// Return a cache builder to save the results of predicate evaluation

@@ -19,27 +19,9 @@
 # tests for arrow_flight crate
 name: arrow_flight
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs that touch certain files and changes to main
+# Triggered by ci.yml, which owns event routing and concurrency.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - rust-toolchain.toml
-      - arrow-array/**
-      - arrow-buffer/**
-      - arrow-cast/**
-      - arrow-data/**
-      - arrow-flight/**
-      - arrow-ipc/**
-      - arrow-schema/**
-      - arrow-select/**
-      - .github/**
+  workflow_call:
 
 permissions:
   contents: read

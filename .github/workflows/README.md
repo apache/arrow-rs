@@ -17,10 +17,7 @@
   under the License.
 -->
 
-The CI is structured so most tests are run in specific workflows:
-`arrow.yml` for `arrow`, `parquet.yml` for `parquet` and the three
-`parquet-variant*` crates, and so on.
-
-The basic idea is to run all tests on pushes to main (to ensure we
-keep main green) but run only the individual workflows on PRs that
-change files that could affect them.
+CI runs a subset of checks on pull requests, selected by the changed files.
+The merge queue runs the full test suite against the proposed merge result.
+Pushes to `main` populate caches and publish documentation without repeating tests.
+A single required status check combines the results and blocks merging on failure.
