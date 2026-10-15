@@ -422,6 +422,13 @@ impl<S: BuilderSpecificState> VariantBuilderExt for ObjectFieldBuilder<'_, '_, '
         self.builder.insert(self.key, value);
     }
 
+    fn try_append_value<'m, 'v>(
+        &mut self,
+        value: impl Into<Variant<'m, 'v>>,
+    ) -> Result<(), ArrowError> {
+        self.builder.try_insert(self.key, value)
+    }
+
     fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
         self.builder.try_new_list(self.key)
     }
