@@ -1575,21 +1575,21 @@ where
                 sizes.push(self.offsets[i] - self.offsets[i - 1]);
             }
             self.offsets.pop();
-            let list_view_array = GenericListViewArray::<O>::new(
+            let list_view_array = GenericListViewArray::<O>::try_new(
                 field,
                 ScalarBuffer::from(self.offsets),
                 ScalarBuffer::from(sizes),
                 element_array,
                 self.nulls.finish(),
-            );
+            )?;
             Ok(Arc::new(list_view_array))
         } else {
-            let list_array = GenericListArray::<O>::new(
+            let list_array = GenericListArray::<O>::try_new(
                 field,
                 OffsetBuffer::<O>::new(ScalarBuffer::from(self.offsets)),
                 element_array,
                 self.nulls.finish(),
-            );
+            )?;
             Ok(Arc::new(list_array))
         }
     }

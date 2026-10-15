@@ -80,6 +80,7 @@ criterion = { workspace = true, default-features = false, features = ["async_fut
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 insta = { workspace = true, default-features = true }
+proptest = { version = "1.0", default-features = false, features = ["std"] }
 brotli = { version = "9.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame"] }
@@ -270,6 +271,11 @@ required-features = ["arrow", "async"]
 harness = false
 
 [[bench]]
+name = "arrow_reader_string_encoding"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "arrow_reader_predicate_fusion"
 required-features = ["arrow", "async", "snap"]
 harness = false
@@ -327,6 +333,11 @@ required-features = ["arrow"]
 name = "row_group_index_reader"
 required-features = ["arrow"]
 harness = false
+
+[[bench]]
+name = "row_selection_algebra"
+harness = false
+required-features = ["arrow"]
 
 [[bench]]
 name = "row_selection_cursor"

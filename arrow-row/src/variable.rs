@@ -23,7 +23,7 @@ use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
 };
 use arrow_data::MAX_INLINE_VIEW_LEN;
-use arrow_schema::SortOptions;
+use arrow_schema::{ArrowError, SortOptions};
 use builder::make_view;
 
 /// The block size of the variable length encoding
@@ -310,7 +310,7 @@ pub fn decode_binary<I: OffsetSizeTrait>(
 fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
     rows: &mut [&[u8]],
     options: SortOptions,
-) -> BinaryViewArray {
+) -> Result<BinaryViewArray, ArrowError> {
     let len = rows.len();
     let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
@@ -326,6 +326,15 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
         } else if VALIDATE_UTF8 {
             inline_capacity += len;
         }
+    }
+    // Every view offset is at most the total length of the non-inlined values,
+    // so checking it once here keeps the offsets below within the `i32` range
+    // the Arrow spec requires
+    let long_values_len = values_capacity - inline_str_max_len;
+    if long_values_len > i32::MAX as usize {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "{long_values_len} bytes of non-inlined values too long to decode into a view array with a single data buffer"
+        )));
     }
     let mut values = MutableBuffer::new(values_capacity);
     let mut view_utf8_validation_buffer = if VALIDATE_UTF8 {
@@ -373,11 +382,17 @@ fn decode_binary_view_inner<const VALIDATE_UTF8: bool>(
 
     // SAFETY:
     // Valid by construction above
-    unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()].into(), nulls) }
+    Ok(unsafe { BinaryViewArray::new_unchecked(views.into(), [values.into()].into(), nulls) })
 }
 
 /// Decodes a binary view array from `rows` with the provided `options`
-pub fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryViewArray {
+///
+/// Returns an error if the non-inlined values are longer than `i32::MAX` bytes,
+/// the most a single data buffer can address
+pub fn decode_binary_view(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+) -> Result<BinaryViewArray, ArrowError> {
     decode_binary_view_inner::<false>(rows, options)
 }
 
@@ -409,17 +424,20 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
 /// # Safety
 ///
 /// The row must contain valid UTF-8 data
+///
+/// Returns an error if the non-inlined values are longer than `i32::MAX` bytes,
+/// the most a single data buffer can address
 pub unsafe fn decode_string_view(
     rows: &mut [&[u8]],
     options: SortOptions,
     validate_utf8: bool,
-) -> StringViewArray {
+) -> Result<StringViewArray, ArrowError> {
     let view = if validate_utf8 {
-        decode_binary_view_inner::<true>(rows, options)
+        decode_binary_view_inner::<true>(rows, options)?
     } else {
-        decode_binary_view_inner::<false>(rows, options)
+        decode_binary_view_inner::<false>(rows, options)?
     };
-    unsafe { view.to_string_view_unchecked() }
+    Ok(unsafe { view.to_string_view_unchecked() })
 }
 
 pub fn decode_null_value(rows: &mut [&[u8]], options: SortOptions) {
