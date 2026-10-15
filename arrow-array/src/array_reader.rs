@@ -26,9 +26,11 @@ use crate::array::ArrayRef;
 /// This is the array-level counterpart to [`RecordBatchReader`], for streams whose
 /// elements are not record batches.
 ///
-/// To create from an iterator, see [ArrayIterator].
+/// To create from an iterator, see [ArrayIterator]. To read one from the C Stream Interface,
+/// see [`ffi_stream::ArrayStreamReader`].
 ///
 /// [`RecordBatchReader`]: crate::RecordBatchReader
+/// [`ffi_stream::ArrayStreamReader`]: crate::ffi_stream::ArrayStreamReader
 pub trait ArrayReader: Iterator<Item = Result<ArrayRef, ArrowError>> {
     /// Returns the field of this `ArrayReader`.
     ///

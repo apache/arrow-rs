@@ -22,8 +22,8 @@
 //! This is handled by [FFI_ArrowArrayStream].
 //!
 //! The second interface is used to import `FFI_ArrowArrayStream` as a Rust reader. A stream
-//! whose top-level type is `Struct` can be read as `RecordBatch` by `RecordBatchStreamReader`;
-//! a stream of any type can be read as `ArrayRef` by `ArrayStreamReader`.
+//! whose top-level type is `Struct` can be read as `RecordBatch` by [`RecordBatchStreamReader`];
+//! a stream of any type can be read as `ArrayRef` by [`ArrayStreamReader`].
 //!
 //! ```ignore
 //! # use std::fs::File;
@@ -406,6 +406,8 @@ fn get_error_code(err: &ArrowError) -> i32 {
 /// Struct used to fetch `RecordBatch` from the C Stream Interface.
 /// Its main responsibility is to expose `RecordBatchReader` functionality
 /// that requires [FFI_ArrowArrayStream].
+///
+/// See [`ArrayStreamReader`] to read a stream whose arrays are not of type `Struct`.
 #[derive(Debug)]
 pub struct RecordBatchStreamReader {
     stream: FFI_ArrowArrayStream,
