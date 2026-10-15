@@ -755,11 +755,10 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
 
 #[cfg(test)]
 mod tests {
-    use crate::variant_array::StructArrayBuilder;
     use crate::{VariantArray, VariantArrayBuilder, json_to_variant, shred_variant};
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, Decimal64Array, Int64Array,
-        LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
+        LargeBinaryArray, LargeStringArray, StringArray, StringViewArray, StructArray,
         TimestampMicrosecondArray, make_array,
     };
     use arrow::buffer::NullBuffer;
@@ -1148,13 +1147,25 @@ mod tests {
             let value: ArrayRef = Arc::new(BinaryArray::from(vec![
                 typed_value.is_none().then_some(&[0u8][..]),
             ]));
-            let mut field = StructArrayBuilder::new().with_field("value", value, true);
+            let mut fields = vec![(
+                Arc::new(Field::new("value", value.data_type().clone(), true)),
+                value,
+            )];
             if let Some(typed_value) = typed_value {
-                field = field.with_field("typed_value", typed_value, true);
+                fields.push((
+                    Arc::new(Field::new(
+                        "typed_value",
+                        typed_value.data_type().clone(),
+                        true,
+                    )),
+                    typed_value,
+                ));
             }
-            let object = StructArrayBuilder::new()
-                .with_field("a", Arc::new(field.build()), false)
-                .build();
+            let field: ArrayRef = Arc::new(StructArray::from(fields));
+            let object = StructArray::from(vec![(
+                Arc::new(Field::new("a", field.data_type().clone(), false)),
+                field,
+            )]);
             let input = VariantArray::perfectly_shredded(
                 Arc::new(BinaryArray::from_vec(vec![EMPTY_VARIANT_METADATA_BYTES])),
                 Arc::new(object),
