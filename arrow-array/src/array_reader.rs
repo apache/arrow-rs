@@ -33,7 +33,7 @@ pub trait ArrayReader: Iterator<Item = Result<ArrayRef, ArrowError>> {
     /// Returns the field of this `ArrayReader`.
     ///
     /// Implementation of this trait should guarantee that all `ArrayRef`'s returned by this
-    /// reader should have the same field as returned from this method.
+    /// reader have the same field as returned from this method.
     fn field(&self) -> &FieldRef;
 }
 
