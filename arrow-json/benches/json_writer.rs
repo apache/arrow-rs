@@ -22,6 +22,9 @@ use arrow_schema::{Field, Schema};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use std::sync::Arc;
 
+#[global_allocator]
+static BENCH_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const ROWS: usize = 1 << 17; // 128K rows
 const LIST_SHORT_ELEMENTS: usize = 5;
 const LIST_LONG_ELEMENTS: usize = 100;

@@ -30,6 +30,9 @@ use rand::RngExt;
 use serde::Serialize;
 use std::sync::Arc;
 
+#[global_allocator]
+static BENCH_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const NUM_ROWS: usize = 65536;
 const STR_LEN: usize = 20;
 

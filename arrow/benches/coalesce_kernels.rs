@@ -29,6 +29,9 @@ use arrow_select::coalesce::BatchCoalescer;
 use criterion::{Criterion, criterion_group, criterion_main};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
+#[global_allocator]
+static BENCH_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Benchmarks for generating evently sized output RecordBatches
 /// from a sequence of filtered source batches
 ///

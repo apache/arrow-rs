@@ -91,6 +91,7 @@ pool = ["arrow-array/pool"]
 chrono = { workspace = true }
 criterion = { workspace = true, default-features = false }
 half = { version = "2.1", default-features = false }
+mimalloc = { version = "0.1", default-features = false }
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 # used in examples
