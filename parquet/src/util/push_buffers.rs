@@ -150,7 +150,7 @@ impl PushBuffers {
     /// Push a new range and its associated buffer
     ///
     /// An empty range adds no bytes, so it is not stored. An empty range is
-    /// always available (see [`Self::has_range`]).
+    /// always available (see `has_range`).
     ///
     /// # Errors
     /// Returns an error if the buffer's length does not match the range's
