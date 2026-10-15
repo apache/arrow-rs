@@ -18,6 +18,7 @@
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::Buffer;
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
+use arrow_buffer::bit_util::compress;
 use bytes::Bytes;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
@@ -203,8 +204,6 @@ pub(crate) fn build_filtered_validity_bitmap(
     item_count
 }
 
-use crate::util::bit_util::compress;
-
 enum MaybePacked {
     Packed(PackedDecoder),
     Fallback(DefinitionLevelDecoderImpl),
@@ -258,10 +257,19 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 let start = levels.len();
                 let (values_read, levels_read) = decoder.read_def_levels(levels, num_levels)?;
 
-                // Safety: slice iterator has a trusted length
-                unsafe {
-                    nulls
-                        .extend_trusted_len(levels[start..].iter().map(|level| level == max_level));
+                if values_read == levels_read {
+                    // Every level is at `max_level`
+                    nulls.append_n(levels_read, true);
+                } else if values_read == 0 {
+                    // No level is at `max_level`
+                    nulls.append_n(levels_read, false);
+                } else {
+                    // Safety: slice iterator has a trusted length
+                    unsafe {
+                        nulls.extend_trusted_len(
+                            levels[start..].iter().map(|level| level == max_level),
+                        );
+                    }
                 }
 
                 Ok((values_read, levels_read))

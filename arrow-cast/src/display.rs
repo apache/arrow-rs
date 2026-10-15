@@ -674,7 +674,7 @@ impl<'a, F: DisplayIndexState<'a> + Array> DisplayIndex for ArrayFormat<'a, F> {
 
 impl DisplayIndex for &BooleanArray {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        write!(f, "{}", self.value(idx))?;
+        f.write_str(if self.value(idx) { "true" } else { "false" })?;
         Ok(())
     }
 }

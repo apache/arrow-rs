@@ -70,7 +70,7 @@ fn split_streams_variable(src: &[u8], dst: &mut [u8], type_size: usize) {
 impl<T: DataType> Encoder<T> for ByteStreamSplitEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         self.buffer
-            .extend(<T as DataType>::T::slice_as_bytes(values));
+            .extend_from_slice(<T as DataType>::T::slice_as_bytes(values));
 
         ensure_phys_ty!(
             Type::FLOAT | Type::DOUBLE | Type::INT32 | Type::INT64,

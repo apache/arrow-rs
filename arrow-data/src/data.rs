@@ -272,6 +272,19 @@ fn checked_len_plus_offset(
     })
 }
 
+/// Returns the first and last of `offsets`, and the bytes of `values` between
+/// them as a `str`. Returns `None` if the offsets are not valid indexes into
+/// `values` or those bytes are not valid UTF-8.
+fn utf8_span<'a, T: ArrowNativeType>(
+    offsets: &[T],
+    values: &'a [u8],
+) -> Option<(usize, usize, &'a str)> {
+    let first = offsets.first()?.to_usize()?;
+    let last = offsets.last()?.to_usize()?;
+    let values_str = std::str::from_utf8(values.get(first..last)?).ok()?;
+    Some((first, last, values_str))
+}
+
 impl ArrayData {
     /// Create a new ArrayData instance;
     ///
@@ -675,6 +688,22 @@ impl ArrayData {
     ///
     /// Panics if `offset + length` overflows or is greater than `self.len()`.
     pub fn slice(&self, offset: usize, length: usize) -> ArrayData {
+        self.clone().sliced(offset, length)
+    }
+
+    /// Creates a zero-copy slice of this array, reusing its buffer and child allocations.
+    ///
+    /// This is equivalent to [`Self::slice`], but consumes `self`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + length` overflows or is greater than `self.len()`.
+    pub fn sliced(mut self, offset: usize, length: usize) -> Self {
+        self.slice_in_place(offset, length);
+        self
+    }
+
+    fn slice_in_place(&mut self, offset: usize, length: usize) {
         let end = offset
             .checked_add(length)
             .expect("offset + length overflow");
@@ -686,29 +715,17 @@ impl ArrayData {
             // the slice to both would count it twice, so the cumulative offset
             // goes to the children and this array's offset is reset to 0.
             let child_offset = self.offset + offset;
-            ArrayData {
-                data_type: self.data_type().clone(),
-                len: length,
-                offset: 0,
-                buffers: self.buffers.clone(),
-                child_data: self
-                    .child_data()
-                    .iter()
-                    .map(|data| data.slice(child_offset, length))
-                    .collect(),
-                // `nulls` belongs to this array rather than to the children, so
-                // it is sliced by `offset` alone.
-                nulls: self.nulls.as_ref().map(|x| x.slice(offset, length)),
+            for child in &mut self.child_data {
+                child.slice_in_place(child_offset, length);
             }
+            self.offset = 0;
         } else {
-            let mut new_data = self.clone();
-
-            new_data.len = length;
-            new_data.offset = offset + self.offset;
-            new_data.nulls = self.nulls.as_ref().map(|x| x.slice(offset, length));
-
-            new_data
+            self.offset += offset;
         }
+        self.len = length;
+        // `nulls` belongs to this array rather than to the children, so
+        // it is sliced by `offset` alone.
+        self.nulls = self.nulls.as_ref().map(|x| x.slice(offset, length));
     }
 
     /// Returns the `buffer` as a slice of type `T` starting at self.offset
@@ -786,31 +803,46 @@ impl ArrayData {
                     vec![ArrayData::new_empty(v.as_ref())],
                     true,
                 ),
-                DataType::Union(f, mode) => {
-                    let (id, _) = f.iter().next().unwrap();
-                    let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
-                    let buffers = match mode {
-                        UnionMode::Sparse => vec![ids],
-                        UnionMode::Dense => {
-                            let end_offset = i32::from_usize(len).unwrap();
-                            vec![ids, Buffer::from_iter(0_i32..end_offset)]
-                        }
-                    };
-
-                    let children = f
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, (_, f))| {
-                            if idx == 0 || *mode == UnionMode::Sparse {
-                                Self::new_null(f.data_type(), len)
-                            } else {
-                                Self::new_empty(f.data_type())
+                DataType::Union(f, mode) => match f.iter().next() {
+                    // Every slot carries a type id naming one of the children,
+                    // so an empty union has nothing to put in a slot and can
+                    // only be the empty array.
+                    None => {
+                        assert_eq!(
+                            len, 0,
+                            "cannot construct null data from an empty union of length {len}, a slot has no type id to carry"
+                        );
+                        let buffers = match mode {
+                            UnionMode::Sparse => vec![zeroed(0)],
+                            UnionMode::Dense => vec![zeroed(0), zeroed(0)],
+                        };
+                        (buffers, vec![], false)
+                    }
+                    Some((id, _)) => {
+                        let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
+                        let buffers = match mode {
+                            UnionMode::Sparse => vec![ids],
+                            UnionMode::Dense => {
+                                let end_offset = i32::from_usize(len).unwrap();
+                                vec![ids, Buffer::from_iter(0_i32..end_offset)]
                             }
-                        })
-                        .collect();
+                        };
 
-                    (buffers, children, false)
-                }
+                        let children = f
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, (_, f))| {
+                                if idx == 0 || *mode == UnionMode::Sparse {
+                                    Self::new_null(f.data_type(), len)
+                                } else {
+                                    Self::new_empty(f.data_type())
+                                }
+                            })
+                            .collect();
+
+                        (buffers, children, false)
+                    }
+                },
                 DataType::RunEndEncoded(r, v) => {
                     if len == 0 {
                         // For empty arrays, create zero-length child arrays.
@@ -1209,12 +1241,10 @@ impl ArrayData {
             DataType::List(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i32>(values_data.len)?;
-                Ok(())
             }
             DataType::LargeList(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i64>(values_data.len)?;
-                Ok(())
             }
             DataType::Map(field, _) => {
                 let DataType::Struct(entries_fields) = field.data_type() else {
@@ -1238,17 +1268,14 @@ impl ArrayData {
                 }
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets::<i32>(values_data.len)?;
-                Ok(())
             }
             DataType::ListView(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets_and_sizes::<i32>(values_data.len)?;
-                Ok(())
             }
             DataType::LargeListView(field) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
                 self.validate_offsets_and_sizes::<i64>(values_data.len)?;
-                Ok(())
             }
             DataType::FixedSizeList(field, list_size) => {
                 let values_data = self.get_single_valid_child_data(field.data_type())?;
@@ -1260,18 +1287,18 @@ impl ArrayData {
                     ))
                 })?;
 
-                let expected_values_len = self.len
+                let len_plus_offset =
+                    checked_len_plus_offset(&self.data_type, self.len, self.offset)?;
+                let expected_values_len = len_plus_offset
                     .checked_mul(list_size)
                     .expect("integer overflow computing expected number of expected values in FixedListSize");
 
                 if values_data.len < expected_values_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Values length {} is less than the length ({}) multiplied by the value size ({}) for {}",
-                        values_data.len, self.len, list_size, self.data_type
+                        "Values length {} is less than the length + offset ({}) multiplied by the value size ({}) for {}",
+                        values_data.len, len_plus_offset, list_size, self.data_type
                     )));
                 }
-
-                Ok(())
             }
             DataType::Struct(fields) => {
                 self.validate_num_child_data(fields.len())?;
@@ -1292,7 +1319,6 @@ impl ArrayData {
                         )));
                     }
                 }
-                Ok(())
             }
             DataType::RunEndEncoded(run_ends_field, values_field) => {
                 self.validate_num_child_data(2)?;
@@ -1309,7 +1335,6 @@ impl ArrayData {
                         "Found null values in run_ends array. The run_ends array should not have null values.".to_string(),
                     ));
                 }
-                Ok(())
             }
             DataType::Union(fields, mode) => {
                 self.validate_num_child_data(fields.len())?;
@@ -1328,11 +1353,9 @@ impl ArrayData {
                         }
                     }
                 }
-                Ok(())
             }
             DataType::Dictionary(_key_type, value_type) => {
                 self.get_single_valid_child_data(value_type)?;
-                Ok(())
             }
             _ => {
                 // other types do not have child data
@@ -1343,9 +1366,9 @@ impl ArrayData {
                         self.child_data.len()
                     )));
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 
     /// Ensures that this array data has a single child_data with the
@@ -1509,14 +1532,12 @@ impl ArrayData {
             DataType::FixedSizeList(field, len) => {
                 let child = &self.child_data[0];
                 if !field.is_nullable() {
-                    match &self.nulls {
-                        Some(nulls) => {
-                            let element_len = *len as usize;
-                            let expanded = nulls.expand(element_len);
-                            self.validate_non_nullable(Some(&expanded), child, child.nulls())?;
-                        }
-                        None => self.validate_non_nullable(None, child, child.nulls())?,
-                    }
+                    let element_len = *len as usize;
+                    let child_nulls = child.nulls().map(|nulls| {
+                        nulls.slice(self.offset * element_len, self.len * element_len)
+                    });
+                    let expanded = self.nulls.as_ref().map(|nulls| nulls.expand(element_len));
+                    self.validate_non_nullable(expanded.as_ref(), child, child_nulls.as_ref())?;
                 }
             }
             DataType::Struct(fields) => {
@@ -1588,12 +1609,47 @@ impl ArrayData {
                 let child = self.child_at(0)?;
                 self.validate_offsets_full::<i64>(child.len)
             }
-            DataType::Union(_, _) => {
-                // Validate Union Array as part of implementing new Union semantics
-                // See comments in `ArrayData::validate()`
-                // https://github.com/apache/arrow-rs/issues/85
-                //
-                // TODO file follow on ticket for full union validation
+            DataType::Union(fields, mode) => {
+                let mut child_lens: Vec<Option<usize>> = vec![None; 128];
+                for (index, (type_id, _)) in fields.iter().enumerate() {
+                    let child = self.child_at(index)?;
+                    child_lens[type_id as usize] = Some(child.len());
+                }
+
+                // Type id values must match one of the fields.
+                let type_ids = self.typed_buffer::<i8>(0, self.len)?;
+                for (index, &type_id) in type_ids.iter().enumerate() {
+                    if type_id < 0 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Type id values cannot be negative, got {type_id} at index {index}"
+                        )));
+                    }
+                    let type_id = type_id as usize;
+                    if child_lens[type_id].is_none() {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Type id values must match one of the field type ids, got {type_id} at index {index}"
+                        )));
+                    }
+                }
+
+                // Check the value offsets are in bounds.
+                if mode == &UnionMode::Dense {
+                    let offsets = self.typed_buffer::<i32>(1, self.len)?;
+
+                    if type_ids
+                        .iter()
+                        .zip(offsets.iter())
+                        .any(|(&type_id, &offset)| {
+                            offset < 0 || offset as usize >= child_lens[type_id as usize].unwrap()
+                        })
+                    {
+                        return Err(ArrowError::InvalidArgumentError(
+                            "Offsets must be non-negative and within the length of the child array"
+                                .to_string(),
+                        ));
+                    }
+                }
+
                 Ok(())
             }
             DataType::Dictionary(key_type, _value_type) => {
@@ -1692,18 +1748,24 @@ impl ArrayData {
     }
 
     /// Ensures that all strings formed by the offsets in `buffers[0]`
-    /// into `buffers[1]` are valid utf8 sequences
+    /// into `buffers[1]` are valid utf8 sequences. Bytes of `buffers[1]`
+    /// outside the range of the offsets are not checked.
     fn validate_utf8<T>(&self) -> Result<(), ArrowError>
     where
         T: ArrowNativeType + TryInto<usize> + num_traits::Num + std::fmt::Display,
     {
         let values_buffer = &self.buffer_at(1)?.as_slice();
-        if let Ok(values_str) = std::str::from_utf8(values_buffer) {
-            // Validate Offsets are correct
+        let offsets = self.typed_offsets::<T>()?;
+        if let Some((first, last, values_str)) = utf8_span(offsets, values_buffer) {
             self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
-                if !values_str.is_char_boundary(range.start)
-                    || !values_str.is_char_boundary(range.end)
-                {
+                // `values_str` ends at the last offset. Checking each pair of offsets doesn't
+                // show that `range.end <= last`: a later offset can still be smaller, which
+                // `validate_each_offset` reports when it gets there.
+                if range.end > last {
+                    return Ok(());
+                }
+                let (start, end) = (range.start - first, range.end - first);
+                if !values_str.is_char_boundary(start) || !values_str.is_char_boundary(end) {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "incomplete utf-8 byte sequence from index {string_index}"
                     )));
@@ -1711,7 +1773,7 @@ impl ArrayData {
                 Ok(())
             })
         } else {
-            // find specific offset that failed utf8 validation
+            // Find specific offset that failed utf8 validation
             self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
                 std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
                     ArrowError::InvalidArgumentError(format!(
@@ -2440,6 +2502,8 @@ pub(crate) fn get_fixed_size_binary_width(data_type: &DataType) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use arrow_schema::UnionFields;
+
     use super::*;
     use crate::ByteView;
     use crate::transform::MutableArrayData;
@@ -2560,6 +2624,88 @@ mod tests {
 
         assert!(build(vec![true, false, true, true]).is_ok());
         assert!(build(vec![true, true, false, true]).is_err());
+    }
+
+    #[test]
+    fn test_fixed_size_list_non_nullable_child_nulls_account_for_parent_offset() {
+        for child_offset in [0, 1] {
+            let child = ArrayData::builder(DataType::Int32)
+                .len(6)
+                .offset(child_offset)
+                .add_buffer(Buffer::from_slice_ref([0i32; 7]))
+                .nulls(Some(NullBuffer::from(vec![
+                    true, true, false, false, true, true,
+                ])))
+                .build()
+                .unwrap();
+            let build = |parent_nulls| {
+                ArrayData::builder(DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Int32, false)),
+                    2,
+                ))
+                .offset(1)
+                .len(2)
+                .nulls(Some(NullBuffer::from(parent_nulls)))
+                .add_child_data(child.clone())
+                .build()
+            };
+
+            // The first visible list contains both child nulls.
+            assert!(build(vec![false, true]).is_ok());
+            assert!(build(vec![true, false]).is_err());
+        }
+    }
+
+    #[test]
+    fn test_fixed_size_list_non_nullable_child_nulls_without_parent_nulls() {
+        let child = ArrayData::builder(DataType::Int32)
+            .len(6)
+            .add_buffer(Buffer::from_slice_ref([0i32; 6]))
+            .nulls(Some(NullBuffer::from(vec![
+                false, false, true, true, false, false,
+            ])))
+            .build()
+            .unwrap();
+        let build = |offset, len, size| {
+            ArrayData::builder(DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Int32, false)),
+                size,
+            ))
+            .offset(offset)
+            .len(len)
+            .add_child_data(child.clone())
+            .build()
+        };
+
+        // Nulls before and after the visible child range are irrelevant.
+        assert!(build(1, 1, 2).is_ok());
+        assert!(build(0, 1, 2).is_err());
+        assert!(build(2, 1, 2).is_err());
+        assert!(build(3, 0, 2).is_ok());
+        assert!(build(1, 2, 0).is_ok());
+    }
+
+    #[test]
+    fn test_fixed_size_list_validation_accounts_for_parent_offset() {
+        for nulls in [None, Some(NullBuffer::new_null(4))] {
+            let child = ArrayData::builder(DataType::Int32)
+                .len(4)
+                .add_buffer(Buffer::from_slice_ref([0i32; 4]))
+                .nulls(nulls)
+                .build()
+                .unwrap();
+            let err = ArrayData::builder(DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Int32, false)),
+                2,
+            ))
+            .offset(1)
+            .len(2)
+            .add_child_data(child)
+            .build()
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("Values length 4 is less than"));
+        }
     }
 
     #[test]
@@ -2694,6 +2840,162 @@ mod tests {
         let sliced = data.slice(1, 3);
 
         sliced.slice(1, usize::MAX);
+    }
+
+    #[test]
+    fn test_sliced() {
+        for nulls in [
+            None,
+            Some(NullBuffer::from(vec![true, false, true, false, true])),
+        ] {
+            let data = ArrayData::builder(DataType::Int32)
+                .len(5)
+                .offset(1)
+                .add_buffer(make_i32_buffer(6))
+                .nulls(nulls)
+                .build()
+                .unwrap();
+
+            for offset in 0..=data.len() {
+                for length in 0..=data.len() - offset {
+                    let owned = data.clone();
+                    let buffers = owned.buffers().as_ptr();
+                    let sliced = owned.sliced(offset, length);
+                    assert_eq!(sliced, data.slice(offset, length));
+                    assert_eq!(sliced.len(), length);
+                    assert_eq!(sliced.offset(), 1 + offset);
+                    assert_eq!(sliced.buffers().as_ptr(), buffers);
+                    assert_eq!(sliced.buffers()[0].as_ptr(), data.buffers()[0].as_ptr());
+                    if let Some(nulls) = data.nulls() {
+                        assert_eq!(
+                            sliced.nulls().unwrap().iter().collect::<Vec<_>>(),
+                            nulls.iter().skip(offset).take(length).collect::<Vec<_>>()
+                        );
+                    }
+                    sliced.validate_full().unwrap();
+                }
+            }
+        }
+
+        let empty = ArrayData::new_empty(&DataType::Int32);
+        assert_eq!(empty.clone().sliced(0, 0), empty);
+    }
+
+    #[test]
+    fn test_sliced_nested_struct() {
+        let child = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .offset(1)
+            .add_buffer(make_i32_buffer(9))
+            .nulls(Some(NullBuffer::from(vec![
+                true, false, true, false, true, true, false, true,
+            ])))
+            .build()
+            .unwrap();
+        let inner = ArrayData::builder(DataType::Struct(Fields::from(vec![Field::new(
+            "x",
+            DataType::Int32,
+            true,
+        )])))
+        .len(6)
+        .offset(1)
+        .nulls(Some(NullBuffer::from(vec![
+            true, false, true, true, false, true,
+        ])))
+        .add_child_data(child)
+        .build()
+        .unwrap();
+        let data = ArrayData::builder(DataType::Struct(Fields::from(vec![Field::new(
+            "inner",
+            inner.data_type().clone(),
+            true,
+        )])))
+        .len(4)
+        .offset(1)
+        .nulls(Some(NullBuffer::from(vec![false, true, false, true])))
+        .add_child_data(inner)
+        .build()
+        .unwrap();
+
+        for (offset, length) in [(0, 4), (1, 2), (4, 0), (0, 0)] {
+            let owned = data.clone();
+            let children = owned.child_data().as_ptr();
+            let grandchildren = owned.child_data()[0].child_data().as_ptr();
+            let buffers = owned.child_data()[0].child_data()[0].buffers().as_ptr();
+            let sliced = owned.sliced(offset, length);
+            let inner = &sliced.child_data()[0];
+            let child = &inner.child_data()[0];
+            assert_eq!(sliced, data.slice(offset, length));
+            assert_eq!(sliced.offset(), 0);
+            assert_eq!(inner.offset(), 0);
+            assert_eq!(child.offset(), 3 + offset);
+            assert_eq!(sliced.child_data().as_ptr(), children);
+            assert_eq!(inner.child_data().as_ptr(), grandchildren);
+            assert_eq!(child.buffers().as_ptr(), buffers);
+            sliced.validate_full().unwrap();
+        }
+
+        let sliced = data.sliced(1, 2).sliced(1, 1);
+        assert_eq!(sliced.null_count(), 1);
+        assert_eq!(sliced.child_data()[0].null_count(), 0);
+        assert_eq!(sliced.child_data()[0].child_data()[0].offset(), 5);
+        assert_eq!(sliced.child_data()[0].child_data()[0].null_count(), 0);
+    }
+
+    #[test]
+    fn test_sliced_list_preserves_children() {
+        let child = ArrayData::builder(DataType::Int32)
+            .len(6)
+            .offset(1)
+            .add_buffer(make_i32_buffer(7))
+            .nulls(Some(NullBuffer::from(vec![
+                true, false, true, false, true, true,
+            ])))
+            .build()
+            .unwrap();
+        let data = ArrayData::builder(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Int32,
+            true,
+        ))))
+        .len(4)
+        .offset(1)
+        .add_buffer(Buffer::from_slice_ref([0i32, 1, 2, 3, 4, 5]))
+        .nulls(Some(NullBuffer::from(vec![false, true, false, true])))
+        .add_child_data(child)
+        .build()
+        .unwrap();
+        let buffers = data.buffers().as_ptr();
+        let children = data.child_data().as_ptr();
+        let child_buffers = data.child_data()[0].buffers().as_ptr();
+        let expected = data.slice(1, 2);
+        let sliced = data.sliced(1, 2);
+        assert_eq!(sliced, expected);
+        assert_eq!(sliced.offset(), 2);
+        assert_eq!(sliced.child_data()[0].len(), 6);
+        assert_eq!(sliced.child_data()[0].offset(), 1);
+        assert_eq!(sliced.buffers().as_ptr(), buffers);
+        assert_eq!(sliced.child_data().as_ptr(), children);
+        assert_eq!(sliced.child_data()[0].buffers().as_ptr(), child_buffers);
+        sliced.validate_full().unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + length overflow")]
+    fn test_sliced_panics_on_offset_length_overflow() {
+        ArrayData::new_null(&DataType::Int32, 4).sliced(1, usize::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "end <= self.len()")]
+    fn test_sliced_panics_on_offset_out_of_bounds() {
+        ArrayData::new_null(&DataType::Int32, 4).sliced(5, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "end <= self.len()")]
+    fn test_sliced_panics_on_length_out_of_bounds() {
+        ArrayData::new_null(&DataType::Int32, 4).sliced(3, 2);
     }
 
     #[test]
@@ -3176,8 +3478,16 @@ mod tests {
     #[cfg(not(feature = "force_validate"))]
     fn test_validate_values_rejects_a_non_integer_run_end() {
         let data_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Utf8, false)),
-            Arc::new(Field::new("values", DataType::Int32, true)),
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Utf8,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
         );
         let run_end_encoded = unsafe {
             ArrayData::builder(data_type)
@@ -3668,5 +3978,96 @@ mod tests {
             ArrayData::try_new(data_type, len, null_bit_buffer, offset, buffers, child_data);
 
         [from_builder_res, from_try_new_res]
+    }
+
+    #[test]
+    fn test_new_null_empty_union() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let data_type = DataType::Union(UnionFields::empty(), mode);
+            let data = ArrayData::new_null(&data_type, 0);
+            data.validate_full()
+                .expect("an empty union of length zero is valid");
+            assert_eq!(data.len(), 0);
+            assert!(data.child_data().is_empty());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot construct null data from an empty union")]
+    fn test_new_null_empty_union_with_slots() {
+        let data_type = DataType::Union(UnionFields::empty(), UnionMode::Dense);
+        let _ = ArrayData::new_null(&data_type, 1);
+    }
+
+    #[test]
+    fn test_union_validate_type_ids() {
+        let dt = DataType::Union(
+            UnionFields::try_new(
+                vec![5],
+                vec![Arc::new(Field::new("a", DataType::Int32, true))],
+            )
+            .unwrap(),
+            UnionMode::Sparse,
+        );
+
+        let child = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .add_buffer(make_i32_buffer(2))
+            .build()
+            .unwrap();
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(2)
+            .offset(0)
+            .buffers(vec![vec![5_i8, 2].into()])
+            .child_data(vec![child])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Type id values must match one of the field type ids, got 2 at index 1"
+        );
+    }
+
+    #[test]
+    fn test_union_validate_dense_offsets() {
+        let dt = DataType::Union(
+            UnionFields::try_new(
+                vec![5],
+                vec![Arc::new(Field::new("a", DataType::Int32, true))],
+            )
+            .unwrap(),
+            UnionMode::Dense,
+        );
+
+        let child = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .add_buffer(make_i32_buffer(2))
+            .build()
+            .unwrap();
+
+        let err = ArrayDataBuilder::new(dt.clone())
+            .len(2)
+            // 2nd offset '10' is out of bounds
+            .buffers(vec![vec![5_i8, 5].into(), vec![0_i32, 10].into()])
+            .child_data(vec![child.clone()])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offsets must be non-negative and within the length of the child array"
+        );
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(2)
+            // 2nd offset is negative
+            .buffers(vec![vec![5_i8, 5].into(), vec![0_i32, -1].into()])
+            .child_data(vec![child])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offsets must be non-negative and within the length of the child array"
+        );
     }
 }
