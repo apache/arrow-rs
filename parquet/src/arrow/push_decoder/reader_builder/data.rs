@@ -22,6 +22,7 @@ use crate::arrow::arrow_reader::RowSelection;
 use crate::arrow::in_memory_row_group::{ColumnChunkData, FetchRanges, InMemoryRowGroup};
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
+use crate::file::metrics::DecompressionMetrics;
 use crate::file::reader::ChunkReader;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
@@ -109,6 +110,7 @@ impl DataRequest {
             page_index,
             row_group_idx,
             metadata: parquet_metadata,
+            decompression: DecompressionMetrics::disabled(),
         };
 
         in_memory_row_group.fill_column_chunks(projection, page_start_offsets, chunks);
@@ -222,6 +224,7 @@ impl<'a> DataRequestBuilder<'a> {
             page_index,
             row_group_idx,
             metadata: parquet_metadata,
+            decompression: DecompressionMetrics::disabled(),
         };
 
         let FetchRanges {

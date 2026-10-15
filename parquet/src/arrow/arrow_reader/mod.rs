@@ -1437,6 +1437,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             reader: Arc::new(input.0),
             metadata,
             row_groups,
+            decompression: metrics.decompression(),
         };
 
         let mut plan_builder = ReadPlanBuilder::new(batch_size)
@@ -1480,6 +1481,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 }
 
 struct ReaderRowGroups<T: ChunkReader> {
+    /// Shared with every column's page reader, so one read totals across columns
+    decompression: crate::file::metrics::DecompressionMetrics,
     reader: Arc<T>,
 
     metadata: Arc<ParquetMetaData>,
@@ -1502,6 +1505,7 @@ impl<T: ChunkReader + 'static> RowGroups for ReaderRowGroups<T> {
             reader: self.reader.clone(),
             metadata: self.metadata.clone(),
             row_groups: self.row_groups.clone().into_iter(),
+            decompression: self.decompression.clone(),
         }))
     }
 
@@ -1519,6 +1523,7 @@ impl<T: ChunkReader + 'static> RowGroups for ReaderRowGroups<T> {
 }
 
 struct ReaderPageIterator<T: ChunkReader> {
+    decompression: crate::file::metrics::DecompressionMetrics,
     reader: Arc<T>,
     column_idx: usize,
     row_groups: std::vec::IntoIter<usize>,
@@ -1539,6 +1544,7 @@ impl<T: ChunkReader + 'static> ReaderPageIterator<T> {
         let reader = self.reader.clone();
 
         SerializedPageReader::new(reader, column_chunk_metadata, total_rows, page_locations)?
+            .with_decompression_metrics(self.decompression.clone())
             .add_crypto_context(
                 rg_idx,
                 self.column_idx,

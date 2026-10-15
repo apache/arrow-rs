@@ -559,13 +559,15 @@ impl RowGroupReaderBuilder {
 
                 let predicate = filter_info.current();
 
-                let row_group = data_request.try_into_in_memory_row_group(
-                    row_group_idx,
-                    row_count,
-                    &self.metadata,
-                    predicate.projection(),
-                    &mut self.buffers,
-                )?;
+                let row_group = data_request
+                    .try_into_in_memory_row_group(
+                        row_group_idx,
+                        row_count,
+                        &self.metadata,
+                        predicate.projection(),
+                        &mut self.buffers,
+                    )?
+                    .with_decompression_metrics(self.metrics.decompression());
 
                 let cache_options = filter_info.cache_builder().producer();
 
@@ -736,13 +738,15 @@ impl RowGroupReaderBuilder {
                     budget,
                 } = row_group_info;
 
-                let row_group = data_request.try_into_in_memory_row_group(
-                    row_group_idx,
-                    row_count,
-                    &self.metadata,
-                    &self.projection,
-                    &mut self.buffers,
-                )?;
+                let row_group = data_request
+                    .try_into_in_memory_row_group(
+                        row_group_idx,
+                        row_count,
+                        &self.metadata,
+                        &self.projection,
+                        &mut self.buffers,
+                    )?
+                    .with_decompression_metrics(self.metrics.decompression());
 
                 let plan = plan_builder.build();
 

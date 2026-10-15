@@ -35,6 +35,7 @@ use crate::errors::{ParquetError, Result};
 #[cfg(feature = "encryption")]
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::metadata::ParquetMetaData;
+use crate::file::metrics::DecompressionRecorder;
 use crate::file::serialized_reader::{
     SerializedPageReaderContext, decode_page, read_page_header_len_from_bytes, verify_page_size,
 };
@@ -117,11 +118,13 @@ pub(crate) fn decode_dictionary_page(
     let page_buf = page_context.decrypt_page_data(page_buf, 0, true)?;
 
     let mut decompressor = create_codec(column_metadata.compression(), &CodecOptions::default())?;
+    // Reading a dictionary for metadata is not part of a scan, so it is not counted.
     let page = decode_page(
         header,
         page_buf,
         column_descriptor.physical_type(),
         decompressor.as_mut(),
+        &mut DecompressionRecorder::default(),
     )?;
     let Page::DictionaryPage {
         buf,

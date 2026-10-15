@@ -28,6 +28,7 @@ use crate::column::reader::decoder::{
 };
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
+use crate::file::metrics::DecompressionPhase;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{ceil, num_required_bits, read_num_bytes};
 
@@ -241,6 +242,14 @@ where
     where
         F: FnMut(&mut V::Buffer, usize, usize, Option<&D::Buffer>) -> Result<()>,
     {
+        // Pages decompressed from here on are being decoded, not walked past.
+        self.page_reader
+            .set_decompression_phase(DecompressionPhase::Read);
+        // A page loaded by an earlier skip that still has values is about to be
+        // read from, so its decompression was not wasted.
+        if self.num_decoded_values < self.num_buffered_values {
+            self.page_reader.current_page_read();
+        }
         let mut total_records_read = 0;
         let mut total_levels_read = 0;
         let mut total_values_read = 0;
@@ -323,6 +332,11 @@ where
     ///
     /// Returns the number of records skipped
     pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        // A page skipped whole costs nothing, but a page walked through to
+        // reach a selected row inside it is decompressed and then thrown away.
+        // Attribute that to skipping rather than to reading.
+        self.page_reader
+            .set_decompression_phase(DecompressionPhase::Skip);
         let mut remaining_records = num_records;
         while remaining_records != 0 {
             if self.num_buffered_values == self.num_decoded_values {
