@@ -1241,7 +1241,7 @@ mod tests {
                 UnionFields::try_new(
                     vec![2, 1],
                     vec![
-                        Field::new("foo", DataType::Int32, true),
+                        Field::new("foo", DataType::Int32, false),
                         Field::new("bar", DataType::Int64, true),
                     ],
                 )
@@ -1254,6 +1254,7 @@ mod tests {
             assert_eq!(array.len(), 4);
             assert_eq!(array.null_count(), 0);
             assert_eq!(array.logical_null_count(), 4);
+            assert_eq!(array.type_id(0), 1);
 
             for i in 0..4 {
                 let a = array.value(i);

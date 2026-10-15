@@ -26,7 +26,7 @@ use arrow_array::StringViewArray;
 use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_data::transform::{Capacities, MutableArrayData};
-use arrow_schema::{DataType, Field, Fields, UnionFields};
+use arrow_schema::{DataType, Field, Fields, UnionFields, UnionMode};
 use std::sync::Arc;
 
 #[cfg_attr(feature = "force_validate", expect(dead_code))]
@@ -1190,7 +1190,7 @@ fn test_extend_nulls_sparse_union() {
     let fields = UnionFields::try_new(
         vec![0, 1],
         vec![
-            Field::new("null", DataType::Null, true),
+            Field::new("null", DataType::Null, false),
             Field::new("str", DataType::Utf8, true),
         ],
     )
@@ -1220,9 +1220,9 @@ fn test_extend_nulls_sparse_union() {
     assert_eq!(result_array.len(), 3);
     // First element should be type_id 1 (str)
     assert_eq!(result_array.type_id(0), 1);
-    // Null elements use the first type_id (0)
-    assert_eq!(result_array.type_id(1), 0);
-    assert_eq!(result_array.type_id(2), 0);
+    // Null elements use the nullable type_id (1)
+    assert_eq!(result_array.type_id(1), 1);
+    assert_eq!(result_array.type_id(2), 1);
     // All children should have length 3 (sparse invariant)
     assert_eq!(result_array.child(0).len(), 3);
     assert_eq!(result_array.child(1).len(), 3);
@@ -1233,7 +1233,7 @@ fn test_extend_nulls_dense_union() {
     let fields = UnionFields::try_new(
         vec![0, 1],
         vec![
-            Field::new("i", DataType::Int32, true),
+            Field::new("i", DataType::Int32, false),
             Field::new("str", DataType::Utf8, true),
         ],
     )
@@ -1264,13 +1264,44 @@ fn test_extend_nulls_dense_union() {
     assert_eq!(result_array.len(), 3);
     // First element is type_id 1 (str)
     assert_eq!(result_array.type_id(0), 1);
-    // Null elements use the first type_id (0)
-    assert_eq!(result_array.type_id(1), 0);
-    assert_eq!(result_array.type_id(2), 0);
+    // Null elements use the nullable type_id (1)
+    assert_eq!(result_array.type_id(1), 1);
+    assert_eq!(result_array.type_id(2), 1);
     // First child (int) should have 2 null entries from extend_nulls
     assert_eq!(result_array.child(0).len(), 2);
     // Second child (str) should have 1 entry from extend
     assert_eq!(result_array.child(1).len(), 1);
+}
+
+#[test]
+fn test_extend_nulls_union_without_nullable_child() {
+    for mode in [UnionMode::Sparse, UnionMode::Dense] {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("i", DataType::Int32, false),
+                Field::new("u", DataType::UInt32, false),
+            ],
+        )
+        .unwrap();
+
+        let type_ids = ScalarBuffer::from(vec![0_i8]);
+        let offsets = (mode == UnionMode::Dense).then(|| ScalarBuffer::from(vec![0_i32]));
+        let children = vec![
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            Arc::new(UInt32Array::from(vec![2])) as ArrayRef,
+        ];
+        let union = UnionArray::try_new(fields, type_ids, offsets, children).unwrap();
+
+        let data = union.to_data();
+        let mut mutable = MutableArrayData::new(vec![&data], true, 2);
+        let err = mutable.try_extend_nulls(1).unwrap_err();
+
+        assert!(
+            err.to_string().contains("no nullable field"),
+            "unexpected error: {err}"
+        );
+    }
 }
 
 #[test]
