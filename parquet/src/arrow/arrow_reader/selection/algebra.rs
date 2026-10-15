@@ -570,9 +570,16 @@ impl<'a> BitReader<'a> {
     #[inline]
     fn read(&self, position: usize) -> Option<u64> {
         let position = self.offset + position;
+        let byte = position / 8;
         // 16 bytes from the byte holding `position` cover 64 bits past any shift of up to 7.
-        let window = self.bytes.get(position / 8..)?.first_chunk::<16>()?;
-        Some((u128::from_le_bytes(*window) >> (position % 8)) as u64)
+        // One compare per word, after which the slice below needs no check. `get(byte..)?`
+        // followed by `first_chunk()?` compiles to two.
+        let len = self.bytes.len();
+        if len < 16 || byte > len - 16 {
+            return None;
+        }
+        let window: [u8; 16] = self.bytes[byte..byte + 16].try_into().unwrap();
+        Some((u128::from_le_bytes(window) >> (position % 8)) as u64)
     }
 
     /// Same as [`Self::read`] for the positions it refuses, with bits past the backing bytes
