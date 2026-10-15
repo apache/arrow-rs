@@ -185,8 +185,9 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
 
     /// Enables validation for unique field keys when inserting into this object.
     ///
-    /// When this is enabled, calling [`ObjectBuilder::finish`] will return an error
-    /// if any duplicate field keys were added using [`ObjectBuilder::insert`].
+    /// When enabled, inserting a duplicate field key fails: the `try_*` methods
+    /// (e.g. [`ObjectBuilder::try_insert`]) return an error, and the others
+    /// (e.g. [`ObjectBuilder::insert`]) panic.
     pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
         self.validate_unique_fields = validate_unique_fields;
         self
