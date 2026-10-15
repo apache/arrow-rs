@@ -385,6 +385,16 @@ where
     num_values: usize,
 }
 
+impl<T: DataType> Default for AlpDecoder<T>
+where
+    T::T: AlpFloat,
+    <T::T as AlpFloat>::Exact: Send,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: DataType> AlpDecoder<T>
 where
     T::T: AlpFloat,

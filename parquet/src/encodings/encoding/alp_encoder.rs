@@ -618,6 +618,15 @@ where
     streaming: StreamingPage<T::T>,
 }
 
+impl<T: DataType> Default for AlpEncoder<T>
+where
+    T::T: AlpFloat,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: DataType> AlpEncoder<T>
 where
     T::T: AlpFloat,

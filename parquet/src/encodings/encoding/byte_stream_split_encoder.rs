@@ -31,6 +31,12 @@ pub struct ByteStreamSplitEncoder<T> {
     _p: PhantomData<T>,
 }
 
+impl<T: DataType> Default for ByteStreamSplitEncoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: DataType> ByteStreamSplitEncoder<T> {
     pub fn new() -> Self {
         Self {

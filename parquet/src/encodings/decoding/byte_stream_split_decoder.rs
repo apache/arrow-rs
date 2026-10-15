@@ -33,6 +33,12 @@ pub struct ByteStreamSplitDecoder<T: DataType> {
     values_decoded: usize,
 }
 
+impl<T: DataType> Default for ByteStreamSplitDecoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: DataType> ByteStreamSplitDecoder<T> {
     pub fn new() -> Self {
         Self {
