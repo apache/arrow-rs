@@ -17,6 +17,7 @@
 
 use crate::data_type::AsBytes;
 use hashbrown::HashTable;
+use std::fmt::Debug;
 
 const DEFAULT_DEDUP_CAPACITY: usize = 4096;
 
@@ -81,11 +82,5 @@ impl<S: Storage> Interner<S> {
     /// Returns the storage for this interner
     pub fn storage(&self) -> &S {
         &self.storage
-    }
-
-    /// Unwraps the inner storage
-    #[cfg(feature = "arrow")]
-    pub fn into_inner(self) -> S {
-        self.storage
     }
 }
