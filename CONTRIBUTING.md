@@ -62,6 +62,17 @@ ideas with the community to get feedback on implementation.
 
 [good-first-issue]: https://github.com/apache/arrow-rs/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
 
+## Creating Pull Requests
+
+With coding agents, the number of open PRs now far exceeds our review capacity.
+To encourage submitters to curate and prepare a small number of high quality PRs,
+and to help reviewers focus on them, users without write access are limited to
+**3 open, non-draft PRs** at a time.
+
+When possible, we recommend splitting your contributions into multiple smaller
+focused PRs rather than large PRs, because they are more likely to be reviewed
+quickly and are easier to understand and review.
+
 ## Developer's guide to Arrow Rust
 
 ### Setting Up Your Build Environment

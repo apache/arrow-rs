@@ -21,6 +21,26 @@
 
 # Changelog
 
+## [59.3.1](https://github.com/apache/arrow-rs/tree/59.3.1) - (2026-10-15)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/59.3.0...59.3.1)
+
+### Bug fixes
+- [59_maintenance] fix(arrow-array): avoid returning corrupt array in `GenericByteArray::into_builder` by @Jefffrey in [#11446](https://github.com/apache/arrow-rs/pull/11446)
+- [59_maintenance] fix(arrow-array): preserve type params in `PrimitiveArray::into_builder` by @Jefffrey in [#11448](https://github.com/apache/arrow-rs/pull/11448)
+- [59_maintenance] fix(arrow-cast): avoid panicking during failed List -> ListView cast by @Jefffrey in [#11445](https://github.com/apache/arrow-rs/pull/11445)
+- [59_maintenance] Fix filter_nulls for predicates selecting all or no rows by @Jefffrey in [#11444](https://github.com/apache/arrow-rs/pull/11444)
+- [59_maintenance] fix: finish methods in `PrimitiveDictionaryBuilder` discard type params by @Jefffrey in [#11442](https://github.com/apache/arrow-rs/pull/11442)
+- [59_maintenance] fix(arrow-array): `PrimitiveRunBuilder` was buggy after `finish` by @Jefffrey in [#11441](https://github.com/apache/arrow-rs/pull/11441)
+- [59_maintenance] fix(parquet): keep virtual columns in the schema reported with a schema hint by @Jefffrey in [#11447](https://github.com/apache/arrow-rs/pull/11447)
+- [59_maintenance] fix(arrow-data): fix gaps in ListView equality by @Jefffrey in [#11439](https://github.com/apache/arrow-rs/pull/11439)
+- [59_maintenance] fix: Parquet `ByteArrayDecoderPlain::read` can silently fail to read the correct number of values by @Jefffrey in [#11440](https://github.com/apache/arrow-rs/pull/11440)
+- [59_maintenance] fix(parquet): reject Thrift list sizes larger than remaining input by @Jefffrey in [#11353](https://github.com/apache/arrow-rs/pull/11353)
+
+### Miscellaneous
+- [59_maintenance] Identify the chronoutil-derived MIT code in the root LICENSE.txt by @Jefffrey in [#11358](https://github.com/apache/arrow-rs/pull/11358)
+- [59_maintenance] fix: update rustls to address RUSTSEC-2026-0285 by @Jefffrey in [#11357](https://github.com/apache/arrow-rs/pull/11357)
+
 ## [59.3.0](https://github.com/apache/arrow-rs/tree/59.3.0) - (2026-08-25)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/59.2.0...59.3.0)
@@ -3271,7 +3291,7 @@
 - Manually run fmt on all files under parquet [\#6328](https://github.com/apache/arrow-rs/pull/6328) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
 - Implement UnionArray logical\_nulls [\#6303](https://github.com/apache/arrow-rs/pull/6303) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gstvg](https://github.com/gstvg))
 - Parquet: Verify 32-bit CRC checksum when decoding pages [\#6290](https://github.com/apache/arrow-rs/pull/6290) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([xmakro](https://github.com/xmakro))
-- 
+-
 ## [53.0.0](https://github.com/apache/arrow-rs/tree/53.0.0) (2024-08-31)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/52.2.0...53.0.0)
