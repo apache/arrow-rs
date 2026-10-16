@@ -82,6 +82,14 @@ impl<T> ColumnChunkMap<T> {
         })
     }
 
+    pub(crate) fn num_row_groups(&self) -> usize {
+        self.num_row_groups
+    }
+
+    pub(crate) fn num_columns(&self) -> usize {
+        self.num_columns
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -105,14 +113,10 @@ impl<T> ColumnChunkMap<T> {
         value: T,
     ) -> Result<Option<T>> {
         let key = self.key(row_group_idx, column_idx)?;
-        if !self.entries.contains_key(&key) {
-            self.entries.try_reserve(1).map_err(|err| {
-                ParquetError::General(format!(
-                    "failed to allocate column chunk map entry at row group {row_group_idx}, \
-                     column {column_idx}: {err}"
-                ))
-            })?;
+        if let Some(existing) = self.entries.get_mut(&key) {
+            return Ok(Some(std::mem::replace(existing, value)));
         }
+
         self.entries.try_reserve(1).map_err(|err| {
             ParquetError::General(format!(
                 "failed to reserve storage for column chunk at row group {row_group_idx}, \
@@ -240,7 +244,7 @@ impl<T> ColumnChunkEntries<T> {
 
 impl<V: HeapSize> HeapSize for ColumnChunkEntries<V> {
     fn heap_size(&self) -> usize {
-        self.entries.len() * std::mem::size_of::<((usize, usize), V)>()
+        self.entries.len() * std::mem::size_of::<(ColumnChunkKey, V)>()
             + self
                 .entries
                 .iter()
@@ -279,6 +283,17 @@ mod tests {
     }
 
     #[test]
+    fn insertion_replaces_existing_value_without_growing() {
+        let mut map = ColumnChunkMap::try_new(1, 1).unwrap();
+        assert_eq!(map.try_insert(0, 0, "first").unwrap(), None);
+        let capacity = map.entries.capacity();
+
+        assert_eq!(map.try_insert(0, 0, "replacement").unwrap(), Some("first"));
+        assert_eq!(map.entries.len(), 1);
+        assert_eq!(map.entries.capacity(), capacity);
+    }
+
+    #[test]
     fn freeze_and_thaw_preserve_entries() {
         let mut map = ColumnChunkMap::try_new(2, 2).unwrap();
         map.try_insert(1, 0, 3).unwrap();
@@ -289,5 +304,14 @@ mod tests {
         let entries = map.try_freeze().unwrap();
         let thawed = entries.try_into_map().unwrap();
         assert_eq!(thawed.try_freeze().unwrap(), expected_entries);
+    }
+
+    #[test]
+    fn frozen_heap_size_uses_packed_key_layout() {
+        let entries = ColumnChunkEntries::try_from_rows(vec![vec![Some(1_i32)]]).unwrap();
+        assert_eq!(
+            entries.heap_size(),
+            std::mem::size_of::<(ColumnChunkKey, i32)>()
+        );
     }
 }

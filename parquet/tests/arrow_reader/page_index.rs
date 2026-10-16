@@ -382,9 +382,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 14585);
+    assert_eq!(metadata.memory_size(), 14009);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 15009);
+    assert_eq!(metadata.memory_size(), 14433);
 
     // populate column 0 for column index and all columns for offset index
     let mut reader = ParquetMetaDataReader::new()
@@ -397,9 +397,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 11088);
+    assert_eq!(metadata.memory_size(), 10728);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 11512);
+    assert_eq!(metadata.memory_size(), 11152);
 
     // populate column 0 for column index and columns 0 & 2 for the offset index
     let mut reader = ParquetMetaDataReader::new()
@@ -412,9 +412,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 9888);
+    assert_eq!(metadata.memory_size(), 9672);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 10312);
+    assert_eq!(metadata.memory_size(), 10096);
 
     // populate only row group 1, column index gets column 0, offset index gets
     // columns 0 and 2.
@@ -428,7 +428,7 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 8310);
+    assert_eq!(metadata.memory_size(), 8238);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 8734);
+    assert_eq!(metadata.memory_size(), 8662);
 }

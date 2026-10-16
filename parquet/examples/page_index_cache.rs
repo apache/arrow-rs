@@ -23,7 +23,7 @@
 //! 1. Finds the requested column chunks that are absent from the page-index cache
 //! 2. Uses [`ParquetMetaDataReader::read_page_index_and_finish`] to request and decode those misses
 //! 3. Moves the decoded entries into the cache and wraps them in [`Arc`]
-//! 4. Builds a query-specific [`PageIndex`] from cached entries
+//! 4. Builds a query-specific [`PageIndexProvider`] from shared cache entries
 //!
 //! A production cache shared by multiple files would also include a stable file identity and
 //! freshness information in its keys. This example also caches only indexes that are present;
@@ -39,7 +39,7 @@ use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::Result;
-use parquet::file::metadata::page_index::{PageIndex, PageIndexBuilder, PageIndexProvider};
+use parquet::file::metadata::page_index::PageIndexProvider;
 use parquet::file::metadata::{
     ColumnChunkMask, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
 };
@@ -49,6 +49,47 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
 type ColumnChunk = (usize, usize);
 
+/// A query-specific provider backed by handles to cached entries.
+#[derive(Debug, Default)]
+struct CachedPageIndexProvider {
+    column_indexes: HashMap<ColumnChunk, Arc<ColumnIndexMetaData>>,
+    offset_indexes: HashMap<ColumnChunk, Arc<OffsetIndexMetaData>>,
+}
+
+impl PageIndexProvider for CachedPageIndexProvider {
+    fn has_offset_indexes(&self) -> bool {
+        !self.offset_indexes.is_empty()
+    }
+
+    fn has_column_indexes(&self) -> bool {
+        !self.column_indexes.is_empty()
+    }
+
+    fn column_index(
+        &self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Option<&ColumnIndexMetaData> {
+        self.column_indexes
+            .get(&(row_group_idx, column_idx))
+            .map(Arc::as_ref)
+    }
+
+    fn offset_index(
+        &self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Option<&OffsetIndexMetaData> {
+        self.offset_indexes
+            .get(&(row_group_idx, column_idx))
+            .map(Arc::as_ref)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Decoded page indexes cached independently of query-specific metadata.
 #[derive(Default)]
 struct PageIndexCache {
@@ -57,7 +98,7 @@ struct PageIndexCache {
 }
 
 impl PageIndexCache {
-    /// Returns the footer metadata and a page index containing exactly the entries requested for
+    /// Returns the footer metadata and a provider containing exactly the entries requested for
     /// one query, loading any cache misses through `ParquetMetaDataReader` first.
     fn page_index_for_query(
         &mut self,
@@ -65,7 +106,7 @@ impl PageIndexCache {
         file_bytes: &Bytes,
         column_index_mask: &ColumnChunkMask,
         offset_index_mask: &ColumnChunkMask,
-    ) -> Result<(ParquetMetaData, PageIndex)> {
+    ) -> Result<(ParquetMetaData, CachedPageIndexProvider)> {
         let num_row_groups = metadata.num_row_groups();
         let num_columns = metadata.file_metadata().schema_descr().num_columns();
 
@@ -107,23 +148,31 @@ impl PageIndexCache {
             }
         }
 
-        // Build an immutable provider containing only the entries needed by this query.
-        let mut builder = PageIndexBuilder::new(num_row_groups, num_columns);
-        for key @ (row_group_idx, column_idx) in
-            column_index_mask.column_chunk_indices(num_row_groups, num_columns)
-        {
-            if let Some(index) = self.column_indexes.get(&key) {
-                builder.try_put_column_index(index.as_ref().clone(), row_group_idx, column_idx)?;
-            }
-        }
-        for key @ (row_group_idx, column_idx) in
-            offset_index_mask.column_chunk_indices(num_row_groups, num_columns)
-        {
-            if let Some(index) = self.offset_indexes.get(&key) {
-                builder.try_put_offset_index(index.as_ref().clone(), row_group_idx, column_idx)?;
-            }
-        }
-        Ok((metadata, builder.build()))
+        // Build an immutable provider containing only handles needed by this query.
+        let column_indexes = column_index_mask
+            .column_chunk_indices(num_row_groups, num_columns)
+            .filter_map(|key| {
+                self.column_indexes
+                    .get(&key)
+                    .map(|index| (key, Arc::clone(index)))
+            })
+            .collect();
+        let offset_indexes = offset_index_mask
+            .column_chunk_indices(num_row_groups, num_columns)
+            .filter_map(|key| {
+                self.offset_indexes
+                    .get(&key)
+                    .map(|index| (key, Arc::clone(index)))
+            })
+            .collect();
+
+        Ok((
+            metadata,
+            CachedPageIndexProvider {
+                column_indexes,
+                offset_indexes,
+            },
+        ))
     }
 }
 
@@ -157,15 +206,15 @@ fn main() -> Result<()> {
     let column_mask = ColumnChunkMask::row_groups_and_columns([0], [0]);
     let offset_mask = ColumnChunkMask::row_groups_and_columns([0], [0, 1, 4]);
     println!("Query 1:");
-    let (cached_metadata, page_index) =
+    let (cached_metadata, provider) =
         cache.page_index_for_query(cached_metadata, &file_bytes, &column_mask, &offset_mask)?;
-    assert_query_indexes(&page_index, 0, &[0], &[0, 1, 4]);
+    assert_query_indexes(&provider, 0, &[0], &[0, 1, 4]);
 
     // Attach the query-specific provider to a cheap clone of the cached footer metadata.
     let query_metadata = cached_metadata
         .clone()
         .into_builder()
-        .set_page_index(Some(Arc::new(page_index)))
+        .set_page_index(Some(Arc::new(provider)))
         .build();
     assert!(query_metadata.page_index().is_some());
 
@@ -173,9 +222,9 @@ fn main() -> Result<()> {
     // index for column 2 is decoded and added to the cache.
     let offset_mask = ColumnChunkMask::row_groups_and_columns([0], [0, 2, 4]);
     println!("Query 2:");
-    let (_cached_metadata, page_index) =
+    let (_cached_metadata, provider) =
         cache.page_index_for_query(cached_metadata, &file_bytes, &column_mask, &offset_mask)?;
-    assert_query_indexes(&page_index, 0, &[0], &[0, 2, 4]);
+    assert_query_indexes(&provider, 0, &[0], &[0, 2, 4]);
 
     println!(
         "Cache now contains {} column indexes and {} offset indexes",
@@ -186,7 +235,7 @@ fn main() -> Result<()> {
 }
 
 fn assert_query_indexes(
-    page_index: &PageIndex,
+    page_index: &dyn PageIndexProvider,
     row_group_idx: usize,
     column_indexes: &[usize],
     offset_indexes: &[usize],

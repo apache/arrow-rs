@@ -17,16 +17,9 @@
 
 //! Page Index structures for efficient page-level skipping
 //!
-//! # 32-bit platforms
-//!
-//! Row-group and column counts may each be as large as `i32::MAX`, consistent with the
-//! Parquet/Thrift metadata format. On a 32-bit platform, however, a [`PageIndex`] cannot contain
-//! more than roughly 134 to 179 million populated column indexes or offset indexes (the exact
-//! limit is target-dependent and available memory may impose a lower limit). For a fully populated
-//! index, this constrains the product of the row-group and column counts. For example, a fully
-//! populated 65,536 by 65,536 page index cannot be represented on a 32-bit platform. Sparse page
-//! indexes with the same logical dimensions may still be represented when their populated entry
-//! count fits within the platform limit.
+//! Row-group and column counts are each limited to `i32::MAX`, consistent with the
+//! Parquet/Thrift metadata format. Populated entries are stored sparsely, subject to platform
+//! address-space and available-memory limits.
 
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::column_chunk::{ColumnChunkEntries, ColumnChunkMap};
@@ -496,9 +489,9 @@ impl PageIndex {
 
     /// Consumes this page index and returns its populated column and offset index entries.
     ///
-    /// Each entry contains its `(row_group_index, column_index)` coordinate and the shared index
-    /// metadata. This can be used to transfer parsed indexes into a cache without cloning the
-    /// metadata or allocating new [`Arc`]s. Entries are returned in row-major order.
+    /// Each entry contains its `(row_group_index, column_index)` coordinate and owned index
+    /// metadata. This can be used to transfer parsed indexes into a cache by moving the metadata
+    /// without cloning it or allocating new [`Arc`]s. Entries are returned in row-major order.
     #[expect(clippy::type_complexity)]
     pub fn into_index_entries(
         self,
@@ -713,7 +706,14 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) {
-        let _ = self.try_put_column_index(column_index, row_group_idx, column_idx);
+        let Some(indexes) = self.column_indexes.as_ref() else {
+            return;
+        };
+        if row_group_idx >= indexes.num_row_groups() || column_idx >= indexes.num_columns() {
+            return;
+        }
+        self.try_put_column_index(column_index, row_group_idx, column_idx)
+            .unwrap_or_else(|err| panic!("{err}"));
     }
 
     /// Attempts to set the column index for a specific row group and column.
@@ -747,7 +747,14 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) {
-        let _ = self.try_put_offset_index(offset_index, row_group_idx, column_idx);
+        let Some(indexes) = self.offset_indexes.as_ref() else {
+            return;
+        };
+        if row_group_idx >= indexes.num_row_groups() || column_idx >= indexes.num_columns() {
+            return;
+        }
+        self.try_put_offset_index(offset_index, row_group_idx, column_idx)
+            .unwrap_or_else(|err| panic!("{err}"));
     }
 
     /// Attempts to set the offset index for a specific row group and column.
@@ -956,6 +963,11 @@ mod tests {
         );
         assert!(
             builder
+                .try_put_offset_index(off_index.clone(), 0, 0)
+                .is_ok()
+        );
+        assert!(
+            builder
                 .try_put_column_index(col_index.clone(), 2, 0)
                 .is_err()
         );
@@ -964,6 +976,19 @@ mod tests {
                 .try_put_offset_index(off_index.clone(), 0, 3)
                 .is_err()
         );
+
+        // Legacy insertion remains a no-op for unallocated storage and invalid coordinates.
+        let mut legacy_unallocated = PageIndexBuilder::default();
+        legacy_unallocated.put_column_index(col_index.clone(), 0, 0);
+        legacy_unallocated.put_offset_index(off_index.clone(), 0, 0);
+        let empty_page_index = legacy_unallocated.build();
+        assert!(!empty_page_index.has_column_indexes());
+        assert!(!empty_page_index.has_offset_indexes());
+
+        builder.put_column_index(col_index.clone(), 2, 0);
+        builder.put_column_index(col_index.clone(), 0, 3);
+        builder.put_offset_index(off_index.clone(), 2, 0);
+        builder.put_offset_index(off_index.clone(), 0, 3);
 
         let mut unallocated = PageIndexBuilder::default();
         assert!(unallocated.try_put_column_index(col_index, 0, 0).is_err());
@@ -977,6 +1002,76 @@ mod tests {
         assert!(page_index.offset_index(0, 0).is_some());
         assert!(page_index.column_index(0, 1).is_none());
         assert!(page_index.offset_index(1, 0).is_none());
+    }
+
+    #[test]
+    fn test_into_index_entries_moves_owned_values_in_row_major_order() {
+        fn column_index(seed: i32, num_pages: usize) -> ColumnIndexMetaData {
+            let mut builder = ColumnIndexBuilder::new(PhysicalType::INT32);
+            for page in 0..num_pages {
+                let min = seed + page as i32;
+                builder.append(
+                    false,
+                    min.to_le_bytes().to_vec(),
+                    (min + 10).to_le_bytes().to_vec(),
+                    0,
+                    None,
+                );
+            }
+            builder.build().unwrap()
+        }
+
+        fn offset_index(seed: i64, num_pages: usize) -> OffsetIndexMetaData {
+            let mut builder = OffsetIndexBuilder::new();
+            for page in 0..num_pages {
+                builder.append_row_count(10);
+                builder.append_offset_and_size(seed + page as i64 * 100, 100);
+            }
+            builder.build()
+        }
+
+        let first_column = column_index(1, 1);
+        let second_column = column_index(2, 2);
+        let column_values = match &second_column {
+            ColumnIndexMetaData::INT32(index) => index.min_values().as_ptr(),
+            _ => unreachable!(),
+        };
+        let offset = offset_index(10, 3);
+        let page_locations = offset.page_locations().as_ptr();
+
+        let mut builder = PageIndexBuilder::new(3, 3);
+        builder.try_put_column_index(second_column, 2, 0).unwrap();
+        builder.try_put_offset_index(offset, 1, 1).unwrap();
+        builder
+            .try_put_column_index(first_column.clone(), 0, 2)
+            .unwrap();
+
+        let (column_entries, offset_entries) = builder.build().into_index_entries();
+        let column_entries = column_entries.collect::<Vec<_>>();
+        let offset_entries = offset_entries.collect::<Vec<_>>();
+        assert_eq!(
+            column_entries,
+            vec![((0, 2), first_column), ((2, 0), column_index(2, 2))]
+        );
+        assert_eq!(offset_entries, vec![((1, 1), offset_index(10, 3))]);
+        match &column_entries[1].1 {
+            ColumnIndexMetaData::INT32(index) => {
+                assert_eq!(index.min_values().as_ptr(), column_values)
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            offset_entries[0].1.page_locations().as_ptr(),
+            page_locations
+        );
+
+        let column = column_index(3, 1);
+        let mut builder = PageIndexBuilder::default();
+        builder.try_allocate_column_indexes(1, 1).unwrap();
+        builder.try_put_column_index(column.clone(), 0, 0).unwrap();
+        let (column_entries, offset_entries) = builder.build().into_index_entries();
+        assert_eq!(column_entries.collect::<Vec<_>>(), vec![((0, 0), column)]);
+        assert_eq!(offset_entries.count(), 0);
     }
 
     #[test]
