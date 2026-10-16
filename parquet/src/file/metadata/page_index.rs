@@ -372,10 +372,10 @@ impl RowGroupPageIndex {
 /// Struct to encapsulate the Parquet [Page Index]
 ///
 /// This struct provides a sparse, immutable representation of the Page Index, stored in row-major
-/// order and keyed by row group and column index. Index values are reference counted so a
-/// `PageIndex` can be assembled cheaply from entries held in a shared cache. It is used internally
-/// by this crate when assembling and writing the Page Index, and is the default implementation of
-/// the [`PageIndexProvider`] contained in the [`ParquetMetaData`].
+/// order and keyed by row group and column index. It owns its populated column and offset index
+/// metadata. Use [`Self::into_index_entries`] to move that metadata into an external cache.
+/// It is used internally by this crate when assembling and writing the Page Index, and is the
+/// default implementation of the [`PageIndexProvider`] contained in the [`ParquetMetaData`].
 ///
 /// # Example: Constructing a synthetic `PageIndex`
 ///
@@ -490,8 +490,8 @@ impl PageIndex {
     /// Consumes this page index and returns its populated column and offset index entries.
     ///
     /// Each entry contains its `(row_group_index, column_index)` coordinate and owned index
-    /// metadata. This can be used to transfer parsed indexes into a cache by moving the metadata
-    /// without cloning it or allocating new [`Arc`]s. Entries are returned in row-major order.
+    /// metadata. This can be used to move parsed indexes into a cache without cloning their
+    /// metadata. Entries are returned in row-major order.
     #[expect(clippy::type_complexity)]
     pub fn into_index_entries(
         self,

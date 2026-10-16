@@ -223,15 +223,16 @@ impl ParquetMetaData {
     ///
     /// 1. Includes size of self
     ///
-    /// 2. Includes heap memory for sub fields such as [`FileMetaData`] and
-    ///    [`RowGroupMetaData`].
+    /// 2. Includes heap memory for sub fields such as [`FileMetaData`],
+    ///    [`RowGroupMetaData`], and the built-in [`PageIndex`] provider.
     ///
-    /// 3. Includes memory from shared pointers (e.g. [`SchemaDescPtr`] and the
-    ///    [`Arc`] values in a [`PageIndex`]). This means `memory_size` will over
-    ///    estimate the memory size if such pointers are shared, including when
-    ///    page indexes are also held in an external cache.
+    /// 3. Includes memory reachable through shared pointers, such as [`SchemaDescPtr`] and the
+    ///    [`Arc`]-wrapped page index provider. Therefore, the same allocation may be counted by
+    ///    multiple metadata values or when the provider is also retained in an external cache.
     ///
-    /// 4. Does not include any allocator overheads
+    /// 4. Does not include heap memory used by custom [`PageIndexProvider`] implementations.
+    ///
+    /// 5. Does not include any allocator overheads.
     pub fn memory_size(&self) -> usize {
         #[cfg(feature = "encryption")]
         let encryption_size = self.file_decryptor.heap_size();
