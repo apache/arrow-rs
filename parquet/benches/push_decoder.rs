@@ -10,7 +10,8 @@
 //! The `scan_plan` group measures `ParquetPushDecoder::scan_plan` for wide
 //! schemas with a page index.
 //!
-//! The `decode` and `decode_8192` groups decode a file with `try_decode`.
+//! The `decode` and `decode_8192` groups decode a file with `try_decode`, for
+//! each [`RequestGranularity`].
 
 use std::hint::black_box;
 use std::ops::Range;
@@ -26,7 +27,7 @@ use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, RowSelection, RowSelector,
 };
-use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
+use parquet::arrow::push_decoder::{ParquetPushDecoderBuilder, RequestGranularity};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataPushDecoder};
 use parquet::file::properties::WriterProperties;
 
@@ -313,6 +314,12 @@ fn bench_scan_plan(c: &mut Criterion) {
     group.finish();
 }
 
+/// The benchmark name of each [`RequestGranularity`].
+const GRANULARITIES: [(&str, RequestGranularity); 2] = [
+    ("row_group", RequestGranularity::RowGroup),
+    ("batch", RequestGranularity::Batch),
+];
+
 /// Decode the file with `try_decode`. Push exactly the ranges that the
 /// decoder requests. Returns the number of rows.
 fn decode_file(builder: ParquetPushDecoderBuilder, file_data: &Bytes) -> usize {
@@ -336,9 +343,9 @@ fn decode_file(builder: ParquetPushDecoderBuilder, file_data: &Bytes) -> usize {
 /// Decode 10 columns and 1,000 rows with small batches, so that the cost of
 /// one request is large next to the decode work.
 ///
-/// `row_group` is the size of a request: `NeedsData` asks for all bytes of a
-/// row group. `10pages_100batch` has one page per batch. `100pages_10batch`
-/// has small pages and small batches.
+/// `row_group` and `batch` are the [`RequestGranularity`] of the decoder.
+/// `10pages_100batch` has one page per batch. `100pages_10batch` has small
+/// pages and small batches.
 fn bench_decode(c: &mut Criterion) {
     let mut group = c.benchmark_group("push_decoder/decode");
 
@@ -348,13 +355,16 @@ fn bench_decode(c: &mut Criterion) {
         let metadata = ArrowReaderMetadata::load(&file_data, options).unwrap();
 
         let id = format!("{pages}pages_{batch_size}batch");
-        group.bench_function(BenchmarkId::new("row_group", &id), |b| {
-            b.iter(|| {
-                let builder = ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())
-                    .with_batch_size(batch_size);
-                black_box(decode_file(builder, &file_data))
-            })
-        });
+        for (name, granularity) in GRANULARITIES {
+            group.bench_function(BenchmarkId::new(name, &id), |b| {
+                b.iter(|| {
+                    let builder = ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())
+                        .with_batch_size(batch_size)
+                        .with_request_granularity(granularity);
+                    black_box(decode_file(builder, &file_data))
+                })
+            });
+        }
     }
 
     group.finish();
@@ -397,13 +407,16 @@ fn bench_decode_large_batches(c: &mut Criterion) {
         let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let metadata = ArrowReaderMetadata::load(&file_data, options).unwrap();
 
-        group.bench_function(BenchmarkId::new("row_group", strings), |b| {
-            b.iter(|| {
-                let builder = ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())
-                    .with_batch_size(8192);
-                black_box(decode_file(builder, &file_data))
-            })
-        });
+        for (name, granularity) in GRANULARITIES {
+            group.bench_function(BenchmarkId::new(name, strings), |b| {
+                b.iter(|| {
+                    let builder = ParquetPushDecoderBuilder::new_with_metadata(metadata.clone())
+                        .with_batch_size(8192)
+                        .with_request_granularity(granularity);
+                    black_box(decode_file(builder, &file_data))
+                })
+            });
+        }
     }
 
     group.finish();
