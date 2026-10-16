@@ -133,7 +133,11 @@ test_source_distribution() {
     local arrow_testing_commit parquet_testing_commit
     arrow_testing_commit=$(submodule_commit testing)
     parquet_testing_commit=$(submodule_commit parquet-testing)
+    # Fetch the commits explicitly, as they may not be reachable from any
+    # branch (e.g. a submodule pinned to a pull request's head commit)
+    git -C arrow-testing-data fetch origin "${arrow_testing_commit}"
     git -C arrow-testing-data checkout "${arrow_testing_commit}"
+    git -C parquet-testing-data fetch origin "${parquet_testing_commit}"
     git -C parquet-testing-data checkout "${parquet_testing_commit}"
   fi
 
