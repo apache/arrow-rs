@@ -17,6 +17,7 @@
 
 use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BinaryViewBuilder, Int32Array, StringArray, StructArray,
+    StructArrayAssembler,
 };
 use arrow::buffer::Buffer;
 use arrow::compute::CastOptions;
@@ -297,6 +298,69 @@ pub fn variant_get_unshredded_object_path_bench(c: &mut Criterion) {
     c.bench_function("variant_get_unshredded_object_path_262k_rows", |b| {
         b.iter(|| variant_get(&input, options.clone()).unwrap())
     });
+}
+
+pub fn variant_get_object_path_metadata_bench(c: &mut Criterion) {
+    let size = SHRED_VARIANT_OBJECT_ROWS;
+    let num_fields = 300;
+    let field = Arc::new(Field::new("typed_value", DataType::Int32, true));
+    let path = VariantPath::from(vec![VariantPathElement::field("attr.140")]);
+    let options = GetOptions::new_with_path(path).with_as_type(Some(field));
+    let mut group = c.benchmark_group("variant_get_object_path_metadata");
+
+    // Alternate two overlapping key sets, always including the lookup target.
+    let json_templates = [0, 1].map(|offset| {
+        Value::Object(
+            (0..num_fields)
+                .map(|index| {
+                    if index == num_fields / 2 {
+                        ("attr.140".to_string(), Value::from(140))
+                    } else {
+                        (format!("attr.{index:03}.{offset}"), Value::from(index))
+                    }
+                })
+                .collect(),
+        )
+    });
+    for case in [
+        "json_to_variant",
+        "variant_array_builder",
+        "per_row_metadata",
+    ] {
+        // Fixture construction is outside the timed loop. The producer cases follow their
+        // output layouts, including any future dictionary sharing.
+        let input = match case {
+            "json_to_variant" => {
+                let json_strings = json_templates.each_ref().map(Value::to_string);
+                let json: ArrayRef = Arc::new(StringArray::from_iter_values(
+                    json_strings.iter().cycle().take(size),
+                ));
+                ArrayRef::from(json_to_variant(&json).unwrap())
+            }
+            "variant_array_builder" => {
+                let mut builder = VariantArrayBuilder::new(size);
+                for json in json_templates.iter().cycle().take(size) {
+                    let mut object = builder.new_object();
+                    // Reverse insertion order produces an unsorted metadata dictionary.
+                    for (name, value) in json.as_object().unwrap().iter().rev() {
+                        object.insert(name, value.as_i64().unwrap());
+                    }
+                    object.finish();
+                }
+                ArrayRef::from(builder.build())
+            }
+            _ => ArrayRef::from(create_per_row_metadata_variant_array(&json_templates, size)),
+        };
+        let result = variant_get(&input, options.clone()).unwrap();
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(result.len(), size);
+        assert!(result.iter().all(|value| value == Some(140)));
+
+        group.bench_function(case, |b| {
+            b.iter(|| variant_get(&input, options.clone()).unwrap())
+        });
+    }
+    group.finish();
 }
 
 /// Shreds objects whose fields only partially match the requested shredding schema.
@@ -708,6 +772,7 @@ criterion_group!(
     variant_get_list_index_all_oob_int64_bench,
     variant_get_shredded_utf8_bench,
     variant_get_unshredded_object_path_bench,
+    variant_get_object_path_metadata_bench,
     shred_variant_partial_object_bench,
     shred_variant_unmatched_object_bench,
     variant_array_builder_build_bench,
@@ -773,6 +838,32 @@ fn create_shredded_utf8_variant_array(size: usize) -> VariantArray {
 
     VariantArray::try_new(struct_array_ref.as_ref())
         .expect("created struct should be a valid shredded variant")
+}
+
+/// Keeps metadata unshared even if `json_to_variant` or `VariantArrayBuilder` starts sharing it.
+/// `BinaryViewArray::from_iter_values` copies each row's metadata into its own byte range.
+fn create_per_row_metadata_variant_array(json_templates: &[Value], size: usize) -> VariantArray {
+    let templates = json_templates
+        .iter()
+        .map(|json| {
+            let mut builder = VariantBuilder::new();
+            append_json(json, &mut builder).unwrap();
+            builder.finish()
+        })
+        .collect::<Vec<_>>();
+    let rows = templates.iter().cycle().take(size);
+    let metadata = BinaryViewArray::from_iter_values(rows.clone().map(|(metadata, _)| metadata));
+    let value = BinaryViewArray::from_iter_values(rows.map(|(_, value)| value));
+    assert_ne!(
+        metadata.value(0).as_ptr(),
+        metadata.value(templates.len()).as_ptr()
+    );
+    let input = StructArrayAssembler::new()
+        .with_field("metadata", Arc::new(metadata), false)
+        .with_field("value", Arc::new(value), false)
+        .build()
+        .unwrap();
+    VariantArray::try_new(&input).unwrap()
 }
 
 fn create_unshredded_object_variant_array(size: usize) -> VariantArray {
