@@ -455,6 +455,12 @@ enum Encoding {
   ///
   /// Currently specified for FLOAT and DOUBLE.
   ALP = 10;
+  /// Compressed string encoding using a Fast Static Symbol Table (FSST).
+  ///
+  /// Frequently occurring substrings (up to 8 bytes) are replaced with
+  /// single-byte codes drawn from a per-page symbol table, enabling random
+  /// access to individual compressed values. Applies to BYTE_ARRAY data.
+  FSST = 11;
 }
 );
 
@@ -476,6 +482,7 @@ impl FromStr for Encoding {
             "RLE_DICTIONARY" | "rle_dictionary" => Ok(Encoding::RLE_DICTIONARY),
             "BYTE_STREAM_SPLIT" | "byte_stream_split" => Ok(Encoding::BYTE_STREAM_SPLIT),
             "ALP" | "alp" => Ok(Encoding::ALP),
+            "FSST" | "fsst" => Ok(Encoding::FSST),
             _ => Err(general_err!("unknown encoding: {}", s)),
         }
     }
@@ -616,6 +623,7 @@ fn i32_to_encoding(val: i32) -> Encoding {
         8 => Encoding::RLE_DICTIONARY,
         9 => Encoding::BYTE_STREAM_SPLIT,
         10 => Encoding::ALP,
+        11 => Encoding::FSST,
         _ => panic!("Impossible encoding {val}"),
     }
 }
