@@ -149,6 +149,10 @@ impl From<&Field> for ArrowJsonField {
 }
 
 /// Represents a dictionary-encoded field in the Arrow JSON format
+///
+/// The optional `metadata` of the dictionary value type is not kept, so it is
+/// not seen when converting an [`ArrowJsonField`] to a [`Field`]. Use
+/// [`field_from_json`] to read it.
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJsonFieldDictionary {
     /// A unique identifier for the dictionary
