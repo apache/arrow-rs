@@ -657,7 +657,7 @@ unsafe fn pack_bit(src: *const u8, bit_idx: usize, out_pos: usize) -> u8 {
 }
 
 #[inline(never)]
-fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
+pub(crate) fn take_bits<I: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     values: &BooleanBuffer,
     indices: &PrimitiveArray<I>,
 ) -> BooleanBuffer {
