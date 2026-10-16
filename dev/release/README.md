@@ -118,6 +118,19 @@ git tag <version>-<rc> apache/main
 git push apache <version>-<rc>
 ```
 
+### Verify Miri results (required)
+
+Run the
+[Miri workflow](https://github.com/apache/arrow-rs/actions/workflows/miri.yaml)
+on the release candidate tag:
+
+```shell
+gh workflow run miri.yaml --repo apache/arrow-rs --ref <version>-<rc>
+```
+
+All partitions must pass before creating the tarball. Review the results and
+link the run in the release tracking issue.
+
 ### Create, sign, and upload tarball
 
 Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps.
