@@ -423,16 +423,23 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         } = self;
         seen.fill(false);
         let mut builder = value_builder.builder_ext(value.metadata());
-        let mut object_builder = builder.try_new_object()?;
+        // Error on a repeated unshredded field instead of overwriting it
+        let mut object_builder = builder.try_new_object()?.with_validate_unique_fields(true);
         let mut partially_shredded = false;
         for (field_name, value) in obj.iter() {
             match typed_value_builders.get_full_mut(field_name) {
                 Some((index, _, typed_value_builder)) => {
+                    // A repeated field would append a second row to this builder
+                    if seen[index] {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Duplicate field name: {field_name}"
+                        )));
+                    }
                     typed_value_builder.append_value(value)?;
                     seen[index] = true;
                 }
                 None => {
-                    object_builder.insert_bytes(field_name, value);
+                    object_builder.try_insert_bytes(field_name, value)?;
                     partially_shredded = true;
                 }
             }
@@ -2349,6 +2356,39 @@ mod tests {
         let value_field3 = result3.value_column();
         assert!(value_field3.is_null(0)); // fully shredded, no remaining fields
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_object_with_duplicate_field_names_errors() -> Result<()> {
+        // Unsorted dictionaries ["a"] and ["a", "a"]; only an unsorted dictionary may repeat a name
+        let metadata_a: &[u8] = &[0x01, 1, 0, 1, b'a'];
+        let metadata_aa: &[u8] = &[0x01, 2, 0, 1, 2, b'a', b'a'];
+        // {"a": 0i8, "a": 1i8}, via field ids [0, 0] and [0, 1]
+        let same_ids: &[u8] = &[0x02, 2, 0, 0, 0, 2, 4, 0x0C, 0, 0x0C, 1];
+        let distinct_ids: &[u8] = &[0x02, 2, 0, 1, 0, 2, 4, 0x0C, 0, 0x0C, 1];
+
+        for (metadata, value) in [(metadata_a, same_ids), (metadata_aa, distinct_ids)] {
+            // Full validation rejects the duplicate, but shredding only validates shallowly
+            assert!(Variant::try_new(metadata, value).is_err());
+            let input = VariantArray::from_parts(
+                Arc::new(BinaryViewArray::from_iter_values([metadata])),
+                Arc::new(BinaryViewArray::from_iter_values([value])),
+                None,
+                None,
+            );
+            // The duplicate is either shredded ("a") or left unshredded ("b")
+            for path in ["a", "b"] {
+                let as_type = ShreddedSchemaBuilder::default()
+                    .with_path(path, &DataType::Int8)?
+                    .build();
+                let err = shred_variant(&input, &as_type).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    "Invalid argument error: Duplicate field name: a"
+                );
+            }
+        }
         Ok(())
     }
 

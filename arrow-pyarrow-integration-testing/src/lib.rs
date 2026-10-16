@@ -31,7 +31,7 @@ use arrow::array::{Array, ArrayData, ArrayRef, Int64Array, make_array};
 use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
-use arrow::ffi_stream::ArrowArrayStreamReader;
+use arrow::ffi_stream::RecordBatchStreamReader;
 use arrow::pyarrow::{FromPyArrow, PyArrowException, PyArrowType, Table, ToPyArrow};
 use arrow::record_batch::RecordBatch;
 
@@ -135,8 +135,8 @@ fn round_trip_record_batch(obj: PyArrowType<RecordBatch>) -> PyResult<PyArrowTyp
 
 #[pyfunction]
 fn round_trip_record_batch_reader(
-    obj: PyArrowType<ArrowArrayStreamReader>,
-) -> PyResult<PyArrowType<ArrowArrayStreamReader>> {
+    obj: PyArrowType<RecordBatchStreamReader>,
+) -> PyResult<PyArrowType<RecordBatchStreamReader>> {
     Ok(obj)
 }
 
@@ -161,7 +161,7 @@ pub fn build_table(
 }
 
 #[pyfunction]
-fn reader_return_errors(obj: PyArrowType<ArrowArrayStreamReader>) -> PyResult<()> {
+fn reader_return_errors(obj: PyArrowType<RecordBatchStreamReader>) -> PyResult<()> {
     // This makes sure we can correctly consume a RBR and return the error,
     // ensuring the error can live beyond the lifetime of the RBR.
     let batches = obj.0.collect::<Result<Vec<RecordBatch>, ArrowError>>();
@@ -173,7 +173,7 @@ fn reader_return_errors(obj: PyArrowType<ArrowArrayStreamReader>) -> PyResult<()
 
 #[pyfunction]
 fn boxed_reader_roundtrip(
-    obj: PyArrowType<ArrowArrayStreamReader>,
+    obj: PyArrowType<RecordBatchStreamReader>,
 ) -> PyArrowType<Box<dyn RecordBatchReader + Send>> {
     let schema = obj.0.schema();
     let batches = obj
