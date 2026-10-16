@@ -20,7 +20,6 @@
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::memory::HeapSize;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ColumnChunkKey(u64);
@@ -66,21 +65,11 @@ fn validate_dimensions(num_row_groups: usize, num_columns: usize) -> Result<()> 
     Ok(())
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ColumnChunkMap<T> {
     num_row_groups: usize,
     num_columns: usize,
-    entries: HashMap<ColumnChunkKey, Arc<T>>,
-}
-
-impl<T> Clone for ColumnChunkMap<T> {
-    fn clone(&self) -> Self {
-        Self {
-            num_row_groups: self.num_row_groups,
-            num_columns: self.num_columns,
-            entries: self.entries.clone(),
-        }
-    }
+    entries: HashMap<ColumnChunkKey, T>,
 }
 
 impl<T> ColumnChunkMap<T> {
@@ -113,8 +102,8 @@ impl<T> ColumnChunkMap<T> {
         &mut self,
         row_group_idx: usize,
         column_idx: usize,
-        value: Arc<T>,
-    ) -> Result<Option<Arc<T>>> {
+        value: T,
+    ) -> Result<Option<T>> {
         let key = self.key(row_group_idx, column_idx)?;
         if !self.entries.contains_key(&key) {
             self.entries.try_reserve(1).map_err(|err| {
@@ -124,6 +113,12 @@ impl<T> ColumnChunkMap<T> {
                 ))
             })?;
         }
+        self.entries.try_reserve(1).map_err(|err| {
+            ParquetError::General(format!(
+                "failed to reserve storage for column chunk at row group {row_group_idx}, \
+                 column {column_idx}: {err}"
+            ))
+        })?;
         Ok(self.entries.insert(key, value))
     }
 
@@ -154,21 +149,11 @@ impl<T: HeapSize> HeapSize for ColumnChunkMap<T> {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ColumnChunkEntries<T> {
     num_row_groups: usize,
     num_columns: usize,
-    entries: Box<[(ColumnChunkKey, Arc<T>)]>,
-}
-
-impl<T> Clone for ColumnChunkEntries<T> {
-    fn clone(&self) -> Self {
-        Self {
-            num_row_groups: self.num_row_groups,
-            num_columns: self.num_columns,
-            entries: self.entries.clone(),
-        }
-    }
+    entries: Box<[(ColumnChunkKey, T)]>,
 }
 
 impl<T> ColumnChunkEntries<T> {
@@ -192,10 +177,7 @@ impl<T> ColumnChunkEntries<T> {
         for (row_group_idx, columns) in rows.into_iter().enumerate() {
             for (column_idx, value) in columns.into_iter().enumerate() {
                 if let Some(value) = value {
-                    entries.push((
-                        ColumnChunkKey::try_new(row_group_idx, column_idx)?,
-                        Arc::new(value),
-                    ));
+                    entries.push((ColumnChunkKey::try_new(row_group_idx, column_idx)?, value));
                 }
             }
         }
@@ -234,17 +216,15 @@ impl<T> ColumnChunkEntries<T> {
                 "column chunk binary search returned invalid entry index {entry_idx}"
             )));
         };
-        Ok(Some(value.as_ref()))
+        Ok(Some(value))
     }
 
     #[cfg_attr(not(test), expect(unused))]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (ColumnChunkKey, &T)> {
-        self.entries
-            .iter()
-            .map(|(key, value)| (*key, value.as_ref()))
+        self.entries.iter().map(|(key, value)| (*key, value))
     }
 
-    pub(crate) fn into_iter(self) -> impl Iterator<Item = (ColumnChunkKey, Arc<T>)> {
+    pub(crate) fn into_iter(self) -> impl Iterator<Item = (ColumnChunkKey, T)> {
         self.entries.into_vec().into_iter()
     }
 
@@ -258,20 +238,14 @@ impl<T> ColumnChunkEntries<T> {
     }
 }
 
-impl<T: HeapSize> HeapSize for ColumnChunkEntries<T> {
+impl<V: HeapSize> HeapSize for ColumnChunkEntries<V> {
     fn heap_size(&self) -> usize {
-        let entries_size = std::mem::size_of_val(self.entries.as_ref());
-        let mut values_size = 0;
-        for (idx, (_, value)) in self.entries.iter().enumerate() {
-            if self.entries[..idx]
+        self.entries.len() * std::mem::size_of::<((usize, usize), V)>()
+            + self
+                .entries
                 .iter()
-                .any(|(_, previous)| Arc::ptr_eq(previous, value))
-            {
-                continue;
-            }
-            values_size += value.heap_size();
-        }
-        entries_size + values_size
+                .map(|(_, value)| value.heap_size())
+                .sum::<usize>()
     }
 }
 
@@ -282,8 +256,8 @@ mod tests {
     #[test]
     fn sparse_storage_is_sorted_and_validates_coordinates() {
         let mut map = ColumnChunkMap::try_new(2, 3).unwrap();
-        map.try_insert(1, 2, Arc::new(12)).unwrap();
-        map.try_insert(0, 1, Arc::new(1)).unwrap();
+        map.try_insert(1, 2, 12).unwrap();
+        map.try_insert(0, 1, 1).unwrap();
         let entries = map.try_freeze().unwrap();
 
         let coordinates = entries
@@ -307,9 +281,13 @@ mod tests {
     #[test]
     fn freeze_and_thaw_preserve_entries() {
         let mut map = ColumnChunkMap::try_new(2, 2).unwrap();
-        map.try_insert(1, 0, Arc::new(3)).unwrap();
+        map.try_insert(1, 0, 3).unwrap();
+        let expected_entries = map.try_freeze().unwrap();
+
+        let mut map = ColumnChunkMap::try_new(2, 2).unwrap();
+        map.try_insert(1, 0, 3).unwrap();
         let entries = map.try_freeze().unwrap();
-        let thawed = entries.clone().try_into_map().unwrap();
-        assert_eq!(thawed.try_freeze().unwrap(), entries);
+        let thawed = entries.try_into_map().unwrap();
+        assert_eq!(thawed.try_freeze().unwrap(), expected_entries);
     }
 }

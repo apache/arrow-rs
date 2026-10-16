@@ -503,8 +503,8 @@ impl PageIndex {
     pub fn into_index_entries(
         self,
     ) -> (
-        impl Iterator<Item = ((usize, usize), Arc<ColumnIndexMetaData>)>,
-        impl Iterator<Item = ((usize, usize), Arc<OffsetIndexMetaData>)>,
+        impl Iterator<Item = ((usize, usize), ColumnIndexMetaData)>,
+        impl Iterator<Item = ((usize, usize), OffsetIndexMetaData)>,
     ) {
         let column_indexes = self
             .column_indexes
@@ -728,21 +728,6 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<()> {
-        self.try_put_column_index_shared(Arc::new(column_index), row_group_idx, column_idx)
-    }
-
-    /// Attempts to set a shared column index for a specific row group and column.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error, and drops `column_index`, if column indexes were not allocated or the
-    /// coordinate is out of bounds.
-    pub fn try_put_column_index_shared(
-        &mut self,
-        column_index: Arc<ColumnIndexMetaData>,
-        row_group_idx: usize,
-        column_idx: usize,
-    ) -> Result<()> {
         let indexes = self
             .column_indexes
             .as_mut()
@@ -774,21 +759,6 @@ impl PageIndexBuilder {
     pub fn try_put_offset_index(
         &mut self,
         offset_index: OffsetIndexMetaData,
-        row_group_idx: usize,
-        column_idx: usize,
-    ) -> Result<()> {
-        self.try_put_offset_index_shared(Arc::new(offset_index), row_group_idx, column_idx)
-    }
-
-    /// Attempts to set a shared offset index for a specific row group and column.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error, and drops `offset_index`, if offset indexes were not allocated or the
-    /// coordinate is out of bounds.
-    pub fn try_put_offset_index_shared(
-        &mut self,
-        offset_index: Arc<OffsetIndexMetaData>,
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<()> {
@@ -982,11 +952,6 @@ mod tests {
         assert!(
             builder
                 .try_put_column_index(col_index.clone(), 0, 0)
-                .is_ok()
-        );
-        assert!(
-            builder
-                .try_put_offset_index_shared(Arc::new(off_index.clone()), 0, 0)
                 .is_ok()
         );
         assert!(

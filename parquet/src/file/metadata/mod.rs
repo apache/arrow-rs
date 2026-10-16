@@ -2326,48 +2326,4 @@ mod tests {
         assert!(page_index.column_index(0, 1).is_some());
         assert!(page_index.offset_index(0, 1).is_some());
     }
-
-    #[test]
-    fn test_page_index_builder_reuses_shared_index() {
-        let mut col_idx_builder = ColumnIndexBuilder::new(Type::INT32);
-        col_idx_builder.append(false, vec![1, 0, 0, 0], vec![100, 0, 0, 0], 10, None);
-        let col_idx = Arc::new(col_idx_builder.build().unwrap());
-
-        let mut builder = PageIndexBuilder::new(2, 2);
-        // Insert out of order to verify the immutable representation sorts its entries.
-        assert!(
-            builder
-                .try_put_column_index_shared(Arc::clone(&col_idx), 1, 0)
-                .is_ok()
-        );
-        assert!(
-            builder
-                .try_put_column_index_shared(Arc::clone(&col_idx), 0, 1)
-                .is_ok()
-        );
-        // Coordinates outside the declared shape are reported and ignored.
-        assert!(
-            builder
-                .try_put_column_index_shared(Arc::clone(&col_idx), 2, 0)
-                .is_err()
-        );
-        let page_index = builder.build();
-
-        assert!(std::ptr::eq(
-            page_index.column_index(0, 1).unwrap(),
-            Arc::as_ref(&col_idx)
-        ));
-        assert!(page_index.column_index(0, 0).is_none());
-        assert!(page_index.column_index(2, 0).is_none());
-
-        let (mut column_indexes, mut offset_indexes) = page_index.into_index_entries();
-        let (coordinate, extracted) = column_indexes.next().unwrap();
-        assert_eq!(coordinate, (0, 1));
-        assert!(Arc::ptr_eq(&extracted, &col_idx));
-        let (coordinate, extracted) = column_indexes.next().unwrap();
-        assert_eq!(coordinate, (1, 0));
-        assert!(Arc::ptr_eq(&extracted, &col_idx));
-        assert!(column_indexes.next().is_none());
-        assert!(offset_indexes.next().is_none());
-    }
 }

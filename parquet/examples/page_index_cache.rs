@@ -22,8 +22,8 @@
 //!
 //! 1. Finds the requested column chunks that are absent from the page-index cache
 //! 2. Uses [`ParquetMetaDataReader::read_page_index_and_finish`] to request and decode those misses
-//! 3. Moves the decoded entries into the cache
-//! 4. Builds a query-specific [`PageIndex`] from shared cache entries
+//! 3. Moves the decoded entries into the cache and wraps them in [`Arc`]
+//! 4. Builds a query-specific [`PageIndex`] from cached entries
 //!
 //! A production cache shared by multiple files would also include a stable file identity and
 //! freshness information in its keys. This example also caches only indexes that are present;
@@ -100,34 +100,27 @@ impl PageIndexCache {
             metadata = returned_metadata;
             if let Some(page_index) = page_index {
                 let (column_indexes, offset_indexes) = page_index.into_index_entries();
-                self.column_indexes.extend(column_indexes);
-                self.offset_indexes.extend(offset_indexes);
+                self.column_indexes
+                    .extend(column_indexes.map(|(key, index)| (key, Arc::new(index))));
+                self.offset_indexes
+                    .extend(offset_indexes.map(|(key, index)| (key, Arc::new(index))));
             }
         }
 
-        // Build an immutable provider containing only the entries needed by this query. Cloning
-        // the Arcs neither clones the decoded metadata nor retains the source file bytes.
+        // Build an immutable provider containing only the entries needed by this query.
         let mut builder = PageIndexBuilder::new(num_row_groups, num_columns);
         for key @ (row_group_idx, column_idx) in
             column_index_mask.column_chunk_indices(num_row_groups, num_columns)
         {
             if let Some(index) = self.column_indexes.get(&key) {
-                builder.try_put_column_index_shared(
-                    Arc::clone(index),
-                    row_group_idx,
-                    column_idx,
-                )?;
+                builder.try_put_column_index(index.as_ref().clone(), row_group_idx, column_idx)?;
             }
         }
         for key @ (row_group_idx, column_idx) in
             offset_index_mask.column_chunk_indices(num_row_groups, num_columns)
         {
             if let Some(index) = self.offset_indexes.get(&key) {
-                builder.try_put_offset_index_shared(
-                    Arc::clone(index),
-                    row_group_idx,
-                    column_idx,
-                )?;
+                builder.try_put_offset_index(index.as_ref().clone(), row_group_idx, column_idx)?;
             }
         }
         Ok((metadata, builder.build()))
