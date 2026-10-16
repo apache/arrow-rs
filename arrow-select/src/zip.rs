@@ -29,7 +29,7 @@ use arrow_buffer::{
     ToByteSlice,
 };
 use arrow_data::transform::MutableArrayData;
-use arrow_data::{ArrayData, ByteView};
+use arrow_data::{ArrayData, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
@@ -814,10 +814,12 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                 let true_count = predicate.count_set_bits();
                 let mut buffers: Vec<Buffer> = truthy_buffers.to_vec();
 
-                // If the falsy buffers are empty, we can use the falsy view as it is, because the value
-                // is completely inlined. Otherwise, we have non-inlined values in the buffer, and we need
-                // to recalculate the falsy view
-                let view_falsy = if falsy_buffers.is_empty() {
+                // A short falsy value is stored entirely inside its view, so we can use the
+                // view as it is. We check the value's length rather than whether the scalar has
+                // buffers, because a scalar cut from a larger array can still have buffers
+                // even when its own value is short. A longer value lives in a buffer, so we
+                // need to update its view to point at that buffer's new position
+                let view_falsy = if (falsy_view as u32) <= MAX_INLINE_VIEW_LEN {
                     falsy_view
                 } else {
                     let byte_view_falsy = ByteView::from(falsy_view);
@@ -1746,6 +1748,85 @@ mod test {
             Some("another longer than 12 bytes"),
             Some("another longer than 12 bytes"),
         ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_strings_array_view_sliced_inline() {
+        // Both scalars are inlined, but each slice keeps its array's data buffer
+        let truthy =
+            StringViewArray::from(vec!["x", "a string longer than twelve bytes"]).slice(0, 1);
+        let falsy =
+            StringViewArray::from(vec!["hello", "another string longer than twelve"]).slice(0, 1);
+
+        let mask = BooleanArray::from(vec![true, false, true, false]);
+        let out = zip(&mask, &Scalar::new(&truthy), &Scalar::new(&falsy)).unwrap();
+        out.to_data().validate_full().unwrap();
+        let actual = out.as_string_view();
+        let expected = StringViewArray::from(vec!["x", "hello", "x", "hello"]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_binary_array_view_sliced_inline_short() {
+        // A falsy value of at most 4 bytes keeps zero padding in view bytes 8 to 11
+        let truthy = BinaryViewArray::from_iter_values([
+            b"x".as_slice(),
+            b"a value longer than twelve bytes",
+        ])
+        .slice(0, 1);
+        let falsy = BinaryViewArray::from_iter_values([
+            b"ab".as_slice(),
+            b"another value longer than twelve",
+        ])
+        .slice(0, 1);
+
+        let mask = BooleanArray::from(vec![false, true, false]);
+        let out = zip(&mask, &Scalar::new(&truthy), &Scalar::new(&falsy)).unwrap();
+        out.to_data().validate_full().unwrap();
+        let actual = out.as_binary_view();
+        let expected = BinaryViewArray::from_iter_values([b"ab".as_slice(), b"x", b"ab"]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_strings_array_view_sliced_long_falsy() {
+        // A long falsy value must still be remapped after the truthy buffers
+        let truthy =
+            StringViewArray::from(vec!["a string longer than twelve bytes", "x"]).slice(0, 1);
+        let falsy =
+            StringViewArray::from(vec!["y", "another string longer than twelve"]).slice(1, 1);
+
+        let mask = BooleanArray::from(vec![true, false]);
+        let out = zip(&mask, &Scalar::new(&truthy), &Scalar::new(&falsy)).unwrap();
+        out.to_data().validate_full().unwrap();
+        let actual = out.as_string_view();
+        let expected = StringViewArray::from(vec![
+            "a string longer than twelve bytes",
+            "another string longer than twelve",
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_binary_array_view_sliced_inline_max_len() {
+        // A 12 byte inlined value whose bytes 8 to 11 are 0xFF must not be read as a buffer index
+        let truthy = BinaryViewArray::from_iter_values([
+            b"x".as_slice(),
+            b"another value longer than twelve",
+        ])
+        .slice(0, 1);
+        let falsy = BinaryViewArray::from_iter_values([
+            [0xFFu8; 12].as_slice(),
+            b"a value longer than twelve bytes",
+        ])
+        .slice(0, 1);
+
+        let mask = BooleanArray::from(vec![true, false]);
+        let out = zip(&mask, &Scalar::new(&truthy), &Scalar::new(&falsy)).unwrap();
+        out.to_data().validate_full().unwrap();
+        let actual = out.as_binary_view();
+        let expected = BinaryViewArray::from_iter_values([b"x".as_slice(), &[0xFFu8; 12]]);
         assert_eq!(actual, &expected);
     }
 }
