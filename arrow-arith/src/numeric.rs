@@ -982,8 +982,7 @@ fn scaled_div<T: DecimalType>(
     let dividend = abs_checked::<T>(l)?;
     let divisor = abs_checked::<T>(r)?;
 
-    let mut quotient = dividend.div_checked(divisor)?;
-    let mut remainder = dividend.mod_checked(divisor)?;
+    let (mut quotient, mut remainder) = dividend.div_rem_checked(divisor)?;
     for _ in 0..mul_pow {
         // `remainder * 10` overflows for divisors near `T::Native::MAX`, so add the remainder
         // ten times and take the divisor off whenever the running sum reaches it.
