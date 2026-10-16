@@ -53,6 +53,7 @@ use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 
 mod byte_budget_chunker;
 pub(crate) mod encoder;
+pub(crate) mod min_max;
 
 use byte_budget_chunker::{ByteBudgetChunker, SubBatchStrategy};
 
@@ -578,7 +579,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     pub(crate) fn write_batch_internal(
         &mut self,
         values: &E::Values,
-        value_indices: Option<&[usize]>,
+        value_indices: Option<ValueIndices<'_>>,
         def_levels: LevelDataRef<'_>,
         rep_levels: LevelDataRef<'_>,
         min: Option<&E::T>,
@@ -607,7 +608,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let num_levels = if num_levels > 0 {
             num_levels
         } else {
-            value_indices.map_or_else(|| values.len(), |i| i.len())
+            value_indices.map_or_else(|| values.len(), |i| i.indices.len())
         };
 
         if let Some(min) = min {
@@ -664,7 +665,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             let sub_batch = chunker.pick_sub_batch(
                 &self.encoder,
                 values,
-                value_indices,
+                value_indices.map(|i| i.indices),
                 chunk_def,
                 values_offset,
                 chunk_size,
@@ -886,7 +887,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         &mut self,
         values: &E::Values,
         values_offset: usize,
-        value_indices: Option<&[usize]>,
+        value_indices: Option<ValueIndices<'_>>,
         chunk_size: usize,
         chunk_def: LevelDataRef<'_>,
         chunk_rep: LevelDataRef<'_>,
@@ -1015,7 +1016,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         &mut self,
         values: &E::Values,
         values_offset: usize,
-        value_indices: Option<&[usize]>,
+        value_indices: Option<ValueIndices<'_>>,
         num_levels: usize,
         def_levels: LevelDataRef<'_>,
         rep_levels: LevelDataRef<'_>,
@@ -1123,9 +1124,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         match value_indices {
-            Some(indices) => {
+            Some(ValueIndices { indices, ascending }) => {
                 let indices = &indices[values_offset..values_offset + values_to_write];
-                self.encoder.write_gather(values, indices)?;
+                // A mini-batch without nulls has a contiguous range of indices,
+                // which the encoder can take as a range instead of gathering
+                // each value through its index
+                match contiguous_range(indices, ascending) {
+                    Some(range) => self.encoder.write(values, range.start, range.len())?,
+                    None => self.encoder.write_gather(values, indices)?,
+                }
             }
             None => self.encoder.write(values, values_offset, values_to_write)?,
         }
@@ -1845,6 +1852,35 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     }
 }
 
+/// The positions in `values` of the values to write, for
+/// [`GenericColumnWriter::write_batch_internal`]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ValueIndices<'a> {
+    pub(crate) indices: &'a [usize],
+    /// Whether `indices` is strictly increasing, as it is for every leaf
+    /// except those below a list view, whose lists may be in any order
+    pub(crate) ascending: bool,
+}
+
+/// Returns the range `indices` covers, if they are its positions in order
+///
+/// Strictly increasing indices are contiguous exactly when they span their
+/// length, so only their ends are checked. Otherwise every index is, as an
+/// out of order permutation of a range would pass as the range; that check
+/// is a simple loop the compiler vectorizes.
+fn contiguous_range(indices: &[usize], ascending: bool) -> Option<std::ops::Range<usize>> {
+    let first = *indices.first()?;
+    if ascending {
+        debug_assert!(indices.windows(2).all(|w| w[0] < w[1]));
+        let last = *indices.last()?;
+        return (last - first + 1 == indices.len()).then_some(first..last + 1);
+    }
+    let in_order = indices.iter().enumerate().fold(true, |in_order, (i, idx)| {
+        in_order & (*idx == first.wrapping_add(i))
+    });
+    in_order.then_some(first..first + indices.len())
+}
+
 fn update_min<T: ParquetValueType>(descr: &ColumnDescriptor, val: &T, min: &mut Option<T>) {
     match min {
         None => *min = Some(val.clone()),
@@ -2127,6 +2163,22 @@ mod tests {
     use crate::util::test_common::rand_gen::random_numbers_range;
 
     use super::*;
+
+    #[test]
+    fn test_contiguous_range() {
+        for ascending in [true, false] {
+            assert_eq!(contiguous_range(&[], ascending), None);
+            assert_eq!(contiguous_range(&[7], ascending), Some(7..8));
+            assert_eq!(contiguous_range(&[3, 4, 5], ascending), Some(3..6));
+            assert_eq!(contiguous_range(&[3, 4, 6], ascending), None);
+            assert_eq!(contiguous_range(&[0, 2], ascending), None);
+        }
+        // Out of order or repeated, as the values of a list view can be
+        assert_eq!(contiguous_range(&[0, 2, 1, 3], false), None);
+        assert_eq!(contiguous_range(&[1, 0], false), None);
+        assert_eq!(contiguous_range(&[5, 4, 3], false), None);
+        assert_eq!(contiguous_range(&[2, 3, 2, 3], false), None);
+    }
 
     #[test]
     fn test_column_writer_inconsistent_def_rep_length() {
