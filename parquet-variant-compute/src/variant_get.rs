@@ -25,7 +25,7 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{VariantPath, VariantPathElement};
+use parquet_variant::{Variant, VariantPath, VariantPathElement};
 
 use crate::ShreddingState;
 use crate::variant_array::all_null_value_column;
@@ -337,19 +337,45 @@ fn shredded_get_path(
 
     // Structs are special.
     //
-    // For fully unshredded targets (`typed_value` absent), delegate to the row builder so we
-    // preserve struct-level cast semantics:
+    // Without a shredded object, delegate to the row builder so we preserve struct-level
+    // cast semantics:
     // - safe mode: non-object rows become NULL structs
     // - strict mode: non-object rows raise a cast error
     //
-    // For shredded/partially-shredded targets (`typed_value` present), recurse into each field
+    // For shredded/partially-shredded objects, recurse into each field
     // separately to take advantage of deeper shredding in child fields.
     if !as_field.has_valid_extension_type::<VariantType>()
         && let DataType::Struct(fields) = as_field.data_type()
     {
-        if target.typed_value_column().is_none() {
-            return shred_basic_variant(target, VariantPath::default(), Some(as_field));
+        let Some(typed_value) = target.typed_value_column().and_then(|v| v.as_struct_opt()) else {
+            return shred_basic_variant(
+                unshred_variant(&target)?,
+                VariantPath::default(),
+                Some(as_field),
+            );
+        };
+
+        if !cast_options.safe && typed_value.null_count() != 0 {
+            for i in 0..target.len() {
+                if target.is_valid(i) && typed_value.is_null(i) {
+                    let value = target.try_value(i)?;
+                    if !matches!(value, Variant::Null | Variant::Object(_)) {
+                        return Err(ArrowError::CastError(format!(
+                            "Failed to extract struct from variant {value:?}"
+                        )));
+                    }
+                }
+            }
         }
+
+        // A null shredded object is not an object row. Mask its children before extracting
+        // fields so values hidden by that null cannot cause child cast errors.
+        let nulls = NullBuffer::union(target.nulls(), typed_value.nulls());
+        let target = make_target_variant(
+            target.value_column().clone(),
+            target.typed_value_column().cloned(),
+            nulls,
+        );
 
         let children = fields
             .iter()
@@ -3684,6 +3710,190 @@ mod test {
     }
 
     #[test]
+    fn test_shredded_struct_cast_preserves_variant_null() {
+        let input = VariantArray::from_iter([Variant::Null]);
+        let target = DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into());
+        for schema in [
+            DataType::Int64,
+            target.clone(),
+            DataType::new_list(DataType::Int64, true),
+        ] {
+            let shredded = shred_variant(&input, &schema).unwrap();
+            for safe in [true, false] {
+                let options = GetOptions::new()
+                    .with_as_type(Some(Arc::new(Field::new("result", target.clone(), true))))
+                    .with_cast_options(CastOptions {
+                        safe,
+                        ..Default::default()
+                    });
+                let result = variant_get(&ArrayRef::from(shredded.clone()), options).unwrap();
+                assert!(result.is_null(0), "schema: {schema}, safe: {safe}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_shredded_struct_cast_rejects_non_objects() {
+        let input = VariantArray::from_iter([Variant::Int64(42)]);
+        let target = DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into());
+        for schema in [
+            DataType::Int64,
+            target.clone(),
+            DataType::new_list(DataType::Int64, true),
+        ] {
+            let shredded = shred_variant(&input, &schema).unwrap();
+            let options = GetOptions::new()
+                .with_as_type(Some(Arc::new(Field::new("result", target.clone(), true))))
+                .with_cast_options(CastOptions {
+                    safe: false,
+                    ..Default::default()
+                });
+            let expected = variant_get(&ArrayRef::from(input.clone()), options.clone())
+                .unwrap_err()
+                .to_string();
+            let error = variant_get(&ArrayRef::from(shredded), options).unwrap_err();
+            assert_eq!(error.to_string(), expected, "schema: {schema}");
+        }
+    }
+
+    #[test]
+    fn test_shredded_struct_cast_matches_unshredded() {
+        let mixed = vec![
+            Some("null"),
+            Some("{}"),
+            Some(r#"{"a": 7}"#),
+            Some(r#"{"a": null}"#),
+            Some(r#"{"other": 9}"#),
+            Some("42"),
+            Some("[]"),
+            Some(r#""text""#),
+            None,
+        ];
+        let objects = vec![None, Some("null"), Some("{}"), Some(r#"{"a": 7}"#)];
+        let target = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int64, true),
+                Field::new("missing", DataType::Utf8, true),
+            ]
+            .into(),
+        );
+        for json in [mixed, objects] {
+            let input = json_to_variant(&(Arc::new(StringArray::from(json)) as ArrayRef)).unwrap();
+            for schema in [
+                DataType::Int64,
+                target.clone(),
+                DataType::new_list(DataType::Int64, true),
+            ] {
+                let shredded = shred_variant(&input, &schema).unwrap();
+                for safe in [true, false] {
+                    let options = GetOptions::new()
+                        .with_as_type(Some(Arc::new(Field::new("result", target.clone(), true))))
+                        .with_cast_options(CastOptions {
+                            safe,
+                            ..Default::default()
+                        });
+                    for (offset, len) in [(0, input.len()), (1, input.len() - 2), (input.len(), 0)]
+                    {
+                        let expected =
+                            variant_get(&ArrayRef::from(input.slice(offset, len)), options.clone());
+                        let actual = variant_get(
+                            &ArrayRef::from(shredded.slice(offset, len)),
+                            options.clone(),
+                        );
+                        match (expected, actual) {
+                            (Ok(expected), Ok(actual)) => assert_eq!(
+                                &actual, &expected,
+                                "schema: {schema}, safe: {safe}, offset: {offset}"
+                            ),
+                            (
+                                Err(ArrowError::CastError(_)),
+                                Err(ArrowError::CastError(message)),
+                            ) => {
+                                assert!(message.contains("Failed to extract struct from variant"));
+                            }
+                            (expected, actual) => panic!(
+                                "schema: {schema}, safe: {safe}, offset: {offset}: \
+                                 expected {expected:?}, got {actual:?}"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_shredded_struct_cast_nested_paths() {
+        let target = DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into());
+        let item = Arc::new(Field::new_list_field(target.clone(), true));
+        let nested = DataType::Struct(vec![Field::new("outer", target.clone(), true)].into());
+        for (schema, path, json) in [
+            (
+                nested,
+                VariantPath::try_from("outer").unwrap(),
+                vec![
+                    Some(r#"{"outer": {"a": 7}}"#),
+                    Some(r#"{"outer": null}"#),
+                    Some(r#"{"outer": 42}"#),
+                    Some(r#"{"outer": {}}"#),
+                    Some("{}"),
+                    None,
+                ],
+            ),
+            (
+                DataType::List(item.clone()),
+                VariantPath::from(0),
+                vec![
+                    Some(r#"[{"a": 7}]"#),
+                    Some("[null]"),
+                    Some("[{}]"),
+                    Some("[]"),
+                    None,
+                ],
+            ),
+            (
+                DataType::LargeList(item.clone()),
+                VariantPath::from(0),
+                vec![Some("[42]"), Some("[null]"), Some("[{}]"), None],
+            ),
+            (
+                DataType::ListView(item.clone()),
+                VariantPath::from(0),
+                vec![Some("[42]"), Some("[null]"), Some("[{}]"), None],
+            ),
+            (
+                DataType::LargeListView(item),
+                VariantPath::from(0),
+                vec![Some("[42]"), Some("[null]"), Some("[{}]"), None],
+            ),
+        ] {
+            let input = json_to_variant(&(Arc::new(StringArray::from(json)) as ArrayRef)).unwrap();
+            let shredded = shred_variant(&input, &schema).unwrap();
+            for safe in [true, false] {
+                let options = GetOptions::new_with_path(path.clone())
+                    .with_as_type(Some(Arc::new(Field::new("result", target.clone(), true))))
+                    .with_cast_options(CastOptions {
+                        safe,
+                        ..Default::default()
+                    });
+                let expected = variant_get(&ArrayRef::from(input.clone()), options.clone());
+                let actual = variant_get(&ArrayRef::from(shredded.clone()), options);
+                match (expected, actual) {
+                    (Ok(expected), Ok(actual)) => {
+                        assert_eq!(&actual, &expected, "schema: {schema}")
+                    }
+                    (Err(ArrowError::CastError(_)), Err(ArrowError::CastError(message))) => {
+                        assert!(message.contains("Failed to extract struct from variant"));
+                    }
+                    (expected, actual) => {
+                        panic!("schema: {schema}: expected {expected:?}, got {actual:?}")
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_unshredded_struct_strict_cast_non_object_errors() {
         let json_strings = vec![r#"{"a": 1, "b": 2}"#, "123"];
         let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
@@ -3791,7 +4001,7 @@ mod test {
 
         let outer_typed_value_nulls = NullBuffer::from(vec![
             true,  // row 0: inner struct exists with typed_value=42
-            false, // row 1: inner field NULL
+            true,  // row 1: outer object exists, inner field NULL
             false, // row 2: outer field NULL
             false, // row 3: top-level NULL
         ]);
@@ -3807,7 +4017,7 @@ mod test {
         let typed_value_nulls = NullBuffer::from(vec![
             true,  // row 0: inner struct exists with typed_value=42
             true,  // row 1: inner field NULL
-            false, // row 2: outer field NULL
+            true,  // row 2: root object exists, outer field NULL
             false, // row 3: top-level NULL
         ]);
         let typed_value = StructArrayAssembler::new()
