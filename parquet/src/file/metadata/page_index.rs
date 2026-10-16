@@ -706,6 +706,8 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) {
+        // preserve stated contract that this does nothing when indexes were not allocated
+        // or passed in indices are out of bounds
         let Some(indexes) = self.column_indexes.as_ref() else {
             return;
         };
@@ -747,6 +749,8 @@ impl PageIndexBuilder {
         row_group_idx: usize,
         column_idx: usize,
     ) {
+        // preserve stated contract that this does nothing when indexes were not allocated
+        // or passed in indices are out of bounds
         let Some(indexes) = self.offset_indexes.as_ref() else {
             return;
         };
