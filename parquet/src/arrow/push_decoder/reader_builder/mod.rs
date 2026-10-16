@@ -27,7 +27,8 @@ use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
     RowSelectionPolicy,
 };
-use crate::arrow::in_memory_row_group::ColumnChunkData;
+use crate::arrow::in_memory_row_group::{ColumnChunkData, InMemoryRowGroup};
+use crate::arrow::push_decoder::RequestGranularity;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::push_decoder::scan_plan::{
@@ -37,7 +38,8 @@ use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
 use crate::file::metadata::page_index::RowGroupPageIndex;
 use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
-use crate::util::push_buffers::PushBuffers;
+use crate::util::push_buffers::{PushBuffers, SharedPushBuffers};
+use arrow_array::RecordBatch;
 use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
@@ -83,11 +85,17 @@ enum RowGroupDecoderState {
         cache_info: Option<CacheInfo>,
     },
     /// Needs data to proceed with reading the output
+    ///
+    /// With [`RequestGranularity::Batch`], `data_request` holds only the pages
+    /// of the next output batch, and `batches` holds the output reader. After
+    /// each batch, the state comes back here for the pages of the next batch.
     WaitingOnData {
         row_group_info: RowGroupInfo,
         data_request: DataRequest,
         /// Any cached filter results
         cache_info: Option<CacheInfo>,
+        /// `Some` with [`RequestGranularity::Batch`]
+        batches: Option<Box<BatchOutput>>,
     },
     /// Finished (or not yet started) reading this group
     Finished,
@@ -107,6 +115,45 @@ impl RowGroupDecoderState {
     }
 }
 
+/// The output of a row group that is decoded one batch at a time, see
+/// [`RowGroupDecoderState::WaitingOnData`].
+struct BatchOutput {
+    /// The output reader, built when the pages of the first batch are pushed.
+    /// It reads the column chunks that the predicates did not read from the
+    /// shared [`PushBuffers`], so it sees the pages pushed later.
+    reader: Option<ParquetRecordBatchReader>,
+    /// The plan of the reader, until the reader is built.
+    plan_builder: Option<ReadPlanBuilder>,
+    /// The column chunks that the predicates read.
+    column_chunks: Option<Vec<Option<Arc<ColumnChunkData>>>>,
+    /// The selected rows that the reader did not return yet, sorted.
+    remaining: Vec<Range<usize>>,
+}
+
+impl std::fmt::Debug for BatchOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BatchOutput")
+            .field("has_reader", &self.reader.is_some())
+            .field("remaining", &self.remaining)
+            .finish()
+    }
+}
+
+/// The result of [`RowGroupReaderBuilder::try_build_incremental`].
+#[derive(Debug)]
+pub(crate) enum IncrementalResult {
+    /// The bytes that the next batch needs.
+    NeedsData(Vec<Range<u64>>),
+    /// The next output batch. `remaining_budget` is `Some` if this batch
+    /// finishes the row group.
+    Batch {
+        batch: RecordBatch,
+        remaining_budget: Option<RowBudget>,
+    },
+    /// The row group is finished, without more batches.
+    Finished { remaining_budget: RowBudget },
+}
+
 /// The byte range of a column chunk in the file.
 pub(crate) fn column_chunk_range(column: &ColumnChunkMetaData) -> Range<u64> {
     let (start, length) = column.byte_range();
@@ -122,6 +169,12 @@ pub(crate) enum RowGroupBuildResult {
     },
     /// More bytes are needed before the active row group can make progress.
     NeedsData(Vec<Range<u64>>),
+    /// The next batch of a row group decoded with [`RequestGranularity::Batch`].
+    /// `remaining_budget` is `Some` if this batch finishes the row group.
+    Batch {
+        batch: RecordBatch,
+        remaining_budget: Option<RowBudget>,
+    },
     /// The active row group produced a reader.
     Data {
         batch_reader: ParquetRecordBatchReader,
@@ -200,12 +253,17 @@ pub(crate) struct RowGroupReaderBuilder {
     /// it is a bug error if it is not put back after transitioning states.
     state: Option<RowGroupDecoderState>,
 
-    /// The underlying data store
-    buffers: PushBuffers,
+    /// The underlying data store. Shared with the output reader of a row
+    /// group that is decoded with [`RequestGranularity::Batch`].
+    buffers: SharedPushBuffers,
 
     /// What each decoding stage fetches. Kept here because the filter is
     /// moved out of the builder while a row group is decoded.
     stages: Arc<StageSchedule>,
+    /// How [`Self::try_build_incremental`] fetches and decodes row groups.
+    request_granularity: RequestGranularity,
+    /// `try_build_incremental` started the active row group.
+    batch_mode_active: bool,
 }
 
 /// The parts of a [`RowGroupReaderBuilder`] needed to rebuild it, recovered by
@@ -225,6 +283,7 @@ pub(crate) struct RowGroupReaderBuilderParts {
     /// Bytes already pushed into the decoder, carried across a rebuild so they
     /// are not re-requested.
     pub buffers: PushBuffers,
+    pub request_granularity: RequestGranularity,
 }
 
 impl RowGroupReaderBuilder {
@@ -240,6 +299,7 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
         row_selection_policy: RowSelectionPolicy,
+        request_granularity: RequestGranularity,
     ) -> Self {
         let (predicate_projections, cache_projection) = match &filter {
             Some(filter) => (
@@ -269,8 +329,10 @@ impl RowGroupReaderBuilder {
             max_predicate_cache_size,
             row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
-            buffers,
+            buffers: Arc::new(std::sync::Mutex::new(buffers)),
             stages: Arc::new(stages),
+            request_granularity,
+            batch_mode_active: false,
         }
     }
 
@@ -293,7 +355,11 @@ impl RowGroupReaderBuilder {
             buffers,
             // Recomputed from `filter` when the builder is rebuilt.
             stages: _,
+            request_granularity,
+            batch_mode_active: _,
         } = self;
+        // A reader of the discarded state can hold a reference.
+        let buffers = std::mem::take(&mut *buffers.lock().unwrap());
         RowGroupReaderBuilderParts {
             batch_size,
             projection,
@@ -303,16 +369,19 @@ impl RowGroupReaderBuilder {
             metrics,
             row_selection_policy,
             buffers,
+            request_granularity,
         }
     }
 
     /// Push new data buffers that can be used to satisfy pending requests
+    // `&mut`: the method changes the shared buffers.
+    #[expect(clippy::needless_pass_by_ref_mut)]
     pub fn push_data(
         &mut self,
         ranges: Vec<Range<u64>>,
         buffers: Vec<Bytes>,
     ) -> Result<(), ParquetError> {
-        self.buffers.push_ranges(ranges, buffers)
+        self.buffers.lock().unwrap().push_ranges(ranges, buffers)
     }
 
     /// True iff the inner state is `Finished`. This is the only state in
@@ -325,12 +394,63 @@ impl RowGroupReaderBuilder {
 
     /// Returns the total number of buffered bytes available
     pub fn buffered_bytes(&self) -> u64 {
-        self.buffers.buffered_bytes()
+        self.buffers.lock().unwrap().buffered_bytes()
+    }
+
+    /// How [`ParquetPushDecoder::try_decode`] fetches and decodes row groups.
+    ///
+    /// [`ParquetPushDecoder::try_decode`]: crate::arrow::push_decoder::ParquetPushDecoder::try_decode
+    pub(crate) fn request_granularity(&self) -> RequestGranularity {
+        self.request_granularity
+    }
+
+    /// Returns true if `try_decode` decodes the active row group one batch at
+    /// a time. While this is true, `try_next_reader` returns an error.
+    pub(crate) fn is_incremental(&self) -> bool {
+        self.batch_mode_active && self.has_active_row_group()
+    }
+
+    /// Decode the active row group one batch at a time. See
+    /// [`RequestGranularity::Batch`]. This runs the same state machine as
+    /// [`Self::try_build`].
+    pub(crate) fn try_build_incremental(&mut self) -> Result<IncrementalResult, ParquetError> {
+        if !self.batch_mode_active {
+            if !matches!(self.state, Some(RowGroupDecoderState::Start { .. })) {
+                return Err(general_err!(
+                    "Internal Error: try_build_incremental called for a row group of try_build"
+                ));
+            }
+            self.batch_mode_active = true;
+        }
+        let result = self.try_build();
+        if !self.has_active_row_group() || result.is_err() {
+            self.batch_mode_active = false;
+        }
+        Ok(match result? {
+            RowGroupBuildResult::NeedsData(ranges) => IncrementalResult::NeedsData(ranges),
+            RowGroupBuildResult::Finished { remaining_budget } => {
+                IncrementalResult::Finished { remaining_budget }
+            }
+            RowGroupBuildResult::Batch {
+                batch,
+                remaining_budget,
+            } => IncrementalResult::Batch {
+                batch,
+                remaining_budget,
+            },
+            RowGroupBuildResult::Data { .. } => {
+                return Err(general_err!(
+                    "Internal Error: reader built with RequestGranularity::Batch"
+                ));
+            }
+        })
     }
 
     /// Clear any staged ranges currently buffered for future decode work.
+    // `&mut`: the method changes the shared buffers.
+    #[expect(clippy::needless_pass_by_ref_mut)]
     pub fn clear_all_ranges(&mut self) {
-        self.buffers.clear_all_ranges();
+        self.buffers.lock().unwrap().clear_all_ranges();
     }
 
     /// take the current state, leaving None in its place.
@@ -536,7 +656,7 @@ impl RowGroupReaderBuilder {
                 mut filter_info,
             } => {
                 // figure out what ranges we still need
-                let needed_ranges = data_request.needed_ranges(&self.buffers);
+                let needed_ranges = data_request.needed_ranges(&self.buffers.lock().unwrap());
                 if !needed_ranges.is_empty() {
                     // still need data
                     return Ok(NextState::result(
@@ -564,7 +684,7 @@ impl RowGroupReaderBuilder {
                     row_count,
                     &self.metadata,
                     predicate.projection(),
-                    &mut self.buffers,
+                    &mut self.buffers.lock().unwrap(),
                 )?;
 
                 let cache_options = filter_info.cache_builder().producer();
@@ -674,6 +794,41 @@ impl RowGroupReaderBuilder {
                 }
 
                 let fetch = self.stages.fetch(Stage::Projection);
+                if self.batch_mode_active {
+                    plan_builder =
+                        plan_builder.with_row_selection_policy(self.row_selection_policy);
+                    plan_builder = prepare_selection_for_page_skipping(
+                        plan_builder,
+                        &self.projection,
+                        self.row_group_offset_index(row_group_idx),
+                        self.metadata.file_metadata().schema_descr().num_columns(),
+                        row_count,
+                    );
+                    let remaining = match plan_builder.selection() {
+                        Some(selection) => selection_to_ranges(selection, 0),
+                        None => std::iter::once(0..row_count).collect(),
+                    };
+                    let batches = Box::new(BatchOutput {
+                        reader: None,
+                        plan_builder: Some(plan_builder),
+                        column_chunks,
+                        remaining,
+                    });
+                    let data_request = self.next_batch_request(row_group_idx, row_count, &batches);
+                    let row_group_info = RowGroupInfo {
+                        row_group_idx,
+                        row_count,
+                        // The plan is in `batches`
+                        plan_builder: ReadPlanBuilder::new(self.batch_size),
+                        budget: remaining_budget,
+                    };
+                    return Ok(NextState::again(RowGroupDecoderState::WaitingOnData {
+                        row_group_info,
+                        data_request,
+                        cache_info,
+                        batches: Some(batches),
+                    }));
+                }
                 let data_request = DataRequestBuilder::new(
                     row_group_idx,
                     row_count,
@@ -707,15 +862,24 @@ impl RowGroupReaderBuilder {
                     row_group_info,
                     data_request,
                     cache_info,
+                    batches: None,
                 })
             }
+            // Waiting on the pages of the next batch
+            RowGroupDecoderState::WaitingOnData {
+                row_group_info,
+                data_request,
+                cache_info,
+                batches: Some(batches),
+            } => self.try_next_output_batch(row_group_info, data_request, cache_info, batches)?,
             // Waiting on data to proceed with reading the output
             RowGroupDecoderState::WaitingOnData {
                 row_group_info,
                 data_request,
                 cache_info,
+                batches: None,
             } => {
-                let needed_ranges = data_request.needed_ranges(&self.buffers);
+                let needed_ranges = data_request.needed_ranges(&self.buffers.lock().unwrap());
                 if !needed_ranges.is_empty() {
                     // still need data
                     return Ok(NextState::result(
@@ -723,11 +887,11 @@ impl RowGroupReaderBuilder {
                             row_group_info,
                             data_request,
                             cache_info,
+                            batches: None,
                         },
                         RowGroupBuildResult::NeedsData(needed_ranges),
                     ));
                 }
-
                 // otherwise we have all the data we need to proceed
                 let RowGroupInfo {
                     row_group_idx,
@@ -741,7 +905,7 @@ impl RowGroupReaderBuilder {
                     row_count,
                     &self.metadata,
                     &self.projection,
-                    &mut self.buffers,
+                    &mut self.buffers.lock().unwrap(),
                 )?;
 
                 let plan = plan_builder.build();
@@ -778,6 +942,146 @@ impl RowGroupReaderBuilder {
         Ok(result)
     }
 
+    /// The pages that the next output batch of `batches` reads and that the
+    /// predicates did not read.
+    fn next_batch_request(
+        &self,
+        row_group_idx: usize,
+        row_count: usize,
+        batches: &BatchOutput,
+    ) -> DataRequest {
+        let rows = take_rows(&mut batches.remaining.clone(), self.batch_size);
+        let selection = ranges_to_selection(&rows, row_count);
+        DataRequestBuilder::new(
+            row_group_idx,
+            row_count,
+            self.batch_size,
+            &self.metadata,
+            &self.projection,
+        )
+        .with_selection(Some(&selection))
+        .with_column_chunks(batches.column_chunks.clone())
+        .build()
+    }
+
+    /// Decode the next output batch of a row group decoded with
+    /// [`RequestGranularity::Batch`], or return the pages that it needs.
+    // `&mut`: the method changes the shared buffers.
+    #[expect(clippy::needless_pass_by_ref_mut)]
+    fn try_next_output_batch(
+        &mut self,
+        row_group_info: RowGroupInfo,
+        data_request: DataRequest,
+        cache_info: Option<CacheInfo>,
+        mut batches: Box<BatchOutput>,
+    ) -> Result<NextState, ParquetError> {
+        let needed_ranges = data_request.needed_ranges(&self.buffers.lock().unwrap());
+        if !needed_ranges.is_empty() {
+            return Ok(NextState::result(
+                RowGroupDecoderState::WaitingOnData {
+                    row_group_info,
+                    data_request,
+                    cache_info,
+                    batches: Some(batches),
+                },
+                RowGroupBuildResult::NeedsData(needed_ranges),
+            ));
+        }
+        let RowGroupInfo {
+            row_group_idx,
+            row_count,
+            ..
+        } = row_group_info;
+
+        if batches.reader.is_none() {
+            let reader = self.build_batch_reader(
+                row_group_idx,
+                row_count,
+                &mut batches,
+                cache_info.as_ref(),
+            )?;
+            batches.reader = Some(reader);
+        }
+        take_rows(&mut batches.remaining, self.batch_size);
+        let batch = match batches.reader.as_mut().and_then(Iterator::next) {
+            Some(Ok(batch)) => batch,
+            Some(Err(e)) => return Err(ParquetError::ArrowError(e.to_string())),
+            None => {
+                return Err(general_err!(
+                    "Internal Error: the output reader ended before the selected rows"
+                ));
+            }
+        };
+
+        if batches.remaining.is_empty() {
+            return Ok(NextState::result(
+                RowGroupDecoderState::Finished,
+                RowGroupBuildResult::Batch {
+                    batch,
+                    remaining_budget: Some(row_group_info.budget),
+                },
+            ));
+        }
+        let data_request = self.next_batch_request(row_group_idx, row_count, &batches);
+        Ok(NextState::result(
+            RowGroupDecoderState::WaitingOnData {
+                row_group_info,
+                data_request,
+                cache_info,
+                batches: Some(batches),
+            },
+            RowGroupBuildResult::Batch {
+                batch,
+                remaining_budget: None,
+            },
+        ))
+    }
+
+    /// Build the output reader of `batches`. The column chunks that the
+    /// predicates did not read are [`ColumnChunkData::Shared`] views of the
+    /// shared [`PushBuffers`].
+    fn build_batch_reader(
+        &self,
+        row_group_idx: usize,
+        row_count: usize,
+        batches: &mut BatchOutput,
+        cache_info: Option<&CacheInfo>,
+    ) -> Result<ParquetRecordBatchReader, ParquetError> {
+        let metadata = self.metadata.row_group(row_group_idx);
+        let mut column_chunks = batches
+            .column_chunks
+            .clone()
+            .unwrap_or_else(|| vec![None; metadata.columns().len()]);
+        for (idx, chunk) in column_chunks.iter_mut().enumerate() {
+            if chunk.is_none() && self.projection.leaf_included(idx) {
+                *chunk = Some(Arc::new(ColumnChunkData::Shared {
+                    length: metadata.column(idx).byte_range().1 as usize,
+                    buffers: Arc::clone(&self.buffers),
+                }));
+            }
+        }
+        let row_group = InMemoryRowGroup {
+            page_index: self.row_group_offset_index(row_group_idx),
+            column_chunks,
+            row_count,
+            row_group_idx,
+            metadata: &self.metadata,
+        };
+        let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
+            .with_batch_size(self.batch_size)
+            .with_parquet_metadata(&self.metadata);
+        let cache_options = cache_info.map(|cache_info| cache_info.builder().consumer());
+        let array_reader = array_reader_builder
+            .with_cache_options(cache_options.as_ref())
+            .build_array_reader(self.fields.as_deref(), &self.projection)?;
+        let plan = batches
+            .plan_builder
+            .take()
+            .ok_or_else(|| general_err!("Internal Error: output plan missing"))?
+            .build();
+        Ok(ParquetRecordBatchReader::new(array_reader, plan))
+    }
+
     /// The index of the active row group, if any.
     pub(crate) fn active_row_group_idx(&self) -> Option<usize> {
         self.state
@@ -789,6 +1093,8 @@ impl RowGroupReaderBuilder {
     /// includes bytes that the caller pushed but the decoder did not request,
     /// for example the bytes between the requested ranges of a larger pushed
     /// buffer.
+    // `&mut`: the method changes the shared buffers.
+    #[expect(clippy::needless_pass_by_ref_mut)]
     pub(crate) fn release_row_group(&mut self, row_group_idx: usize) {
         let ranges: Vec<Range<u64>> = self
             .metadata
@@ -797,14 +1103,16 @@ impl RowGroupReaderBuilder {
             .iter()
             .map(column_chunk_range)
             .collect();
-        self.buffers.release_ranges(&ranges);
+        self.buffers.lock().unwrap().release_ranges(&ranges);
     }
 
     /// Remove the buffered bytes outside the read column chunks of
     /// `row_groups`. A column chunk is read if the output or a predicate
     /// reads its column. Indexes that are not in the file are ignored.
+    // `&mut`: the method changes the shared buffers.
+    #[expect(clippy::needless_pass_by_ref_mut)]
     pub(crate) fn release_unread_bytes(&mut self, row_groups: impl IntoIterator<Item = usize>) {
-        if self.buffers.buffered_bytes() == 0 {
+        if self.buffers.lock().unwrap().buffered_bytes() == 0 {
             return;
         }
         let mut read_columns = self.projection.clone();
@@ -827,7 +1135,7 @@ impl RowGroupReaderBuilder {
                     .map(|(_, column)| column_chunk_range(column)),
             );
         }
-        self.buffers.retain_ranges(&keep);
+        self.buffers.lock().unwrap().retain_ranges(&keep);
     }
 
     /// A [`ScanPlanBuilder`] that plans the same ranges as this builder, for
@@ -970,6 +1278,51 @@ fn loaded_row_ranges_for_projection(
         .reduce(|loaded, column| loaded.intersection(&column))
         .filter(|loaded| loaded.skipped_row_count() != 0)
         .map(LoadedRowRanges::from_selection)
+}
+
+/// Row ranges to a [`RowSelection`] of `row_count` rows.
+fn ranges_to_selection(ranges: &[Range<usize>], row_count: usize) -> RowSelection {
+    RowSelection::from_consecutive_ranges(ranges.iter().cloned(), row_count)
+}
+
+/// The selected rows of `selection`, as sorted row ranges.
+fn selection_to_ranges(selection: &RowSelection, from: usize) -> Vec<Range<usize>> {
+    let mut out: Vec<Range<usize>> = vec![];
+    let mut pos = from;
+    for selector in selection.iter() {
+        if !selector.skip && selector.row_count > 0 {
+            match out.last_mut() {
+                Some(last) if last.end == pos => last.end = pos + selector.row_count,
+                _ => out.push(pos..pos + selector.row_count),
+            }
+        }
+        pos += selector.row_count;
+    }
+    out
+}
+
+/// Remove and return the first `n` rows of `ranges`.
+fn take_rows(ranges: &mut Vec<Range<usize>>, n: usize) -> Vec<Range<usize>> {
+    let mut taken = vec![];
+    let mut remaining = n;
+    let mut consumed = 0;
+    for range in ranges.iter_mut() {
+        if remaining == 0 {
+            break;
+        }
+        let len = range.end - range.start;
+        if len <= remaining {
+            taken.push(range.clone());
+            remaining -= len;
+            consumed += 1;
+        } else {
+            taken.push(range.start..range.start + remaining);
+            range.start += remaining;
+            remaining = 0;
+        }
+    }
+    ranges.drain(..consumed);
+    taken
 }
 
 #[cfg(test)]

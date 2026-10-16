@@ -46,6 +46,13 @@ use std::ops::Range;
 ///
 /// The buffers are sorted by the start of their range. Thus, lookups use a
 /// binary search, not a scan of all buffers. Pushed ranges can overlap.
+/// A [`PushBuffers`] that the push decoder shares with the column readers of
+/// [`ColumnChunkData::Shared`].
+///
+/// [`ColumnChunkData::Shared`]: crate::arrow::in_memory_row_group::ColumnChunkData::Shared
+#[cfg(feature = "arrow")]
+pub(crate) type SharedPushBuffers = std::sync::Arc<std::sync::Mutex<PushBuffers>>;
+
 #[derive(Debug, Clone, Default)]
 pub struct PushBuffers {
     /// the virtual "offset" of this buffers (added to any request)
@@ -204,6 +211,23 @@ impl PushBuffers {
             .take_while(|(_, r)| r.start.saturating_add(self.max_len) >= end)
             .find(|(_, r)| r.end >= end)
             .map(|(idx, _)| idx)
+    }
+
+    /// The bytes from `start` to the end of the buffer that contains `start`
+    /// and reaches furthest, if any.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn get_from(&self, start: u64) -> Option<Bytes> {
+        let candidates = self.ranges.partition_point(|r| r.start <= start);
+        let idx = self.ranges[..candidates]
+            .iter()
+            .enumerate()
+            .rev()
+            .take_while(|(_, r)| r.start.saturating_add(self.max_len) > start)
+            .filter(|(_, r)| r.end > start)
+            .max_by_key(|(_, r)| r.end)
+            .map(|(idx, _)| idx)?;
+        let offset = (start - self.ranges[idx].start) as usize;
+        Some(self.buffers[idx].slice(offset..))
     }
 
     /// return the file length of the Parquet file being read
