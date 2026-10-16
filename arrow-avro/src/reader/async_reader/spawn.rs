@@ -20,11 +20,20 @@ use std::ops::Range;
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::{FutureExt, TryFutureExt};
+use futures::stream::BoxStream;
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use tokio::runtime::Handle;
+use tokio::sync::{mpsc, oneshot};
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::errors::AvroError;
 use crate::reader::async_reader::AsyncFileReader;
+
+// Size for the channel buffer between the task driving the inner reader's
+// stream and the task consuming the forwarded chunks. This is minimized to
+// avoid excessive buffering in case the consumer is slower than the
+// producer; the main purpose of the channel is to permit concurrency.
+const STREAM_BUFFER_SIZE: usize = 2;
 
 /// An [`AsyncFileReader`] that performs I/O on a separate tokio runtime.
 ///
@@ -89,6 +98,51 @@ where
         spawn(&self.handle, async move { inner.get_bytes(range).await })
     }
 
+    fn get_stream(
+        &mut self,
+        range: Range<u64>,
+    ) -> BoxFuture<'_, Result<BoxStream<'_, Result<Bytes, AvroError>>, AvroError>> {
+        let mut inner = self.inner.clone();
+        let handle = self.handle.clone();
+        async move {
+            // The inner stream borrows from `inner`, so the same task that owns
+            // `inner` must both establish and drive the stream to completion,
+            // forwarding each item over the channel to the caller. `spawn` is
+            // reused here for its panic/cancellation handling: if the task ends
+            // (e.g. is cancelled because the runtime shut down) before it can
+            // report whether the stream was established, awaiting its join
+            // handle surfaces that failure with the usual mapping.
+            let (sender, receiver) = mpsc::channel(STREAM_BUFFER_SIZE);
+            let (ready_tx, ready_rx) = oneshot::channel();
+            let driver = spawn(&handle, async move {
+                let mut stream = match inner.get_stream(range).await {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e));
+                        return Ok(());
+                    }
+                };
+                if ready_tx.send(Ok(())).is_err() {
+                    return Ok(());
+                }
+                while let Some(item) = stream.next().await {
+                    if sender.send(item).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(())
+            });
+            match ready_rx.await {
+                Ok(Ok(())) => Ok(ReceiverStream::new(receiver)
+                    .map_err(AvroError::from)
+                    .boxed()),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err(driver.await.unwrap_err()),
+            }
+        }
+        .boxed()
+    }
+
     fn get_byte_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
@@ -123,6 +177,19 @@ mod tests {
             let data = self.data.slice(range.start as usize..range.end as usize);
             futures::future::ready(Ok(data)).boxed()
         }
+
+        fn get_stream(
+            &mut self,
+            range: Range<u64>,
+        ) -> BoxFuture<'_, Result<BoxStream<'_, Result<Bytes, AvroError>>, AvroError>> {
+            self.threads
+                .lock()
+                .unwrap()
+                .push(std::thread::current().id());
+            let data = self.data.slice(range.start as usize..range.end as usize);
+            let stream: BoxStream<'_, _> = futures::stream::once(async move { Ok(data) }).boxed();
+            futures::future::ready(Ok(stream)).boxed()
+        }
     }
 
     #[tokio::test]
@@ -144,6 +211,14 @@ mod tests {
 
         let ranges = reader.get_byte_ranges(vec![0..5, 6..11]).await.unwrap();
         assert_eq!(ranges[1].as_ref(), b"world");
+
+        let mut stream = reader.get_stream(6..11).await.unwrap();
+        let mut collected = Vec::new();
+        while let Some(item) = stream.next().await {
+            collected.extend_from_slice(&item.unwrap());
+        }
+        assert_eq!(collected.as_slice(), b"world");
+        drop(stream);
 
         // All I/O must have run on the spawned runtime, not the current one
         let current_id = std::thread::current().id();
@@ -171,6 +246,12 @@ mod tests {
         rt.shutdown_background();
 
         let err = reader.get_bytes(0..1).await.unwrap_err().to_string();
+        assert!(err.contains("was cancelled"), "{err}");
+
+        let err = match reader.get_stream(0..1).await {
+            Ok(_) => panic!("expected get_stream to fail"),
+            Err(e) => e.to_string(),
+        };
         assert!(err.contains("was cancelled"), "{err}");
     }
 }
