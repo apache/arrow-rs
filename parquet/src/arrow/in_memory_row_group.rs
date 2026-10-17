@@ -21,7 +21,7 @@ use crate::arrow::arrow_reader::RowSelection;
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::ParquetError;
 use crate::file::metadata::page_index::RowGroupPageIndex;
-use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::offset_index::PageLocation;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use bytes::{Buf, Bytes};
@@ -39,77 +39,12 @@ pub(crate) struct InMemoryRowGroup<'a> {
     pub(crate) metadata: &'a ParquetMetaData,
 }
 
-/// What ranges to fetch for the columns in this row group
-#[derive(Debug)]
-pub(crate) struct FetchRanges {
-    /// The byte ranges to fetch
-    pub(crate) ranges: Vec<Range<u64>>,
-    /// If `Some`, the start offsets of each page for each column chunk, or
-    /// `None` for a column chunk without an offset index (fetched in full)
-    pub(crate) page_start_offsets: Option<Vec<Option<Vec<u64>>>>,
-}
-
 impl InMemoryRowGroup<'_> {
-    /// Returns the byte ranges to fetch for the columns specified in
-    /// `projection` and `selection`.
-    ///
-    /// `cache_mask` indicates which columns, if any, are being cached by
-    /// [`RowGroupCache`](crate::arrow::array_reader::RowGroupCache).
-    /// The `selection` for Cached columns is expanded to batch boundaries to simplify
-    /// accounting for what data is cached.
-    ///
-    /// The ranges of each column chunk come from [`ColumnFetch`].
-    pub(crate) fn fetch_ranges(
-        &self,
-        projection: &ProjectionMask,
-        selection: Option<&RowSelection>,
-        batch_size: usize,
-        cache_mask: Option<&ProjectionMask>,
-    ) -> FetchRanges {
-        let metadata = self.metadata.row_group(self.row_group_idx);
-        // With a `RowSelection` and an `OffsetIndex`, only fetch the pages
-        // required for the `RowSelection`
-        let page_index = self.page_index.as_ref().filter(|_| selection.is_some());
-        let expanded_selection = selection
-            .filter(|_| page_index.is_some() && cache_mask.is_some())
-            .map(|selection| selection.expand_to_batch_boundaries(batch_size, self.row_count));
-
-        // Consider preallocating outer vec: https://github.com/apache/arrow-rs/issues/8667
-        let mut page_start_offsets: Option<Vec<Option<Vec<u64>>>> = page_index.map(|_| vec![]);
-        let mut ranges = vec![];
-        let columns = columns_to_fetch(projection, self.column_chunks.len(), |idx| {
-            self.column_chunks[idx].is_some()
-        });
-        for idx in columns {
-            let locations = page_index
-                .and_then(|page_index| page_index.offset_index(idx))
-                .map(|offset_index| offset_index.page_locations().as_slice());
-            let column_selection =
-                column_selection(selection, expanded_selection.as_ref(), cache_mask, idx);
-            let (start, len) = metadata.column(idx).byte_range();
-            let fetch = ColumnFetch::new(start..start + len, locations, column_selection);
-            let first = ranges.len();
-            ranges.extend(fetch.ranges());
-            if let Some(page_start_offsets) = page_start_offsets.as_mut() {
-                page_start_offsets.push(match fetch {
-                    // No offset index for this column, fetch the entire column
-                    ColumnFetch::Chunk { .. } => None,
-                    ColumnFetch::Pages { .. } => {
-                        Some(ranges[first..].iter().map(|range| range.start).collect())
-                    }
-                });
-            }
-        }
-        FetchRanges {
-            ranges,
-            page_start_offsets,
-        }
-    }
-
     /// Fills in `self.column_chunks` with the data fetched from `chunk_data`.
     ///
-    /// This function **must** be called with the data from the ranges returned by
-    /// `fetch_ranges` and the corresponding page_start_offsets, with the exact same and `selection`.
+    /// This function **must** be called with the data of the ranges of
+    /// [`column_fetches`] for the same `projection` and selection, in the
+    /// same order, and with the corresponding `page_start_offsets`.
     pub(crate) fn fill_column_chunks<I>(
         &mut self,
         projection: &ProjectionMask,
@@ -131,7 +66,7 @@ impl InMemoryRowGroup<'_> {
                 }
 
                 match page_start_offsets.next() {
-                    // No offset index: `fetch_ranges` requested the whole chunk
+                    // No offset index: the whole chunk was requested
                     Some(None) => {
                         if let Some(data) = chunk_data.next() {
                             *chunk = Some(Arc::new(ColumnChunkData::Dense {
@@ -175,24 +110,71 @@ impl InMemoryRowGroup<'_> {
     }
 }
 
-/// The leaf columns in `projection` that are not yet read, in column order.
-///
-/// A decoding stage of a row group does not fetch a column that an earlier
-/// stage of the same row group read.
+/// Byte range of a column chunk in the file.
 #[inline]
-pub(crate) fn columns_to_fetch<'a>(
-    projection: &'a ProjectionMask,
-    num_columns: usize,
-    is_read: impl Fn(usize) -> bool + 'a,
-) -> impl Iterator<Item = usize> + 'a {
-    (0..num_columns).filter(move |&idx| projection.leaf_included(idx) && !is_read(idx))
+pub(crate) fn column_chunk_range(column: &ColumnChunkMetaData) -> Range<u64> {
+    let (start, length) = column.byte_range();
+    start..start + length
 }
 
-/// The selection that [`InMemoryRowGroup::fetch_ranges`] uses to choose the
-/// pages of column `idx`: `expanded_selection` (the selection expanded to
-/// batch boundaries) if `cache_mask` includes the column, else `selection`.
+/// The page index of row group `row_group_idx`, if `metadata` has offset
+/// indexes.
+pub(crate) fn offset_index_for_row_group(
+    metadata: &ParquetMetaData,
+    row_group_idx: usize,
+) -> Option<RowGroupPageIndex> {
+    metadata
+        .page_index()
+        .is_some_and(|page_index| page_index.has_offset_indexes())
+        .then(|| metadata.page_index_for_row_group(row_group_idx))
+}
+
+/// What one decoding stage of a row group fetches: the [`ColumnFetch`] of
+/// each column chunk that it reads, in column order.
+///
+/// A stage reads the leaf columns of `projection` that `is_read` does not
+/// exclude, because an earlier stage of the same row group read them. With a
+/// `selection` and a `page_index`, a fetch has only the pages of the selected
+/// rows. For a column in `cache_mask`, the selection is expanded to batch
+/// boundaries, so that the predicate cache can serve complete batches.
+///
+/// This is the one place that decides what a stage fetches. The push decoder
+/// requests these ranges, and its [`ScanPlan`] lists them.
+///
+/// [`ScanPlan`]: crate::arrow::push_decoder::ScanPlan
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn column_fetches<'a>(
+    row_group: &'a RowGroupMetaData,
+    row_count: usize,
+    page_index: Option<&'a RowGroupPageIndex>,
+    projection: &'a ProjectionMask,
+    selection: Option<&'a RowSelection>,
+    batch_size: usize,
+    cache_mask: Option<&'a ProjectionMask>,
+    is_read: impl Fn(usize) -> bool + 'a,
+) -> impl Iterator<Item = (usize, ColumnFetch<'a>)> + 'a {
+    let expanded_selection = selection
+        .filter(|_| page_index.is_some() && cache_mask.is_some())
+        .map(|selection| selection.expand_to_batch_boundaries(batch_size, row_count));
+    let num_columns = row_group.columns().len();
+    (0..num_columns)
+        .filter(move |&idx| projection.leaf_included(idx) && !is_read(idx))
+        .map(move |idx| {
+            let locations = page_index
+                .and_then(|page_index| page_index.offset_index(idx))
+                .map(|offset_index| offset_index.page_locations().as_slice());
+            let selection =
+                column_selection(selection, expanded_selection.as_ref(), cache_mask, idx);
+            let chunk = column_chunk_range(row_group.column(idx));
+            (idx, ColumnFetch::new(chunk, locations, selection))
+        })
+}
+
+/// The selection that [`column_fetches`] uses to choose the pages of column
+/// `idx`: `expanded_selection` (the selection expanded to batch boundaries)
+/// if `cache_mask` includes the column, else `selection`.
 #[inline]
-pub(crate) fn column_selection<'a>(
+fn column_selection<'a>(
     selection: Option<&'a RowSelection>,
     expanded_selection: Option<&'a RowSelection>,
     cache_mask: Option<&ProjectionMask>,
@@ -204,7 +186,7 @@ pub(crate) fn column_selection<'a>(
     }
 }
 
-/// What [`InMemoryRowGroup::fetch_ranges`] fetches for one column chunk.
+/// What [`column_fetches`] fetches for one column chunk.
 ///
 /// This is the one place that decides which bytes of a column chunk are
 /// requested, so other users of this rule cannot differ from the decoder.

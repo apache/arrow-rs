@@ -27,7 +27,9 @@ use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, PredicateOptions, ReadPlanBuilder, RowFilter, RowSelection,
     RowSelectionPolicy,
 };
-use crate::arrow::in_memory_row_group::ColumnChunkData;
+use crate::arrow::in_memory_row_group::{
+    ColumnChunkData, column_chunk_range, offset_index_for_row_group,
+};
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
 use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::push_decoder::scan_plan::{
@@ -35,14 +37,14 @@ use crate::arrow::push_decoder::scan_plan::{
 };
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
+use crate::file::metadata::ParquetMetaData;
 use crate::file::metadata::page_index::RowGroupPageIndex;
-use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
 use data::DataRequest;
 use filter::AdvanceResult;
 use filter::FilterInfo;
-pub(crate) use stages::{Stage, StageSchedule};
+pub(crate) use stages::{Stage, StageFetch, StageSchedule};
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
@@ -105,12 +107,6 @@ impl RowGroupDecoderState {
             Self::Finished => None,
         }
     }
-}
-
-/// The byte range of a column chunk in the file.
-pub(crate) fn column_chunk_range(column: &ColumnChunkMetaData) -> Range<u64> {
-    let (start, length) = column.byte_range();
-    start..start + length
 }
 
 #[derive(Debug)]
@@ -583,7 +579,7 @@ impl RowGroupReaderBuilder {
                 plan_builder = prepare_selection_for_page_skipping(
                     plan_builder,
                     predicate.projection(),
-                    self.row_group_offset_index(row_group_idx),
+                    offset_index_for_row_group(&self.metadata, row_group_idx),
                     self.metadata.file_metadata().schema_descr().num_columns(),
                     row_count,
                 );
@@ -691,7 +687,7 @@ impl RowGroupReaderBuilder {
                 plan_builder = prepare_selection_for_page_skipping(
                     plan_builder,
                     &self.projection,
-                    self.row_group_offset_index(row_group_idx),
+                    offset_index_for_row_group(&self.metadata, row_group_idx),
                     self.metadata.file_metadata().schema_descr().num_columns(),
                     row_count,
                 );
@@ -873,19 +869,6 @@ impl RowGroupReaderBuilder {
         cache_projection.intersect(projection);
         // Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
         cache_projection.without_nested_types(metadata.file_metadata().schema_descr())
-    }
-
-    /// Get the offset index for the specified row group, if any
-    fn row_group_offset_index(&self, row_group_idx: usize) -> Option<RowGroupPageIndex> {
-        if self
-            .metadata
-            .page_index()
-            .is_some_and(|pi| pi.has_offset_indexes())
-        {
-            Some(self.metadata.page_index_for_row_group(row_group_idx))
-        } else {
-            None
-        }
     }
 }
 
