@@ -230,7 +230,7 @@ fn cast_keys_only<K: ArrowDictionaryKeyType>(
     to_index_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let source_keys: ArrayRef = Arc::new(PrimitiveArray::<K>::from(array.keys().to_data()));
+    let source_keys = array.keys();
     let cast_keys = cast_with_options(&source_keys, to_index_type, cast_options)?;
 
     if cast_keys.null_count() > source_keys.null_count() {
