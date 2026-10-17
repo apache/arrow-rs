@@ -795,18 +795,23 @@ unsafe impl Array for UnionArray {
         };
 
         if fields.len() <= 1 {
-            return self.fields.iter().find_map(|field_opt| {
-                field_opt
-                    .as_ref()
-                    .and_then(|field| field.logical_nulls())
-                    .map(|logical_nulls| {
-                        if self.is_dense() {
-                            self.gather_nulls(vec![(0, logical_nulls)]).into()
-                        } else {
-                            logical_nulls
-                        }
-                    })
-            });
+            return self
+                .fields
+                .iter()
+                .enumerate()
+                .find_map(|(type_id, field_opt)| {
+                    field_opt
+                        .as_ref()
+                        .and_then(|field| field.logical_nulls())
+                        .map(|logical_nulls| {
+                            if self.is_dense() {
+                                self.gather_nulls(vec![(type_id as i8, logical_nulls)])
+                                    .into()
+                            } else {
+                                logical_nulls
+                            }
+                        })
+                });
         }
 
         let logical_nulls = self.fields_logical_nulls();
@@ -2048,6 +2053,23 @@ mod tests {
 
         assert_eq!(expected, array.logical_nulls().unwrap().into_inner());
         assert_eq!(expected, array.gather_nulls(array.fields_logical_nulls()));
+    }
+
+    #[test]
+    fn test_dense_union_one_field_nonzero_type_id_logical_nulls() {
+        let fields = UnionFields::try_new([5], [Field::new("a", DataType::Int32, true)]).unwrap();
+        let child = Arc::new(Int32Array::from(vec![None, Some(1)]));
+        let array = UnionArray::try_new(
+            fields,
+            vec![5, 5, 5].into(),
+            Some(vec![1, 0, 1].into()),
+            vec![child],
+        )
+        .unwrap();
+
+        let expected = NullBuffer::from(vec![true, false, true]);
+        assert_eq!(array.logical_nulls(), Some(expected));
+        assert_eq!(array.logical_null_count(), 1);
     }
 
     #[test]
