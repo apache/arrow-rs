@@ -255,6 +255,7 @@ impl StreamDecoder {
                                 &version,
                             )?
                             .with_require_alignment(self.require_alignment)
+                            .with_skip_validation(self.skip_validation.clone())
                             .read_record_batch()?;
                             self.state = DecoderState::default();
                             return Ok(Some(batch));
