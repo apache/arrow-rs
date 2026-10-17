@@ -44,8 +44,8 @@ mod ranges;
 mod selector;
 
 use algebra::{
-    and_then_mask, and_then_row_selections, and_then_selectors_with_mask, intersect_masks,
-    intersect_row_selections, union_masks, union_row_selections,
+    and_then_mask, and_then_row_selections, and_then_selectors_with_mask, combine_mixed_selection,
+    intersect_masks, intersect_row_selections, union_masks, union_row_selections,
 };
 pub use boolean::MaskRunIter;
 use boolean::{
@@ -54,7 +54,9 @@ use boolean::{
 };
 pub(crate) use cursor::{LoadedRowRanges, MaskCursor, RowSelectionStrategy};
 pub use cursor::{RowSelectionCursor, RowSelectionPolicy};
-use ranges::{expand_to_batch_boundaries_from_selectors, scan_ranges_from_selectors};
+use ranges::{
+    expand_to_batch_boundaries_from_selectors, scan_ranges_from_mask, scan_ranges_from_selectors,
+};
 pub use selector::RowSelector;
 use selector::{limit_selectors, offset_selectors, split_off_selectors};
 
@@ -443,9 +445,7 @@ impl RowSelection {
             RowSelectionInner::Selectors(selectors) => {
                 scan_ranges_from_selectors(selectors.iter().copied(), page_locations)
             }
-            RowSelectionInner::Mask(mask) => {
-                scan_ranges_from_selectors(MaskRunIter::new(mask.mask()), page_locations)
-            }
+            RowSelectionInner::Mask(mask) => scan_ranges_from_mask(mask.mask(), page_locations),
         }
     }
 
@@ -547,6 +547,10 @@ impl RowSelection {
     }
 
     /// Compute the intersection of two [`RowSelection`]
+    ///
+    /// Nonempty mixed inputs return a mask-backed result.
+    /// If only one input is empty, the result keeps the other's representation.
+    ///
     /// For example:
     /// self:      NNYYYYNNYYNYN
     /// other:     NYNNNNNNY
@@ -560,16 +564,18 @@ impl RowSelection {
             (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
                 intersect_row_selections(l, r)
             }
-            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                intersect_row_selections(l, &r.borrowed_selectors())
-            }
-            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                intersect_row_selections(&l.borrowed_selectors(), r)
+            (RowSelectionInner::Selectors(selectors), RowSelectionInner::Mask(mask))
+            | (RowSelectionInner::Mask(mask), RowSelectionInner::Selectors(selectors)) => {
+                combine_mixed_selection(selectors, mask, intersect_masks)
             }
         }
     }
 
     /// Compute the union of two [`RowSelection`]
+    ///
+    /// Nonempty mixed inputs return a mask-backed result.
+    /// If only one input is empty, the result keeps the other's representation.
+    ///
     /// For example:
     /// self:      NNYYYYNNYYNYN
     /// other:     NYNNNNNNN
@@ -583,11 +589,9 @@ impl RowSelection {
             (RowSelectionInner::Selectors(l), RowSelectionInner::Selectors(r)) => {
                 union_row_selections(l, r)
             }
-            (RowSelectionInner::Selectors(l), RowSelectionInner::Mask(r)) => {
-                union_row_selections(l, &r.borrowed_selectors())
-            }
-            (RowSelectionInner::Mask(l), RowSelectionInner::Selectors(r)) => {
-                union_row_selections(&l.borrowed_selectors(), r)
+            (RowSelectionInner::Selectors(selectors), RowSelectionInner::Mask(mask))
+            | (RowSelectionInner::Mask(mask), RowSelectionInner::Selectors(selectors)) => {
+                combine_mixed_selection(selectors, mask, union_masks)
             }
         }
     }

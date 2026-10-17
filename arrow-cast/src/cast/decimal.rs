@@ -237,8 +237,7 @@ where
 
     let f_fallible = move |x: I::Native| {
         // div is >= 10 and so this cannot overflow
-        let d = x.div_wrapping(div);
-        let r = x.mod_wrapping(div);
+        let (d, r) = x.div_rem_wrapping(div);
 
         // Round result
         let adjusted = match x >= I::Native::ZERO {
@@ -675,37 +674,116 @@ where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: DecimalCast,
 {
+    validate_decimal_precision_and_scale::<D>(precision, scale)?;
     let mul = 10_f64.powi(scale as i32);
 
     if cast_options.safe {
         array
-            .unary_opt::<_, D>(|v| {
-                single_float_to_decimal::<D>(v.as_(), mul)
-                    .filter(|v| D::is_valid_decimal_precision(*v, precision))
-            })
+            .unary_opt::<_, D>(|v| float_to_decimal_checked::<D>(v.as_(), mul, precision).ok())
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     } else {
         array
             .try_unary::<_, D, _>(|v| {
-                let v = single_float_to_decimal::<D>(v.as_(), mul).ok_or_else(|| {
-                    ArrowError::CastError(format!(
-                        "Cannot cast to {}({}, {}). Overflowing on {:?}",
-                        D::PREFIX,
-                        precision,
-                        scale,
-                        v
-                    ))
-                })?;
-                D::validate_decimal_precision(v, precision, scale).map(|()| v)
+                float_to_decimal_checked::<D>(v.as_(), mul, precision)
+                    .map_err(|e| e.into_arrow_error(v, precision, scale))
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
     }
 }
 
+/// Converts a floating point value to the unscaled integer representation of a decimal.
+///
+/// Scales the input by `10^scale` and rounds half away from zero. Returns an error
+/// if the precision or scale is invalid, or the result does not fit the native
+/// type or the requested precision. Non-finite inputs are rejected.
+/// Use [`float_to_decimal_opt`] when the reason for failure is not needed.
+///
+/// ```
+/// use arrow_array::types::Decimal32Type;
+/// use arrow_cast::cast::float_to_decimal;
+///
+/// assert_eq!(float_to_decimal::<Decimal32Type>(12.345, 5, 2).unwrap(), 1235);
+/// assert!(float_to_decimal::<Decimal32Type>(12345.678, 5, 2).is_err());
+/// ```
+#[inline]
+pub fn float_to_decimal<D>(input: f64, precision: u8, scale: i8) -> Result<D::Native, ArrowError>
+where
+    D: DecimalType,
+    D::Native: DecimalCast,
+{
+    validate_decimal_precision_and_scale::<D>(precision, scale)?;
+    float_to_decimal_checked::<D>(input, 10_f64.powi(scale as i32), precision)
+        .map_err(|e| e.into_arrow_error(input, precision, scale))
+}
+
+/// Like [`float_to_decimal`], but returns `None` on failure.
+/// With valid precision and scale, conversion failures do not allocate an error message.
+///
+/// ```
+/// use arrow_array::types::Decimal32Type;
+/// use arrow_cast::cast::float_to_decimal_opt;
+///
+/// assert_eq!(float_to_decimal_opt::<Decimal32Type>(12.345, 5, 2), Some(1235));
+/// assert_eq!(float_to_decimal_opt::<Decimal32Type>(12345.678, 5, 2), None);
+/// ```
+pub fn float_to_decimal_opt<D>(input: f64, precision: u8, scale: i8) -> Option<D::Native>
+where
+    D: DecimalType,
+    D::Native: DecimalCast,
+{
+    validate_decimal_precision_and_scale::<D>(precision, scale).ok()?;
+    float_to_decimal_checked::<D>(input, 10_f64.powi(scale as i32), precision).ok()
+}
+
+// Keep failure reporting allocation-free for scalar Option and safe array casts.
+enum FloatToDecimalError<D: DecimalType> {
+    NativeOverflow,
+    PrecisionOverflow(D::Native),
+}
+
+impl<D: DecimalType> FloatToDecimalError<D> {
+    fn into_arrow_error(self, input: impl std::fmt::Debug, precision: u8, scale: i8) -> ArrowError {
+        match self {
+            Self::NativeOverflow => ArrowError::CastError(format!(
+                "Cannot cast to {}({}, {}). Overflowing on {:?}",
+                D::PREFIX,
+                precision,
+                scale,
+                input
+            )),
+            Self::PrecisionOverflow(value) => {
+                D::validate_decimal_precision(value, precision, scale).unwrap_err()
+            }
+        }
+    }
+}
+
+// `mul` is precomputed once for array casts. Precision must already be validated.
+#[inline]
+fn float_to_decimal_checked<D>(
+    input: f64,
+    mul: f64,
+    precision: u8,
+) -> Result<D::Native, FloatToDecimalError<D>>
+where
+    D: DecimalType,
+    D::Native: DecimalCast,
+{
+    let value =
+        D::Native::from_f64((mul * input).round()).ok_or(FloatToDecimalError::NativeOverflow)?;
+    if D::is_valid_decimal_precision(value, precision) {
+        Ok(value)
+    } else {
+        Err(FloatToDecimalError::PrecisionOverflow(value))
+    }
+}
+
 /// Cast a single floating point value to a decimal native with the given multiple.
-/// Returns `None` if the value cannot be represented with the requested precision.
+/// Returns `None` if the scaled and rounded value does not fit the native integer
+/// type. The caller must separately validate the decimal precision.
+#[deprecated(since = "60.0.0", note = "Use `float_to_decimal` instead")]
 #[inline(always)]
 pub fn single_float_to_decimal<D>(input: f64, mul: f64) -> Option<D::Native>
 where
@@ -717,7 +795,6 @@ where
 
 pub(crate) fn cast_decimal_to_integer<D, T>(
     array: &dyn Array,
-    base: D::Native,
     scale: i8,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
@@ -729,13 +806,16 @@ where
 {
     let array = array.as_primitive::<D>();
 
-    let div: D::Native = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
-        ArrowError::CastError(format!(
-            "Cannot cast to {:?}. The scale {} causes overflow.",
-            D::PREFIX,
-            scale,
-        ))
-    })?;
+    // div is always > 0, so div_wrapping(div) can never overflow/panic
+    let div: D::Native = D::Native::usize_as(10)
+        .pow_checked(scale.unsigned_abs() as u32)
+        .map_err(|_| {
+            ArrowError::CastError(format!(
+                "Cannot cast to {:?}. The scale {} causes overflow.",
+                D::PREFIX,
+                scale,
+            ))
+        })?;
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
 
@@ -783,11 +863,8 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array
-                            .value(i)
-                            .div_checked(div)
-                            .ok()
-                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        let v = array.value(i).div_wrapping(div);
+                        let v = <T::Native as NumCast>::from(v);
                         value_builder.append_option(v);
                     }
                 }
@@ -797,7 +874,7 @@ where
                     if array.is_null(i) {
                         value_builder.append_null();
                     } else {
-                        let v = array.value(i).div_checked(div)?;
+                        let v = array.value(i).div_wrapping(div);
 
                         let value =
                             <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
@@ -837,6 +914,92 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_float_to_decimal() {
+        fn check<D: DecimalType>()
+        where
+            D::Native: DecimalCast,
+        {
+            for (input, scale, expected) in [
+                (12.345, 2, 1235),
+                (-12.345, 2, -1235),
+                (999.99, 2, 99999),
+                (-999.99, 2, -99999),
+                (99999.25, 0, 99999),
+                (999992.5, -1, 99999),
+                (0.0, 2, 0),
+            ] {
+                assert_eq!(
+                    float_to_decimal_opt::<D>(input, 5, scale),
+                    float_to_decimal::<D>(input, 5, scale).ok(),
+                );
+                assert_eq!(
+                    float_to_decimal::<D>(input, 5, scale)
+                        .unwrap()
+                        .to_i128()
+                        .unwrap(),
+                    expected,
+                );
+            }
+            for (input, scale) in [
+                (12345.678, 2),
+                (-12345.678, 2),
+                (999.9975, 2),
+                (-999.9975, 2),
+                (99999.75, 0),
+                (-99999.75, 0),
+                (999997.5, -1),
+                (-999997.5, -1),
+                (f64::NAN, 0),
+                (f64::INFINITY, 0),
+                (f64::NEG_INFINITY, 0),
+                (f64::MAX, 0),
+            ] {
+                assert!(float_to_decimal::<D>(input, 5, scale).is_err());
+                assert!(float_to_decimal_opt::<D>(input, 5, scale).is_none());
+            }
+            for (precision, scale) in [(0, 0), (D::MAX_PRECISION + 1, 0), (5, 6)] {
+                assert!(float_to_decimal::<D>(0.0, precision, scale).is_err());
+                assert!(float_to_decimal_opt::<D>(0.0, precision, scale).is_none());
+            }
+        }
+        check::<Decimal32Type>();
+        check::<Decimal64Type>();
+        check::<Decimal128Type>();
+        check::<Decimal256Type>();
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn test_single_float_to_decimal_preserves_native_range() {
+        // Deprecation preserves acceptance of values that fit i32 but exceed
+        // Decimal32's maximum precision. The new API checks that precision.
+        for (input, expected) in [
+            (1_000_000_000.0, 1_000_000_000),
+            (-1_000_000_000.0, -1_000_000_000),
+            (999_999_999.75, 1_000_000_000),
+            (-999_999_999.75, -1_000_000_000),
+        ] {
+            assert_eq!(
+                single_float_to_decimal::<Decimal32Type>(input, 1.0),
+                Some(expected)
+            );
+            assert!(float_to_decimal::<Decimal32Type>(input, 9, 0).is_err());
+        }
+        assert_eq!(
+            single_float_to_decimal::<Decimal32Type>(999_999_999.0, 1.0),
+            Some(999_999_999),
+        );
+        assert_eq!(
+            single_float_to_decimal::<Decimal32Type>(12.345, 100.0),
+            Some(1235)
+        );
+        assert_eq!(
+            single_float_to_decimal::<Decimal32Type>(f64::MAX, 1.0),
+            None
+        );
+    }
 
     #[test]
     #[expect(deprecated)]

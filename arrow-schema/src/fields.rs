@@ -309,7 +309,12 @@ impl<'a> IntoIterator for &'a Fields {
     }
 }
 
-/// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding type ids
+/// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding
+/// type ids.
+///
+/// Invariants:
+/// - All type ids are unique
+/// - All type ids are non-negative
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
@@ -350,8 +355,9 @@ impl UnionFields {
     /// # Errors
     ///
     /// This function returns an error if:
+    /// - Iterators are not the same length
     /// - Any type_id appears more than once (duplicate type ids)
-    /// - The type_ids are duplicated
+    /// - There is a negative type_id
     ///
     /// # Examples
     ///
@@ -615,14 +621,26 @@ impl UnionFields {
                 output.push((field_type_id, from_field.clone()))
             }
         }
-        *self = output.into_iter().collect();
+        // TODO: see above comment; can we remove the need to go through try_new
+        //       and just validate in this function ourselves?
+        let (type_ids, fields): (Vec<i8>, Vec<FieldRef>) = output.into_iter().unzip();
+        *self = Self::try_new(type_ids, fields)?;
         Ok(())
     }
 }
 
 impl FromIterator<(i8, FieldRef)> for UnionFields {
+    /// # Panics
+    ///
+    /// This will panic on invalid inputs:
+    /// - Duplicate type IDs
+    /// - Negative type IDs
+    ///
+    /// Prefer using [`UnionFields::try_new`] for a fallible construction method.
     fn from_iter<T: IntoIterator<Item = (i8, FieldRef)>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
+        let iter = iter.into_iter();
+        let (type_ids, fields): (Vec<i8>, Vec<FieldRef>) = iter.unzip();
+        Self::try_new(type_ids, fields).expect("invalid arguments passed")
     }
 }
 
@@ -1001,5 +1019,17 @@ mod tests {
         ]);
         assert!(res.is_ok());
         assert_eq!(res.unwrap().len(), 3);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "invalid arguments passed: InvalidArgumentError(\"type ids must be non-negative: -1\")"
+    )]
+    fn test_union_fields_from_iter_should_validate() {
+        let fields: Vec<(i8, FieldRef)> = vec![
+            (0, Arc::new(Field::new("a", DataType::Int32, true))),
+            (-1, Arc::new(Field::new("a", DataType::Int32, true))),
+        ];
+        UnionFields::from_iter(fields);
     }
 }
