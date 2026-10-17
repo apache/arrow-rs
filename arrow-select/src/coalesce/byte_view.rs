@@ -471,20 +471,12 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             return Ok(());
         }
 
-        // The views reference external buffers, so match the filter kernel:
-        // filter the views/nulls, but reuse the source's data buffers rather
-        // than copying the referenced string data.
+        // Apply the normal copy path's compaction decision to the selected views.
         let filtered = filter.filter(source.as_ref())?;
-        let filtered = filtered.as_byte_view::<B>();
-
-        self.ensure_capacity();
-        if let Some(nulls) = filtered.nulls().as_ref() {
-            self.nulls.append_buffer(nulls);
-        } else {
-            self.nulls.append_n_non_nulls(filter.count());
-        }
-        self.append_views_and_update_buffer_index(filtered.views(), filtered.data_buffers(), false);
-        Ok(())
+        self.set_source(Some(filtered));
+        let result = self.copy_rows(0, filter.count());
+        self.set_source(None);
+        result
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
@@ -629,11 +621,11 @@ mod tests {
         let values = (0..32)
             .map(|i| format!("This value is longer than 12 bytes: {i}").into_bytes())
             .collect::<Vec<_>>();
-        let array = BinaryViewArray::from_iter(values.iter().map(|v| Some(v.as_slice())));
+        let array = BinaryViewArray::from_iter(values.iter().map(|v| Some(v.as_slice()))).gc();
         assert!(!array.data_buffers().is_empty());
         let source_buffer = array.data_buffers()[0].as_ptr();
 
-        let filter = BooleanArray::from((0..32).map(|i| i == 3 || i == 29).collect::<Vec<_>>());
+        let filter = BooleanArray::from((0..32).map(|i| i >= 8).collect::<Vec<_>>());
         let predicate = FilterBuilder::new(&filter).build();
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(32);
@@ -643,9 +635,10 @@ mod tests {
         let output = in_progress.finish().unwrap();
         let output = output.as_binary_view();
 
-        assert_eq!(output.len(), 2);
-        assert_eq!(output.value(0), values[3].as_slice());
-        assert_eq!(output.value(1), values[29].as_slice());
+        assert_eq!(output.len(), 24);
+        for (i, value) in values[8..].iter().enumerate() {
+            assert_eq!(output.value(i), value.as_slice());
+        }
         assert!(
             output
                 .data_buffers()
@@ -653,6 +646,25 @@ mod tests {
                 .any(|buffer| std::ptr::addr_eq(buffer.as_ptr(), source_buffer)),
             "expected filtered output to reuse the source data buffer"
         );
+    }
+
+    #[test]
+    fn test_copy_rows_by_filter_from_drops_unused_buffers() {
+        for value in [None, Some(b"short".as_slice())] {
+            let array = BinaryViewArray::from_iter([
+                Some(b"a value longer than twelve bytes".as_slice()),
+                value,
+            ]);
+            let predicate = FilterBuilder::new(&BooleanArray::from(vec![false, true])).build();
+            let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(2);
+            in_progress
+                .copy_rows_by_filter_from(Arc::new(array), &predicate)
+                .unwrap();
+            let output = in_progress.finish().unwrap();
+            let output = output.as_binary_view();
+            assert_eq!(output, &BinaryViewArray::from_iter([value]));
+            assert!(output.data_buffers().is_empty());
+        }
     }
 
     /// Build a compacted BinaryViewArray whose values all spill into external
