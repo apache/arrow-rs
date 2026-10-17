@@ -378,7 +378,13 @@ where
 
     offsets
         .windows(2)
-        .try_for_each(|pair| -> Result<(), ArrowError> {
+        .enumerate()
+        .try_for_each(|(i, pair)| -> Result<(), ArrowError> {
+            if array.is_null(i) {
+                new_offsets.push(len_so_far);
+                return Ok(());
+            }
+
             let new_start = match start.cmp(&zero) {
                 Ordering::Greater => {
                     // a saturated start can carry pair[0] + start past the offset
@@ -1190,6 +1196,46 @@ mod tests {
                 "start={start} length={length:?}"
             );
         }
+    }
+
+    #[test]
+    fn substring_ignores_null_string_bytes() {
+        check_null_string_bytes::<i32>();
+        check_null_string_bytes::<i64>();
+    }
+
+    fn check_null_string_bytes<O: OffsetSizeTrait>() {
+        let values = GenericStringArray::<O>::from(vec!["prefix", "é", "abcd", "中", "", "end"]);
+        let array = GenericStringArray::<O>::new(
+            values.offsets().clone(),
+            values.values().clone(),
+            Some(NullBuffer::from(vec![true, false, true, false, true, true])),
+        );
+
+        for (offset, len) in [(0, array.len()), (1, 4)] {
+            let array = array.slice(offset, len);
+            let view = StringViewArray::from(array.iter().collect::<Vec<_>>());
+            for (start, length) in [
+                (1, None),
+                (-1, None),
+                (-2, Some(1)),
+                (0, Some(1)),
+                (1, Some(0)),
+                (100, Some(100)),
+                (-100, None),
+            ] {
+                let expected = substring(&view, start, length).unwrap();
+                let actual = substring(&array, start, length).unwrap();
+                assert_eq!(
+                    actual.as_string::<O>().iter().collect::<Vec<_>>(),
+                    expected.as_string_view().iter().collect::<Vec<_>>(),
+                    "offset={offset}, start={start}, length={length:?}"
+                );
+            }
+        }
+
+        let valid = GenericStringArray::<O>::from(vec!["é", "ab"]);
+        assert!(substring(&valid, 1, None).is_err());
     }
 
     #[test]
