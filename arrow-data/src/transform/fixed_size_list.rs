@@ -25,9 +25,11 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
         DataType::FixedSizeList(_, i) => *i as usize,
         _ => unreachable!(),
     };
+    let offset = array.offset();
 
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
+            let start = start + offset;
             for child in &mut mutable.child_data {
                 child.try_extend(index, start * size, (start + len) * size)?;
             }
