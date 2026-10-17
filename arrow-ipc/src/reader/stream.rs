@@ -307,6 +307,151 @@ impl StreamDecoder {
             _ => Err(ArrowError::IpcError("Unexpected End of Stream".to_string())),
         }
     }
+
+    /// Returns `true` once the stream's EOS marker has been consumed.
+    pub fn is_finished(&self) -> bool {
+        matches!(self.state, DecoderState::Finished)
+    }
+}
+
+/// Pull-based, zero-copy IPC stream reader over an owned in-memory [`Buffer`].
+///
+/// Where [`StreamReader`](crate::reader::StreamReader) reads from an arbitrary
+/// `R: Read` and copies each message body into a fresh allocation, this reader
+/// takes a fully-materialized [`Buffer`] and yields [`RecordBatch`]es whose
+/// column [`Buffer`]s alias the input — no per-message memcpy. Use this when
+/// the entire IPC stream is already in memory (HTTP body, mmap, byte slice,
+/// shared-memory segment, `bytes::Bytes` from object storage, …).
+///
+/// For a streaming push-based interface that handles partial buffers (e.g. a
+/// chunked byte stream from object storage), use [`StreamDecoder`] directly.
+///
+/// # Example
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{Int32Array, RecordBatch};
+/// # use arrow_buffer::Buffer;
+/// # use arrow_ipc::reader::BufferStreamReader;
+/// # use arrow_ipc::writer::StreamWriter;
+/// # use arrow_schema::{DataType, Field, Schema};
+/// let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+/// let batch = RecordBatch::try_new(
+///     schema.clone(),
+///     vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+/// ).unwrap();
+///
+/// let mut bytes = Vec::new();
+/// let mut w = StreamWriter::try_new(&mut bytes, schema.as_ref()).unwrap();
+/// w.write(&batch).unwrap();
+/// w.finish().unwrap();
+/// drop(w);
+///
+/// let mut reader = BufferStreamReader::try_new(Buffer::from(bytes)).unwrap();
+/// assert_eq!(reader.schema().as_ref(), schema.as_ref());
+/// let read = reader.next().unwrap().unwrap();
+/// assert_eq!(read, batch);
+/// assert!(reader.next().is_none());
+/// ```
+#[derive(Debug)]
+pub struct BufferStreamReader {
+    decoder: StreamDecoder,
+    buffer: Buffer,
+    schema: SchemaRef,
+    /// `StreamDecoder::decode` may parse the schema and the first
+    /// record batch in a single call (its inner loop only exits on a
+    /// `RecordBatch` header or empty input). When that happens we stash
+    /// the eager batch here so it's returned by the first `next()`.
+    pending: Option<RecordBatch>,
+    /// Set once the iterator has returned its final item.
+    finished: bool,
+}
+
+impl BufferStreamReader {
+    /// Create a new reader, eagerly draining the schema message (and any
+    /// leading dictionary messages) so [`schema`](Self::schema) is cheap
+    /// and infallible afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `buffer` does not start with a valid IPC stream
+    /// schema message.
+    pub fn try_new(buffer: Buffer) -> Result<Self, ArrowError> {
+        let mut decoder = StreamDecoder::new();
+        let mut working = buffer;
+        let mut pending: Option<RecordBatch> = None;
+        // Drive the decoder until the schema is parsed. `StreamDecoder`
+        // may consume the schema *and* the first record batch in a
+        // single `decode()` call (its inner loop only exits on a
+        // RecordBatch or on empty input); stash that eager batch.
+        while decoder.schema().is_none() {
+            if working.is_empty() {
+                return Err(ArrowError::IpcError(
+                    "Expected schema message, found empty stream.".to_string(),
+                ));
+            }
+            if let Some(batch) = decoder.decode(&mut working)? {
+                if decoder.schema().is_none() {
+                    return Err(ArrowError::IpcError(
+                        "Expected schema as first IPC message, got record batch".to_string(),
+                    ));
+                }
+                pending = Some(batch);
+                break;
+            }
+        }
+        let schema = decoder.schema().expect("schema decoded above");
+        Ok(Self {
+            decoder,
+            buffer: working,
+            schema,
+            pending,
+            finished: false,
+        })
+    }
+
+    /// Create a new reader from a [`bytes::Bytes`] (cheap zero-copy
+    /// conversion via the existing `impl From<bytes::Bytes> for Buffer`).
+    pub fn try_new_from_bytes(bytes: bytes::Bytes) -> Result<Self, ArrowError> {
+        Self::try_new(Buffer::from(bytes))
+    }
+
+    /// The schema of the stream.
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    /// Returns `true` if the stream's EOS marker has been consumed and no
+    /// further batches will be produced.
+    pub fn is_finished(&self) -> bool {
+        self.finished || self.decoder.is_finished()
+    }
+}
+
+impl Iterator for BufferStreamReader {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(batch) = self.pending.take() {
+            return Some(Ok(batch));
+        }
+        loop {
+            if self.finished || self.decoder.is_finished() {
+                return None;
+            }
+            if self.buffer.is_empty() {
+                self.finished = true;
+                // Like `StreamReader`, a stream that ends on a message boundary
+                // without an EOS marker is accepted, but a truncated message is an error
+                return self.decoder.finish().err().map(Err);
+            }
+            match self.decoder.decode(&mut self.buffer) {
+                Ok(Some(batch)) => return Some(Ok(batch)),
+                Ok(None) => {}
+                Err(e) => return Some(Err(e)),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -440,5 +585,145 @@ mod tests {
         }
 
         decoder.finish().expect("Failed to finish decoder");
+    }
+
+    // ---------------------------------------------------------------
+    // BufferStreamReader
+    // ---------------------------------------------------------------
+
+    fn make_int_batch(rows: usize) -> (RecordBatch, Arc<Schema>) {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(
+                (0..rows as i32).collect::<Vec<_>>(),
+            ))],
+        )
+        .unwrap();
+        (batch, schema)
+    }
+
+    fn serialize_stream(batches: &[RecordBatch], schema: &Schema) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut w = StreamWriter::try_new(&mut buf, schema).unwrap();
+            for b in batches {
+                w.write(b).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn buffer_stream_reader_roundtrip_single_batch() {
+        let (batch, schema) = make_int_batch(64);
+        let bytes = serialize_stream(std::slice::from_ref(&batch), schema.as_ref());
+        let mut r = BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap();
+        assert_eq!(r.schema().as_ref(), schema.as_ref());
+        let got = r.next().unwrap().unwrap();
+        assert_eq!(got, batch);
+        assert!(r.next().is_none());
+        assert!(r.is_finished());
+    }
+
+    #[test]
+    fn buffer_stream_reader_multiple_batches() {
+        let (a, schema) = make_int_batch(8);
+        let (b, _) = make_int_batch(16);
+        let (c, _) = make_int_batch(32);
+        let bytes = serialize_stream(&[a.clone(), b.clone(), c.clone()], schema.as_ref());
+        let r = BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap();
+        let collected: Vec<_> = r.map(Result::unwrap).collect();
+        assert_eq!(collected, vec![a, b, c]);
+    }
+
+    #[test]
+    fn buffer_stream_reader_aliases_input() {
+        // The IPC reader builds each column buffer by slicing one shared
+        // owned-bytes allocation, so the resulting batch must NOT have
+        // allocated fresh memory for column data — it should alias the
+        // input buffer's underlying storage.
+        let (batch, schema) = make_int_batch(1024);
+        let bytes = serialize_stream(std::slice::from_ref(&batch), schema.as_ref());
+        let owned = Buffer::from_vec(bytes);
+        let owned_ptr = owned.as_ptr();
+        let owned_len = owned.len();
+        let mut r = BufferStreamReader::try_new(owned).unwrap();
+        let got = r.next().unwrap().unwrap();
+        // The Int32 values column buffer should point inside the input
+        // allocation: same base ptr range, no new heap region.
+        let col_buf = got.column(0).to_data().buffers()[0].clone();
+        let col_ptr = col_buf.as_ptr();
+        let inside = (col_ptr as usize) >= (owned_ptr as usize)
+            && (col_ptr as usize) < (owned_ptr as usize) + owned_len;
+        assert!(
+            inside,
+            "column buffer ptr {col_ptr:?} not inside input allocation \
+             {owned_ptr:?}..{:?}",
+            unsafe { owned_ptr.add(owned_len) }
+        );
+    }
+
+    #[test]
+    fn buffer_stream_reader_empty_buffer_errors() {
+        let err = BufferStreamReader::try_new(Buffer::from_vec::<u8>(vec![])).unwrap_err();
+        assert!(matches!(err, ArrowError::IpcError(_)), "{err:?}");
+    }
+
+    #[test]
+    fn buffer_stream_reader_schema_only() {
+        let (_, schema) = make_int_batch(0);
+        let bytes = serialize_stream(&[], schema.as_ref());
+        let mut r = BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap();
+        assert_eq!(r.schema().as_ref(), schema.as_ref());
+        assert!(r.next().is_none());
+    }
+
+    #[test]
+    fn buffer_stream_reader_dict_batch() {
+        let dict_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let schema = Arc::new(Schema::new(vec![Field::new("d", dict_type, false)]));
+        let values = arrow_array::StringArray::from(vec!["a", "b"]);
+        let keys = Int32Array::from(vec![0, 1, 0, 1, 0]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict)]).unwrap();
+        let bytes = serialize_stream(std::slice::from_ref(&batch), schema.as_ref());
+        let mut r = BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap();
+        let got = r.next().unwrap().unwrap();
+        assert_eq!(got, batch);
+        assert!(r.next().is_none());
+    }
+
+    #[test]
+    fn buffer_stream_reader_no_eos_marker() {
+        let (batch, schema) = make_int_batch(4);
+        let mut bytes = serialize_stream(std::slice::from_ref(&batch), schema.as_ref());
+        bytes.truncate(bytes.len() - 8); // strip the EOS marker
+        let r = BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap();
+        let collected: Vec<_> = r.map(Result::unwrap).collect();
+        assert_eq!(collected, vec![batch]);
+    }
+
+    #[test]
+    fn buffer_stream_reader_truncated_message_errors() {
+        let (a, schema) = make_int_batch(4);
+        let (b, _) = make_int_batch(8);
+        let mut bytes = serialize_stream(&[a.clone(), b], schema.as_ref());
+        bytes.truncate(bytes.len() - 16); // cut into the last batch's body
+        let mut r = BufferStreamReader::try_new(Buffer::from_vec(bytes)).unwrap();
+        assert_eq!(r.next().unwrap().unwrap(), a);
+        let err = r.next().unwrap().unwrap_err();
+        assert!(matches!(err, ArrowError::IpcError(_)), "{err:?}");
+        assert!(r.next().is_none());
+        assert!(r.is_finished());
+    }
+
+    #[test]
+    fn buffer_stream_reader_from_bytes() {
+        let (batch, schema) = make_int_batch(4);
+        let bytes = serialize_stream(std::slice::from_ref(&batch), schema.as_ref());
+        let mut r = BufferStreamReader::try_new_from_bytes(bytes::Bytes::from(bytes)).unwrap();
+        assert_eq!(r.next().unwrap().unwrap(), batch);
     }
 }
