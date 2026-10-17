@@ -3567,6 +3567,48 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_integer_bounds() {
+        // The all-nines cases have as many digits as a bound but lie past it. atoi 3.1.0
+        // parsed -99999 as i16 without an overflow check (#11591).
+        macro_rules! check {
+            ($t:ty) => {{
+                type Native = <$t as ArrowPrimitiveType>::Native;
+                let (min, max) = (i128::from(Native::MIN), i128::from(Native::MAX));
+                let nines = 10_i128.pow(max.ilog10() + 1) - 1;
+                for v in [
+                    min,
+                    max,
+                    min - 1,
+                    max + 1,
+                    -nines,
+                    nines,
+                    -nines - 1,
+                    nines + 1,
+                ] {
+                    let expected = Native::try_from(v).ok();
+                    // The leading space takes the path that trims before parsing
+                    for s in [v.to_string(), format!(" {v}")] {
+                        assert_eq!(
+                            <$t>::parse(&s),
+                            expected,
+                            "{s:?} as {}",
+                            <$t as ArrowPrimitiveType>::DATA_TYPE
+                        );
+                    }
+                }
+            }};
+        }
+        check!(Int8Type);
+        check!(Int16Type);
+        check!(Int32Type);
+        check!(Int64Type);
+        check!(UInt8Type);
+        check!(UInt16Type);
+        check!(UInt32Type);
+        check!(UInt64Type);
+    }
+
+    #[test]
     fn test_parse_interval_month_day_nano_config() {
         let interval = parse_interval_month_day_nano_config(
             "1",
