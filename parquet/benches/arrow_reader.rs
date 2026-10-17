@@ -113,6 +113,8 @@ fn build_test_schema() -> SchemaDescPtr {
             }
             REQUIRED BOOLEAN mandatory_bool_leaf;
             OPTIONAL BOOLEAN optional_bool_leaf;
+            REQUIRED FIXED_LEN_BYTE_ARRAY (7) mandatory_decimal5_leaf (DECIMAL(15,2));
+            OPTIONAL FIXED_LEN_BYTE_ARRAY (7) optional_decimal5_leaf (DECIMAL(15,2));
         }
         ";
     parse_message_type(message_type)
@@ -242,10 +244,9 @@ where
                             big_int.to_signed_bytes_be()
                         }
                         Type::FIXED_LEN_BYTE_ARRAY => {
-                            assert_eq!(column_desc.type_length(), 16);
-                            // fixed length byte array use the fixed size
-                            // the size is 16
-                            value.to_be_bytes().to_vec()
+                            // the low `type_length` bytes of the big-endian value
+                            let width = column_desc.type_length() as usize;
+                            value.to_be_bytes()[16 - width..].to_vec()
                         }
                         _ => unimplemented!(),
                     };
@@ -1072,13 +1073,14 @@ fn create_f16_by_bytes_reader(
 fn create_decimal_by_bytes_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
+    arrow_type: Option<DataType>,
 ) -> Box<dyn ArrayReader> {
     let physical_type = column_desc.physical_type();
     match physical_type {
         Type::BYTE_ARRAY => make_byte_array_reader(
             Box::new(page_iterator),
             column_desc,
-            None,
+            arrow_type,
             DEFAULT_BATCH_SIZE,
             None,
         )
@@ -1086,7 +1088,7 @@ fn create_decimal_by_bytes_reader(
         Type::FIXED_LEN_BYTE_ARRAY => make_fixed_len_byte_array_reader(
             Box::new(page_iterator),
             column_desc,
-            None,
+            arrow_type,
             DEFAULT_BATCH_SIZE,
             None,
         )
@@ -1194,6 +1196,7 @@ fn bench_byte_decimal<T>(
     encoding: Encoding,
     min: i128,
     max: i128,
+    arrow_type: Option<DataType>,
 ) where
     T: parquet::data_type::DataType,
     T::T: From<Vec<u8>>,
@@ -1213,8 +1216,11 @@ fn bench_byte_decimal<T>(
         encoding.to_string().to_lowercase() + " encoded, mandatory, no NULLs",
         |b| {
             b.iter(|| {
-                let array_reader =
-                    create_decimal_by_bytes_reader(data.clone(), mandatory_column_desc.clone());
+                let array_reader = create_decimal_by_bytes_reader(
+                    data.clone(),
+                    mandatory_column_desc.clone(),
+                    arrow_type.clone(),
+                );
                 count = bench_array_reader(array_reader);
             });
             assert_eq!(count, EXPECTED_VALUE_COUNT);
@@ -1232,8 +1238,11 @@ fn bench_byte_decimal<T>(
         encoding.to_string().to_lowercase() + " encoded, optional, no NULLs",
         |b| {
             b.iter(|| {
-                let array_reader =
-                    create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
+                let array_reader = create_decimal_by_bytes_reader(
+                    data.clone(),
+                    optional_column_desc.clone(),
+                    arrow_type.clone(),
+                );
                 count = bench_array_reader(array_reader);
             });
             assert_eq!(count, EXPECTED_VALUE_COUNT);
@@ -1252,8 +1261,11 @@ fn bench_byte_decimal<T>(
         encoding.to_string().to_lowercase() + " encoded, optional, half NULLs",
         |b| {
             b.iter(|| {
-                let array_reader =
-                    create_decimal_by_bytes_reader(data.clone(), optional_column_desc.clone());
+                let array_reader = create_decimal_by_bytes_reader(
+                    data.clone(),
+                    optional_column_desc.clone(),
+                    arrow_type.clone(),
+                );
                 count = bench_array_reader(array_reader);
             });
             assert_eq!(count, EXPECTED_VALUE_COUNT);
@@ -1961,6 +1973,7 @@ fn decimal_benches(c: &mut Criterion) {
         // precision is 16: the max is 9999999999999999
         9999999999999000,
         9999999999999999,
+        None,
     );
     group.finish();
 
@@ -1976,6 +1989,7 @@ fn decimal_benches(c: &mut Criterion) {
         // precision is 16: the max is 9999999999999999
         9999999999999000,
         9999999999999999,
+        None,
     );
     group.finish();
 
@@ -1990,6 +2004,36 @@ fn decimal_benches(c: &mut Criterion) {
         // precision is 16: the max is 9999999999999999
         9999999999999000,
         9999999999999999,
+        None,
+    );
+    group.finish();
+
+    // parquet FIXED_LEN_BYTE_ARRAY(7), logical type decimal(15,2): the minimal
+    // width, as Spark's legacy format writes it
+    let mut group = c.benchmark_group("arrow_array_reader/FIXED_LEN_BYTE_ARRAY(7)/Decimal128Array");
+    let mandatory_decimal5_leaf_desc = schema.column(45);
+    let optional_decimal5_leaf_desc = schema.column(46);
+    bench_byte_decimal::<FixedLenByteArrayType>(
+        &mut group,
+        &mandatory_decimal5_leaf_desc,
+        &optional_decimal5_leaf_desc,
+        Encoding::PLAIN,
+        // precision is 15, with negative values to exercise sign extension
+        -999999999999999,
+        999999999999999,
+        None,
+    );
+    group.finish();
+
+    let mut group = c.benchmark_group("arrow_array_reader/FIXED_LEN_BYTE_ARRAY(7)/Decimal64Array");
+    bench_byte_decimal::<FixedLenByteArrayType>(
+        &mut group,
+        &mandatory_decimal5_leaf_desc,
+        &optional_decimal5_leaf_desc,
+        Encoding::PLAIN,
+        -999999999999999,
+        999999999999999,
+        Some(DataType::Decimal64(15, 2)),
     );
     group.finish();
 }
