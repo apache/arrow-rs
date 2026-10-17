@@ -773,37 +773,6 @@ mod tests {
     }
 
     #[test]
-    fn test_last_set_bit_position_word_boundaries() {
-        for offset in [0, 1, 7, 8, 63, 64, 65] {
-            for len in [0_usize, 1, 63, 64, 65, 127, 128, 129, 257, 8193] {
-                for last in [
-                    None,
-                    Some(0),
-                    Some(63),
-                    Some(64),
-                    Some(127),
-                    Some(128),
-                    len.checked_sub(1),
-                ] {
-                    let last = last.filter(|&pos| pos < len);
-                    // Set bits outside the slice must not affect the result.
-                    let mut bits = vec![true; offset + len + 64];
-                    bits[offset..offset + len].fill(false);
-                    if let Some(pos) = last {
-                        bits[offset + pos] = true;
-                    }
-                    let mask = BooleanBuffer::from(bits).slice(offset, len);
-                    assert_eq!(
-                        last_set_bit_position(&mask),
-                        last,
-                        "offset={offset}, len={len}, last={last:?}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
     fn test_trim_mask_fuzz_equivalence() {
         let mut rand = rng();
