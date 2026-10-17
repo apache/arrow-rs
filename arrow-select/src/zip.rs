@@ -814,11 +814,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                 let true_count = predicate.count_set_bits();
                 let mut buffers: Vec<Buffer> = truthy_buffers.to_vec();
 
-                // A short falsy value is stored entirely inside its view, so we can use the
-                // view as it is. We check the value's length rather than whether the scalar has
-                // buffers, because a scalar cut from a larger array can still have buffers
-                // even when its own value is short. A longer value lives in a buffer, so we
-                // need to update its view to point at that buffer's new position
+                // Check if we need to keep falsy buffer in case view isn't inline
                 let view_falsy = if (falsy_view as u32) <= MAX_INLINE_VIEW_LEN {
                     falsy_view
                 } else {
@@ -1791,20 +1787,17 @@ mod test {
 
     #[test]
     fn test_zip_kernel_scalar_strings_array_view_sliced_long_falsy() {
-        // A long falsy value must still be remapped after the truthy buffers
+        // A 13 byte falsy value is not inlined, so it must be remapped after the truthy buffers
         let truthy =
             StringViewArray::from(vec!["a string longer than twelve bytes", "x"]).slice(0, 1);
-        let falsy =
-            StringViewArray::from(vec!["y", "another string longer than twelve"]).slice(1, 1);
+        let falsy = StringViewArray::from(vec!["y", "thirteen byte"]).slice(1, 1);
 
         let mask = BooleanArray::from(vec![true, false]);
         let out = zip(&mask, &Scalar::new(&truthy), &Scalar::new(&falsy)).unwrap();
         out.to_data().validate_full().unwrap();
         let actual = out.as_string_view();
-        let expected = StringViewArray::from(vec![
-            "a string longer than twelve bytes",
-            "another string longer than twelve",
-        ]);
+        let expected =
+            StringViewArray::from(vec!["a string longer than twelve bytes", "thirteen byte"]);
         assert_eq!(actual, &expected);
     }
 
