@@ -112,6 +112,9 @@
 //! [sbbf-paper]: https://arxiv.org/pdf/2101.01719
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
 
+#[cfg(feature = "arrow")]
+mod arrow;
+
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
@@ -249,6 +252,22 @@ impl Block {
     }
 }
 
+impl Block {
+    /// Same result as [`Block::check`], but tests all 8 words without an early
+    /// exit. This has no data-dependent branch, so it is faster when many
+    /// hashes are checked in a loop.
+    #[cfg_attr(not(any(feature = "arrow", test)), expect(dead_code))]
+    #[inline(always)]
+    fn check_branch_free(&self, hash: u32) -> bool {
+        let mut missing = 0u32;
+        for (word, salt) in self.0.iter().zip(SALT) {
+            let bit = 1u32 << (hash.wrapping_mul(salt) >> 27);
+            missing |= !word & bit;
+        }
+        missing == 0
+    }
+}
+
 impl std::ops::Index<usize> for Block {
     type Output = u32;
 
@@ -319,6 +338,37 @@ impl Block {
 /// struct set via [`crate::file::properties::WriterProperties`] and is thus hidden by default.
 #[derive(Debug, Clone)]
 pub struct Sbbf(Vec<Block>);
+
+/// A disjoint, mutable range of the blocks of an [`Sbbf`].
+///
+/// See [`Sbbf::shards_mut`].
+#[derive(Debug)]
+pub struct SbbfShard<'a> {
+    blocks: &'a mut [Block],
+    first_block: usize,
+    total_blocks: usize,
+}
+
+impl SbbfShard<'_> {
+    /// Insert a hash (see [`Sbbf::hash_value`]) into this shard.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`Sbbf::shard_index`] does not map `hash` to this shard.
+    #[inline]
+    pub fn insert_hash(&mut self, hash: u64) {
+        let block_index = (((hash >> 32).saturating_mul(self.total_blocks as u64)) >> 32) as usize;
+        let local = block_index.wrapping_sub(self.first_block);
+        match self.blocks.get_mut(local) {
+            Some(block) => block.insert(hash as u32),
+            None => panic!(
+                "hash for block {block_index} inserted into a shard with blocks {}..{}",
+                self.first_block,
+                self.first_block + self.blocks.len()
+            ),
+        }
+    }
+}
 
 pub(crate) const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
 
@@ -549,8 +599,21 @@ impl Sbbf {
         self.insert_hash(hash_as_bytes(value));
     }
 
-    /// Insert a hash into the filter
-    fn insert_hash(&mut self, hash: u64) {
+    /// Return the hash that [`Self::insert`] and [`Self::check`] use for `value`.
+    ///
+    /// This is xxHash64 (seed 0) of the plain-encoded bytes of the value, as the
+    /// Parquet specification requires. Use it with [`Self::insert_hash`] and
+    /// [`Self::check_hash`] to hash a value once and use the hash many times, or to
+    /// compute hashes on a different thread than the one that changes the filter.
+    pub fn hash_value<T: AsBytes + ?Sized>(value: &T) -> u64 {
+        hash_as_bytes(value)
+    }
+
+    /// Insert a hash into the filter.
+    ///
+    /// The hash must come from [`Self::hash_value`] (or an equal function), otherwise
+    /// [`Self::check`] will not find the value.
+    pub fn insert_hash(&mut self, hash: u64) {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].insert(hash as u32)
     }
@@ -563,9 +626,82 @@ impl Sbbf {
     /// Check if a hash is in the filter. May return
     /// true for values that was never inserted ("false positive")
     /// but will always return false if a hash has not been inserted.
-    fn check_hash(&self, hash: u64) -> bool {
+    ///
+    /// See [`Self::hash_value`].
+    pub fn check_hash(&self, hash: u64) -> bool {
         let block_index = self.hash_to_block_index(hash);
         self.0[block_index].check(hash as u32)
+    }
+
+    /// Same result as [`Self::check_hash`], without data-dependent branches.
+    #[cfg_attr(not(any(feature = "arrow", test)), expect(dead_code))]
+    #[inline(always)]
+    fn check_hash_branch_free(&self, hash: u64) -> bool {
+        let block_index = self.hash_to_block_index(hash);
+        self.0[block_index].check_branch_free(hash as u32)
+    }
+
+    /// Return the index of the shard of [`Self::shards_mut`] that holds `hash`.
+    ///
+    /// The result is less than `num_shards`. `num_shards` must be the same value
+    /// that is given to [`Self::shards_mut`].
+    pub fn shard_index(&self, hash: u64, num_shards: usize) -> usize {
+        self.hash_to_block_index(hash) / self.blocks_per_shard(num_shards)
+    }
+
+    /// Split the filter into `num_shards` disjoint mutable parts.
+    ///
+    /// Each [`SbbfShard`] holds a contiguous range of blocks. A hash goes into the
+    /// shard at [`Self::shard_index`]. Because the shards do not share memory, a
+    /// caller can fill them from different threads at the same time without locks
+    /// or atomic operations. The result is equal to the filter that
+    /// [`Self::insert_hash`] makes with the same hashes in one thread.
+    ///
+    /// Always returns `num_shards` shards (at least 1). Some shards are empty when the
+    /// filter has fewer blocks than `num_shards`.
+    ///
+    /// ```
+    /// # use parquet::bloom_filter::Sbbf;
+    /// let mut filter = Sbbf::new_with_ndv_fpp(1000, 0.01).unwrap();
+    /// let hashes: Vec<u64> = (0..1000i64).map(|v| Sbbf::hash_value(&v)).collect();
+    /// let num_shards = 4;
+    /// // Group the hashes by shard
+    /// let mut buckets = vec![vec![]; num_shards];
+    /// for h in hashes {
+    ///     buckets[filter.shard_index(h, num_shards)].push(h);
+    /// }
+    /// // Fill each shard on its own thread
+    /// std::thread::scope(|s| {
+    ///     for (mut shard, bucket) in filter.shards_mut(num_shards).into_iter().zip(&buckets) {
+    ///         s.spawn(move || bucket.iter().for_each(|h| shard.insert_hash(*h)));
+    ///     }
+    /// });
+    /// assert!(filter.check(&42i64));
+    /// ```
+    pub fn shards_mut(&mut self, num_shards: usize) -> Vec<SbbfShard<'_>> {
+        let num_shards = num_shards.max(1);
+        let per_shard = self.blocks_per_shard(num_shards);
+        let total_blocks = self.0.len();
+        let mut shards: Vec<SbbfShard<'_>> = self
+            .0
+            .chunks_mut(per_shard)
+            .enumerate()
+            .map(|(i, blocks)| SbbfShard {
+                blocks,
+                first_block: i * per_shard,
+                total_blocks,
+            })
+            .collect();
+        shards.resize_with(num_shards, || SbbfShard {
+            blocks: &mut [],
+            first_block: total_blocks,
+            total_blocks,
+        });
+        shards
+    }
+
+    fn blocks_per_shard(&self, num_shards: usize) -> usize {
+        self.0.len().div_ceil(num_shards.max(1)).max(1)
     }
 
     /// Return the total in memory size of this bloom filter in bytes
@@ -786,6 +922,80 @@ fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_hash_value_insert_hash_check_hash() {
+        let mut filter = Sbbf::new_with_ndv_fpp(100, 0.01).unwrap();
+        filter.insert_hash(Sbbf::hash_value(&42i64));
+        assert!(filter.check(&42i64));
+        assert!(filter.check_hash(Sbbf::hash_value(&42i64)));
+        assert_eq!(Sbbf::hash_value("hello"), hash_as_bytes("hello"));
+    }
+
+    #[test]
+    fn test_branch_free_check_matches_check() {
+        let mut filter = Sbbf::new_with_num_of_bytes(256);
+        for i in 0..200u64 {
+            filter.insert(&(i * 7));
+        }
+        for i in 0..5000u64 {
+            let h = Sbbf::hash_value(&i);
+            assert_eq!(filter.check_hash(h), filter.check_hash_branch_free(h));
+        }
+    }
+
+    #[test]
+    fn test_shards_mut_matches_serial_insert() {
+        let hashes: Vec<u64> = (0..50_000u64).map(|v| Sbbf::hash_value(&v)).collect();
+        let mut serial = Sbbf::new_with_ndv_fpp(50_000, 0.01).unwrap();
+        hashes.iter().for_each(|h| serial.insert_hash(*h));
+        let mut expected = vec![];
+        serial.write_bitset(&mut expected).unwrap();
+
+        for num_shards in [1, 3, 8, 64] {
+            let mut sharded = Sbbf::new_with_ndv_fpp(50_000, 0.01).unwrap();
+            let mut buckets = vec![vec![]; num_shards];
+            for h in &hashes {
+                buckets[sharded.shard_index(*h, num_shards)].push(*h);
+            }
+            let shards = sharded.shards_mut(num_shards);
+            assert_eq!(shards.len(), num_shards);
+            std::thread::scope(|s| {
+                for (mut shard, bucket) in shards.into_iter().zip(&buckets) {
+                    s.spawn(move || bucket.iter().for_each(|h| shard.insert_hash(*h)));
+                }
+            });
+            let mut actual = vec![];
+            sharded.write_bitset(&mut actual).unwrap();
+            assert_eq!(actual, expected, "{num_shards} shards");
+        }
+    }
+
+    #[test]
+    fn test_shards_mut_more_shards_than_blocks() {
+        let mut filter = Sbbf::new_with_num_of_bytes(64); // 2 blocks
+        let hashes: Vec<u64> = (0..100u64).map(|v| Sbbf::hash_value(&v)).collect();
+        let shard_of: Vec<usize> = hashes.iter().map(|h| filter.shard_index(*h, 8)).collect();
+        let mut shards = filter.shards_mut(8);
+        assert_eq!(shards.len(), 8);
+        for (h, s) in hashes.iter().zip(shard_of) {
+            shards[s].insert_hash(*h);
+        }
+        for v in 0..100u64 {
+            assert!(filter.check(&v));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "inserted into a shard")]
+    fn test_shard_insert_wrong_shard_panics() {
+        let mut filter = Sbbf::new_with_num_of_bytes(1024);
+        let h = (0..u64::MAX)
+            .map(|v| Sbbf::hash_value(&v))
+            .find(|h| filter.shard_index(*h, 2) == 1)
+            .unwrap();
+        filter.shards_mut(2)[0].insert_hash(h);
+    }
 
     #[test]
     fn test_hash_bytes() {
