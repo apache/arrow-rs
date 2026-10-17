@@ -212,6 +212,9 @@ pub mod schema;
 #[cfg(not(feature = "experimental"))]
 mod schema;
 
+#[cfg(feature = "arrow")]
+pub(crate) use schema::decimal_length_from_precision;
+
 use std::fmt::Debug;
 
 pub use self::arrow_writer::ArrowWriter;
