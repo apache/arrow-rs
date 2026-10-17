@@ -889,10 +889,13 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
             flags |= Flags::DICTIONARY_ORDERED;
         }
 
-        let schema = FFI_ArrowSchema::try_from(field.data_type())?.with_name(field.name())?;
-        // Keep the flags set for the data type, such as `MAP_KEYS_SORTED`.
-        let flags = flags | Flags::from_bits_truncate(schema.flags);
-        let schema = schema.with_flags(flags)?;
+        if let DataType::Map(_, true) = field.data_type() {
+            flags |= Flags::MAP_KEYS_SORTED;
+        }
+
+        let schema = FFI_ArrowSchema::try_from(field.data_type())?
+            .with_name(field.name())?
+            .with_flags(flags)?;
         // SAFETY: schema was just constructed by this crate.
         unsafe { schema.with_metadata(field.metadata()) }
     }
