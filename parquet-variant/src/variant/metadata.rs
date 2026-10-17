@@ -362,6 +362,17 @@ impl<'m> VariantMetadata<'m> {
         self.bytes.len()
     }
 
+    /// Returns (only) the bytes that make up this metadata dictionary.
+    ///
+    /// As with [`Self::size`], this may be a prefix of what was passed to [`Self::new`] or
+    /// [`Self::try_new`] if the input was larger than necessary to encode the dictionary.
+    ///
+    /// This is mainly useful for recognizing that two values share one metadata dictionary, so
+    /// that work derived from that dictionary can be cached across them.
+    pub fn as_bytes(&self) -> &'m [u8] {
+        self.bytes
+    }
+
     /// Attempts to retrieve a dictionary entry by index, failing if out of bounds or if the
     /// underlying bytes are [invalid].
     ///
