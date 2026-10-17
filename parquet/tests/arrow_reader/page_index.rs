@@ -370,9 +370,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_none());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 7441);
+    assert_eq!(metadata.memory_size(), 7425);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 7865);
+    assert_eq!(metadata.memory_size(), 7849);
 
     // full index
     let mut reader = ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
@@ -382,9 +382,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 14009);
+    assert_eq!(metadata.memory_size(), 13993);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 14433);
+    assert_eq!(metadata.memory_size(), 14417);
 
     // populate column 0 for column index and all columns for offset index
     let mut reader = ParquetMetaDataReader::new()
@@ -397,9 +397,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 10728);
+    assert_eq!(metadata.memory_size(), 10712);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 11152);
+    assert_eq!(metadata.memory_size(), 11136);
 
     // populate column 0 for column index and columns 0 & 2 for the offset index
     let mut reader = ParquetMetaDataReader::new()
@@ -412,9 +412,9 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 9672);
+    assert_eq!(metadata.memory_size(), 9656);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 10096);
+    assert_eq!(metadata.memory_size(), 10080);
 
     // populate only row group 1, column index gets column 0, offset index gets
     // columns 0 and 2.
@@ -428,7 +428,7 @@ fn test_page_index_sizes() {
     let metadata = reader.finish().unwrap();
     assert!(metadata.page_index().is_some());
     #[cfg(not(feature = "encryption"))]
-    assert_eq!(metadata.memory_size(), 8238);
+    assert_eq!(metadata.memory_size(), 8222);
     #[cfg(feature = "encryption")]
-    assert_eq!(metadata.memory_size(), 8662);
+    assert_eq!(metadata.memory_size(), 8646);
 }
