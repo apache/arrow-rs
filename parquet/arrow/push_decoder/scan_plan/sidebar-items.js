@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["CHUNK","DICTIONARY"],"enum":["PageKind","PageSet"],"fn":["position"],"mod":["budget","frontier"],"struct":["PlannedRange","Planner","RowGroupContext","RowGroupRanges","ScanPlan","ScanPlanBuilder","SelectedRows","StageColumns","StagePlan","StageRanges"],"type":["HeadPosition","HeapEntry","RangeOrder"]};

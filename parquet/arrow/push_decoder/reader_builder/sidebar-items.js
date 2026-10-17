@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["RowGroupBuildResult","RowGroupDecoderState"],"fn":["column_chunk_range","loaded_row_ranges_for_projection","prepare_selection_for_page_skipping"],"mod":["data","filter","stages"],"struct":["NextState","RowGroupInfo","RowGroupReaderBuilder","RowGroupReaderBuilderParts"]};

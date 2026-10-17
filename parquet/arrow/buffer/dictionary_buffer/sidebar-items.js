@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["DictionaryBuffer"],"fn":["build_dictionary_array","hash_byte_slices","hashes_as_u64","pack_fixed_values","pack_fixed_values_impl","pack_values_from_offsets","pack_values_from_offsets_impl"],"macro":[["fixed_dict_helper",1],["offsets_dict_helper",1]],"struct":["BuildPassthroughHasher","PassthroughHasher"]};

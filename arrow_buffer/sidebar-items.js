@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["alloc","arith","bigint","bit_chunk_iterator","bit_iterator","bit_mask","bit_util","buffer","builder","bytes","error","interval","native","pool","util"],"struct":["IntervalDayTime","IntervalMonthDayNano","OverflowError","TrackingMemoryPool","i256"],"trait":["ArrowNativeType","MemoryPool","MemoryReservation","ToByteSlice"]};

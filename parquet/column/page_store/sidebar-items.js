@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["InMemoryPageStore","InMemoryPageStoreFactory","PageKey","PageStoreArgs"],"trait":["PageStore","PageStoreFactory"]};

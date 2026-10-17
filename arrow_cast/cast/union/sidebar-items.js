@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["resolve_child_array","same_type_family","union_extract_by_type"]};

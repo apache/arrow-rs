@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["GenericListArray"],"trait":["OffsetSizeTrait"],"type":["LargeListArray","ListArray"]};
