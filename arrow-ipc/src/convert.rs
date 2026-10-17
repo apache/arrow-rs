@@ -159,8 +159,13 @@ pub fn schema_to_fb_offset<'a>(
 
 /// Convert an IPC Field to Arrow Field
 ///
+/// See [value type metadata] for how the metadata of a dictionary's value
+/// type is mapped to [`Field`] metadata.
+///
 /// This panics on malformed input; every reader path uses the fallible
 /// conversion instead. kept for backwards compatibility only.
+///
+/// [value type metadata]: crate::reader#dictionary-value-type-metadata
 impl From<crate::Field<'_>> for Field {
     fn from(field: crate::Field) -> Field {
         try_field_from(field).expect("invalid IPC field")
@@ -168,6 +173,11 @@ impl From<crate::Field<'_>> for Field {
 }
 
 /// Convert an IPC Field to Arrow Field
+///
+/// See [value type metadata] for how `DictionaryEncoding.custom_metadata`
+/// is mapped.
+///
+/// [value type metadata]: crate::reader#dictionary-value-type-metadata
 fn try_field_from(field: crate::Field) -> Result<Field, ArrowError> {
     let arrow_field = if let Some(dictionary) = field.dictionary() {
         #[expect(deprecated)]
@@ -195,6 +205,21 @@ fn try_field_from(field: crate::Field) -> Result<Field, ArrowError> {
         }
     }
 
+    // `DataType::Dictionary` cannot carry metadata for its value type
+    // (https://github.com/apache/arrow-rs/issues/7982), so copy it to the field
+    // unless the field has its own extension type
+    if let Some(value_metadata) = field.dictionary().and_then(|d| d.custom_metadata())
+        && !metadata_map.contains_key(extension::EXTENSION_TYPE_NAME_KEY)
+    {
+        for kv in value_metadata {
+            if let (Some(k), Some(v)) = (kv.key(), kv.value()) {
+                metadata_map
+                    .entry(k.to_string())
+                    .or_insert_with(|| v.to_string());
+            }
+        }
+    }
+
     Ok(arrow_field.with_metadata(metadata_map))
 }
 
@@ -208,6 +233,11 @@ pub fn fb_to_schema(fb: crate::Schema) -> Schema {
 ///
 /// Returns an error on schema messages that the flatbuffer
 /// verifier accepts but that are not valid Arrow.
+///
+/// See [value type metadata] for how the metadata of a dictionary's value
+/// type is mapped to [`Field`] metadata.
+///
+/// [value type metadata]: crate::reader#dictionary-value-type-metadata
 pub fn try_fb_to_schema(fb: crate::Schema) -> Result<Schema, ArrowError> {
     let mut fields: Vec<Field> = vec![];
     let c_fields = fb
@@ -245,6 +275,11 @@ pub fn try_fb_to_schema(fb: crate::Schema) -> Result<Schema, ArrowError> {
 }
 
 /// Try deserialize flat buffer format bytes into a schema
+///
+/// See [value type metadata] for how the metadata of a dictionary's value
+/// type is mapped to [`Field`] metadata.
+///
+/// [value type metadata]: crate::reader#dictionary-value-type-metadata
 pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema, ArrowError> {
     if let Ok(ipc) = crate::root_as_message(bytes) {
         if let Some(schema) = ipc.header_as_schema() {
@@ -262,6 +297,11 @@ pub fn try_schema_from_flatbuffer_bytes(bytes: &[u8]) -> Result<Schema, ArrowErr
 }
 
 /// Try deserialize the IPC format bytes into a schema
+///
+/// See [value type metadata] for how the metadata of a dictionary's value
+/// type is mapped to [`Field`] metadata.
+///
+/// [value type metadata]: crate::reader#dictionary-value-type-metadata
 pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
     // There are two protocol types: https://issues.apache.org/jira/browse/ARROW-6313
     // The original protocol is:
@@ -1018,6 +1058,13 @@ pub(crate) fn get_fb_field_type<'a>(
 }
 
 /// Create an IPC dictionary encoding
+///
+/// `DictionaryEncoding.custom_metadata` (metadata for the dictionary value
+/// type) is never written: [`DataType::Dictionary`] cannot carry metadata for
+/// its value type (see <https://github.com/apache/arrow-rs/issues/7982>), so
+/// arrow-rs cannot distinguish metadata of the dictionary value type from
+/// metadata of the field's own type, and writes the metadata of a dictionary
+/// field to `Field.custom_metadata`.
 pub(crate) fn get_fb_dictionary<'a>(
     index_type: &DataType,
     dict_id: i64,
@@ -1088,6 +1135,136 @@ impl MessageBuffer {
     pub fn as_ref(&self) -> Message<'_> {
         // SAFETY: Run verifier on construction
         unsafe { crate::root_as_message_unchecked(&self.0) }
+    }
+}
+
+/// Helpers to build IPC schemas that the arrow-rs writer cannot produce
+#[cfg(test)]
+pub(crate) mod test_util {
+    use super::*;
+
+    pub(crate) const UUID: &str = "arrow.uuid";
+
+    /// `Dictionary(Int32, FixedSizeBinary(16))`, the type of the fields built
+    /// by [`fb_dictionary_field`]
+    pub(crate) fn uuid_dictionary_type() -> DataType {
+        Dictionary(Box::new(Int32), Box::new(FixedSizeBinary(16)))
+    }
+
+    /// Push `pairs` as a vector of IPC `KeyValue`s.
+    fn fb_key_values<'a>(
+        fbb: &mut FlatBufferBuilder<'a>,
+        pairs: &[(&str, &str)],
+    ) -> WIPOffset<Vector<'a, ForwardsUOffset<KeyValue<'a>>>> {
+        let pairs = pairs
+            .iter()
+            .map(|(k, v)| {
+                let key = fbb.create_string(k);
+                let value = fbb.create_string(v);
+                let mut kv = crate::KeyValueBuilder::new(fbb);
+                kv.add_key(key);
+                kv.add_value(value);
+                kv.finish()
+            })
+            .collect::<Vec<_>>();
+        fbb.create_vector(&pairs)
+    }
+
+    /// Push an IPC field `name` of type [`uuid_dictionary_type`] with
+    /// dictionary id `id`, the given `DictionaryEncoding.custom_metadata`
+    /// (omitted if `None`) and `Field.custom_metadata`.
+    pub(crate) fn fb_dictionary_field<'a>(
+        fbb: &mut FlatBufferBuilder<'a>,
+        name: &str,
+        id: i64,
+        value_metadata: Option<&[(&str, &str)]>,
+        field_metadata: &[(&str, &str)],
+    ) -> WIPOffset<crate::Field<'a>> {
+        let name = fbb.create_string(name);
+        let value_type = {
+            let mut b = crate::FixedSizeBinaryBuilder::new(fbb);
+            b.add_byteWidth(16);
+            b.finish().as_union_value()
+        };
+        let index_type = {
+            let mut b = crate::IntBuilder::new(fbb);
+            b.add_bitWidth(32);
+            b.add_is_signed(true);
+            b.finish()
+        };
+        let value_metadata = value_metadata.map(|m| fb_key_values(fbb, m));
+        let dictionary = crate::DictionaryEncoding::create(
+            fbb,
+            &crate::DictionaryEncodingArgs {
+                id,
+                indexType: Some(index_type),
+                isOrdered: false,
+                dictionaryKind: crate::DictionaryKind::DenseArray,
+                custom_metadata: value_metadata,
+            },
+        );
+        let field_metadata =
+            (!field_metadata.is_empty()).then(|| fb_key_values(fbb, field_metadata));
+        let mut b = crate::FieldBuilder::new(fbb);
+        b.add_name(name);
+        b.add_nullable(true);
+        b.add_type_type(crate::Type::FixedSizeBinary);
+        b.add_type_(value_type);
+        b.add_dictionary(dictionary);
+        if let Some(field_metadata) = field_metadata {
+            b.add_custom_metadata(field_metadata);
+        }
+        b.finish()
+    }
+
+    /// Push an IPC field `name` of type `type_type` (a list or a struct) with
+    /// the given children.
+    pub(crate) fn fb_nested_field<'a>(
+        fbb: &mut FlatBufferBuilder<'a>,
+        name: &str,
+        type_type: crate::Type,
+        children: &[WIPOffset<crate::Field<'a>>],
+    ) -> WIPOffset<crate::Field<'a>> {
+        let name = fbb.create_string(name);
+        let type_ = match type_type {
+            crate::Type::List => crate::ListBuilder::new(fbb).finish().as_union_value(),
+            crate::Type::Struct_ => crate::Struct_Builder::new(fbb).finish().as_union_value(),
+            _ => unimplemented!("{type_type:?}"),
+        };
+        let children = fbb.create_vector(children);
+        let mut b = crate::FieldBuilder::new(fbb);
+        b.add_name(name);
+        b.add_nullable(true);
+        b.add_type_type(type_type);
+        b.add_type_(type_);
+        b.add_children(children);
+        b.finish()
+    }
+
+    /// Push an IPC schema of `fields`.
+    pub(crate) fn fb_schema<'a>(
+        fbb: &mut FlatBufferBuilder<'a>,
+        fields: &[WIPOffset<crate::Field<'a>>],
+    ) -> WIPOffset<crate::Schema<'a>> {
+        let fields = fbb.create_vector(fields);
+        let mut b = crate::SchemaBuilder::new(fbb);
+        b.add_fields(fields);
+        b.finish()
+    }
+
+    /// Finish `fbb` as an IPC `Message` whose header is a schema of `fields`.
+    pub(crate) fn fb_schema_message<'a>(
+        mut fbb: FlatBufferBuilder<'a>,
+        fields: &[WIPOffset<crate::Field<'a>>],
+    ) -> Vec<u8> {
+        let schema = fb_schema(&mut fbb, fields);
+        let mut message = crate::MessageBuilder::new(&mut fbb);
+        message.add_version(crate::MetadataVersion::V5);
+        message.add_header_type(crate::MessageHeader::Schema);
+        message.add_header(schema.as_union_value());
+        let message = message.finish();
+        fbb.finish(message, None);
+        fbb.finished_data().to_vec()
     }
 }
 
@@ -1431,5 +1608,132 @@ mod tests {
         assert_eq!(ipc.bodyLength(), ipc2.bodyLength());
         assert!(ipc.custom_metadata().is_none());
         assert!(ipc2.custom_metadata().is_none());
+    }
+
+    use super::test_util::*;
+    use extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+
+    /// Read the single field of a schema message holding the given dictionary
+    /// field
+    fn read_dictionary_field(
+        value_metadata: Option<&[(&str, &str)]>,
+        field_metadata: &[(&str, &str)],
+    ) -> Field {
+        let mut fbb = FlatBufferBuilder::new();
+        let field = fb_dictionary_field(&mut fbb, "uuids", 0, value_metadata, field_metadata);
+        let bytes = fb_schema_message(fbb, &[field]);
+        let schema = try_schema_from_flatbuffer_bytes(&bytes).unwrap();
+        let field = schema.field(0).clone();
+        assert_eq!(field.data_type(), &uuid_dictionary_type());
+        field
+    }
+
+    #[test]
+    fn dictionary_value_metadata_is_copied_to_field() {
+        let field = read_dictionary_field(
+            Some(&[
+                (EXTENSION_TYPE_NAME_KEY, UUID),
+                (EXTENSION_TYPE_METADATA_KEY, ""),
+            ]),
+            &[],
+        );
+        assert_eq!(
+            field.metadata(),
+            &Metadata::from([
+                (EXTENSION_TYPE_NAME_KEY, UUID),
+                (EXTENSION_TYPE_METADATA_KEY, ""),
+            ])
+        );
+    }
+
+    #[test]
+    fn dictionary_value_metadata_does_not_override_field_metadata() {
+        let field = read_dictionary_field(
+            Some(&[
+                (EXTENSION_TYPE_NAME_KEY, UUID),
+                (EXTENSION_TYPE_METADATA_KEY, "value"),
+                ("k", "value"),
+            ]),
+            &[(EXTENSION_TYPE_METADATA_KEY, "field"), ("k", "field")],
+        );
+        assert_eq!(
+            field.metadata(),
+            &Metadata::from([
+                (EXTENSION_TYPE_NAME_KEY, UUID),
+                (EXTENSION_TYPE_METADATA_KEY, "field"),
+                ("k", "field"),
+            ])
+        );
+    }
+
+    #[test]
+    fn dictionary_value_metadata_is_dropped_for_field_extension_type() {
+        // an extension type with dictionary storage, whose dictionary values
+        // are themselves an extension type
+        let field_metadata = [(EXTENSION_TYPE_NAME_KEY, "example.uuid_dictionary")];
+        let field = read_dictionary_field(
+            Some(&[(EXTENSION_TYPE_NAME_KEY, UUID), ("k", "value")]),
+            &field_metadata,
+        );
+        assert_eq!(field.metadata(), &Metadata::from(field_metadata));
+    }
+
+    #[test]
+    fn empty_dictionary_value_metadata() {
+        let field_metadata = [("k", "field")];
+        let field = read_dictionary_field(Some(&[]), &field_metadata);
+        assert_eq!(field, read_dictionary_field(None, &field_metadata));
+        assert_eq!(field.metadata(), &Metadata::from(field_metadata));
+    }
+
+    #[test]
+    fn nested_dictionary_value_metadata_is_copied_to_field() {
+        let mut fbb = FlatBufferBuilder::new();
+        let value_metadata: &[_] = &[(EXTENSION_TYPE_NAME_KEY, UUID)];
+        let item = fb_dictionary_field(&mut fbb, "item", 0, Some(value_metadata), &[]);
+        let list = fb_nested_field(&mut fbb, "list", crate::Type::List, &[item]);
+        let child = fb_dictionary_field(&mut fbb, "child", 1, Some(value_metadata), &[]);
+        let r#struct = fb_nested_field(&mut fbb, "struct", crate::Type::Struct_, &[child]);
+        let bytes = fb_schema_message(fbb, &[list, r#struct]);
+
+        let schema = try_schema_from_flatbuffer_bytes(&bytes).unwrap();
+        let uuid_field = |name| {
+            #[expect(deprecated)]
+            Field::new_dict(name, uuid_dictionary_type(), true, 0, false)
+                .with_metadata([(EXTENSION_TYPE_NAME_KEY, UUID)])
+        };
+        let expected = Schema::new(vec![
+            Field::new_list("list", uuid_field("item"), true),
+            Field::new_struct("struct", vec![uuid_field("child")], true),
+        ]);
+        assert_eq!(schema, expected);
+    }
+
+    #[test]
+    fn non_utf8_dictionary_value_metadata_is_rejected() {
+        // the flatbuffer verifier checks that the strings of
+        // `DictionaryEncoding.custom_metadata` are valid UTF-8
+        let marker = "not_utf8_marker";
+        let mut fbb = FlatBufferBuilder::new();
+        let field = fb_dictionary_field(
+            &mut fbb,
+            "uuids",
+            0,
+            Some(&[(EXTENSION_TYPE_NAME_KEY, marker)]),
+            &[],
+        );
+        let mut bytes = fb_schema_message(fbb, &[field]);
+        assert!(try_schema_from_flatbuffer_bytes(&bytes).is_ok());
+
+        let pos = bytes
+            .windows(marker.len())
+            .position(|w| w == marker.as_bytes())
+            .unwrap();
+        bytes[pos] = 0xff;
+        let err = try_schema_from_flatbuffer_bytes(&bytes).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parser error: Unable to get root as message"
+        );
     }
 }
