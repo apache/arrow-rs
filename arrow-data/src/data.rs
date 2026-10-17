@@ -2761,6 +2761,29 @@ mod tests {
     }
 
     #[test]
+    fn test_extend_fixed_size_list_accounts_for_parent_offset() {
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let child = ArrayData::builder(DataType::Int32)
+            .len(6)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5]))
+            .build()
+            .unwrap();
+
+        let data = ArrayData::builder(DataType::FixedSizeList(field, 2))
+            .len(2)
+            .offset(1)
+            .add_child_data(child)
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&data], false, data.len());
+        mutable.try_extend(0, 0, data.len()).unwrap();
+        let output = mutable.freeze();
+
+        assert_eq!(output.child_data()[0].buffer::<i32>(0), &[2, 3, 4, 5]);
+    }
+
+    #[test]
     fn test_null_count() {
         let mut bit_v: [u8; 2] = [0; 2];
         bit_util::set_bit(&mut bit_v, 0);

@@ -4728,6 +4728,7 @@ mod tests {
             Some("123"),
             Some("-123"),
             Some("86374"),
+            Some("-40000"),
             None,
         ])) as ArrayRef;
 
@@ -4736,8 +4737,13 @@ mod tests {
             format_options: FormatOptions::default(),
         };
         let res = cast_with_options(&str, &DataType::Int16, &options).expect("should cast to i16");
-        let expected =
-            Arc::new(Int16Array::from(vec![Some(123), Some(-123), None, None])) as ArrayRef;
+        let expected = Arc::new(Int16Array::from(vec![
+            Some(123),
+            Some(-123),
+            None,
+            None,
+            None,
+        ])) as ArrayRef;
         assert_eq!(&res, &expected);
     }
 
