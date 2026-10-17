@@ -177,6 +177,22 @@ impl Fields {
                         return Ok(None);
                     }
                 }
+                ListView(child) => {
+                    let fields = filter_field(child, filter)?;
+                    if let Some(fields) = fields {
+                        ListView(fields)
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                LargeListView(child) => {
+                    let fields = filter_field(child, filter)?;
+                    if let Some(fields) = fields {
+                        LargeListView(fields)
+                    } else {
+                        return Ok(None);
+                    }
+                }
                 Map(child, ordered) => {
                     let fields = filter_field(child, filter)?;
                     if let Some(fields) = fields {
@@ -795,6 +811,76 @@ mod tests {
         // Propagate error
         let r = fields.try_filter_leaves(|_, _| Err(ArrowError::SchemaError("error".to_string())));
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_filter_list_view() {
+        let floats = Fields::from(vec![
+            Field::new("a", DataType::Float32, false),
+            Field::new("b", DataType::Float32, false),
+        ]);
+        let fields = Fields::from(vec![
+            Field::new(
+                "lv_struct",
+                DataType::ListView(Arc::new(Field::new(
+                    "floats",
+                    DataType::Struct(floats.clone()),
+                    true,
+                ))),
+                true,
+            ),
+            Field::new(
+                "llv_struct",
+                DataType::LargeListView(Arc::new(Field::new(
+                    "floats",
+                    DataType::Struct(floats.clone()),
+                    true,
+                ))),
+                false,
+            ),
+            Field::new(
+                "lv_prim",
+                DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false))),
+                true,
+            ),
+            Field::new(
+                "llv_prim",
+                DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int64, true))),
+                false,
+            ),
+        ]);
+
+        let floats_a = DataType::Struct(vec![floats[0].clone()].into());
+
+        // Filter by leaf field name "a" inside nested structs of ListView and LargeListView
+        let r = fields.filter_leaves(|_, f| f.name() == "a");
+        assert_eq!(r.len(), 2);
+        assert_eq!(
+            r[0].as_ref(),
+            &Field::new(
+                "lv_struct",
+                DataType::ListView(Arc::new(Field::new("floats", floats_a.clone(), true))),
+                true,
+            )
+        );
+        assert_eq!(
+            r[1].as_ref(),
+            &Field::new(
+                "llv_struct",
+                DataType::LargeListView(Arc::new(Field::new("floats", floats_a, true))),
+                false,
+            )
+        );
+
+        // Parent ListView/LargeListView fields are not leaves themselves
+        let r = fields.filter_leaves(|_, f| f.name() == "lv_struct" || f.name() == "llv_struct");
+        assert_eq!(r.len(), 0);
+
+        // Leaf indices: 0,1 (lv_struct.floats.a,b), 2,3 (llv_struct.floats.a,b), 4 (lv_prim.item), 5 (llv_prim.item)
+        let r = fields.filter_leaves(|idx, _| idx == 4 || idx == 5);
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0], fields[2]);
+        assert_eq!(r[1], fields[3]);
     }
 
     #[test]
