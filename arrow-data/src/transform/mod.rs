@@ -226,13 +226,12 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
             mutable
                 .buffer1
                 .extend(views[start..start + len].iter().map(|v| {
-                    let len = *v as u32;
-                    if len <= 12 {
-                        return *v; // Stored inline
-                    }
+                    // A view of 12 bytes or fewer stores the string inline and
+                    // has no buffer index, so adding 0 leaves it unchanged.
+                    let offset = if *v as u32 > 12 { buffer_offset } else { 0 };
                     let mut view = ByteView::from(*v);
-                    view.buffer_index += buffer_offset;
-                    view.into()
+                    view.buffer_index += offset;
+                    u128::from(view)
                 }));
             Ok(())
         },
