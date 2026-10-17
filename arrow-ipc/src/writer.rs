@@ -2649,6 +2649,24 @@ fn write_array_data(
             write_options,
         )?;
         return Ok(offset);
+    } else if matches!(data_type, DataType::Union(_, _)) {
+        for (buffer, byte_width) in array_data
+            .buffers()
+            .iter()
+            .zip([size_of::<i8>(), size_of::<i32>()])
+        {
+            let buffer =
+                buffer.slice_with_length(array_data.offset() * byte_width, num_rows * byte_width);
+            offset = encode_sink_buffer(
+                buffer,
+                meta,
+                sink,
+                offset,
+                compression_codec,
+                ipc_write_context,
+                write_options.alignment,
+            )?;
+        }
     } else {
         for buffer in array_data.buffers() {
             offset = encode_sink_buffer(
@@ -2673,6 +2691,20 @@ fn write_array_data(
                 // write the nested data (e.g list data)
                 offset = write_array_data(
                     data_ref,
+                    meta,
+                    sink,
+                    offset,
+                    compression_codec,
+                    ipc_write_context,
+                    write_options,
+                )?;
+            }
+        }
+        DataType::Union(_, UnionMode::Sparse) => {
+            for data_ref in array_data.child_data() {
+                let child_data = data_ref.slice(array_data.offset(), num_rows);
+                offset = write_array_data(
+                    &child_data,
                     meta,
                     sink,
                     offset,
@@ -2834,6 +2866,92 @@ mod tests {
     use crate::root_as_footer;
 
     use super::*;
+
+    #[test]
+    fn test_roundtrip_sliced_list_of_union() {
+        fn decoded(array: &ArrayRef) -> Vec<Vec<Option<i32>>> {
+            (0..array.len())
+                .map(|row| {
+                    let values = match array.data_type() {
+                        DataType::List(_) => array.as_list::<i32>().value(row),
+                        DataType::LargeList(_) => array.as_list::<i64>().value(row),
+                        _ => unreachable!(),
+                    };
+                    let union = values.as_union();
+                    (0..union.len())
+                        .map(|index| {
+                            union
+                                .value(index)
+                                .as_primitive::<Int32Type>()
+                                .iter()
+                                .next()
+                                .unwrap()
+                        })
+                        .collect()
+                })
+                .collect()
+        }
+
+        for mode in [UnionMode::Dense, UnionMode::Sparse] {
+            let fields = UnionFields::try_new(
+                [3, 7],
+                [
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
+                ],
+            )
+            .unwrap();
+            let offsets = (mode == UnionMode::Dense).then(|| vec![2, 0, 1].into());
+            let union: ArrayRef = Arc::new(
+                UnionArray::try_new(
+                    fields,
+                    vec![3_i8, 7, 3].into(),
+                    offsets,
+                    vec![
+                        Arc::new(Int32Array::from(vec![Some(11), None, Some(33)])),
+                        Arc::new(Int32Array::from(vec![Some(101), Some(202), None])),
+                    ],
+                )
+                .unwrap(),
+            );
+            for large in [false, true] {
+                let item = Arc::new(Field::new("item", union.data_type().clone(), true));
+                let list: ArrayRef = if large {
+                    Arc::new(LargeListArray::new(
+                        item,
+                        arrow_buffer::OffsetBuffer::from_lengths([1, 2]),
+                        union.clone(),
+                        None,
+                    ))
+                } else {
+                    Arc::new(ListArray::new(
+                        item,
+                        arrow_buffer::OffsetBuffer::from_lengths([1, 2]),
+                        union.clone(),
+                        None,
+                    ))
+                };
+                for (offset, len) in [(0, 2), (1, 1), (2, 0)] {
+                    let array = list.slice(offset, len);
+                    array.to_data().validate_full().unwrap();
+                    let expected = decoded(&array);
+                    let schema = Arc::new(Schema::new(vec![Field::new(
+                        "v",
+                        array.data_type().clone(),
+                        true,
+                    )]));
+                    let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+                    for output in [
+                        deserialize_file(serialize_file(&batch)),
+                        deserialize_stream(serialize_stream(&batch)),
+                    ] {
+                        output.column(0).to_data().validate_full().unwrap();
+                        assert_eq!(decoded(output.column(0)), expected);
+                    }
+                }
+            }
+        }
+    }
 
     fn serialize_file(rb: &RecordBatch) -> Vec<u8> {
         let mut writer = FileWriter::try_new(vec![], rb.schema_ref()).unwrap();
