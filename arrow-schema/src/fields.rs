@@ -320,8 +320,7 @@ impl<'a> IntoIterator for &'a Fields {
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct UnionFields(Arc<[(i8, FieldRef)]>);
 
-/// Deserializes the same representation as `Serialize`, but goes through
-/// [`UnionFields::try_new`] so the invariants above are enforced.
+// Manual implementation to enforce invariants per docstring above
 #[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for UnionFields {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -1069,13 +1068,17 @@ mod tests {
         let field = Arc::new(Field::new("a", DataType::Int32, true));
 
         let duplicate: Vec<(i8, FieldRef)> = vec![(1, Arc::clone(&field)), (1, Arc::clone(&field))];
-        let serialized = postcard::to_stdvec(&duplicate).unwrap();
-        let err = postcard::from_bytes::<UnionFields>(&serialized).unwrap_err();
-        assert!(matches!(err, postcard::Error::SerdeDeCustom), "{err:?}");
+        let serialized = serde_json::to_string(&duplicate).unwrap();
+        let err = serde_json::from_str::<UnionFields>(&serialized).unwrap_err();
+        assert!(err.to_string().contains("duplicate type id: 1"), "{err}");
 
         let negative: Vec<(i8, FieldRef)> = vec![(0, Arc::clone(&field)), (-1, field)];
-        let serialized = postcard::to_stdvec(&negative).unwrap();
-        let err = postcard::from_bytes::<UnionFields>(&serialized).unwrap_err();
-        assert!(matches!(err, postcard::Error::SerdeDeCustom), "{err:?}");
+        let serialized = serde_json::to_string(&negative).unwrap();
+        let err = serde_json::from_str::<UnionFields>(&serialized).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("type ids must be non-negative: -1"),
+            "{err}"
+        );
     }
 }
