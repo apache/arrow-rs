@@ -266,16 +266,6 @@ impl ParquetMetaData {
     }
 }
 
-impl HeapSize for Arc<[RowGroupMetaData]> {
-    fn heap_size(&self) -> usize {
-        // account for the contents of the Vec
-        let rg_size = self.iter().map(|t| t.heap_size()).sum::<usize>();
-        // The heap block contains the strong and weak counts followed by the slice,
-        // padded to the alignment of usize. The fat pointer itself is stored inline.
-        2 * std::mem::size_of::<usize>() + std::mem::size_of_val(self.as_ref()) + rg_size
-    }
-}
-
 impl PartialEq for ParquetMetaData {
     fn eq(&self, other: &Self) -> bool {
         // Compare file metadata and row groups
@@ -775,6 +765,16 @@ impl RowGroupMetaData {
     /// Converts this [`RowGroupMetaData`] into a [`RowGroupMetaDataBuilder`]
     pub fn into_builder(self) -> RowGroupMetaDataBuilder {
         RowGroupMetaDataBuilder(self)
+    }
+}
+
+impl HeapSize for Arc<[RowGroupMetaData]> {
+    fn heap_size(&self) -> usize {
+        // account for the contents of the slice
+        let rg_size = self.iter().map(|t| t.heap_size()).sum::<usize>();
+        // The heap block contains the strong and weak counts followed by the slice,
+        // The fat pointer itself is stored inline.
+        2 * std::mem::size_of::<usize>() + std::mem::size_of_val(self.as_ref()) + rg_size
     }
 }
 
