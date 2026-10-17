@@ -2255,7 +2255,7 @@ mod tests {
             .set_row_groups(row_group_meta.clone())
             .build();
 
-        let base_expected_size = 2090;
+        let base_expected_size = 2074;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
         let footer_key = b"0123456789012345";
@@ -2281,7 +2281,7 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        let expected_size_with_decryptor = 3120;
+        let expected_size_with_decryptor = 3104;
         assert!(expected_size_with_decryptor > base_expected_size);
 
         assert_eq!(
