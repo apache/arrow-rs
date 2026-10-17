@@ -179,3 +179,33 @@ For a full list of features and target CPUs use
 $ rustc --print target-cpus
 $ rustc --print target-features
 ```
+
+### Profile-Guided Optimization
+
+The compiler chooses what to inline and how to lay out branches without knowing
+which paths a workload actually takes. [Profile-Guided Optimization] (PGO)
+records a profile from a representative run and feeds it back into a second
+compilation, so that those decisions are driven by measured behaviour rather
+than by heuristics.
+
+`arrow` is a library, so PGO is applied when building the application that
+depends on it, using a profile collected from that application's own workload.
+[`cargo-pgo`] wraps the underlying `-C profile-generate` and `-C profile-use`
+steps
+
+```shell
+$ rustup component add llvm-tools-preview
+$ cargo install cargo-pgo
+$ cargo pgo build                                   # build an instrumented binary
+$ ./target/<host-triple>/release/<binary>           # run a representative workload
+$ cargo pgo optimize                                # rebuild using the recorded profiles
+```
+
+How much this helps depends on how closely the training workload resembles the
+real one. A [PGO benchmark report] for `arrow` measured improvements across many
+of this crate's benchmarks alongside regressions in others, so it is worth
+measuring on your own workload rather than assuming a win.
+
+[Profile-Guided Optimization]: https://doc.rust-lang.org/rustc/profile-guided-optimization.html
+[`cargo-pgo`]: https://github.com/Kobzol/cargo-pgo
+[PGO benchmark report]: https://github.com/apache/arrow-rs/discussions/6500
