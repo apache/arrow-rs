@@ -1287,6 +1287,59 @@ fn arrow_writer_string_dictionary_unsigned_index() {
     RoundTripTest::new(Arc::new(d)).with_schema(schema).run();
 }
 
+#[test]
+fn arrow_writer_dictionary_null_values() {
+    let write = |dict: &ArrayRef, nullable: bool| -> Result<Bytes> {
+        let field = Field::new("col", dict.data_type().clone(), nullable);
+        let schema = Arc::new(Schema::new(vec![field]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![dict.clone()]).unwrap();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        Ok(Bytes::from(buf))
+    };
+    let roundtrip = |dict: &ArrayRef, nullable: bool| {
+        let value_type = dict.as_any_dictionary().values().data_type().clone();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            value_type.clone(),
+            nullable,
+        )]));
+        let read = read_column_with_schema(write(dict, nullable).unwrap(), schema);
+        assert_eq!(&read, &arrow_cast::cast(dict, &value_type).unwrap());
+    };
+
+    let values: [ArrayRef; 2] = [
+        Arc::new(Int32Array::from(vec![Some(7), None])),
+        Arc::new(StringArray::from(vec![Some("a"), None])),
+    ];
+    for values in values {
+        // Valid keys pointing at a null value
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(
+            Int8Array::from(vec![0, 1, 0, 1]),
+            values.clone(),
+        ));
+        let err = write(&dict, false).unwrap_err().to_string();
+        assert!(err.contains("non-nullable field 'col'"), "{err}");
+        roundtrip(&dict, true);
+
+        // The null value is never referenced
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(
+            Int8Array::from(vec![0, 0]),
+            values.clone(),
+        ));
+        roundtrip(&dict, false);
+
+        // No null values
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(
+            Int8Array::from(vec![0, 0]),
+            values.slice(0, 1),
+        ));
+        roundtrip(&dict, false);
+    }
+}
+
 /// Writes a single-column RecordBatch to an in-memory Parquet buffer.
 fn write_column_to_bytes(array: ArrayRef) -> Bytes {
     let schema = Arc::new(Schema::new(vec![Field::new(
