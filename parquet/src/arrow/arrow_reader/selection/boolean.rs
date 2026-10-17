@@ -250,22 +250,17 @@ pub(super) fn split_off_mask(
     (head, tail)
 }
 
-/// Position of the highest set bit in `mask`, scanning bytes from the end.
+/// Position of the highest set bit in `mask`, scanning words from the end.
 fn last_set_bit_position(mask: &BooleanBuffer) -> Option<usize> {
-    let values = mask.values();
-    let offset = mask.offset();
-    let end = offset + mask.len();
-    for byte_idx in (offset / 8..end.div_ceil(8)).rev() {
-        let byte_start = byte_idx * 8;
-        let mut byte = values[byte_idx];
-        if end - byte_start < 8 {
-            byte &= (1u8 << (end - byte_start)) - 1;
-        }
-        if byte_start < offset {
-            byte &= !((1u8 << (offset - byte_start)) - 1);
-        }
-        if byte != 0 {
-            return Some(byte_start + 7 - byte.leading_zeros() as usize - offset);
+    let chunks = mask.bit_chunks();
+    let remainder = chunks.remainder_bits();
+    if remainder != 0 {
+        return Some(chunks.chunk_len() * 64 + 63 - remainder.leading_zeros() as usize);
+    }
+    for i in (0..chunks.chunk_len()).rev() {
+        let word = chunks.chunk(i);
+        if word != 0 {
+            return Some(i * 64 + 63 - word.leading_zeros() as usize);
         }
     }
     None
@@ -774,6 +769,37 @@ mod tests {
             .slice(1, 6);
         for min_runs in 0..=6 {
             assert_eq!(mask_has_at_least_runs(&mask, min_runs), 4 >= min_runs);
+        }
+    }
+
+    #[test]
+    fn test_last_set_bit_position_word_boundaries() {
+        for offset in [0, 1, 7, 8, 63, 64, 65] {
+            for len in [0_usize, 1, 63, 64, 65, 127, 128, 129, 257, 8193] {
+                for last in [
+                    None,
+                    Some(0),
+                    Some(63),
+                    Some(64),
+                    Some(127),
+                    Some(128),
+                    len.checked_sub(1),
+                ] {
+                    let last = last.filter(|&pos| pos < len);
+                    // Set bits outside the slice must not affect the result.
+                    let mut bits = vec![true; offset + len + 64];
+                    bits[offset..offset + len].fill(false);
+                    if let Some(pos) = last {
+                        bits[offset + pos] = true;
+                    }
+                    let mask = BooleanBuffer::from(bits).slice(offset, len);
+                    assert_eq!(
+                        last_set_bit_position(&mask),
+                        last,
+                        "offset={offset}, len={len}, last={last:?}"
+                    );
+                }
+            }
         }
     }
 
