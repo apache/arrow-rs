@@ -49,9 +49,10 @@ If you want to work on an issue which is not already assigned to someone else
 and there are no comment indicating that someone is already working on that
 issue then you can assign the issue to yourself by submitting a single word
 comment `take`. This will assign the issue to yourself. However, if you are
-unable to make progress you should unassign the issue by using the `unassign me`
-link at the top of the issue page (and ask for help if are stuck) so that
-someone else can get involved in the work.
+unable to make progress you should unassign the issue so that someone else can
+get involved in the work. You can do this either by using the `unassign me`
+link at the top of the issue page or by leaving a single word comment `untake`
+(and ask for help if you are stuck).
 
 If you plan to work on a new feature that doesn't have an existing ticket, it is
 a good idea to open a ticket to discuss the feature. Advanced discussion often
@@ -60,6 +61,17 @@ Arrow-rs before too much time is invested. It also often helps to discuss your
 ideas with the community to get feedback on implementation.
 
 [good-first-issue]: https://github.com/apache/arrow-rs/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
+
+## Creating Pull Requests
+
+With coding agents, the number of open PRs now far exceeds our review capacity.
+To encourage submitters to curate and prepare a small number of high quality PRs,
+and to help reviewers focus on them, users without write access are limited to
+**3 open, non-draft PRs** at a time.
+
+When possible, we recommend splitting your contributions into multiple smaller
+focused PRs rather than large PRs, because they are more likely to be reviewed
+quickly and are easier to understand and review.
 
 ## Developer's guide to Arrow Rust
 
