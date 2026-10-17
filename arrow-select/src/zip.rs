@@ -1765,7 +1765,7 @@ mod test {
 
     #[test]
     fn test_zip_kernel_scalar_binary_array_view_sliced_inline_short() {
-        // A falsy value of at most 4 bytes keeps zero padding in view bytes 8 to 11
+        // A falsy value of at most 4 bytes leaves view bytes 8 to 11 as padding
         let truthy = BinaryViewArray::from_iter_values([
             b"x".as_slice(),
             b"a value longer than twelve bytes",
