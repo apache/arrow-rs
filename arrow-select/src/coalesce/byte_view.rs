@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::coalesce::{InProgressArray, append_gathered_nulls, validate_indices_bounds};
+use crate::coalesce::{InProgressArray, append_gathered_nulls};
 use crate::filter::{FilterPredicate, FilterSelection};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
@@ -58,13 +58,9 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     completed_buffers_size: usize,
     /// The size in bytes from [`Self::source`] that it is being used in [`Self::completed`]
     size_of_completed_buffers_from_current_source: usize,
-    /// Weak identity of the last source whose data buffers were appended by
-    /// [`Self::copy_rows_by_indices`]. Held as a `Weak` so repeat-chunk caching
-    /// does not retain the source's views and null bitmap.
+    /// Last indexed source whose buffers were appended to `completed`
     last_indexed_source: Option<Weak<dyn Array>>,
-    /// Index into [`Self::completed`] at which the buffers from
-    /// [`Self::last_indexed_source`] start, used to remap non-inline view
-    /// buffer indices on subsequent chunks.
+    /// First `completed` buffer for `last_indexed_source`
     last_indexed_starting_buffer: u32,
 }
 
@@ -365,10 +361,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         self.current = Some(dst_buffer);
     }
 
-    /// Scatter path for sparse index selections: copy only the selected
-    /// non-inline bytes into a fresh buffer instead of retaining every source
-    /// buffer. Leaves `last_indexed_source` untouched so future chunks re-check
-    /// sparsity.
     #[inline(never)]
     fn append_indexed_views_and_copy_strings(
         &mut self,
@@ -439,7 +431,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     }
 }
 
-/// Sum of lengths of non-inline views at `indices`.
 fn selected_non_inline_bytes(src_views: &[u128], indices: &[u32]) -> usize {
     let mut total = 0usize;
     for &idx in indices {
@@ -589,15 +580,11 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         &mut self,
         source: &ArrayRef,
         indices: &[u32],
-        validate_indices: bool,
     ) -> Result<(), ArrowError> {
         if indices.is_empty() {
             return Ok(());
         }
         let typed = source.as_byte_view::<B>();
-        if validate_indices {
-            validate_indices_bounds(indices, typed.len())?;
-        }
         self.ensure_capacity();
 
         if let Some(src_nulls) = typed.nulls() {
@@ -629,8 +616,6 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             .as_ref()
             .is_some_and(|cached| std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(source)));
 
-        // Retaining every source buffer for a sparse selection keeps unselected
-        // data alive. Compact when the buffers are more than 2x the selected bytes.
         if !same_source {
             let selected_bytes = selected_non_inline_bytes(src_views, indices);
             let source_capacity: usize = src_buffers.iter().map(|b| b.capacity()).sum();
@@ -715,9 +700,6 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
     }
 
     fn size(&self) -> usize {
-        // `last_indexed_source` is a `Weak`: its buffers are already counted in
-        // `completed_buffers_size`, and it does not retain the source's views
-        // or null bitmap.
         self.completed_buffers_size
             + self.current.as_ref().map_or(0, |c| c.capacity())
             + self.nulls.allocated_size()
@@ -726,10 +708,6 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 .source
                 .as_ref()
                 .map_or(0, |s| s.array.get_array_memory_size())
-    }
-
-    fn supports_fast_scatter(&self) -> bool {
-        true
     }
 }
 
@@ -969,9 +947,7 @@ mod tests {
         let indices = [5u32, 0, 2, 4, 1, 1, 3, 0];
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(16);
-        in_progress
-            .copy_rows_by_indices(&source, &indices, true)
-            .unwrap();
+        in_progress.copy_rows_by_indices(&source, &indices).unwrap();
         let actual = in_progress.finish().unwrap();
 
         let expected = take(source.as_ref(), &UInt32Array::from(indices.to_vec()), None).unwrap();
@@ -980,42 +956,27 @@ mod tests {
     }
 
     #[test]
-    fn test_copy_rows_by_indices_repeated_same_source_does_not_inflate_size() {
-        let (array, _buffer_capacity) = non_inline_array(32);
+    fn test_copy_rows_by_indices_reuses_same_source_buffers() {
+        let (array, _) = non_inline_array(32);
         let source: ArrayRef = Arc::new(array);
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(64);
-        let base = in_progress.size();
 
-        // Dense first call populates the same-source cache so the follow-up
-        // small selection reuses it instead of re-adding source buffers.
         let dense_indices: Vec<u32> = (0..32u32).collect();
         in_progress
-            .copy_rows_by_indices(&source, &dense_indices, true)
+            .copy_rows_by_indices(&source, &dense_indices)
             .unwrap();
         let after_first = in_progress.size();
 
         in_progress
-            .copy_rows_by_indices(&source, &[1u32, 2, 4], true)
+            .copy_rows_by_indices(&source, &[1u32, 2, 4])
             .unwrap();
         let after_second = in_progress.size();
 
-        let first_growth = after_first - base;
         let second_growth = after_second - after_first;
         assert!(
             second_growth <= 3 * size_of::<u128>(),
-            "same-source re-entry should not re-count buffers: first={first_growth}, second={second_growth}"
-        );
-
-        // Dropping the external strong ref must release the source's views and
-        // nulls: our `Weak` cache does not keep it alive.
-        drop(source);
-        assert!(
-            in_progress
-                .last_indexed_source
-                .as_ref()
-                .is_some_and(|w| w.upgrade().is_none()),
-            "cached Weak should not retain the source"
+            "same-source re-entry added {second_growth} bytes"
         );
 
         in_progress.finish().unwrap();
@@ -1033,10 +994,10 @@ mod tests {
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(16);
         in_progress
-            .copy_rows_by_indices(&source_a, &indices_a, true)
+            .copy_rows_by_indices(&source_a, &indices_a)
             .unwrap();
         in_progress
-            .copy_rows_by_indices(&source_b, &indices_b, true)
+            .copy_rows_by_indices(&source_b, &indices_b)
             .unwrap();
         let actual = in_progress.finish().unwrap();
 

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::coalesce::{InProgressArray, append_gathered_nulls, validate_indices_bounds};
+use crate::coalesce::{InProgressArray, append_gathered_nulls};
 use crate::filter::{FilterIndices, FilterPredicate, FilterSelection, FilterSlices};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
@@ -210,15 +210,11 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         &mut self,
         source: &ArrayRef,
         indices: &[u32],
-        validate_indices: bool,
     ) -> Result<(), ArrowError> {
         if indices.is_empty() {
             return Ok(());
         }
         let typed = source.as_primitive::<T>();
-        if validate_indices {
-            validate_indices_bounds(indices, typed.len())?;
-        }
         self.ensure_capacity();
 
         if let Some(src_nulls) = typed.nulls() {
@@ -230,6 +226,8 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         let values = typed.values();
         let current_len = self.current.len();
         self.current.reserve(indices.len());
+        // SAFETY: indices were bounds-checked by the coalescer, and reserve
+        // allocated one output slot per index.
         unsafe {
             let base = self
                 .current
@@ -263,10 +261,6 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             .map_or(0, |source| source.get_array_memory_size())
             + self.current.capacity() * std::mem::size_of::<T::Native>()
             + self.nulls.allocated_size()
-    }
-
-    fn supports_fast_scatter(&self) -> bool {
-        true
     }
 }
 
@@ -428,24 +422,10 @@ mod tests {
         ];
 
         let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(32, DataType::Int32);
-        in_progress
-            .copy_rows_by_indices(&source, &indices, true)
-            .unwrap();
+        in_progress.copy_rows_by_indices(&source, &indices).unwrap();
         let actual = in_progress.finish().unwrap();
 
         let expected = take(source.as_ref(), &UInt32Array::from(indices.to_vec()), None).unwrap();
         assert_eq!(actual.as_ref(), expected.as_ref());
-    }
-
-    #[test]
-    fn test_copy_rows_by_indices_empty() {
-        let source: ArrayRef = Arc::new(Int32Array::from_iter_values(0..10i32));
-
-        let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(32, DataType::Int32);
-        in_progress
-            .copy_rows_by_indices(&source, &[], true)
-            .unwrap();
-        assert_eq!(in_progress.current.capacity(), 0);
-        assert_eq!(in_progress.nulls.allocated_size(), 0);
     }
 }

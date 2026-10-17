@@ -21,8 +21,8 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
-use crate::take::{TakeOptions, take, take_record_batch};
-use arrow_array::types::{BinaryViewType, StringViewType};
+use crate::take::{take, take_bits, take_record_batch};
+use arrow_array::types::{BinaryViewType, StringViewType, UInt32Type};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, downcast_primitive};
 use arrow_buffer::{Buffer, NullBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
@@ -54,10 +54,7 @@ pub(crate) fn append_gathered_nulls(
     let buf = Buffer::from_slice_ref(indices);
     let scalar: ScalarBuffer<u32> = ScalarBuffer::new(buf, 0, indices.len());
     let indices_arr = UInt32Array::new(scalar, None);
-    let gathered = crate::take::take_bits::<arrow_array::types::UInt32Type, false>(
-        source_nulls.inner(),
-        &indices_arr,
-    );
+    let gathered = take_bits::<UInt32Type, false>(source_nulls.inner(), &indices_arr);
     nulls.append_buffer(&NullBuffer::new(gathered));
 }
 
@@ -98,10 +95,7 @@ fn should_use_sparse_filter_copy(filter_len: usize, selected_count: usize) -> bo
     selected_count <= filter_len / SPARSE_FILTER_COPY_MAX_SELECTIVITY_DENOMINATOR
 }
 
-/// Maximum selected row fraction for the direct indexed-copy path.
-///
-/// Direct indexed copying avoids materializing sparse selections, while the
-/// existing `take` path is faster for dense selections.
+// Dense selections are faster through `take`.
 const INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 2;
 
 fn should_use_indexed_copy(input_rows: usize, selected_rows: usize) -> bool {
@@ -393,15 +387,11 @@ impl BatchCoalescer {
             return self.push_batch(taken_batch);
         }
 
-        // Skip the fast path when biggest_coalesce_batch_size would be bypassed,
-        // or when any column lacks a specialized zero-copy scatter.
+        // Let push_batch handle large-batch bypasses and unsupported columns.
         let fast_path_allowed = self
             .biggest_coalesce_batch_size
             .is_none_or(|limit| indices.len() <= limit)
-            && self
-                .in_progress_arrays
-                .iter()
-                .all(|arr| arr.supports_fast_scatter());
+            && !self.has_non_specialized_filter_columns;
         if fast_path_allowed
             && let Some(u32_arr) = indices.as_any().downcast_ref::<UInt32Array>()
             && u32_arr.null_count() == 0
@@ -412,10 +402,6 @@ impl BatchCoalescer {
         self.push_batch(taken_batch)
     }
 
-    /// Fast-path scatter used by [`Self::push_batch_with_indices`] when every
-    /// column has a specialized zero-copy scatter and the selection fits under
-    /// `biggest_coalesce_batch_size`. Not exposed publicly: callers that bypass
-    /// the gate would skip the large-batch bypass in [`Self::push_batch`].
     fn push_batch_with_index(
         &mut self,
         batch: RecordBatch,
@@ -440,7 +426,7 @@ impl BatchCoalescer {
             let take_n = (indices.len() - offset).min(room);
             let chunk = &indices[offset..offset + take_n];
             for (in_progress, column) in self.in_progress_arrays.iter_mut().zip(columns) {
-                in_progress.copy_rows_by_indices(column, chunk, false)?;
+                in_progress.copy_rows_by_indices(column, chunk)?;
             }
             self.buffered_rows += take_n;
             offset += take_n;
@@ -921,13 +907,11 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     }
 
     /// Copy rows at `indices` from `source` into the in-progress array.
-    /// When `validate_indices` is true, bounds-check `indices` against
-    /// `source.len()` before any unchecked read.
+    /// `indices` must already be bounds-checked against `source`.
     fn copy_rows_by_indices(
         &mut self,
         source: &ArrayRef,
         indices: &[u32],
-        validate_indices: bool,
     ) -> Result<(), ArrowError> {
         if indices.is_empty() {
             return Ok(());
@@ -935,19 +919,11 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
         let buf = Buffer::from_slice_ref(indices);
         let scalar: ScalarBuffer<u32> = ScalarBuffer::new(buf, 0, indices.len());
         let indices_arr = UInt32Array::new(scalar, None);
-        let opts = Some(TakeOptions {
-            check_bounds: validate_indices,
-        });
-        let taken = take(source.as_ref(), &indices_arr, opts)?;
+        let taken = take(source.as_ref(), &indices_arr, None)?;
         self.set_source(Some(taken));
         let result = self.copy_rows(0, indices.len());
         self.set_source(None);
         result
-    }
-
-    /// True if `copy_rows_by_indices` beats the default `take + copy_rows`.
-    fn supports_fast_scatter(&self) -> bool {
-        false
     }
 
     /// Finish the currently in-progress array and return it as an `ArrayRef`
@@ -1019,11 +995,8 @@ mod tests {
 
     #[test]
     fn test_indexed_copy_threshold() {
-        assert!(should_use_indexed_copy(8192, 8));
-        assert!(should_use_indexed_copy(8192, 819));
         assert!(should_use_indexed_copy(8192, 4096));
         assert!(!should_use_indexed_copy(8192, 4097));
-        assert!(!should_use_indexed_copy(8192, 6554));
     }
 
     #[test]
