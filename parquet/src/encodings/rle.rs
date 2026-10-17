@@ -717,10 +717,16 @@ impl RleDecoder {
             } else {
                 self.rle_left = (indicator_value >> 1) as u32;
                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
-                self.current_value = bit_reader.get_aligned::<u64>(value_width);
-                self.current_value.ok_or_else(|| {
+                let value = bit_reader.get_aligned::<u64>(value_width).ok_or_else(|| {
                     general_err!("parquet_data_error: not enough data for RLE decoding")
                 })?;
+                if self.bit_width < u64::BITS as u8 && value >= (1_u64 << self.bit_width) {
+                    return Err(general_err!(
+                        "Invalid or corrupted RLE value {value} exceeds bit width {}",
+                        self.bit_width
+                    ));
+                }
+                self.current_value = Some(value);
             }
             Ok(true)
         } else {
