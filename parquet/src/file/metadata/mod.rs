@@ -331,7 +331,7 @@ impl RowGroups {
     }
 
     /// Convert to Owned variant, cloning if necessary
-    fn into_owned(&mut self) {
+    fn convert_to_owned(&mut self) {
         if matches!(self, RowGroups::Shared(_)) {
             let old = std::mem::replace(self, RowGroups::Owned(Vec::new()));
             *self = RowGroups::Owned(old.into_vec());
@@ -340,7 +340,7 @@ impl RowGroups {
 
     /// Get a mutable reference to the Vec, converting from Shared if necessary
     fn as_mut_vec(&mut self) -> &mut Vec<RowGroupMetaData> {
-        self.into_owned();
+        self.convert_to_owned();
         match self {
             RowGroups::Owned(v) => v,
             RowGroups::Shared(_) => unreachable!(),
