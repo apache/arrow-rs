@@ -316,9 +316,23 @@ impl<'a> IntoIterator for &'a Fields {
 /// - All type ids are unique
 /// - All type ids are non-negative
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct UnionFields(Arc<[(i8, FieldRef)]>);
+
+/// Deserializes the same representation as `Serialize`, but goes through
+/// [`UnionFields::try_new`] so the invariants above are enforced.
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for UnionFields {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let entries = Vec::<(i8, FieldRef)>::deserialize(deserializer)?;
+        let (type_ids, fields): (Vec<i8>, Vec<FieldRef>) = entries.into_iter().unzip();
+        Self::try_new(type_ids, fields).map_err(serde::de::Error::custom)
+    }
+}
 
 impl std::fmt::Debug for UnionFields {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1031,5 +1045,37 @@ mod tests {
             (-1, Arc::new(Field::new("a", DataType::Int32, true))),
         ];
         UnionFields::from_iter(fields);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_union_fields_serde_round_trip() {
+        let fields = UnionFields::try_new(
+            vec![1, 3],
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let serialized = postcard::to_stdvec(&fields).unwrap();
+        let deserialized: UnionFields = postcard::from_bytes(&serialized).unwrap();
+        assert_eq!(fields, deserialized);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_union_fields_deserialize_should_validate() {
+        let field = Arc::new(Field::new("a", DataType::Int32, true));
+
+        let duplicate: Vec<(i8, FieldRef)> = vec![(1, Arc::clone(&field)), (1, Arc::clone(&field))];
+        let serialized = postcard::to_stdvec(&duplicate).unwrap();
+        let err = postcard::from_bytes::<UnionFields>(&serialized).unwrap_err();
+        assert!(matches!(err, postcard::Error::SerdeDeCustom), "{err:?}");
+
+        let negative: Vec<(i8, FieldRef)> = vec![(0, Arc::clone(&field)), (-1, field)];
+        let serialized = postcard::to_stdvec(&negative).unwrap();
+        let err = postcard::from_bytes::<UnionFields>(&serialized).unwrap_err();
+        assert!(matches!(err, postcard::Error::SerdeDeCustom), "{err:?}");
     }
 }
