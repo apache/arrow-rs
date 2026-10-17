@@ -66,10 +66,6 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     /// [`Self::last_indexed_source`] start, used to remap non-inline view
     /// buffer indices on subsequent chunks.
     last_indexed_starting_buffer: u32,
-    /// Whether to retain source buffers while copying the current complete
-    /// index selection. This is decided before the coalescer splits that
-    /// selection at output batch boundaries.
-    indexed_copy_retain_source_buffers: Option<bool>,
 }
 
 struct Source {
@@ -109,7 +105,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             size_of_completed_buffers_from_current_source: 0,
             last_indexed_source: None,
             last_indexed_starting_buffer: 0,
-            indexed_copy_retain_source_buffers: None,
             buffer_source,
             _phantom: PhantomData,
         }
@@ -404,8 +399,10 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         };
 
         let new_buffer_index: u32 = self.completed.len().try_into().expect("too many buffers");
+        let current_len = self.views.len();
         self.views.reserve(indices.len());
-        for &idx in indices {
+        let output = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
+        for (i, &idx) in indices.iter().enumerate() {
             // SAFETY: caller validated idx < src_views.len().
             let raw = unsafe { *src_views.get_unchecked(idx as usize) };
             let mut view = ByteView::from(raw);
@@ -421,10 +418,23 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                 };
                 view.offset = dst_buffer.len() as u32;
                 view.buffer_index = new_buffer_index;
-                dst_buffer.extend_from_slice(src);
+                let dst_len = dst_buffer.len();
+                // SAFETY: `dst_buffer` was sized for all selected non-inline bytes,
+                // and `src` belongs to the input array and cannot overlap it.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        src.as_ptr(),
+                        dst_buffer.as_mut_ptr().add(dst_len),
+                        str_len,
+                    );
+                    dst_buffer.set_len(dst_len + str_len);
+                }
             }
-            self.views.push(view.as_u128());
+            // SAFETY: `reserve` above allocated room for every selected view.
+            unsafe { output.add(i).write(view.as_u128()) };
         }
+        // SAFETY: the loop above initialized exactly `indices.len()` views.
+        unsafe { self.views.set_len(current_len + indices.len()) };
         self.current = Some(dst_buffer);
     }
 }
@@ -444,22 +454,6 @@ fn selected_non_inline_bytes(src_views: &[u128], indices: &[u32]) -> usize {
 }
 
 impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
-    fn begin_indexed_copy(&mut self, source: &ArrayRef, indices: &[u32]) {
-        let typed = source.as_byte_view::<B>();
-        if typed.data_buffers().is_empty() {
-            self.indexed_copy_retain_source_buffers = None;
-            return;
-        }
-        let source_capacity: usize = typed.data_buffers().iter().map(|b| b.capacity()).sum();
-        let selected_bytes = selected_non_inline_bytes(typed.views(), indices);
-        self.indexed_copy_retain_source_buffers =
-            Some(source_capacity <= selected_bytes.saturating_mul(2));
-    }
-
-    fn end_indexed_copy(&mut self) {
-        self.indexed_copy_retain_source_buffers = None;
-    }
-
     fn set_source(&mut self, source: Option<ArrayRef>) {
         // If used values from source, add only the size that was used
         self.completed_buffers_size += self.size_of_completed_buffers_from_current_source;
@@ -635,23 +629,12 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             .as_ref()
             .is_some_and(|cached| std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(source)));
 
-        // Reusing all source buffers for a sparse selection amplifies memory
-        // (every unselected row stays alive). Match the `copy_rows` GC heuristic:
-        // compact the referenced bytes when the source is at least 2x sparser
-        // than the complete selection. BatchCoalescer may split that selection
-        // into smaller chunks at output batch boundaries, but those boundaries
-        // must not change the retention decision.
+        // Retaining every source buffer for a sparse selection keeps unselected
+        // data alive. Compact when the buffers are more than 2x the selected bytes.
         if !same_source {
-            let selected_bytes_to_compact = match self.indexed_copy_retain_source_buffers {
-                Some(true) => None,
-                Some(false) => Some(selected_non_inline_bytes(src_views, indices)),
-                None => {
-                    let selected_bytes = selected_non_inline_bytes(src_views, indices);
-                    let source_capacity: usize = src_buffers.iter().map(|b| b.capacity()).sum();
-                    (source_capacity > selected_bytes.saturating_mul(2)).then_some(selected_bytes)
-                }
-            };
-            if let Some(selected_bytes) = selected_bytes_to_compact {
+            let selected_bytes = selected_non_inline_bytes(src_views, indices);
+            let source_capacity: usize = src_buffers.iter().map(|b| b.capacity()).sum();
+            if source_capacity > selected_bytes.saturating_mul(2) {
                 self.append_indexed_views_and_copy_strings(
                     src_views,
                     indices,
