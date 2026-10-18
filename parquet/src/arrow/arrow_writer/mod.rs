@@ -1563,7 +1563,7 @@ fn write_leaf(
                 writer: typed,
                 levels,
             },
-        )?,
+        ),
         ColumnWriter::BoolColumnWriter(typed) => {
             let array = column.as_boolean();
             let values = get_bool_array_slice(array, indices.iter().copied());
@@ -1583,7 +1583,7 @@ fn write_leaf(
                 writer: typed,
                 levels,
             },
-        )?,
+        ),
         ColumnWriter::Int96ColumnWriter(_typed) => {
             unreachable!("Currently unreachable because data type not supported")
         }
@@ -1604,7 +1604,7 @@ fn write_leaf(
                 writer: typed,
                 levels,
             },
-        )?,
+        ),
     }
 }
 
@@ -1622,10 +1622,17 @@ pub(crate) trait PrimitiveVisitor<T> {
     type Output;
 
     /// Receives values that are stored as they are
-    fn slice(self, values: &[T]) -> Self::Output;
+    fn slice(self, values: &[T]) -> Result<Self::Output>;
 
     /// Receives values that are each stored as `convert(value)`
-    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Self::Output;
+    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Result<Self::Output>;
+
+    /// Returns the error for an Arrow type that cannot be stored in the column
+    ///
+    /// `error` is the error that [`ArrowWriter`] returns.
+    fn unsupported(&self, _data_type: &ArrowDataType, error: ParquetError) -> ParquetError {
+        error
+    }
 }
 
 /// Passes the values [`ArrowWriter`] stores for `column` in an `INT32` column to `visitor`
@@ -1634,7 +1641,7 @@ pub(crate) fn visit_i32<V: PrimitiveVisitor<i32>>(
     visitor: V,
 ) -> Result<V::Output> {
     // Note: this should match the contents of arrow_to_parquet_type
-    let output = match column.data_type() {
+    match column.data_type() {
         ArrowDataType::Null => visitor.slice(Int32Array::new_null(column.len()).values()),
         ArrowDataType::Int8 => {
             visitor.map(column.as_primitive::<Int8Type>().values(), |x| x as i32)
@@ -1689,9 +1696,11 @@ pub(crate) fn visit_i32<V: PrimitiveVisitor<i32>>(
                 v.as_i128() as i32
             })
         }
-        d => return Err(ParquetError::General(format!("Cannot coerce {d} to I32"))),
-    };
-    Ok(output)
+        d => Err(visitor.unsupported(
+            d,
+            ParquetError::General(format!("Cannot coerce {d} to I32")),
+        )),
+    }
 }
 
 /// Passes the values [`ArrowWriter`] stores for `column` in an `INT64` column to `visitor`
@@ -1700,7 +1709,7 @@ pub(crate) fn visit_i64<V: PrimitiveVisitor<i64>>(
     visitor: V,
 ) -> Result<V::Output> {
     // Note: this should match the contents of arrow_to_parquet_type
-    let output = match column.data_type() {
+    match column.data_type() {
         ArrowDataType::Date64 => visitor.slice(column.as_primitive::<Date64Type>().values()),
         ArrowDataType::Int64 => visitor.slice(column.as_primitive::<Int64Type>().values()),
         ArrowDataType::UInt64 => {
@@ -1741,6 +1750,13 @@ pub(crate) fn visit_i64<V: PrimitiveVisitor<i64>>(
                 visitor.slice(column.as_primitive::<DurationNanosecondType>().values())
             }
         },
+        ArrowDataType::Decimal32(_, _) => {
+            // ArrowWriter stores Decimal32 as INT32, but ArrowSbbf can check
+            // Decimal32 values against an INT64 decimal column
+            visitor.map(column.as_primitive::<Decimal32Type>().values(), |v| {
+                v as i64
+            })
+        }
         ArrowDataType::Decimal64(_, _) => {
             visitor.slice(column.as_primitive::<Decimal64Type>().values())
         }
@@ -1756,9 +1772,11 @@ pub(crate) fn visit_i64<V: PrimitiveVisitor<i64>>(
                 v.as_i128() as i64
             })
         }
-        d => return Err(ParquetError::General(format!("Cannot coerce {d} to I64"))),
-    };
-    Ok(output)
+        d => Err(visitor.unsupported(
+            d,
+            ParquetError::General(format!("Cannot coerce {d} to I64")),
+        )),
+    }
 }
 
 /// Writes the values passed to it to an `INT32` or `INT64` column
@@ -1771,7 +1789,7 @@ impl<T, E> PrimitiveVisitor<T> for WritePrimitive<'_, '_, E>
 where
     E: ColumnValueEncoder<Values = [T]>,
 {
-    type Output = Result<usize>;
+    type Output = usize;
 
     fn slice(self, values: &[T]) -> Result<usize> {
         write_primitive(self.writer, values, self.levels)
@@ -1792,14 +1810,23 @@ pub(crate) trait FixedLenByteArrayVisitor {
     type Output;
 
     /// Returns the length of the values that decimals of `precision` are stored as
-    fn decimal_length(&self, precision: u8) -> usize;
+    ///
+    /// `native_length` is the length of the Arrow decimal type, for example 16
+    /// for `Decimal128`.
+    fn decimal_length(&self, precision: u8, native_length: usize) -> usize;
 
     /// Receives values that are `length` bytes long
     ///
     /// `fill(i, value)` writes the value at index `i` of the array to `value`,
-    /// which is `length` zeroed bytes. It returns `false` if the value does not
-    /// fit in `length` bytes, which can only happen for decimals.
-    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8]) -> bool) -> Self::Output;
+    /// which is `length` zeroed bytes.
+    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Result<Self::Output>;
+
+    /// Returns the error for an Arrow type that cannot be stored in the column
+    ///
+    /// `error` is the error that [`ArrowWriter`] returns.
+    fn unsupported(&self, _data_type: &ArrowDataType, error: ParquetError) -> ParquetError {
+        error
+    }
 }
 
 /// Passes the values [`ArrowWriter`] stores for `column` in a `FIXED_LEN_BYTE_ARRAY`
@@ -1808,7 +1835,7 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
     column: &dyn arrow_array::Array,
     visitor: V,
 ) -> Result<V::Output> {
-    let output = match column.data_type() {
+    match column.data_type() {
         ArrowDataType::Interval(interval_unit) => match interval_unit {
             IntervalUnit::YearMonth => {
                 // 12 bytes of months, days and milliseconds (4 bytes each). An Arrow
@@ -1816,7 +1843,6 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
                 let array = column.as_primitive::<IntervalYearMonthType>();
                 visitor.values(12, |i, value| {
                     value[0..4].copy_from_slice(&array.value(i).to_le_bytes());
-                    true
                 })
             }
             IntervalUnit::DayTime => {
@@ -1828,20 +1854,19 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
                     let interval = array.value(i);
                     value[4..8].copy_from_slice(&interval.days.to_le_bytes());
                     value[8..12].copy_from_slice(&interval.milliseconds.to_le_bytes());
-                    true
                 })
             }
-            IntervalUnit::MonthDayNano => {
-                return Err(ParquetError::NYI(format!(
+            IntervalUnit::MonthDayNano => Err(visitor.unsupported(
+                column.data_type(),
+                ParquetError::NYI(format!(
                     "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
-                )));
-            }
+                )),
+            )),
         },
         ArrowDataType::FixedSizeBinary(_) => {
             let array = column.as_fixed_size_binary();
             visitor.values(array.value_size(), |i, value| {
                 value.copy_from_slice(array.value(i));
-                true
             })
         }
         ArrowDataType::Decimal32(_, _) => {
@@ -1860,63 +1885,52 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
             let array = column.as_primitive::<Float16Type>();
             visitor.values(2, |i, value| {
                 value.copy_from_slice(&array.value(i).to_le_bytes());
-                true
             })
         }
-        _ => {
-            return Err(ParquetError::NYI(
+        d => Err(visitor.unsupported(
+            d,
+            ParquetError::NYI(
                 "Attempting to write an Arrow type that is not yet implemented".to_string(),
-            ));
-        }
-    };
-    Ok(output)
+            ),
+        )),
+    }
 }
 
 /// Passes the big-endian two's complement bytes of the values of `array` to `visitor`
+///
+/// The values are resized to [`FixedLenByteArrayVisitor::decimal_length`] bytes:
+/// sign-extended if that is longer than the Arrow decimal type, or truncated to
+/// the low bytes if it is shorter. A value too large for the length is truncated,
+/// as [`ArrowWriter`] has always done, since Arrow does not validate precision.
 fn visit_decimal<T: NativeDecimalType, V: FixedLenByteArrayVisitor>(
     array: &PrimitiveArray<T>,
     visitor: V,
-) -> V::Output {
-    let length = visitor.decimal_length(array.precision());
-    visitor.values(length, |i, value| {
-        resize_twos_complement(T::to_be_bytes(array.value(i)).as_ref(), value)
-    })
+) -> Result<V::Output> {
+    let length = visitor.decimal_length(array.precision(), T::BYTE_LENGTH);
+    let be_bytes = |i| T::to_be_bytes(array.value(i));
+    // Compare the lengths once, not for each value
+    match length.checked_sub(T::BYTE_LENGTH) {
+        // Same length, which lets the compiler inline the copy
+        Some(0) => visitor.values(length, |i, value| {
+            value.copy_from_slice(be_bytes(i).as_ref());
+        }),
+        Some(extension) => visitor.values(length, |i, value| {
+            let bytes = be_bytes(i);
+            value[..extension].fill(sign_byte(bytes.as_ref()));
+            value[extension..].copy_from_slice(bytes.as_ref());
+        }),
+        None => visitor.values(length, |i, value| {
+            value.copy_from_slice(&be_bytes(i).as_ref()[T::BYTE_LENGTH - length..]);
+        }),
+    }
 }
 
-/// Writes the big-endian two's complement integer `bytes` to `out`, which may be
-/// shorter or longer than `bytes`
-///
-/// Drops leading bytes when `out` is shorter and sign-extends when it is longer.
-/// Returns `false` if a dropped byte was not sign extension, that is, if the
-/// integer does not fit in `out`.
-#[inline]
-fn resize_twos_complement(bytes: &[u8], out: &mut [u8]) -> bool {
-    match out.len().checked_sub(bytes.len()) {
-        // Same length, which lets the compiler inline the copy
-        Some(0) => {
-            out.copy_from_slice(bytes);
-            true
-        }
-        Some(extension) => {
-            let sign = if bytes.first().is_some_and(|b| (*b as i8) < 0) {
-                0xFF
-            } else {
-                0
-            };
-            out[..extension].fill(sign);
-            out[extension..].copy_from_slice(bytes);
-            true
-        }
-        None => {
-            let (dropped, kept) = bytes.split_at(bytes.len() - out.len());
-            out.copy_from_slice(kept);
-            let sign = if kept.first().is_some_and(|b| (*b as i8) < 0) {
-                0xFF
-            } else {
-                0
-            };
-            dropped.iter().all(|b| *b == sign)
-        }
+/// Returns the byte that sign-extends the big-endian two's complement integer `bytes`
+fn sign_byte(bytes: &[u8]) -> u8 {
+    if bytes.first().is_some_and(|b| (*b as i8) < 0) {
+        0xFF
+    } else {
+        0
     }
 }
 
@@ -1927,18 +1941,18 @@ struct WriteFixedLenByteArray<'a, 'b> {
 }
 
 impl FixedLenByteArrayVisitor for WriteFixedLenByteArray<'_, '_> {
-    type Output = Result<usize>;
+    type Output = usize;
 
-    fn decimal_length(&self, precision: u8) -> usize {
-        decimal_length_from_precision(precision)
+    fn decimal_length(&self, precision: u8, native_length: usize) -> usize {
+        let length = decimal_length_from_precision(precision);
+        // The precision of a valid Arrow decimal type fits in its native type
+        assert!(length <= native_length);
+        length
     }
 
-    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8]) -> bool) -> Result<usize> {
+    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Result<usize> {
         let indices = self.levels.non_null_indices().iter().copied();
-        // A value that does not fit is truncated, as the writer has always done
-        let values = chunk_array_slice(length, indices, |i, value| {
-            fill(i, value);
-        });
+        let values = chunk_array_slice(length, indices, fill);
         self.writer.write_batch_internal(
             values.as_slice(),
             None,
