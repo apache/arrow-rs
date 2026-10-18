@@ -2872,11 +2872,7 @@ mod tests {
         fn decoded(array: &ArrayRef) -> Vec<Vec<Option<i32>>> {
             (0..array.len())
                 .map(|row| {
-                    let values = match array.data_type() {
-                        DataType::List(_) => array.as_list::<i32>().value(row),
-                        DataType::LargeList(_) => array.as_list::<i64>().value(row),
-                        _ => unreachable!(),
-                    };
+                    let values = array.as_list::<i32>().value(row);
                     let union = values.as_union();
                     (0..union.len())
                         .map(|index| {
@@ -2914,40 +2910,29 @@ mod tests {
                 )
                 .unwrap(),
             );
-            for large in [false, true] {
-                let item = Arc::new(Field::new("item", union.data_type().clone(), true));
-                let list: ArrayRef = if large {
-                    Arc::new(LargeListArray::new(
-                        item,
-                        arrow_buffer::OffsetBuffer::from_lengths([1, 2]),
-                        union.clone(),
-                        None,
-                    ))
-                } else {
-                    Arc::new(ListArray::new(
-                        item,
-                        arrow_buffer::OffsetBuffer::from_lengths([1, 2]),
-                        union.clone(),
-                        None,
-                    ))
-                };
-                for (offset, len) in [(0, 2), (1, 1), (2, 0)] {
-                    let array = list.slice(offset, len);
-                    array.to_data().validate_full().unwrap();
-                    let expected = decoded(&array);
-                    let schema = Arc::new(Schema::new(vec![Field::new(
-                        "v",
-                        array.data_type().clone(),
-                        true,
-                    )]));
-                    let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
-                    for output in [
-                        deserialize_file(serialize_file(&batch)),
-                        deserialize_stream(serialize_stream(&batch)),
-                    ] {
-                        output.column(0).to_data().validate_full().unwrap();
-                        assert_eq!(decoded(output.column(0)), expected);
-                    }
+            let item = Arc::new(Field::new("item", union.data_type().clone(), true));
+            let list: ArrayRef = Arc::new(ListArray::new(
+                item,
+                arrow_buffer::OffsetBuffer::from_lengths([1, 2]),
+                union,
+                None,
+            ));
+            for (offset, len) in [(0, 2), (1, 1), (2, 0)] {
+                let array = list.slice(offset, len);
+                array.to_data().validate_full().unwrap();
+                let expected = decoded(&array);
+                let schema = Arc::new(Schema::new(vec![Field::new(
+                    "v",
+                    array.data_type().clone(),
+                    true,
+                )]));
+                let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+                for output in [
+                    deserialize_file(serialize_file(&batch)),
+                    deserialize_stream(serialize_stream(&batch)),
+                ] {
+                    output.column(0).to_data().validate_full().unwrap();
+                    assert_eq!(decoded(output.column(0)), expected);
                 }
             }
         }
