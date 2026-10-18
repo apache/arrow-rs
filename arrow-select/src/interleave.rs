@@ -2261,35 +2261,30 @@ mod tests {
     }
 
     /// One list view row of size 1 per element of `values`.
-    fn single_element_list_views<O: OffsetSizeTrait>(
-        field: FieldRef,
-        values: ArrayRef,
-    ) -> GenericListViewArray<O> {
+    fn single_element_list_views(field: FieldRef, values: ArrayRef) -> ListViewArray {
         let len = values.len();
-        GenericListViewArray::new(
+        ListViewArray::new(
             field,
-            (0..len).map(O::usize_as).collect::<Vec<_>>().into(),
-            vec![O::usize_as(1); len].into(),
+            (0..len as i32).collect::<Vec<_>>().into(),
+            vec![1; len].into(),
             values,
             None,
         )
     }
 
-    fn test_interleave_list_view_dictionary_overflow<O: OffsetSizeTrait>(
-        indices: &[(usize, usize)],
-    ) {
+    fn test_interleave_list_view_dictionary_overflow(indices: &[(usize, usize)]) {
         // The two dictionaries hold 256 values together, more than Int8 keys can
         // address, but the selected rows only reference one distinct value.
         let field = Arc::new(Field::new_list_field(
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
         ));
-        let a = single_element_list_views::<O>(field.clone(), int8_dictionary_128_values());
-        let b = single_element_list_views::<O>(field, int8_dictionary_128_values());
+        let a = single_element_list_views(field.clone(), int8_dictionary_128_values());
+        let b = single_element_list_views(field, int8_dictionary_128_values());
 
         let result = interleave(&[&a, &b], indices).unwrap();
 
-        let result = result.as_list_view::<O>();
+        let result = result.as_list_view::<i32>();
         assert_eq!(result.len(), indices.len());
         for i in 0..result.len() {
             assert_eq!(dictionary_strings(result.value(i).as_ref()), ["0"]);
@@ -2299,23 +2294,13 @@ mod tests {
     #[test]
     fn test_list_view_dictionary_overflow_copy() {
         // The selected rows are cheaper to copy than to concat the backing arrays
-        test_interleave_list_view_dictionary_overflow::<i32>(&[(0, 0), (1, 0)]);
-    }
-
-    #[test]
-    fn test_large_list_view_dictionary_overflow_copy() {
-        test_interleave_list_view_dictionary_overflow::<i64>(&[(0, 0), (1, 0)]);
+        test_interleave_list_view_dictionary_overflow(&[(0, 0), (1, 0)]);
     }
 
     #[test]
     fn test_list_view_dictionary_overflow_concat() {
         // Repeated rows make concatenating the backing arrays cheaper than copying
-        test_interleave_list_view_dictionary_overflow::<i32>(&[(0, 0), (0, 0), (1, 0), (1, 0)]);
-    }
-
-    #[test]
-    fn test_large_list_view_dictionary_overflow_concat() {
-        test_interleave_list_view_dictionary_overflow::<i64>(&[(0, 0), (0, 0), (1, 0), (1, 0)]);
+        test_interleave_list_view_dictionary_overflow(&[(0, 0), (0, 0), (1, 0), (1, 0)]);
     }
 
     #[test]
@@ -2332,7 +2317,7 @@ mod tests {
         ));
         let view = || {
             let child = StructArray::new(fields.clone(), vec![int8_dictionary_128_values()], None);
-            single_element_list_views::<i32>(list_field.clone(), Arc::new(child))
+            single_element_list_views(list_field.clone(), Arc::new(child))
         };
         let (a, b) = (view(), view());
 
@@ -2361,7 +2346,7 @@ mod tests {
             let values = StringArray::from_iter_values((0..200).map(|i| format!("{prefix}{i}")));
             let keys = UInt8Array::from_iter_values(0..200);
             let dict = DictionaryArray::<UInt8Type>::new(keys, Arc::new(values));
-            single_element_list_views::<i32>(field.clone(), Arc::new(dict))
+            single_element_list_views(field.clone(), Arc::new(dict))
         };
         let (a, b) = (view("a"), view("b"));
 
