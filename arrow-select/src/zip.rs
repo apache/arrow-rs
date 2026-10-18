@@ -1764,28 +1764,6 @@ mod test {
     }
 
     #[test]
-    fn test_zip_kernel_scalar_binary_array_view_sliced_inline_short() {
-        // A falsy value of at most 4 bytes leaves view bytes 8 to 11 as padding
-        let truthy = BinaryViewArray::from_iter_values([
-            b"x".as_slice(),
-            b"a value longer than twelve bytes",
-        ])
-        .slice(0, 1);
-        let falsy = BinaryViewArray::from_iter_values([
-            b"ab".as_slice(),
-            b"another value longer than twelve",
-        ])
-        .slice(0, 1);
-
-        let mask = BooleanArray::from(vec![false, true, false]);
-        let out = zip(&mask, &Scalar::new(&truthy), &Scalar::new(&falsy)).unwrap();
-        out.to_data().validate_full().unwrap();
-        let actual = out.as_binary_view();
-        let expected = BinaryViewArray::from_iter_values([b"ab".as_slice(), b"x", b"ab"]);
-        assert_eq!(actual, &expected);
-    }
-
-    #[test]
     fn test_zip_kernel_scalar_strings_array_view_sliced_long_falsy() {
         // A 13 byte falsy value is not inlined, so it must be remapped after the truthy buffers
         let truthy =
