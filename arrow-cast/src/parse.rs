@@ -18,6 +18,7 @@
 //! [`Parser`] implementations for converting strings to Arrow types
 //!
 //! Used by the CSV and JSON readers to convert strings to Arrow types
+use crate::local_time::resolve_local_datetime;
 use arrow_array::ArrowNativeTypeOp;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
@@ -162,8 +163,24 @@ impl TimestampParser {
 ///
 /// * `2023-01-01 040506 America/Los_Angeles`
 ///
-/// If a timestamp is ambiguous, for example as a result of daylight-savings time, an error
-/// will be returned
+/// A timestamp with no explicit offset is read as a wall clock time in the
+/// relevant timezone, which for an IANA timezone does not always identify a
+/// unique instant. Daylight savings transitions are resolved the same way
+/// PostgreSQL and DuckDB resolve them: an *ambiguous* reading (the repeated
+/// hour when the clocks go back) takes the later instant, and a *nonexistent*
+/// reading (the skipped hour when the clocks go forward) is shifted forward by
+/// the length of the gap.
+///
+/// ```
+/// # use arrow_cast::parse::string_to_datetime;
+/// # use chrono::Utc;
+/// // 02:30 does not exist in America/New_York on 2024-03-10; it is read as 03:30 EDT
+/// let gap = string_to_datetime(&Utc, "2024-03-10 02:30:00 America/New_York").unwrap();
+/// assert_eq!(gap.to_rfc3339(), "2024-03-10T07:30:00+00:00");
+/// // 01:30 happens twice on 2024-11-03; the later (EST) instant is used
+/// let ambiguous = string_to_datetime(&Utc, "2024-11-03 01:30:00 America/New_York").unwrap();
+/// assert_eq!(ambiguous.to_rfc3339(), "2024-11-03T06:30:00+00:00");
+/// ```
 ///
 /// Some formats supported by PostgresSql <https://www.postgresql.org/docs/current/datatype-datetime.html#DATATYPE-DATETIME-TIME-TABLE>
 /// are not supported, like
@@ -186,9 +203,7 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
     let date = parser.date().ok_or_else(|| err("error parsing date"))?;
     if bytes.len() == 10 {
         let datetime = date.and_time(NaiveTime::MIN);
-        return timezone
-            .from_local_datetime(&datetime)
-            .single()
+        return resolve_local_datetime(timezone, &datetime)
             .ok_or_else(|| err("error computing timezone offset"));
     }
 
@@ -207,9 +222,7 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
     }
 
     if bytes.len() <= tz_offset {
-        return timezone
-            .from_local_datetime(&datetime)
-            .single()
+        return resolve_local_datetime(timezone, &datetime)
             .ok_or_else(|| err("error computing timezone offset"));
     }
 
@@ -219,9 +232,7 @@ pub fn string_to_datetime<T: TimeZone>(timezone: &T, s: &str) -> Result<DateTime
 
     // Parse remainder of string as timezone
     let parsed_tz: Tz = s[tz_offset..].trim_start().parse()?;
-    let parsed = parsed_tz
-        .from_local_datetime(&datetime)
-        .single()
+    let parsed = resolve_local_datetime(&parsed_tz, &datetime)
         .ok_or_else(|| err("error computing timezone offset"))?;
 
     Ok(parsed.with_timezone(timezone))

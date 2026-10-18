@@ -23,7 +23,7 @@
 //! parser -- goes through [`resolve_local_offset`] so that the two cannot drift
 //! apart.
 
-use chrono::{LocalResult, NaiveDateTime, TimeDelta, TimeZone};
+use chrono::{DateTime, LocalResult, NaiveDateTime, Offset, TimeDelta, TimeZone};
 
 /// Returns the offset to use when interpreting `local` as a wall clock reading
 /// in `tz`, or `None` if it cannot be resolved.
@@ -84,4 +84,17 @@ pub(crate) fn resolve_local_offset<T: TimeZone>(
                 .earliest()
         }
     }
+}
+
+/// Reads `local` as a wall clock time in `tz`, resolving daylight savings
+/// ambiguities and gaps as described on [`resolve_local_offset`].
+///
+/// This is [`TimeZone::from_local_datetime`] with the two unresolvable
+/// [`LocalResult`] cases decided rather than rejected.
+pub(crate) fn resolve_local_datetime<T: TimeZone>(
+    tz: &T,
+    local: &NaiveDateTime,
+) -> Option<DateTime<T>> {
+    let offset = resolve_local_offset(tz, local)?;
+    Some(tz.from_utc_datetime(&(*local - offset.fix())))
 }
