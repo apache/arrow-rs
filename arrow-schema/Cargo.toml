@@ -58,6 +58,8 @@ bincode = { version = "2.0.1", default-features = false, features = [
 ] }
 criterion = { workspace = true, default-features = false }
 insta = "1.43.1"
+postcard = { version = "1.0.10", default-features = false, features = ["use-std"] }
+serde_json = "1.0"
 
 [[bench]]
 name = "ffi"
