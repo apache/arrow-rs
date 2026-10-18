@@ -19,6 +19,20 @@ use super::{_MutableArrayData, Extend};
 use crate::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 
+fn nullable_union_field(fields: &arrow_schema::UnionFields) -> Result<(usize, i8), ArrowError> {
+    fields
+        .iter()
+        .enumerate()
+        .find_map(|(index, (type_id, field))| field.is_nullable().then_some((index, type_id)))
+        .ok_or_else(|| {
+            ArrowError::InvalidArgumentError(if fields.is_empty() {
+                "Cannot extend a union with no fields with nulls".to_owned()
+            } else {
+                "Cannot extend a union with no nullable fields with nulls".to_owned()
+            })
+        })
+}
+
 pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
     let type_ids = array.buffer::<i8>(0);
 
@@ -77,23 +91,19 @@ pub(super) fn extend_nulls_dense(
     let DataType::Union(fields, _) = &mutable.data_type else {
         unreachable!()
     };
-    let first_type_id = fields
-        .iter()
-        .next()
-        .expect("union must have at least one field")
-        .0;
+    let (child_index, null_type_id) = nullable_union_field(fields)?;
 
     // Extend type_ids buffer
     mutable
         .buffer1
-        .try_extend_from_slice(&vec![first_type_id; len])
+        .try_extend_from_slice(&vec![null_type_id; len])
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-    // Dense: extend offsets pointing into the first child, then extend nulls in that child
-    let child_offset = mutable.child_data[0].len();
+    // Dense: point into a nullable child and extend its values with nulls.
+    let child_offset = mutable.child_data[child_index].len();
     let (start, end) = (child_offset as i32, (child_offset + len) as i32);
     mutable.buffer2.extend(start..end);
-    mutable.child_data[0].try_extend_nulls(len)?;
+    mutable.child_data[child_index].try_extend_nulls(len)?;
     Ok(())
 }
 
@@ -104,16 +114,12 @@ pub(super) fn extend_nulls_sparse(
     let DataType::Union(fields, _) = &mutable.data_type else {
         unreachable!()
     };
-    let first_type_id = fields
-        .iter()
-        .next()
-        .expect("union must have at least one field")
-        .0;
+    let (_, null_type_id) = nullable_union_field(fields)?;
 
     // Extend type_ids buffer
     mutable
         .buffer1
-        .try_extend_from_slice(&vec![first_type_id; len])
+        .try_extend_from_slice(&vec![null_type_id; len])
         .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
     // Sparse: extend nulls in ALL children
