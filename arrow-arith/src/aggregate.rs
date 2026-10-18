@@ -573,26 +573,24 @@ pub fn sum_array<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>>(
 ) -> Option<T::Native> {
     match array.data_type() {
         DataType::Dictionary(_, _) => {
-            let null_count = array.null_count();
+            let logical_null_count = array.logical_null_count();
 
-            if null_count == array.len() {
+            if logical_null_count == array.len() {
                 return None;
             }
 
-            let mut has_non_null_value = false;
             let iter = ArrayIter::new(array);
             let sum = iter
                 .into_iter()
                 .fold(T::default_value(), |accumulator, value| {
                     if let Some(value) = value {
-                        has_non_null_value = true;
                         accumulator.add_wrapping(value)
                     } else {
                         accumulator
                     }
                 });
 
-            has_non_null_value.then_some(sum)
+            Some(sum)
         }
         DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
             DataType::Int16 => ree::sum_wrapping::<types::Int16Type, T>(&array),
@@ -615,26 +613,24 @@ pub fn sum_array_checked<T: ArrowNumericType, A: ArrayAccessor<Item = T::Native>
 ) -> Result<Option<T::Native>, ArrowError> {
     match array.data_type() {
         DataType::Dictionary(_, _) => {
-            let null_count = array.null_count();
+            let logical_null_count = array.logical_null_count();
 
-            if null_count == array.len() {
+            if logical_null_count == array.len() {
                 return Ok(None);
             }
 
-            let mut has_non_null_value = false;
             let iter = ArrayIter::new(array);
             let sum = iter
                 .into_iter()
                 .try_fold(T::default_value(), |accumulator, value| {
                     if let Some(value) = value {
-                        has_non_null_value = true;
                         accumulator.add_checked(value)
                     } else {
                         Ok(accumulator)
                     }
                 })?;
 
-            Ok(has_non_null_value.then_some(sum))
+            Ok(Some(sum))
         }
         DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
             DataType::Int16 => ree::sum_checked::<types::Int16Type, T>(&array),
