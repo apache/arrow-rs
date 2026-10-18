@@ -201,6 +201,7 @@ pub struct ReaderBuilder {
     coerce_primitive: bool,
     strict_mode: bool,
     ignore_type_conflicts: bool,
+    allow_non_finite_floats: bool,
     is_field: bool,
     struct_mode: StructMode,
     flatten_top_level_arrays: bool,
@@ -223,6 +224,7 @@ impl ReaderBuilder {
             coerce_primitive: false,
             strict_mode: false,
             ignore_type_conflicts: false,
+            allow_non_finite_floats: false,
             is_field: false,
             struct_mode: Default::default(),
             flatten_top_level_arrays: false,
@@ -267,6 +269,7 @@ impl ReaderBuilder {
             coerce_primitive: false,
             strict_mode: false,
             ignore_type_conflicts: false,
+            allow_non_finite_floats: false,
             is_field: true,
             struct_mode: Default::default(),
             flatten_top_level_arrays: false,
@@ -285,6 +288,23 @@ impl ReaderBuilder {
     pub fn with_coerce_primitive(self, coerce_primitive: bool) -> Self {
         Self {
             coerce_primitive,
+            ..self
+        }
+    }
+
+    /// Accepts the nonstandard JSON number literals `NaN`, `Infinity`, and `-Infinity`.
+    ///
+    /// Disabled by default, as [RFC 8259] excludes these literals from JSON numbers.
+    /// When enabled, floating-point columns preserve their IEEE values. Other column
+    /// types follow the usual coercion and type-conflict options. Quoted strings are
+    /// unaffected.
+    ///
+    /// This option applies to reading with a known schema, not schema inference.
+    ///
+    /// [RFC 8259]: https://www.rfc-editor.org/rfc/rfc8259.html#section-6
+    pub fn with_allow_non_finite_floats(self, allow_non_finite_floats: bool) -> Self {
+        Self {
+            allow_non_finite_floats,
             ..self
         }
     }
@@ -399,6 +419,7 @@ impl ReaderBuilder {
                 batch_size: self.batch_size,
                 num_fields,
                 flatten_top_level_arrays: self.flatten_top_level_arrays,
+                allow_non_finite_floats: self.allow_non_finite_floats,
             }),
             batch_size: self.batch_size,
             schema: self.schema,
@@ -4439,5 +4460,102 @@ mod tests {
 
         let err = read(false);
         assert!(err.contains("returned 0 values for 1 rows"), "{err}");
+    }
+
+    #[test]
+    fn test_non_finite_floats_opt_in() {
+        for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let batch = ReaderBuilder::new_with_field(Field::new("n", data_type, true))
+                .with_allow_non_finite_floats(true)
+                .build(b"NaN\nInfinity\n-Infinity\n1.5\nnull".as_slice())
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            let values = arrow_cast::cast(batch.column(0), &DataType::Float64).unwrap();
+            let values = values.as_primitive::<Float64Type>();
+            assert!(values.is_valid(0) && values.value(0).is_nan());
+            assert_eq!(values.value(1), f64::INFINITY);
+            assert_eq!(values.value(2), f64::NEG_INFINITY);
+            assert_eq!(values.value(3), 1.5);
+            assert!(values.is_null(4));
+        }
+
+        for token in ["NaN", "Infinity", "-Infinity"] {
+            // Default readers remain strict; enabling the option doesn't make integers nullable.
+            for (data_type, allow) in [(DataType::Float64, false), (DataType::Int64, true)] {
+                let builder = ReaderBuilder::new_with_field(Field::new("n", data_type, true));
+                let builder = if allow {
+                    builder.with_allow_non_finite_floats(true)
+                } else {
+                    builder
+                };
+                let result = builder.build(token.as_bytes()).unwrap().next().unwrap();
+                assert!(result.is_err(), "{token}");
+            }
+            let batch = ReaderBuilder::new_with_field(Field::new("n", DataType::Utf8, true))
+                .with_allow_non_finite_floats(true)
+                .with_coerce_primitive(true)
+                .build(token.as_bytes())
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(batch.column(0).as_string::<i32>().value(0), token);
+        }
+    }
+
+    #[test]
+    fn test_non_finite_floats_streaming() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "metadata",
+                DataType::Struct(vec![Field::new("year", DataType::Float64, true)].into()),
+                true,
+            ),
+            Field::new(
+                "values",
+                DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+                true,
+            ),
+            Field::new("text", DataType::Utf8, true),
+        ]));
+        let input = br#"{"metadata":{"year":NaN},"values":[Infinity,-Infinity,null],"text":"NaN \"Infinity\" -Infinity"}"#;
+        let builder = ReaderBuilder::new(schema).with_allow_non_finite_floats(true);
+        // Every split size includes splits inside literals and after the leading minus.
+        for size in 1..=input.len() {
+            let mut decoder = builder.clone().build_decoder().unwrap();
+            for chunk in input.chunks(size) {
+                assert_eq!(decoder.decode(chunk).unwrap(), chunk.len());
+            }
+            let batch = decoder.flush().unwrap().unwrap();
+            let year = batch
+                .column(0)
+                .as_struct()
+                .column(0)
+                .as_primitive::<Float64Type>();
+            assert!(year.is_valid(0) && year.value(0).is_nan());
+            let values = batch.column(1).as_list::<i32>().value(0);
+            let values = values.as_primitive::<Float64Type>();
+            assert_eq!(values.value(0), f64::INFINITY);
+            assert_eq!(values.value(1), f64::NEG_INFINITY);
+            assert!(values.is_null(2));
+            assert_eq!(
+                batch.column(2).as_string::<i32>().value(0),
+                r#"NaN "Infinity" -Infinity"#
+            );
+        }
+        for input in [
+            r#"{"metadata":{"year":Na}}"#,
+            r#"{"metadata":{"year":NaNx}}"#,
+            r#"{"metadata":{"year":-NaN}}"#,
+            r#"{"metadata":{"year":+Infinity}}"#,
+            r#"{"metadata":{"year":Infinit"#,
+            r#"{"metadata":{"year":-Infinit"#,
+            r"{NaN:1}",
+        ] {
+            let mut reader = builder.clone().build(input.as_bytes()).unwrap();
+            assert!(reader.next().unwrap().is_err(), "{input}");
+        }
     }
 }
