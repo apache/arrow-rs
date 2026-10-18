@@ -1314,8 +1314,7 @@ const NANOS_PER_MILLIS: i64 = 1_000_000;
 const NANOS_PER_SECOND: i64 = 1_000 * NANOS_PER_MILLIS;
 const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
 const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
-#[cfg(test)]
-const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
+pub(crate) const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
 /// Config to parse interval strings
 ///

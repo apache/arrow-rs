@@ -17,7 +17,8 @@
 
 use crate::cast::*;
 use crate::parse::{
-    IntervalParseConfig, IntervalUnit as IntervalParseUnit, parse_interval_month_day_nano_config,
+    IntervalParseConfig, IntervalUnit as IntervalParseUnit, NANOS_PER_DAY,
+    parse_interval_month_day_nano_config,
 };
 use arrow_buffer::NullBuffer;
 
@@ -162,13 +163,19 @@ where
             ))
         })?;
 
-    if interval.months != 0 || interval.days != 0 {
+    if interval.months != 0 {
         return Err(ArrowError::ComputeError(
-            "Cannot convert interval containing non-zero months or days to duration".to_string(),
+            "Cannot convert interval containing non-zero months to duration".to_string(),
         ));
     }
 
-    Ok(interval.nanoseconds / scale)
+    let nanos = NANOS_PER_DAY as i128 * interval.days as i128 + interval.nanoseconds as i128;
+    i64::try_from(nanos / scale as i128).map_err(|_| {
+        ArrowError::CastError(format!(
+            "Cannot cast string '{string}' to value of {} type",
+            D::DATA_TYPE
+        ))
+    })
 }
 
 /// Casts generic string arrays to a Duration type

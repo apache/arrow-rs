@@ -5593,8 +5593,11 @@ mod tests {
             Some("90 seconds"),
             Some("0.5 hours"),
             Some("-1 hour -30 minutes"),
-            None,
             Some("2 days"),
+            Some("1 week"),
+            Some("45 days 14 hours 2 mins 34 secs"),
+            None,
+            Some("2 months"),
         ]);
         let to_type = DataType::Duration(TimeUnit::Second);
 
@@ -5606,6 +5609,9 @@ mod tests {
                 Some(90),
                 Some(1800),
                 Some(-5400),
+                Some(172800),
+                Some(604800),
+                Some(3938554),
                 None,
                 None
             ])
@@ -5618,7 +5624,7 @@ mod tests {
         let err = cast_with_options(&array, &to_type, &options).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Compute error: Cannot convert interval containing non-zero months or days to duration"
+            "Compute error: Cannot convert interval containing non-zero months to duration"
         );
     }
 
@@ -5629,18 +5635,25 @@ mod tests {
             Arc::new(LargeStringArray::from(vec![
                 Some("10"),
                 Some("1 minute"),
+                Some("1 day"),
                 None,
             ])) as ArrayRef,
             Arc::new(StringViewArray::from(vec![
                 Some("10"),
                 Some("1 minute"),
+                Some("1 day"),
                 None,
             ])) as ArrayRef,
         ] {
             let casted = cast(&array, &to_type).unwrap();
             assert_eq!(
                 casted.as_primitive::<DurationNanosecondType>(),
-                &DurationNanosecondArray::from(vec![Some(10), Some(60_000_000_000), None])
+                &DurationNanosecondArray::from(vec![
+                    Some(10),
+                    Some(60_000_000_000),
+                    Some(86_400_000_000_000),
+                    None
+                ])
             );
         }
     }
