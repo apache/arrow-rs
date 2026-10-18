@@ -706,16 +706,8 @@ mod tests {
     #[test]
     fn test_extend_accounts_for_offset() {
         let dt = DataType::RunEndEncoded(
-            Arc::new(Field::new(
-                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
-                DataType::Int32,
-                false,
-            )),
-            Arc::new(Field::new(
-                Field::REE_VALUES_FIELD_DEFAULT_NAME,
-                DataType::Float32,
-                true,
-            )),
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Float32, true)),
         );
 
         let runs = ArrayData::builder(DataType::Int32)
