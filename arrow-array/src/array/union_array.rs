@@ -707,7 +707,7 @@ impl From<ArrayData> for UnionArray {
         let mut boxed_fields = vec![None; max_id + 1];
         for (cd, (field_id, _)) in child_data.into_iter().zip(fields.iter()) {
             let cd = match mode {
-                UnionMode::Sparse => cd.sliced(offset, len),
+                UnionMode::Sparse => cd.slice(offset, len),
                 UnionMode::Dense => cd,
             };
             boxed_fields[field_id as usize] = Some(make_array(cd));
