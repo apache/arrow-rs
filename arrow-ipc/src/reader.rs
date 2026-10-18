@@ -369,6 +369,17 @@ impl RecordBatchDecoder<'_> {
         let skip_validation = self.skip_validation.get();
 
         let nulls = if null_count > 0 {
+            if !skip_validation {
+                // Check before constructing the BooleanBuffer, which would otherwise panic.
+                let needed_len = len.div_ceil(8);
+                if null_buffer.len() < needed_len {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "null_bit_buffer size too small. got {} needed {}",
+                        null_buffer.len(),
+                        needed_len
+                    )));
+                }
+            }
             let validity_buffer = BooleanBuffer::new(null_buffer, 0, len);
             let null_buffer = if skip_validation {
                 // safety: flag can only be set via unsafe code
@@ -3602,6 +3613,30 @@ mod tests {
             .add_buffer(ScalarBuffer::<i32>::from_iter(0..8000).into())
             .nulls(Some(NullBuffer::from(&[true, false, true, false])));
         let array: ArrayRef = unsafe { Arc::new(Int32Array::from(data.build_unchecked())) };
+        let batch = RecordBatch::try_from_iter([("a", array)]).unwrap();
+
+        let mut stream = Vec::new();
+        let mut writer =
+            crate::writer::StreamWriter::try_new(&mut stream, &batch.schema()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+
+        let mut reader = StreamReader::try_new(Cursor::new(stream), None).unwrap();
+        let err = reader.next().unwrap().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: null_bit_buffer size too small. got 1 needed 1000"
+        );
+    }
+
+    #[test]
+    fn test_stream_reader_rejects_short_struct_validity_buffer() {
+        // Serialize a StructArray with too few validity bits.
+        let fields = Fields::from(vec![Field::new("b", DataType::Int32, false)]);
+        let child: ArrayRef = Arc::new(Int32Array::from_iter_values(0..8000));
+        let nulls = NullBuffer::from(&[true, false, true, false]);
+        let array: ArrayRef =
+            unsafe { Arc::new(StructArray::new_unchecked(fields, vec![child], Some(nulls))) };
         let batch = RecordBatch::try_from_iter([("a", array)]).unwrap();
 
         let mut stream = Vec::new();
