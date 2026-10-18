@@ -1609,12 +1609,47 @@ impl ArrayData {
                 let child = self.child_at(0)?;
                 self.validate_offsets_full::<i64>(child.len)
             }
-            DataType::Union(_, _) => {
-                // Validate Union Array as part of implementing new Union semantics
-                // See comments in `ArrayData::validate()`
-                // https://github.com/apache/arrow-rs/issues/85
-                //
-                // TODO file follow on ticket for full union validation
+            DataType::Union(fields, mode) => {
+                let mut child_lens: Vec<Option<usize>> = vec![None; 128];
+                for (index, (type_id, _)) in fields.iter().enumerate() {
+                    let child = self.child_at(index)?;
+                    child_lens[type_id as usize] = Some(child.len());
+                }
+
+                // Type id values must match one of the fields.
+                let type_ids = self.typed_buffer::<i8>(0, self.len)?;
+                for (index, &type_id) in type_ids.iter().enumerate() {
+                    if type_id < 0 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Type id values cannot be negative, got {type_id} at index {index}"
+                        )));
+                    }
+                    let type_id = type_id as usize;
+                    if child_lens[type_id].is_none() {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Type id values must match one of the field type ids, got {type_id} at index {index}"
+                        )));
+                    }
+                }
+
+                // Check the value offsets are in bounds.
+                if mode == &UnionMode::Dense {
+                    let offsets = self.typed_buffer::<i32>(1, self.len)?;
+
+                    if type_ids
+                        .iter()
+                        .zip(offsets.iter())
+                        .any(|(&type_id, &offset)| {
+                            offset < 0 || offset as usize >= child_lens[type_id as usize].unwrap()
+                        })
+                    {
+                        return Err(ArrowError::InvalidArgumentError(
+                            "Offsets must be non-negative and within the length of the child array"
+                                .to_string(),
+                        ));
+                    }
+                }
+
                 Ok(())
             }
             DataType::Dictionary(key_type, _value_type) => {
@@ -2723,6 +2758,29 @@ mod tests {
         let output = mutable.freeze();
 
         assert_eq!(output.child_data()[0].buffer::<i32>(0), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_extend_fixed_size_list_accounts_for_parent_offset() {
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let child = ArrayData::builder(DataType::Int32)
+            .len(6)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5]))
+            .build()
+            .unwrap();
+
+        let data = ArrayData::builder(DataType::FixedSizeList(field, 2))
+            .len(2)
+            .offset(1)
+            .add_child_data(child)
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&data], false, data.len());
+        mutable.try_extend(0, 0, data.len()).unwrap();
+        let output = mutable.freeze();
+
+        assert_eq!(output.child_data()[0].buffer::<i32>(0), &[2, 3, 4, 5]);
     }
 
     #[test]
@@ -3962,5 +4020,77 @@ mod tests {
     fn test_new_null_empty_union_with_slots() {
         let data_type = DataType::Union(UnionFields::empty(), UnionMode::Dense);
         let _ = ArrayData::new_null(&data_type, 1);
+    }
+
+    #[test]
+    fn test_union_validate_type_ids() {
+        let dt = DataType::Union(
+            UnionFields::try_new(
+                vec![5],
+                vec![Arc::new(Field::new("a", DataType::Int32, true))],
+            )
+            .unwrap(),
+            UnionMode::Sparse,
+        );
+
+        let child = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .add_buffer(make_i32_buffer(2))
+            .build()
+            .unwrap();
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(2)
+            .offset(0)
+            .buffers(vec![vec![5_i8, 2].into()])
+            .child_data(vec![child])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Type id values must match one of the field type ids, got 2 at index 1"
+        );
+    }
+
+    #[test]
+    fn test_union_validate_dense_offsets() {
+        let dt = DataType::Union(
+            UnionFields::try_new(
+                vec![5],
+                vec![Arc::new(Field::new("a", DataType::Int32, true))],
+            )
+            .unwrap(),
+            UnionMode::Dense,
+        );
+
+        let child = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .add_buffer(make_i32_buffer(2))
+            .build()
+            .unwrap();
+
+        let err = ArrayDataBuilder::new(dt.clone())
+            .len(2)
+            // 2nd offset '10' is out of bounds
+            .buffers(vec![vec![5_i8, 5].into(), vec![0_i32, 10].into()])
+            .child_data(vec![child.clone()])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offsets must be non-negative and within the length of the child array"
+        );
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(2)
+            // 2nd offset is negative
+            .buffers(vec![vec![5_i8, 5].into(), vec![0_i32, -1].into()])
+            .child_data(vec![child])
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Offsets must be non-negative and within the length of the child array"
+        );
     }
 }
