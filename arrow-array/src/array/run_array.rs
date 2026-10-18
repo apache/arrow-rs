@@ -1591,14 +1591,13 @@ mod tests {
         let runs = ArrayData::builder(DataType::Int32)
             .len(2)
             .offset(2)
-            .add_buffer(vec![-10_i32, -20, 1_i32, 3, 0, 100].into())
+            .add_buffer(vec![-10_i32, -20, 1_i32, 4, 0, 100].into())
             .build()
             .unwrap();
         let values = Float32Array::from(vec![1.5, 2.5]);
 
         let data = ArrayDataBuilder::new(dt)
             .len(3)
-            .offset(0)
             .child_data(vec![runs, values.to_data()])
             .build()
             .unwrap();
