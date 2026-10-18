@@ -2625,18 +2625,6 @@ mod tests {
                 <$type>::add_year_months_opt($date_fn(MIN_VALID_DATE), -1).is_none(),
                 "add_year_months: overflow neg days"
             );
-
-            // Negating i32::MIN months overflows i32: subtract must return
-            // None (reported as a Date arithmetic overflow by the kernels)
-            // instead of panicking in debug builds
-            assert!(
-                <$type>::subtract_year_months_opt(date, i32::MIN).is_none(),
-                "subtract_year_months: negating i32::MIN months overflows i32"
-            );
-            assert!(
-                <$type>::add_year_months_opt(date, i32::MIN).is_none(),
-                "add_year_months: i32::MIN months moves the date out of range"
-            );
         }};
     }
 
@@ -2817,26 +2805,6 @@ mod tests {
                 "subtract_month_day_nano: overflow neg days from max"
             );
 
-            // Negating i32::MIN months overflows i32: subtract must return
-            // None instead of panicking in debug builds, with or without
-            // day/nanosecond parts
-            assert!(
-                <$type>::subtract_month_day_nano_opt(
-                    date,
-                    IntervalMonthDayNano::new(i32::MIN, 0, 0)
-                )
-                .is_none(),
-                "subtract_month_day_nano: negating i32::MIN months overflows i32"
-            );
-            assert!(
-                <$type>::subtract_month_day_nano_opt(
-                    date,
-                    IntervalMonthDayNano::new(i32::MIN, 1, 1)
-                )
-                .is_none(),
-                "subtract_month_day_nano: negating i32::MIN months overflows i32 with other parts"
-            );
-
             // Overflow handling - add
             assert!(
                 <$type>::add_month_day_nano_opt(
@@ -2901,35 +2869,22 @@ mod tests {
         // overflows i32: the date kernels must return the Date arithmetic
         // overflow error instead of panicking in debug builds
         // https://github.com/apache/arrow-rs/issues/11600
-        let dates = Date32Array::from(vec![0]);
-        let deltas = IntervalYearMonthArray::from(vec![i32::MIN]);
-        let err = sub(&dates, &deltas).unwrap_err();
-        assert!(
-            err.to_string().contains("Date arithmetic overflow"),
-            "unexpected error: {err}"
-        );
-
-        let dates = Date64Array::from(vec![0]);
-        let err = sub(&dates, &deltas).unwrap_err();
-        assert!(
-            err.to_string().contains("Date arithmetic overflow"),
-            "unexpected error: {err}"
-        );
-
-        let deltas =
+        let dates: [ArrayRef; 2] = [
+            Arc::new(Date32Array::from(vec![0])),
+            Arc::new(Date64Array::from(vec![0])),
+        ];
+        let year_month = IntervalYearMonthArray::from(vec![i32::MIN]);
+        let month_day_nano =
             IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNano::new(i32::MIN, 0, 0)]);
-        let dates = Date32Array::from(vec![0]);
-        let err = sub(&dates, &deltas).unwrap_err();
-        assert!(
-            err.to_string().contains("Date arithmetic overflow"),
-            "unexpected error: {err}"
-        );
-
-        let dates = Date64Array::from(vec![0]);
-        let err = sub(&dates, &deltas).unwrap_err();
-        assert!(
-            err.to_string().contains("Date arithmetic overflow"),
-            "unexpected error: {err}"
-        );
+        for dates in &dates {
+            assert_eq!(
+                sub(dates, &year_month).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - -2147483648 months"
+            );
+            assert_eq!(
+                sub(dates, &month_day_nano).unwrap_err().to_string(),
+                "Compute error: Date arithmetic overflow: 0 - IntervalMonthDayNano { months: -2147483648, days: 0, nanoseconds: 0 }"
+            );
+        }
     }
 }

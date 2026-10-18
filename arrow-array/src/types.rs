@@ -1140,6 +1140,8 @@ impl Date32Type {
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> Option<<Date32Type as ArrowPrimitiveType>::Native> {
         let prior = Date32Type::to_naive_date_opt(date)?;
+        // -i32::MIN overflows i32, but a 2^31 month shift is outside
+        // NaiveDate's range anyway: the subtraction would overflow regardless
         let months = IntervalYearMonthType::to_months(delta.checked_neg()?);
         let posterior = add_months_date(prior, months)?;
         Some(Date32Type::from_naive_date(posterior))
@@ -1226,6 +1228,8 @@ impl Date32Type {
     ) -> Option<<Date32Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date32Type::to_naive_date_opt(date)?;
+        // -i32::MIN overflows i32, but a 2^31 month shift is outside
+        // NaiveDate's range anyway: the subtraction would overflow regardless
         let res = add_months_date(res, months.checked_neg()?)?;
         let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
         let res = res.checked_sub_signed(Duration::nanoseconds(nanos))?;
@@ -1330,6 +1334,8 @@ impl Date64Type {
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let prior = Date64Type::to_naive_date_opt(date)?;
+        // -i32::MIN overflows i32, but a 2^31 month shift is outside
+        // NaiveDate's range anyway: the subtraction would overflow regardless
         let months = IntervalYearMonthType::to_months(delta.checked_neg()?);
         let posterior = add_months_date(prior, months)?;
         Some(Date64Type::from_naive_date(posterior))
@@ -1368,6 +1374,8 @@ impl Date64Type {
     ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date64Type::to_naive_date_opt(date)?;
+        // -i32::MIN overflows i32, but a 2^31 month shift is outside
+        // NaiveDate's range anyway: the subtraction would overflow regardless
         let res = add_months_date(res, months.checked_neg()?)?;
         let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
         let res = res.checked_sub_signed(Duration::nanoseconds(nanos))?;
@@ -1858,6 +1866,35 @@ mod tests {
     fn year_month_should_roundtrip_neg() {
         let value = IntervalYearMonthType::make_value(-1, -2);
         assert_eq!(IntervalYearMonthType::to_months(value), -14);
+    }
+
+    #[test]
+    fn date_subtract_i32_min_months_overflows() {
+        // Negating i32::MIN months overflows i32: the *_opt helpers must
+        // return None instead of panicking in debug builds
+        // https://github.com/apache/arrow-rs/issues/11600
+        assert!(Date32Type::subtract_year_months_opt(0, i32::MIN).is_none());
+        assert!(Date64Type::subtract_year_months_opt(0, i32::MIN).is_none());
+        // adding i32::MIN months moves any date out of NaiveDate's range
+        assert!(Date32Type::add_year_months_opt(0, i32::MIN).is_none());
+        assert!(Date64Type::add_year_months_opt(0, i32::MIN).is_none());
+        assert!(
+            Date32Type::subtract_month_day_nano_opt(0, IntervalMonthDayNano::new(i32::MIN, 0, 0))
+                .is_none()
+        );
+        assert!(
+            Date64Type::subtract_month_day_nano_opt(0, IntervalMonthDayNano::new(i32::MIN, 0, 0))
+                .is_none()
+        );
+        // other parts must not mask the overflowing months
+        assert!(
+            Date32Type::subtract_month_day_nano_opt(0, IntervalMonthDayNano::new(i32::MIN, 1, 1))
+                .is_none()
+        );
+        assert!(
+            Date64Type::subtract_month_day_nano_opt(0, IntervalMonthDayNano::new(i32::MIN, 1, 1))
+                .is_none()
+        );
     }
 
     fn test_layout<T: ArrowPrimitiveType>() {
