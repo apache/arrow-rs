@@ -34,7 +34,10 @@ fn nullable_union_field(fields: &arrow_schema::UnionFields) -> Result<(usize, i8
 }
 
 pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
+    // `buffer` already applies the parent offset to the type ids
     let type_ids = array.buffer::<i8>(0);
+    // but a sparse union's children are not sliced by the parent offset
+    let offset = array.offset();
 
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
@@ -43,8 +46,18 @@ pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend<'_> {
                 .buffer1
                 .extend_from_slice(&type_ids[start..start + len]);
 
+            let child_start = start.checked_add(offset).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "sparse union offset {offset} with start {start} overflows usize"
+                ))
+            })?;
+            let child_end = child_start.checked_add(len).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "sparse union start {child_start} with length {len} overflows usize"
+                ))
+            })?;
             for child in &mut mutable.child_data {
-                child.try_extend(index, start, start + len)?;
+                child.try_extend(index, child_start, child_end)?;
             }
             Ok(())
         },
