@@ -19,7 +19,6 @@
 name = "arrow-schema"
 version = { workspace = true }
 description = "Defines the logical types for arrow arrays"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -56,6 +55,7 @@ all-features = true
 criterion = { workspace = true, default-features = false }
 insta = { workspace = true, default-features = true }
 postcard = { version = "1.0.10", default-features = false, features = ["use-std"] }
+serde_json = "1.0"
 
 [[bench]]
 name = "ffi"

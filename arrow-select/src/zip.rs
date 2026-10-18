@@ -25,11 +25,11 @@ use arrow_array::types::{
 };
 use arrow_array::*;
 use arrow_buffer::{
-    BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, OffsetBufferBuilder,
-    ScalarBuffer, ToByteSlice,
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+    ToByteSlice,
 };
 use arrow_data::transform::MutableArrayData;
-use arrow_data::{ArrayData, ByteView};
+use arrow_data::{ArrayData, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
@@ -595,10 +595,19 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
             }
         }
 
-        let total_number_of_bytes =
-            true_count * truthy_val.len() + (predicate.len() - true_count) * falsy_val.len();
+        let total_number_of_bytes = true_count
+            .checked_mul(truthy_val.len())
+            .and_then(|truthy_bytes| {
+                let falsy_bytes = (predicate.len() - true_count).checked_mul(falsy_val.len())?;
+                truthy_bytes.checked_add(falsy_bytes)
+            })
+            .ok_or_else(|| ArrowError::MemoryError("zip output size overflow".to_string()))?;
+        T::Offset::from_usize(total_number_of_bytes)
+            .ok_or(ArrowError::OffsetOverflowError(total_number_of_bytes))?;
         let mut mutable = MutableBuffer::with_capacity(total_number_of_bytes);
-        let mut offset_buffer_builder = OffsetBufferBuilder::<T::Offset>::new(predicate.len());
+        let mut offsets = Vec::<T::Offset>::with_capacity(predicate.len() + 1);
+        offsets.push(T::Offset::usize_as(0));
+        let mut current_offset: usize = 0;
 
         // keep track of how much is filled
         let mut filled = 0;
@@ -606,6 +615,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         let truthy_len = truthy_val.len();
         let falsy_len = falsy_val.len();
 
+        // Each run's offsets are bounded by the checked total output size.
         SlicesIterator::from(predicate).try_for_each(|(start, end)| -> Result<(), ArrowError> {
             // the gap needs to be filled with falsy values
             if start > filled {
@@ -615,9 +625,12 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
                     .try_repeat_slice_n_times(falsy_val, false_repeat_count)
                     .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-                for _ in 0..false_repeat_count {
-                    offset_buffer_builder.push_length(falsy_len)
-                }
+                let start_offset = current_offset;
+                current_offset += falsy_len * false_repeat_count;
+                offsets.extend(
+                    (1..=false_repeat_count)
+                        .map(|index| T::Offset::usize_as(start_offset + index * falsy_len)),
+                );
             }
 
             let true_repeat_count = end - start;
@@ -626,9 +639,12 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
                 .try_repeat_slice_n_times(truthy_val, true_repeat_count)
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-            for _ in 0..true_repeat_count {
-                offset_buffer_builder.push_length(truthy_len)
-            }
+            let start_offset = current_offset;
+            current_offset += truthy_len * true_repeat_count;
+            offsets.extend(
+                (1..=true_repeat_count)
+                    .map(|index| T::Offset::usize_as(start_offset + index * truthy_len)),
+            );
             filled = end;
             Ok(())
         })?;
@@ -640,12 +656,18 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
                 .try_repeat_slice_n_times(falsy_val, false_repeat_count)
                 .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
 
-            for _ in 0..false_repeat_count {
-                offset_buffer_builder.push_length(falsy_len)
-            }
+            let start_offset = current_offset;
+            current_offset += falsy_len * false_repeat_count;
+            offsets.extend(
+                (1..=false_repeat_count)
+                    .map(|index| T::Offset::usize_as(start_offset + index * falsy_len)),
+            );
         }
 
-        Ok((mutable.into(), offset_buffer_builder.finish()))
+        debug_assert_eq!(current_offset, total_number_of_bytes);
+        // SAFETY: offsets start at zero, are monotonically increasing, and fit in T::Offset.
+        let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+        Ok((mutable.into(), offsets))
     }
 }
 
@@ -792,10 +814,8 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                 let true_count = predicate.count_set_bits();
                 let mut buffers: Vec<Buffer> = truthy_buffers.to_vec();
 
-                // If the falsy buffers are empty, we can use the falsy view as it is, because the value
-                // is completely inlined. Otherwise, we have non-inlined values in the buffer, and we need
-                // to recalculate the falsy view
-                let view_falsy = if falsy_buffers.is_empty() {
+                // Check if we need to keep falsy buffer in case view isn't inline
+                let view_falsy = if (falsy_view as u32) <= MAX_INLINE_VIEW_LEN {
                     falsy_view
                 } else {
                     let byte_view_falsy = ByteView::from(falsy_view);
@@ -1293,6 +1313,23 @@ mod test {
     }
 
     #[test]
+    fn test_zip_scalar_bytes_offset_overflow() {
+        // Repeating a 64 KiB scalar 32,768 times exceeds i32::MAX.
+        // The size must be rejected before allocating the output buffer.
+        let value = vec![0_u8; 65_536];
+        let large = Scalar::new(BinaryArray::from_iter_values([value.as_slice()]));
+        let empty = Scalar::new(BinaryArray::from_iter_values([b"".as_slice()]));
+        let mask = BooleanArray::from_iter((0..65_536).map(|i| Some(i % 2 == 0)));
+
+        for (truthy, falsy) in [(&large, &empty), (&empty, &large)] {
+            assert!(matches!(
+                zip(&mask, truthy, falsy),
+                Err(ArrowError::OffsetOverflowError(2_147_483_648))
+            ));
+        }
+    }
+
+    #[test]
     fn test_zip_scalar_bytes_only_taking_one_side() {
         let mask_len = 5;
         let all_true_mask = BooleanArray::from(vec![true; mask_len]);
@@ -1707,6 +1744,60 @@ mod test {
             Some("another longer than 12 bytes"),
             Some("another longer than 12 bytes"),
         ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_strings_array_view_sliced_inline() {
+        // Both scalars are inlined, but each slice keeps its array's data buffer
+        let truthy =
+            StringViewArray::from(vec!["x", "a string longer than twelve bytes"]).slice(0, 1);
+        let falsy =
+            StringViewArray::from(vec!["hello", "another string longer than twelve"]).slice(0, 1);
+
+        let mask = BooleanArray::from(vec![true, false, true, false]);
+        let out = zip(&mask, &Scalar::new(&truthy), &Scalar::new(&falsy)).unwrap();
+        out.to_data().validate_full().unwrap();
+        let actual = out.as_string_view();
+        let expected = StringViewArray::from(vec!["x", "hello", "x", "hello"]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_strings_array_view_sliced_long_falsy() {
+        // A 13 byte falsy value is not inlined, so it must be remapped after the truthy buffers
+        let truthy =
+            StringViewArray::from(vec!["a string longer than twelve bytes", "x"]).slice(0, 1);
+        let falsy = StringViewArray::from(vec!["y", "thirteen byte"]).slice(1, 1);
+
+        let mask = BooleanArray::from(vec![true, false]);
+        let out = zip(&mask, &Scalar::new(&truthy), &Scalar::new(&falsy)).unwrap();
+        out.to_data().validate_full().unwrap();
+        let actual = out.as_string_view();
+        let expected =
+            StringViewArray::from(vec!["a string longer than twelve bytes", "thirteen byte"]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_binary_array_view_sliced_inline_max_len() {
+        // A 12 byte inlined value whose bytes 8 to 11 are 0xFF must not be read as a buffer index
+        let truthy = BinaryViewArray::from_iter_values([
+            b"x".as_slice(),
+            b"another value longer than twelve",
+        ])
+        .slice(0, 1);
+        let falsy = BinaryViewArray::from_iter_values([
+            [0xFFu8; 12].as_slice(),
+            b"a value longer than twelve bytes",
+        ])
+        .slice(0, 1);
+
+        let mask = BooleanArray::from(vec![true, false]);
+        let out = zip(&mask, &Scalar::new(&truthy), &Scalar::new(&falsy)).unwrap();
+        out.to_data().validate_full().unwrap();
+        let actual = out.as_binary_view();
+        let expected = BinaryViewArray::from_iter_values([b"x".as_slice(), &[0xFFu8; 12]]);
         assert_eq!(actual, &expected);
     }
 }

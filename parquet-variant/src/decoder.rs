@@ -445,6 +445,7 @@ mod tests {
         );
     }
 
+    #[expect(clippy::float_cmp_const)]
     mod float {
         use super::*;
 
@@ -607,7 +608,7 @@ mod tests {
 
     #[test]
     fn test_short_string_truncated_length() {
-        let data = b"Hel";
+        let data = b"Abc";
         let result = decode_short_string(1 | (5 << 2), data);
         assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
     }

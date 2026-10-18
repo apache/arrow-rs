@@ -177,6 +177,22 @@ impl Fields {
                         return Ok(None);
                     }
                 }
+                ListView(child) => {
+                    let fields = filter_field(child, filter)?;
+                    if let Some(fields) = fields {
+                        ListView(fields)
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                LargeListView(child) => {
+                    let fields = filter_field(child, filter)?;
+                    if let Some(fields) = fields {
+                        LargeListView(fields)
+                    } else {
+                        return Ok(None);
+                    }
+                }
                 Map(child, ordered) => {
                     let fields = filter_field(child, filter)?;
                     if let Some(fields) = fields {
@@ -309,11 +325,29 @@ impl<'a> IntoIterator for &'a Fields {
     }
 }
 
-/// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding type ids
+/// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding
+/// type ids.
+///
+/// Invariants:
+/// - All type ids are unique
+/// - All type ids are non-negative
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct UnionFields(Arc<[(i8, FieldRef)]>);
+
+// Manual implementation to enforce invariants per docstring above
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for UnionFields {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let entries = Vec::<(i8, FieldRef)>::deserialize(deserializer)?;
+        let (type_ids, fields): (Vec<i8>, Vec<FieldRef>) = entries.into_iter().unzip();
+        Self::try_new(type_ids, fields).map_err(serde::de::Error::custom)
+    }
+}
 
 impl std::fmt::Debug for UnionFields {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -350,8 +384,9 @@ impl UnionFields {
     /// # Errors
     ///
     /// This function returns an error if:
+    /// - Iterators are not the same length
     /// - Any type_id appears more than once (duplicate type ids)
-    /// - The type_ids are duplicated
+    /// - There is a negative type_id
     ///
     /// # Examples
     ///
@@ -615,14 +650,26 @@ impl UnionFields {
                 output.push((field_type_id, from_field.clone()))
             }
         }
-        *self = output.into_iter().collect();
+        // TODO: see above comment; can we remove the need to go through try_new
+        //       and just validate in this function ourselves?
+        let (type_ids, fields): (Vec<i8>, Vec<FieldRef>) = output.into_iter().unzip();
+        *self = Self::try_new(type_ids, fields)?;
         Ok(())
     }
 }
 
 impl FromIterator<(i8, FieldRef)> for UnionFields {
+    /// # Panics
+    ///
+    /// This will panic on invalid inputs:
+    /// - Duplicate type IDs
+    /// - Negative type IDs
+    ///
+    /// Prefer using [`UnionFields::try_new`] for a fallible construction method.
     fn from_iter<T: IntoIterator<Item = (i8, FieldRef)>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
+        let iter = iter.into_iter();
+        let (type_ids, fields): (Vec<i8>, Vec<FieldRef>) = iter.unzip();
+        Self::try_new(type_ids, fields).expect("invalid arguments passed")
     }
 }
 
@@ -695,8 +742,16 @@ mod tests {
             Field::new(
                 "i",
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                    Arc::new(Field::new("values", DataType::Struct(floats.clone()), true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        false,
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        DataType::Struct(floats.clone()),
+                        true,
+                    )),
                 ),
                 false,
             ),
@@ -726,8 +781,16 @@ mod tests {
             &Field::new(
                 "i",
                 DataType::RunEndEncoded(
-                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
-                    Arc::new(Field::new("values", floats_a.clone(), true)),
+                    Arc::new(Field::new(
+                        Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                        DataType::Int32,
+                        false
+                    )),
+                    Arc::new(Field::new(
+                        Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                        floats_a.clone(),
+                        true
+                    )),
                 ),
                 false,
             )
@@ -761,6 +824,76 @@ mod tests {
         // Propagate error
         let r = fields.try_filter_leaves(|_, _| Err(ArrowError::SchemaError("error".to_string())));
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_filter_list_view() {
+        let floats = Fields::from(vec![
+            Field::new("a", DataType::Float32, false),
+            Field::new("b", DataType::Float32, false),
+        ]);
+        let fields = Fields::from(vec![
+            Field::new(
+                "lv_struct",
+                DataType::ListView(Arc::new(Field::new(
+                    "floats",
+                    DataType::Struct(floats.clone()),
+                    true,
+                ))),
+                true,
+            ),
+            Field::new(
+                "llv_struct",
+                DataType::LargeListView(Arc::new(Field::new(
+                    "floats",
+                    DataType::Struct(floats.clone()),
+                    true,
+                ))),
+                false,
+            ),
+            Field::new(
+                "lv_prim",
+                DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, false))),
+                true,
+            ),
+            Field::new(
+                "llv_prim",
+                DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int64, true))),
+                false,
+            ),
+        ]);
+
+        let floats_a = DataType::Struct(vec![floats[0].clone()].into());
+
+        // Filter by leaf field name "a" inside nested structs of ListView and LargeListView
+        let r = fields.filter_leaves(|_, f| f.name() == "a");
+        assert_eq!(r.len(), 2);
+        assert_eq!(
+            r[0].as_ref(),
+            &Field::new(
+                "lv_struct",
+                DataType::ListView(Arc::new(Field::new("floats", floats_a.clone(), true))),
+                true,
+            )
+        );
+        assert_eq!(
+            r[1].as_ref(),
+            &Field::new(
+                "llv_struct",
+                DataType::LargeListView(Arc::new(Field::new("floats", floats_a, true))),
+                false,
+            )
+        );
+
+        // Parent ListView/LargeListView fields are not leaves themselves
+        let r = fields.filter_leaves(|_, f| f.name() == "lv_struct" || f.name() == "llv_struct");
+        assert_eq!(r.len(), 0);
+
+        // Leaf indices: 0,1 (lv_struct.floats.a,b), 2,3 (llv_struct.floats.a,b), 4 (lv_prim.item), 5 (llv_prim.item)
+        let r = fields.filter_leaves(|idx, _| idx == 4 || idx == 5);
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0], fields[2]);
+        assert_eq!(r[1], fields[3]);
     }
 
     #[test]
@@ -985,5 +1118,53 @@ mod tests {
         ]);
         assert!(res.is_ok());
         assert_eq!(res.unwrap().len(), 3);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "invalid arguments passed: InvalidArgumentError(\"type ids must be non-negative: -1\")"
+    )]
+    fn test_union_fields_from_iter_should_validate() {
+        let fields: Vec<(i8, FieldRef)> = vec![
+            (0, Arc::new(Field::new("a", DataType::Int32, true))),
+            (-1, Arc::new(Field::new("a", DataType::Int32, true))),
+        ];
+        UnionFields::from_iter(fields);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_union_fields_serde_round_trip() {
+        let fields = UnionFields::try_new(
+            vec![1, 3],
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+        let serialized = postcard::to_stdvec(&fields).unwrap();
+        let deserialized: UnionFields = postcard::from_bytes(&serialized).unwrap();
+        assert_eq!(fields, deserialized);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_union_fields_deserialize_should_validate() {
+        let field = Arc::new(Field::new("a", DataType::Int32, true));
+
+        let duplicate: Vec<(i8, FieldRef)> = vec![(1, Arc::clone(&field)), (1, Arc::clone(&field))];
+        let serialized = serde_json::to_string(&duplicate).unwrap();
+        let err = serde_json::from_str::<UnionFields>(&serialized).unwrap_err();
+        assert!(err.to_string().contains("duplicate type id: 1"), "{err}");
+
+        let negative: Vec<(i8, FieldRef)> = vec![(0, Arc::clone(&field)), (-1, field)];
+        let serialized = serde_json::to_string(&negative).unwrap();
+        let err = serde_json::from_str::<UnionFields>(&serialized).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("type ids must be non-negative: -1"),
+            "{err}"
+        );
     }
 }

@@ -32,13 +32,13 @@ pub type Int16Builder = PrimitiveBuilder<Int16Type>;
 pub type Int32Builder = PrimitiveBuilder<Int32Type>;
 /// A signed 64-bit integer array builder.
 pub type Int64Builder = PrimitiveBuilder<Int64Type>;
-/// An usigned 8-bit integer array builder.
+/// An unsigned 8-bit integer array builder.
 pub type UInt8Builder = PrimitiveBuilder<UInt8Type>;
-/// An usigned 16-bit integer array builder.
+/// An unsigned 16-bit integer array builder.
 pub type UInt16Builder = PrimitiveBuilder<UInt16Type>;
-/// An usigned 32-bit integer array builder.
+/// An unsigned 32-bit integer array builder.
 pub type UInt32Builder = PrimitiveBuilder<UInt32Type>;
-/// An usigned 64-bit integer array builder.
+/// An unsigned 64-bit integer array builder.
 pub type UInt64Builder = PrimitiveBuilder<UInt64Type>;
 /// A 16-bit floating point array builder.
 pub type Float16Builder = PrimitiveBuilder<Float16Type>;
@@ -61,13 +61,13 @@ pub type Date32Builder = PrimitiveBuilder<Date32Type>;
 /// A 64-bit date array builder.
 pub type Date64Builder = PrimitiveBuilder<Date64Type>;
 
-/// A 32-bit elaspsed time in seconds array builder.
+/// A 32-bit elapsed time in seconds array builder.
 pub type Time32SecondBuilder = PrimitiveBuilder<Time32SecondType>;
-/// A 32-bit elaspsed time in milliseconds array builder.
+/// A 32-bit elapsed time in milliseconds array builder.
 pub type Time32MillisecondBuilder = PrimitiveBuilder<Time32MillisecondType>;
-/// A 64-bit elaspsed time in microseconds array builder.
+/// A 64-bit elapsed time in microseconds array builder.
 pub type Time64MicrosecondBuilder = PrimitiveBuilder<Time64MicrosecondType>;
-/// A 64-bit elaspsed time in nanoseconds array builder.
+/// A 64-bit elapsed time in nanoseconds array builder.
 pub type Time64NanosecondBuilder = PrimitiveBuilder<Time64NanosecondType>;
 
 /// A “calendar” interval in months array builder.

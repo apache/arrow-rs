@@ -20,7 +20,7 @@ use std::fmt;
 use std::ops::Index;
 use std::sync::Arc;
 
-/// A cheaply clonable map of key-value metadata, used by
+/// A cheaply cloneable map of key-value metadata, used by
 /// [`Field`](crate::Field) and [`Schema`](crate::Schema).
 ///
 /// Cloning a `Metadata` is always cheap, as the underlying map is

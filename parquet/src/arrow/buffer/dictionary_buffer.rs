@@ -19,13 +19,19 @@ use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
 use ahash::RandomState;
-use arrow_array::{Array, DictionaryArray, downcast_integer};
+use arrow_array::{Array, DictionaryArray, PrimitiveArray, downcast_integer};
 use arrow_array::{
-    ArrayRef, FixedSizeBinaryArray, OffsetSizeTrait, cast::AsArray, make_array,
-    types::ArrowDictionaryKeyType,
+    ArrayRef, FixedSizeBinaryArray, GenericBinaryArray, OffsetSizeTrait,
+    builder::FixedSizeBinaryDictionaryBuilder,
+    cast::AsArray,
+    types::{
+        ArrowDictionaryKeyType, ArrowPrimitiveType, Int8Type, Int16Type, Int32Type, Int64Type,
+        UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    },
 };
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
+};
 use arrow_schema::DataType as ArrowType;
 use hashbrown::HashMap as HbHashMap;
 use hashbrown::hash_map::Entry;
@@ -158,7 +164,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     }
                 }
 
-                let ArrowType::Dictionary(_, value_type) = data_type else {
+                let ArrowType::Dictionary(key_type, value_type) = data_type else {
                     unreachable!()
                 };
                 let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
@@ -172,24 +178,29 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     values
                 };
 
-                let builder = ArrayDataBuilder::new(data_type.clone())
-                    .len(keys.len())
-                    .add_buffer(Buffer::from_vec(keys))
-                    .add_child_data(values.into_data())
-                    .null_bit_buffer(null_buffer);
+                let num_keys = keys.len();
+                let keys_buffer = Buffer::from_vec(keys);
+                let null_buffer =
+                    null_buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, num_keys)));
 
-                let data = match cfg!(debug_assertions) {
-                    true => builder.build().unwrap(),
-                    false => unsafe { builder.build_unchecked() },
-                };
-
-                Ok(make_array(data))
+                build_dictionary_array(key_type, keys_buffer, num_keys, null_buffer, values)
             }
             Self::Values { values } => {
                 let (key_type, value_type) = match data_type {
                     ArrowType::Dictionary(k, v) => (k, v.as_ref().clone()),
                     _ => unreachable!(),
                 };
+
+                // Plain byte-array pages are decoded into an offset buffer. Convert
+                // this representation explicitly before rebuilding an FSB dictionary,
+                // as FixedSizeBinary arrays have no offsets buffer.
+                if let ArrowType::FixedSizeBinary(size) = value_type {
+                    let binary = values.into_array(null_buffer, GenericBinaryArray::<V>::DATA_TYPE);
+                    let binary = binary.as_binary::<V>();
+                    let array =
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(binary.iter(), size)?;
+                    return pack_fixed_values(key_type, &array);
+                }
 
                 hash_byte_slices(&values.offsets, &values.values, hash_scratch);
                 let hashes = hashes_as_u64(hash_scratch);
@@ -231,6 +242,70 @@ impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K
             }
         }
     }
+}
+
+/// Build a dictionary array from a raw keys buffer and an already-decoded values
+/// `ArrayRef`, skipping the ArrayData round-trip.
+fn build_dictionary_array(
+    key_type: &ArrowType,
+    keys_buffer: Buffer,
+    num_keys: usize,
+    null_buffer: Option<NullBuffer>,
+    values: ArrayRef,
+) -> Result<ArrayRef> {
+    macro_rules! build {
+        ($kt:ty) => {{
+            let scalars =
+                ScalarBuffer::<<$kt as ArrowPrimitiveType>::Native>::new(keys_buffer, 0, num_keys);
+            let keys = PrimitiveArray::<$kt>::new(scalars, null_buffer);
+            // SAFETY: key bounds already validated by caller
+            let dict = unsafe { DictionaryArray::<$kt>::new_unchecked(keys, values) };
+            Ok(Arc::new(dict) as ArrayRef)
+        }};
+    }
+    match key_type {
+        ArrowType::Int8 => build!(Int8Type),
+        ArrowType::Int16 => build!(Int16Type),
+        ArrowType::Int32 => build!(Int32Type),
+        ArrowType::Int64 => build!(Int64Type),
+        ArrowType::UInt8 => build!(UInt8Type),
+        ArrowType::UInt16 => build!(UInt16Type),
+        ArrowType::UInt32 => build!(UInt32Type),
+        ArrowType::UInt64 => build!(UInt64Type),
+        _ => Err(general_err!("unsupported dictionary key type: {key_type}")),
+    }
+}
+
+macro_rules! fixed_dict_helper {
+    ($k:ty, $array:ident) => {
+        pack_fixed_values_impl::<$k>($array)
+    };
+}
+
+fn pack_fixed_values(key_type: &ArrowType, array: &FixedSizeBinaryArray) -> Result<ArrayRef> {
+    downcast_integer! {
+        key_type => (fixed_dict_helper, array),
+        _ => unreachable!(),
+    }
+}
+
+fn pack_fixed_values_impl<K: ArrowDictionaryKeyType>(
+    array: &FixedSizeBinaryArray,
+) -> Result<ArrayRef> {
+    let mut builder = FixedSizeBinaryDictionaryBuilder::<K>::with_capacity(
+        array.len(),
+        1024,
+        array.value_length(),
+    );
+    for x in array {
+        match x {
+            Some(x) => {
+                builder.append(x)?;
+            }
+            None => builder.append_null(),
+        }
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 macro_rules! offsets_dict_helper {
@@ -400,6 +475,10 @@ fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &
     let state = RandomState::new();
 
     // SAFETY: MutableBuffer is 64-byte aligned; scratch is sized to exactly count * size_of::<u64>()
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "MutableBuffer is 64-byte aligned"
+    )]
     let hash_slots = unsafe { from_raw_parts_mut(scratch.as_mut_ptr().cast::<u64>(), count) };
 
     for idx in 0..count {
@@ -415,8 +494,14 @@ fn hash_byte_slices<I: ArrowNativeType>(offsets: &[I], values: &[u8], scratch: &
 #[inline]
 fn hashes_as_u64(scratch: &[u8]) -> &[u64] {
     let n = scratch.len() / size_of::<u64>();
-    // SAFETY: scratch was written as u64s by hash_byte_slices
-    unsafe { from_raw_parts(scratch.as_ptr().cast::<u64>(), n) }
+    // SAFETY: scratch was written as u64s by hash_byte_slices, and MutableBuffer is 64-byte aligned
+    #[expect(
+        clippy::cast_ptr_alignment,
+        reason = "MutableBuffer is 64-byte aligned"
+    )]
+    unsafe {
+        from_raw_parts(scratch.as_ptr().cast::<u64>(), n)
+    }
 }
 
 #[cfg(test)]
@@ -424,7 +509,6 @@ mod tests {
     use super::*;
     use arrow::compute::cast;
     use arrow_array::StringArray;
-    use arrow_array::types::*;
 
     #[test]
     fn test_dictionary_buffer() {
@@ -609,6 +693,45 @@ mod tests {
                 err.contains("dictionary key overflow"),
                 "expected 'dictionary key overflow', got: {err}"
             );
+        }
+    }
+
+    #[test]
+    fn test_fixed_size_binary_key_overflow_boundary() {
+        for (key_type, capacity) in [(ArrowType::Int8, 128u32), (ArrowType::UInt8, 256)] {
+            for unique in [capacity, capacity + 1] {
+                let values = (0..unique)
+                    .map(|value| Some(value.to_le_bytes()))
+                    .chain([None, Some(0u32.to_le_bytes())]);
+                let values =
+                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(values, 4).unwrap();
+                let result = pack_fixed_values(&key_type, &values);
+                if unique > capacity {
+                    let error = result.unwrap_err();
+                    let ParquetError::External(source) = &error else {
+                        panic!("expected an Arrow dictionary overflow error, got {error}");
+                    };
+                    assert!(
+                        matches!(
+                            source.downcast_ref::<arrow_schema::ArrowError>(),
+                            Some(arrow_schema::ArrowError::DictionaryKeyOverflowError)
+                        ),
+                        "{error}"
+                    );
+                } else {
+                    let array = result.unwrap();
+                    assert_eq!(array.len(), unique as usize + 2);
+                    assert_eq!(array.null_count(), 1);
+                    assert!(array.is_null(unique as usize));
+                    assert!(array.is_valid(unique as usize + 1));
+                    let dictionary = array.as_any_dictionary();
+                    assert_eq!(dictionary.values().len(), unique as usize);
+                    assert_eq!(
+                        dictionary.values().data_type(),
+                        &ArrowType::FixedSizeBinary(4)
+                    );
+                }
+            }
         }
     }
 

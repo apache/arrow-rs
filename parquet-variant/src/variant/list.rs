@@ -157,7 +157,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
         Self::try_new_with_shallow_validation(metadata, value).expect("Invalid variant list value")
     }
 
-    /// Attempts to interpet `metadata` and `value` as a variant array, performing only basic
+    /// Attempts to interpret `metadata` and `value` as a variant array, performing only basic
     /// (constant-cost) [validation].
     ///
     /// [validation]: Self#Validation

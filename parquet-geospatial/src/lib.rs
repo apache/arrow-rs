@@ -19,6 +19,13 @@
 //!
 //! [Geometry and Geography Encoding]: https://github.com/apache/parquet-format/blob/master/Geospatial.md
 //! [Apache Parquet]: https://parquet.apache.org/
+//!
+//! # Platform Support
+//!
+//! Only little-endian platforms are officially supported and tested in CI.
+//! Big-endian platforms are not tested in CI and may not work correctly.
+//! Fixes for big-endian platforms are welcome and handled on a best-effort basis,
+//! but compatibility is not guaranteed.
 
 pub mod bounding;
 pub mod interval;

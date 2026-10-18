@@ -24,7 +24,7 @@ use apache_avro::{Decimal, Schema as ApacheSchema};
 use arrow_avro::schema::{CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SINGLE_OBJECT_MAGIC};
 use arrow_avro::{reader::ReaderBuilder, schema::AvroSchema};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::{hint::black_box, time::Duration};
 use uuid::Uuid;
 
@@ -448,7 +448,7 @@ const SPARSE_NEST_SCHEMA: &str = r#"{"type":"record","name":"SparseNestRec","fie
 
 macro_rules! dataset {
     ($name:ident, $schema_json:expr, $gen_fn:ident) => {
-        static $name: Lazy<Vec<Vec<u8>>> = Lazy::new(|| {
+        static $name: LazyLock<Vec<Vec<u8>>> = LazyLock::new(|| {
             let schema =
                 ApacheSchema::parse_str($schema_json).expect("invalid schema for generator");
             let arrow_schema = AvroSchema::new($schema_json.parse().unwrap());
@@ -467,7 +467,7 @@ macro_rules! dataset {
 /// Additional helper for Confluent's ID-based wire format (00 + BE u32).
 macro_rules! dataset_id {
     ($name:ident, $schema_json:expr, $gen_fn:ident, $id:expr) => {
-        static $name: Lazy<Vec<Vec<u8>>> = Lazy::new(|| {
+        static $name: LazyLock<Vec<Vec<u8>>> = LazyLock::new(|| {
             let schema =
                 ApacheSchema::parse_str($schema_json).expect("invalid schema for generator");
             let prefix = make_prefix(Fingerprint::Id($id));

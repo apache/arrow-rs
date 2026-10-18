@@ -22,16 +22,15 @@ use arrow_avro::writer::format::AvroSoeFormat;
 use arrow_avro::writer::{EncodedRows, WriterBuilder};
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use once_cell::sync::Lazy;
 use std::hint::black_box;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 const SIZES: [usize; 4] = [1_000, 10_000, 100_000, 1_000_000];
 
 /// Pre-generate EncodedRows for each size to avoid setup overhead in benchmarks.
-static ENCODED_DATA: Lazy<Vec<EncodedRows>> =
-    Lazy::new(|| SIZES.iter().map(|&n| make_encoded_rows(n)).collect());
+static ENCODED_DATA: LazyLock<Vec<EncodedRows>> =
+    LazyLock::new(|| SIZES.iter().map(|&n| make_encoded_rows(n)).collect());
 
 /// Create an EncodedRows with `n` rows of Int32 data.
 fn make_encoded_rows(n: usize) -> EncodedRows {

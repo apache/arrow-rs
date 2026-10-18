@@ -69,7 +69,7 @@ where
     array.try_unary_mut(op)
 }
 
-/// Allies a binary infallable function to two [`PrimitiveArray`]s,
+/// Applies a binary infallible function to two [`PrimitiveArray`]s,
 /// producing a new [`PrimitiveArray`]
 ///
 /// # Details

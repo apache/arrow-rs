@@ -25,7 +25,7 @@ use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{RecordBatchDecoder, read_dictionary_impl};
+use crate::reader::{MAX_PREALLOC_BYTES, RecordBatchDecoder, read_dictionary_impl};
 use crate::{CONTINUATION_MARKER, MessageHeader};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
@@ -193,6 +193,7 @@ impl StreamDecoder {
                         continue;
                     }
 
+                    reserve_declared(&mut self.buf, len)?;
                     let to_read = buffer.len().min(len - self.buf.len());
                     self.buf
                         .try_extend_from_slice(&buffer[..to_read])
@@ -212,6 +213,7 @@ impl StreamDecoder {
                         buffer.advance(body_length);
                         body
                     } else {
+                        reserve_declared(&mut self.buf, body_length)?;
                         let to_read = buffer.len().min(body_length - self.buf.len());
                         self.buf
                             .try_extend_from_slice(&buffer[..to_read])
@@ -309,12 +311,24 @@ impl StreamDecoder {
     }
 }
 
+/// Reserves a message's declared length before copying its first bytes into an empty `buf`,
+/// bounded as in `read_body_bounded`. Growing with each input buffer instead doubles the
+/// capacity, and the decoded batch, which is zero-copy over `buf`, keeps up to twice its size.
+fn reserve_declared(buf: &mut MutableBuffer, len: usize) -> Result<(), ArrowError> {
+    if buf.is_empty() {
+        buf.try_reserve(len.min(MAX_PREALLOC_BYTES))
+            .map_err(|e| ArrowError::MemoryError(e.to_string()))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::writer::{IpcWriteOptions, StreamWriter};
     use arrow_array::{
-        DictionaryArray, Int32Array, Int64Array, RecordBatch, RunArray, types::Int32Type,
+        DictionaryArray, Int32Array, Int64Array, RecordBatch, RunArray, StringArray,
+        types::Int32Type,
     };
     use arrow_schema::{DataType, Field, Schema};
 
@@ -385,10 +399,14 @@ mod tests {
         let schema = Schema::new(vec![Field::new(
             "test1",
             DataType::RunEndEncoded(
-                Arc::new(Field::new("run_ends".to_string(), DataType::Int32, false)),
+                Arc::new(Field::new(
+                    Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                    DataType::Int32,
+                    false,
+                )),
                 #[expect(deprecated)]
                 Arc::new(Field::new_dict(
-                    "values".to_string(),
+                    Field::REE_VALUES_FIELD_DEFAULT_NAME,
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     true,
                     0,
@@ -436,5 +454,72 @@ mod tests {
         }
 
         decoder.finish().expect("Failed to finish decoder");
+    }
+
+    /// Fed one byte at a time, every message is split across input buffers, so its body is
+    /// assembled in the scratch buffer that the decoded batch then shares.
+    #[test]
+    fn test_split_body_is_buffered_at_its_declared_size() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let input = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from_iter_values(
+                (0..7000).map(|i| format!("value{i:05}")),
+            )) as _],
+        )
+        .unwrap();
+
+        let mut stream = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut stream, &schema).unwrap();
+        writer.write(&input).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let mut decoder = StreamDecoder::new();
+        let mut output = None;
+        for byte in stream.chunks(1) {
+            if let Some(batch) = decoder.decode(&mut Buffer::from(byte)).unwrap() {
+                output = Some(batch);
+            }
+        }
+        decoder.finish().unwrap();
+        let output = output.unwrap();
+        assert_eq!(output, input);
+
+        let held = output.column(0).to_data().buffers()[0].capacity();
+        assert!(
+            held <= stream.len(),
+            "decoded batch holds {held} bytes, more than the {} byte stream it came from",
+            stream.len()
+        );
+    }
+
+    /// A declared length is untrusted, so reserving it up front is bounded: an implausible
+    /// one must leave the decoder waiting for more bytes rather than abort on allocation.
+    #[test]
+    fn test_implausible_body_length_reserves_a_bounded_buffer() {
+        for body_length in [i64::MAX, 1 << 50] {
+            let mut fbb = flatbuffers::FlatBufferBuilder::new();
+            let mut message = crate::MessageBuilder::new(&mut fbb);
+            message.add_version(crate::MetadataVersion::V5);
+            message.add_header_type(MessageHeader::NONE);
+            message.add_bodyLength(body_length);
+            let root = message.finish();
+            fbb.finish(root, None);
+            let metadata = fbb.finished_data();
+
+            let mut stream = Vec::new();
+            stream.extend_from_slice(&CONTINUATION_MARKER);
+            stream.extend_from_slice(&(metadata.len() as i32).to_le_bytes());
+            stream.extend_from_slice(metadata);
+            stream.extend_from_slice(&[0xAB; 16]);
+
+            let mut decoder = StreamDecoder::new();
+            let decoded = decoder
+                .decode(&mut Buffer::from(stream.as_slice()))
+                .unwrap();
+            assert!(decoded.is_none(), "body_length {body_length}");
+            assert!(decoder.finish().is_err(), "body_length {body_length}");
+        }
     }
 }

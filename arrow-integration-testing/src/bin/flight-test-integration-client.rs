@@ -17,9 +17,6 @@
 
 //! The client side of the Arrow Flight integration tests.
 
-// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
-#![allow(unused_crate_dependencies)]
-
 use arrow_integration_testing::flight_client_scenarios;
 use clap::Parser;
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
