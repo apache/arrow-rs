@@ -759,11 +759,20 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
 
     fn get_value_from_scalar(scalar: &dyn Array) -> (Option<u128>, Arc<[Buffer]>) {
         if scalar.is_null(0) {
-            (None, empty_arc_buffers())
-        } else {
-            let (views, buffers, _) = scalar.as_byte_view::<T>().clone().into_parts();
-            (views.first().copied(), buffers)
+            return (None, empty_arc_buffers());
         }
+        let array = scalar.as_byte_view::<T>();
+        let view = array.views()[0];
+        if (view as u32) <= MAX_INLINE_VIEW_LEN {
+            return (Some(view), empty_arc_buffers());
+        }
+        // Keep only the buffer the value points to, not every buffer of the array it came from
+        let byte_view = ByteView::from(view);
+        let buffer = array.data_buffers()[byte_view.buffer_index as usize].clone();
+        (
+            Some(byte_view.with_buffer_index(0).as_u128()),
+            Arc::from([buffer]),
+        )
     }
 
     fn get_views_for_single_non_nullable(
@@ -923,6 +932,7 @@ impl<T: ByteViewType> ZipImpl for ByteViewScalarImpl<T> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow_array::builder::StringViewBuilder;
     use arrow_array::types::Int32Type;
 
     #[test]
@@ -1799,5 +1809,50 @@ mod test {
         let actual = out.as_binary_view();
         let expected = BinaryViewArray::from_iter_values([b"x".as_slice(), &[0xFFu8; 12]]);
         assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_strings_array_view_keeps_only_referenced_buffers() {
+        // Each scalar is sliced from an array with one buffer per long value
+        let long_values = |prefix: &str| {
+            let mut builder = StringViewBuilder::new().with_fixed_block_size(32);
+            for i in 0..3 {
+                builder.append_value(format!("{prefix} value longer than twelve bytes {i}"));
+            }
+            builder.finish()
+        };
+        let truthy = long_values("truthy");
+        let falsy = long_values("falsy");
+        assert_eq!(truthy.data_buffers().len(), 3);
+        assert_eq!(falsy.data_buffers().len(), 3);
+        let truthy = Scalar::new(truthy.slice(1, 1));
+        let falsy = Scalar::new(falsy.slice(2, 1));
+        let null = Scalar::new(StringViewArray::new_null(1));
+
+        let mask = BooleanArray::from(vec![true, false, true]);
+        let out = zip(&mask, &truthy, &falsy).unwrap();
+        out.to_data().validate_full().unwrap();
+        let expected = StringViewArray::from(vec![
+            "truthy value longer than twelve bytes 1",
+            "falsy value longer than twelve bytes 2",
+            "truthy value longer than twelve bytes 1",
+        ]);
+        assert_eq!(out.as_string_view(), &expected);
+        assert_eq!(out.as_string_view().data_buffers().len(), 2);
+
+        let all_true = BooleanArray::from(vec![true, true]);
+        let out = zip(&all_true, &truthy, &falsy).unwrap();
+        out.to_data().validate_full().unwrap();
+        assert_eq!(out.as_string_view().data_buffers().len(), 1);
+
+        let out = zip(&mask, &null, &falsy).unwrap();
+        out.to_data().validate_full().unwrap();
+        let expected = StringViewArray::from(vec![
+            None,
+            Some("falsy value longer than twelve bytes 2"),
+            None,
+        ]);
+        assert_eq!(out.as_string_view(), &expected);
+        assert_eq!(out.as_string_view().data_buffers().len(), 1);
     }
 }
