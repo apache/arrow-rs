@@ -868,6 +868,19 @@ fn take_boolean<IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     }
 }
 
+/// A value to copy in [`take_bytes`]
+#[derive(Clone, Copy, Default)]
+struct ByteCopy<I, O> {
+    /// Index of the value in the source array, used to order the copies
+    index: I,
+    /// Start of the value in the source values
+    start: O,
+    /// Length of the value in bytes
+    len: O,
+    /// Start of the value in the destination values
+    dst_offset: O,
+}
+
 /// `take` implementation for string arrays
 fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE_INDICES: bool>(
     array: &GenericByteArray<T>,
@@ -881,55 +894,52 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE_IN
     let mut capacity = 0;
     let nulls = take_nulls::<_, VALIDATE_INDICES>(array.nulls(), indices);
 
+    let mut copies: Vec<ByteCopy<IndexType::Native, T::Offset>>;
+
+    // Number of copies per source index, collected while computing the offsets so that
+    // ordering the copies takes a single pass. Left empty for large arrays, which use a
+    // comparison sort instead.
+    let mut counts = if array.len() <= COUNTING_SORT_MAX_LEN {
+        vec![0usize; array.len()]
+    } else {
+        Vec::new()
+    };
+
     // Branch on output nulls — `None` means every output slot is valid.
     match nulls.as_ref().filter(|n| n.null_count() > 0) {
         // Fast path: no nulls in output, every index is valid.
         None => {
-            for index in indices.values() {
-                let index = index.as_usize();
-                let start = input_offsets[index].as_usize();
-                let end = input_offsets[index + 1].as_usize();
+            copies = Vec::with_capacity(indices.len());
+            for &index in indices.values() {
+                let start = input_offsets[index.as_usize()].as_usize();
+                let end = input_offsets[index.as_usize() + 1].as_usize();
+                let dst_offset = capacity;
                 capacity += end - start;
                 offsets.push(
                     T::Offset::from_usize(capacity)
                         .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
                 );
-            }
-
-            values.reserve(capacity);
-
-            let dst = values.spare_capacity_mut();
-            debug_assert!(dst.len() >= capacity);
-            let mut offset = 0;
-
-            for index in indices.values() {
-                // SAFETY: in-bounds proven by the first loop's bounds-checked offset access.
-                // dst asserted above to include the required capacity.
-                unsafe {
-                    let data: &[u8] = array.value_unchecked(index.as_usize()).as_ref();
-                    std::ptr::copy_nonoverlapping(
-                        data.as_ptr(),
-                        dst.get_unchecked_mut(offset..).as_mut_ptr().cast::<u8>(),
-                        data.len(),
-                    );
-                    offset += data.len();
+                // `start`, `end` are input offsets and `dst_offset` is below the checked
+                // `capacity`, so they all fit in `T::Offset`
+                copies.push(ByteCopy {
+                    index,
+                    start: T::Offset::usize_as(start),
+                    len: T::Offset::usize_as(end - start),
+                    dst_offset: T::Offset::usize_as(dst_offset),
+                });
+                if let Some(count) = counts.get_mut(index.as_usize()) {
+                    *count += 1;
                 }
-            }
-
-            // SAFETY: wrote exactly `capacity` bytes above; reserved on line above.
-            unsafe {
-                values.set_len(capacity);
             }
         }
         // Nullable path: only process valid (non-null) output positions.
         Some(output_nulls) => {
-            let mut source_ranges = Vec::with_capacity(indices.len() - output_nulls.null_count());
+            copies = Vec::with_capacity(indices.len() - output_nulls.null_count());
             let mut last_filled = 0;
 
             // Pre-fill offsets; we overwrite valid positions below.
             offsets.resize(indices.len() + 1, T::Offset::default());
 
-            // Pass 1: find all valid ranges that need to be copied.
             for i in output_nulls.valid_indices() {
                 let current_offset = T::Offset::from_usize(capacity)
                     .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
@@ -939,14 +949,24 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE_IN
                 }
 
                 // SAFETY: `i` comes from a validity bitmap over `indices`, so it is in-bounds.
-                let index = unsafe { indices.value_unchecked(i) }.as_usize();
-                let start = input_offsets[index].as_usize();
-                let end = input_offsets[index + 1].as_usize();
+                let index = unsafe { indices.value_unchecked(i) };
+                let start = input_offsets[index.as_usize()].as_usize();
+                let end = input_offsets[index.as_usize() + 1].as_usize();
                 capacity += end - start;
                 offsets[i + 1] = T::Offset::from_usize(capacity)
                     .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
+                // `start`, `end` are input offsets and `current_offset` was checked above,
+                // so they all fit in `T::Offset`
+                copies.push(ByteCopy {
+                    index,
+                    start: T::Offset::usize_as(start),
+                    len: T::Offset::usize_as(end - start),
+                    dst_offset: current_offset,
+                });
+                if let Some(count) = counts.get_mut(index.as_usize()) {
+                    *count += 1;
+                }
 
-                source_ranges.push((start, end));
                 last_filled = i + 1;
             }
 
@@ -954,39 +974,48 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE_IN
             let final_offset = T::Offset::from_usize(capacity)
                 .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
             offsets[last_filled + 1..].fill(final_offset);
-            // Pass 2: copy byte data for all collected ranges.
-            values.reserve(capacity);
-            debug_assert_eq!(
-                source_ranges.iter().map(|(s, e)| e - s).sum::<usize>(),
-                capacity,
-                "capacity must equal total bytes across all ranges"
-            );
-
-            let src = array.value_data();
-            let src = src.as_ptr();
-            let dst = values.spare_capacity_mut();
-            debug_assert!(dst.len() >= capacity);
-
-            let mut offset = 0;
-
-            for (start, end) in source_ranges {
-                let value_len = end - start;
-                // SAFETY: caller guarantees each (start, end) is in-bounds of `src`.
-                // `dst` asserted above to include the required capacity.
-                // The regions don't overlap (src is input, dst is a fresh allocation).
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        src.add(start),
-                        dst.get_unchecked_mut(offset..).as_mut_ptr().cast::<u8>(),
-                        value_len,
-                    );
-                    offset += value_len;
-                }
-            }
-            // SAFETY: caller guarantees `capacity` == total bytes across all ranges,
-            // so the loop above wrote exactly `capacity` bytes.
-            unsafe { values.set_len(capacity) };
         }
+    }
+
+    // Order the copies by source index so the input values are read sequentially
+    // and the output is written in random order instead.
+    let copies = if counts.is_empty() {
+        copies.sort_unstable_by_key(|copy| copy.index.as_usize());
+        copies
+    } else {
+        counting_sort_by_key(copies, counts, |copy| copy.index.as_usize())
+    };
+
+    values.reserve(capacity);
+    let dst = values.spare_capacity_mut();
+    debug_assert!(dst.len() >= capacity);
+    let dst = dst.as_mut_ptr().cast::<u8>();
+
+    let src = array.value_data().as_ptr();
+
+    for ByteCopy {
+        start,
+        len,
+        dst_offset,
+        ..
+    } in copies
+    {
+        // SAFETY: `start..start + len` came from the bounds-checked offset access above,
+        // so it is in-bounds of the input values. `dst_offset + len` is at most `capacity`
+        // and `dst` was reserved with `capacity` bytes.
+        // The regions don't overlap (src is input, dst is a fresh allocation).
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                src.add(start.as_usize()),
+                dst.add(dst_offset.as_usize()),
+                len.as_usize(),
+            );
+        }
+    }
+
+    // SAFETY: the copies cover every byte in `0..capacity` exactly once.
+    unsafe {
+        values.set_len(capacity);
     }
 
     // SAFETY: offsets are monotonically increasing and in-bounds of `values`,
@@ -997,6 +1026,34 @@ fn take_bytes<T: ByteArrayType, IndexType: ArrowPrimitiveType, const VALIDATE_IN
     };
 
     Ok(array)
+}
+
+/// Arrays up to this length order the copies in [`take_bytes`] with [`counting_sort_by_key`]
+const COUNTING_SORT_MAX_LEN: usize = 1 << 16;
+
+/// Stable counting sort of `entries` by `key`, where `counts[k]` is the number of
+/// entries with key `k`
+fn counting_sort_by_key<E: Copy + Default>(
+    entries: Vec<E>,
+    mut counts: Vec<usize>,
+    key: impl Fn(&E) -> usize,
+) -> Vec<E> {
+    // Turn the counts into the starting position of each key
+    let mut sum = 0;
+    for count in &mut counts {
+        let n = *count;
+        *count = sum;
+        sum += n;
+    }
+    debug_assert_eq!(sum, entries.len());
+
+    let mut sorted = vec![E::default(); entries.len()];
+    for entry in entries {
+        let position = &mut counts[key(&entry)];
+        sorted[*position] = entry;
+        *position += 1;
+    }
+    sorted
 }
 
 /// `take` implementation for byte view arrays
@@ -1734,6 +1791,7 @@ mod tests {
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_schema::{Field, Fields, TimeUnit, UnionFields};
     use num_traits::ToPrimitive;
+    use rand::{RngExt, SeedableRng};
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,
@@ -4187,5 +4245,54 @@ mod tests {
         let result = take(&input, &indices, None).unwrap();
 
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_take_bytes_counting_and_comparison_sort() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        // Both sides of `COUNTING_SORT_MAX_LEN` to cover the counting sort and the comparison sort
+        for len in [
+            1000,
+            COUNTING_SORT_MAX_LEN,
+            COUNTING_SORT_MAX_LEN + 1,
+            100_000,
+        ] {
+            let values =
+                StringArray::from_iter((0..len).map(|i| (i % 7 != 0).then(|| "x".repeat(i % 13))));
+            let indices = UInt32Array::from_iter(
+                (0..5000).map(|i| (i % 11 != 0).then(|| rng.random_range(0..len as u32))),
+            );
+
+            let taken = take(&values, &indices, None).unwrap();
+            let taken = taken.as_string::<i32>();
+
+            let expected = StringArray::from_iter(indices.iter().map(|index| {
+                let index = index? as usize;
+                values.is_valid(index).then(|| values.value(index))
+            }));
+            assert_eq!(taken, &expected);
+        }
+    }
+
+    #[test]
+    fn test_counting_sort_by_key() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        for num_keys in [1, 2, 255, 256, 1000, 65_536] {
+            for len in [0, 1, 10, 1000, 100_000] {
+                let entries: Vec<(usize, usize)> = (0..len)
+                    .map(|i| (rng.random_range(0..num_keys), i))
+                    .collect();
+                let mut counts = vec![0; num_keys];
+                for &(key, _) in &entries {
+                    counts[key] += 1;
+                }
+                let mut expected = entries.clone();
+                expected.sort_by_key(|&(key, _)| key);
+                assert_eq!(
+                    counting_sort_by_key(entries, counts, |&(key, _)| key),
+                    expected
+                );
+            }
+        }
     }
 }
