@@ -3819,4 +3819,253 @@ mod tests {
             Time32SecondType::parse(time)
         );
     }
+
+    /// Parses `s` as a wall clock reading in `zone` and returns the resulting
+    /// instant, as (seconds since the epoch, RFC3339 rendering in UTC).
+    ///
+    /// `zone` plays the role of the target `Timestamp(_, Some(tz))` timezone.
+    fn parse_in_zone(zone: &str, s: &str) -> (i64, String) {
+        let tz: Tz = zone.parse().unwrap();
+        let dt = string_to_datetime(&tz, s).unwrap();
+        (dt.timestamp(), dt.to_utc().to_rfc3339())
+    }
+
+    /// Parses `s`, which names its own timezone, against a UTC target.
+    fn parse_with_named_zone(s: &str) -> (i64, String) {
+        let dt = string_to_datetime(&Utc, s).unwrap();
+        (dt.timestamp(), dt.to_utc().to_rfc3339())
+    }
+
+    // A naive datetime read as a wall clock time in the target timezone. This is
+    // the `'2024-03-10 02:30:00'::timestamptz` spelling, where the timezone comes
+    // from the target type rather than from the string.
+    //
+    // Every expectation here was taken from PostgreSQL 17.11 via
+    // `SET TimeZone = <zone>; SELECT '<input>'::timestamptz;`.
+    #[test]
+    fn test_string_to_datetime_dst_target_timezone() {
+        // (zone, input, epoch seconds, UTC rendering)
+        let cases = [
+            // America/New_York: a one hour DST step.
+            // Control: nothing special about this reading.
+            (
+                "America/New_York",
+                "2024-11-01 00:00:00",
+                1_730_433_600,
+                "2024-11-01T04:00:00+00:00",
+            ),
+            // Ambiguous: the clocks go back at 2024-11-03T02:00 EDT, so 01:30
+            // happens twice. The later (EST, -05:00) instant wins.
+            (
+                "America/New_York",
+                "2024-11-03 01:30:00",
+                1_730_615_400,
+                "2024-11-03T06:30:00+00:00",
+            ),
+            // Nonexistent: the clocks go forward at 2024-03-10T02:00 EST, so
+            // 02:30 never happens. It shifts forward to 03:30 EDT.
+            (
+                "America/New_York",
+                "2024-03-10 02:30:00",
+                1_710_055_800,
+                "2024-03-10T07:30:00+00:00",
+            ),
+            // Australia/Sydney: southern hemisphere, so the gap is in October and
+            // the repeated hour is in April.
+            (
+                "Australia/Sydney",
+                "2024-04-07 02:30:00",
+                1_712_421_000,
+                "2024-04-06T16:30:00+00:00",
+            ),
+            (
+                "Australia/Sydney",
+                "2024-10-06 02:30:00",
+                1_728_145_800,
+                "2024-10-05T16:30:00+00:00",
+            ),
+            // Australia/Lord_Howe: a *thirty minute* DST step, so the gap is half
+            // an hour wide and 02:15 shifts to 02:45 rather than to 03:15.
+            (
+                "Australia/Lord_Howe",
+                "2024-04-07 01:45:00",
+                1_712_416_500,
+                "2024-04-06T15:15:00+00:00",
+            ),
+            (
+                "Australia/Lord_Howe",
+                "2024-10-06 02:15:00",
+                1_728_143_100,
+                "2024-10-05T15:45:00+00:00",
+            ),
+            // Pacific/Chatham: +12:45 / +13:45, i.e. an offset that is not a whole
+            // number of hours on either side of the transition.
+            (
+                "Pacific/Chatham",
+                "2024-04-07 03:00:00",
+                1_712_412_900,
+                "2024-04-06T14:15:00+00:00",
+            ),
+            (
+                "Pacific/Chatham",
+                "2024-09-29 03:00:00",
+                1_727_532_900,
+                "2024-09-28T14:15:00+00:00",
+            ),
+            // A fixed offset has no transitions and is unaffected.
+            (
+                "+05:30",
+                "2024-03-10 02:30:00",
+                1_710_018_000,
+                "2024-03-09T21:00:00+00:00",
+            ),
+        ];
+
+        for (zone, input, epoch, utc) in cases {
+            assert_eq!(
+                parse_in_zone(zone, input),
+                (epoch, utc.to_string()),
+                "{input} in {zone}"
+            );
+        }
+    }
+
+    // The date-only branch of `string_to_datetime`, which reads local midnight.
+    // Midnight is where a transition falls in a number of zones, and it is easy
+    // to miss when only datetime inputs are considered.
+    #[test]
+    fn test_string_to_datetime_dst_date_only() {
+        let cases = [
+            // Brazil started DST at midnight, so 2018-11-04T00:00 does not exist
+            // in America/Sao_Paulo. It shifts forward to 01:00 -02:00.
+            (
+                "America/Sao_Paulo",
+                "2018-11-04",
+                1_541_300_400,
+                "2018-11-04T03:00:00+00:00",
+            ),
+            // Cuba ends DST at midnight, so 2024-11-03T00:00 happens twice in
+            // America/Havana. The later (-05:00) instant wins.
+            (
+                "America/Havana",
+                "2024-11-03",
+                1_730_610_000,
+                "2024-11-03T05:00:00+00:00",
+            ),
+            // Control: New York's transition that day is at 02:00, not midnight.
+            (
+                "America/New_York",
+                "2024-03-10",
+                1_710_046_800,
+                "2024-03-10T05:00:00+00:00",
+            ),
+        ];
+
+        for (zone, input, epoch, utc) in cases {
+            assert_eq!(
+                parse_in_zone(zone, input),
+                (epoch, utc.to_string()),
+                "{input} in {zone}"
+            );
+        }
+    }
+
+    // A timezone named by the string itself, e.g.
+    // `TIMESTAMPTZ '2024-03-10 02:30:00 America/New_York'`. PostgreSQL resolves
+    // these exactly as it resolves a reading taken against the session timezone,
+    // and so do we: the zone is named more explicitly, but the wall clock reading
+    // is no less ambiguous for it.
+    #[test]
+    fn test_string_to_datetime_dst_named_zone_in_string() {
+        let cases = [
+            (
+                "2024-11-03 01:30:00 America/New_York",
+                1_730_615_400,
+                "2024-11-03T06:30:00+00:00",
+            ),
+            (
+                "2024-03-10 02:30:00 America/New_York",
+                1_710_055_800,
+                "2024-03-10T07:30:00+00:00",
+            ),
+            (
+                "2023-11-05 01:30:06 America/Los_Angeles",
+                1_699_176_606,
+                "2023-11-05T09:30:06+00:00",
+            ),
+            (
+                "2023-03-12 02:05:06 America/Los_Angeles",
+                1_678_615_506,
+                "2023-03-12T10:05:06+00:00",
+            ),
+            (
+                "2024-04-07 02:30:00 Australia/Sydney",
+                1_712_421_000,
+                "2024-04-06T16:30:00+00:00",
+            ),
+            (
+                "2024-10-06 02:30:00 Australia/Sydney",
+                1_728_145_800,
+                "2024-10-05T16:30:00+00:00",
+            ),
+            (
+                "2024-04-07 01:45:00 Australia/Lord_Howe",
+                1_712_416_500,
+                "2024-04-06T15:15:00+00:00",
+            ),
+            (
+                "2024-10-06 02:15:00 Australia/Lord_Howe",
+                1_728_143_100,
+                "2024-10-05T15:45:00+00:00",
+            ),
+            (
+                "2024-04-07 03:00:00 Pacific/Chatham",
+                1_712_412_900,
+                "2024-04-06T14:15:00+00:00",
+            ),
+            (
+                "2024-09-29 03:00:00 Pacific/Chatham",
+                1_727_532_900,
+                "2024-09-28T14:15:00+00:00",
+            ),
+            // A fixed offset spelled out in the string stays unaffected.
+            (
+                "2024-03-10 02:30:00 +05:30",
+                1_710_018_000,
+                "2024-03-09T21:00:00+00:00",
+            ),
+        ];
+
+        for (input, epoch, utc) in cases {
+            assert_eq!(
+                parse_with_named_zone(input),
+                (epoch, utc.to_string()),
+                "{input}"
+            );
+        }
+    }
+
+    // Sub-second precision survives the shift applied to a nonexistent reading.
+    #[test]
+    fn test_string_to_datetime_dst_subsecond() {
+        let tz: Tz = "America/New_York".parse().unwrap();
+        let dt = string_to_datetime(&tz, "2024-03-10 02:30:00.123456789").unwrap();
+        assert_eq!(dt.timestamp(), 1_710_055_800);
+        assert_eq!(dt.timestamp_subsec_nanos(), 123_456_789);
+
+        let dt =
+            string_to_datetime(&Utc, "2024-11-03 01:30:00.123456789 America/New_York").unwrap();
+        assert_eq!(dt.timestamp(), 1_730_615_400);
+        assert_eq!(dt.timestamp_subsec_nanos(), 123_456_789);
+    }
+
+    // `string_to_timestamp_nanos` reads against UTC, which has no transitions, so
+    // none of this changes what it does.
+    #[test]
+    fn test_string_to_timestamp_nanos_unaffected_by_dst() {
+        assert_eq!(
+            string_to_timestamp_nanos("2024-03-10 02:30:00").unwrap(),
+            1_710_038_000_000_000_000 - 200_000_000_000
+        );
+    }
 }
