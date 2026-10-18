@@ -18,17 +18,12 @@
 //! Check Arrow arrays against Parquet bloom filters
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float32Type, Float64Type};
 use arrow_array::{Array, BooleanArray};
-use arrow_buffer::BooleanBuffer;
 use arrow_schema::DataType;
 
-use crate::arrow::arrow_writer::{
-    FixedLenByteArrayVisitor, PrimitiveVisitor, visit_fixed_len_byte_array, visit_i32, visit_i64,
-};
-use crate::basic::{ConvertedType, LogicalType, Type as PhysicalType};
+use crate::basic::{ConvertedType, LogicalType};
 use crate::bloom_filter::Sbbf;
-use crate::data_type::AsBytes;
+use crate::bloom_filter::arrow::HashTarget;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescriptor;
 
@@ -90,9 +85,7 @@ use crate::schema::types::ColumnDescriptor;
 #[derive(Debug, Clone, Copy)]
 pub struct ArrowSbbf<'a> {
     sbbf: &'a Sbbf,
-    physical_type: PhysicalType,
-    /// The length of the column's values if it is a `FIXED_LEN_BYTE_ARRAY` column
-    type_length: i32,
+    target: HashTarget,
     /// The scale of the column's values if it is a decimal column
     decimal_scale: Option<i32>,
 }
@@ -107,8 +100,11 @@ impl<'a> ArrowSbbf<'a> {
         };
         Self {
             sbbf,
-            physical_type: column.physical_type(),
-            type_length: column.type_length(),
+            target: HashTarget {
+                physical_type: column.physical_type(),
+                // Only used for a FIXED_LEN_BYTE_ARRAY column, whose length the schema checks
+                type_length: column.type_length().max(0) as usize,
+            },
             decimal_scale,
         }
     }
@@ -120,8 +116,8 @@ impl<'a> ArrowSbbf<'a> {
     ///
     /// Decimal values of any precision can be checked against a decimal column
     /// of the same scale. They are converted to the column's physical type and,
-    /// for a `FIXED_LEN_BYTE_ARRAY` column, to the column's length; a value too
-    /// large for that length is reported as absent.
+    /// for a `FIXED_LEN_BYTE_ARRAY` column, to the column's length. A value too
+    /// large for that length is truncated, as [`ArrowWriter`] does.
     ///
     /// Returns an error if [`ArrowWriter`] cannot write `array`'s data type to a
     /// column of this physical type, if `array` is a decimal array and the
@@ -146,55 +142,7 @@ impl<'a> ArrowSbbf<'a> {
             _ => {}
         }
 
-        let sbbf = self.sbbf;
-        let found = match (self.physical_type, array.data_type()) {
-            (PhysicalType::INT32, _) => visit_i32(array, CheckPrimitive { sbbf })?,
-            (PhysicalType::INT64, _) => visit_i64(array, CheckPrimitive { sbbf })?,
-            (PhysicalType::FLOAT, DataType::Float32) => {
-                CheckPrimitive { sbbf }.slice(array.as_primitive::<Float32Type>().values())
-            }
-            (PhysicalType::DOUBLE, DataType::Float64) => {
-                CheckPrimitive { sbbf }.slice(array.as_primitive::<Float64Type>().values())
-            }
-            (PhysicalType::BOOLEAN, DataType::Boolean) => array
-                .as_boolean()
-                .values()
-                .iter()
-                .map(|v| sbbf.check(&v))
-                .collect(),
-            (PhysicalType::BYTE_ARRAY, DataType::Utf8) => {
-                check_bytes(sbbf, array.as_string::<i32>())
-            }
-            (PhysicalType::BYTE_ARRAY, DataType::LargeUtf8) => {
-                check_bytes(sbbf, array.as_string::<i64>())
-            }
-            (PhysicalType::BYTE_ARRAY, DataType::Utf8View) => {
-                check_bytes(sbbf, array.as_string_view())
-            }
-            (PhysicalType::BYTE_ARRAY, DataType::Binary) => {
-                check_bytes(sbbf, array.as_binary::<i32>())
-            }
-            (PhysicalType::BYTE_ARRAY, DataType::LargeBinary) => {
-                check_bytes(sbbf, array.as_binary::<i64>())
-            }
-            (PhysicalType::BYTE_ARRAY, DataType::BinaryView) => {
-                check_bytes(sbbf, array.as_binary_view())
-            }
-            (PhysicalType::FIXED_LEN_BYTE_ARRAY, _) => {
-                let visitor = CheckFixedLenByteArray {
-                    sbbf,
-                    array,
-                    // Never negative for a FIXED_LEN_BYTE_ARRAY column, which the schema checks
-                    type_length: self.type_length as usize,
-                };
-                visit_fixed_len_byte_array(array, visitor)??
-            }
-            (physical_type, data_type) => {
-                return Err(ParquetError::NYI(format!(
-                    "Checking a bloom filter of a {physical_type} column with {data_type} values is not supported"
-                )));
-            }
-        };
+        let found = self.sbbf.check_array_for(array, self.target)?;
         Ok(BooleanArray::new(found, array.logical_nulls()))
     }
 
@@ -217,77 +165,11 @@ impl<'a> ArrowSbbf<'a> {
     }
 }
 
-/// Checks the `INT32`, `INT64`, `FLOAT` or `DOUBLE` values passed to it against a bloom filter
-struct CheckPrimitive<'a> {
-    sbbf: &'a Sbbf,
-}
-
-impl<T: AsBytes> PrimitiveVisitor<T> for CheckPrimitive<'_> {
-    type Output = BooleanBuffer;
-
-    fn slice(self, values: &[T]) -> BooleanBuffer {
-        values.iter().map(|v| self.sbbf.check(v)).collect()
-    }
-
-    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> BooleanBuffer {
-        values
-            .iter()
-            .map(|v| self.sbbf.check(&convert(*v)))
-            .collect()
-    }
-}
-
-/// Checks the `FIXED_LEN_BYTE_ARRAY` values of `array` passed to it against a bloom filter
-struct CheckFixedLenByteArray<'a> {
-    sbbf: &'a Sbbf,
-    array: &'a dyn Array,
-    type_length: usize,
-}
-
-impl FixedLenByteArrayVisitor for CheckFixedLenByteArray<'_> {
-    type Output = Result<BooleanBuffer>;
-
-    fn decimal_length(&self, _precision: u8) -> usize {
-        // Decimals of any precision are converted to the column's length
-        self.type_length
-    }
-
-    fn values(
-        self,
-        length: usize,
-        fill: impl Fn(usize, &mut [u8]) -> bool,
-    ) -> Result<BooleanBuffer> {
-        if length != self.type_length {
-            return Err(ParquetError::General(format!(
-                "Cannot check a bloom filter of a FIXED_LEN_BYTE_ARRAY column of length {} with {} values, which have length {length}",
-                self.type_length,
-                self.array.data_type()
-            )));
-        }
-        let mut value = vec![0; length];
-        Ok((0..self.array.len())
-            .map(|i| {
-                value.fill(0);
-                // A value that does not fit in the column cannot be in it
-                fill(i, &mut value) && self.sbbf.check(value.as_slice())
-            })
-            .collect())
-    }
-}
-
-fn check_bytes<'a, T: AsRef<[u8]> + ?Sized + 'a>(
-    sbbf: &Sbbf,
-    values: impl arrow_array::ArrayAccessor<Item = &'a T>,
-) -> BooleanBuffer {
-    (0..values.len())
-        .map(|i| sbbf.check(values.value(i).as_ref()))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
+    use crate::basic::Type as PhysicalType;
     use crate::file::properties::{ReaderProperties, WriterProperties};
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::serialized_reader::ReadOptionsBuilder;
@@ -466,14 +348,41 @@ mod tests {
             .unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true, false]));
 
-        // Values that need more than 13 bytes cannot be in the column. Their low
-        // 13 bytes are the bytes of 12345 and -12345, so truncating them would
-        // report them as present
+        // Values that need more than 13 bytes are truncated to 13 bytes, as
+        // ArrowWriter does. Their low 13 bytes are the bytes of 12345 and -12345,
+        // so they are reported as present (a false positive, never a false negative)
         let wide = 1_i128 << 104;
         let found = sbbf
             .check(&decimal128(vec![12345 + wide, -12345 - wide], 38, 2))
             .unwrap();
-        assert_eq!(found, BooleanArray::from(vec![false, false]));
+        assert_eq!(found, BooleanArray::from(vec![true, true]));
+    }
+
+    #[test]
+    fn decimal32_against_int64_column() {
+        let written = Decimal64Array::from(vec![12345, -12345])
+            .with_precision_and_scale(12, 2)
+            .unwrap();
+        let (sbbf, column) = write_and_read_bloom_filter(Arc::new(written), false);
+        assert_eq!(column.physical_type(), PhysicalType::INT64);
+        let found = ArrowSbbf::new(&sbbf, &column)
+            .check(
+                &Decimal32Array::from(vec![12345, -12345, 54321])
+                    .with_precision_and_scale(9, 2)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(found, BooleanArray::from(vec![true, true, false]));
+    }
+
+    #[test]
+    fn null_array_against_any_column() {
+        let (sbbf, column) =
+            write_and_read_bloom_filter(Arc::new(StringArray::from(vec!["a"])), false);
+        let found = ArrowSbbf::new(&sbbf, &column)
+            .check(&NullArray::new(2))
+            .unwrap();
+        assert_eq!(found, BooleanArray::from(vec![None, None]));
     }
 
     #[test]
@@ -523,7 +432,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Cannot check a bloom filter of a FIXED_LEN_BYTE_ARRAY column of length 4 with FixedSizeBinary(3) values, which have length 3"
+            "Parquet error: Sbbf: cannot hash FixedSizeBinary(3) values, which have length 3, for a FIXED_LEN_BYTE_ARRAY column of length 4"
         );
     }
 

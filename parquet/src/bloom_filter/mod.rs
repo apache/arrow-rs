@@ -113,7 +113,7 @@
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
 
 #[cfg(feature = "arrow")]
-mod arrow;
+pub(crate) mod arrow;
 
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;

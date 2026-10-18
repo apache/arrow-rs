@@ -18,148 +18,216 @@
 //! Insert and check whole Arrow arrays in an [`Sbbf`].
 //!
 //! Each value is hashed as the Parquet physical value that
-//! [`ArrowWriter`](crate::arrow::ArrowWriter) writes for it with the default
-//! options. Thus a filter filled from Arrow arrays gives the same answers as a
-//! bloom filter that `ArrowWriter` writes for the same values, and the reverse.
+//! [`ArrowWriter`](crate::arrow::ArrowWriter) writes for it. The conversion from
+//! Arrow to Parquet values is the writer's own ([`visit_i32`], [`visit_i64`] and
+//! [`visit_fixed_len_byte_array`]), so a filter filled from Arrow arrays gives the
+//! same answers as a bloom filter that `ArrowWriter` writes for the same values,
+//! and the reverse.
+
+use std::cell::RefCell;
 
 use super::{SEED, Sbbf, hash_as_bytes};
-use crate::arrow::decimal_length_from_precision;
+use crate::arrow::arrow_to_parquet_type;
+use crate::arrow::arrow_writer::{
+    FixedLenByteArrayVisitor, PrimitiveVisitor, visit_fixed_len_byte_array, visit_i32, visit_i64,
+};
+use crate::basic::Type as PhysicalType;
 use crate::errors::{ParquetError, Result};
+use crate::schema::types::Type;
 use arrow_array::cast::AsArray;
-use arrow_array::types::*;
-use arrow_array::{Array, ArrowPrimitiveType};
-use arrow_buffer::{BooleanBuffer, i256};
-use arrow_schema::{DataType, TimeUnit};
+use arrow_array::types::{Float32Type, Float64Type};
+use arrow_array::{Array, ArrayAccessor};
+use arrow_buffer::BooleanBuffer;
+use arrow_schema::{DataType, Field, TimeUnit};
 
-/// Receives a function that returns the hash of slot `i` of an array.
-trait HashVisitor {
+/// Receives a function that returns the hash of slot `i` of an array
+pub(crate) trait HashVisitor {
     type Output;
     fn visit(self, len: usize, hash: impl Fn(usize) -> u64) -> Self::Output;
 }
 
-/// Calls `visitor` with the hash function for the type of `array`.
-fn visit_hashes<V: HashVisitor>(array: &dyn Array, visitor: V) -> Result<V::Output> {
-    use DataType::*;
+/// The Parquet column whose values an Arrow array is hashed as
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HashTarget {
+    pub(crate) physical_type: PhysicalType,
+    /// The length of the values of a `FIXED_LEN_BYTE_ARRAY` column
+    pub(crate) type_length: usize,
+}
 
-    fn prim<T: ArrowPrimitiveType, V: HashVisitor>(
-        array: &dyn Array,
-        visitor: V,
-        hash: impl Fn(T::Native) -> u64,
-    ) -> V::Output {
-        let values = array.as_primitive::<T>().values();
-        visitor.visit(values.len(), |i| hash(values[i]))
-    }
-    fn bytes<'a, V: HashVisitor>(
-        len: usize,
-        visitor: V,
-        value: impl Fn(usize) -> &'a [u8],
-    ) -> V::Output {
-        visitor.visit(len, |i| hash_as_bytes(value(i)))
-    }
-    // Decimals are written as INT32, INT64 or FIXED_LEN_BYTE_ARRAY (big endian,
-    // truncated to the minimum length for the precision).
-    fn decimal<T: ArrowPrimitiveType, V: HashVisitor>(
-        array: &dyn Array,
-        visitor: V,
-        precision: u8,
-        to_i256: impl Fn(T::Native) -> i256,
-    ) -> V::Output {
-        let values = array.as_primitive::<T>().values();
-        if (1..=9).contains(&precision) {
-            visitor.visit(values.len(), |i| {
-                hash_i32(to_i256(values[i]).as_i128() as i32)
-            })
-        } else if precision <= 18 {
-            visitor.visit(values.len(), |i| {
-                hash_i64(to_i256(values[i]).as_i128() as i64)
-            })
-        } else {
-            let len = decimal_length_from_precision(precision);
-            visitor.visit(values.len(), |i| {
-                let be = to_i256(values[i]).to_be_bytes();
-                hash_as_bytes(&be[32 - len..])
-            })
+impl HashTarget {
+    /// The column that `ArrowWriter` writes for `data_type` with the default options
+    fn for_data_type(data_type: &DataType) -> Result<Self> {
+        match arrow_to_parquet_type(&Field::new("c", data_type.clone(), true), false)? {
+            Type::PrimitiveType {
+                physical_type,
+                type_length,
+                ..
+            } => Ok(Self {
+                physical_type,
+                type_length: type_length.max(0) as usize,
+            }),
+            Type::GroupType { .. } => Err(unsupported(data_type)),
         }
+    }
+}
+
+fn unsupported(data_type: &DataType) -> ParquetError {
+    ParquetError::NYI(format!(
+        "Sbbf: Arrow data type {data_type} is not supported"
+    ))
+}
+
+/// Calls `visitor` with the hash of the value that `ArrowWriter` writes for each
+/// slot of `array` in a column of `target`
+pub(crate) fn visit_hashes<V: HashVisitor>(
+    array: &dyn Array,
+    target: HashTarget,
+    visitor: V,
+) -> Result<V::Output> {
+    match (target.physical_type, array.data_type()) {
+        (PhysicalType::INT32, _) => visit_i32(array, HashPrimitive(visitor)),
+        (PhysicalType::INT64, _) => visit_i64(array, HashPrimitive(visitor)),
+        (PhysicalType::FLOAT, DataType::Float32) => {
+            Ok(HashPrimitive(visitor).slice(array.as_primitive::<Float32Type>().values()))
+        }
+        (PhysicalType::DOUBLE, DataType::Float64) => {
+            Ok(HashPrimitive(visitor).slice(array.as_primitive::<Float64Type>().values()))
+        }
+        (PhysicalType::BOOLEAN, DataType::Boolean) => {
+            let array = array.as_boolean();
+            Ok(visitor.visit(array.len(), |i| hash_as_bytes(&array.value(i))))
+        }
+        (PhysicalType::BYTE_ARRAY, DataType::Utf8) => {
+            Ok(hash_bytes(array.as_string::<i32>(), visitor))
+        }
+        (PhysicalType::BYTE_ARRAY, DataType::LargeUtf8) => {
+            Ok(hash_bytes(array.as_string::<i64>(), visitor))
+        }
+        (PhysicalType::BYTE_ARRAY, DataType::Utf8View) => {
+            Ok(hash_bytes(array.as_string_view(), visitor))
+        }
+        (PhysicalType::BYTE_ARRAY, DataType::Binary) => {
+            Ok(hash_bytes(array.as_binary::<i32>(), visitor))
+        }
+        (PhysicalType::BYTE_ARRAY, DataType::LargeBinary) => {
+            Ok(hash_bytes(array.as_binary::<i64>(), visitor))
+        }
+        (PhysicalType::BYTE_ARRAY, DataType::BinaryView) => {
+            Ok(hash_bytes(array.as_binary_view(), visitor))
+        }
+        (PhysicalType::FIXED_LEN_BYTE_ARRAY, _) => visit_fixed_len_byte_array(
+            array,
+            HashFixedLenByteArray {
+                visitor,
+                len: array.len(),
+                type_length: target.type_length,
+                data_type: array.data_type(),
+            },
+        )?,
+        (physical_type, data_type) => Err(ParquetError::NYI(format!(
+            "Sbbf: hashing {data_type} values for a {physical_type} column is not supported"
+        ))),
+    }
+}
+
+fn hash_bytes<'a, T, V>(array: impl ArrayAccessor<Item = &'a T>, visitor: V) -> V::Output
+where
+    T: AsRef<[u8]> + ?Sized + 'a,
+    V: HashVisitor,
+{
+    visitor.visit(array.len(), |i| hash_as_bytes(array.value(i).as_ref()))
+}
+
+/// A value of an `INT32`, `INT64`, `FLOAT` or `DOUBLE` column
+trait HashNative: Copy {
+    fn hash(self) -> u64;
+}
+
+impl HashNative for i32 {
+    #[inline(always)]
+    fn hash(self) -> u64 {
+        hash_i32(self)
+    }
+}
+
+impl HashNative for i64 {
+    #[inline(always)]
+    fn hash(self) -> u64 {
+        hash_i64(self)
+    }
+}
+
+impl HashNative for f32 {
+    #[inline(always)]
+    fn hash(self) -> u64 {
+        hash_i32(self.to_bits() as i32)
+    }
+}
+
+impl HashNative for f64 {
+    #[inline(always)]
+    fn hash(self) -> u64 {
+        hash_i64(self.to_bits() as i64)
+    }
+}
+
+/// Hashes the `INT32`, `INT64`, `FLOAT` or `DOUBLE` values passed to it
+struct HashPrimitive<V>(V);
+
+impl<T: HashNative, V: HashVisitor> PrimitiveVisitor<T> for HashPrimitive<V> {
+    type Output = V::Output;
+
+    fn slice(self, values: &[T]) -> V::Output {
+        self.0.visit(values.len(), |i| values[i].hash())
     }
 
-    let output = match array.data_type() {
-        // INT32
-        Int8 => prim::<Int8Type, _>(array, visitor, |v| hash_i32(v as i32)),
-        Int16 => prim::<Int16Type, _>(array, visitor, |v| hash_i32(v as i32)),
-        Int32 => prim::<Int32Type, _>(array, visitor, hash_i32),
-        UInt8 => prim::<UInt8Type, _>(array, visitor, |v| hash_i32(v as i32)),
-        UInt16 => prim::<UInt16Type, _>(array, visitor, |v| hash_i32(v as i32)),
-        UInt32 => prim::<UInt32Type, _>(array, visitor, |v| hash_i32(v as i32)),
-        Date32 => prim::<Date32Type, _>(array, visitor, hash_i32),
-        Time32(TimeUnit::Second) => prim::<Time32SecondType, _>(array, visitor, hash_i32),
-        Time32(TimeUnit::Millisecond) => prim::<Time32MillisecondType, _>(array, visitor, hash_i32),
-        // INT64
-        Int64 => prim::<Int64Type, _>(array, visitor, hash_i64),
-        UInt64 => prim::<UInt64Type, _>(array, visitor, |v| hash_i64(v as i64)),
-        Date64 => prim::<Date64Type, _>(array, visitor, hash_i64),
-        Time64(TimeUnit::Microsecond) => prim::<Time64MicrosecondType, _>(array, visitor, hash_i64),
-        Time64(TimeUnit::Nanosecond) => prim::<Time64NanosecondType, _>(array, visitor, hash_i64),
-        Timestamp(TimeUnit::Second, _) => prim::<TimestampSecondType, _>(array, visitor, hash_i64),
-        Timestamp(TimeUnit::Millisecond, _) => {
-            prim::<TimestampMillisecondType, _>(array, visitor, hash_i64)
-        }
-        Timestamp(TimeUnit::Microsecond, _) => {
-            prim::<TimestampMicrosecondType, _>(array, visitor, hash_i64)
-        }
-        Timestamp(TimeUnit::Nanosecond, _) => {
-            prim::<TimestampNanosecondType, _>(array, visitor, hash_i64)
-        }
-        Duration(TimeUnit::Second) => prim::<DurationSecondType, _>(array, visitor, hash_i64),
-        Duration(TimeUnit::Millisecond) => {
-            prim::<DurationMillisecondType, _>(array, visitor, hash_i64)
-        }
-        Duration(TimeUnit::Microsecond) => {
-            prim::<DurationMicrosecondType, _>(array, visitor, hash_i64)
-        }
-        Duration(TimeUnit::Nanosecond) => {
-            prim::<DurationNanosecondType, _>(array, visitor, hash_i64)
-        }
-        // Decimals
-        Decimal32(p, _) => decimal::<Decimal32Type, _>(array, visitor, *p, i256::from),
-        Decimal64(p, _) => decimal::<Decimal64Type, _>(array, visitor, *p, i256::from),
-        Decimal128(p, _) => decimal::<Decimal128Type, _>(array, visitor, *p, i256::from_i128),
-        Decimal256(p, _) => decimal::<Decimal256Type, _>(array, visitor, *p, |v| v),
-        // BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY
-        Utf8 => {
-            let a = array.as_string::<i32>();
-            bytes(a.len(), visitor, |i| a.value(i).as_bytes())
-        }
-        LargeUtf8 => {
-            let a = array.as_string::<i64>();
-            bytes(a.len(), visitor, |i| a.value(i).as_bytes())
-        }
-        Utf8View => {
-            let a = array.as_string_view();
-            bytes(a.len(), visitor, |i| a.value(i).as_bytes())
-        }
-        Binary => {
-            let a = array.as_binary::<i32>();
-            bytes(a.len(), visitor, |i| a.value(i))
-        }
-        LargeBinary => {
-            let a = array.as_binary::<i64>();
-            bytes(a.len(), visitor, |i| a.value(i))
-        }
-        BinaryView => {
-            let a = array.as_binary_view();
-            bytes(a.len(), visitor, |i| a.value(i))
-        }
-        FixedSizeBinary(_) => {
-            let a = array.as_fixed_size_binary();
-            bytes(a.len(), visitor, |i| a.value(i))
-        }
-        other => {
-            return Err(ParquetError::NYI(format!(
-                "Sbbf: Arrow data type {other} is not supported"
+    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> V::Output {
+        self.0.visit(values.len(), |i| convert(values[i]).hash())
+    }
+}
+
+/// Hashes the `FIXED_LEN_BYTE_ARRAY` values passed to it
+struct HashFixedLenByteArray<'a, V> {
+    visitor: V,
+    len: usize,
+    type_length: usize,
+    data_type: &'a DataType,
+}
+
+impl<V: HashVisitor> FixedLenByteArrayVisitor for HashFixedLenByteArray<'_, V> {
+    type Output = Result<V::Output>;
+
+    fn decimal_length(&self, _precision: u8) -> usize {
+        // Decimals of any precision are converted to the column's length
+        self.type_length
+    }
+
+    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Result<V::Output> {
+        if length != self.type_length {
+            return Err(ParquetError::General(format!(
+                "Sbbf: cannot hash {} values, which have length {length}, for a FIXED_LEN_BYTE_ARRAY column of length {}",
+                self.data_type, self.type_length
             )));
         }
-    };
-    Ok(output)
+        let value = RefCell::new(vec![0; length]);
+        Ok(self.visitor.visit(self.len, |i| {
+            let mut value = value.borrow_mut();
+            value.fill(0);
+            fill(i, &mut value);
+            hash_as_bytes(value.as_slice())
+        }))
+    }
+}
+
+/// Checks the hashes passed to it against a filter
+struct CheckHashes<'a>(&'a Sbbf);
+
+impl HashVisitor for CheckHashes<'_> {
+    type Output = BooleanBuffer;
+
+    fn visit(self, len: usize, hash: impl Fn(usize) -> u64) -> BooleanBuffer {
+        BooleanBuffer::collect_bool(len, |i| self.0.check_hash_branch_free(hash(i)))
+    }
 }
 
 impl Sbbf {
@@ -201,13 +269,23 @@ impl Sbbf {
         )
     }
 
+    /// Calls `visitor` with the hashes of `array` for the column that
+    /// `ArrowWriter` writes for it with the default options
+    fn visit_array_hashes<V: HashVisitor>(array: &dyn Array, visitor: V) -> Result<V::Output> {
+        let data_type = array.data_type();
+        if !Self::supports_data_type(data_type) {
+            return Err(unsupported(data_type));
+        }
+        visit_hashes(array, HashTarget::for_data_type(data_type)?, visitor)
+    }
+
     /// Write [`Self::hash_value`] of each slot of `array` into `hashes`.
     ///
     /// Each value is hashed as the Parquet physical value that
-    /// [`ArrowWriter`](crate::arrow::ArrowWriter) writes for it (for example an
-    /// `Int8` is hashed as an `INT32`). `hashes` is cleared first and has
-    /// `array.len()` items after the call. The hashes of null slots are not
-    /// defined; the caller must skip them.
+    /// [`ArrowWriter`](crate::arrow::ArrowWriter) writes for it with the default
+    /// options (for example an `Int8` is hashed as an `INT32`). `hashes` is
+    /// cleared first and has `array.len()` items after the call. The hashes of
+    /// null slots are not defined; the caller must skip them.
     ///
     /// Returns an error if [`Self::supports_data_type`] is `false` for the type
     /// of `array`.
@@ -221,7 +299,7 @@ impl Sbbf {
         }
         hashes.clear();
         hashes.reserve(array.len());
-        visit_hashes(array, Extend(hashes))
+        Self::visit_array_hashes(array, Extend(hashes))
     }
 
     /// Insert each non-null value of `array` into the filter.
@@ -246,7 +324,7 @@ impl Sbbf {
             }
         }
         let nulls = array.logical_nulls();
-        visit_hashes(
+        Self::visit_array_hashes(
             array,
             Insert {
                 filter: self,
@@ -263,21 +341,29 @@ impl Sbbf {
     /// (see [`Self::hash_array`]), but faster: the type dispatch is done once for
     /// the array, and the block test has no data-dependent branches.
     ///
+    /// To check a bloom filter read from a Parquet file, use
+    /// [`ArrowSbbf`](crate::arrow::bloom_filter::ArrowSbbf), which converts the
+    /// values to the column's physical type instead of the default one.
+    ///
     /// Returns an error if [`Self::supports_data_type`] is `false` for the type of
     /// `array`.
     pub fn check_array(&self, array: &dyn Array) -> Result<BooleanBuffer> {
-        struct Check<'a>(&'a Sbbf);
-        impl HashVisitor for Check<'_> {
-            type Output = BooleanBuffer;
-            fn visit(self, len: usize, hash: impl Fn(usize) -> u64) -> BooleanBuffer {
-                BooleanBuffer::collect_bool(len, |i| self.0.check_hash_branch_free(hash(i)))
-            }
-        }
-        let result = visit_hashes(array, Check(self))?;
+        let result = Self::visit_array_hashes(array, CheckHashes(self))?;
         Ok(match array.logical_nulls() {
             Some(nulls) => &result & nulls.inner(),
             None => result,
         })
+    }
+
+    /// Check each slot of `array`, hashed for a column of `target`
+    ///
+    /// The result of null slots is not defined.
+    pub(crate) fn check_array_for(
+        &self,
+        array: &dyn Array,
+        target: HashTarget,
+    ) -> Result<BooleanBuffer> {
+        visit_hashes(array, target, CheckHashes(self))
     }
 }
 

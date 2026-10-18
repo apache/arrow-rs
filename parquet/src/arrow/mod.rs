@@ -212,8 +212,7 @@ pub mod schema;
 #[cfg(not(feature = "experimental"))]
 mod schema;
 
-#[cfg(feature = "arrow")]
-pub(crate) use schema::decimal_length_from_precision;
+pub(crate) use schema::arrow_to_parquet_type;
 
 use std::fmt::Debug;
 

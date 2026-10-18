@@ -558,7 +558,7 @@ pub fn decimal_length_from_precision(precision: u8) -> usize {
 }
 
 /// Convert an arrow field to a parquet `Type`
-fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
+pub(crate) fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
     const PARQUET_LIST_ELEMENT_NAME: &str = "element";
     const PARQUET_MAP_STRUCT_NAME: &str = "key_value";
     const PARQUET_KEY_FIELD_NAME: &str = "key";

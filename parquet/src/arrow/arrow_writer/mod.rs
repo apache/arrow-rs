@@ -1741,6 +1741,10 @@ pub(crate) fn visit_i64<V: PrimitiveVisitor<i64>>(
                 visitor.slice(column.as_primitive::<DurationNanosecondType>().values())
             }
         },
+        ArrowDataType::Decimal32(_, _) => visitor
+            .map(column.as_primitive::<Decimal32Type>().values(), |v| {
+                v as i64
+            }),
         ArrowDataType::Decimal64(_, _) => {
             visitor.slice(column.as_primitive::<Decimal64Type>().values())
         }
@@ -1797,9 +1801,9 @@ pub(crate) trait FixedLenByteArrayVisitor {
     /// Receives values that are `length` bytes long
     ///
     /// `fill(i, value)` writes the value at index `i` of the array to `value`,
-    /// which is `length` zeroed bytes. It returns `false` if the value does not
-    /// fit in `length` bytes, which can only happen for decimals.
-    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8]) -> bool) -> Self::Output;
+    /// which is `length` zeroed bytes. A decimal that does not fit in `length`
+    /// bytes is truncated.
+    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Self::Output;
 }
 
 /// Passes the values [`ArrowWriter`] stores for `column` in a `FIXED_LEN_BYTE_ARRAY`
@@ -1816,7 +1820,6 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
                 let array = column.as_primitive::<IntervalYearMonthType>();
                 visitor.values(12, |i, value| {
                     value[0..4].copy_from_slice(&array.value(i).to_le_bytes());
-                    true
                 })
             }
             IntervalUnit::DayTime => {
@@ -1828,7 +1831,6 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
                     let interval = array.value(i);
                     value[4..8].copy_from_slice(&interval.days.to_le_bytes());
                     value[8..12].copy_from_slice(&interval.milliseconds.to_le_bytes());
-                    true
                 })
             }
             IntervalUnit::MonthDayNano => {
@@ -1841,7 +1843,6 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
             let array = column.as_fixed_size_binary();
             visitor.values(array.value_size(), |i, value| {
                 value.copy_from_slice(array.value(i));
-                true
             })
         }
         ArrowDataType::Decimal32(_, _) => {
@@ -1860,7 +1861,6 @@ pub(crate) fn visit_fixed_len_byte_array<V: FixedLenByteArrayVisitor>(
             let array = column.as_primitive::<Float16Type>();
             visitor.values(2, |i, value| {
                 value.copy_from_slice(&array.value(i).to_le_bytes());
-                true
             })
         }
         _ => {
@@ -1886,37 +1886,19 @@ fn visit_decimal<T: NativeDecimalType, V: FixedLenByteArrayVisitor>(
 /// Writes the big-endian two's complement integer `bytes` to `out`, which may be
 /// shorter or longer than `bytes`
 ///
-/// Drops leading bytes when `out` is shorter and sign-extends when it is longer.
-/// Returns `false` if a dropped byte was not sign extension, that is, if the
-/// integer does not fit in `out`.
+/// Drops leading bytes when `out` is shorter, which truncates an integer that
+/// does not fit, and sign-extends when it is longer.
 #[inline]
-fn resize_twos_complement(bytes: &[u8], out: &mut [u8]) -> bool {
+fn resize_twos_complement(bytes: &[u8], out: &mut [u8]) {
     match out.len().checked_sub(bytes.len()) {
         // Same length, which lets the compiler inline the copy
-        Some(0) => {
-            out.copy_from_slice(bytes);
-            true
-        }
+        Some(0) => out.copy_from_slice(bytes),
         Some(extension) => {
-            let sign = if bytes.first().is_some_and(|b| (*b as i8) < 0) {
-                0xFF
-            } else {
-                0
-            };
-            out[..extension].fill(sign);
+            let negative = bytes.first().is_some_and(|b| (*b as i8) < 0);
+            out[..extension].fill(if negative { 0xFF } else { 0 });
             out[extension..].copy_from_slice(bytes);
-            true
         }
-        None => {
-            let (dropped, kept) = bytes.split_at(bytes.len() - out.len());
-            out.copy_from_slice(kept);
-            let sign = if kept.first().is_some_and(|b| (*b as i8) < 0) {
-                0xFF
-            } else {
-                0
-            };
-            dropped.iter().all(|b| *b == sign)
-        }
+        None => out.copy_from_slice(&bytes[bytes.len() - out.len()..]),
     }
 }
 
@@ -1933,12 +1915,9 @@ impl FixedLenByteArrayVisitor for WriteFixedLenByteArray<'_, '_> {
         decimal_length_from_precision(precision)
     }
 
-    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8]) -> bool) -> Result<usize> {
+    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Result<usize> {
         let indices = self.levels.non_null_indices().iter().copied();
-        // A value that does not fit is truncated, as the writer has always done
-        let values = chunk_array_slice(length, indices, |i, value| {
-            fill(i, value);
-        });
+        let values = chunk_array_slice(length, indices, fill);
         self.writer.write_batch_internal(
             values.as_slice(),
             None,
