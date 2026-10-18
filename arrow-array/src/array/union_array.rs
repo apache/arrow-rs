@@ -705,6 +705,10 @@ impl From<ArrayData> for UnionArray {
         let max_id = fields.iter().map(|(i, _)| i).max().unwrap_or_default() as usize;
         let mut boxed_fields = vec![None; max_id + 1];
         for (cd, (field_id, _)) in child_data.into_iter().zip(fields.iter()) {
+            let cd = match mode {
+                UnionMode::Sparse => cd.sliced(offset, len),
+                UnionMode::Dense => cd,
+            };
             boxed_fields[field_id as usize] = Some(make_array(cd));
         }
         Self {
@@ -1691,6 +1695,55 @@ mod tests {
         // [null, 3.0, null]
         let record_batch_slice = record_batch.slice(1, 3);
         test_slice_union(record_batch_slice);
+    }
+
+    #[test]
+    fn test_union_from_sliced_array_data() {
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let fields = UnionFields::try_new(
+                [3, 7],
+                [
+                    Field::new("ints", DataType::Int32, false),
+                    Field::new("floats", DataType::Float64, false),
+                ],
+            )
+            .unwrap();
+            let offsets = (mode == UnionMode::Dense).then(|| vec![0, 1, 2, 3].into());
+            let array = UnionArray::try_new(
+                fields,
+                vec![3, 7, 3, 7].into(),
+                offsets,
+                vec![
+                    Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+                    Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                ],
+            )
+            .unwrap();
+            for (offset, len) in [(1, 2), (0, 2), (4, 0), (0, 4)] {
+                let expected = array.slice(offset, len);
+                let actual = make_array(array.to_data().slice(offset, len));
+                let actual = actual.as_any().downcast_ref::<UnionArray>().unwrap();
+                for i in 0..len {
+                    assert_eq!(actual.value(i).to_data(), expected.value(i).to_data());
+                }
+                assert_eq!(actual.to_data(), expected.to_data());
+            }
+        }
+    }
+
+    #[test]
+    fn test_sparse_union_from_sliced_array_data_logical_nulls() {
+        let child = Int32Array::from(vec![Some(10), None, Some(30)]);
+        let fields =
+            UnionFields::try_new([0], [Field::new("ints", DataType::Int32, true)]).unwrap();
+        let array =
+            UnionArray::try_new(fields, vec![0, 0, 0].into(), None, vec![Arc::new(child)]).unwrap();
+        for (offset, len) in [(0, 1), (1, 1), (2, 1), (3, 0)] {
+            let expected = array.slice(offset, len);
+            let actual = make_array(array.to_data().slice(offset, len));
+            assert_eq!(actual.logical_nulls(), expected.logical_nulls());
+            assert_eq!(actual.to_data(), expected.to_data());
+        }
     }
 
     #[test]
