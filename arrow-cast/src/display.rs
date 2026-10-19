@@ -778,7 +778,7 @@ pub fn write_timestamp(
             let date = Utc.from_utc_datetime(&naive).with_timezone(&tz);
             match &format.0 {
                 CompiledTimeFormatInner::Custom(items) => {
-                    write!(f, "{}", date.format_with_items(items.0.iter()))?
+                    date.format_with_items(items.0.iter()).write_to(f)?
                 }
                 CompiledTimeFormatInner::Default => {
                     write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
@@ -787,7 +787,7 @@ pub fn write_timestamp(
         }
         None => match &format.0 {
             CompiledTimeFormatInner::Custom(items) => {
-                write!(f, "{}", naive.format_with_items(items.0.iter()))?
+                naive.format_with_items(items.0.iter()).write_to(f)?
             }
             CompiledTimeFormatInner::Default => write!(f, "{naive:?}")?,
         },
@@ -856,7 +856,7 @@ macro_rules! impl_temporal_format {
                 ) -> FormatResult {
                     match &format.0 {
                         CompiledTimeFormatInner::Custom(items) => {
-                            write!(f, "{}", self.format_with_items(items.0.iter()))?
+                            self.format_with_items(items.0.iter()).write_to(f)?
                         }
                         CompiledTimeFormatInner::Default => write!(f, "{self:?}")?,
                     }

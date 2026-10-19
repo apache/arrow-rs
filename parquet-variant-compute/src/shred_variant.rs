@@ -467,7 +467,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
     }
 
     fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
-        let mut builder = StructArrayBuilder::new();
+        let mut builder = StructArrayAssembler::new();
         for (field_name, typed_value_builder) in self.typed_value_builders {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
             let array =
