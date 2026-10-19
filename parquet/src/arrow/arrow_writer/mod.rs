@@ -356,7 +356,9 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// If one limit is set, that limit is respected.
     /// If both limits are set, the lower bound (whichever triggers first) is respected.
     ///
-    /// This will fail if the `batch`'s schema does not match the writer's schema.
+    /// This will fail if the `batch`'s schema does not match the writer's schema,
+    /// or if a logical null is reachable at a position the writer schema declares
+    /// non-nullable.
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         if batch.num_rows() == 0 {
             return Ok(());
@@ -925,7 +927,8 @@ pub struct ArrowLeafColumn(ArrayLevels);
 /// Computes the [`ArrowLeafColumn`] for a potentially nested [`ArrayRef`]
 ///
 /// This function can be used to encode individual columns in parallel.
-/// See example on [`ArrowColumnWriter`]
+/// See example on [`ArrowColumnWriter`]. A reachable logical null in a
+/// non-nullable `field` returns an error when the leaf is written.
 pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafColumn>> {
     let levels = calculate_array_levels(array, field)?;
     Ok(levels.into_iter().map(ArrowLeafColumn).collect())
@@ -1103,6 +1106,7 @@ enum ArrowColumnWriterImpl {
 impl ArrowColumnWriter {
     /// Write an [`ArrowLeafColumn`]
     pub fn write(&mut self, col: &ArrowLeafColumn) -> Result<()> {
+        col.0.validate()?;
         self.write_internal(&col.0)
     }
 
@@ -1113,6 +1117,7 @@ impl ArrowColumnWriter {
         chunker: &mut ContentDefinedChunker,
     ) -> Result<()> {
         let levels = &col.0;
+        levels.validate()?;
         let chunks = chunker.get_arrow_chunks(
             levels.def_level_data().as_ref(),
             levels.rep_level_data().as_ref(),
@@ -2434,6 +2439,384 @@ mod tests {
                 nullable_values,
             )),
         )
+    }
+
+    #[test]
+    fn arrow_writer_required_ree_schema_rejects_nullable_dense_input() {
+        let writer_schema = Arc::new(Schema::new(vec![Field::new(
+            "c",
+            run_end_type(DataType::Int32, false),
+            false,
+        )]));
+        let batch_schema = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![Some(7), None, Some(9)]))],
+        )
+        .unwrap();
+
+        for skip_metadata in [false, true] {
+            for cdc in [false, true] {
+                let props = WriterProperties::builder()
+                    .set_content_defined_chunking(cdc.then(Default::default))
+                    .build();
+                let options = ArrowWriterOptions::new()
+                    .with_properties(props)
+                    .with_skip_arrow_metadata(skip_metadata);
+                let mut writer = ArrowWriter::try_new_with_options(
+                    Vec::new(),
+                    writer_schema.clone(),
+                    options.clone(),
+                )
+                .unwrap();
+                let error = writer.write(&batch).unwrap_err().to_string();
+                assert!(
+                    error.contains("Found null at index 1 for required field 'c'"),
+                    "skip_metadata={skip_metadata}, cdc={cdc}: {error}"
+                );
+
+                // A nullable batch schema is fine when the data has no actual nulls.
+                let values: ArrayRef = Arc::new(Int32Array::from(vec![7, 8, 9]));
+                let batch =
+                    RecordBatch::try_new(batch_schema.clone(), vec![values.clone()]).unwrap();
+                let mut file = vec![];
+                let mut writer =
+                    ArrowWriter::try_new_with_options(&mut file, writer_schema.clone(), options)
+                        .unwrap();
+                writer.write(&batch).unwrap();
+                writer.close().unwrap();
+                assert_eq!(read_column(file).as_ref(), values.as_ref());
+            }
+        }
+    }
+
+    #[test]
+    fn ree_nulls_respect_dense_schema_nullability() {
+        let run_ends = Int32Array::from(vec![2, 4, 5]);
+        let values = Int32Array::from(vec![Some(1), None, Some(2)]);
+        let ree: ArrayRef = Arc::new(Int32RunArray::try_new(&run_ends, &values).unwrap());
+        let ree_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "c",
+                ree.data_type().clone(),
+                true,
+            )])),
+            vec![ree],
+        )
+        .unwrap();
+
+        let nullable_schema = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, true)]));
+        let mut file = vec![];
+        let mut writer = ArrowWriter::try_new(&mut file, nullable_schema, None).unwrap();
+        writer.write(&ree_batch).unwrap();
+        writer.close().unwrap();
+        assert_eq!(
+            read_column(file).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![Some(1), Some(1), None, None, Some(2)])
+        );
+
+        let required_schema = Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, false)]));
+        let mut writer = ArrowWriter::try_new(Vec::new(), required_schema, None).unwrap();
+        let error = writer.write(&ree_batch).unwrap_err().to_string();
+        assert!(error.contains("Found null") && error.contains("required field 'c'"));
+    }
+
+    #[test]
+    fn required_null_validation_respects_reachability_and_write_timing() {
+        let required = Field::new("c", DataType::Int32, false);
+        let nullable: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
+        let leaves = compute_leaves(&required, &nullable).unwrap();
+        let schema = Arc::new(Schema::new(vec![required.clone()]));
+        let writer = ArrowWriter::try_new(Vec::new(), schema, None).unwrap();
+        let (_file, factory) = writer.into_serialized_writer().unwrap();
+        let mut columns = factory.create_column_writers(0).unwrap();
+        assert!(
+            columns[0]
+                .write(&leaves[0])
+                .unwrap_err()
+                .to_string()
+                .contains("required field 'c'")
+        );
+
+        // Only a referenced logical dictionary null is invalid, not an unused value.
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None]));
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(
+            Int8Array::from(vec![0, 0]),
+            values.clone(),
+        ));
+        assert_eq!(
+            roundtrip_compatible_column(required.clone(), dict).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![7, 7])
+        );
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(Int8Array::from(vec![0, 1]), values));
+        let leaves = compute_leaves(&required, &dict).unwrap();
+        assert!(leaves[0].0.validate().is_err());
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(
+            Int8Array::from(vec![Some(0), None]),
+            Arc::new(Int32Array::from(vec![7])),
+        ));
+        let leaves = compute_leaves(&required, &dict).unwrap();
+        assert!(leaves[0].0.validate().is_err());
+
+        // A nullable ancestor masks an otherwise required child null, including
+        // when the target child has a schema-only REE wrapper.
+        let actual_fields = Fields::from(vec![Field::new("source_child", DataType::Int32, true)]);
+        let array: ArrayRef = Arc::new(StructArray::new(
+            actual_fields.clone(),
+            vec![nullable.clone()],
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+        let unmasked: ArrayRef = Arc::new(StructArray::new(
+            actual_fields,
+            vec![nullable.clone()],
+            None,
+        ));
+        for child_type in [DataType::Int32, run_end_type(DataType::Int32, false)] {
+            let target = Field::new(
+                "c",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "target_child",
+                    child_type,
+                    false,
+                )])),
+                true,
+            );
+            let leaves = compute_leaves(&target, &unmasked).unwrap();
+            assert!(leaves[0].0.validate().is_err());
+            let leaves = compute_leaves(&target, &array).unwrap();
+            assert!(leaves[0].0.validate().is_ok());
+            let result = roundtrip_compatible_column(target, array.clone());
+            assert_eq!(result.as_struct().fields()[0].name(), "target_child");
+            assert!(result.is_null(1));
+        }
+
+        // Unused list child slots and out-of-slice scalar nulls are unreachable.
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![None, Some(9), None]));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![1_i32, 2].into()),
+            values,
+            None,
+        ));
+        let target = Field::new(
+            "c",
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
+            false,
+        );
+        assert!(
+            compute_leaves(&target, &list).unwrap()[0]
+                .0
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            roundtrip_compatible_column(required, nullable.slice(0, 1)).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![1])
+        );
+    }
+
+    fn check_required_list_validation(list_type: fn(Arc<Field>) -> DataType) {
+        let make_array = |values: Vec<Option<i32>>,
+                          offsets: Vec<i32>,
+                          sizes: Vec<i32>,
+                          nulls: Option<NullBuffer>| {
+            let child = Arc::new(Field::new("source_child", DataType::Int32, true));
+            let values: ArrayRef = Arc::new(Int32Array::from(values));
+            match list_type(child.clone()) {
+                DataType::List(_) => Arc::new(ListArray::new(
+                    child,
+                    OffsetBuffer::new(offsets.into()),
+                    values,
+                    nulls,
+                )) as ArrayRef,
+                DataType::LargeList(_) => Arc::new(LargeListArray::new(
+                    child,
+                    OffsetBuffer::new(
+                        offsets
+                            .into_iter()
+                            .map(i64::from)
+                            .collect::<Vec<_>>()
+                            .into(),
+                    ),
+                    values,
+                    nulls,
+                )) as ArrayRef,
+                DataType::ListView(_) => Arc::new(ListViewArray::new(
+                    child,
+                    offsets.into(),
+                    sizes.into(),
+                    values,
+                    nulls,
+                )) as ArrayRef,
+                DataType::LargeListView(_) => Arc::new(LargeListViewArray::new(
+                    child,
+                    offsets
+                        .into_iter()
+                        .map(i64::from)
+                        .collect::<Vec<_>>()
+                        .into(),
+                    sizes.into_iter().map(i64::from).collect::<Vec<_>>().into(),
+                    values,
+                    nulls,
+                )) as ArrayRef,
+                _ => unreachable!(),
+            }
+        };
+        let is_view = matches!(
+            list_type(Arc::new(Field::new("item", DataType::Int32, true))),
+            DataType::ListView(_) | DataType::LargeListView(_)
+        );
+        let offsets = |starts: Vec<i32>, end: i32| {
+            let mut result = starts;
+            if !is_view {
+                result.push(end);
+            }
+            result
+        };
+        let target = Field::new(
+            "c",
+            list_type(Arc::new(Field::new("target_child", DataType::Int32, false))),
+            true,
+        );
+        let invalid = make_array(vec![None, Some(7)], offsets(vec![0], 2), vec![2], None);
+        let valid = make_array(vec![Some(7), Some(8)], offsets(vec![0], 2), vec![2], None);
+        let masked = make_array(
+            vec![None, Some(7)],
+            offsets(vec![0, 1], 2),
+            vec![1, 1],
+            Some(NullBuffer::from(vec![false, true])),
+        );
+        let unused = make_array(
+            vec![None, Some(7), None],
+            offsets(vec![1], 2),
+            vec![1],
+            None,
+        );
+        let empty = make_array(vec![None], offsets(vec![0], 0), vec![0], None);
+        let sliced = make_array(
+            vec![None, Some(7)],
+            offsets(vec![0, 1], 2),
+            vec![1, 1],
+            None,
+        )
+        .slice(1, 1);
+        let schema = Arc::new(Schema::new(vec![target.clone()]));
+
+        // Binding succeeds even for invalid input; writing the affected leaf rejects it.
+        for (name, array, invalid) in [
+            ("reachable null", invalid, true),
+            ("valid required child", valid.clone(), false),
+            ("null ancestor", masked, false),
+            ("unused child slots", unused, false),
+            ("empty list", empty, false),
+            ("out-of-slice null", sliced, false),
+        ] {
+            let leaves = compute_leaves(&target, &array).unwrap();
+            assert_eq!(leaves.len(), 1);
+            for cdc in [false, true] {
+                let props = WriterProperties::builder()
+                    .set_content_defined_chunking(cdc.then(Default::default))
+                    .build();
+                let mut writer =
+                    ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
+                let mut chunkers = writer.cdc_chunkers.take();
+                let (_file, factory) = writer.into_serialized_writer().unwrap();
+                let mut columns = factory.create_column_writers(0).unwrap();
+                let before = (
+                    columns[0].memory_size(),
+                    columns[0].get_estimated_total_bytes(),
+                );
+                let result = match &mut chunkers {
+                    Some(chunkers) => columns[0].write_with_chunker(&leaves[0], &mut chunkers[0]),
+                    None => columns[0].write(&leaves[0]),
+                };
+                if invalid {
+                    let error = result.unwrap_err().to_string();
+                    assert!(
+                        error.contains("Found null at index 0 for required field 'target_child'"),
+                        "{name}, cdc={cdc}: {error}"
+                    );
+                    assert_eq!(
+                        before,
+                        (
+                            columns[0].memory_size(),
+                            columns[0].get_estimated_total_bytes()
+                        ),
+                        "invalid leaf must be rejected before encoding"
+                    );
+                    // A rejected leaf write must leave no encoded values behind.
+                    let valid_leaves = compute_leaves(&target, &valid).unwrap();
+                    match &mut chunkers {
+                        Some(chunkers) => columns[0]
+                            .write_with_chunker(&valid_leaves[0], &mut chunkers[0])
+                            .unwrap(),
+                        None => columns[0].write(&valid_leaves[0]).unwrap(),
+                    }
+                    assert_eq!(
+                        columns
+                            .pop()
+                            .unwrap()
+                            .close()
+                            .unwrap()
+                            .close
+                            .metadata
+                            .num_values(),
+                        2
+                    );
+                } else {
+                    result.unwrap();
+                    columns.pop().unwrap().close().unwrap();
+                }
+
+                // Exercise the ordinary and CDC row-group driving entry points as well.
+                let batch = RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![Field::new(
+                        "c",
+                        array.data_type().clone(),
+                        true,
+                    )])),
+                    vec![array.clone()],
+                )
+                .unwrap();
+                let props = WriterProperties::builder()
+                    .set_content_defined_chunking(cdc.then(Default::default))
+                    .build();
+                let mut writer =
+                    ArrowWriter::try_new(Vec::new(), schema.clone(), Some(props)).unwrap();
+                let result = writer.write(&batch);
+                if invalid {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("required field 'target_child'")
+                    );
+                } else {
+                    result.unwrap();
+                    writer.close().unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn required_list_validation_preserves_level_generation() {
+        check_required_list_validation(DataType::List);
+    }
+
+    #[test]
+    fn required_large_list_validation_preserves_level_generation() {
+        check_required_list_validation(DataType::LargeList);
+    }
+
+    #[test]
+    fn required_list_view_validation_preserves_level_generation() {
+        check_required_list_validation(DataType::ListView);
+    }
+
+    #[test]
+    fn required_large_list_view_validation_preserves_level_generation() {
+        check_required_list_validation(DataType::LargeListView);
     }
 
     fn nullable_int32_list() -> ArrayRef {
