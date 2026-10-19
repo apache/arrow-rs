@@ -64,7 +64,7 @@ macro_rules! ree_map {
 ///   ┌─────────────────┐  ┌─────────┐       ┌─────────────────┐
 /// │ │        A        │  │    2    │ │     │        A        │
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
-/// │ │        D        │  │    3    │ │     │        A        │    run length of 'A' = runs_ends[0] - 0 = 2
+/// │ │        D        │  │    3    │ │     │        A        │    run length of 'A' = run_ends[0] - 0 = 2
 ///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
 /// │ │        B        │  │    6    │ │     │        D        │    run length of 'D' = run_ends[1] - run_ends[0] = 1
 ///   └─────────────────┘  └─────────┘       ├─────────────────┤
@@ -73,11 +73,73 @@ macro_rules! ree_map {
 /// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘     │        B        │
 ///                                          ├─────────────────┤
 ///                RunArray                  │        B        │    run length of 'B' = run_ends[2] - run_ends[1] = 3
-///               length = 3                 └─────────────────┘
+///          offset = 0, len = 6             └─────────────────┘
 ///
 ///                                             Logical array
 ///                                                Contents
 /// ```
+///
+/// # Logical `offset` and `len`
+///
+/// [`Array::len`] and [`Array::offset`] of a [`RunArray`] describe the **logical**
+/// array, not the physical `run_ends` and `values` children. In the example above
+/// the logical length is `6` even though `run_ends` and `values` each contain `3`
+/// elements.
+///
+/// Each run end is a logical index counted from the start of the *unsliced* logical
+/// array. Slicing a [`RunArray`] (see [`RunArray::slice`]) is zero-copy: `run_ends`
+/// and `values` are left untouched and only `offset` and `len` change to select a
+/// window of the logical array. The run ends are **not** rewritten relative to the
+/// new `offset`.
+///
+/// A [`RunArray`] is therefore valid when:
+///
+/// * every run end is greater than zero and `run_ends` is strictly increasing,
+/// * `run_ends` and `values` have the same length (the number of runs), and
+/// * if `len > 0`, the last run end is greater than or equal to `offset + len`.
+///
+/// Runs that end at or before `offset` lie entirely before the slice, and runs that
+/// start at or after `offset + len` lie entirely after it; neither is visible.
+/// [`Self::get_start_physical_index`] and [`Self::get_end_physical_index`] return the
+/// range of physical indexes (into `run_ends` and `values`) that are visible.
+///
+/// The example below shows the array above after calling `slice(1, 3)`. The
+/// `run_ends` and `values` children are identical to the unsliced array; only
+/// `offset` and `len` differ:
+///
+/// ```text
+/// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
+///   ┌─────────────────┐  ┌─────────┐       ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+/// │ │        A        │  │    2    │ │              A             logical index 0: before offset, not visible
+///   ├─────────────────┤  ├─────────┤       ┌─────────────────┐ ◄── offset = 1
+/// │ │        D        │  │    3    │ │     │        A        │    logical index 1 < run_ends[0] = 2, so 'A'
+///   ├─────────────────┤  ├─────────┤       ├─────────────────┤
+/// │ │        B        │  │    6    │ │     │        D        │    logical index 2 < run_ends[1] = 3, so 'D'
+///   └─────────────────┘  └─────────┘       ├─────────────────┤
+/// │        values          run_ends  │     │        B        │    logical index 3 < run_ends[2] = 6, so 'B'
+///                                          └─────────────────┘ ◄── offset + len = 4
+/// └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘              B             logical index 4: after offset + len, not visible
+///                                          ├ ─ ─ ─ ─ ─ ─ ─ ─ ┤
+///                RunArray                           B             logical index 5: after offset + len, not visible
+///          offset = 1, len = 3             └ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///
+///                                             Logical array
+///                                                Contents
+/// ```
+///
+/// # Slicing of the child arrays
+///
+/// The `values` array may itself be sliced (that is, have a non-zero offset). Run
+/// `i` always corresponds to `values.value(i)` using the normal, logical indexing of
+/// the `values` array, so any offset on `values` is applied as usual.
+///
+/// The `run_ends` child is treated as unsliced: a [`RunArray`] uses the entire run
+/// ends buffer as the physical run ends, and the offset of the `run_ends` child in
+/// an [`ArrayData`] is ignored when converting it to a [`RunArray`]. When a
+/// [`RunArray`] is built with [`RunArray::try_new`], the run ends are taken from
+/// [`PrimitiveArray::values`], which already accounts for any slicing of that
+/// array, so a sliced `run_ends` [`PrimitiveArray`] is copied by reference without
+/// the elements outside its slice.
 ///
 /// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
 /// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
