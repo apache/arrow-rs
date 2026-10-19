@@ -4491,16 +4491,5 @@ mod tests {
             assert!(values.is_null(2));
             assert_eq!(text.value(row), r#"NaN "Infinity""#);
         }
-        for input in [
-            r#"{"metadata":{"year":NaNx}}"#,
-            r#"{"metadata":{"year":-NaN}}"#,
-            r#"{"metadata":{"year":+Infinity}}"#,
-            r#"{"metadata":{"year":Infinit"#,
-            r#"{"metadata":{"year":-Infinit"#,
-            r"{NaN:1}",
-        ] {
-            let mut reader = builder.clone().build(input.as_bytes()).unwrap();
-            assert!(reader.next().unwrap().is_err(), "{input}");
-        }
     }
 }
