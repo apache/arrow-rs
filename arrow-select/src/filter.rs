@@ -550,10 +550,11 @@ impl FilterPredicate {
         }
     }
 
-    /// Returns true if any row selected by this predicate is null in `nulls`
+    /// Returns true if any row selected by this predicate is null in `nulls`.
+    ///
+    /// The caller must check that `nulls` covers the filter, as `filter_nulls` does.
     fn selects_null(&self, nulls: &NullBuffer) -> bool {
         let len = self.filter.len();
-        assert!(nulls.len() >= len);
         // Below one selected row per word, probing the precomputed indices
         // is cheaper than scanning the mask, as in `filter_bits`
         if let IterationStrategy::Indices(indices) = &self.strategy
@@ -580,7 +581,7 @@ impl FilterPredicate {
     /// Panics if the input contains nulls and is shorter than this predicate.
     pub fn filter_nulls(&self, nulls: Option<&NullBuffer>) -> Option<NullBuffer> {
         let nulls = nulls?;
-        if nulls.null_count() == 0 || !self.selects_null(nulls) {
+        if nulls.null_count() == 0 {
             return None;
         }
 
@@ -594,14 +595,16 @@ impl FilterPredicate {
             _ => {}
         }
 
+        if !self.selects_null(nulls) {
+            return None;
+        }
+
         let nulls = filter_bits(nulls.inner(), self);
         // The filtered `nulls` has a length of `self.count` bits and therefore
         // the null count is this minus the number of valid bits
         let null_count = self.count - nulls.count_set_bits_offset(0, self.count);
-
-        if null_count == 0 {
-            return None;
-        }
+        // `selects_null` found a selected null, and `filter_bits` keeps it
+        debug_assert_ne!(null_count, 0);
 
         let buffer = BooleanBuffer::new(nulls, 0, self.count);
         debug_assert_eq!(null_count, buffer.len() - buffer.count_set_bits());
@@ -1712,7 +1715,7 @@ mod tests {
     }
 
     // Three full 64-bit words and an 8-bit partial trailing word
-    const LEN: usize = 200;
+    const NULLS_LEN: usize = 200;
     // The first row of the first two words, and the last row of the partial one
     const NULL_ROWS: [usize; 3] = [0, 64, 199];
     // A valid row in the partial trailing word
@@ -1720,27 +1723,30 @@ mod tests {
 
     // Sliced at offset 1 so the null bits start off a byte boundary
     fn nullable_values() -> Int32Array {
-        let mut values = vec![Some(0); LEN + 1];
+        let mut values = vec![Some(0); NULLS_LEN + 1];
         for row in NULL_ROWS {
             values[row + 1] = None;
         }
-        Int32Array::from(values).slice(1, LEN)
+        Int32Array::from(values).slice(1, NULLS_LEN)
     }
 
     // One case per path through `selects_null` and the filter strategies
     fn keep_valid_rows(nulls: &NullBuffer) -> [Vec<bool>; 3] {
         [
             // Above FILTER_SLICES_SELECTIVITY_THRESHOLD, so a slices strategy
-            (0..LEN).map(|i| nulls.is_valid(i)).collect(),
+            (0..NULLS_LEN).map(|i| nulls.is_valid(i)).collect(),
             // Below it, so an index strategy that scans the mask
-            (0..LEN).map(|i| i % 2 == 1 && nulls.is_valid(i)).collect(),
+            (0..NULLS_LEN)
+                .map(|i| i % 2 == 1 && nulls.is_valid(i))
+                .collect(),
             // Under one row per word, so the optimized predicate probes its indices
-            (0..LEN).map(|i| i == SPARSE_ROW).collect(),
+            (0..NULLS_LEN).map(|i| i == SPARSE_ROW).collect(),
         ]
     }
 
     fn predicates(keep: &[bool]) -> Vec<FilterPredicate> {
         let mask = BooleanArray::from(keep.to_vec());
+        // The same mask at offset 1, so its bits start off a byte boundary
         let padded: BooleanArray = std::iter::once(false).chain(keep.iter().copied()).collect();
         let offset_mask = padded.slice(1, keep.len());
         [mask, offset_mask]
@@ -2843,8 +2849,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "nulls.len() >= len")]
-    fn test_filter_nulls_shorter_than_filter() {
+    #[should_panic(expected = "nulls.len() >= self.filter.len()")]
+    fn test_filter_nulls_too_large() {
         let nulls = NullBuffer::from(vec![true, false, true, true, true, true, true, true]);
         let predicate = BooleanArray::from(vec![
             true, false, false, false, false, false, false, false, false,
