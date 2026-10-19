@@ -82,8 +82,8 @@ macro_rules! ree_map {
 /// # `offset` and `len`
 ///
 /// The [`Array::len`] and [`Array::offset`] for a `RunArray` refer to the
-/// **logical** length, not the `run_ends` and `values` childa rrays. In the
-/// example above the `RunArray` has length is `6` even though `run_ends` and
+/// **logical** length, not the `run_ends` and `values` child arrays. In the
+/// example above the `RunArray` has length `6` even though `run_ends` and
 /// `values` each contain `3` elements.
 ///
 /// The values in `run_ends` represent indexes of the *unsliced* logical array.
@@ -124,10 +124,8 @@ macro_rules! ree_map {
 /// always corresponds to `values.value(i)`, the logical indexing
 /// of the `values` array, including any offset.
 ///
-/// The `run_ends` are never sliced: a [`RunArray`] uses the entire run
-/// ends buffer as the physical run ends.
+/// The `run_ends` are never sliced.
 ///
-/// [`From<ArrayData> for RunArray`]: RunArray#impl-From<ArrayData>-for-RunArray<R>
 /// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
 /// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
 pub struct RunArray<R: RunEndIndexType> {
