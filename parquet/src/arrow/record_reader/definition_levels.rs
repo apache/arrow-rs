@@ -331,8 +331,20 @@ impl PackedDecoder {
     fn next_rle_block(&mut self) -> Result<()> {
         let indicator_value = self.decode_header()?;
         if indicator_value & 1 == 1 {
-            let len = (indicator_value >> 1) as usize;
-            self.packed_count = len * 8;
+            let len = usize::try_from(indicator_value >> 1)?;
+            // For a bit width of 1, each group of 8 levels occupies one byte.
+            // Validate the whole run before either read() or skip() accesses it.
+            let remaining = self.data.len().saturating_sub(self.data_offset);
+            if len > remaining {
+                return Err(ParquetError::EOF(format!(
+                    "unexpected end of file whilst decoding definition levels bit-packed run: expected {len} bytes, found {remaining}"
+                )));
+            }
+            self.packed_count = len.checked_mul(8).ok_or_else(|| {
+                ParquetError::EOF(
+                    "definition levels bit-packed run length exceeds addressable size".into(),
+                )
+            })?;
             self.packed_offset = 0;
         } else {
             self.rle_left = (indicator_value >> 1) as usize;
@@ -612,6 +624,29 @@ mod tests {
         }
         assert_eq!(read_level + skip_level, len);
         assert_eq!(read_value + skip_value, total_value);
+    }
+
+    #[test]
+    fn test_packed_decoder_truncated_run_returns_error() {
+        // The header declares 504 levels (63 bytes), but only three packed bytes follow.
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, Bytes::from_static(&[0x7F, 0x55, 0x55, 0x55]));
+
+        let mut decoded = BooleanBufferBuilder::new(504);
+        let result = decoder.read(&mut decoded, 504);
+
+        assert!(matches!(result, Err(ParquetError::EOF(_))));
+    }
+
+    #[test]
+    fn test_packed_decoder_skip_truncated_run_returns_error() {
+        // The skip path must validate the same source range as the read path.
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, Bytes::from_static(&[0x7F, 0x55, 0x55, 0x55]));
+
+        let result = decoder.skip(504);
+
+        assert!(matches!(result, Err(ParquetError::EOF(_))));
     }
 
     #[test]
