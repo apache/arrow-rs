@@ -3540,8 +3540,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_run_array_validates_last_run() {
+    /// Returns a `RunEndEncoded<Int32, Float32>` data type and run ends / values
+    /// children whose runs end at `[1, 3]`, i.e. a logical length of 3.
+    fn run_array_test_children() -> (DataType, Vec<ArrayData>) {
         let dt = DataType::RunEndEncoded(
             Arc::new(Field::new(
                 Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
@@ -3566,10 +3567,17 @@ mod tests {
             .build()
             .unwrap();
 
+        (dt, vec![runs, values])
+    }
+
+    #[test]
+    fn test_run_array_validates_last_run() {
+        let (dt, children) = run_array_test_children();
+
         let err = ArrayDataBuilder::new(dt)
             .len(4)
             .offset(0)
-            .child_data(vec![runs, values])
+            .child_data(children)
             .build()
             .unwrap_err();
         assert_eq!(
@@ -3580,37 +3588,49 @@ mod tests {
 
     #[test]
     fn test_run_array_empty_validates() {
-        let dt = DataType::RunEndEncoded(
-            Arc::new(Field::new(
-                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
-                DataType::Int32,
-                false,
-            )),
-            Arc::new(Field::new(
-                Field::REE_VALUES_FIELD_DEFAULT_NAME,
-                DataType::Float32,
-                true,
-            )),
-        );
-
-        let runs = ArrayData::builder(DataType::Int32)
-            .len(2)
-            .add_buffer(vec![1_i32, 3].into())
-            .build()
-            .unwrap();
-        let values = ArrayData::builder(DataType::Float32)
-            .len(2)
-            .add_buffer(vec![1.5_f32, 2.5].into())
-            .build()
-            .unwrap();
+        let (dt, children) = run_array_test_children();
 
         let data = ArrayDataBuilder::new(dt)
             .len(0)
             .offset(4)
-            .child_data(vec![runs, values])
+            .child_data(children)
             .build()
             .unwrap();
         assert_eq!(data.len(), 0);
+    }
+
+    /// The parent's offset must be included when checking the last run end:
+    /// offset 2 + length 2 = 4 exceeds the last run end of 3.
+    #[test]
+    fn test_run_array_validates_last_run_with_offset() {
+        let (dt, children) = run_array_test_children();
+
+        let err = ArrayDataBuilder::new(dt)
+            .len(2)
+            .offset(2)
+            .child_data(children)
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: The offset + length of array should be less or equal to last value in the run_ends array. The last value of run_ends array is 3 and offset + length of array is 4."
+        );
+    }
+
+    /// A slice that stays within the last run end is valid:
+    /// offset 1 + length 2 = 3 equals the last run end of 3.
+    #[test]
+    fn test_run_array_sliced_validates() {
+        let (dt, children) = run_array_test_children();
+
+        let data = ArrayDataBuilder::new(dt)
+            .len(2)
+            .offset(1)
+            .child_data(children)
+            .build()
+            .unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data.offset(), 1);
     }
 
     /// `validate_values` must report missing children rather than index out of bounds.
