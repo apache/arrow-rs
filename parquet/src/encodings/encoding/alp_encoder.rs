@@ -601,7 +601,7 @@ impl<F: AlpFloat> StreamingPage<F> {
 /// The first page is buffered whole: ALP samples it to choose the column chunk's
 /// candidate `(exponent, factor)` set, which needs all of the page's data. Once
 /// that preset is fixed, later pages are encoded incrementally, a vector at a
-/// time, without ever holding the whole page of raw floats (see [`StreamingPage`]).
+/// time, without ever holding the whole page of raw floats.
 pub struct AlpEncoder<T: DataType>
 where
     T::T: AlpFloat,
@@ -618,11 +618,20 @@ where
     streaming: StreamingPage<T::T>,
 }
 
+impl<T: DataType> Default for AlpEncoder<T>
+where
+    T::T: AlpFloat,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: DataType> AlpEncoder<T>
 where
     T::T: AlpFloat,
 {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             values: Vec::new(),
             preset: None,

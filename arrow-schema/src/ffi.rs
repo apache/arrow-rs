@@ -889,6 +889,10 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
             flags |= Flags::DICTIONARY_ORDERED;
         }
 
+        if let DataType::Map(_, true) = field.data_type() {
+            flags |= Flags::MAP_KEYS_SORTED;
+        }
+
         let schema = FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
             .with_flags(flags)?;
@@ -1066,6 +1070,56 @@ mod tests {
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type).unwrap();
         assert!(arrow_schema.map_keys_sorted());
+    }
+
+    fn map_type(keys_sorted: bool) -> DataType {
+        let entries = Field::new(
+            Field::MAP_ENTRIES_FIELD_DEFAULT_NAME,
+            DataType::Struct(Fields::from(vec![
+                Field::new(Field::MAP_KEY_FIELD_DEFAULT_NAME, DataType::Utf8, false),
+                Field::new(Field::MAP_VALUE_FIELD_DEFAULT_NAME, DataType::Int32, true),
+            ])),
+            false,
+        );
+        DataType::Map(Arc::new(entries), keys_sorted)
+    }
+
+    #[test]
+    fn test_map_keys_sorted_field() {
+        for keys_sorted in [false, true] {
+            for nullable in [false, true] {
+                let field = Field::new("m", map_type(keys_sorted), nullable);
+                let c_schema = FFI_ArrowSchema::try_from(&field).unwrap();
+                assert_eq!(c_schema.map_keys_sorted(), keys_sorted);
+                assert_eq!(c_schema.nullable(), nullable);
+                round_trip_field(field);
+            }
+        }
+    }
+
+    #[test]
+    fn test_map_keys_sorted_nested() {
+        let map = |keys_sorted| Field::new("m", map_type(keys_sorted), true);
+
+        for keys_sorted in [false, true] {
+            round_trip_type(DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int32, true),
+                map(keys_sorted),
+            ])));
+            round_trip_type(DataType::List(Arc::new(map(keys_sorted))));
+            round_trip_type(DataType::Union(
+                UnionFields::try_new(
+                    vec![0, 1],
+                    vec![Field::new("i", DataType::Int32, true), map(keys_sorted)],
+                )
+                .unwrap(),
+                UnionMode::Dense,
+            ));
+            round_trip_schema(Schema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                map(keys_sorted),
+            ]));
+        }
     }
 
     #[test]

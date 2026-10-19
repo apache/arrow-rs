@@ -165,7 +165,7 @@
 
 mod records;
 
-use arrow_array::builder::{NullBuilder, PrimitiveBuilder};
+use arrow_array::builder::{NullBuilder, PrimitiveBuilder, StringDictionaryBuilder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_cast::parse::{Parser, parse_decimal, string_to_datetime};
@@ -1033,70 +1033,20 @@ fn parse(
                     if value_type.as_ref() == &DataType::Utf8 =>
                 {
                     match key_type.as_ref() {
-                        DataType::Int8 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int8Type>>(),
-                        ) as ArrayRef),
-                        DataType::Int16 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int16Type>>(),
-                        ) as ArrayRef),
-                        DataType::Int32 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int32Type>>(),
-                        ) as ArrayRef),
-                        DataType::Int64 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<Int64Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt8 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt8Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt16 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt16Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt32 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt32Type>>(),
-                        ) as ArrayRef),
-                        DataType::UInt64 => Ok(Arc::new(
-                            rows.iter()
-                                .map(|row| {
-                                    let s = row.get(i);
-                                    (!null_regex.is_null(s)).then_some(s)
-                                })
-                                .collect::<DictionaryArray<UInt64Type>>(),
-                        ) as ArrayRef),
+                        DataType::Int8 => build_dictionary_array::<Int8Type>(rows, i, null_regex),
+                        DataType::Int16 => build_dictionary_array::<Int16Type>(rows, i, null_regex),
+                        DataType::Int32 => build_dictionary_array::<Int32Type>(rows, i, null_regex),
+                        DataType::Int64 => build_dictionary_array::<Int64Type>(rows, i, null_regex),
+                        DataType::UInt8 => build_dictionary_array::<UInt8Type>(rows, i, null_regex),
+                        DataType::UInt16 => {
+                            build_dictionary_array::<UInt16Type>(rows, i, null_regex)
+                        }
+                        DataType::UInt32 => {
+                            build_dictionary_array::<UInt32Type>(rows, i, null_regex)
+                        }
+                        DataType::UInt64 => {
+                            build_dictionary_array::<UInt64Type>(rows, i, null_regex)
+                        }
                         _ => Err(ArrowError::ParseError(format!(
                             "Unsupported dictionary key type {key_type}"
                         ))),
@@ -1280,6 +1230,24 @@ fn build_boolean_array(
         })
         .collect::<Result<BooleanArray, _>>()
         .map(|e| Arc::new(e) as ArrayRef)
+}
+
+// parses a specific column (col_idx) into an Arrow dictionary array of strings.
+fn build_dictionary_array<K: ArrowDictionaryKeyType>(
+    rows: &StringRecords<'_>,
+    col_idx: usize,
+    null_regex: &NullRegex,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = StringDictionaryBuilder::<K>::with_capacity(rows.len(), 256, 1024);
+    for row in rows.iter() {
+        let s = row.get(col_idx);
+        if null_regex.is_null(s) {
+            builder.append_null();
+        } else {
+            builder.append(s)?;
+        }
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 /// Builder for CSV [`Reader`]s
@@ -2066,6 +2034,27 @@ mod tests {
         assert_eq!(strings.value(0), "Elgin, Scotland, the UK");
         assert_eq!(strings.value(4), "Eastbourne, East Sussex, UK");
         assert_eq!(strings.value(29), "Uckfield, East Sussex, UK");
+    }
+
+    #[test]
+    fn test_csv_dictionary_key_overflow() {
+        let schema = Arc::new(Schema::new(vec![Field::new_dictionary(
+            "c",
+            DataType::Int8,
+            DataType::Utf8,
+            false,
+        )]));
+        let read = |distinct: usize| {
+            let rows = (0..distinct).map(|i| format!("v{i}")).collect::<Vec<_>>();
+            let mut reader = ReaderBuilder::new(schema.clone())
+                .build(Cursor::new(rows.join("\n")))
+                .unwrap();
+            reader.next().unwrap()
+        };
+
+        assert_eq!(read(128).unwrap().num_rows(), 128);
+        let err = read(129).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
     }
 
     #[test]
