@@ -421,14 +421,19 @@ impl ValueDecoder {
             }
             Decoder::Dict { decoder } => {
                 let dict = self.dict_page.as_ref().unwrap();
-                if dict.is_empty() {
-                    return Ok(0);
-                }
-
+                let dictionary_len = dict.len() / self.byte_length;
                 decoder.read(num_values, |keys| {
                     out.reserve(keys.len() * self.byte_length);
                     for key in keys {
-                        let offset = *key as usize * self.byte_length;
+                        let index = usize::try_from(*key).map_err(|_| {
+                            general_err!("dictionary index out of bounds: {key}")
+                        })?;
+                        if index >= dictionary_len {
+                            return Err(general_err!(
+                                "dictionary index out of bounds: {index} (dictionary size {dictionary_len})"
+                            ));
+                        }
+                        let offset = index * self.byte_length;
                         out.extend_from_slice(&dict.as_ref()[offset..offset + self.byte_length]);
                     }
                     Ok(())
@@ -609,12 +614,56 @@ mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
     use crate::arrow::arrow_reader::ParquetRecordBatchReader;
+    use crate::encodings::rle::RleEncoder;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ListArray};
     use arrow_array::{Decimal256Array, RecordBatch};
     use bytes::Bytes;
     use std::sync::Arc;
+
+    fn fixed_len_byte_array_column() -> ColumnDescPtr {
+        let primitive = Arc::new(
+            crate::schema::types::Type::primitive_type_builder("fixed", Type::FIXED_LEN_BYTE_ARRAY)
+                .with_length(4)
+                .build()
+                .unwrap(),
+        );
+        Arc::new(ColumnDescriptor::new(
+            primitive,
+            0,
+            0,
+            ColumnPath::from("fixed"),
+        ))
+    }
+
+    fn encoded_dictionary_index(index: u64, bit_width: u8) -> Bytes {
+        let mut encoder = RleEncoder::new_from_buf(bit_width, vec![bit_width]);
+        encoder.put(index);
+        encoder.consume().into()
+    }
+
+    fn dictionary_decoder(
+        dictionary: Bytes,
+        dictionary_values: u32,
+        indices: Bytes,
+        num_values: Option<usize>,
+    ) -> ValueDecoder {
+        let mut decoder = ValueDecoder::new(&fixed_len_byte_array_column());
+        decoder
+            .set_dict(
+                dictionary,
+                dictionary_values,
+                Encoding::RLE_DICTIONARY,
+                false,
+            )
+            .unwrap();
+        decoder
+            .set_data(Encoding::RLE_DICTIONARY, indices, 1, num_values)
+            .unwrap();
+        decoder
+    }
 
     #[test]
     fn test_pending_reservation_tracks_max_capacity() {
@@ -626,6 +675,72 @@ mod tests {
 
         buffer.reserve_exact(12);
         assert_eq!(buffer.values_capacity, Some(12));
+    }
+
+    #[test]
+    fn test_dictionary_index_out_of_bounds_returns_error() {
+        let mut decoder = dictionary_decoder(
+            Bytes::from_static(b"aaaabbbb"),
+            2,
+            encoded_dictionary_index(255, 8),
+            Some(1),
+        );
+
+        let mut output = FixedLenByteArrayBuffer::with_capacity(1);
+        let error = decoder.read(&mut output, 1).unwrap_err();
+
+        assert!(error.to_string().contains("dictionary index out of bounds"));
+    }
+
+    #[test]
+    fn test_dictionary_index_in_bounds_reads_value() {
+        let mut decoder = dictionary_decoder(
+            Bytes::from_static(b"aaaabbbb"),
+            2,
+            encoded_dictionary_index(1, 8),
+            Some(1),
+        );
+
+        let mut output = FixedLenByteArrayBuffer::with_capacity(1);
+
+        assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
+        assert_eq!(output.buffer, b"bbbb");
+    }
+
+    #[test]
+    fn test_empty_dictionary_index_returns_error() {
+        let mut decoder =
+            dictionary_decoder(Bytes::new(), 0, encoded_dictionary_index(0, 1), Some(1));
+
+        let mut output = FixedLenByteArrayBuffer::with_capacity(1);
+        let error = decoder.read(&mut output, 1).unwrap_err();
+
+        assert!(error.to_string().contains("dictionary index out of bounds"));
+    }
+
+    #[test]
+    fn test_empty_dictionary_without_indices_reads_zero_values() {
+        let mut decoder = dictionary_decoder(Bytes::new(), 0, Bytes::from_static(&[0]), None);
+
+        let mut output = FixedLenByteArrayBuffer::with_capacity(1);
+
+        assert_eq!(decoder.read(&mut output, 1).unwrap(), 0);
+        assert!(output.buffer.is_empty());
+    }
+
+    #[test]
+    fn test_negative_dictionary_index_returns_error() {
+        let mut decoder = dictionary_decoder(
+            Bytes::from_static(b"aaaabbbb"),
+            2,
+            encoded_dictionary_index(u32::MAX.into(), 32),
+            Some(1),
+        );
+
+        let mut output = FixedLenByteArrayBuffer::with_capacity(1);
+        let error = decoder.read(&mut output, 1).unwrap_err();
+
+        assert!(error.to_string().contains("dictionary index out of bounds"));
     }
 
     #[test]
