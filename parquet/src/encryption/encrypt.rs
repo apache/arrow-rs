@@ -26,13 +26,20 @@ use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Formatter;
 use std::io::Write;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 struct EncryptionKey {
     key: Vec<u8>,
     key_metadata: Option<Vec<u8>>,
+}
+
+impl std::fmt::Debug for EncryptionKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EncryptionKey {{ }}")
+    }
 }
 
 impl EncryptionKey {

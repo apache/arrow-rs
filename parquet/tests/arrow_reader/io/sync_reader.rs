@@ -156,6 +156,11 @@ fn test_read_single_column_no_page_index() {
 
 #[test]
 fn test_read_row_selection() {
+    // Dictionary pages are read on first decode of a data page that needs
+    // them, so skipping a page does not pull its dictionary in. That is why
+    // the trace below shows the dictionary *after* the data page wherever a
+    // skip precedes it, and *before* the data page where none does.
+    // See apache/arrow-rs#11154.
     // There are 400 total rows spread across 4 data pages (100 rows each)
     // select rows 175..225 (i.e. DataPage(1) of row group 0 and DataPage(0) of row group 1)
     let test_file = test_file();
@@ -181,10 +186,10 @@ fn test_read_row_selection() {
         "UNKNOWN: 22230..22877 (maybe Page Index)",
         "Event: Builder Configured",
         "Event: Reader Built",
-        "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
         "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
@@ -221,6 +226,11 @@ fn test_read_limit() {
 
 #[test]
 fn test_read_single_row_filter() {
+    // Dictionary pages are read on first decode of a data page that needs
+    // them, so skipping a page does not pull its dictionary in. That is why
+    // the trace below shows the dictionary *after* the data page wherever a
+    // skip precedes it, and *before* the data page where none does.
+    // See apache/arrow-rs#11154.
     // Values from column "b" range 400..799
     // filter  "b" > 575 and < 625
     // (last data page in Row Group 0 and first DataPage in Row Group 1)
@@ -255,10 +265,10 @@ fn test_read_single_row_filter() {
         "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
         "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
         "Event: Reader Built",
-        "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
         "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
@@ -269,6 +279,11 @@ fn test_read_single_row_filter() {
 
 #[test]
 fn test_read_multiple_row_filter() {
+    // Dictionary pages are read on first decode of a data page that needs
+    // them, so skipping a page does not pull its dictionary in. That is why
+    // the trace below shows the dictionary *after* the data page wherever a
+    // skip precedes it, and *before* the data page where none does.
+    // See apache/arrow-rs#11154.
     // Values in column "a" range 0..399
     // Values in column "b" range 400..799
     // First filter: "a" > 175  (last data page in Row Group 0)
@@ -305,14 +320,14 @@ fn test_read_multiple_row_filter() {
         "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
         "Row Group 1, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
         "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
         "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
         "Event: Reader Built",
-        "Row Group 0, column 'c': DictionaryPage   (7107 bytes, 1 requests) [data]",
         "Row Group 0, column 'c': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 0, column 'c': DictionaryPage   (7107 bytes, 1 requests) [data]",
         "Row Group 1, column 'c': DictionaryPage   (7217 bytes, 1 requests) [data]",
         "Row Group 1, column 'c': DataPage(0)      (113 bytes , 1 requests) [data]",
     ]

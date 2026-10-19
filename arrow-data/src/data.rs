@@ -2761,6 +2761,70 @@ mod tests {
     }
 
     #[test]
+    fn test_extend_fixed_size_list_accounts_for_parent_offset() {
+        let field = Arc::new(Field::new("item", DataType::Int32, false));
+        let child = ArrayData::builder(DataType::Int32)
+            .len(6)
+            .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5]))
+            .build()
+            .unwrap();
+
+        let data = ArrayData::builder(DataType::FixedSizeList(field, 2))
+            .len(2)
+            .offset(1)
+            .add_child_data(child)
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&data], false, data.len());
+        mutable.try_extend(0, 0, data.len()).unwrap();
+        let output = mutable.freeze();
+
+        assert_eq!(output.child_data()[0].buffer::<i32>(0), &[2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_extend_sparse_union_accounts_for_parent_offset() {
+        let fields = UnionFields::try_new(
+            [0, 1],
+            [
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ],
+        )
+        .unwrap();
+        let child_a = ArrayData::builder(DataType::Int32)
+            .len(3)
+            .add_buffer(Buffer::from_slice_ref([10, 20, 30]))
+            .build()
+            .unwrap();
+        let child_b = ArrayData::builder(DataType::Int32)
+            .len(3)
+            .add_buffer(Buffer::from_slice_ref([100, 200, 300]))
+            .build()
+            .unwrap();
+
+        // The children are left whole, as `ArrayData::slice` and C Data
+        // Interface producers leave them for a sparse union
+        let data = ArrayData::builder(DataType::Union(fields, UnionMode::Sparse))
+            .len(2)
+            .offset(1)
+            .add_buffer(Buffer::from_slice_ref([0i8, 1, 0]))
+            .add_child_data(child_a)
+            .add_child_data(child_b)
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&data], false, data.len());
+        mutable.try_extend(0, 0, data.len()).unwrap();
+        let output = mutable.freeze();
+
+        assert_eq!(output.buffer::<i8>(0), &[1, 0]);
+        assert_eq!(output.child_data()[0].buffer::<i32>(0), &[20, 30]);
+        assert_eq!(output.child_data()[1].buffer::<i32>(0), &[200, 300]);
+    }
+
+    #[test]
     fn test_null_count() {
         let mut bit_v: [u8; 2] = [0; 2];
         bit_util::set_bit(&mut bit_v, 0);

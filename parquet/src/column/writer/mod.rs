@@ -53,6 +53,7 @@ use crate::schema::types::{BasicTypeInfo, ColumnDescPtr, ColumnDescriptor};
 
 mod byte_budget_chunker;
 pub(crate) mod encoder;
+pub(crate) mod min_max;
 
 use byte_budget_chunker::{ByteBudgetChunker, SubBatchStrategy};
 
@@ -1783,11 +1784,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
 
         self.encodings.insert(compressed_page.encoding());
-        self.encoding_stats.push(PageEncodingStats {
-            page_type: PageType::DICTIONARY_PAGE,
-            encoding: compressed_page.encoding(),
-            count: 1,
-        });
+        // The dictionary page is always laid out first in the column chunk,
+        // even when a page writer that defers dictionary ordering receives it
+        // after the data pages. Keep `encoding_stats` in file order, as some
+        // readers (e.g. Arrow C++) expect the dictionary page entry first.
+        self.encoding_stats.insert(
+            0,
+            PageEncodingStats {
+                page_type: PageType::DICTIONARY_PAGE,
+                encoding: compressed_page.encoding(),
+                count: 1,
+            },
+        );
         let page_spec = self.page_writer.write_page(compressed_page)?;
         self.update_metrics_for_page(page_spec);
         // For the directory page, don't need to update column/offset index.
