@@ -24,7 +24,9 @@ use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
 use crate::interleave::interleave_record_batch;
 use crate::take::take_record_batch;
 use arrow_array::types::{BinaryViewType, StringViewType};
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, RecordBatch, downcast_integer, downcast_primitive,
+};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -32,17 +34,21 @@ use std::sync::Arc;
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
 mod byte_view;
+mod dictionary;
 mod fixed_size_binary;
 mod generic;
 mod primitive;
 
 use byte_view::InProgressByteViewArray;
+use dictionary::InProgressDictionaryArray;
 use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
 fn has_sparse_filter_copy(data_type: &DataType) -> bool {
-    data_type.is_primitive() || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
+    data_type.is_primitive()
+        || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
+        || matches!(data_type, DataType::Dictionary(_, _))
 }
 
 /// Maximum selected row fraction for the fused sparse-filter copy path.
@@ -776,6 +782,15 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         };
     }
 
+    macro_rules! instantiate_dictionary {
+        ($t:ty) => {
+            Box::new(InProgressDictionaryArray::<$t>::new(
+                data_type.clone(),
+                batch_size,
+            ))
+        };
+    }
+
     downcast_primitive! {
         // Instantiate InProgressPrimitiveArray for each primitive type
         data_type => (instantiate_primitive),
@@ -783,6 +798,10 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
         }
+        DataType::Dictionary(key, _) => downcast_integer! {
+            key.as_ref() => (instantiate_dictionary),
+            _ => unreachable!("illegal dictionary key type {key}"),
+        },
         DataType::FixedSizeBinary(size) => {
             Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
         }
@@ -1772,6 +1791,30 @@ mod tests {
         )]));
         let coalescer = BatchCoalescer::new(boolean, 100);
         assert!(coalescer.has_non_specialized_filter_columns);
+
+        let dictionary = Arc::new(Schema::new(vec![Field::new(
+            "dictionary",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let coalescer = BatchCoalescer::new(dictionary, 100);
+        assert!(!coalescer.has_non_specialized_filter_columns);
+
+        let dictionary = Arc::new(Schema::new(vec![Field::new(
+            "dictionary",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let coalescer = BatchCoalescer::new(dictionary, 100);
+        assert!(!coalescer.has_non_specialized_filter_columns);
+
+        let dictionary = Arc::new(Schema::new(vec![Field::new(
+            "dictionary",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Boolean)),
+            true,
+        )]));
+        let coalescer = BatchCoalescer::new(dictionary, 100);
+        assert!(!coalescer.has_non_specialized_filter_columns);
     }
 
     #[derive(Debug, Clone, PartialEq)]
