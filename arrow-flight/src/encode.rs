@@ -1918,7 +1918,7 @@ mod tests {
         ])
         .unwrap();
 
-        verify_encoded_split(batch, 120).await;
+        verify_encoded_split(batch, 88).await;
     }
 
     #[tokio::test]
@@ -1929,7 +1929,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4312).await;
+        verify_encoded_split(batch, 4304).await;
     }
 
     #[tokio::test]
@@ -1965,7 +1965,7 @@ mod tests {
         // 5k over limit (which is 2x larger than limit of 5k)
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5808).await;
+        verify_encoded_split(batch, 5784).await;
     }
 
     #[tokio::test]
@@ -1995,7 +1995,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 3336).await;
+        verify_encoded_split(batch, 3328).await;
     }
 
     #[tokio::test]
@@ -2009,7 +2009,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 5288).await;
+        verify_encoded_split(batch, 5280).await;
     }
 
     #[tokio::test]
@@ -2034,7 +2034,7 @@ mod tests {
 
         // overage is much higher than ideal
         // https://github.com/apache/arrow-rs/issues/3478
-        verify_encoded_split(batch, 4136).await;
+        verify_encoded_split(batch, 4112).await;
     }
 
     /// Return size, in memory of flight data
