@@ -99,8 +99,15 @@ fn should_use_sparse_filter_copy(filter_len: usize, selected_count: usize) -> bo
 // Dense selections are faster through `take`.
 const INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 2;
 
+// Byte-view indexed copying is only faster for sparse selections.
+const BYTE_VIEW_INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR: usize = 16;
+
 fn should_use_indexed_copy(input_rows: usize, selected_rows: usize) -> bool {
     selected_rows <= input_rows / INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR
+}
+
+fn should_use_byte_view_indexed_copy(input_rows: usize, selected_rows: usize) -> bool {
+    selected_rows <= input_rows / BYTE_VIEW_INDEXED_COPY_MAX_SELECTIVITY_DENOMINATOR
 }
 
 /// Concatenate multiple [`RecordBatch`]es
@@ -206,6 +213,8 @@ pub struct BatchCoalescer {
     in_progress_arrays: Vec<Box<dyn InProgressArray>>,
     /// True if some column still needs the materialized filter path.
     has_non_specialized_filter_columns: bool,
+    /// True if some column uses the byte-view indexed-copy path.
+    has_byte_view_columns: bool,
     /// Buffered row count. Always less than `batch_size`
     buffered_rows: usize,
     /// Completed batches
@@ -227,6 +236,10 @@ impl BatchCoalescer {
             .fields()
             .iter()
             .any(|field| !has_sparse_filter_copy(field.data_type()));
+        let has_byte_view_columns = schema
+            .fields()
+            .iter()
+            .any(|field| matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView));
         let in_progress_arrays = schema
             .fields()
             .iter()
@@ -238,6 +251,7 @@ impl BatchCoalescer {
             target_batch_size,
             in_progress_arrays,
             has_non_specialized_filter_columns,
+            has_byte_view_columns,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
@@ -383,7 +397,17 @@ impl BatchCoalescer {
         batch: RecordBatch,
         indices: &dyn Array,
     ) -> Result<(), ArrowError> {
-        if !should_use_indexed_copy(batch.num_rows(), indices.len()) {
+        let exceeds_byte_view_threshold = self.has_byte_view_columns
+            && !should_use_byte_view_indexed_copy(batch.num_rows(), indices.len());
+        if exceeds_byte_view_threshold
+            && let Some(u32_arr) = indices.as_any().downcast_ref::<UInt32Array>()
+            && u32_arr.null_count() == 0
+        {
+            validate_indices_bounds(u32_arr.values(), batch.num_rows())?;
+        }
+
+        if !should_use_indexed_copy(batch.num_rows(), indices.len()) || exceeds_byte_view_threshold
+        {
             let taken_batch = take_record_batch(&batch, indices)?;
             return self.push_batch(taken_batch);
         }
@@ -1041,6 +1065,13 @@ mod tests {
     fn test_indexed_copy_threshold() {
         assert!(should_use_indexed_copy(8192, 4096));
         assert!(!should_use_indexed_copy(8192, 4097));
+    }
+
+    #[test]
+    fn test_byte_view_indexed_copy_threshold() {
+        assert!(should_use_byte_view_indexed_copy(8192, 512));
+        assert!(!should_use_byte_view_indexed_copy(8192, 513));
+        assert!(!should_use_byte_view_indexed_copy(8192, 819));
     }
 
     #[test]
