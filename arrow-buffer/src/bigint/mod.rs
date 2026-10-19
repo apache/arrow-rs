@@ -496,9 +496,16 @@ impl i256 {
         let a = self.wrapping_abs();
         let b = other.wrapping_abs();
 
-        let (div, rem) = div_rem(&a.as_digits(), &b.as_digits());
-        let div = Self::from_digits(div);
-        let rem = Self::from_digits(rem);
+        let (div, rem) = if a.high == 0 && b.high == 0 {
+            // Magnitudes below 2^128 don't need the long division
+            (
+                Self::from_parts(a.low / b.low, 0),
+                Self::from_parts(a.low % b.low, 0),
+            )
+        } else {
+            let (div, rem) = div_rem(&a.as_digits(), &b.as_digits());
+            (Self::from_digits(div), Self::from_digits(rem))
+        };
 
         Ok((
             if self.is_negative() == other.is_negative() {
@@ -1203,6 +1210,7 @@ impl CheckedDiv for i256 {
 }
 
 impl CheckedMul for i256 {
+    #[inline]
     fn checked_mul(&self, v: &i256) -> Option<Self> {
         (*self).checked_mul(*v)
     }

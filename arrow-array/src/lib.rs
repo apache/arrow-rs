@@ -242,6 +242,9 @@ pub const ARROW_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod array;
 pub use array::*;
 
+mod array_reader;
+pub use array_reader::{ArrayIterator, ArrayReader};
+
 mod record_batch;
 pub use record_batch::{
     RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,

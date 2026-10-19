@@ -661,6 +661,50 @@ pub fn variant_get_decimal_from_float_bench(c: &mut Criterion) {
     );
 }
 
+pub fn variant_get_decimal_from_string_bench(c: &mut Criterion) {
+    let samples = ["123.45", "-67.89", "0"];
+    bench_variant_get_decimal(
+        c,
+        "short_string_to_decimal32(7,2)_valid",
+        |rng| Variant::from(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal32(7, 2),
+        &[true, false],
+    );
+
+    // Exceed the 63-byte short-string limit while keeping the values in range.
+    let samples = [
+        "0000000000000000000000000000000000000000000000000000000000000000123.45",
+        "-000000000000000000000000000000000000000000000000000000000000000067.89",
+    ];
+    bench_variant_get_decimal(
+        c,
+        "string_to_decimal128(38,3)_long",
+        |rng| Variant::from(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal128(38, 3),
+        &[true, false],
+    );
+    let samples = [
+        "1234567890123456789012345678901234567890.12",
+        "-1234567890123456789012345678901234567890.12",
+    ];
+    bench_variant_get_decimal(
+        c,
+        "short_string_to_decimal256(76,2)_wide",
+        |rng| Variant::from(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal256(76, 2),
+        &[true],
+    );
+
+    let samples = ["12345.67", "-6789.01", "0"];
+    bench_variant_get_decimal(
+        c,
+        "short_string_to_decimal256(40,-2)_scale_down",
+        |rng| Variant::from(samples[rng.random_range(0..samples.len())]),
+        DataType::Decimal256(40, -2),
+        &[true],
+    );
+}
+
 fn bench_variant_get_decimal(
     c: &mut Criterion,
     name: &str,
@@ -685,7 +729,7 @@ fn bench_variant_get_decimal(
             &format!("variant_get_decimal_{name}_8192_{mode}"),
             |rng, array_size| {
                 // Unshredded input exercises Variant's scalar conversion. Keep
-                // the requested numeric type and make every tenth row null.
+                // the requested source type and make every tenth row null.
                 let mut builder = VariantArrayBuilder::new(array_size);
                 for i in 0..array_size {
                     if i % 10 == 0 {
@@ -726,6 +770,7 @@ criterion_group!(
     variant_get_binary_from_string_bench,
     variant_get_decimal_from_int_bench,
     variant_get_decimal_from_float_bench,
+    variant_get_decimal_from_string_bench,
 );
 
 criterion_main!(benches);
