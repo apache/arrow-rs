@@ -35,14 +35,23 @@ mod byte_view;
 mod fixed_size_binary;
 mod generic;
 mod primitive;
+mod run_end;
 
 use byte_view::InProgressByteViewArray;
 use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
+use run_end::InProgressInt32RunArray;
 
 fn has_sparse_filter_copy(data_type: &DataType) -> bool {
-    data_type.is_primitive() || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
+    data_type.is_primitive()
+        || matches!(data_type, DataType::Utf8View | DataType::BinaryView)
+        || matches!(
+            data_type,
+            DataType::RunEndEncoded(run_ends, values)
+                if run_ends.data_type() == &DataType::Int32
+                    && values.data_type() == &DataType::Int32
+        )
 }
 
 /// Maximum selected row fraction for the fused sparse-filter copy path.
@@ -785,6 +794,15 @@ fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn 
         }
         DataType::FixedSizeBinary(size) => {
             Box::new(InProgressFixedSizeBinaryArray::new(*size, batch_size))
+        }
+        DataType::RunEndEncoded(run_ends, values)
+            if run_ends.data_type() == &DataType::Int32
+                && values.data_type() == &DataType::Int32 =>
+        {
+            Box::new(InProgressInt32RunArray::new(
+                data_type.clone(),
+                batch_size,
+            ))
         }
         _ => Box::new(GenericInProgressArray::new()),
     }
@@ -1772,6 +1790,17 @@ mod tests {
         )]));
         let coalescer = BatchCoalescer::new(boolean, 100);
         assert!(coalescer.has_non_specialized_filter_columns);
+
+        let run_end_encoded = Arc::new(Schema::new(vec![Field::new(
+            "ree",
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", DataType::Int32, true)),
+            ),
+            true,
+        )]));
+        let coalescer = BatchCoalescer::new(run_end_encoded, 100);
+        assert!(!coalescer.has_non_specialized_filter_columns);
     }
 
     #[derive(Debug, Clone, PartialEq)]
