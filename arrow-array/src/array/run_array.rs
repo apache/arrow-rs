@@ -79,33 +79,24 @@ macro_rules! ree_map {
 ///                                                Contents
 /// ```
 ///
-/// # Logical `offset` and `len`
+/// # `offset` and `len`
 ///
-/// [`Array::len`] and [`Array::offset`] of a [`RunArray`] describe the **logical**
-/// array, not the physical `run_ends` and `values` children. In the example above
-/// the logical length is `6` even though `run_ends` and `values` each contain `3`
-/// elements.
+/// The [`Array::len`] and [`Array::offset`] for a `RunArray` refer to the
+/// **logical** length, not the `run_ends` and `values` childa rrays. In the
+/// example above the `RunArray` has length is `6` even though `run_ends` and
+/// `values` each contain `3` elements.
 ///
-/// Each run end is a logical index counted from the start of the *unsliced* logical
-/// array. Slicing a [`RunArray`] (see [`RunArray::slice`]) is zero-copy: `run_ends`
-/// and `values` are left untouched and only `offset` and `len` change to select a
-/// window of the logical array. The run ends are **not** rewritten relative to the
-/// new `offset`.
+/// The values in `run_ends` represent indexes of the *unsliced* logical array.
+/// This allows zero-copy [`RunArray::slice`]: `run_ends` and `values` are left
+/// untouched and only `offset` and `len` are adjusted.
 ///
-/// A [`RunArray`] is therefore valid when:
+/// A [`RunArray`] must satisfy the following invariants:
 ///
-/// * every run end is greater than zero and `run_ends` is strictly increasing,
-/// * `run_ends` and `values` have the same length (the number of runs), and
+/// * every run end is greater than zero and `run_ends` is strictly increasing
+/// * `run_ends` and `values` have the same length
 /// * if `len > 0`, the last run end is greater than or equal to `offset + len`.
 ///
-/// Runs that end at or before `offset` lie entirely before the slice, and runs that
-/// start at or after `offset + len` lie entirely after it; neither is visible.
-/// [`Self::get_start_physical_index`] and [`Self::get_end_physical_index`] return the
-/// range of physical indexes (into `run_ends` and `values`) that are visible.
-///
-/// The example below shows the array above after calling `slice(1, 3)`. The
-/// `run_ends` and `values` children are identical to the unsliced array; only
-/// `offset` and `len` differ:
+/// The example below shows the same array as above after calling `slice(1, 3)`
 ///
 /// ```text
 /// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
@@ -129,18 +120,14 @@ macro_rules! ree_map {
 ///
 /// # Slicing of the child arrays
 ///
-/// The `values` array may itself be sliced (that is, have a non-zero offset). Run
-/// `i` always corresponds to `values.value(i)` using the normal, logical indexing of
-/// the `values` array, so any offset on `values` is applied as usual.
+/// Note that the `values` array may itself have a non-zero offset. Run `i`
+/// always corresponds to `values.value(i)`, the logical indexing
+/// of the `values` array, including any offset.
 ///
-/// The `run_ends` child is treated as unsliced: a [`RunArray`] uses the entire run
-/// ends buffer as the physical run ends, and the offset of the `run_ends` child in
-/// an [`ArrayData`] is ignored when converting it to a [`RunArray`]. When a
-/// [`RunArray`] is built with [`RunArray::try_new`], the run ends are taken from
-/// [`PrimitiveArray::values`], which already accounts for any slicing of that
-/// array, so a sliced `run_ends` [`PrimitiveArray`] is copied by reference without
-/// the elements outside its slice.
+/// The `run_ends` are never sliced: a [`RunArray`] uses the entire run
+/// ends buffer as the physical run ends.
 ///
+/// [`From<ArrayData> for RunArray`]: RunArray#impl-From<ArrayData>-for-RunArray<R>
 /// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
 /// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
 pub struct RunArray<R: RunEndIndexType> {
@@ -171,6 +158,14 @@ impl<R: RunEndIndexType> RunArray<R> {
     }
 
     /// Attempts to create a [`RunArray`] using the given `run_ends` and `values`.
+    ///
+    /// The resulting array is unsliced: its logical offset is `0` and its logical
+    /// length is the last value of `run_ends` (or `0` if `run_ends` is empty).
+    ///
+    /// Both inputs may themselves be sliced arrays. The run ends are taken from
+    /// [`PrimitiveArray::values`], which only contains the elements within the
+    /// slice, so they become the physical run ends of the new array. `values` is
+    /// kept by reference, including any offset it has, and is indexed logically.
     ///
     /// # Errors
     ///
@@ -467,6 +462,22 @@ impl<R: RunEndIndexType> RunArray<R> {
     }
 }
 
+/// Converts an [`ArrayData`] into a [`RunArray`].
+///
+/// The `len` and `offset` of `data` become the logical length and offset of the
+/// [`RunArray`]; see the [`RunArray`] documentation for how they relate to the
+/// run ends.
+///
+/// The `offset` and `len` of the `run_ends` child are **ignored**: the entire
+/// buffer of the `run_ends` child is used as the physical run ends. The
+/// `run_ends` child must therefore be unsliced (offset `0` and `len` equal to the
+/// number of elements in its buffer). The `values` child may be sliced; its
+/// offset is respected.
+///
+/// # Panics
+///
+/// Panics if `data` is not a [`DataType::RunEndEncoded`] array with a `run_ends`
+/// child of type `R`, or does not have exactly two children.
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
     // The method assumes the caller already validated the data using `ArrayData::validate_data()`
     fn from(data: ArrayData) -> Self {
