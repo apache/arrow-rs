@@ -118,13 +118,16 @@ macro_rules! ree_map {
 ///                                                Contents
 /// ```
 ///
-/// # Slicing of the child arrays
+/// # Sliced child arrays
 ///
-/// Note that the `values` array may itself have a non-zero offset. Run `i`
-/// always corresponds to `values.value(i)`, the logical indexing
-/// of the `values` array, including any offset.
+/// [`RunArray::slice`] doesn't slice child arrays, but a `RunArray` may be
+/// built from child arrays that are already sliced. In that case the offset of
+/// each child is respected:
 ///
-/// The `run_ends` are never sliced.
+/// * The values are the `len` elements of the values `values` child, starting
+///   at its offset. This means the value of run `i` is `values.value(i)`
+/// * The run ends are the `len` elements of the `run_ends` child
+///   starting at its `offset`.
 ///
 /// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
 /// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
@@ -468,8 +471,11 @@ impl<R: RunEndIndexType> RunArray<R> {
 /// [`RunArray`]; see the [`RunArray`] documentation for how they relate to the
 /// run ends.
 ///
-/// The `offset` and `len` of the `run_ends` child are **ignored**: the entire
-/// buffer of the `run_ends` child is used as the physical run ends.
+/// The `offset` and `len` of the `run_ends` child are respected: only the `len`
+/// elements starting at `offset` are used as run ends. See [Sliced child
+/// arrays].
+///
+/// [Sliced child arrays]: RunArray#sliced-child-arrays
 ///
 /// # Panics
 ///
