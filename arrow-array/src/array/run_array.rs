@@ -167,9 +167,13 @@ impl<R: RunEndIndexType> RunArray<R> {
     ///
     /// # Errors
     ///
+    /// Returns an error if the [`RunArray` invariants] are not satisfied:
+    ///
     /// - If `run_ends` and `values` have different lengths
     /// - If `run_ends` has any null values
     /// - If `run_ends` doesn't consist of strictly increasing positive integers
+    ///
+    /// [`RunArray` invariants]: RunArray#offset-and-len
     pub fn try_new(run_ends: &PrimitiveArray<R>, values: &dyn Array) -> Result<Self, ArrowError> {
         // 1. run_ends and values must have the same (physical) length.
         if run_ends.len() != values.len() {
@@ -237,7 +241,10 @@ impl<R: RunEndIndexType> RunArray<R> {
     ///
     /// # Safety
     ///
-    /// Safe if [`Self::try_new`] would not error
+    /// Safe if [`Self::try_new`] would not error, that is if `run_ends` and
+    /// `values` satisfy the [`RunArray` invariants]
+    ///
+    /// [`RunArray` invariants]: RunArray#offset-and-len
     pub unsafe fn new_unchecked(
         data_type: DataType,
         run_ends: RunEndBuffer<R::Native>,
