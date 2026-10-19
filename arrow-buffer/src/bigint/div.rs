@@ -59,27 +59,25 @@ fn bits(arr: &[u64]) -> usize {
 
 /// Division of numerator by a u64 divisor
 fn div_rem_small<const N: usize>(numerator: &[u64; N], divisor: u64) -> ([u64; N], [u64; N]) {
-    // x86_64 divides by one word with `div`. On 32-bit targets, including wasm32, each
-    // 64x64-to-128-bit product in the reciprocal path would call `__multi3`
-    #[cfg(any(
-        all(target_arch = "x86_64", not(miri)),
-        not(target_pointer_width = "64")
-    ))]
-    {
-        div_rem_small_word(numerator, divisor)
-    }
-
-    // Here `div_rem_word` would call `__udivti3` for every digit
+    // `div_rem_word` uses the `div` instruction only on x86_64 outside Miri, which can't run
+    // inline assembly. On every other 64-bit target it is a `u128` division, which calls
+    // `__udivti3` for every digit, so those targets divide with a reciprocal instead
     #[cfg(all(target_pointer_width = "64", any(not(target_arch = "x86_64"), miri)))]
     {
         div_rem_small_reciprocal(numerator, divisor)
+    }
+
+    // x86_64 outside Miri keeps `div`. On 32-bit targets, including wasm32, each
+    // 64x64-to-128-bit product in the reciprocal path would call `__multi3`
+    #[cfg(not(all(target_pointer_width = "64", any(not(target_arch = "x86_64"), miri))))]
+    {
+        div_rem_small_word(numerator, divisor)
     }
 }
 
 #[cfg(any(
     test,
-    all(target_arch = "x86_64", not(miri)),
-    not(target_pointer_width = "64")
+    not(all(target_pointer_width = "64", any(not(target_arch = "x86_64"), miri)))
 ))]
 fn div_rem_small_word<const N: usize>(numerator: &[u64; N], divisor: u64) -> ([u64; N], [u64; N]) {
     let mut rem = 0u64;
@@ -127,7 +125,7 @@ fn div_rem_small_reciprocal<const N: usize>(
 
 /// Returns `floor((2^128 - 1) / divisor) - 2^64` for a divisor with its top bit set
 ///
-/// This is algorithm 2 of [Möller and Granlund (2011)](https://gmplib.org/~tege/division-paper.pdf),
+/// This is algorithm 2 of [Möller and Granlund, "Improved division by invariant integers" (2011)](https://gmplib.org/~tege/division-paper.pdf),
 /// which avoids a `u128` division
 #[cfg(any(
     test,
@@ -167,7 +165,7 @@ fn reciprocal_word(divisor: u64) -> u64 {
 
 /// Divides `hi:lo` by a divisor with its top bit set, given its [`reciprocal_word`]
 ///
-/// This is algorithm 4 of [Möller and Granlund (2011)](https://gmplib.org/~tege/division-paper.pdf)
+/// This is algorithm 4 of [Möller and Granlund, "Improved division by invariant integers" (2011)](https://gmplib.org/~tege/division-paper.pdf)
 #[cfg(any(
     test,
     all(target_pointer_width = "64", any(not(target_arch = "x86_64"), miri))
@@ -425,7 +423,7 @@ impl<T, const N: usize> std::ops::DerefMut for ArrayPlusOne<T, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{RngExt, rng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
 
     fn check_div_rem_small<const N: usize>(numerator: [u64; N], divisor: u64) {
         let expected = div_rem_small_word(&numerator, divisor);
@@ -443,7 +441,7 @@ mod tests {
         for i in 257..512u64 {
             divisors.extend([(i << 55) - 1, i << 55, (i << 55) + 1]);
         }
-        let mut rng = rng();
+        let mut rng = StdRng::seed_from_u64(42);
         divisors.extend((0..100_000).map(|_| rng.random::<u64>() | (1 << 63)));
         for divisor in divisors {
             let n = (u128::from(!divisor) << 64) | u128::from(u64::MAX);
@@ -454,12 +452,11 @@ mod tests {
 
     #[test]
     fn test_div_rem_word_reciprocal() {
-        // The second correction, which random inputs rarely reach, runs for this input
-        let (hi, lo, divisor) = (
-            3787258589690185862,
-            17800796494353475223,
-            9357586864501027680,
-        );
+        // The reciprocal of 2^63 + 2 is 2^64 - 8, so the estimate for
+        // (2^127 + 2^64 - 1) / (2^63 + 2) is 2^64 - 3. That is one below the quotient
+        // 2^64 - 2, so the second correction runs. Random inputs rarely reach it.
+        let (hi, lo, divisor) = (1 << 63, u64::MAX, (1 << 63) + 2);
+        assert_eq!(reciprocal_word(divisor), u64::MAX - 7);
         let n = (u128::from(hi) << 64) | u128::from(lo);
         let d = u128::from(divisor);
         assert_eq!(
@@ -467,7 +464,7 @@ mod tests {
             ((n / d) as u64, (n % d) as u64)
         );
 
-        let mut rng = rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let mut divisors = vec![1 << 63, (1 << 63) + 1, u64::MAX - 1, u64::MAX];
         divisors.extend((0..100).map(|_| rng.random::<u64>() | (1 << 63)));
         for divisor in divisors {
@@ -493,7 +490,7 @@ mod tests {
 
     #[test]
     fn test_div_rem_small_reciprocal() {
-        let mut rng = rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let numerators = [
             [0; 4],
             [1, 0, 0, 0],
