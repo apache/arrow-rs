@@ -160,11 +160,6 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// The resulting array is unsliced: its logical offset is `0` and its logical
     /// length is the last value of `run_ends` (or `0` if `run_ends` is empty).
     ///
-    /// Both inputs may themselves be sliced arrays. The run ends are taken from
-    /// [`PrimitiveArray::values`], which only contains the elements within the
-    /// slice, so they become the physical run ends of the new array. `values` is
-    /// kept by reference, including any offset it has, and is indexed logically.
-    ///
     /// # Errors
     ///
     /// Returns an error if the [`RunArray` invariants] are not satisfied:
@@ -474,10 +469,7 @@ impl<R: RunEndIndexType> RunArray<R> {
 /// run ends.
 ///
 /// The `offset` and `len` of the `run_ends` child are **ignored**: the entire
-/// buffer of the `run_ends` child is used as the physical run ends. The
-/// `run_ends` child must therefore be unsliced (offset `0` and `len` equal to the
-/// number of elements in its buffer). The `values` child may be sliced; its
-/// offset is respected.
+/// buffer of the `run_ends` child is used as the physical run ends.
 ///
 /// # Panics
 ///
