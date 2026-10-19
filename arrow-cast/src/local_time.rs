@@ -50,6 +50,12 @@ use chrono::{DateTime, LocalResult, NaiveDateTime, Offset, TimeDelta, TimeZone};
 ///
 /// Timezones with a fixed offset are never ambiguous and have no gaps.
 ///
+/// The gap rule probes the offset 24 hours earlier. This is correct for the
+/// IANA timezone database, but this function accepts any [`TimeZone`]. For a
+/// timezone whose transitions do not obey the assumptions given in the body
+/// (no gap longer than 24 hours, no two transitions closer than 24 hours), the
+/// result can be `None` or an incorrect offset.
+///
 /// See <https://github.com/apache/arrow-rs/issues/11037> for the PostgreSQL and
 /// ICU (DuckDB) sources these rules are taken from.
 pub(crate) fn resolve_local_offset<T: TimeZone>(
@@ -96,5 +102,6 @@ pub(crate) fn resolve_local_datetime<T: TimeZone>(
     local: &NaiveDateTime,
 ) -> Option<DateTime<T>> {
     let offset = resolve_local_offset(tz, local)?;
-    Some(tz.from_utc_datetime(&(*local - offset.fix())))
+    let utc = local.checked_sub_offset(offset.fix())?;
+    Some(DateTime::from_naive_utc_and_offset(utc, offset))
 }

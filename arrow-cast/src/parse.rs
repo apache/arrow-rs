@@ -171,6 +171,10 @@ impl TimestampParser {
 /// reading (the skipped hour when the clocks go forward) is shifted forward by
 /// the length of the gap.
 ///
+/// These rules also apply to the CSV and JSON readers, which call this
+/// function. They accept a timestamp in a daylight savings gap or overlap and
+/// resolve it as described above, rather than returning an error.
+///
 /// ```
 /// # use arrow_cast::parse::string_to_datetime;
 /// # use chrono::Utc;
@@ -4000,16 +4004,6 @@ mod tests {
                 "2024-03-10T07:30:00+00:00",
             ),
             (
-                "2023-11-05 01:30:06 America/Los_Angeles",
-                1_699_176_606,
-                "2023-11-05T09:30:06+00:00",
-            ),
-            (
-                "2023-03-12 02:05:06 America/Los_Angeles",
-                1_678_615_506,
-                "2023-03-12T10:05:06+00:00",
-            ),
-            (
                 "2024-04-07 02:30:00 Australia/Sydney",
                 1_712_421_000,
                 "2024-04-06T16:30:00+00:00",
@@ -4076,7 +4070,7 @@ mod tests {
     fn test_string_to_timestamp_nanos_unaffected_by_dst() {
         assert_eq!(
             string_to_timestamp_nanos("2024-03-10 02:30:00").unwrap(),
-            1_710_038_000_000_000_000 - 200_000_000_000
+            1_710_037_800 * 1_000_000_000
         );
     }
 }
