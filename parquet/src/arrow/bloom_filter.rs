@@ -19,14 +19,13 @@
 
 use arrow_array::builder::BooleanBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float32Type, Float64Type, RunEndIndexType};
-use arrow_array::{Array, BooleanArray, RunArray, downcast_run_array};
-use arrow_buffer::{ArrowNativeType, BooleanBuffer};
-use arrow_schema::DataType;
-
-use crate::arrow::arrow_writer::{
-    FixedLenByteArrayVisitor, PrimitiveVisitor, visit_fixed_len_byte_array, visit_i32, visit_i64,
+use arrow_array::types::*;
+use arrow_array::{
+    Array, ArrowPrimitiveType, BooleanArray, PrimitiveArray, RunArray, downcast_run_array,
 };
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, i256};
+use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+
 use crate::basic::{ConvertedType, LogicalType, Type as PhysicalType};
 use crate::bloom_filter::Sbbf;
 use crate::data_type::AsBytes;
@@ -118,8 +117,13 @@ pub struct ArrowSbbf<'a> {
     decimal_scale: Option<i32>,
 }
 
+// The functions in this file that are not generic are `#[inline]`, so they are
+// only compiled in crates that call them. Compiled into this crate, they change
+// how the rest of it is split into codegen units and inlined, which changes the
+// machine code of `ArrowWriter` even though its source is unchanged.
 impl<'a> ArrowSbbf<'a> {
     /// Create a new [`ArrowSbbf`] for the bloom filter of the column described by `column`
+    #[inline]
     pub fn new(sbbf: &'a Sbbf, column: &ColumnDescriptor) -> Self {
         let decimal_scale = match column.logical_type_ref() {
             Some(LogicalType::Decimal(decimal)) => Some(decimal.scale),
@@ -152,6 +156,7 @@ impl<'a> ArrowSbbf<'a> {
     /// array whose values have a different length than the column's.
     ///
     /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    #[inline]
     pub fn check(&self, array: &dyn Array) -> Result<BooleanArray> {
         if let Some(dictionary) = array.as_any_dictionary_opt() {
             let values = self.check(dictionary.values().as_ref())?;
@@ -171,18 +176,14 @@ impl<'a> ArrowSbbf<'a> {
         self.validate_decimal(array.data_type())?;
 
         let sbbf = self.sbbf;
-        let primitive = CheckPrimitive {
-            sbbf,
-            physical_type: self.physical_type,
-        };
         let found = match (self.physical_type, array.data_type()) {
-            (PhysicalType::INT32, _) => visit_i32(array, primitive)?,
-            (PhysicalType::INT64, _) => visit_i64(array, primitive)?,
+            (PhysicalType::INT32, _) => self.check_i32(array)?,
+            (PhysicalType::INT64, _) => self.check_i64(array)?,
             (PhysicalType::FLOAT, DataType::Float32) => {
-                primitive.slice(array.as_primitive::<Float32Type>().values())?
+                check_primitive(sbbf, array.as_primitive::<Float32Type>(), |v| v)
             }
             (PhysicalType::DOUBLE, DataType::Float64) => {
-                primitive.slice(array.as_primitive::<Float64Type>().values())?
+                check_primitive(sbbf, array.as_primitive::<Float64Type>(), |v| v)
             }
             (PhysicalType::BOOLEAN, DataType::Boolean) => array
                 .as_boolean()
@@ -208,17 +209,267 @@ impl<'a> ArrowSbbf<'a> {
             (PhysicalType::BYTE_ARRAY, DataType::BinaryView) => {
                 check_bytes(sbbf, array.as_binary_view())
             }
-            (PhysicalType::FIXED_LEN_BYTE_ARRAY, _) => {
-                let visitor = CheckFixedLenByteArray {
-                    sbbf,
-                    array,
-                    type_length: self.type_length,
-                };
-                visit_fixed_len_byte_array(array, visitor)?
-            }
+            (PhysicalType::FIXED_LEN_BYTE_ARRAY, _) => self.check_fixed_len_byte_array(array)?,
             (physical_type, data_type) => return Err(unsupported(physical_type, data_type)),
         };
         Ok(BooleanArray::new(found, array.logical_nulls()))
+    }
+
+    /// Checks the values that [`ArrowWriter`] stores for `array` in an `INT32` column
+    ///
+    /// This must match the conversion in [`ArrowWriter`], which the
+    /// `every_writer_type` test checks.
+    ///
+    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    #[inline]
+    fn check_i32(&self, array: &dyn Array) -> Result<BooleanBuffer> {
+        let sbbf = self.sbbf;
+        Ok(match array.data_type() {
+            DataType::Int8 => check_primitive(sbbf, array.as_primitive::<Int8Type>(), |v| v as i32),
+            DataType::Int16 => {
+                check_primitive(sbbf, array.as_primitive::<Int16Type>(), |v| v as i32)
+            }
+            DataType::Int32 => check_primitive(sbbf, array.as_primitive::<Int32Type>(), |v| v),
+            DataType::UInt8 => {
+                check_primitive(sbbf, array.as_primitive::<UInt8Type>(), |v| v as i32)
+            }
+            DataType::UInt16 => {
+                check_primitive(sbbf, array.as_primitive::<UInt16Type>(), |v| v as i32)
+            }
+            // The same bits, so values above `i32::MAX` are negative
+            DataType::UInt32 => {
+                check_primitive(sbbf, array.as_primitive::<UInt32Type>(), |v| v as i32)
+            }
+            DataType::Date32 => check_primitive(sbbf, array.as_primitive::<Date32Type>(), |v| v),
+            DataType::Time32(TimeUnit::Second) => {
+                check_primitive(sbbf, array.as_primitive::<Time32SecondType>(), |v| v)
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                check_primitive(sbbf, array.as_primitive::<Time32MillisecondType>(), |v| v)
+            }
+            // Milliseconds are stored as days, rounded towards zero
+            DataType::Date64 => check_primitive(sbbf, array.as_primitive::<Date64Type>(), |v| {
+                (v / 86_400_000) as i32
+            }),
+            // Decimals are stored as their unscaled value, truncated to 32 bits
+            DataType::Decimal32(_, _) => {
+                check_primitive(sbbf, array.as_primitive::<Decimal32Type>(), |v| v)
+            }
+            DataType::Decimal64(_, _) => {
+                check_primitive(sbbf, array.as_primitive::<Decimal64Type>(), |v| v as i32)
+            }
+            DataType::Decimal128(_, _) => {
+                check_primitive(sbbf, array.as_primitive::<Decimal128Type>(), |v| v as i32)
+            }
+            DataType::Decimal256(_, _) => {
+                check_primitive(sbbf, array.as_primitive::<Decimal256Type>(), |v| {
+                    v.as_i128() as i32
+                })
+            }
+            data_type => return Err(unsupported(PhysicalType::INT32, data_type)),
+        })
+    }
+
+    /// Checks the values that [`ArrowWriter`] stores for `array` in an `INT64` column
+    ///
+    /// This must match the conversion in [`ArrowWriter`], which the
+    /// `every_writer_type` test checks.
+    ///
+    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    #[inline]
+    fn check_i64(&self, array: &dyn Array) -> Result<BooleanBuffer> {
+        let sbbf = self.sbbf;
+        Ok(match array.data_type() {
+            DataType::Int64 => check_primitive(sbbf, array.as_primitive::<Int64Type>(), |v| v),
+            // The same bits, so values above `i64::MAX` are negative
+            DataType::UInt64 => {
+                check_primitive(sbbf, array.as_primitive::<UInt64Type>(), |v| v as i64)
+            }
+            DataType::Date64 => check_primitive(sbbf, array.as_primitive::<Date64Type>(), |v| v),
+            DataType::Time64(TimeUnit::Microsecond) => {
+                check_primitive(sbbf, array.as_primitive::<Time64MicrosecondType>(), |v| v)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                check_primitive(sbbf, array.as_primitive::<Time64NanosecondType>(), |v| v)
+            }
+            DataType::Timestamp(unit, _) => match unit {
+                TimeUnit::Second => {
+                    check_primitive(sbbf, array.as_primitive::<TimestampSecondType>(), |v| v)
+                }
+                TimeUnit::Millisecond => check_primitive(
+                    sbbf,
+                    array.as_primitive::<TimestampMillisecondType>(),
+                    |v| v,
+                ),
+                TimeUnit::Microsecond => check_primitive(
+                    sbbf,
+                    array.as_primitive::<TimestampMicrosecondType>(),
+                    |v| v,
+                ),
+                TimeUnit::Nanosecond => {
+                    check_primitive(sbbf, array.as_primitive::<TimestampNanosecondType>(), |v| v)
+                }
+            },
+            DataType::Duration(unit) => match unit {
+                TimeUnit::Second => {
+                    check_primitive(sbbf, array.as_primitive::<DurationSecondType>(), |v| v)
+                }
+                TimeUnit::Millisecond => {
+                    check_primitive(sbbf, array.as_primitive::<DurationMillisecondType>(), |v| v)
+                }
+                TimeUnit::Microsecond => {
+                    check_primitive(sbbf, array.as_primitive::<DurationMicrosecondType>(), |v| v)
+                }
+                TimeUnit::Nanosecond => {
+                    check_primitive(sbbf, array.as_primitive::<DurationNanosecondType>(), |v| v)
+                }
+            },
+            // Decimals are stored as their unscaled value, truncated to 64 bits.
+            // ArrowWriter stores Decimal32 as INT32, but it can be checked against
+            // an INT64 decimal column.
+            DataType::Decimal32(_, _) => {
+                check_primitive(sbbf, array.as_primitive::<Decimal32Type>(), |v| v as i64)
+            }
+            DataType::Decimal64(_, _) => {
+                check_primitive(sbbf, array.as_primitive::<Decimal64Type>(), |v| v)
+            }
+            DataType::Decimal128(_, _) => {
+                check_primitive(sbbf, array.as_primitive::<Decimal128Type>(), |v| v as i64)
+            }
+            DataType::Decimal256(_, _) => {
+                check_primitive(sbbf, array.as_primitive::<Decimal256Type>(), |v| {
+                    v.as_i128() as i64
+                })
+            }
+            data_type => return Err(unsupported(PhysicalType::INT64, data_type)),
+        })
+    }
+
+    /// Checks the values that [`ArrowWriter`] stores for `array` in a
+    /// `FIXED_LEN_BYTE_ARRAY` column
+    ///
+    /// This must match the conversion in [`ArrowWriter`], which the
+    /// `every_writer_type` test checks.
+    ///
+    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    #[inline]
+    fn check_fixed_len_byte_array(&self, array: &dyn Array) -> Result<BooleanBuffer> {
+        match array.data_type() {
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                // 12 bytes of months, days and milliseconds (4 bytes each). An Arrow
+                // YearMonth interval only stores months, so only the first 4 bytes are set.
+                let values = array.as_primitive::<IntervalYearMonthType>();
+                self.check_fixed_len(array, 12, |i, value| {
+                    value[0..4].copy_from_slice(&values.value(i).to_le_bytes());
+                })
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                // 12 bytes of months, days and milliseconds (4 bytes each). An Arrow
+                // DayTime interval only stores days and milliseconds, so the first 4
+                // bytes are not set.
+                let values = array.as_primitive::<IntervalDayTimeType>();
+                self.check_fixed_len(array, 12, |i, value| {
+                    let interval = values.value(i);
+                    value[4..8].copy_from_slice(&interval.days.to_le_bytes());
+                    value[8..12].copy_from_slice(&interval.milliseconds.to_le_bytes());
+                })
+            }
+            DataType::Float16 => {
+                let values = array.as_primitive::<Float16Type>();
+                self.check_fixed_len(array, 2, |i, value| {
+                    value.copy_from_slice(&values.value(i).to_le_bytes());
+                })
+            }
+            DataType::FixedSizeBinary(_) => {
+                let values = array.as_fixed_size_binary();
+                self.validate_length(array.data_type(), values.value_size())?;
+                Ok((0..values.len())
+                    .map(|i| self.sbbf.check(values.value(i)))
+                    .collect())
+            }
+            DataType::Decimal32(_, _) => Ok(self
+                .check_decimal(array.as_primitive::<Decimal32Type>(), |v| {
+                    i256::from_i128(v.into())
+                })),
+            DataType::Decimal64(_, _) => Ok(self
+                .check_decimal(array.as_primitive::<Decimal64Type>(), |v| {
+                    i256::from_i128(v.into())
+                })),
+            DataType::Decimal128(_, _) => {
+                Ok(self.check_decimal(array.as_primitive::<Decimal128Type>(), i256::from_i128))
+            }
+            DataType::Decimal256(_, _) => {
+                Ok(self.check_decimal(array.as_primitive::<Decimal256Type>(), |v| v))
+            }
+            data_type => Err(unsupported(PhysicalType::FIXED_LEN_BYTE_ARRAY, data_type)),
+        }
+    }
+
+    /// Checks `length` byte values against a `FIXED_LEN_BYTE_ARRAY` column
+    ///
+    /// `fill(i, value)` writes the value at index `i` of `array` to `value`, which
+    /// is `length` zeroed bytes.
+    fn check_fixed_len(
+        &self,
+        array: &dyn Array,
+        length: usize,
+        fill: impl Fn(usize, &mut [u8]),
+    ) -> Result<BooleanBuffer> {
+        self.validate_length(array.data_type(), length)?;
+        let mut value = vec![0; length];
+        Ok((0..array.len())
+            .map(|i| {
+                value.fill(0);
+                fill(i, &mut value);
+                self.sbbf.check(value.as_slice())
+            })
+            .collect())
+    }
+
+    /// Checks decimal values against a `FIXED_LEN_BYTE_ARRAY` column
+    ///
+    /// The values are stored as big-endian two's complement integers of the
+    /// column's length. A value that needs more bytes is truncated to its low
+    /// bytes, as [`ArrowWriter`] does, since Arrow does not validate precision.
+    /// A value of a narrower decimal type than the column is sign-extended.
+    ///
+    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
+    fn check_decimal<T: ArrowPrimitiveType>(
+        &self,
+        array: &PrimitiveArray<T>,
+        to_i256: impl Fn(T::Native) -> i256,
+    ) -> BooleanBuffer {
+        const I256_LENGTH: usize = 32;
+        let length = self.type_length;
+        // The number of bytes each value is sign-extended by, or the number of
+        // its high bytes that are dropped
+        let extension = length.saturating_sub(I256_LENGTH);
+        let dropped = I256_LENGTH.saturating_sub(length);
+        let mut value = vec![0; length];
+        array
+            .values()
+            .iter()
+            .map(|v| {
+                let bytes = to_i256(*v).to_be_bytes();
+                let sign = if (bytes[0] as i8) < 0 { 0xFF } else { 0 };
+                value[..extension].fill(sign);
+                value[extension..].copy_from_slice(&bytes[dropped..]);
+                self.sbbf.check(value.as_slice())
+            })
+            .collect()
+    }
+
+    /// Returns an error unless `length`, the length of the values of `data_type`,
+    /// is the length of the column's values
+    #[inline]
+    fn validate_length(&self, data_type: &DataType, length: usize) -> Result<()> {
+        if length != self.type_length {
+            return Err(ParquetError::General(format!(
+                "Cannot check a bloom filter of a FIXED_LEN_BYTE_ARRAY column of length {} with {data_type} values, which have length {length}",
+                self.type_length,
+            )));
+        }
+        Ok(())
     }
 
     /// Checks the values of a run-end encoded array, and repeats each result for its run
@@ -244,6 +495,7 @@ impl<'a> ArrowSbbf<'a> {
     /// scale is a different integer, and so is the integer value of an array
     /// that is not a decimal. Converting it to the column's scale could lose
     /// digits, so it is not supported.
+    #[inline]
     fn validate_decimal(&self, data_type: &DataType) -> Result<()> {
         let scale = match data_type {
             DataType::Decimal32(_, scale)
@@ -272,73 +524,24 @@ impl<'a> ArrowSbbf<'a> {
 /// Returns the error for checking a bloom filter of `physical_type` with values
 /// of `data_type`, which [`ArrowWriter`](crate::arrow::ArrowWriter) cannot write
 /// to such a column
+#[inline]
 fn unsupported(physical_type: PhysicalType, data_type: &DataType) -> ParquetError {
     ParquetError::General(format!(
         "Cannot check a bloom filter of physical type {physical_type} with {data_type} values"
     ))
 }
 
-/// Checks the `INT32`, `INT64`, `FLOAT` or `DOUBLE` values passed to it against a bloom filter
-struct CheckPrimitive<'a> {
-    sbbf: &'a Sbbf,
-    physical_type: PhysicalType,
-}
-
-impl<T: AsBytes> PrimitiveVisitor<T> for CheckPrimitive<'_> {
-    type Output = BooleanBuffer;
-
-    fn slice(self, values: &[T]) -> Result<BooleanBuffer> {
-        Ok(values.iter().map(|v| self.sbbf.check(v)).collect())
-    }
-
-    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Result<BooleanBuffer> {
-        Ok(values
-            .iter()
-            .map(|v| self.sbbf.check(&convert(*v)))
-            .collect())
-    }
-
-    fn unsupported(&self, data_type: &DataType, _error: ParquetError) -> ParquetError {
-        unsupported(self.physical_type, data_type)
-    }
-}
-
-/// Checks the `FIXED_LEN_BYTE_ARRAY` values of `array` passed to it against a bloom filter
-struct CheckFixedLenByteArray<'a> {
-    sbbf: &'a Sbbf,
-    array: &'a dyn Array,
-    type_length: usize,
-}
-
-impl FixedLenByteArrayVisitor for CheckFixedLenByteArray<'_> {
-    type Output = BooleanBuffer;
-
-    fn decimal_length(&self, _precision: u8, _native_length: usize) -> usize {
-        // Decimals of any precision are converted to the column's length
-        self.type_length
-    }
-
-    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Result<BooleanBuffer> {
-        if length != self.type_length {
-            return Err(ParquetError::General(format!(
-                "Cannot check a bloom filter of a FIXED_LEN_BYTE_ARRAY column of length {} with {} values, which have length {length}",
-                self.type_length,
-                self.array.data_type()
-            )));
-        }
-        let mut value = vec![0; length];
-        Ok((0..self.array.len())
-            .map(|i| {
-                value.fill(0);
-                fill(i, &mut value);
-                self.sbbf.check(value.as_slice())
-            })
-            .collect())
-    }
-
-    fn unsupported(&self, data_type: &DataType, _error: ParquetError) -> ParquetError {
-        unsupported(PhysicalType::FIXED_LEN_BYTE_ARRAY, data_type)
-    }
+/// Checks `convert(value)` for each value of `array` against a bloom filter
+fn check_primitive<T: ArrowPrimitiveType, U: AsBytes>(
+    sbbf: &Sbbf,
+    array: &PrimitiveArray<T>,
+    convert: impl Fn(T::Native) -> U,
+) -> BooleanBuffer {
+    array
+        .values()
+        .iter()
+        .map(|v| sbbf.check(&convert(*v)))
+        .collect()
 }
 
 fn check_bytes<'a, T: AsRef<[u8]> + ?Sized + 'a>(
@@ -357,23 +560,24 @@ mod tests {
     use crate::file::properties::{ReaderProperties, WriterProperties};
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::serialized_reader::ReadOptionsBuilder;
-    use crate::schema::types::ColumnDescPtr;
-    use arrow_array::types::{Int16Type, Int32Type};
+    use crate::schema::types::{ColumnDescPtr, ColumnPath, Type};
     use arrow_array::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, i256};
     use bytes::Bytes;
     use std::sync::Arc;
 
-    /// Writes `array` with a bloom filter and returns the filter and column descriptor
-    fn write_and_read_bloom_filter(array: ArrayRef, coerce_types: bool) -> (Sbbf, ColumnDescPtr) {
-        let batch = RecordBatch::try_from_iter([("c", array)]).unwrap();
+    /// Writes `batch` with bloom filters, and returns the filter and descriptor of each column
+    fn write_and_read_bloom_filters(
+        batch: &RecordBatch,
+        coerce_types: bool,
+    ) -> Vec<(Sbbf, ColumnDescPtr)> {
         let props = WriterProperties::builder()
             .set_bloom_filter_enabled(true)
             .set_coerce_types(coerce_types)
             .build();
         let mut buffer = Vec::new();
         let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
-        writer.write(&batch).unwrap();
+        writer.write(batch).unwrap();
         writer.close().unwrap();
 
         let options = ReadOptionsBuilder::new()
@@ -384,14 +588,22 @@ mod tests {
             )
             .build();
         let reader = SerializedFileReader::new_with_options(Bytes::from(buffer), options).unwrap();
-        let sbbf = reader
-            .get_row_group(0)
+        let row_group = reader.get_row_group(0).unwrap();
+        (0..batch.num_columns())
+            .map(|i| {
+                let sbbf = row_group.get_column_bloom_filter(i).unwrap().clone();
+                let column = reader.metadata().row_group(0).column(i).column_descr_ptr();
+                (sbbf, column)
+            })
+            .collect()
+    }
+
+    /// Writes `array` with a bloom filter and returns the filter and column descriptor
+    fn write_and_read_bloom_filter(array: ArrayRef, coerce_types: bool) -> (Sbbf, ColumnDescPtr) {
+        let batch = RecordBatch::try_from_iter([("c", array)]).unwrap();
+        write_and_read_bloom_filters(&batch, coerce_types)
+            .pop()
             .unwrap()
-            .get_column_bloom_filter(0)
-            .unwrap()
-            .clone();
-        let column = reader.metadata().row_group(0).column(0).column_descr_ptr();
-        (sbbf, column)
     }
 
     /// Writes `written` and checks that every value is found and no value of `absent` is
@@ -553,6 +765,31 @@ mod tests {
             .check(&decimal128(vec![12345 + wide, -12345 - wide], 38, 2))
             .unwrap();
         assert_eq!(found, BooleanArray::from(vec![true, true]));
+    }
+
+    #[test]
+    fn decimal_column_longer_than_i256() {
+        // ArrowWriter stores decimals in at most 32 bytes, but another writer can
+        // use a longer FIXED_LEN_BYTE_ARRAY, to which values are sign-extended
+        let column = Type::primitive_type_builder("c", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+            .with_length(33)
+            .with_logical_type(Some(LogicalType::decimal(2, 10)))
+            .with_precision(10)
+            .with_scale(2)
+            .build()
+            .unwrap();
+        let column = ColumnDescriptor::new(Arc::new(column), 1, 0, ColumnPath::from("c"));
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        for (sign, value) in [(0, 12345), (0xFF, -12345)] {
+            let mut bytes = vec![sign];
+            bytes.extend_from_slice(&i256::from(value).to_be_bytes());
+            sbbf.insert(bytes.as_slice());
+        }
+
+        let found = ArrowSbbf::new(&sbbf, &column)
+            .check(&decimal128(vec![12345, -12345, 54321], 10, 2))
+            .unwrap();
+        assert_eq!(found, BooleanArray::from(vec![true, true, false]));
     }
 
     #[test]
@@ -824,5 +1061,295 @@ mod tests {
             err.to_string(),
             "Parquet error: Cannot check a bloom filter of physical type FIXED_LEN_BYTE_ARRAY with Interval(MonthDayNano) values"
         );
+    }
+
+    /// Returns `values` with a null inserted at index 2
+    fn with_null<T>(values: [T; 4]) -> Vec<Option<T>> {
+        let mut values: Vec<_> = values.into_iter().map(Some).collect();
+        values.insert(2, None);
+        values
+    }
+
+    /// Returns a column of each Arrow type that [`ArrowWriter`] can write to a
+    /// primitive column, with edge values and a null
+    fn writer_type_columns() -> Vec<(&'static str, ArrayRef)> {
+        let day = 86_400_000;
+        let f16 = half::f16::from_f32;
+        let fsb = |values: Vec<Option<&[u8; 4]>>| -> ArrayRef {
+            Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter_with_size(values.into_iter(), 4)
+                    .unwrap(),
+            )
+        };
+        // The last value is too large for the precision, so the writer truncates
+        // it. No value is 0, which a wrong truncation could produce.
+        let decimal32 = |precision| -> ArrayRef {
+            let values = with_null([-12345, 1, 12345, i32::MAX / 3]);
+            Arc::new(
+                Decimal32Array::from(values)
+                    .with_precision_and_scale(precision, 2)
+                    .unwrap(),
+            )
+        };
+        let decimal64 = |precision| -> ArrayRef {
+            let values = with_null([-12345, 1, 12345, i64::MAX / 3]);
+            Arc::new(
+                Decimal64Array::from(values)
+                    .with_precision_and_scale(precision, 2)
+                    .unwrap(),
+            )
+        };
+        let decimal128 = |precision| -> ArrayRef {
+            let values = with_null([-12345, 1, 12345, i128::MAX / 3]);
+            Arc::new(
+                Decimal128Array::from(values)
+                    .with_precision_and_scale(precision, 2)
+                    .unwrap(),
+            )
+        };
+        let decimal256 = |precision| -> ArrayRef {
+            let large = i256::MAX.wrapping_div(i256::from(3));
+            let values = with_null([i256::from(-12345), i256::from(1), i256::from(12345), large]);
+            Arc::new(
+                Decimal256Array::from(values)
+                    .with_precision_and_scale(precision, 2)
+                    .unwrap(),
+            )
+        };
+        let strings = with_null(["", "a", "longer than twelve bytes", "é"]);
+        let binaries: Vec<_> = strings.iter().map(|s| s.map(str::as_bytes)).collect();
+        let interval = IntervalDayTime::new;
+        let day_times = with_null([
+            interval(1, 2),
+            interval(-3, 4),
+            interval(0, 0),
+            interval(i32::MAX, i32::MIN),
+        ]);
+        let int16s = Int16Array::from(vec![
+            Some(9),
+            Some(-7),
+            None,
+            Some(3),
+            Some(i16::MIN),
+            Some(5),
+        ]);
+        let keys = Int32Array::from(with_null([0, 1, 0, 1]));
+        let ree_int8 = RunArray::<Int32Type>::try_new(
+            &Int32Array::from(vec![2, 3, 5]),
+            &Int8Array::from(vec![Some(-3), None, Some(i8::MAX)]),
+        );
+        let ree_utf8 = RunArray::<Int16Type>::try_new(
+            &Int16Array::from(vec![1, 3, 5]),
+            &StringArray::from(vec![Some("a"), None, Some("b")]),
+        );
+
+        let time32s = with_null([0, 1, 3600, 86399]);
+        let time64s = with_null([0, 1, 3600, 86399]);
+        let i64s = with_null([-1, 0, 1, i64::MAX]);
+        let float16s = with_null([f16(-1.5), f16(0.0), f16(-0.0), half::f16::NAN]);
+        // Stored as days, rounded towards zero, with coerce_types
+        let date64s = with_null([-1, 0, 5 * day + 1, -5 * day - 1]);
+        let timestamp_ms = TimestampMillisecondArray::from(i64s.clone()).with_timezone("+01:00");
+
+        vec![
+            (
+                "int8",
+                Arc::new(Int8Array::from(with_null([i8::MIN, -1, 1, i8::MAX]))),
+            ),
+            (
+                "int16",
+                Arc::new(Int16Array::from(with_null([i16::MIN, -1, 1, i16::MAX]))),
+            ),
+            (
+                "int32",
+                Arc::new(Int32Array::from(with_null([i32::MIN, -1, 1, i32::MAX]))),
+            ),
+            (
+                "int64",
+                Arc::new(Int64Array::from(with_null([i64::MIN, -1, 1, i64::MAX]))),
+            ),
+            (
+                "uint8",
+                Arc::new(UInt8Array::from(with_null([0, 1, 128, u8::MAX]))),
+            ),
+            (
+                "uint16",
+                Arc::new(UInt16Array::from(with_null([0, 1, 32768, u16::MAX]))),
+            ),
+            (
+                "uint32",
+                Arc::new(UInt32Array::from(with_null([0, 1, 1 << 31, u32::MAX]))),
+            ),
+            (
+                "uint64",
+                Arc::new(UInt64Array::from(with_null([0, 1, 1 << 63, u64::MAX]))),
+            ),
+            ("float16", Arc::new(Float16Array::from(float16s))),
+            (
+                "float32",
+                Arc::new(Float32Array::from(with_null([-1.5, 0.0, -0.0, f32::NAN]))),
+            ),
+            (
+                "float64",
+                Arc::new(Float64Array::from(with_null([
+                    -1.5,
+                    0.0,
+                    f64::INFINITY,
+                    f64::NAN,
+                ]))),
+            ),
+            (
+                "bool",
+                Arc::new(BooleanArray::from(with_null([true, false, true, false]))),
+            ),
+            (
+                "date32",
+                Arc::new(Date32Array::from(with_null([-1, 0, 1, 20000]))),
+            ),
+            ("date64", Arc::new(Date64Array::from(date64s))),
+            (
+                "time32_s",
+                Arc::new(Time32SecondArray::from(time32s.clone())),
+            ),
+            ("time32_ms", Arc::new(Time32MillisecondArray::from(time32s))),
+            (
+                "time64_us",
+                Arc::new(Time64MicrosecondArray::from(time64s.clone())),
+            ),
+            ("time64_ns", Arc::new(Time64NanosecondArray::from(time64s))),
+            (
+                "timestamp_s",
+                Arc::new(TimestampSecondArray::from(i64s.clone())),
+            ),
+            ("timestamp_ms", Arc::new(timestamp_ms)),
+            (
+                "timestamp_us",
+                Arc::new(TimestampMicrosecondArray::from(i64s.clone())),
+            ),
+            (
+                "timestamp_ns",
+                Arc::new(TimestampNanosecondArray::from(i64s.clone())),
+            ),
+            (
+                "duration_s",
+                Arc::new(DurationSecondArray::from(i64s.clone())),
+            ),
+            (
+                "duration_ms",
+                Arc::new(DurationMillisecondArray::from(i64s.clone())),
+            ),
+            (
+                "duration_us",
+                Arc::new(DurationMicrosecondArray::from(i64s.clone())),
+            ),
+            ("duration_ns", Arc::new(DurationNanosecondArray::from(i64s))),
+            // Stored as INT32, INT64 or FIXED_LEN_BYTE_ARRAY depending on precision
+            ("decimal32_5", decimal32(5)),
+            ("decimal32_9", decimal32(9)),
+            ("decimal64_5", decimal64(5)),
+            ("decimal64_18", decimal64(18)),
+            ("decimal128_5", decimal128(5)),
+            ("decimal128_15", decimal128(15)),
+            ("decimal128_20", decimal128(20)),
+            ("decimal128_38", decimal128(38)),
+            ("decimal256_5", decimal256(5)),
+            ("decimal256_15", decimal256(15)),
+            ("decimal256_30", decimal256(30)),
+            ("decimal256_76", decimal256(76)),
+            (
+                "interval_year_month",
+                Arc::new(IntervalYearMonthArray::from(with_null([
+                    -1,
+                    0,
+                    13,
+                    i32::MAX,
+                ]))),
+            ),
+            (
+                "interval_day_time",
+                Arc::new(IntervalDayTimeArray::from(day_times)),
+            ),
+            (
+                "fixed_size_binary",
+                fsb(with_null([
+                    b"abcd",
+                    b"\0\0\0\0",
+                    b"\xff\xfe\xfd\xfc",
+                    b"abce",
+                ])),
+            ),
+            ("utf8", Arc::new(StringArray::from(strings.clone()))),
+            (
+                "large_utf8",
+                Arc::new(LargeStringArray::from(strings.clone())),
+            ),
+            ("utf8_view", Arc::new(StringViewArray::from(strings))),
+            ("binary", Arc::new(BinaryArray::from(binaries.clone()))),
+            (
+                "large_binary",
+                Arc::new(LargeBinaryArray::from(binaries.clone())),
+            ),
+            ("binary_view", Arc::new(BinaryViewArray::from(binaries))),
+            ("sliced_int16", Arc::new(int16s.slice(1, 5))),
+            // Dictionary and run-end encoded arrays are written as their values
+            (
+                "dictionary_int16",
+                Arc::new(DictionaryArray::new(
+                    keys.clone(),
+                    Arc::new(Int16Array::from(vec![-1, i16::MAX])),
+                )),
+            ),
+            (
+                "dictionary_decimal",
+                Arc::new(DictionaryArray::new(
+                    keys.clone(),
+                    decimal128(30).slice(0, 2),
+                )),
+            ),
+            (
+                "dictionary_fixed_size_binary",
+                Arc::new(DictionaryArray::new(
+                    keys.clone(),
+                    fsb(vec![Some(b"abcd"), Some(b"wxyz")]),
+                )),
+            ),
+            (
+                "dictionary_utf8",
+                Arc::new(DictionaryArray::new(
+                    keys,
+                    Arc::new(StringArray::from(vec!["a", "longer than twelve bytes"])),
+                )),
+            ),
+            ("ree_int8", Arc::new(ree_int8.unwrap())),
+            ("ree_utf8", Arc::new(ree_utf8.unwrap())),
+        ]
+    }
+
+    /// Writes a column of each Arrow type that [`ArrowWriter`] can write to a
+    /// primitive column, and checks that [`ArrowSbbf`] finds every written value
+    ///
+    /// [`ArrowSbbf`] has its own copy of the writer's conversions, so this
+    /// checks that the two agree.
+    #[test]
+    fn every_writer_type() {
+        let columns = writer_type_columns();
+        let batch = RecordBatch::try_from_iter(columns.clone()).unwrap();
+        for coerce_types in [false, true] {
+            let filters = write_and_read_bloom_filters(&batch, coerce_types);
+            assert_eq!(filters.len(), columns.len());
+            for ((name, array), (sbbf, column)) in columns.iter().zip(&filters) {
+                let context = format!("{name} with coerce_types {coerce_types}");
+                let found = ArrowSbbf::new(sbbf, column)
+                    .check(array.as_ref())
+                    .unwrap_or_else(|e| panic!("{context}: {e}"));
+                assert_eq!(found.len(), array.len(), "{context}");
+                // Every value is found, and nulls are null
+                let nulls = array.logical_nulls();
+                for (i, found) in found.iter().enumerate() {
+                    let valid = nulls.as_ref().is_none_or(|nulls| nulls.is_valid(i));
+                    assert_eq!(found, valid.then_some(true), "{context}: index {i}");
+                }
+            }
+        }
     }
 }
