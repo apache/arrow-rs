@@ -960,6 +960,10 @@ pub(crate) fn dangling_ptr() -> NonNull<u8> {
 }
 
 impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
+    /// Appends the items of `iter`.
+    ///
+    /// If `iter`'s [`size_hint`](Iterator::size_hint) reports an exact length,
+    /// at most that many items are appended.
     #[inline]
     fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T) {
         let iterator = iter.into_iter();
@@ -1341,6 +1345,10 @@ impl std::iter::FromIterator<bool> for MutableBuffer {
 }
 
 impl<T: ArrowNativeType> std::iter::FromIterator<T> for MutableBuffer {
+    /// Collects the items of `iter`.
+    ///
+    /// If `iter`'s [`size_hint`](Iterator::size_hint) reports an exact length,
+    /// at most that many items are collected.
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut buffer = Self::default();
         buffer.extend_from_iter(iter.into_iter());
