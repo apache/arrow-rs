@@ -882,32 +882,17 @@ mod tests {
     #[test]
     fn test_skip_and_count_long_run() {
         let mut writer = BitWriter::new(8);
-        writer.put_vlq_int(u64::from(u32::MAX) * 2);
+        writer.put_vlq_int(MAX_RUN_LEN << 1);
         writer.put_aligned(1_u8, 1);
         let mut decoder = RleDecoder::new(1);
         decoder.set_data(writer.consume().into()).unwrap();
         // Must not expand this run or allocate scratch space proportional to it.
         assert_eq!(
             decoder.skip_and_count(usize::MAX, 1_u64).unwrap(),
-            (u32::MAX as usize, u32::MAX as usize)
+            (MAX_RUN_LEN as usize, MAX_RUN_LEN as usize)
         );
         assert_eq!(decoder.skip_and_count(1, 1_u64).unwrap(), (0, 0));
-#[test]
-fn test_skip_and_count_long_run() {
-   let mut writer = BitWriter::new(8);
-   writer.put_vlq_int(MAX_RUN_LEN << 1);
-   writer.put_aligned(1_u8, 1);
-
-   let mut decoder = RleDecoder::new(1);
-   decoder.set_data(writer.consume().into()).unwrap();
-
-   // Must not expand this run or allocate scratch space proportional to it.
-   assert_eq!(
-       decoder.skip_and_count(usize::MAX, 1_u64).unwrap(),
-       (MAX_RUN_LEN as usize, MAX_RUN_LEN as usize)
-   );
-   assert_eq!(decoder.skip_and_count(1, 1_u64).unwrap(), (0, 0));
-}
+    }
 
     #[test]
     fn test_rle_consume_flush_buffer() {
