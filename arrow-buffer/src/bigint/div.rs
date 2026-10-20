@@ -126,7 +126,10 @@ fn div_rem_small_reciprocal<const N: usize>(
 /// Returns `floor((2^128 - 1) / divisor) - 2^64` for a divisor with its top bit set
 ///
 /// This is algorithm 2 of [Möller and Granlund, "Improved division by invariant integers" (2011)](https://gmplib.org/~tege/division-paper.pdf),
-/// which avoids a `u128` division
+/// which avoids a `u128` division. It looks up an 11-bit approximation of `2^74 / divisor`,
+/// refines it with Newton iterations to 21, 34 and 65 bits, and then corrects the last bit.
+///
+/// The names follow the paper, where `vK` is the `K`th approximation
 #[cfg(any(
     test,
     all(target_pointer_width = "64", any(not(target_arch = "x86_64"), miri))
@@ -134,7 +137,8 @@ fn div_rem_small_reciprocal<const N: usize>(
 fn reciprocal_word(divisor: u64) -> u64 {
     debug_assert_eq!(divisor >> 63, 1);
 
-    // `floor((2^19 - 3 * 2^8) / d9)` for each value of the top 9 bits `d9`
+    // `floor((2^19 - 3 * 2^8) / d9)` for each value of the top 9 bits `d9`. The paper subtracts
+    // `3 * 2^8` to make the error bound of `v0` symmetric around zero
     const TABLE: [u16; 256] = {
         let mut table = [0; 256];
         let mut i = 0;
@@ -145,20 +149,29 @@ fn reciprocal_word(divisor: u64) -> u64 {
         table
     };
 
-    let d0 = divisor & 1;
-    let d9 = divisor >> 55;
-    let d40 = (divisor >> 24) + 1;
-    let d63 = (divisor >> 1) + d0;
+    let d0 = divisor & 1; // Least significant bit
+    let d9 = divisor >> 55; // Most significant 9 bits
+    // `d40` and `d63` are rounded up, so they can equal 2^40 and 2^63
+    let d40 = (divisor >> 24) + 1; // Most significant 40 bits
+    let d63 = (divisor >> 1) + d0; // Most significant 63 bits
 
     // `d9` is in 256..512, so masking gives `d9 - 256` without a bounds check
     let v0 = u64::from(TABLE[(d9 & 0xff) as usize]);
-    // Two Newton iterations, each about doubling the bits of precision
+    // Each Newton iteration `x + x * (1 - x * d)` about doubles the bits of precision. The
+    // shifts scale `v1` to about `2^84 / divisor` and `v2` to about `2^97 / divisor`, and keep
+    // every product within a `u64`. The `- 1` makes `v1` an underestimate, so the next line's
+    // `2^60 - v1 * d40`, the error of `v1`, can't underflow
     let v1 = (v0 << 11) - ((v0 * v0 * d40) >> 40) - 1;
     let v2 = (v1 << 13) + ((v1 * ((1 << 60) - v1 * d40)) >> 47);
-    // `2^96 - v2 * d63 + floor(v2 / 2) * d0`, which the paper shows fits in 64 bits
+    // The error of `v2`, `2^97 - v2 * divisor`, can take 65 bits, so this computes half of it
+    // as `2^96 - v2 * d63 + floor(v2 / 2) * d0`, which fits in 64 bits. The `2^96` term is
+    // zero modulo 2^64
     let e = ((v2 >> 1) & d0.wrapping_neg()).wrapping_sub(v2.wrapping_mul(d63));
+    // `2^64 + v3` is about `2^128 / divisor`. The `2^64` bit is always set, so it isn't stored
     let v3 = (v2 << 31).wrapping_add(((u128::from(v2) * u128::from(e)) >> 65) as u64);
-    // `floor((v3 + 2^64 + 1) * divisor / 2^64)`, without overflowing a `u128`
+    // `v3` is the result or one less. `floor((v3 + 2^64 + 1) * divisor / 2^64)` is 2^64 in the
+    // first case and `2^64 - 1` in the second, so subtracting it modulo 2^64 adds the missing
+    // one. Adding `2^64 * divisor` as `divisor` after the shift keeps the product in a `u128`
     let p = (((u128::from(v3) + 1) * u128::from(divisor)) >> 64) as u64;
     v3.wrapping_sub(p.wrapping_add(divisor))
 }
@@ -177,6 +190,7 @@ fn div_rem_word_reciprocal(hi: u64, lo: u64, divisor: u64, reciprocal: u64) -> (
 
     // `(2^64 + reciprocal) * hi + lo` is below 2^128 because `hi < divisor`
     let p = u128::from(reciprocal) * u128::from(hi) + ((u128::from(hi) << 64) | u128::from(lo));
+    // `q` is the quotient, one more, or one less
     let mut q = ((p >> 64) as u64).wrapping_add(1);
     let mut r = lo.wrapping_sub(q.wrapping_mul(divisor));
     // The low word of `p` tells whether `q` was one too large
@@ -184,6 +198,7 @@ fn div_rem_word_reciprocal(hi: u64, lo: u64, divisor: u64, reciprocal: u64) -> (
         q = q.wrapping_sub(1);
         r = r.wrapping_add(divisor);
     }
+    // `q` was one too small, which is rare
     if r >= divisor {
         q += 1;
         r -= divisor;
