@@ -197,6 +197,7 @@ dependencies = [
  "criterion",
  "half",
  "memmap2",
+ "mimalloc",
  "rand",
  "serde",
 ]
@@ -461,6 +462,7 @@ dependencies = [
  "itoa",
  "lexical-core",
  "memchr",
+ "mimalloc",
  "num-traits",
  "rand",
  "ryu",

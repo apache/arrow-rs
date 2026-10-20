@@ -29,6 +29,9 @@ use arrow_array::types::Decimal128Type;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint;
 
+#[global_allocator]
+static BENCH_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn bench_filter(data_array: &dyn Array, filter_array: &BooleanArray) {
     hint::black_box(filter(data_array, filter_array).unwrap());
 }
