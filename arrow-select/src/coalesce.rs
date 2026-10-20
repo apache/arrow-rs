@@ -22,7 +22,7 @@
 //! [`take`]: crate::take::take
 use crate::filter::{FilterBuilder, FilterPredicate, FilterSelection};
 use crate::interleave::interleave_record_batch;
-use crate::take::{take, take_bits, take_record_batch};
+use crate::take::{TakeOptions, take, take_arrays_unchecked, take_bits, take_record_batch};
 use arrow_array::types::{
     BinaryViewType, GenericBinaryType, GenericStringType, StringViewType, UInt32Type,
 };
@@ -48,8 +48,13 @@ use fixed_size_binary::InProgressFixedSizeBinaryArray;
 use generic::GenericInProgressArray;
 use primitive::InProgressPrimitiveArray;
 
-// Caller must have bounds-checked `indices` against `source_nulls`.
-pub(crate) fn append_gathered_nulls(
+/// Appends the validity bits selected by `indices` to `nulls`.
+///
+/// # Safety
+///
+/// `indices` must not contain nulls, and every value must be less than
+/// `source_nulls.len()`.
+pub(crate) unsafe fn append_gathered_nulls(
     nulls: &mut NullBufferBuilder,
     source_nulls: &NullBuffer,
     indices: &UInt32Array,
@@ -414,6 +419,9 @@ impl BatchCoalescer {
     /// Returns `Err(ArrowError::InvalidArgumentError)` if `indices` is a
     /// non-null `UInt32Array` with any out-of-bounds value.
     ///
+    /// Non-null `UInt32Array` indices may use a direct-copy fast path; other
+    /// supported index arrays use [`take_record_batch`] instead.
+    ///
     /// # Example
     /// ```
     /// # use arrow_array::{record_batch, UInt32Array};
@@ -438,30 +446,43 @@ impl BatchCoalescer {
         batch: RecordBatch,
         indices: &dyn Array,
     ) -> Result<(), ArrowError> {
-        if let Some(u32_arr) = indices.as_any().downcast_ref::<UInt32Array>()
-            && u32_arr.null_count() == 0
-        {
+        let u32_indices = indices
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .filter(|array| array.null_count() == 0);
+        if let Some(u32_arr) = u32_indices {
             validate_indices_bounds(u32_arr.values(), batch.num_rows())?;
         }
 
+        // Direct indexed copying is a fast path for non-null UInt32 selections
+        // that are sparse enough for every column (with a stricter ByteView
+        // threshold). It is only equivalent to `push_batch(take(...))` when the
+        // materialized batch would not trigger the configured large-batch bypass.
         let exceeds_byte_view_threshold = self.has_byte_view_columns
             && !should_use_byte_view_indexed_copy(batch.num_rows(), indices.len());
-        if !should_use_indexed_copy(batch.num_rows(), indices.len()) || exceeds_byte_view_threshold
-        {
-            let taken_batch = take_record_batch(&batch, indices)?;
-            return self.push_batch(taken_batch);
-        }
+        let indexed_copy_allowed = should_use_indexed_copy(batch.num_rows(), indices.len())
+            && !exceeds_byte_view_threshold;
 
         let fast_path_allowed = self
             .biggest_coalesce_batch_size
             .is_none_or(|limit| indices.len() <= limit);
-        if fast_path_allowed
-            && let Some(u32_arr) = indices.as_any().downcast_ref::<UInt32Array>()
-            && u32_arr.null_count() == 0
+        if indexed_copy_allowed
+            && fast_path_allowed
+            && let Some(u32_arr) = u32_indices
         {
             return self.push_batch_with_index(batch, u32_arr);
         }
-        let taken_batch = take_record_batch(&batch, indices)?;
+
+        let taken_batch = if let Some(u32_arr) = u32_indices {
+            // SAFETY: `u32_arr` was bounds-checked against `batch.num_rows()` above,
+            // which is the length of every column in the record batch.
+            let columns = unsafe { take_arrays_unchecked(batch.columns(), u32_arr)? };
+            // SAFETY: `take_arrays_unchecked` returns one array of `u32_arr.len()` rows
+            // for every field in `batch.schema()`.
+            unsafe { RecordBatch::new_unchecked(batch.schema(), columns, u32_arr.len()) }
+        } else {
+            take_record_batch(&batch, indices)?
+        };
         self.push_batch(taken_batch)
     }
 
@@ -502,7 +523,10 @@ impl BatchCoalescer {
                 &sliced
             };
             for (in_progress, column) in self.in_progress_arrays.iter_mut().zip(columns) {
-                in_progress.copy_rows_by_indices(column, chunk)?;
+                // SAFETY: `push_batch_with_indices` validated every index against
+                // `batch.num_rows()`, which equals `column.len()`, and slicing the
+                // validated indices preserves both bounds and validity.
+                unsafe { in_progress.copy_rows_by_indices(column, chunk)? };
             }
             self.buffered_rows += take_n;
             offset += take_n;
@@ -1045,8 +1069,12 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     }
 
     /// Copy rows at `indices` from `source` into the in-progress array.
-    /// `indices` must already be bounds-checked against `source`.
-    fn copy_rows_by_indices(
+    ///
+    /// # Safety
+    ///
+    /// `indices` must not contain nulls, and every value must be less than
+    /// `source.len()`. Specialized implementations may use unchecked indexing.
+    unsafe fn copy_rows_by_indices(
         &mut self,
         source: &ArrayRef,
         indices: &UInt32Array,
@@ -1054,7 +1082,11 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
         if indices.is_empty() {
             return Ok(());
         }
-        let taken = take(source.as_ref(), indices, None)?;
+        let taken = take(
+            source.as_ref(),
+            indices,
+            Some(TakeOptions { check_bounds: true }),
+        )?;
         self.set_source(Some(taken));
         let result = self.copy_rows(0, indices.len());
         self.set_source(None);

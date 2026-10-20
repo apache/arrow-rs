@@ -206,7 +206,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         }
     }
 
-    fn copy_rows_by_indices(
+    unsafe fn copy_rows_by_indices(
         &mut self,
         source: &ArrayRef,
         indices: &UInt32Array,
@@ -218,7 +218,9 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         self.ensure_capacity();
 
         if let Some(src_nulls) = typed.nulls() {
-            append_gathered_nulls(&mut self.nulls, src_nulls, indices);
+            // SAFETY: the caller validated every index against `typed.len()`, which
+            // equals the length of its null buffer.
+            unsafe { append_gathered_nulls(&mut self.nulls, src_nulls, indices) };
         } else {
             self.nulls.append_n_non_nulls(indices.len());
         }
@@ -429,20 +431,11 @@ mod tests {
         ]);
 
         let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(32, DataType::Int32);
-        in_progress.copy_rows_by_indices(&source, &indices).unwrap();
+        // SAFETY: `indices` contains no nulls and every index is less than `source.len()`.
+        unsafe { in_progress.copy_rows_by_indices(&source, &indices).unwrap() };
         let actual = in_progress.finish().unwrap();
 
         let expected = take(source.as_ref(), &indices, None).unwrap();
         assert_eq!(actual.as_ref(), expected.as_ref());
-    }
-
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "caller-validated in-bounds indices")]
-    fn test_copy_rows_by_indices_debug_assert_rejects_oob() {
-        let source: ArrayRef = Arc::new(Int32Array::from_iter_values(0..4i32));
-        let indices = UInt32Array::from(vec![0u32, 99]);
-        let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(4, DataType::Int32);
-        let _ = in_progress.copy_rows_by_indices(&source, &indices);
     }
 }
