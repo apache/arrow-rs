@@ -3181,6 +3181,25 @@ mod test {
         assert!(batch.column(0).as_any().is::<StringViewArray>());
     }
 
+    #[test]
+    fn test_utf8view_keeps_nulls() {
+        let schema = Schema::new(vec![Field::new("s", DataType::Utf8, true)]);
+        let values = vec![Some("a"), None, Some(""), None, Some("b")];
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(StringArray::from(values.clone())) as ArrayRef],
+        )
+        .unwrap();
+        let bytes = write_ocf(&schema, &[batch]);
+        let mut reader = ReaderBuilder::new()
+            .with_utf8_view(true)
+            .build(Cursor::new(bytes))
+            .unwrap();
+        let out = reader.next().unwrap().unwrap();
+        let expected: ArrayRef = Arc::new(StringViewArray::from(values));
+        assert_eq!(out.column(0), &expected);
+    }
+
     fn make_reader_schema_with_default_fields(
         path: &str,
         default_fields: Vec<Value>,
