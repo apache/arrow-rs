@@ -26,6 +26,7 @@ use crate::basic::Encoding;
 use crate::column::reader::decoder::{
     ColumnLevelDecoder, DefinitionLevelDecoder, DefinitionLevelDecoderImpl,
 };
+use crate::encodings::rle::run_len;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 
@@ -330,24 +331,21 @@ struct PackedDecoder {
 impl PackedDecoder {
     fn next_rle_block(&mut self) -> Result<()> {
         let indicator_value = self.decode_header()?;
+        let num_values = run_len(indicator_value as u64)? as usize;
         if indicator_value & 1 == 1 {
-            let len = usize::try_from(indicator_value >> 1)?;
+            let packed_bytes = num_values / 8;
             // For a bit width of 1, each group of 8 levels occupies one byte.
             // Validate the whole run before either read() or skip() accesses it.
             let remaining = self.data.len().saturating_sub(self.data_offset);
-            if len > remaining {
+            if packed_bytes > remaining {
                 return Err(ParquetError::EOF(format!(
-                    "unexpected end of file whilst decoding definition levels bit-packed run: expected {len} bytes, found {remaining}"
+                    "unexpected end of file whilst decoding definition levels bit-packed run: expected {packed_bytes} bytes, found {remaining}"
                 )));
             }
-            self.packed_count = len.checked_mul(8).ok_or_else(|| {
-                ParquetError::EOF(
-                    "definition levels bit-packed run length exceeds addressable size".into(),
-                )
-            })?;
+            self.packed_count = num_values;
             self.packed_offset = 0;
         } else {
-            self.rle_left = (indicator_value >> 1) as usize;
+            self.rle_left = num_values;
             let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
                 ParquetError::EOF(
                     "unexpected end of file whilst decoding definition levels rle value".into(),
@@ -511,6 +509,7 @@ mod tests {
     use super::*;
 
     use crate::encodings::rle::RleEncoder;
+    use crate::util::bit_util::BitWriter;
     use rand::{RngExt, rng};
 
     #[test]
@@ -717,5 +716,20 @@ mod tests {
         // Now the valid run is exhausted, next call should parse the null run and return None
         let result = decoder.try_consume_all_valid(5).unwrap();
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_packed_decoder_invalid_run_len() {
+        let mut writer = BitWriter::new(16);
+        writer.put_vlq_int(u64::MAX);
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, writer.consume().into());
+
+        let mut decoded = BooleanBufferBuilder::new(8);
+        let err = decoder.read(&mut decoded, 8).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Invalid or corrupted RLE run length 18446744073709551615. Max allowed is 2147483647"
+        );
     }
 }
