@@ -399,6 +399,10 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         selected_bytes: usize,
         max_buffer_size: usize,
     ) {
+        debug_assert!(
+            indices.iter().all(|&idx| (idx as usize) < src_views.len()),
+            "append_indexed_views_and_copy_strings_with_max_buffer_size requires caller-validated in-bounds indices",
+        );
         if selected_bytes == 0 {
             self.views.reserve(indices.len());
             for &idx in indices {
@@ -493,6 +497,10 @@ fn selected_non_inline_bytes(
     indices: &[u32],
     max_buffer_size: usize,
 ) -> Option<usize> {
+    debug_assert!(
+        indices.iter().all(|&idx| (idx as usize) < src_views.len()),
+        "selected_non_inline_bytes requires caller-validated in-bounds indices",
+    );
     let mut total = 0usize;
     for &idx in indices {
         // SAFETY: caller validated idx < src_views.len().
@@ -669,6 +677,12 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         let index_values = indices.values();
         let src_views = typed.views();
         let src_buffers = typed.data_buffers();
+        debug_assert!(
+            index_values
+                .iter()
+                .all(|&idx| (idx as usize) < src_views.len()),
+            "copy_rows_by_indices requires caller-validated in-bounds indices",
+        );
 
         if src_buffers.is_empty() {
             let current_len = self.views.len();
@@ -730,6 +744,12 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 
         let current_len = self.views.len();
         self.views.reserve(indices.len());
+        debug_assert!(
+            index_values
+                .iter()
+                .all(|&idx| (idx as usize) < src_views.len()),
+            "copy_rows_by_indices requires caller-validated in-bounds indices",
+        );
         // SAFETY: caller validated indices < typed.len() == src_views.len().
         unsafe {
             let base = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
@@ -1129,5 +1149,17 @@ mod tests {
                 .all(|buffer| buffer.len() <= max_buffer_size)
         );
         actual.to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "caller-validated in-bounds indices")]
+    fn test_copy_rows_by_indices_debug_assert_rejects_oob() {
+        let source: ArrayRef = Arc::new(BinaryViewArray::from_iter_values(
+            [b"a".as_slice(), b"b", b"c"].into_iter(),
+        ));
+        let indices = UInt32Array::from(vec![0u32, 99]);
+        let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(4);
+        let _ = in_progress.copy_rows_by_indices(&source, &indices);
     }
 }

@@ -227,6 +227,12 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         let values = typed.values();
         let current_len = self.current.len();
         self.current.reserve(indices.len());
+        debug_assert!(
+            index_values
+                .iter()
+                .all(|&idx| (idx as usize) < values.len()),
+            "copy_rows_by_indices requires caller-validated in-bounds indices",
+        );
         // SAFETY: indices were bounds-checked by the coalescer, and reserve
         // allocated one output slot per index.
         unsafe {
@@ -428,5 +434,15 @@ mod tests {
 
         let expected = take(source.as_ref(), &indices, None).unwrap();
         assert_eq!(actual.as_ref(), expected.as_ref());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "caller-validated in-bounds indices")]
+    fn test_copy_rows_by_indices_debug_assert_rejects_oob() {
+        let source: ArrayRef = Arc::new(Int32Array::from_iter_values(0..4i32));
+        let indices = UInt32Array::from(vec![0u32, 99]);
+        let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(4, DataType::Int32);
+        let _ = in_progress.copy_rows_by_indices(&source, &indices);
     }
 }
