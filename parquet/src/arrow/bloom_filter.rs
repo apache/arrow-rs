@@ -19,13 +19,14 @@
 
 use arrow_array::builder::BooleanBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::types::*;
-use arrow_array::{
-    Array, ArrowPrimitiveType, BooleanArray, PrimitiveArray, RunArray, downcast_run_array,
-};
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, i256};
-use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use arrow_array::types::{Float32Type, Float64Type, RunEndIndexType};
+use arrow_array::{Array, BooleanArray, RunArray, downcast_run_array};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer};
+use arrow_schema::DataType;
 
+use crate::arrow::arrow_writer::{
+    FixedLenByteArrayVisitor, PrimitiveVisitor, visit_fixed_len_byte_array, visit_i32, visit_i64,
+};
 use crate::basic::{ConvertedType, LogicalType, Type as PhysicalType};
 use crate::bloom_filter::Sbbf;
 use crate::data_type::AsBytes;
@@ -117,13 +118,8 @@ pub struct ArrowSbbf<'a> {
     decimal_scale: Option<i32>,
 }
 
-// The functions in this file that are not generic are `#[inline]`, so they are
-// only compiled in crates that call them. Compiled into this crate, they change
-// how the rest of it is split into codegen units and inlined, which changes the
-// machine code of `ArrowWriter` even though its source is unchanged.
 impl<'a> ArrowSbbf<'a> {
     /// Create a new [`ArrowSbbf`] for the bloom filter of the column described by `column`
-    #[inline]
     pub fn new(sbbf: &'a Sbbf, column: &ColumnDescriptor) -> Self {
         let decimal_scale = match column.logical_type_ref() {
             Some(LogicalType::Decimal(decimal)) => Some(decimal.scale),
@@ -156,7 +152,6 @@ impl<'a> ArrowSbbf<'a> {
     /// array whose values have a different length than the column's.
     ///
     /// [`ArrowWriter`]: crate::arrow::ArrowWriter
-    #[inline]
     pub fn check(&self, array: &dyn Array) -> Result<BooleanArray> {
         if let Some(dictionary) = array.as_any_dictionary_opt() {
             let values = self.check(dictionary.values().as_ref())?;
@@ -176,14 +171,18 @@ impl<'a> ArrowSbbf<'a> {
         self.validate_decimal(array.data_type())?;
 
         let sbbf = self.sbbf;
+        let primitive = CheckPrimitive {
+            sbbf,
+            physical_type: self.physical_type,
+        };
         let found = match (self.physical_type, array.data_type()) {
-            (PhysicalType::INT32, _) => self.check_i32(array)?,
-            (PhysicalType::INT64, _) => self.check_i64(array)?,
+            (PhysicalType::INT32, _) => visit_i32(array, primitive)?,
+            (PhysicalType::INT64, _) => visit_i64(array, primitive)?,
             (PhysicalType::FLOAT, DataType::Float32) => {
-                check_primitive(sbbf, array.as_primitive::<Float32Type>(), |v| v)
+                primitive.slice(array.as_primitive::<Float32Type>().values())?
             }
             (PhysicalType::DOUBLE, DataType::Float64) => {
-                check_primitive(sbbf, array.as_primitive::<Float64Type>(), |v| v)
+                primitive.slice(array.as_primitive::<Float64Type>().values())?
             }
             (PhysicalType::BOOLEAN, DataType::Boolean) => array
                 .as_boolean()
@@ -209,267 +208,17 @@ impl<'a> ArrowSbbf<'a> {
             (PhysicalType::BYTE_ARRAY, DataType::BinaryView) => {
                 check_bytes(sbbf, array.as_binary_view())
             }
-            (PhysicalType::FIXED_LEN_BYTE_ARRAY, _) => self.check_fixed_len_byte_array(array)?,
+            (PhysicalType::FIXED_LEN_BYTE_ARRAY, _) => {
+                let visitor = CheckFixedLenByteArray {
+                    sbbf,
+                    array,
+                    type_length: self.type_length,
+                };
+                visit_fixed_len_byte_array(array, visitor)?
+            }
             (physical_type, data_type) => return Err(unsupported(physical_type, data_type)),
         };
         Ok(BooleanArray::new(found, array.logical_nulls()))
-    }
-
-    /// Checks the values that [`ArrowWriter`] stores for `array` in an `INT32` column
-    ///
-    /// This must match the conversion in [`ArrowWriter`], which the
-    /// `every_writer_type` test checks.
-    ///
-    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
-    #[inline]
-    fn check_i32(&self, array: &dyn Array) -> Result<BooleanBuffer> {
-        let sbbf = self.sbbf;
-        Ok(match array.data_type() {
-            DataType::Int8 => check_primitive(sbbf, array.as_primitive::<Int8Type>(), |v| v as i32),
-            DataType::Int16 => {
-                check_primitive(sbbf, array.as_primitive::<Int16Type>(), |v| v as i32)
-            }
-            DataType::Int32 => check_primitive(sbbf, array.as_primitive::<Int32Type>(), |v| v),
-            DataType::UInt8 => {
-                check_primitive(sbbf, array.as_primitive::<UInt8Type>(), |v| v as i32)
-            }
-            DataType::UInt16 => {
-                check_primitive(sbbf, array.as_primitive::<UInt16Type>(), |v| v as i32)
-            }
-            // The same bits, so values above `i32::MAX` are negative
-            DataType::UInt32 => {
-                check_primitive(sbbf, array.as_primitive::<UInt32Type>(), |v| v as i32)
-            }
-            DataType::Date32 => check_primitive(sbbf, array.as_primitive::<Date32Type>(), |v| v),
-            DataType::Time32(TimeUnit::Second) => {
-                check_primitive(sbbf, array.as_primitive::<Time32SecondType>(), |v| v)
-            }
-            DataType::Time32(TimeUnit::Millisecond) => {
-                check_primitive(sbbf, array.as_primitive::<Time32MillisecondType>(), |v| v)
-            }
-            // Milliseconds are stored as days, rounded towards zero
-            DataType::Date64 => check_primitive(sbbf, array.as_primitive::<Date64Type>(), |v| {
-                (v / 86_400_000) as i32
-            }),
-            // Decimals are stored as their unscaled value, truncated to 32 bits
-            DataType::Decimal32(_, _) => {
-                check_primitive(sbbf, array.as_primitive::<Decimal32Type>(), |v| v)
-            }
-            DataType::Decimal64(_, _) => {
-                check_primitive(sbbf, array.as_primitive::<Decimal64Type>(), |v| v as i32)
-            }
-            DataType::Decimal128(_, _) => {
-                check_primitive(sbbf, array.as_primitive::<Decimal128Type>(), |v| v as i32)
-            }
-            DataType::Decimal256(_, _) => {
-                check_primitive(sbbf, array.as_primitive::<Decimal256Type>(), |v| {
-                    v.as_i128() as i32
-                })
-            }
-            data_type => return Err(unsupported(PhysicalType::INT32, data_type)),
-        })
-    }
-
-    /// Checks the values that [`ArrowWriter`] stores for `array` in an `INT64` column
-    ///
-    /// This must match the conversion in [`ArrowWriter`], which the
-    /// `every_writer_type` test checks.
-    ///
-    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
-    #[inline]
-    fn check_i64(&self, array: &dyn Array) -> Result<BooleanBuffer> {
-        let sbbf = self.sbbf;
-        Ok(match array.data_type() {
-            DataType::Int64 => check_primitive(sbbf, array.as_primitive::<Int64Type>(), |v| v),
-            // The same bits, so values above `i64::MAX` are negative
-            DataType::UInt64 => {
-                check_primitive(sbbf, array.as_primitive::<UInt64Type>(), |v| v as i64)
-            }
-            DataType::Date64 => check_primitive(sbbf, array.as_primitive::<Date64Type>(), |v| v),
-            DataType::Time64(TimeUnit::Microsecond) => {
-                check_primitive(sbbf, array.as_primitive::<Time64MicrosecondType>(), |v| v)
-            }
-            DataType::Time64(TimeUnit::Nanosecond) => {
-                check_primitive(sbbf, array.as_primitive::<Time64NanosecondType>(), |v| v)
-            }
-            DataType::Timestamp(unit, _) => match unit {
-                TimeUnit::Second => {
-                    check_primitive(sbbf, array.as_primitive::<TimestampSecondType>(), |v| v)
-                }
-                TimeUnit::Millisecond => check_primitive(
-                    sbbf,
-                    array.as_primitive::<TimestampMillisecondType>(),
-                    |v| v,
-                ),
-                TimeUnit::Microsecond => check_primitive(
-                    sbbf,
-                    array.as_primitive::<TimestampMicrosecondType>(),
-                    |v| v,
-                ),
-                TimeUnit::Nanosecond => {
-                    check_primitive(sbbf, array.as_primitive::<TimestampNanosecondType>(), |v| v)
-                }
-            },
-            DataType::Duration(unit) => match unit {
-                TimeUnit::Second => {
-                    check_primitive(sbbf, array.as_primitive::<DurationSecondType>(), |v| v)
-                }
-                TimeUnit::Millisecond => {
-                    check_primitive(sbbf, array.as_primitive::<DurationMillisecondType>(), |v| v)
-                }
-                TimeUnit::Microsecond => {
-                    check_primitive(sbbf, array.as_primitive::<DurationMicrosecondType>(), |v| v)
-                }
-                TimeUnit::Nanosecond => {
-                    check_primitive(sbbf, array.as_primitive::<DurationNanosecondType>(), |v| v)
-                }
-            },
-            // Decimals are stored as their unscaled value, truncated to 64 bits.
-            // ArrowWriter stores Decimal32 as INT32, but it can be checked against
-            // an INT64 decimal column.
-            DataType::Decimal32(_, _) => {
-                check_primitive(sbbf, array.as_primitive::<Decimal32Type>(), |v| v as i64)
-            }
-            DataType::Decimal64(_, _) => {
-                check_primitive(sbbf, array.as_primitive::<Decimal64Type>(), |v| v)
-            }
-            DataType::Decimal128(_, _) => {
-                check_primitive(sbbf, array.as_primitive::<Decimal128Type>(), |v| v as i64)
-            }
-            DataType::Decimal256(_, _) => {
-                check_primitive(sbbf, array.as_primitive::<Decimal256Type>(), |v| {
-                    v.as_i128() as i64
-                })
-            }
-            data_type => return Err(unsupported(PhysicalType::INT64, data_type)),
-        })
-    }
-
-    /// Checks the values that [`ArrowWriter`] stores for `array` in a
-    /// `FIXED_LEN_BYTE_ARRAY` column
-    ///
-    /// This must match the conversion in [`ArrowWriter`], which the
-    /// `every_writer_type` test checks.
-    ///
-    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
-    #[inline]
-    fn check_fixed_len_byte_array(&self, array: &dyn Array) -> Result<BooleanBuffer> {
-        match array.data_type() {
-            DataType::Interval(IntervalUnit::YearMonth) => {
-                // 12 bytes of months, days and milliseconds (4 bytes each). An Arrow
-                // YearMonth interval only stores months, so only the first 4 bytes are set.
-                let values = array.as_primitive::<IntervalYearMonthType>();
-                self.check_fixed_len(array, 12, |i, value| {
-                    value[0..4].copy_from_slice(&values.value(i).to_le_bytes());
-                })
-            }
-            DataType::Interval(IntervalUnit::DayTime) => {
-                // 12 bytes of months, days and milliseconds (4 bytes each). An Arrow
-                // DayTime interval only stores days and milliseconds, so the first 4
-                // bytes are not set.
-                let values = array.as_primitive::<IntervalDayTimeType>();
-                self.check_fixed_len(array, 12, |i, value| {
-                    let interval = values.value(i);
-                    value[4..8].copy_from_slice(&interval.days.to_le_bytes());
-                    value[8..12].copy_from_slice(&interval.milliseconds.to_le_bytes());
-                })
-            }
-            DataType::Float16 => {
-                let values = array.as_primitive::<Float16Type>();
-                self.check_fixed_len(array, 2, |i, value| {
-                    value.copy_from_slice(&values.value(i).to_le_bytes());
-                })
-            }
-            DataType::FixedSizeBinary(_) => {
-                let values = array.as_fixed_size_binary();
-                self.validate_length(array.data_type(), values.value_size())?;
-                Ok((0..values.len())
-                    .map(|i| self.sbbf.check(values.value(i)))
-                    .collect())
-            }
-            DataType::Decimal32(_, _) => Ok(self
-                .check_decimal(array.as_primitive::<Decimal32Type>(), |v| {
-                    i256::from_i128(v.into())
-                })),
-            DataType::Decimal64(_, _) => Ok(self
-                .check_decimal(array.as_primitive::<Decimal64Type>(), |v| {
-                    i256::from_i128(v.into())
-                })),
-            DataType::Decimal128(_, _) => {
-                Ok(self.check_decimal(array.as_primitive::<Decimal128Type>(), i256::from_i128))
-            }
-            DataType::Decimal256(_, _) => {
-                Ok(self.check_decimal(array.as_primitive::<Decimal256Type>(), |v| v))
-            }
-            data_type => Err(unsupported(PhysicalType::FIXED_LEN_BYTE_ARRAY, data_type)),
-        }
-    }
-
-    /// Checks `length` byte values against a `FIXED_LEN_BYTE_ARRAY` column
-    ///
-    /// `fill(i, value)` writes the value at index `i` of `array` to `value`, which
-    /// is `length` zeroed bytes.
-    fn check_fixed_len(
-        &self,
-        array: &dyn Array,
-        length: usize,
-        fill: impl Fn(usize, &mut [u8]),
-    ) -> Result<BooleanBuffer> {
-        self.validate_length(array.data_type(), length)?;
-        let mut value = vec![0; length];
-        Ok((0..array.len())
-            .map(|i| {
-                value.fill(0);
-                fill(i, &mut value);
-                self.sbbf.check(value.as_slice())
-            })
-            .collect())
-    }
-
-    /// Checks decimal values against a `FIXED_LEN_BYTE_ARRAY` column
-    ///
-    /// The values are stored as big-endian two's complement integers of the
-    /// column's length. A value that needs more bytes is truncated to its low
-    /// bytes, as [`ArrowWriter`] does, since Arrow does not validate precision.
-    /// A value of a narrower decimal type than the column is sign-extended.
-    ///
-    /// [`ArrowWriter`]: crate::arrow::ArrowWriter
-    fn check_decimal<T: ArrowPrimitiveType>(
-        &self,
-        array: &PrimitiveArray<T>,
-        to_i256: impl Fn(T::Native) -> i256,
-    ) -> BooleanBuffer {
-        const I256_LENGTH: usize = 32;
-        let length = self.type_length;
-        // The number of bytes each value is sign-extended by, or the number of
-        // its high bytes that are dropped
-        let extension = length.saturating_sub(I256_LENGTH);
-        let dropped = I256_LENGTH.saturating_sub(length);
-        let mut value = vec![0; length];
-        array
-            .values()
-            .iter()
-            .map(|v| {
-                let bytes = to_i256(*v).to_be_bytes();
-                let sign = if (bytes[0] as i8) < 0 { 0xFF } else { 0 };
-                value[..extension].fill(sign);
-                value[extension..].copy_from_slice(&bytes[dropped..]);
-                self.sbbf.check(value.as_slice())
-            })
-            .collect()
-    }
-
-    /// Returns an error unless `length`, the length of the values of `data_type`,
-    /// is the length of the column's values
-    #[inline]
-    fn validate_length(&self, data_type: &DataType, length: usize) -> Result<()> {
-        if length != self.type_length {
-            return Err(ParquetError::General(format!(
-                "Cannot check a bloom filter of a FIXED_LEN_BYTE_ARRAY column of length {} with {data_type} values, which have length {length}",
-                self.type_length,
-            )));
-        }
-        Ok(())
     }
 
     /// Checks the values of a run-end encoded array, and repeats each result for its run
@@ -495,7 +244,6 @@ impl<'a> ArrowSbbf<'a> {
     /// scale is a different integer, and so is the integer value of an array
     /// that is not a decimal. Converting it to the column's scale could lose
     /// digits, so it is not supported.
-    #[inline]
     fn validate_decimal(&self, data_type: &DataType) -> Result<()> {
         let scale = match data_type {
             DataType::Decimal32(_, scale)
@@ -524,24 +272,73 @@ impl<'a> ArrowSbbf<'a> {
 /// Returns the error for checking a bloom filter of `physical_type` with values
 /// of `data_type`, which [`ArrowWriter`](crate::arrow::ArrowWriter) cannot write
 /// to such a column
-#[inline]
 fn unsupported(physical_type: PhysicalType, data_type: &DataType) -> ParquetError {
     ParquetError::General(format!(
         "Cannot check a bloom filter of physical type {physical_type} with {data_type} values"
     ))
 }
 
-/// Checks `convert(value)` for each value of `array` against a bloom filter
-fn check_primitive<T: ArrowPrimitiveType, U: AsBytes>(
-    sbbf: &Sbbf,
-    array: &PrimitiveArray<T>,
-    convert: impl Fn(T::Native) -> U,
-) -> BooleanBuffer {
-    array
-        .values()
-        .iter()
-        .map(|v| sbbf.check(&convert(*v)))
-        .collect()
+/// Checks the `INT32`, `INT64`, `FLOAT` or `DOUBLE` values passed to it against a bloom filter
+struct CheckPrimitive<'a> {
+    sbbf: &'a Sbbf,
+    physical_type: PhysicalType,
+}
+
+impl<T: AsBytes> PrimitiveVisitor<T> for CheckPrimitive<'_> {
+    type Output = BooleanBuffer;
+
+    fn slice(self, values: &[T]) -> Result<BooleanBuffer> {
+        Ok(values.iter().map(|v| self.sbbf.check(v)).collect())
+    }
+
+    fn map<S: Copy>(self, values: &[S], convert: impl Fn(S) -> T) -> Result<BooleanBuffer> {
+        Ok(values
+            .iter()
+            .map(|v| self.sbbf.check(&convert(*v)))
+            .collect())
+    }
+
+    fn unsupported(&self, data_type: &DataType, _error: ParquetError) -> ParquetError {
+        unsupported(self.physical_type, data_type)
+    }
+}
+
+/// Checks the `FIXED_LEN_BYTE_ARRAY` values of `array` passed to it against a bloom filter
+struct CheckFixedLenByteArray<'a> {
+    sbbf: &'a Sbbf,
+    array: &'a dyn Array,
+    type_length: usize,
+}
+
+impl FixedLenByteArrayVisitor for CheckFixedLenByteArray<'_> {
+    type Output = BooleanBuffer;
+
+    fn decimal_length(&self, _precision: u8, _native_length: usize) -> usize {
+        // Decimals of any precision are converted to the column's length
+        self.type_length
+    }
+
+    fn values(self, length: usize, fill: impl Fn(usize, &mut [u8])) -> Result<BooleanBuffer> {
+        if length != self.type_length {
+            return Err(ParquetError::General(format!(
+                "Cannot check a bloom filter of a FIXED_LEN_BYTE_ARRAY column of length {} with {} values, which have length {length}",
+                self.type_length,
+                self.array.data_type()
+            )));
+        }
+        let mut value = vec![0; length];
+        Ok((0..self.array.len())
+            .map(|i| {
+                value.fill(0);
+                fill(i, &mut value);
+                self.sbbf.check(value.as_slice())
+            })
+            .collect())
+    }
+
+    fn unsupported(&self, data_type: &DataType, _error: ParquetError) -> ParquetError {
+        unsupported(PhysicalType::FIXED_LEN_BYTE_ARRAY, data_type)
+    }
 }
 
 fn check_bytes<'a, T: AsRef<[u8]> + ?Sized + 'a>(
@@ -561,6 +358,7 @@ mod tests {
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::schema::types::{ColumnDescPtr, ColumnPath, Type};
+    use arrow_array::types::{Int16Type, Int32Type};
     use arrow_array::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, i256};
     use bytes::Bytes;
@@ -1327,9 +1125,6 @@ mod tests {
 
     /// Writes a column of each Arrow type that [`ArrowWriter`] can write to a
     /// primitive column, and checks that [`ArrowSbbf`] finds every written value
-    ///
-    /// [`ArrowSbbf`] has its own copy of the writer's conversions, so this
-    /// checks that the two agree.
     #[test]
     fn every_writer_type() {
         let columns = writer_type_columns();
