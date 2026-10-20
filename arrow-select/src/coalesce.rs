@@ -1078,9 +1078,9 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, UInt8Type};
     use arrow_array::{
-        BinaryViewArray, DictionaryArray, Int32Array, Int64Array, RecordBatchOptions, StringArray,
-        StringViewArray, TimestampNanosecondArray, UInt8Array, UInt32Array, UInt64Array,
-        make_array, record_batch,
+        BinaryViewArray, DictionaryArray, FixedSizeBinaryArray, Int32Array, Int64Array,
+        RecordBatchOptions, StringArray, StringViewArray, TimestampNanosecondArray, UInt8Array,
+        UInt32Array, UInt64Array, make_array, record_batch,
     };
     use arrow_buffer::BooleanBufferBuilder;
     use arrow_schema::{DataType, Field, Schema};
@@ -3315,6 +3315,83 @@ mod tests {
         }
         for batch in &completed[..completed.len() - 1] {
             assert_eq!(batch.num_rows(), target_batch_size);
+        }
+
+        let actual = concat_batches(&schema, completed.iter()).unwrap();
+        let expected = take_record_batch(&batch, &indices).unwrap();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_mixed_schema_with_nulls_splits_matches_take() {
+        let fsb_size: i32 = 4;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, true),
+            Field::new("s", DataType::Utf8, true),
+            Field::new("b", DataType::Boolean, true),
+            Field::new("f", DataType::FixedSizeBinary(fsb_size), true),
+        ]));
+
+        let num_rows = 300usize;
+        let int_col = Int32Array::from_iter(
+            (0..num_rows as i32).map(|v| if v % 7 == 0 { None } else { Some(v) }),
+        );
+        let str_col = StringArray::from_iter((0..num_rows).map(|v| {
+            if v % 5 == 0 {
+                None
+            } else {
+                Some(format!("row-{v}"))
+            }
+        }));
+        let bool_col = BooleanArray::from_iter(
+            (0..num_rows).map(|v| if v % 11 == 0 { None } else { Some(v % 2 == 0) }),
+        );
+        let fsb_col = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            (0..num_rows).map(|v| {
+                if v % 9 == 0 {
+                    None
+                } else {
+                    let mut bytes = [0u8; 4];
+                    bytes.copy_from_slice(&(v as u32).to_le_bytes());
+                    Some(bytes)
+                }
+            }),
+            fsb_size,
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(int_col),
+                Arc::new(str_col),
+                Arc::new(bool_col),
+                Arc::new(fsb_col),
+            ],
+        )
+        .unwrap();
+
+        let indices = UInt32Array::from_iter_values((0..num_rows as u32).step_by(2));
+        // Prime < indices.len() (150) so the chunking loop in push_batch_with_index
+        // runs multiple times and the final chunk is a partial batch (150 % 37 = 2).
+        let target_batch_size = 37;
+
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), target_batch_size);
+        coalescer
+            .push_batch_with_indices(batch.clone(), &indices)
+            .unwrap();
+        coalescer.finish_buffered_batch().unwrap();
+
+        let mut completed = vec![];
+        while let Some(b) = coalescer.next_completed_batch() {
+            completed.push(b);
+        }
+        assert!(
+            completed.len() > 1,
+            "expected the output to span multiple batches"
+        );
+        for b in &completed[..completed.len() - 1] {
+            assert_eq!(b.num_rows(), target_batch_size);
         }
 
         let actual = concat_batches(&schema, completed.iter()).unwrap();
