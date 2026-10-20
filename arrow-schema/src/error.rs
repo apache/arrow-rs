@@ -27,8 +27,6 @@ use arrow_buffer::BufferError;
 #[derive(Debug)]
 pub enum ArrowError {
     /// Error returned by a buffer operation.
-    ///
-    /// Boxed to keep the size of `ArrowError` down.
     BufferError(Box<BufferError>),
     /// Returned when functionality is not yet available.
     NotYetImplemented(String),
