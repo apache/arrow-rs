@@ -56,6 +56,30 @@ const BIT_PACK_GROUP_SIZE: usize = 8;
 /// Maximum groups of `BIT_PACK_GROUP_SIZE` values per bit-packed run. Current value is 64.
 const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;
 
+/// Maximum number of values in a single run. The
+/// [format spec](https://github.com/apache/parquet-format/blob/master/Encodings.md#run-length-encoding--bit-packing-hybrid-rle--3)
+/// requires run lengths to be in the range `[1, 2^31 - 1]`.
+const MAX_RUN_LEN: u64 = i32::MAX as u64;
+
+/// Returns the number of values in the run with the given header, or an error if it
+/// exceeds [`MAX_RUN_LEN`].
+#[inline]
+pub(crate) fn run_len(indicator_value: u64) -> Result<u32> {
+    let len = if indicator_value & 1 == 1 {
+        // A bit-packed header stores the number of groups of `BIT_PACK_GROUP_SIZE` values.
+        // Saturate so that a corrupt header which overflows is rejected below.
+        (indicator_value >> 1).saturating_mul(BIT_PACK_GROUP_SIZE as u64)
+    } else {
+        indicator_value >> 1
+    };
+    if len > MAX_RUN_LEN {
+        return Err(general_err!(
+            "Invalid or corrupted RLE run length {len}. Max allowed is {MAX_RUN_LEN}"
+        ));
+    }
+    Ok(len as u32)
+}
+
 /// A RLE/Bit-Packing hybrid encoder.
 // TODO: tracking memory usage
 pub struct RleEncoder {
@@ -712,10 +736,11 @@ impl RleDecoder {
             if indicator_value == 0 {
                 return Ok(false);
             }
+            let num_values = run_len(indicator_value as u64)?;
             if indicator_value & 1 == 1 {
-                self.bit_packed_left = ((indicator_value >> 1) * BIT_PACK_GROUP_SIZE as i64) as u32;
+                self.bit_packed_left = num_values;
             } else {
-                self.rle_left = (indicator_value >> 1) as u32;
+                self.rle_left = num_values;
                 let value_width = bit_util::ceil(self.bit_width as usize, u8::BITS as usize);
                 self.current_value = bit_reader.get_aligned::<u64>(value_width);
                 self.current_value.ok_or_else(|| {
@@ -857,14 +882,14 @@ mod tests {
     #[test]
     fn test_skip_and_count_long_run() {
         let mut writer = BitWriter::new(8);
-        writer.put_vlq_int(u64::from(u32::MAX) * 2);
+        writer.put_vlq_int(MAX_RUN_LEN << 1);
         writer.put_aligned(1_u8, 1);
         let mut decoder = RleDecoder::new(1);
         decoder.set_data(writer.consume().into()).unwrap();
         // Must not expand this run or allocate scratch space proportional to it.
         assert_eq!(
             decoder.skip_and_count(usize::MAX, 1_u64).unwrap(),
-            (u32::MAX as usize, u32::MAX as usize)
+            (MAX_RUN_LEN as usize, MAX_RUN_LEN as usize)
         );
         assert_eq!(decoder.skip_and_count(1, 1_u64).unwrap(), (0, 0));
     }
@@ -1369,6 +1394,38 @@ mod tests {
             .unwrap();
         assert_eq!(r, num_values);
         assert_eq!(vec![23; num_values], decoded);
+    }
+
+    #[test]
+    fn test_run_len_limit() {
+        let set_data = |indicator_value: u64| {
+            let mut writer = BitWriter::new(16);
+            writer.put_vlq_int(indicator_value);
+            writer.put_aligned(1_u8, 1); // repeated value of an RLE run
+            RleDecoder::new(1).set_data(writer.consume().into())
+        };
+        let max_groups = MAX_RUN_LEN / BIT_PACK_GROUP_SIZE as u64;
+
+        // The longest runs allowed by the spec
+        set_data(MAX_RUN_LEN << 1).unwrap();
+        set_data((max_groups << 1) | 1).unwrap();
+
+        for (indicator_value, expected_len) in [
+            ((MAX_RUN_LEN + 1) << 1, "2147483648"),
+            (((max_groups + 1) << 1) | 1, "2147483648"),
+            // Overflows `i64` when converted to a number of values
+            ((1 << 61) | 1, "9223372036854775808"),
+            // Negative when decoded as `i64`
+            (0xa4ff_ffff_ffff_ffff, "18446744073709551615"),
+        ] {
+            let err = set_data(indicator_value).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Parquet error: Invalid or corrupted RLE run length {expected_len}. Max allowed is 2147483647"
+                )
+            );
+        }
     }
 
     #[test]
