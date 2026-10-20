@@ -298,22 +298,26 @@ impl Buffer {
         });
     }
 
-    /// Increases the offset of this buffer by `offset`
+    /// Increases the offset of this buffer by `additional_offset`
     ///
     /// # Errors
     ///
-    /// Errors iff `offset` is larger than `len`. The buffer is left unchanged.
+    /// Errors iff `additional_offset` is larger than `len`. The buffer is left unchanged.
     #[inline]
-    pub fn try_advance(&mut self, offset: usize) -> Result<(), OutOfBoundsError> {
-        if self.length < offset {
-            return Err(OutOfBoundsError::new("buffer", offset, self.length));
+    pub fn try_advance(&mut self, additional_offset: usize) -> Result<(), OutOfBoundsError> {
+        if self.length < additional_offset {
+            return Err(OutOfBoundsError::new(
+                "buffer",
+                additional_offset,
+                self.length,
+            ));
         }
-        self.length -= offset;
+        self.length -= additional_offset;
         // Safety:
         // This cannot overflow as
         // `self.offset + self.length < self.data.len()`
-        // `offset < self.length`
-        self.ptr = unsafe { self.ptr.add(offset) };
+        // `additional_offset < self.length`
+        self.ptr = unsafe { self.ptr.add(additional_offset) };
         Ok(())
     }
 
