@@ -27,7 +27,7 @@ use arrow_flight::FlightDescriptor;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::{
     decode::{DecodedPayload, FlightDataDecoder, FlightRecordBatchStream},
-    encode::FlightDataEncoderBuilder,
+    encode::{DictionaryHandling, FlightDataEncoderBuilder},
     error::FlightError,
 };
 use arrow_ipc::reader;
@@ -308,8 +308,178 @@ async fn test_mismatched_record_batch_schema() {
     let err = result.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Arrow error: Invalid argument error: number of columns(1) must match number of fields(2) in schema"
+        "Arrow error: Schema error: Record batch schema does not match input schema"
     );
+}
+
+#[tokio::test]
+async fn test_encoder_hydrate_rejects_first_batch_with_different_schema() {
+    assert_first_batch_schema_mismatch(DictionaryHandling::Hydrate).await;
+}
+
+#[tokio::test]
+async fn test_encoder_resend_rejects_first_batch_with_different_schema() {
+    assert_first_batch_schema_mismatch(DictionaryHandling::Resend).await;
+}
+
+async fn assert_first_batch_schema_mismatch(handling: DictionaryHandling) {
+    let batch = RecordBatch::try_from_iter(vec![(
+        "actual",
+        Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+    )])
+    .unwrap();
+    let expected = Arc::new(Schema::new(vec![Field::new(
+        "expected",
+        DataType::Int32,
+        true,
+    )]));
+
+    let mut stream = FlightDataEncoderBuilder::new()
+        .with_dictionary_handling(handling)
+        .with_schema(expected)
+        .build(futures::stream::iter(vec![Ok(batch)]));
+
+    assert!(stream.next().await.unwrap().is_ok());
+    let error = stream.next().await.unwrap().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Arrow error: Schema error: Record batch schema does not match input schema"
+    );
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn test_encoder_hydrate_rejects_subsequent_schema_changes() {
+    assert_subsequent_schema_changes_rejected(false).await;
+}
+
+#[tokio::test]
+async fn test_encoder_resend_rejects_subsequent_schema_changes() {
+    assert_subsequent_schema_changes_rejected(true).await;
+}
+
+async fn assert_subsequent_schema_changes_rejected(resend: bool) {
+    let values = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+    let original = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )])),
+        vec![values.clone()],
+    )
+    .unwrap();
+    let changed = [
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("value", DataType::Int32, false),
+                Field::new("extra", DataType::Int32, false),
+            ])),
+            vec![values.clone(), values.clone()],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "renamed",
+                DataType::Int32,
+                false,
+            )])),
+            vec![values.clone()],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                true,
+            )])),
+            vec![values.clone()],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("value", DataType::Int32, false)
+                    .with_metadata(HashMap::from([("key".to_string(), "changed".to_string())])),
+            ])),
+            vec![values.clone()],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Int64,
+                false,
+            )])),
+            vec![Arc::new(arrow_array::Int64Array::from(vec![1])) as ArrayRef],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(
+                original
+                    .schema()
+                    .as_ref()
+                    .clone()
+                    .with_metadata(HashMap::from([(
+                        "schema_key".to_string(),
+                        "changed".to_string(),
+                    )])),
+            ),
+            vec![values.clone()],
+        )
+        .unwrap(),
+    ];
+
+    for batch in &changed {
+        let handling = if resend {
+            DictionaryHandling::Resend
+        } else {
+            DictionaryHandling::Hydrate
+        };
+        let mut stream = FlightDataEncoderBuilder::new()
+            .with_dictionary_handling(handling)
+            .build(futures::stream::iter(vec![
+                Ok(original.clone()),
+                Ok(batch.clone()),
+            ]));
+
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().await.unwrap().is_ok());
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Arrow error: Schema error: Record batch schema does not match input schema"
+        );
+        assert!(stream.next().await.is_none());
+    }
+}
+
+#[tokio::test]
+async fn test_encoder_accepts_changed_dictionary_values_with_same_schema() {
+    let batches = vec![make_dictionary_batch(5), make_dictionary_batch(9)];
+    let schema = batches[0].schema();
+
+    for handling in [DictionaryHandling::Hydrate, DictionaryHandling::Resend] {
+        let resend = handling == DictionaryHandling::Resend;
+        let stream = FlightDataEncoderBuilder::new()
+            .with_dictionary_handling(handling)
+            .with_schema(schema.clone())
+            .build(futures::stream::iter(batches.clone().into_iter().map(Ok)));
+        let decoded: Vec<_> = FlightRecordBatchStream::new_from_flight_data(stream)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(decoded.len(), batches.len());
+        if resend {
+            assert_eq!(decoded, batches);
+        } else {
+            let hydrated_schema = Arc::new(prepare_schema_for_flight(schema.as_ref()));
+            let expected: Vec<_> = batches
+                .iter()
+                .map(|batch| prepare_batch_for_flight(batch, hydrated_schema.clone()).unwrap())
+                .collect();
+            assert_eq!(decoded, expected);
+        }
+    }
 }
 
 #[tokio::test]
