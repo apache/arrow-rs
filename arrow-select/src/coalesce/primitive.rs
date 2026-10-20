@@ -18,7 +18,7 @@
 use crate::coalesce::{InProgressArray, append_gathered_nulls};
 use crate::filter::{FilterIndices, FilterPredicate, FilterSelection, FilterSlices};
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
+use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray, UInt32Array};
 use arrow_buffer::{NullBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::Debug;
@@ -209,7 +209,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
     fn copy_rows_by_indices(
         &mut self,
         source: &ArrayRef,
-        indices: &[u32],
+        indices: &UInt32Array,
     ) -> Result<(), ArrowError> {
         if indices.is_empty() {
             return Ok(());
@@ -223,6 +223,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             self.nulls.append_n_non_nulls(indices.len());
         }
 
+        let index_values = indices.values();
         let values = typed.values();
         let current_len = self.current.len();
         self.current.reserve(indices.len());
@@ -235,7 +236,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
                 .as_mut_ptr()
                 .cast::<T::Native>();
             let src = values.as_ptr();
-            for (i, &idx) in indices.iter().enumerate() {
+            for (i, &idx) in index_values.iter().enumerate() {
                 base.add(i).write(*src.add(idx as usize));
             }
             self.current.set_len(current_len + indices.len());
@@ -417,15 +418,15 @@ mod tests {
         let source: ArrayRef = Arc::new(Int32Array::from_iter(
             (0..32i32).map(|i| if i % 3 == 0 { None } else { Some(i) }),
         ));
-        let indices = [
+        let indices = UInt32Array::from(vec![
             0u32, 15, 2, 7, 3, 9, 12, 1, 20, 15, 6, 8, 11, 18, 21, 24, 30,
-        ];
+        ]);
 
         let mut in_progress = InProgressPrimitiveArray::<Int32Type>::new(32, DataType::Int32);
         in_progress.copy_rows_by_indices(&source, &indices).unwrap();
         let actual = in_progress.finish().unwrap();
 
-        let expected = take(source.as_ref(), &UInt32Array::from(indices.to_vec()), None).unwrap();
+        let expected = take(source.as_ref(), &indices, None).unwrap();
         assert_eq!(actual.as_ref(), expected.as_ref());
     }
 }

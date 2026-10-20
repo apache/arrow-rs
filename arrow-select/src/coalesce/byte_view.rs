@@ -19,7 +19,7 @@ use crate::coalesce::{InProgressArray, append_gathered_nulls};
 use crate::filter::{FilterPredicate, FilterSelection};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
-use arrow_array::{Array, ArrayRef, GenericByteViewArray};
+use arrow_array::{Array, ArrayRef, GenericByteViewArray, UInt32Array};
 use arrow_buffer::{Buffer, NullBuffer, NullBufferBuilder};
 use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
@@ -462,17 +462,8 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
                     .try_into()
                     .expect("byte view offset exceeds u32::MAX");
                 view.buffer_index = self.completed.len().try_into().expect("too many buffers");
-                let dst_len = dst_buffer.len();
-                // SAFETY: the destination was sized for the remaining selected bytes,
-                // and `src` belongs to the input array and cannot overlap it.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        src.as_ptr(),
-                        dst_buffer.as_mut_ptr().add(dst_len),
-                        str_len,
-                    );
-                    dst_buffer.set_len(dst_len + str_len);
-                }
+                debug_assert!(dst_buffer.capacity() - dst_buffer.len() >= str_len);
+                dst_buffer.extend_from_slice(src);
                 copied_bytes = copied_bytes
                     .checked_add(str_len)
                     .expect("selected byte count overflow");
@@ -642,7 +633,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
     fn copy_rows_by_indices(
         &mut self,
         source: &ArrayRef,
-        indices: &[u32],
+        indices: &UInt32Array,
     ) -> Result<(), ArrowError> {
         if indices.is_empty() {
             return Ok(());
@@ -656,6 +647,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             self.nulls.append_n_non_nulls(indices.len());
         }
 
+        let index_values = indices.values();
         let src_views = typed.views();
         let src_buffers = typed.data_buffers();
 
@@ -666,7 +658,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             unsafe {
                 let base = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
                 let src = src_views.as_ptr();
-                for (i, &idx) in indices.iter().enumerate() {
+                for (i, &idx) in index_values.iter().enumerate() {
                     base.add(i).write(*src.add(idx as usize));
                 }
                 self.views.set_len(current_len + indices.len());
@@ -681,7 +673,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 
         if !same_source
             && let Some(selected_bytes) =
-                selected_non_inline_bytes(src_views, indices, i32::MAX as usize)
+                selected_non_inline_bytes(src_views, index_values, i32::MAX as usize)
         {
             let source_capacity = src_buffers
                 .iter()
@@ -692,7 +684,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             {
                 self.append_indexed_views_and_copy_strings(
                     src_views,
-                    indices,
+                    index_values,
                     src_buffers,
                     selected_bytes,
                 );
@@ -724,14 +716,14 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             let base = self.views.spare_capacity_mut().as_mut_ptr().cast::<u128>();
             let src = src_views.as_ptr();
             if starting_buffer == 0 {
-                for (i, &idx) in indices.iter().enumerate() {
+                for (i, &idx) in index_values.iter().enumerate() {
                     base.add(i).write(*src.add(idx as usize));
                 }
             } else {
                 // Non-inline views (length > MAX_INLINE_VIEW_LEN) carry buffer_index
                 // in bits [64, 96); bump via raw u128 add to skip the ByteView round-trip.
                 let bump = (starting_buffer as u128) << 64;
-                for (i, &idx) in indices.iter().enumerate() {
+                for (i, &idx) in index_values.iter().enumerate() {
                     let raw = *src.add(idx as usize);
                     let len = raw as u32;
                     let adjusted = if len > MAX_INLINE_VIEW_LEN {
@@ -1014,13 +1006,13 @@ mod tests {
         ];
         let source: ArrayRef = Arc::new(BinaryViewArray::from_iter(values.iter().copied()));
         assert!(source.as_binary_view().data_buffers().is_empty());
-        let indices = [5u32, 0, 2, 4, 1, 1, 3, 0];
+        let indices = UInt32Array::from(vec![5u32, 0, 2, 4, 1, 1, 3, 0]);
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(16);
         in_progress.copy_rows_by_indices(&source, &indices).unwrap();
         let actual = in_progress.finish().unwrap();
 
-        let expected = take(source.as_ref(), &UInt32Array::from(indices.to_vec()), None).unwrap();
+        let expected = take(source.as_ref(), &indices, None).unwrap();
         assert_eq!(actual.as_ref(), expected.as_ref());
         assert!(actual.as_binary_view().data_buffers().is_empty());
     }
@@ -1032,14 +1024,14 @@ mod tests {
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(64);
 
-        let dense_indices: Vec<u32> = (0..32u32).collect();
+        let dense_indices = UInt32Array::from_iter_values(0..32u32);
         in_progress
             .copy_rows_by_indices(&source, &dense_indices)
             .unwrap();
         let after_first = in_progress.size();
 
         in_progress
-            .copy_rows_by_indices(&source, &[1u32, 2, 4])
+            .copy_rows_by_indices(&source, &UInt32Array::from(vec![1u32, 2, 4]))
             .unwrap();
         let after_second = in_progress.size();
 
@@ -1059,8 +1051,8 @@ mod tests {
         let source_a: ArrayRef = Arc::new(array_a);
         let source_b: ArrayRef = Arc::new(array_b);
 
-        let indices_a = [0u32, 1, 3, 5, 7];
-        let indices_b = [2u32, 5, 1, 6, 4];
+        let indices_a = UInt32Array::from(vec![0u32, 1, 3, 5, 7]);
+        let indices_b = UInt32Array::from(vec![2u32, 5, 1, 6, 4]);
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(16);
         in_progress
@@ -1071,18 +1063,8 @@ mod tests {
             .unwrap();
         let actual = in_progress.finish().unwrap();
 
-        let taken_a = take(
-            source_a.as_ref(),
-            &UInt32Array::from(indices_a.to_vec()),
-            None,
-        )
-        .unwrap();
-        let taken_b = take(
-            source_b.as_ref(),
-            &UInt32Array::from(indices_b.to_vec()),
-            None,
-        )
-        .unwrap();
+        let taken_a = take(source_a.as_ref(), &indices_a, None).unwrap();
+        let taken_b = take(source_b.as_ref(), &indices_b, None).unwrap();
         let expected = concat(&[taken_a.as_ref(), taken_b.as_ref()]).unwrap();
         assert_eq!(actual.as_ref(), expected.as_ref());
 
