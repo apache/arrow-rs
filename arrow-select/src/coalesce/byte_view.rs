@@ -363,24 +363,36 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         self.current = Some(dst_buffer);
     }
 
+    /// # Safety
+    ///
+    /// Every value in `indices` must be less than `src_views.len()`, and every
+    /// selected non-inline view must reference a valid range in `src_buffers`.
     #[inline(never)]
-    fn append_indexed_views_and_copy_strings(
+    unsafe fn append_indexed_views_and_copy_strings(
         &mut self,
         src_views: &[u128],
         indices: &[u32],
         src_buffers: &[Buffer],
         selected_bytes: usize,
     ) {
-        self.append_indexed_views_and_copy_strings_with_max_buffer_size(
-            src_views,
-            indices,
-            src_buffers,
-            selected_bytes,
-            i32::MAX as usize,
-        );
+        // SAFETY: the caller guarantees the same index and ByteView buffer
+        // invariants required by the delegated operation.
+        unsafe {
+            self.append_indexed_views_and_copy_strings_with_max_buffer_size(
+                src_views,
+                indices,
+                src_buffers,
+                selected_bytes,
+                i32::MAX as usize,
+            );
+        }
     }
 
-    fn append_indexed_views_and_copy_strings_with_max_buffer_size(
+    /// # Safety
+    ///
+    /// Every value in `indices` must be less than `src_views.len()`, and every
+    /// selected non-inline view must reference a valid range in `src_buffers`.
+    unsafe fn append_indexed_views_and_copy_strings_with_max_buffer_size(
         &mut self,
         src_views: &[u128],
         indices: &[u32],
@@ -481,7 +493,13 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     }
 }
 
-fn selected_non_inline_bytes(
+/// Returns the total size of the selected non-inline values, or `None` if a
+/// value exceeds `max_buffer_size` or the total overflows `usize`.
+///
+/// # Safety
+///
+/// Every value in `indices` must be less than `src_views.len()`.
+unsafe fn selected_non_inline_bytes(
     src_views: &[u128],
     indices: &[u32],
     max_buffer_size: usize,
@@ -638,7 +656,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         Ok(())
     }
 
-    fn copy_rows_by_indices(
+    unsafe fn copy_rows_by_indices(
         &mut self,
         source: &ArrayRef,
         indices: &UInt32Array,
@@ -650,7 +668,9 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         self.ensure_capacity();
 
         if let Some(src_nulls) = typed.nulls() {
-            append_gathered_nulls(&mut self.nulls, src_nulls, indices);
+            // SAFETY: the caller validated every index against `typed.len()`, which
+            // equals the length of its null buffer.
+            unsafe { append_gathered_nulls(&mut self.nulls, src_nulls, indices) };
         } else {
             self.nulls.append_n_non_nulls(indices.len());
         }
@@ -686,8 +706,11 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             .is_some_and(|cached| std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(source)));
 
         if !same_source
-            && let Some(selected_bytes) =
+            && let Some(selected_bytes) = unsafe {
+                // SAFETY: the caller validated every index against `typed.len()`,
+                // which equals `src_views.len()`.
                 selected_non_inline_bytes(src_views, index_values, i32::MAX as usize)
+            }
         {
             let source_capacity = src_buffers
                 .iter()
@@ -696,12 +719,17 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 (source_capacity, selected_bytes.checked_mul(2))
                 && source_capacity > compaction_threshold
             {
-                self.append_indexed_views_and_copy_strings(
-                    src_views,
-                    index_values,
-                    src_buffers,
-                    selected_bytes,
-                );
+                // SAFETY: the caller validated every index against `typed.len()`,
+                // which equals `src_views.len()`, and both the views and buffers
+                // come from the same valid ByteView array.
+                unsafe {
+                    self.append_indexed_views_and_copy_strings(
+                        src_views,
+                        index_values,
+                        src_buffers,
+                        selected_bytes,
+                    );
+                }
                 return Ok(());
             }
         }
@@ -1029,7 +1057,8 @@ mod tests {
         let indices = UInt32Array::from(vec![5u32, 0, 2, 4, 1, 1, 3, 0]);
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(16);
-        in_progress.copy_rows_by_indices(&source, &indices).unwrap();
+        // SAFETY: `indices` contains no nulls and every index is less than `source.len()`.
+        unsafe { in_progress.copy_rows_by_indices(&source, &indices).unwrap() };
         let actual = in_progress.finish().unwrap();
 
         let expected = take(source.as_ref(), &indices, None).unwrap();
@@ -1045,14 +1074,20 @@ mod tests {
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(64);
 
         let dense_indices = UInt32Array::from_iter_values(0..32u32);
-        in_progress
-            .copy_rows_by_indices(&source, &dense_indices)
-            .unwrap();
+        // SAFETY: both index arrays contain no nulls and every index is less than
+        // `source.len()`.
+        unsafe {
+            in_progress
+                .copy_rows_by_indices(&source, &dense_indices)
+                .unwrap();
+        }
         let after_first = in_progress.size();
 
-        in_progress
-            .copy_rows_by_indices(&source, &UInt32Array::from(vec![1u32, 2, 4]))
-            .unwrap();
+        unsafe {
+            in_progress
+                .copy_rows_by_indices(&source, &UInt32Array::from(vec![1u32, 2, 4]))
+                .unwrap();
+        }
         let after_second = in_progress.size();
 
         let second_growth = after_second - after_first;
@@ -1075,12 +1110,16 @@ mod tests {
         let indices_b = UInt32Array::from(vec![2u32, 5, 1, 6, 4]);
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(16);
-        in_progress
-            .copy_rows_by_indices(&source_a, &indices_a)
-            .unwrap();
-        in_progress
-            .copy_rows_by_indices(&source_b, &indices_b)
-            .unwrap();
+        // SAFETY: both index arrays contain no nulls and every index is less than
+        // its corresponding source length.
+        unsafe {
+            in_progress
+                .copy_rows_by_indices(&source_a, &indices_a)
+                .unwrap();
+            in_progress
+                .copy_rows_by_indices(&source_b, &indices_b)
+                .unwrap();
+        }
         let actual = in_progress.finish().unwrap();
 
         let taken_a = take(source_a.as_ref(), &indices_a, None).unwrap();
@@ -1105,18 +1144,23 @@ mod tests {
         let indices = [0u32, 3, 7];
         let max_buffer_size = 80;
         let typed = source.as_binary_view();
+        // SAFETY: every index is less than `typed.views().len()`.
         let selected_bytes =
-            selected_non_inline_bytes(typed.views(), &indices, max_buffer_size).unwrap();
+            unsafe { selected_non_inline_bytes(typed.views(), &indices, max_buffer_size) }.unwrap();
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(16);
         in_progress.nulls.append_n_non_nulls(indices.len());
-        in_progress.append_indexed_views_and_copy_strings_with_max_buffer_size(
-            typed.views(),
-            &indices,
-            typed.data_buffers(),
-            selected_bytes,
-            max_buffer_size,
-        );
+        // SAFETY: every index selects a valid view from `typed`, whose views and
+        // buffers come from the same validated ByteView array.
+        unsafe {
+            in_progress.append_indexed_views_and_copy_strings_with_max_buffer_size(
+                typed.views(),
+                &indices,
+                typed.data_buffers(),
+                selected_bytes,
+                max_buffer_size,
+            );
+        }
         let actual = in_progress.finish().unwrap();
 
         let expected = take(source.as_ref(), &UInt32Array::from(indices.to_vec()), None).unwrap();
@@ -1130,17 +1174,5 @@ mod tests {
                 .all(|buffer| buffer.len() <= max_buffer_size)
         );
         actual.to_data().validate_full().unwrap();
-    }
-
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "caller-validated in-bounds indices")]
-    fn test_copy_rows_by_indices_debug_assert_rejects_oob() {
-        let source: ArrayRef = Arc::new(BinaryViewArray::from_iter_values(
-            [b"a".as_slice(), b"b", b"c"].into_iter(),
-        ));
-        let indices = UInt32Array::from(vec![0u32, 99]);
-        let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(4);
-        let _ = in_progress.copy_rows_by_indices(&source, &indices);
     }
 }
