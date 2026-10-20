@@ -22,5 +22,6 @@ The merge queue runs the full test suite, except Miri, against the proposed merg
 Pushes to `main` populate caches and publish documentation without repeating tests.
 A single required status check combines the results and blocks merging on failure.
 
-Miri runs separately on demand through the `miri` workflow's **Run workflow** button
-or `gh workflow run miri.yaml --repo apache/arrow-rs --ref <branch-or-tag>`.
+Miri runs separately every day at 03:17 UTC and on demand through the `miri`
+workflow's **Run workflow** button or
+`gh workflow run miri.yaml --repo apache/arrow-rs --ref <branch-or-tag>`.

@@ -134,6 +134,8 @@ jobs:
         run: echo "$NEEDS"
       # Path-filtered suites are intentionally skipped. A failed/cancelled
       # selector or suite must still block merging.
+      # Miri runs separately to reduce runner time:
+      # https://github.com/apache/arrow-rs/issues/11548
       - name: Fail if any suite failed or was cancelled
         if: needs.changes.result != 'success' || contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
