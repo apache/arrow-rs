@@ -38,6 +38,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo install cargo-audit --locked
       - name: Run audit check
-        run: cargo audit
+        # Waiting on an object_store release with quick-xml >=0.41.0.
+        # https://rustsec.org/advisories/RUSTSEC-2026-0194
+        # https://rustsec.org/advisories/RUSTSEC-2026-0195
+        # The pyo3 fix requires pyo3 >=0.29, a breaking upgrade not suitable for 57.x.
+        # https://rustsec.org/advisories/RUSTSEC-2026-0176
+        # https://rustsec.org/advisories/RUSTSEC-2026-0177
+        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0176 --ignore RUSTSEC-2026-0177

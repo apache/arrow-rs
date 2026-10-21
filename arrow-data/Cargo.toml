@@ -19,7 +19,6 @@
 name = "arrow-data"
 version = { workspace = true }
 description = "Array data abstractions for Apache Arrow"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
