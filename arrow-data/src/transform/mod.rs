@@ -226,16 +226,18 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
             mutable
                 .buffer1
                 .extend(views[start..start + len].iter().map(|v| {
-                    // A view of 12 bytes or fewer stores the string inline and
-                    // has no buffer index, so adding 0 leaves it unchanged.
+                    // A view of a string of 12 bytes or fewer stores the
+                    // string inline and has no buffer index, so adding 0
+                    // leaves it unchanged.
                     let offset = if *v as u32 > MAX_INLINE_VIEW_LEN {
                         buffer_offset
                     } else {
                         0
                     };
-                    // The buffer index is bits 64 to 95 of a view. The new index
-                    // is less than the number of data buffers, so the sum never
-                    // carries into the bits above it.
+                    // The buffer index is bits 64 to 95 of a view. Adding
+                    // `buffer_offset` gives the string's buffer index in the
+                    // output, which fits in 32 bits, so the sum never carries
+                    // into bit 96.
                     v + ((offset as u128) << 64)
                 }));
             Ok(())
