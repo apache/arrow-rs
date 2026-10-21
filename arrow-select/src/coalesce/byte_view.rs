@@ -578,6 +578,7 @@ impl BufferSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coalesce::assert_contains;
     use crate::filter::FilterBuilder;
     use arrow_array::types::BinaryViewType;
     use arrow_array::{BinaryViewArray, BooleanArray};
@@ -767,18 +768,12 @@ mod tests {
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(8);
         in_progress.set_source(Some(Arc::clone(&array)));
         let err = in_progress.copy_rows_by_filter(&predicate).unwrap_err();
-        assert!(
-            err.to_string().contains("larger than source array"),
-            "unexpected error: {err}"
-        );
+        assert_contains(err.to_string(), "larger than source array");
 
         let mut in_progress = InProgressByteViewArray::<BinaryViewType>::new(8);
         let err = in_progress
             .copy_rows_by_filter_from(array, &predicate)
             .unwrap_err();
-        assert!(
-            err.to_string().contains("larger than source array"),
-            "unexpected error: {err}"
-        );
+        assert_contains(err.to_string(), "larger than source array");
     }
 }
