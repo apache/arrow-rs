@@ -15,13 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{fs, path::PathBuf, str::FromStr};
+use std::{fs, path::PathBuf};
 
 /// Returns path to the test parquet file in 'data' directory
 pub fn get_test_path(file_name: &str) -> PathBuf {
-    let mut pathbuf = PathBuf::from_str(&arrow::util::test_util::parquet_test_data()).unwrap();
-    pathbuf.push(file_name);
-    pathbuf
+    PathBuf::from(arrow::util::test_util::parquet_test_data()).join(file_name)
 }
 
 /// Returns file handle for a test parquet file from 'data' directory

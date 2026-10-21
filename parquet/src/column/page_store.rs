@@ -70,9 +70,12 @@ impl PageKey {
 /// thread at a time (both methods take `&mut self`), so it needs no internal
 /// synchronization — hence only `Send`, not `Sync`.
 ///
-/// The default ([`InMemoryPageStore`]) keeps blobs on the heap. Configure a
-/// different backend via
-/// [`ArrowWriterOptions::with_page_store_factory`](crate::arrow::arrow_writer::ArrowWriterOptions::with_page_store_factory).
+/// The default ([`InMemoryPageStore`]) keeps blobs in memory on the heap.
+///
+/// For an example of configuring the Parquet writer to use an alternate
+/// `PageStore` see the [`ArrowWriterOptions::with_page_store_factory`] API.
+///
+/// [`ArrowWriterOptions::with_page_store_factory`]: crate::arrow::arrow_writer::ArrowWriterOptions::with_page_store_factory
 pub trait PageStore: Send {
     /// Store `value`, returning a handle that can later be passed to
     /// [`take`](Self::take).
@@ -110,11 +113,14 @@ pub struct PageStoreArgs<'a> {
     column_descriptor: &'a ColumnDescriptor,
 }
 
-impl<'a> PageStoreArgs<'a> {
+impl PageStoreArgs<'_> {
     // Constructed only by the Arrow writer; without that feature there is no caller.
     #[cfg(feature = "arrow")]
-    pub(crate) fn new(column_index: usize, column_descriptor: &'a ColumnDescriptor) -> Self {
-        Self {
+    pub(crate) fn new(
+        column_index: usize,
+        column_descriptor: &ColumnDescriptor,
+    ) -> PageStoreArgs<'_> {
+        PageStoreArgs {
             column_index,
             column_descriptor,
         }

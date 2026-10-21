@@ -26,13 +26,20 @@ use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Formatter;
 use std::io::Write;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 struct EncryptionKey {
     key: Vec<u8>,
     key_metadata: Option<Vec<u8>>,
+}
+
+impl std::fmt::Debug for EncryptionKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EncryptionKey {{ }}")
+    }
 }
 
 impl EncryptionKey {
@@ -124,7 +131,7 @@ impl FileEncryptionProperties {
         let mut column_names: Vec<String> = Vec::with_capacity(self.column_keys.len());
         let mut keys: Vec<Vec<u8>> = Vec::with_capacity(self.column_keys.len());
         let mut meta: Vec<Vec<u8>> = Vec::with_capacity(self.column_keys.len());
-        for (key, value) in self.column_keys.iter() {
+        for (key, value) in &self.column_keys {
             column_names.push(key.clone());
             keys.push(value.key.clone());
             if let Some(metadata) = value.key_metadata.as_ref() {

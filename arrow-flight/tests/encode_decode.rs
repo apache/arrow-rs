@@ -19,16 +19,19 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow_array::{
+    Array, ArrayRef, Float64Array, Int32Array, LargeStringArray, RecordBatch, UnionArray,
+};
 use arrow_cast::pretty::pretty_format_batches;
 use arrow_flight::FlightDescriptor;
 use arrow_flight::flight_descriptor::DescriptorType;
 use arrow_flight::{
     decode::{DecodedPayload, FlightDataDecoder, FlightRecordBatchStream},
-    encode::FlightDataEncoderBuilder,
+    encode::{DictionaryHandling, FlightDataEncoderBuilder},
     error::FlightError,
 };
-use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow_ipc::reader;
+use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, UnionFields};
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 
@@ -305,8 +308,178 @@ async fn test_mismatched_record_batch_schema() {
     let err = result.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Arrow error: Invalid argument error: number of columns(1) must match number of fields(2) in schema"
+        "Arrow error: Schema error: Record batch schema does not match input schema"
     );
+}
+
+#[tokio::test]
+async fn test_encoder_hydrate_rejects_first_batch_with_different_schema() {
+    assert_first_batch_schema_mismatch(DictionaryHandling::Hydrate).await;
+}
+
+#[tokio::test]
+async fn test_encoder_resend_rejects_first_batch_with_different_schema() {
+    assert_first_batch_schema_mismatch(DictionaryHandling::Resend).await;
+}
+
+async fn assert_first_batch_schema_mismatch(handling: DictionaryHandling) {
+    let batch = RecordBatch::try_from_iter(vec![(
+        "actual",
+        Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+    )])
+    .unwrap();
+    let expected = Arc::new(Schema::new(vec![Field::new(
+        "expected",
+        DataType::Int32,
+        true,
+    )]));
+
+    let mut stream = FlightDataEncoderBuilder::new()
+        .with_dictionary_handling(handling)
+        .with_schema(expected)
+        .build(futures::stream::iter(vec![Ok(batch)]));
+
+    assert!(stream.next().await.unwrap().is_ok());
+    let error = stream.next().await.unwrap().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Arrow error: Schema error: Record batch schema does not match input schema"
+    );
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn test_encoder_hydrate_rejects_subsequent_schema_changes() {
+    assert_subsequent_schema_changes_rejected(false).await;
+}
+
+#[tokio::test]
+async fn test_encoder_resend_rejects_subsequent_schema_changes() {
+    assert_subsequent_schema_changes_rejected(true).await;
+}
+
+async fn assert_subsequent_schema_changes_rejected(resend: bool) {
+    let values = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+    let original = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )])),
+        vec![values.clone()],
+    )
+    .unwrap();
+    let changed = [
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("value", DataType::Int32, false),
+                Field::new("extra", DataType::Int32, false),
+            ])),
+            vec![values.clone(), values.clone()],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "renamed",
+                DataType::Int32,
+                false,
+            )])),
+            vec![values.clone()],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                true,
+            )])),
+            vec![values.clone()],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("value", DataType::Int32, false)
+                    .with_metadata(HashMap::from([("key".to_string(), "changed".to_string())])),
+            ])),
+            vec![values.clone()],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Int64,
+                false,
+            )])),
+            vec![Arc::new(arrow_array::Int64Array::from(vec![1])) as ArrayRef],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(
+                original
+                    .schema()
+                    .as_ref()
+                    .clone()
+                    .with_metadata(HashMap::from([(
+                        "schema_key".to_string(),
+                        "changed".to_string(),
+                    )])),
+            ),
+            vec![values.clone()],
+        )
+        .unwrap(),
+    ];
+
+    for batch in &changed {
+        let handling = if resend {
+            DictionaryHandling::Resend
+        } else {
+            DictionaryHandling::Hydrate
+        };
+        let mut stream = FlightDataEncoderBuilder::new()
+            .with_dictionary_handling(handling)
+            .build(futures::stream::iter(vec![
+                Ok(original.clone()),
+                Ok(batch.clone()),
+            ]));
+
+        assert!(stream.next().await.unwrap().is_ok());
+        assert!(stream.next().await.unwrap().is_ok());
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Arrow error: Schema error: Record batch schema does not match input schema"
+        );
+        assert!(stream.next().await.is_none());
+    }
+}
+
+#[tokio::test]
+async fn test_encoder_accepts_changed_dictionary_values_with_same_schema() {
+    let batches = vec![make_dictionary_batch(5), make_dictionary_batch(9)];
+    let schema = batches[0].schema();
+
+    for handling in [DictionaryHandling::Hydrate, DictionaryHandling::Resend] {
+        let resend = handling == DictionaryHandling::Resend;
+        let stream = FlightDataEncoderBuilder::new()
+            .with_dictionary_handling(handling)
+            .with_schema(schema.clone())
+            .build(futures::stream::iter(batches.clone().into_iter().map(Ok)));
+        let decoded: Vec<_> = FlightRecordBatchStream::new_from_flight_data(stream)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(decoded.len(), batches.len());
+        if resend {
+            assert_eq!(decoded, batches);
+        } else {
+            let hydrated_schema = Arc::new(prepare_schema_for_flight(schema.as_ref()));
+            let expected: Vec<_> = batches
+                .iter()
+                .map(|batch| prepare_batch_for_flight(batch, hydrated_schema.clone()).unwrap())
+                .collect();
+            assert_eq!(decoded, expected);
+        }
+    }
 }
 
 #[tokio::test]
@@ -412,6 +585,122 @@ async fn test_mismatched_schema_message() {
         "Error decoding ipc RecordBatch: Invalid argument error",
     )
     .await;
+}
+
+/// Encode `batch` to IPC, shift its body buffer by `alignment_offset` bytes from a
+/// 64-byte-aligned base, then decode with alignment enforcement enabled.
+fn decode_misaligned(
+    batch: RecordBatch,
+    alignment_offset: usize,
+) -> Result<RecordBatch, arrow_schema::ArrowError> {
+    use arrow_buffer::{Buffer, MutableBuffer};
+    use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator};
+
+    let ipc_gen = IpcDataGenerator {};
+    let mut dict_tracker = DictionaryTracker::new(false);
+    let (_, encoded) = ipc_gen
+        .encode(
+            &batch,
+            &mut dict_tracker,
+            &Default::default(),
+            &mut Default::default(),
+        )
+        .unwrap();
+
+    // MutableBuffer guarantees 64-byte alignment, so slicing at `alignment_offset`
+    // produces a pointer misaligned for types with stricter requirements.
+    let mut misaligned = MutableBuffer::with_capacity(encoded.arrow_data.len() + alignment_offset);
+    for _ in 0..alignment_offset {
+        misaligned.push(0_u8);
+    }
+    misaligned.extend_from_slice(&encoded.arrow_data);
+    let misaligned_buf = Buffer::from(misaligned).slice(alignment_offset);
+
+    let message = arrow_ipc::root_as_message(&encoded.ipc_message).unwrap();
+    let ipc_batch = message.header_as_record_batch().unwrap();
+
+    reader::RecordBatchDecoder::try_new(
+        &misaligned_buf,
+        ipc_batch,
+        batch.schema(),
+        &Default::default(),
+        &message.version(),
+    )
+    .unwrap()
+    .with_require_alignment(true)
+    .read_record_batch()
+}
+
+#[test]
+fn test_misaligned_int32() {
+    let err = decode_misaligned(
+        RecordBatch::try_from_iter(vec![(
+            "i32",
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+        )])
+        .unwrap(),
+        1,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains(
+            "Misaligned buffers[0] in array of type Int32, offset from expected alignment of 4 by 1"
+        ),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_misaligned_large_string() {
+    let err = decode_misaligned(
+        RecordBatch::try_from_iter(vec![(
+            "str",
+            Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc"])) as ArrayRef,
+        )])
+        .unwrap(),
+        1,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains(
+            "Misaligned buffers[0] in array of type LargeUtf8, offset from expected alignment of 8 by 1"
+        ),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
+fn test_misaligned_dense_union() {
+    let union_fields = UnionFields::try_new(
+        [0i8, 1],
+        [
+            Arc::new(arrow_schema::Field::new("a", DataType::Int32, false)),
+            Arc::new(arrow_schema::Field::new("b", DataType::Float64, false)),
+        ],
+    )
+    .unwrap();
+    let type_ids = arrow_buffer::ScalarBuffer::<i8>::from(vec![0i8, 1, 0]);
+    let offsets = arrow_buffer::ScalarBuffer::<i32>::from(vec![0i32, 0, 1]);
+    let children: Vec<ArrayRef> = vec![
+        Arc::new(Int32Array::from(vec![1, 2])),
+        Arc::new(Float64Array::from(vec![3.0])),
+    ];
+    let union_array = UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap();
+    decode_misaligned(
+        RecordBatch::try_new(
+            Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+                "u",
+                union_array.data_type().clone(),
+                false,
+            )])),
+            vec![Arc::new(union_array)],
+        )
+        .unwrap(),
+        1,
+    )
+    .unwrap();
 }
 
 /// Encodes input as a FlightData stream, and then decodes it using

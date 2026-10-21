@@ -267,10 +267,12 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
                 bytes.as_slice()
             };
             match arrow_ipc::root_as_message(slice) {
-                Ok(message) => message
-                    .header_as_schema()
-                    .map(arrow_ipc::convert::fb_to_schema)
-                    .ok_or_else(|| arrow_err!("the message is not Arrow Schema")),
+                Ok(message) => {
+                    let schema = message
+                        .header_as_schema()
+                        .ok_or_else(|| arrow_err!("the message is not Arrow Schema"))?;
+                    arrow_ipc::convert::try_fb_to_schema(schema).map_err(Into::into)
+                }
                 Err(err) => {
                     // The flatbuffers implementation returns an error on verification error.
                     Err(arrow_err!(
@@ -311,6 +313,135 @@ pub fn encode_arrow_schema(schema: &Schema) -> String {
     BASE64_STANDARD.encode(&len_prefix_schema)
 }
 
+/// Reject map keys that are nullable after resolving their encoded layout.
+/// This validates the writer's logical contract, not a batch's physical layout.
+pub(crate) fn validate_map_key_type(data_type: &DataType) -> Result<()> {
+    match data_type {
+        DataType::Map(entries, _) => {
+            let DataType::Struct(fields) = entries.data_type() else {
+                return Err(arrow_err!(
+                    "DataType::Map should contain a struct field child"
+                ));
+            };
+            if fields.len() != 2 {
+                return Err(arrow_err!("DataType::Map entries must contain two fields"));
+            }
+            let key = &fields[0];
+            let mut key_type = key.data_type();
+            let mut nullable = key.is_nullable();
+            loop {
+                match key_type {
+                    DataType::Dictionary(_, value) => key_type = value,
+                    DataType::RunEndEncoded(_, value) => {
+                        nullable |= value.is_nullable();
+                        key_type = value.data_type();
+                    }
+                    _ => break,
+                }
+            }
+            if nullable {
+                return Err(arrow_err!(
+                    "Map key field '{}' must be non-nullable, including its encoded values",
+                    key.name()
+                ));
+            }
+            validate_map_key_type(entries.data_type())?;
+        }
+        DataType::Struct(fields) => {
+            for field in fields {
+                validate_map_key_type(field.data_type())?;
+            }
+        }
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::RunEndEncoded(_, field) => validate_map_key_type(field.data_type())?,
+        DataType::Dictionary(_, value) => validate_map_key_type(value)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Normalize `field` for Arrow schema metadata.
+///
+/// This removes wrappers the Parquet reader does not reconstruct: REE at any
+/// nesting depth and dictionaries around nested values. Scalar dictionaries,
+/// including `Utf8View` and `BinaryView`, are retained in the metadata.
+fn normalize_metadata_field(field: &Field) -> Field {
+    match field.data_type() {
+        DataType::RunEndEncoded(_, value_field) => {
+            let value = normalize_metadata_field(value_field);
+            field
+                .clone()
+                .with_data_type(value.data_type().clone())
+                .with_nullable(field.is_nullable() || value.is_nullable())
+        }
+        DataType::Dictionary(key, value_type) => {
+            // Dictionary values have no Field, so use a synthetic one to retain
+            // the nullability of any REE value while normalizing recursively.
+            let value_field = Field::new("", value_type.as_ref().clone(), false);
+            let value = normalize_metadata_field(&value_field);
+            let value_type = value.data_type();
+            // Parquet expands nested dictionary values into leaf columns.
+            // Scalar view dictionaries are supported by the reader and must remain.
+            let data_type = if value_type.is_nested() {
+                value_type.clone()
+            } else {
+                DataType::Dictionary(key.clone(), Box::new(value_type.clone()))
+            };
+            field
+                .clone()
+                .with_data_type(data_type)
+                .with_nullable(field.is_nullable() || value.is_nullable())
+        }
+        _ => field
+            .clone()
+            .with_data_type(normalize_metadata_children(field.data_type())),
+    }
+}
+
+fn normalize_metadata_children(dt: &DataType) -> DataType {
+    match dt {
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|f| Arc::new(normalize_metadata_field(f)))
+                .collect(),
+        ),
+        DataType::List(f) => DataType::List(Arc::new(normalize_metadata_field(f))),
+        DataType::LargeList(f) => DataType::LargeList(Arc::new(normalize_metadata_field(f))),
+        DataType::FixedSizeList(f, n) => {
+            DataType::FixedSizeList(Arc::new(normalize_metadata_field(f)), *n)
+        }
+        DataType::ListView(f) => DataType::ListView(Arc::new(normalize_metadata_field(f))),
+        DataType::LargeListView(f) => {
+            DataType::LargeListView(Arc::new(normalize_metadata_field(f)))
+        }
+        DataType::Map(f, sorted) => DataType::Map(Arc::new(normalize_metadata_field(f)), *sorted),
+        _ => dt.clone(),
+    }
+}
+
+/// Whether `dt` needs normalization before being written as Arrow schema metadata.
+fn needs_metadata_normalization(dt: &DataType) -> bool {
+    match dt {
+        DataType::RunEndEncoded(_, _) => true,
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|f| needs_metadata_normalization(f.data_type())),
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::ListView(f)
+        | DataType::LargeListView(f)
+        | DataType::Map(f, _) => needs_metadata_normalization(f.data_type()),
+        DataType::Dictionary(_, value) => value.is_nested() || needs_metadata_normalization(value),
+        _ => false,
+    }
+}
+
 /// Mutates writer metadata by storing the encoded Arrow schema hint in
 /// [`ARROW_SCHEMA_META_KEY`].
 ///
@@ -318,6 +449,22 @@ pub fn encode_arrow_schema(schema: &Schema) -> String {
 ///
 /// [`ARROW_SCHEMA_META_KEY`]: crate::arrow::ARROW_SCHEMA_META_KEY
 pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterProperties) {
+    let needs_normalization = schema
+        .fields()
+        .iter()
+        .any(|f| needs_metadata_normalization(f.data_type()));
+    let metadata_schema;
+    let schema = if needs_normalization {
+        let fields: Vec<Field> = schema
+            .fields()
+            .iter()
+            .map(|f| normalize_metadata_field(f))
+            .collect();
+        metadata_schema = Schema::new_with_metadata(fields, schema.metadata().clone());
+        &metadata_schema
+    } else {
+        schema
+    };
     let encoded = encode_arrow_schema(schema);
 
     let schema_kv = KeyValue {
@@ -395,7 +542,7 @@ pub struct ArrowSchemaConverter<'a> {
     schema_root: &'a str,
     /// Should we coerce Arrow types to compatible Parquet types?
     ///
-    /// See docs on [Self::with_coerce_types]`
+    /// See docs on [`Self::with_coerce_types`]
     coerce_types: bool,
 }
 
@@ -459,6 +606,9 @@ impl<'a> ArrowSchemaConverter<'a> {
     ///
     /// See example in [`ArrowSchemaConverter`]
     pub fn convert(&self, schema: &Schema) -> Result<SchemaDescriptor> {
+        for field in schema.fields() {
+            validate_map_key_type(field.data_type())?;
+        }
         let fields = schema
             .fields()
             .iter()
@@ -717,7 +867,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
-            let (physical_type, length) = if *precision > 1 && *precision <= 9 {
+            let (physical_type, length) = if *precision >= 1 && *precision <= 9 {
                 (PhysicalType::INT32, -1)
             } else if *precision <= 18 {
                 (PhysicalType::INT64, -1)
@@ -833,9 +983,17 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             let dict_field = field.clone().with_data_type(value.as_ref().clone());
             arrow_to_parquet_type(&dict_field, coerce_types)
         }
-        DataType::RunEndEncoded(_, _) => Err(arrow_err!(
-            "Converting RunEndEncodedType to parquet not supported",
-        )),
+        DataType::RunEndEncoded(_, value) => {
+            // Run-end encoding is a physical layout. The Parquet column uses the
+            // run value type and is optional when either the run array or its
+            // values are nullable, so schema conversion recurses into the value
+            // field here.
+            let value_field = field
+                .clone()
+                .with_data_type(value.data_type().clone())
+                .with_nullable(field.is_nullable() || value.is_nullable());
+            arrow_to_parquet_type(&value_field, coerce_types)
+        }
     }
 }
 
@@ -945,6 +1103,41 @@ mod tests {
             Field::new("decimal7", DataType::Decimal256(39, 2), false),
         ]);
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
+    }
+
+    #[test]
+    fn test_decimal_precision_physical_types() {
+        let cases = [
+            (1, PhysicalType::INT32, None),
+            (9, PhysicalType::INT32, None),
+            (10, PhysicalType::INT64, None),
+            (18, PhysicalType::INT64, None),
+            (19, PhysicalType::FIXED_LEN_BYTE_ARRAY, Some(9)),
+            (38, PhysicalType::FIXED_LEN_BYTE_ARRAY, Some(16)),
+        ];
+
+        for (precision, expected_type, expected_length) in cases {
+            let arrow_schema = Schema::new(vec![Field::new(
+                "decimal",
+                DataType::Decimal128(precision, 0),
+                false,
+            )]);
+            let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema).unwrap();
+            let column = parquet_schema.column(0);
+
+            assert_eq!(
+                column.physical_type(),
+                expected_type,
+                "precision {precision}"
+            );
+            if let Some(expected_length) = expected_length {
+                assert_eq!(
+                    column.type_length(),
+                    expected_length,
+                    "precision {precision}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1703,9 +1896,9 @@ mod tests {
             ),
             Field::new_map(
                 "my_map",
-                "entries",
-                Field::new("keys", DataType::Utf8, false),
-                Field::new("values", DataType::Int32, true),
+                "my_entries",
+                Field::new("my_keys", DataType::Utf8, false),
+                Field::new("my_values", DataType::Int32, true),
                 false,
                 true,
             ),
@@ -1748,9 +1941,9 @@ mod tests {
                 }
             }
             OPTIONAL GROUP my_map (MAP) {
-                REPEATED GROUP entries {
-                    REQUIRED BINARY keys (STRING);
-                    OPTIONAL INT32 values;
+                REPEATED GROUP my_entries {
+                    REQUIRED BINARY my_keys (STRING);
+                    OPTIONAL INT32 my_values;
                 }
             }
         }
@@ -1852,7 +2045,7 @@ mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
             Field::new(
@@ -1862,7 +2055,7 @@ mod tests {
             )
             .with_metadata(HashMap::from_iter(vec![(
                 "adjusted_to_utc".to_string(),
-                "".to_string(),
+                String::new(),
             )])),
             Field::new(
                 "ts_milli",
@@ -1940,7 +2133,7 @@ mod tests {
                         assert_eq!(a.physical_type(), b.physical_type());
                         assert_eq!(a.converted_type(), b.converted_type());
                     }
-                };
+                }
             });
     }
 
@@ -1958,6 +2151,278 @@ mod tests {
             .convert(&arrow_schema);
 
         converted_arrow_schema.unwrap();
+    }
+
+    #[test]
+    fn test_run_end_schema_conversion_recurses_into_value_type() {
+        fn run_end_type(value_type: DataType, nullable_values: bool) -> DataType {
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", value_type, nullable_values)),
+            )
+        }
+
+        // A leaf REE contributes the value's physical type and combined
+        // nullability to the Parquet schema.
+        let leaf_schema = Schema::new(vec![Field::new(
+            "ree",
+            run_end_type(DataType::Int32, true),
+            false,
+        )]);
+        let converted = ArrowSchemaConverter::new().convert(&leaf_schema).unwrap();
+        assert_eq!(converted.columns().len(), 1);
+        assert_eq!(converted.column(0).name(), "ree");
+        assert_eq!(converted.column(0).physical_type(), PhysicalType::INT32);
+        assert_eq!(converted.column(0).max_def_level(), 1);
+
+        // Non-leaf value types recurse into the value type rather than
+        // exposing Arrow's physical run-end wrapper in the Parquet schema.
+        let list_schema = Schema::new(vec![Field::new(
+            "ree_list",
+            run_end_type(
+                DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
+                true,
+            ),
+            true,
+        )]);
+        let converted = ArrowSchemaConverter::new().convert(&list_schema).unwrap();
+        assert_eq!(converted.columns().len(), 1);
+        assert_eq!(converted.column(0).physical_type(), PhysicalType::INT32);
+        assert!(
+            converted.column(0).max_rep_level() >= 1,
+            "list element should be repeated"
+        );
+
+        let dictionary_schema = Schema::new(vec![Field::new(
+            "ree_dictionary",
+            run_end_type(
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+                true,
+            ),
+            true,
+        )]);
+        let converted = ArrowSchemaConverter::new()
+            .convert(&dictionary_schema)
+            .unwrap();
+        assert_eq!(converted.columns().len(), 1);
+        assert_eq!(
+            converted.column(0).physical_type(),
+            PhysicalType::BYTE_ARRAY
+        );
+    }
+
+    fn map_type_with_key(key: Field) -> DataType {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(vec![key, Field::new("value", DataType::Int32, true)].into()),
+                false,
+            )),
+            false,
+        )
+    }
+
+    #[test]
+    fn test_map_key_schema_rejects_logically_nullable_keys() {
+        let ree = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let dictionary_ree = DataType::Dictionary(Box::new(DataType::Int8), Box::new(ree.clone()));
+        let nested_ree = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", dictionary_ree.clone(), false)),
+        );
+        for key in [
+            Field::new("key", DataType::Int32, true),
+            Field::new("key", ree, false),
+            Field::new("key", dictionary_ree, false),
+            Field::new("key", nested_ree, false),
+        ] {
+            let map = map_type_with_key(key);
+            for data_type in [
+                map.clone(),
+                DataType::Struct(vec![Field::new("nested", map.clone(), true)].into()),
+                DataType::List(Arc::new(Field::new("item", map.clone(), true))),
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(map.clone())),
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", map, true)),
+                ),
+            ] {
+                let schema = Schema::new(vec![Field::new("map", data_type, true)]);
+                for coerce_types in [false, true] {
+                    let err = ArrowSchemaConverter::new()
+                        .with_coerce_types(coerce_types)
+                        .convert(&schema)
+                        .unwrap_err();
+                    assert!(
+                        err.to_string()
+                            .contains("Map key field 'key' must be non-nullable"),
+                        "{err}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_map_key_schema_preserves_required_keys_and_nullable_members() {
+        for key_type in [
+            DataType::Int32,
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", DataType::Int32, false)),
+            ),
+            DataType::Struct(vec![Field::new("member", DataType::Int32, true)].into()),
+        ] {
+            let schema = Schema::new(vec![Field::new(
+                "map",
+                map_type_with_key(Field::new("key", key_type, false)),
+                true,
+            )]);
+            let parquet = ArrowSchemaConverter::new().convert(&schema).unwrap();
+            let key = &parquet.root_schema().get_fields()[0].get_fields()[0].get_fields()[0];
+            assert_eq!(key.get_basic_info().repetition(), Repetition::REQUIRED);
+
+            let mut props = WriterProperties::builder().build();
+            add_encoded_arrow_schema_to_metadata(&schema, &mut props);
+            let encoded = props
+                .key_value_metadata()
+                .unwrap()
+                .iter()
+                .find(|kv| kv.key == crate::arrow::ARROW_SCHEMA_META_KEY)
+                .unwrap()
+                .value
+                .as_deref()
+                .unwrap();
+            let decoded = get_arrow_schema_from_metadata(encoded).unwrap();
+            let DataType::Map(entries, _) = decoded.field(0).data_type() else {
+                unreachable!()
+            };
+            let DataType::Struct(fields) = entries.data_type() else {
+                unreachable!()
+            };
+            assert!(!fields[0].is_nullable());
+            assert!(fields[1].is_nullable());
+            if let DataType::Struct(members) = fields[0].data_type() {
+                assert!(members[0].is_nullable());
+            }
+        }
+    }
+
+    #[test]
+    fn test_arrow_metadata_normalization_merges_ree_value_nullability() {
+        let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let inner = Arc::new(Field::new("inner", DataType::Int32, true));
+        let nested = Arc::new(Field::new(
+            "nested",
+            DataType::RunEndEncoded(Arc::clone(&run_ends), inner),
+            false,
+        ));
+        let field = Field::new("outer", DataType::RunEndEncoded(run_ends, nested), false);
+
+        let normalized = normalize_metadata_field(&field);
+        assert_eq!(normalized.data_type(), &DataType::Int32);
+        assert!(normalized.is_nullable());
+    }
+
+    #[test]
+    fn test_arrow_metadata_normalization_descends_dictionary_values() {
+        let ree = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int64, true)),
+        );
+        let field = Field::new(
+            "dictionary_ree",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(ree)),
+            false,
+        );
+
+        assert!(needs_metadata_normalization(field.data_type()));
+        let normalized = normalize_metadata_field(&field);
+        assert_eq!(
+            normalized.data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int64))
+        );
+        assert!(normalized.is_nullable());
+        assert!(!needs_metadata_normalization(normalized.data_type()));
+
+        let mut props = WriterProperties::builder().build();
+        add_encoded_arrow_schema_to_metadata(&Schema::new(vec![field]), &mut props);
+        let encoded = props
+            .key_value_metadata()
+            .unwrap()
+            .iter()
+            .find(|kv| kv.key == crate::arrow::ARROW_SCHEMA_META_KEY)
+            .unwrap()
+            .value
+            .as_deref()
+            .unwrap();
+        let decoded = get_arrow_schema_from_metadata(encoded).unwrap();
+        assert_eq!(decoded.field(0), &normalized);
+    }
+
+    #[test]
+    fn test_arrow_metadata_normalization_preserves_view_dictionary_siblings() {
+        let dictionary = |dt| DataType::Dictionary(Box::new(DataType::Int8), Box::new(dt));
+        let ree = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                true,
+            )),
+        );
+        let fields = vec![
+            // This field forces normalization of the schema's metadata.
+            Field::new(
+                "nested",
+                dictionary(DataType::Struct(
+                    vec![Field::new("child", ree, false)].into(),
+                )),
+                false,
+            ),
+            // Scalar view dictionaries are reader-supported, just like Utf8
+            // dictionaries. Normalizing their sibling must preserve these hints.
+            Field::new("view", dictionary(DataType::Utf8View), true),
+            Field::new("ordinary", dictionary(DataType::Utf8), true),
+            Field::new("binary_view", dictionary(DataType::BinaryView), true),
+        ];
+        let schema = Schema::new(fields);
+        assert!(needs_metadata_normalization(schema.field(0).data_type()));
+        let mut props = WriterProperties::builder().build();
+        add_encoded_arrow_schema_to_metadata(&schema, &mut props);
+        let encoded = props
+            .key_value_metadata()
+            .unwrap()
+            .iter()
+            .find(|kv| kv.key == crate::arrow::ARROW_SCHEMA_META_KEY)
+            .unwrap()
+            .value
+            .as_deref()
+            .unwrap();
+        let decoded = get_arrow_schema_from_metadata(encoded).unwrap();
+        let DataType::Struct(children) = decoded.field(0).data_type() else {
+            panic!("nested dictionary not erased")
+        };
+        assert_eq!(children[0].name(), "child");
+        assert_eq!(children[0].data_type(), &DataType::Int32);
+        assert!(children[0].is_nullable());
+        assert!(!decoded.field(0).is_nullable());
+        assert_eq!(decoded.field(1), schema.field(1));
+        assert_eq!(decoded.field(2), schema.field(2));
+        assert_eq!(decoded.field(3), schema.field(3));
+        assert!(!needs_metadata_normalization(schema.field(1).data_type()));
+        assert!(!needs_metadata_normalization(schema.field(3).data_type()));
+        let parquet = ArrowSchemaConverter::new().convert(&schema).unwrap();
+        assert_eq!(parquet.column(0).path().parts(), &["nested", "child"]);
+        assert_eq!(parquet.column(0).max_def_level(), 1);
     }
 
     #[test]
@@ -2073,7 +2538,7 @@ mod tests {
                 // Field::new("c28", DataType::Duration(TimeUnit::Millisecond), false),
                 // Field::new("c29", DataType::Duration(TimeUnit::Microsecond), false),
                 // Field::new("c30", DataType::Duration(TimeUnit::Nanosecond), false),
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 Field::new_dict(
                     "c31",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -2242,10 +2707,7 @@ mod tests {
 
     #[test]
     fn test_arrow_schema_roundtrip_lists() -> Result<()> {
-        let metadata: HashMap<String, String> = [("Key".to_string(), "Value".to_string())]
-            .iter()
-            .cloned()
-            .collect();
+        let metadata = HashMap::from([("Key".to_string(), "Value".to_string())]);
 
         let schema = Schema::new_with_metadata(
             vec![

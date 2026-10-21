@@ -29,7 +29,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::Encoding;
 use parquet::file::properties::WriterProperties;
 use rand::{
-    Rng, SeedableRng,
+    RngExt, SeedableRng,
     distr::{Alphanumeric, StandardUniform},
     prelude::StdRng,
 };
@@ -332,8 +332,10 @@ fn read_write(c: &mut Criterion, spec: ParquetFileSpec, msg: &str) {
     file_from_spec(spec, &mut buffer);
 
     c.bench_function(&format!("write {msg}"), |b| {
-        buffer.clear();
-        b.iter(|| file_from_spec(spec, &mut buffer))
+        b.iter(|| {
+            buffer.clear();
+            file_from_spec(spec, &mut buffer)
+        })
     });
 
     let file_bytes = Bytes::from(buffer);

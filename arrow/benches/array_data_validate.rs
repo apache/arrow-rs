@@ -19,8 +19,6 @@
 extern crate criterion;
 use criterion::Criterion;
 
-extern crate arrow;
-
 use arrow::{array::*, buffer::Buffer, datatypes::DataType};
 
 fn create_binary_array_data(length: i32) -> ArrayData {

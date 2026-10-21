@@ -154,14 +154,7 @@ where
             break;
         }
 
-        let current_data = reader
-            .get_bytes(range_to_fetch.clone())
-            .await
-            .map_err(|err| {
-                AvroError::General(format!(
-                    "Error fetching Avro header from file reader: {err}"
-                ))
-            })?;
+        let current_data = reader.get_bytes(range_to_fetch.clone()).await?;
         if current_data.is_empty() {
             return Err(AvroError::EOF(
                 "Unexpected EOF while fetching header data".into(),

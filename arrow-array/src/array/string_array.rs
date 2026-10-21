@@ -159,7 +159,7 @@ mod tests {
     use crate::Array;
     use crate::builder::{ListBuilder, PrimitiveBuilder, StringBuilder};
     use crate::types::UInt8Type;
-    use arrow_buffer::Buffer;
+    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
     use std::sync::Arc;
@@ -257,9 +257,7 @@ mod tests {
         expected = "Trying to access an element at index 4 from a StringArray of length 3"
     )]
     fn test_string_array_get_value_index_out_of_bound() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
+        let values = b"helloparquet";
         let offsets: [i32; 4] = [0, 5, 5, 12];
         let array_data = ArrayData::builder(DataType::Utf8)
             .len(3)
@@ -507,6 +505,29 @@ mod tests {
     }
 
     #[test]
+    fn test_string_array_invalid_bytes_outside_offsets() {
+        // Only the bytes that the offsets span need to be valid UTF-8, as in a
+        // slice of a larger array
+        let values = Buffer::from_slice_ref(b"\xFFa\xC3\xA9\xFF");
+        let offsets = OffsetBuffer::new(vec![1, 2, 4].into());
+        let string = StringArray::try_new(offsets, values.clone(), None).unwrap();
+        assert_eq!(string, StringArray::from(vec!["a", "é"]));
+
+        let offsets = OffsetBuffer::new(vec![1, 3, 4].into());
+        let err = StringArray::try_new(offsets, values, None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Split UTF-8 codepoint at offset 3"
+        );
+
+        // An empty value whose offset is inside a character, in a values buffer
+        // that is valid UTF-8 as a whole. ArrayData validation must agree.
+        let offsets = OffsetBuffer::new(vec![1, 1].into());
+        let string = StringArray::try_new(offsets, Buffer::from_slice_ref("é"), None).unwrap();
+        string.to_data().validate_full().unwrap();
+    }
+
+    #[test]
     fn test_empty_offsets() {
         let string = StringArray::from(
             ArrayData::builder(DataType::Utf8)
@@ -550,6 +571,66 @@ mod tests {
 
         let err_return = array.into_builder().unwrap_err();
         assert_eq!(&err_return, &shared_array);
+    }
+
+    #[test]
+    fn test_into_builder_non_zero_first_offset() {
+        // Sliced, and the only owner of its buffers
+        let array: StringArray = vec!["abcde", "fgh", "ij"].into();
+        let sliced = array.slice(1, 2);
+        drop(array);
+        let err_return = sliced.into_builder().unwrap_err();
+        assert_eq!(err_return, StringArray::from(vec!["fgh", "ij"]));
+
+        // Not sliced, but there are unused bytes before the first offset and
+        // after the last offset
+        let array = StringArray::new(
+            OffsetBuffer::new(vec![3, 5, 8].into()),
+            Buffer::from(b"xxxabcdeyy"),
+            None,
+        );
+        let mut builder = array.into_builder().unwrap();
+        builder.append_value("fg");
+        assert_eq!(builder.finish(), StringArray::from(vec!["ab", "cde", "fg"]));
+    }
+
+    #[test]
+    fn test_into_builder_err_returns_original_buffers() {
+        // The offsets could be reused, but the values buffer is shared
+        let values = Buffer::from(b"abxyz");
+        let array = StringArray::new(
+            OffsetBuffer::new(vec![0, 2, 2].into()),
+            values.clone(),
+            None,
+        );
+        let offsets_ptr = array.offsets().as_ptr();
+
+        let err_return = array.into_builder().unwrap_err();
+        assert_eq!(err_return.offsets().as_ptr(), offsets_ptr);
+        assert_eq!(err_return.values(), &values);
+    }
+
+    #[test]
+    fn test_into_builder_nulls() {
+        // Reused when this array is the only owner
+        let array = StringArray::from(vec![Some("ab"), None]);
+        let nulls_ptr = array.nulls().unwrap().buffer().as_ptr();
+        let builder = array.into_builder().unwrap();
+        assert_eq!(builder.validity_slice().unwrap().as_ptr(), nulls_ptr);
+
+        // Copied when shared
+        let nulls = NullBuffer::from(vec![true, false]);
+        let array = StringArray::new(
+            OffsetBuffer::new(vec![0, 2, 2].into()),
+            Buffer::from(b"ab"),
+            Some(nulls.clone()),
+        );
+        let mut builder = array.into_builder().unwrap();
+        builder.append_value("c");
+        assert_eq!(
+            builder.finish(),
+            StringArray::from(vec![Some("ab"), None, Some("c")])
+        );
     }
 
     #[test]

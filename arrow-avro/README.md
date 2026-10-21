@@ -28,6 +28,7 @@ This crate provides:
 
 - a **reader** that decodes Avro
   - **Object Container Files (OCF)**,
+  - **unframed binary datums**,
   - **Avro Single‑Object Encoding (SOE)**, and
   - **Confluent Schema Registry wire format**  
   into Arrow `RecordBatch`es; and
@@ -103,27 +104,23 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-See the crate docs for runnable SOE and Confluent round‑trip examples.
+See the crate docs for runnable unframed-datum, SOE, and Confluent examples. Unframed Kafka
+messages or consecutive raw records can be decoded directly with `Decoder::decode` after
+selecting the known writer schema with `ReaderBuilder::with_active_fingerprint` and configuring
+`ReaderBuilder::with_decoder_mode(DecoderMode::UnframedDatum)`.
 
-### Async reading from object stores (`object_store` feature)
+### Async reading (`async` feature)
 
 ```rust,ignore
-use std::sync::Arc;
-use arrow_avro::reader::{AsyncAvroFileReader, AvroObjectReader};
+use arrow_avro::reader::AsyncAvroFileReader;
 use futures::TryStreamExt;
-use object_store::ObjectStore;
-use object_store::local::LocalFileSystem;
-use object_store::path::Path;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
-    let path = Path::from("data/example.avro");
+    let file = tokio::fs::File::open("data/example.avro").await?;
+    let file_size = file.metadata().await?.len();
 
-    let meta = store.head(&path).await?;
-    let reader = AvroObjectReader::new(store, path);
-
-    let stream = AsyncAvroFileReader::builder(reader, meta.size, 1024)
+    let stream = AsyncAvroFileReader::builder(file, file_size, 1024)
         .try_build()
         .await?;
 
@@ -134,6 +131,13 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+Any `AsyncFileReader` implementation can be used as the source, so object
+storage services (S3, GCS, Azure Blob, etc.) can be integrated by implementing
+`AsyncFileReader` on top of a client such as the [`object_store`] crate. See
+the example on the `AsyncFileReader` trait documentation.
+
+[`object_store`]: https://docs.rs/object_store/latest/object_store/
 
 ---
 
@@ -158,12 +162,12 @@ async fn main() -> anyhow::Result<()> {
 * Only **OCF** uses these codecs (they compress per‑block). They do **not** apply to raw Avro frames used by Confluent wire format or SOE. The crate’s `compression` module is specifically for **OCF blocks**.
 * `deflate` uses `flate2` with the `rust_backend` (no system zlib required).
 
-### Async & Object Store
+### Async
 
 | Feature        | Default | What it enables                                                             | When to use                                                                   |
 |----------------|--------:|-----------------------------------------------------------------------------|-------------------------------------------------------------------------------|
-| `async`        |       ⬜ | Async APIs for reading Avro via `futures` and `tokio`                       | Enable for non-blocking async Avro reading with `AsyncAvroFileReader`.        |
-| `object_store` |       ⬜ | Integration with `object_store` crate (implies `async`)                     | Enable for reading Avro from cloud storage (S3, GCS, Azure Blob, etc.).       |
+| `async`        |       ⬜ | Async APIs for reading Avro via `futures` and `tokio`                       | Enable for non-blocking async Avro reading with `AsyncAvroFileReader`, including from cloud storage via a custom `AsyncFileReader`. |
+| `object_store` |       ⬜ | **Deprecated**: the deprecated `AvroObjectReader` (implies `async`)         | Do not enable in new code; implement `AsyncFileReader` directly instead. Will be removed in a future release. |
 
 ### Schema fingerprints & custom logical type helpers
 
@@ -193,10 +197,10 @@ async fn main() -> anyhow::Result<()> {
   ```toml
   arrow-avro = { version = "58", default-features = false, features = ["deflate", "snappy", "zstd"] }
   ```
-* Async reading from object stores (S3, GCS, etc.):
+* Async reading (including from object stores such as S3, GCS, etc.):
 
   ```toml
-  arrow-avro = { version = "58", features = ["object_store"] }
+  arrow-avro = { version = "58", features = ["async"] }
   ```
 * Fingerprint helpers:
 
@@ -209,6 +213,7 @@ async fn main() -> anyhow::Result<()> {
 ## What formats are supported?
 
 * **OCF (Object Container Files)**: self‑describing Avro files with header, optional compression, sync markers; reader and writer supported.
+* **Unframed binary datums**: bare Avro records with an externally known writer schema; configure `DecoderMode::UnframedDatum` and decode directly with `Decoder::decode`, without adding a synthetic framing prefix.
 * **Confluent Schema Registry wire format**: 1‑byte magic `0x00` + 4‑byte BE schema ID + Avro body; supports decode + encode helpers.
 * **Avro Single‑Object Encoding (SOE)**: 2‑byte magic `0xC3 0x01` + 8‑byte LE CRC‑64‑AVRO fingerprint + Avro body; supports decode + encode helpers.
 

@@ -90,17 +90,22 @@ pub fn byte_array_all_encodings(
 
 /// Build a real `PrimitiveArrayReader<Int32Type>` from raw non-null values
 /// and definition/repetition levels. This exercises the full production
-/// `RecordReader` code path (including selective padding when a parent
-/// `ListArrayReader` calls `enable_selective_padding`).
+/// `RecordReader` code path, including selective padding when
+/// `padding_threshold` is set.
 ///
 /// `values` must contain only the non-null values (entries where
 /// `def_levels[i] == max_def_level`), in order, as Parquet encodes them.
+///
+/// `padding_threshold` controls null filtering: `None` for full padding
+/// (top-level columns), `Some(threshold)` for selective padding (list
+/// children — typically the parent list's def_level).
 pub fn make_int32_page_reader(
     values: &[i32],
     def_levels: &[i16],
     rep_levels: &[i16],
     max_def_level: i16,
     max_rep_level: i16,
+    padding_threshold: Option<i16>,
 ) -> Box<dyn ArrayReader> {
     use crate::arrow::array_reader::PrimitiveArrayReader;
     use crate::arrow::arrow_reader::DEFAULT_BATCH_SIZE;
@@ -130,8 +135,14 @@ pub fn make_int32_page_reader(
     let pages = vec![vec![pb.consume()]];
     let page_iter = InMemoryPageIterator::new(pages);
     Box::new(
-        PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iter), desc, None, DEFAULT_BATCH_SIZE)
-            .unwrap(),
+        PrimitiveArrayReader::<Int32Type>::new(
+            Box::new(page_iter),
+            desc,
+            None,
+            DEFAULT_BATCH_SIZE,
+            padding_threshold,
+        )
+        .unwrap(),
     )
 }
 

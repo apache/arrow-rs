@@ -15,50 +15,82 @@
 # specific language governing permissions and limitations
 # under the License.
 
-arrow:
+development-process:
   - changed-files:
     - any-glob-to-any-file:
-      - 'arrow-arith/**/*'
-      - 'arrow-array/**/*'
-      - 'arrow-buffer/**/*'
-      - 'arrow-cast/**/*'
-      - 'arrow-csv/**/*'
-      - 'arrow-data/**/*'
-      - 'arrow-flight/**/*'
-      - 'arrow-integration-test/**/*'
-      - 'arrow-integration-testing/**/*'
-      - 'arrow-ipc/**/*'
-      - 'arrow-json/**/*'
-      - 'arrow-avro/**/*'
-      - 'arrow-ord/**/*'
-      - 'arrow-row/**/*'
-      - 'arrow-schema/**/*'
-      - 'arrow-select/**/*'
-      - 'arrow-string/**/*'
-      - 'arrow/**/*'
+      - ".github/**/*"
+      - ".config/**/*"
+      - "dev/**/*"
+
+arrow-core:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "arrow/**/*"
+      - "arrow-array/**/*"
+      - "arrow-buffer/**/*"
+      - "arrow-data/**/*"
+      - "arrow-integration-test/**/*"
+      - "arrow-integration-testing/**/*"
+      - "arrow-schema/**/*"
+
+arrow-kernels:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "arrow-arith/**/*"
+      - "arrow-cast/**/*"
+      - "arrow-select/**/*"
+      - "arrow-string/**/*"
+      - "arrow-ord/**/*"
+      - "arrow-cmp/**/*"
 
 arrow-avro:
   - changed-files:
-      - any-glob-to-any-file:
-          - 'arrow-avro/**/*'
+    - any-glob-to-any-file:
+      - "arrow-avro/**/*"
 
 arrow-flight:
   - changed-files:
     - any-glob-to-any-file:
-      - 'arrow-flight/**/*'
+      - "arrow-flight/**/*"
 
 parquet:
   - changed-files:
     - any-glob-to-any-file:
-      - 'parquet/**/*'
+      - "parquet/**/*"
+      - "parquet_derive/**/*"
+      - "parquet_derive_test/**/*"
+      - "parquet-geospatial/**/*"
 
 parquet-variant:
   - changed-files:
-      - any-glob-to-any-file:
-          - 'parquet-variant/**/*'
-          - 'parquet-variant-compute/**/*'
-          - 'parquet-variant-json/**/*'
+    - any-glob-to-any-file:
+      - "parquet-variant/**/*"
+      - "parquet-variant-compute/**/*"
+      - "parquet-variant-json/**/*"
 
-parquet-derive:
+arrow-csv:
   - changed-files:
-    - any-glob-to-any-file: [ 'parquet_derive/**/*' ]
+    - any-glob-to-any-file:
+      - "arrow-csv/**/*"
+
+arrow-ipc:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "arrow-ipc/**/*"
+
+arrow-json:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "arrow-json/**/*"
+
+arrow-pyarrow:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "arrow-pyarrow/**/*"
+      - "arrow-pyarrow-testing/**/*"
+      - "arrow-pyarrow-integration-testing/**/*"
+
+arrow-row:
+  - changed-files:
+    - any-glob-to-any-file:
+      - "arrow-row/**/*"

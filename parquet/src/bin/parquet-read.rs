@@ -92,7 +92,7 @@ fn main() {
         match iter.next() {
             Some(row) => print_row(&row.unwrap(), json),
             None => break,
-        };
+        }
         start += 1;
     }
 }

@@ -121,7 +121,7 @@ mod tests {
     use arrow_data::ArrayData;
     use arrow_schema::{Field, Fields};
     use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     #[test]
     fn test_nullif_int_array() {
@@ -524,6 +524,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn nullif_fuzz() {
         let mut rng = StdRng::seed_from_u64(7337);
 
@@ -577,31 +578,13 @@ mod tests {
 
     /// Returns a new BooleanArray with no null buffer
     fn remove_null_buffer(array: &BooleanArray) -> BooleanArray {
-        make_array(
-            array
-                .into_data()
-                .into_builder()
-                .nulls(None)
-                .build()
-                .unwrap(),
-        )
-        .as_boolean()
-        .clone()
+        BooleanArray::new(array.values().clone(), None)
     }
 
     /// Returns a new BooleanArray with a null buffer where all values are valid
     fn remove_null_values(array: &BooleanArray) -> BooleanArray {
         let len = array.len();
         let new_nulls = NullBuffer::from_iter(std::iter::repeat_n(true, len));
-        make_array(
-            array
-                .into_data()
-                .into_builder()
-                .nulls(Some(new_nulls))
-                .build()
-                .unwrap(),
-        )
-        .as_boolean()
-        .clone()
+        BooleanArray::new(array.values().clone(), Some(new_nulls))
     }
 }

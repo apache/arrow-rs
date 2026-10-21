@@ -47,10 +47,11 @@ pub(super) fn fixed_binary_equal(
     } else {
         let selectivity_frac = lhs.null_count() as f64 / lhs.len() as f64;
 
+        // get a ref of the null buffer bytes, to use in testing for nullness
+        let lhs_nulls = lhs.nulls().unwrap();
+        let rhs_nulls = rhs.nulls().unwrap();
+
         if selectivity_frac >= NULL_SLICES_SELECTIVITY_THRESHOLD {
-            // get a ref of the null buffer bytes, to use in testing for nullness
-            let lhs_nulls = lhs.nulls().unwrap();
-            let rhs_nulls = rhs.nulls().unwrap();
             // with nulls, we need to compare item by item whenever it is not null
             (0..len).all(|i| {
                 let lhs_pos = lhs_start + i;
@@ -70,10 +71,8 @@ pub(super) fn fixed_binary_equal(
                         )
             })
         } else {
-            let lhs_nulls = lhs.nulls().unwrap();
             let lhs_slices_iter =
                 BitSliceIterator::new(lhs_nulls.validity(), lhs_start + lhs_nulls.offset(), len);
-            let rhs_nulls = rhs.nulls().unwrap();
             let rhs_slices_iter =
                 BitSliceIterator::new(rhs_nulls.validity(), rhs_start + rhs_nulls.offset(), len);
 

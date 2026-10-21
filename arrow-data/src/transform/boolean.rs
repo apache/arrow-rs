@@ -32,11 +32,16 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
                 array.offset() + start,
                 len,
             );
+            Ok(())
         },
     )
 }
 
-pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
+pub(super) fn extend_nulls(
+    mutable: &mut _MutableArrayData,
+    len: usize,
+) -> Result<(), arrow_schema::ArrowError> {
     let buffer = &mut mutable.buffer1;
     resize_for_bits(buffer, mutable.len + len);
+    Ok(())
 }

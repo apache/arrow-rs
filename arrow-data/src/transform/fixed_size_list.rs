@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::ArrayData;
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 
 use super::{_MutableArrayData, Extend};
 
@@ -25,25 +25,44 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
         DataType::FixedSizeList(_, i) => *i as usize,
         _ => unreachable!(),
     };
+    let offset = array.offset();
 
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
-            mutable
-                .child_data
-                .iter_mut()
-                .for_each(|child| child.extend(index, start * size, (start + len) * size))
+            let start = start.checked_add(offset).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "fixed size list offset {offset} with start {start} overflows usize"
+                ))
+            })?;
+            let end = start.checked_add(len).ok_or_else(|| {
+                ArrowError::InvalidArgumentError(format!(
+                    "fixed size list start {start} with length {len} overflows usize"
+                ))
+            })?;
+            let (child_start, child_end) = start
+                .checked_mul(size)
+                .zip(end.checked_mul(size))
+                .ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "fixed size list range {start}..{end} with size {size} overflows usize"
+                    ))
+                })?;
+            for child in &mut mutable.child_data {
+                child.try_extend(index, child_start, child_end)?;
+            }
+            Ok(())
         },
     )
 }
 
-pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
+pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) -> Result<(), ArrowError> {
     let size = match mutable.data_type {
         DataType::FixedSizeList(_, i) => i as usize,
         _ => unreachable!(),
     };
 
-    mutable
-        .child_data
-        .iter_mut()
-        .for_each(|child| child.extend_nulls(len * size))
+    for child in &mut mutable.child_data {
+        child.try_extend_nulls(len * size)?;
+    }
+    Ok(())
 }

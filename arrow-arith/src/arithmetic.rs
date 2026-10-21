@@ -25,7 +25,6 @@
 use crate::arity::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::ArrowNativeType;
 use arrow_buffer::i256;
 use arrow_schema::*;
 use std::cmp::min;
@@ -114,17 +113,18 @@ pub fn multiply_fixed_point_checked(
             .with_precision_and_scale(precision, required_scale);
     }
 
-    try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
+    let round = divide_and_round(divisor);
+    let product = try_binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
         let a = i256::from_i128(a);
         let b = i256::from_i128(b);
 
         let mut mul = a.wrapping_mul(b);
-        mul = divide_and_round::<Decimal256Type>(mul, divisor);
+        mul = round(mul);
         mul.to_i128().ok_or_else(|| {
             ArrowError::ArithmeticOverflow(format!("Overflow happened on: {a:?} * {b:?}"))
         })
-    })
-    .and_then(|a| a.with_precision_and_scale(precision, required_scale))
+    })?;
+    product.with_precision_and_scale(precision, required_scale)
 }
 
 /// Perform `left * right` operation on two decimal arrays. If either left or right value is
@@ -158,30 +158,32 @@ pub fn multiply_fixed_point(
             .with_precision_and_scale(precision, required_scale);
     }
 
-    binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
+    let round = divide_and_round(divisor);
+    let product = binary::<_, _, _, Decimal128Type>(left, right, |a, b| {
         let a = i256::from_i128(a);
         let b = i256::from_i128(b);
 
         let mut mul = a.wrapping_mul(b);
-        mul = divide_and_round::<Decimal256Type>(mul, divisor);
+        mul = round(mul);
         mul.as_i128()
-    })
-    .and_then(|a| a.with_precision_and_scale(precision, required_scale))
+    })?;
+    product.with_precision_and_scale(precision, required_scale)
 }
 
-/// Divide a decimal native value by given divisor and round the result.
-fn divide_and_round<I: DecimalType>(input: I::Native, div: I::Native) -> I::Native {
-    let d = input.div_wrapping(div);
-    let r = input.mod_wrapping(div);
-
-    let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
+/// Returns a function that divides a value by `div` and rounds the result half away from zero
+fn divide_and_round(div: i256) -> impl Fn(i256) -> i256 {
+    let half = div.div_wrapping(i256::from_i128(2));
     let half_neg = half.neg_wrapping();
 
-    // Round result
-    match input >= I::Native::ZERO {
-        true if r >= half => d.add_wrapping(I::Native::ONE),
-        false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
-        _ => d,
+    move |input| {
+        let (d, r) = input.wrapping_div_rem(div);
+
+        // Round result
+        match input >= i256::ZERO {
+            true if r >= half => d.add_wrapping(i256::ONE),
+            false if r <= half_neg => d.sub_wrapping(i256::ONE),
+            _ => d,
+        }
     }
 }
 
@@ -339,5 +341,48 @@ mod tests {
             result.value_as_string(0),
             "1234567890.0000000000000000000000000000"
         );
+    }
+
+    #[test]
+    fn test_decimal_multiply_fixed_point_rounding() {
+        // Products below, at and above half for each sign, rounded from scale 1 to scale 0
+        let a = Decimal128Array::from(vec![
+            Some(14),
+            Some(15),
+            Some(16),
+            Some(-14),
+            Some(-15),
+            Some(-16),
+            Some(25),
+            Some(-25),
+            None,
+        ])
+        .with_precision_and_scale(38, 1)
+        .unwrap();
+        let b = Decimal128Array::from(vec![1, 1, 1, 1, 1, 1, -1, -1, 1])
+            .with_precision_and_scale(38, 0)
+            .unwrap();
+        let expected = Decimal128Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(2),
+            Some(-1),
+            Some(-2),
+            Some(-2),
+            Some(-3),
+            Some(3),
+            None,
+        ])
+        .with_precision_and_scale(38, 0)
+        .unwrap();
+
+        // The slice without the null covers the paths without nulls
+        for (a, b, expected) in [
+            (a.clone(), b.clone(), expected.clone()),
+            (a.slice(0, 8), b.slice(0, 8), expected.slice(0, 8)),
+        ] {
+            assert_eq!(multiply_fixed_point(&a, &b, 0).unwrap(), expected);
+            assert_eq!(multiply_fixed_point_checked(&a, &b, 0).unwrap(), expected);
+        }
     }
 }

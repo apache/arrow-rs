@@ -38,14 +38,12 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
-///
-/// `batch_size` is used to pre-allocate internal buffers,
-/// avoiding reallocations when reading the first batch of data.
 pub fn make_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
     batch_size: usize,
+    padding_threshold: Option<i16>,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -60,13 +58,19 @@ pub fn make_byte_array_reader(
         | ArrowType::Utf8
         | ArrowType::Decimal128(_, _)
         | ArrowType::Decimal256(_, _) => {
-            let reader = GenericRecordReader::new(column_desc, batch_size);
+            let mut reader = GenericRecordReader::new(column_desc, batch_size);
+            if let Some(threshold) = padding_threshold {
+                reader.set_padding_threshold(threshold);
+            }
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
         }
         ArrowType::LargeUtf8 | ArrowType::LargeBinary => {
-            let reader = GenericRecordReader::new(column_desc, batch_size);
+            let mut reader = GenericRecordReader::new(column_desc, batch_size);
+            if let Some(threshold) = padding_threshold {
+                reader.set_padding_threshold(threshold);
+            }
             Ok(Box::new(ByteArrayReader::<i64>::new(
                 pages, data_type, reader,
             )))
@@ -118,7 +122,7 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let buffer = self.record_reader.consume_record_data();
-        let null_buffer = self.record_reader.consume_bitmap_buffer();
+        let null_buffer = self.record_reader.consume_compact_bitmap();
         self.def_levels_buffer = self.record_reader.consume_def_levels();
         self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
@@ -167,6 +171,10 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
+    }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
     }
 }
 
@@ -406,12 +414,12 @@ impl ByteArrayDecoderPlain {
             self.offset = end_offset;
             read += 1;
         }
-        self.max_remaining_values -= to_read;
+        self.max_remaining_values -= read;
 
         if self.validate_utf8 {
             output.check_valid_utf8(initial_values_length)?;
         }
-        Ok(to_read)
+        Ok(read)
     }
 
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
@@ -453,7 +461,7 @@ impl ByteArrayDecoderDeltaLength {
 
         let mut total_bytes = 0;
 
-        for l in lengths.iter() {
+        for l in &lengths {
             if *l < 0 {
                 return Err(ParquetError::General(
                     "negative delta length byte array length".to_string(),
@@ -636,23 +644,25 @@ mod tests {
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
 
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
+            assert_eq!(output.values.as_slice(), b"hello");
             assert_eq!(output.offsets.as_slice(), &[0, 5]);
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(output.values.as_slice(), "helloworld".as_bytes());
+            assert_eq!(output.values.as_slice(), b"helloworld");
             assert_eq!(output.offsets.as_slice(), &[0, 5, 10]);
 
             assert_eq!(decoder.read(&mut output, 2).unwrap(), 2);
-            assert_eq!(output.values.as_slice(), "helloworldab".as_bytes());
+            assert_eq!(output.values.as_slice(), b"helloworldab");
             assert_eq!(output.offsets.as_slice(), &[0, 5, 10, 11, 12]);
 
             assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
 
             let valid = [false, false, true, true, false, true, true, false, false];
-            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+            let valid_buffer = Buffer::from_iter(valid.iter().copied());
 
-            output.pad_nulls(0, 4, valid.len(), valid_buffer.as_slice());
+            output
+                .pad_nulls(0, 4, valid.len(), valid_buffer.as_slice())
+                .unwrap();
             let array = output.into_array(Some(valid_buffer), ArrowType::Utf8);
             let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
 
@@ -691,22 +701,24 @@ mod tests {
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
 
-            assert_eq!(output.values.as_slice(), "hello".as_bytes());
+            assert_eq!(output.values.as_slice(), b"hello");
             assert_eq!(output.offsets.as_slice(), &[0, 5]);
 
             assert_eq!(decoder.skip_values(1).unwrap(), 1);
             assert_eq!(decoder.skip_values(1).unwrap(), 1);
 
             assert_eq!(decoder.read(&mut output, 1).unwrap(), 1);
-            assert_eq!(output.values.as_slice(), "hellob".as_bytes());
+            assert_eq!(output.values.as_slice(), b"hellob");
             assert_eq!(output.offsets.as_slice(), &[0, 5, 6]);
 
             assert_eq!(decoder.read(&mut output, 4).unwrap(), 0);
 
             let valid = [false, false, true, true, false, false];
-            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+            let valid_buffer = Buffer::from_iter(valid.iter().copied());
 
-            output.pad_nulls(0, 2, valid.len(), valid_buffer.as_slice());
+            output
+                .pad_nulls(0, 2, valid.len(), valid_buffer.as_slice())
+                .unwrap();
             let array = output.into_array(Some(valid_buffer), ArrowType::Utf8);
             let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
 
@@ -740,5 +752,19 @@ mod tests {
             decoder.set_data(encoding, page, 4, None).unwrap();
             assert_eq!(decoder.skip_values(1024).unwrap(), 0);
         }
+    }
+
+    #[test]
+    fn test_plain_decoder_reports_values_actually_read() {
+        // The page claims to contain two values, but its buffer contains only
+        // one complete PLAIN-encoded BYTE_ARRAY value.
+        let buffer = Bytes::from_static(&[3, 0, 0, 0, b'f', b'o', b'o']);
+        let mut decoder = ByteArrayDecoderPlain::new(buffer, 2, Some(2), false);
+        let mut output = OffsetBuffer::<i32>::with_capacity(2);
+
+        assert_eq!(decoder.read(&mut output, 2).unwrap(), 1);
+        assert_eq!(output.values.as_slice(), b"foo");
+        assert_eq!(output.offsets.as_slice(), &[0, 3]);
+        assert_eq!(decoder.max_remaining_values, 1);
     }
 }

@@ -88,7 +88,7 @@ pub trait TypeVisitor<R, C> {
                     }
                 }
             }
-            _ => Err(General(
+            Type::GroupType { .. } => Err(General(
                 "Group element type of list can only contain one field.".to_string(),
             )),
         }

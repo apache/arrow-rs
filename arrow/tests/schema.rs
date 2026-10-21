@@ -22,9 +22,7 @@ use std::collections::HashMap;
 
 #[test]
 fn schema_destructure() {
-    let meta = [("foo".to_string(), "baz".to_string())]
-        .into_iter()
-        .collect::<HashMap<String, String>>();
+    let meta = HashMap::from([("foo".to_string(), "baz".to_string())]);
 
     let field = Field::new("c1", DataType::Utf8, false);
     let schema = Schema::new(vec![field]).with_metadata(meta);

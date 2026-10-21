@@ -163,6 +163,7 @@ impl From<ParquetError> for io::Error {
 // Convenient macros for different errors
 
 macro_rules! general_err {
+    ($fmt:literal) => (ParquetError::General(format!($fmt)));
     ($fmt:expr) => (ParquetError::General($fmt.to_owned()));
     ($fmt:expr, $($args:expr),*) => (ParquetError::General(format!($fmt, $($args),*)));
     ($e:expr, $fmt:expr) => (ParquetError::General($fmt.to_owned(), $e));
@@ -171,17 +172,20 @@ macro_rules! general_err {
 }
 
 macro_rules! nyi_err {
+    ($fmt:literal) => (ParquetError::NYI(format!($fmt)));
     ($fmt:expr) => (ParquetError::NYI($fmt.to_owned()));
     ($fmt:expr, $($args:expr),*) => (ParquetError::NYI(format!($fmt, $($args),*)));
 }
 
 macro_rules! eof_err {
+    ($fmt:literal) => (ParquetError::EOF(format!($fmt)));
     ($fmt:expr) => (ParquetError::EOF($fmt.to_owned()));
     ($fmt:expr, $($args:expr),*) => (ParquetError::EOF(format!($fmt, $($args),*)));
 }
 
 #[cfg(feature = "arrow")]
 macro_rules! arrow_err {
+    ($fmt:literal) => (ParquetError::ArrowError(format!($fmt)));
     ($fmt:expr) => (ParquetError::ArrowError($fmt.to_owned()));
     ($fmt:expr, $($args:expr),*) => (ParquetError::ArrowError(format!($fmt, $($args),*)));
     ($e:expr, $fmt:expr) => (ParquetError::ArrowError($fmt.to_owned(), $e));
@@ -196,5 +200,27 @@ macro_rules! arrow_err {
 impl From<ParquetError> for ArrowError {
     fn from(p: ParquetError) -> Self {
         Self::ParquetError(format!("{p}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The single-argument arms of the error macros must format their argument, so that
+    /// inline format arguments are not silently emitted as literal text.
+    #[test]
+    fn error_macros_format_inline_args() {
+        let expected = 1;
+        let actual = 2;
+        assert_eq!(
+            general_err!("expected {expected}, got {actual}").to_string(),
+            "Parquet error: expected 1, got 2"
+        );
+        assert_eq!(
+            nyi_err!("not yet: {expected}").to_string(),
+            "NYI: not yet: 1"
+        );
+        assert_eq!(eof_err!("eof at {actual}").to_string(), "EOF: eof at 2");
     }
 }

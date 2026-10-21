@@ -19,7 +19,6 @@
 name = "arrow-string"
 version = { workspace = true }
 description = "String kernels for arrow arrays"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
@@ -45,3 +44,6 @@ regex = { version = "1.7.0", default-features = false, features = ["std", "unico
 regex-syntax = { version = "0.8.0", default-features = false, features = ["unicode"] }
 num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 memchr = "2.7.4"
+
+[lints]
+workspace = true

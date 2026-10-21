@@ -92,7 +92,7 @@ impl<T: std::fmt::Debug> Serialize for DebugSerialize<T> {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&format!("{:?}", &self.0))
+        serializer.serialize_str(&format!("{:?}", self.0))
     }
 }
 

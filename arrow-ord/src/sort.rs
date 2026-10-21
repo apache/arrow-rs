@@ -18,7 +18,6 @@
 //! Defines sort kernel for `ArrayRef`
 
 use crate::ord::{DynComparator, make_comparator};
-use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -55,6 +54,9 @@ pub use arrow_schema::SortOptions;
 /// assert_eq!(sorted_array.as_ref(), &Int32Array::from(vec![1, 2, 3, 4, 5]));
 /// ```
 pub fn sort(values: &dyn Array, options: Option<SortOptions>) -> Result<ArrayRef, ArrowError> {
+    if values.is_empty() {
+        return Ok(new_empty_array(values.data_type()));
+    }
     downcast_primitive_array!(
         values => sort_native_type(values, options),
         DataType::RunEndEncoded(_, _) => sort_run(values, options, None),
@@ -158,6 +160,9 @@ pub fn sort_limit(
     options: Option<SortOptions>,
     limit: Option<usize>,
 ) -> Result<ArrayRef, ArrowError> {
+    if values.is_empty() || limit == Some(0) {
+        return Ok(new_empty_array(values.data_type()));
+    }
     if let DataType::RunEndEncoded(_, _) = values.data_type() {
         return sort_run(values, options, limit);
     }
@@ -273,6 +278,10 @@ pub fn sort_to_indices(
     options: Option<SortOptions>,
     limit: Option<usize>,
 ) -> Result<UInt32Array, ArrowError> {
+    if array.is_empty() || limit == Some(0) {
+        return Ok(UInt32Array::from(Vec::<u32>::new()));
+    }
+
     let options = options.unwrap_or_default();
 
     let (v, n) = partition_validity(array);
@@ -363,7 +372,7 @@ fn sort_bytes<T: ByteArrayType>(
             let len = slice.len() as u64;
             // Compute the 4‑byte prefix in BE order, or left‑pad if shorter
             let prefix = if slice.len() >= 4 {
-                let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u32);
+                let raw = std::ptr::read_unaligned(slice.as_ptr().cast::<u32>());
                 u32::from_be(raw)
             } else if slice.is_empty() {
                 // Handle empty slice case to avoid shift overflow
@@ -712,14 +721,14 @@ fn sort_run_downcasted<R: RunEndIndexType>(
 
     let run_ends = run_array.run_ends();
 
-    let mut new_run_ends_builder = BufferBuilder::<R::Native>::new(run_ends.len());
+    let mut new_run_ends = Vec::with_capacity(run_ends.len());
     let mut new_run_end: usize = 0;
     let mut new_physical_len: usize = 0;
 
     let consume_runs = |run_length, _| {
         new_run_end += run_length;
         new_physical_len += 1;
-        new_run_ends_builder.append(R::Native::from_usize(new_run_end).unwrap());
+        new_run_ends.push(R::Native::from_usize(new_run_end).unwrap());
     };
 
     let (values_indices, run_values) = sort_run_inner(run_array, options, output_len, consume_runs);
@@ -729,7 +738,7 @@ fn sort_run_downcasted<R: RunEndIndexType>(
         // The function builds a valid run_ends array and hence need not be validated.
         ArrayDataBuilder::new(R::DATA_TYPE)
             .len(new_physical_len)
-            .add_buffer(new_run_ends_builder.finish())
+            .add_buffer(new_run_ends.into())
             .build_unchecked()
     };
 
@@ -925,6 +934,42 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
 /// Sort elements lexicographically from a list of `ArrayRef` into an unsigned integer
 /// (`UInt32Array`) of indices.
 ///
+/// # Example
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, UInt32Array, Int32Array, RecordBatch, StringArray};
+/// # use arrow_ord::sort::{lexsort_to_indices, SortColumn};
+/// # use arrow_select::take::take_record_batch;
+/// // Two columns (a, b). Values (2,x), (1, z), (1(a))
+/// let batch = RecordBatch::try_from_iter(vec![
+///     ("a", Arc::new(Int32Array::from(vec![2, 1, 1])) as ArrayRef),
+///     ("b", Arc::new(StringArray::from(vec!["x", "z", "a"])) as ArrayRef),
+/// ])
+/// .unwrap();
+///
+/// // Configure sort by (a, b)
+/// let sort_columns = vec![
+///     SortColumn {
+///         values: batch.column(0).clone(),
+///         options: None,
+///     },
+///     SortColumn {
+///         values: batch.column(1).clone(),
+///         options: None,
+///     },
+/// ];
+///
+/// // indices of the rows of (a,b), in lexicographic order
+/// let indices = lexsort_to_indices(&sort_columns, None).unwrap();
+/// assert_eq!(&indices, &UInt32Array::from(vec![2, 1, 0]));
+/// // Create new sorted RecordBatch by copying values at indices
+/// let sorted = take_record_batch(&batch, &indices).unwrap();
+///
+/// assert_eq!(sorted.column(0).as_ref(), &Int32Array::from(vec![1, 1, 2]));
+/// assert_eq!(sorted.column(1).as_ref(), &StringArray::from(vec!["a", "z", "x"]));
+/// ```
+///
 /// Note: for multi-column sorts without a limit, using the [row format](https://docs.rs/arrow-row/latest/arrow_row/)
 /// may be significantly faster
 pub fn lexsort_to_indices(
@@ -947,42 +992,58 @@ pub fn lexsort_to_indices(
         return Err(ArrowError::ComputeError(
             "lexical sort columns have different row counts".to_string(),
         ));
+    }
+
+    let len = limit.unwrap_or(row_count).min(row_count);
+
+    if len == 0 {
+        return Ok(UInt32Array::from(Vec::<u32>::new()));
+    }
+
+    // The heap path avoids allocating and partially sorting all row indices
+    // when the requested limit is a small fraction of the input. For larger
+    // limits, the existing partial-sort path is preferred because heap
+    // maintenance costs grow with the requested limit.
+    let value_indices = match limit {
+        Some(limit) if limit <= row_count / 10 => match columns.len() {
+            2 => lexsort_topk_fixed::<2>(columns, row_count, len)?,
+            3 => lexsort_topk_fixed::<3>(columns, row_count, len)?,
+            4 => lexsort_topk_fixed::<4>(columns, row_count, len)?,
+            5 => lexsort_topk_fixed::<5>(columns, row_count, len)?,
+            _ => {
+                let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
+                lexsort_topk(row_count, len, |a, b| {
+                    lexicographical_comparator.compare(a, b)
+                })
+            }
+        },
+        _ => {
+            let mut value_indices = (0..row_count).collect::<Vec<usize>>();
+
+            // Instantiate specialized versions of comparisons for small numbers
+            // of columns as it helps the compiler generate better code.
+            match columns.len() {
+                2 => sort_fixed_column::<2>(columns, &mut value_indices, len)?,
+                3 => sort_fixed_column::<3>(columns, &mut value_indices, len)?,
+                4 => sort_fixed_column::<4>(columns, &mut value_indices, len)?,
+                5 => sort_fixed_column::<5>(columns, &mut value_indices, len)?,
+                _ => {
+                    let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
+                    sort_unstable_by(&mut value_indices, len, |a, b| {
+                        lexicographical_comparator.compare(*a, *b)
+                    });
+                }
+            }
+
+            value_indices.truncate(len);
+            value_indices
+        }
     };
 
-    let mut value_indices = (0..row_count).collect::<Vec<usize>>();
-    let mut len = value_indices.len();
-
-    if let Some(limit) = limit {
-        len = limit.min(len);
-    }
-
-    // Instantiate specialized versions of comparisons for small numbers
-    // of columns as it helps the compiler generate better code.
-    match columns.len() {
-        2 => {
-            sort_fixed_column::<2>(columns, &mut value_indices, len)?;
-        }
-        3 => {
-            sort_fixed_column::<3>(columns, &mut value_indices, len)?;
-        }
-        4 => {
-            sort_fixed_column::<4>(columns, &mut value_indices, len)?;
-        }
-        5 => {
-            sort_fixed_column::<5>(columns, &mut value_indices, len)?;
-        }
-        _ => {
-            let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
-            // uint32 can be sorted unstably
-            sort_unstable_by(&mut value_indices, len, |a, b| {
-                lexicographical_comparator.compare(*a, *b)
-            });
-        }
-    }
     Ok(UInt32Array::from(
-        value_indices[..len]
-            .iter()
-            .map(|i| *i as u32)
+        value_indices
+            .into_iter()
+            .map(|i| i as u32)
             .collect::<Vec<_>>(),
     ))
 }
@@ -998,6 +1059,90 @@ fn sort_fixed_column<const N: usize>(
         lexicographical_comparator.compare(*a, *b)
     });
     Ok(())
+}
+
+// Uses the fixed-column comparator for the bounded heap path.
+fn lexsort_topk_fixed<const N: usize>(
+    columns: &[SortColumn],
+    row_count: usize,
+    limit: usize,
+) -> Result<Vec<usize>, ArrowError> {
+    let lexicographical_comparator = FixedLexicographicalComparator::<N>::try_new(columns)?;
+    Ok(lexsort_topk(row_count, limit, |a, b| {
+        lexicographical_comparator.compare(a, b)
+    }))
+}
+
+// Keeps the smallest `limit` indices in a bounded max-heap.
+// The root is the largest retained index according to `compare`.
+fn lexsort_topk(
+    row_count: usize,
+    limit: usize,
+    mut compare: impl FnMut(usize, usize) -> Ordering,
+) -> Vec<usize> {
+    let mut heap = Vec::with_capacity(limit);
+
+    for idx in 0..row_count {
+        if heap.len() < limit {
+            heap.push(idx);
+            let pos = heap.len() - 1;
+            sift_up_worst_heap(&mut heap, pos, &mut compare);
+        } else if compare(idx, heap[0]) == Ordering::Less {
+            heap[0] = idx;
+            sift_down_worst_heap(&mut heap, 0, &mut compare);
+        }
+    }
+
+    heap.sort_unstable_by(|a, b| compare(*a, *b));
+    heap
+}
+
+// Moves a newly inserted index toward the root while it is larger than its parent.
+fn sift_up_worst_heap(
+    heap: &mut [usize],
+    mut pos: usize,
+    compare: &mut impl FnMut(usize, usize) -> Ordering,
+) {
+    while pos > 0 {
+        let parent = (pos - 1) / 2;
+
+        if compare(heap[parent], heap[pos]) != Ordering::Less {
+            break;
+        }
+
+        heap.swap(parent, pos);
+        pos = parent;
+    }
+}
+
+// Moves the root down until both children are no larger than it.
+// The larger child is selected at each step so the worst retained row remains
+// at heap[0].
+fn sift_down_worst_heap(
+    heap: &mut [usize],
+    mut pos: usize,
+    compare: &mut impl FnMut(usize, usize) -> Ordering,
+) {
+    loop {
+        let left = pos * 2 + 1;
+        if left >= heap.len() {
+            break;
+        }
+
+        let right = left + 1;
+        let worst = if right < heap.len() && compare(heap[left], heap[right]) == Ordering::Less {
+            right
+        } else {
+            left
+        };
+
+        if compare(heap[pos], heap[worst]) != Ordering::Less {
+            break;
+        }
+
+        heap.swap(pos, worst);
+        pos = worst;
+    }
 }
 
 /// It's unstable_sort, may not preserve the order of equal elements
@@ -1022,7 +1167,7 @@ impl LexicographicalComparator {
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for comparator in &self.compare_items {
             match comparator(a_idx, b_idx) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -1058,7 +1203,7 @@ impl<const N: usize> FixedLexicographicalComparator<N> {
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for comparator in &self.compare_items {
             match comparator(a_idx, b_idx) {
-                Ordering::Equal => continue,
+                Ordering::Equal => {}
                 r => return r,
             }
         }
@@ -1102,7 +1247,7 @@ mod tests {
     use half::f16;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
-    use rand::{Rng, RngCore, SeedableRng};
+    use rand::{Rng, RngExt, SeedableRng};
 
     fn create_decimal_array<T: DecimalType>(
         data: Vec<Option<usize>>,
@@ -1512,6 +1657,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_sort_to_indices_primitives() {
         test_sort_to_indices_primitive_arrays::<Int8Type>(
             vec![None, Some(0), Some(2), Some(-1), Some(0), None],
@@ -2622,6 +2768,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_sort_primitives() {
         // default case
         test_sort_primitive_arrays::<UInt8Type>(
@@ -3518,6 +3665,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Unsupported inline assembly
     fn test_sort_list() {
         test_sort_list_arrays::<Int8Type>(
             vec![
@@ -4484,6 +4632,30 @@ mod tests {
     }
 
     #[test]
+    fn test_lex_sort_limit_paths() {
+        let input = vec![
+            SortColumn {
+                values: Arc::new(Int32Array::from_iter_values((0..100).rev())) as ArrayRef,
+                options: None,
+            },
+            SortColumn {
+                values: Arc::new(Int32Array::from_iter_values(0..100)) as ArrayRef,
+                options: None,
+            },
+        ];
+
+        // Exercise the bounded heap path.
+        let indices = lexsort_to_indices(&input, Some(10)).unwrap();
+        let expected = UInt32Array::from_iter_values((90..100).rev());
+        assert_eq!(indices, expected);
+
+        // Exercise the existing partial-sort path.
+        let indices = lexsort_to_indices(&input, Some(11)).unwrap();
+        let expected = UInt32Array::from_iter_values((89..100).rev());
+        assert_eq!(indices, expected);
+    }
+
+    #[test]
     fn test_partial_sort() {
         let mut before: Vec<&str> = vec![
             "a", "cat", "mat", "on", "sat", "the", "xxx", "xxxx", "fdadfdsf",
@@ -5003,7 +5175,7 @@ mod tests {
 
         // Use standard library sort as reference
         let mut expected = test_cases.clone();
-        expected.sort();
+        expected.sort_unstable();
 
         // Use our sorting algorithm
         let string_array = StringArray::from(test_cases.clone());
@@ -5051,7 +5223,7 @@ mod tests {
 
         let strings: Vec<&str> = test_cases.iter().map(|(s, _)| *s).collect();
         let mut expected = strings.clone();
-        expected.sort();
+        expected.sort_unstable();
 
         let string_array = StringArray::from(strings.clone());
         let indices: Vec<u32> = (0..strings.len() as u32).collect();
@@ -5084,7 +5256,7 @@ mod tests {
         ];
 
         let mut expected = test_cases.clone();
-        expected.sort();
+        expected.sort_unstable();
 
         let string_array = StringArray::from(test_cases.clone());
         let indices: Vec<u32> = (0..test_cases.len() as u32).collect();
@@ -5168,7 +5340,6 @@ mod tests {
                 let remaining = length - current_len;
                 for _ in 0..remaining {
                     result.push(rng.random_range('a'..='z'));
-                    current_len += 1;
                 }
                 break;
             }
@@ -5203,7 +5374,7 @@ mod tests {
         let test_cases = vec!["a", "ab", "ba", "baa", "abba", "abbc", "abc", "cda"];
 
         let mut expected = test_cases.clone();
-        expected.sort();
+        expected.sort_unstable();
         expected.reverse(); // Descending order
 
         let string_array = StringArray::from(test_cases.clone());
@@ -5262,7 +5433,7 @@ mod tests {
         let limit = 3;
 
         let mut expected = test_cases.clone();
-        expected.sort();
+        expected.sort_unstable();
         expected.truncate(limit);
 
         let string_array = StringArray::from(test_cases.clone());
@@ -5283,5 +5454,26 @@ mod tests {
 
         assert_eq!(sorted_strings, expected);
         assert_eq!(sorted_strings.len(), limit);
+    }
+
+    #[test]
+    fn test_empty_run() {
+        let run = RunArray::try_new(
+            &Int16Array::from(vec![1, 2, 3]),
+            &Int32Array::from(vec![1, 5, 2]),
+        )
+        .unwrap();
+
+        let sorted = sort(&run.slice(1, 0), None).unwrap();
+        assert!(sorted.is_empty());
+        // ensure output run array upholds safety invariants
+        sorted.into_data().validate_full().unwrap();
+
+        let sorted = sort_limit(&run, None, Some(0)).unwrap();
+        assert!(sorted.is_empty());
+        sorted.into_data().validate_full().unwrap();
+
+        let indices = sort_to_indices(&run, None, Some(0)).unwrap();
+        assert!(indices.is_empty());
     }
 }

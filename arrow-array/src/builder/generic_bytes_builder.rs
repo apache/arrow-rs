@@ -58,17 +58,24 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
 
     /// Creates a new  [`GenericByteBuilder`] from buffers.
     ///
+    /// Any bytes in `value_buffer` after the last offset are dropped. The first
+    /// bit of `null_buffer` is for the first row.
+    ///
     /// # Safety
     ///
     /// This doesn't verify buffer contents as it assumes the buffers are from
     /// existing and valid [`GenericByteArray`].
     pub unsafe fn new_from_buffer(
         offsets_buffer: MutableBuffer,
-        value_buffer: MutableBuffer,
+        mut value_buffer: MutableBuffer,
         null_buffer: Option<MutableBuffer>,
     ) -> Self {
         let offsets_builder: Vec<T::Offset> =
             ScalarBuffer::<T::Offset>::from(offsets_buffer).into();
+
+        // New values are appended at the end of the values buffer, so it must end
+        // at the last offset
+        value_buffer.truncate(offsets_builder.last().unwrap().as_usize());
         let value_builder: Vec<u8> = ScalarBuffer::<u8>::from(value_buffer).into();
 
         let null_buffer_builder = null_buffer
@@ -76,8 +83,8 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .unwrap_or_else(|| NullBufferBuilder::new_with_len(offsets_builder.len() - 1));
 
         Self {
-            offsets_builder,
             value_builder,
+            offsets_builder,
             null_buffer_builder,
         }
     }
@@ -113,6 +120,10 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// Appends a value of type `T` into the builder `n` times.
     ///
     /// See [`Self::append_value`] for more panic information.
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`Self::append_value`]
     #[inline]
     pub fn append_value_n(&mut self, value: impl AsRef<T::Native>, n: usize) {
         let bytes: &[u8] = value.as_ref().as_ref();
@@ -131,12 +142,16 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// - A `Some` value will append the value.
     ///
     /// See [`Self::append_value`] for more panic information.
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`Self::append_value`]
     #[inline]
     pub fn append_option(&mut self, value: Option<impl AsRef<T::Native>>) {
         match value {
             None => self.append_null(),
             Some(v) => self.append_value(v),
-        };
+        }
     }
 
     /// Append a null value into the builder.
@@ -207,6 +222,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .nulls(self.null_buffer_builder.finish());
 
         self.offsets_builder.push(self.next_offset());
+        // SAFETY: builder is constructed from valid offset and value buffers maintained by the builder
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
     }
@@ -222,6 +238,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             .add_buffer(value_buffer)
             .nulls(self.null_buffer_builder.finish_cloned());
 
+        // SAFETY: builder is constructed from valid offset and value buffers maintained by the builder
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericByteArray::from(array_data)
     }
@@ -231,14 +248,29 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         self.value_builder.as_slice()
     }
 
+    /// Returns the current values buffer capacity, in bytes.
+    pub fn values_capacity(&self) -> usize {
+        self.value_builder.capacity()
+    }
+
     /// Returns the current offsets buffer as a slice
     pub fn offsets_slice(&self) -> &[T::Offset] {
         self.offsets_builder.as_slice()
     }
 
+    /// Returns the current offsets buffer capacity, in offsets.
+    pub fn offsets_capacity(&self) -> usize {
+        self.offsets_builder.capacity()
+    }
+
     /// Returns the current null buffer as a slice
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.null_buffer_builder.as_slice()
+    }
+
+    /// Returns the current null buffer allocated capacity, in bytes.
+    pub fn validity_capacity(&self) -> usize {
+        self.null_buffer_builder.allocated_size()
     }
 
     /// Returns the current null buffer as a mutable slice
@@ -762,7 +794,7 @@ mod tests {
         let r: Vec<_> = a.iter().flatten().collect();
         assert_eq!(
             r,
-            &["foo".as_bytes(), "bar\n".as_bytes(), "fizbuz".as_bytes()]
+            &[b"foo".as_slice(), b"bar\n".as_slice(), b"fizbuz".as_slice()]
         )
     }
 

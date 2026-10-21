@@ -20,7 +20,6 @@ name = "parquet_derive_test"
 version = { workspace = true }
 license = { workspace = true }
 description = "Integration test package for parquet-derive"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = [ "parquet" ]
@@ -36,3 +35,6 @@ uuid = { version = "1", features = ["v4"] }
 
 [package.metadata.docs.rs]
 all-features = true
+
+[lints]
+workspace = true

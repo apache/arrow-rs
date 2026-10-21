@@ -165,7 +165,7 @@ pub trait VariantToJson {
     fn to_json_value(&self) -> Result<Value, ArrowError>;
 }
 
-impl<'m, 'v> VariantToJson for Variant<'m, 'v> {
+impl VariantToJson for Variant<'_, '_> {
     fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError> {
         match self {
             Variant::Null => write!(buffer, "null")?,
@@ -175,8 +175,8 @@ impl<'m, 'v> VariantToJson for Variant<'m, 'v> {
             Variant::Int16(i) => write!(buffer, "{i}")?,
             Variant::Int32(i) => write!(buffer, "{i}")?,
             Variant::Int64(i) => write!(buffer, "{i}")?,
-            Variant::Float(f) => write!(buffer, "{f}")?,
-            Variant::Double(f) => write!(buffer, "{f}")?,
+            Variant::Float(f) => write!(buffer, "{}", ryu::Buffer::new().format(*f))?,
+            Variant::Double(f) => write!(buffer, "{}", ryu::Buffer::new().format(*f))?,
             Variant::Decimal4(decimal) => write!(buffer, "{decimal}")?,
             Variant::Decimal8(decimal) => write!(buffer, "{decimal}")?,
             Variant::Decimal16(decimal) => write!(buffer, "{decimal}")?,
@@ -344,10 +344,7 @@ fn format_date_string(date: &chrono::NaiveDate) -> String {
 }
 
 fn format_timestamp_ntz_string(ts: &chrono::NaiveDateTime, precision: usize) -> String {
-    let format_str = format!(
-        "{}",
-        ts.format(&format!("%Y-%m-%dT%H:%M:%S%.{}f", precision))
-    );
+    let format_str = format!("{}", ts.format(&format!("%Y-%m-%dT%H:%M:%S%.{precision}f")));
     ts.format(format_str.as_str()).to_string()
 }
 
@@ -361,9 +358,9 @@ fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
     match micros {
         0 => format!("{}.{}", base, 0),
         _ => {
-            let micros_str = format!("{:06}", micros);
-            let micros_str_trimmed = micros_str.trim_matches('0');
-            format!("{}.{}", base, micros_str_trimmed)
+            let micros_str = format!("{micros:06}");
+            let micros_str_trimmed = micros_str.trim_end_matches('0');
+            format!("{base}.{micros_str_trimmed}")
         }
     }
 }
@@ -508,6 +505,21 @@ mod tests {
         let variant = Variant::Time(naive_time);
         let json = variant.to_json_string()?;
         assert_eq!("\"03:25:45.12346\"", json);
+
+        let expected = [
+            (10, "00:00:00.00001"),
+            (10010, "00:00:00.01001"),
+            (100000, "00:00:00.1"),
+            (123450, "00:00:00.12345"),
+        ];
+
+        for (micros, expected_json) in expected {
+            let naive_time =
+                NaiveTime::from_num_seconds_from_midnight_opt(0, micros * 1000).unwrap();
+            let variant = Variant::Time(naive_time);
+            let json = variant.to_json_string()?;
+            assert_eq!(format!("\"{expected_json}\""), json);
+        }
 
         let json_value = variant.to_json_value()?;
         assert!(matches!(json_value, Value::String(_)));
@@ -801,8 +813,10 @@ mod tests {
 
         JsonTest {
             variant: Variant::Float(0.0),
-            expected_json: "0",
-            expected_value: Value::Number(0.into()), // Use integer 0 to match JSON parsing
+            expected_json: "0.0",
+            expected_value: serde_json::Number::from_f64(0.0)
+                .map(Value::Number)
+                .unwrap(),
         }
         .run();
 
@@ -819,6 +833,15 @@ mod tests {
             variant: Variant::Double(std::f64::consts::E),
             expected_json: "2.718281828459045",
             expected_value: serde_json::Number::from_f64(std::f64::consts::E)
+                .map(Value::Number)
+                .unwrap(),
+        }
+        .run();
+
+        JsonTest {
+            variant: Variant::Double(2.0),
+            expected_json: "2.0",
+            expected_value: serde_json::Number::from_f64(2.0)
                 .map(Value::Number)
                 .unwrap(),
         }
@@ -872,7 +895,7 @@ mod tests {
         JsonTest {
             variant: Variant::from(""),
             expected_json: "\"\"",
-            expected_value: Value::String("".to_string()),
+            expected_value: Value::String(String::new()),
         }
         .run();
 
@@ -902,7 +925,7 @@ mod tests {
         JsonTest {
             variant: Variant::Binary(b""),
             expected_json: "\"\"", // empty base64
-            expected_value: Value::String("".to_string()),
+            expected_value: Value::String(String::new()),
         }
         .run();
 
@@ -1197,7 +1220,7 @@ mod tests {
             obj.insert("string_field", "test_string");
             obj.insert("int_field", 123i32);
             obj.insert("bool_field", true);
-            obj.insert("float_field", 2.71f64);
+            obj.insert("float_field", 2.0f64);
             obj.insert("null_field", ());
             obj.insert("long_field", 999i64);
             obj.finish();
@@ -1206,6 +1229,7 @@ mod tests {
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         let json = variant.to_json_string()?;
+        assert!(json.contains(r#""float_field":2.0"#));
 
         let parsed: Value = serde_json::from_str(&json).unwrap();
         let obj = parsed.as_object().expect("expected JSON object");

@@ -25,11 +25,8 @@ use std::{fmt::Debug, fmt::Formatter};
 
 use crate::alloc::Deallocation;
 use crate::buffer::dangling_ptr;
-
 #[cfg(feature = "pool")]
-use crate::pool::{MemoryPool, MemoryReservation};
-#[cfg(feature = "pool")]
-use std::sync::Mutex;
+use crate::{MemoryPool, TrackedReservation};
 
 /// A continuous, fixed-size, immutable memory region that knows how to de-allocate itself.
 ///
@@ -45,7 +42,7 @@ use std::sync::Mutex;
 /// When the region is allocated by a different allocator, [Deallocation::Custom], this calls the
 /// custom deallocator to deallocate the region when it is no longer needed.
 ///
-pub struct Bytes {
+pub(crate) struct Bytes {
     /// The raw pointer to be beginning of the region
     ptr: NonNull<u8>,
 
@@ -57,7 +54,7 @@ pub struct Bytes {
 
     /// Memory reservation for tracking memory usage
     #[cfg(feature = "pool")]
-    pub(super) reservation: Mutex<Option<Box<dyn MemoryReservation>>>,
+    pub(super) reservation: TrackedReservation,
 }
 
 impl Bytes {
@@ -80,7 +77,7 @@ impl Bytes {
             len,
             deallocation,
             #[cfg(feature = "pool")]
-            reservation: Mutex::new(None),
+            reservation: TrackedReservation::default(),
         }
     }
 
@@ -89,21 +86,16 @@ impl Bytes {
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.len
     }
 
     #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    #[inline]
-    pub fn ptr(&self) -> NonNull<u8> {
+    pub(crate) fn ptr(&self) -> NonNull<u8> {
         self.ptr
     }
 
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         match self.deallocation {
             Deallocation::Standard(layout) => layout.size(),
             // we only know the size of the custom allocation
@@ -114,8 +106,8 @@ impl Bytes {
 
     /// Register this [`Bytes`] with the provided [`MemoryPool`], replacing any prior reservation.
     #[cfg(feature = "pool")]
-    pub fn claim(&self, pool: &dyn MemoryPool) {
-        *self.reservation.lock().unwrap() = Some(pool.reserve(self.capacity()));
+    pub(crate) fn claim(&self, pool: &dyn MemoryPool) {
+        self.reservation.claim(pool, self.capacity());
     }
 
     /// Resize the memory reservation of this buffer
@@ -123,14 +115,7 @@ impl Bytes {
     /// This is a no-op if this buffer doesn't have a reservation.
     #[cfg(feature = "pool")]
     fn resize_reservation(&self, new_size: usize) {
-        let mut guard = self.reservation.lock().unwrap();
-        if let Some(mut reservation) = guard.take() {
-            // Resize the reservation
-            reservation.resize(new_size);
-
-            // Put it back
-            *guard = Some(reservation);
-        }
+        self.reservation.resize(new_size);
     }
 
     /// Try to reallocate the underlying memory region to a new size (smaller or larger).
@@ -139,7 +124,15 @@ impl Bytes {
     /// Returns `Err` if the memory was allocated with a custom allocator,
     /// or the call to `realloc` failed, for whatever reason.
     /// In case of `Err`, the [`Bytes`] will remain as it was (i.e. have the old size).
-    pub fn try_realloc(&mut self, new_len: usize) -> Result<(), ()> {
+    ///
+    /// `on_reallocated` is called after [`Bytes`] has updated its internal
+    /// pointer, but before resizing the memory reservation, which may call user
+    /// code.
+    pub(crate) fn try_realloc(
+        &mut self,
+        new_len: usize,
+        on_reallocated: impl FnOnce(NonNull<u8>),
+    ) -> Result<(), ()> {
         if let Deallocation::Standard(old_layout) = self.deallocation {
             if old_layout.size() == new_len {
                 return Ok(()); // Nothing to do
@@ -167,6 +160,7 @@ impl Bytes {
                     self.ptr = ptr;
                     self.len = new_len;
                     self.deallocation = Deallocation::Standard(new_layout);
+                    on_reallocated(ptr);
 
                     #[cfg(feature = "pool")]
                     {
@@ -223,7 +217,7 @@ impl PartialEq for Bytes {
 
 impl Debug for Bytes {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "Bytes {{ ptr: {:?}, len: {}, data: ", self.ptr, self.len,)?;
+        write!(f, "Bytes {{ ptr: {:?}, len: {}, data: ", self.ptr, self.len)?;
 
         f.debug_list().entries(self.iter()).finish()?;
 
@@ -236,10 +230,12 @@ impl From<bytes::Bytes> for Bytes {
         let len = value.len();
         Self {
             len,
-            ptr: NonNull::new(value.as_ptr() as _).unwrap(),
+            // `bytes::Bytes` is shared and immutable, so the buffer is never written
+            // through this pointer; the cast only changes constness.
+            ptr: NonNull::new(value.as_ptr().cast_mut()).unwrap(),
             deallocation: Deallocation::Custom(std::sync::Arc::new(value), len),
             #[cfg(feature = "pool")]
-            reservation: Mutex::new(None),
+            reservation: TrackedReservation::default(),
         }
     }
 }

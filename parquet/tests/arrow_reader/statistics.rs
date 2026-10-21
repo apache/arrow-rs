@@ -46,6 +46,7 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
+use parquet::basic::ColumnOrder;
 use parquet::file::metadata::PageIndexPolicy;
 use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
@@ -75,8 +76,7 @@ impl Int64Case {
     fn make_int64_batches_with_null(&self) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("i64", DataType::Int64, true)]));
 
-        let v64: Vec<i64> =
-            (self.no_null_values_start as _..self.no_null_values_end as _).collect();
+        let v64: Vec<i64> = (self.no_null_values_start..self.no_null_values_end).collect();
 
         RecordBatch::try_new(
             schema,
@@ -258,20 +258,16 @@ impl Test<'_> {
         let row_groups = reader.metadata().row_groups();
 
         if check.data_page() {
-            let column_page_index = reader
+            let page_index = reader
                 .metadata()
-                .column_index()
-                .expect("File should have column page indices");
-
-            let column_offset_index = reader
-                .metadata()
-                .offset_index()
-                .expect("File should have column offset indices");
+                .page_index()
+                .expect("File should have page indices")
+                .as_ref();
 
             let row_group_indices: Vec<_> = (0..row_groups.len()).collect();
 
             let min = converter
-                .data_page_mins(column_page_index, column_offset_index, &row_group_indices)
+                .data_page_mins(page_index, &row_group_indices)
                 .unwrap();
             assert_eq!(
                 &min, &expected_min,
@@ -279,7 +275,7 @@ impl Test<'_> {
             );
 
             let max = converter
-                .data_page_maxes(column_page_index, column_offset_index, &row_group_indices)
+                .data_page_maxes(page_index, &row_group_indices)
                 .unwrap();
             assert_eq!(
                 &max, &expected_max,
@@ -287,7 +283,7 @@ impl Test<'_> {
             );
 
             let null_counts = converter
-                .data_page_null_counts(column_page_index, column_offset_index, &row_group_indices)
+                .data_page_null_counts(page_index, &row_group_indices)
                 .unwrap();
 
             assert_eq!(
@@ -297,7 +293,7 @@ impl Test<'_> {
             );
 
             let row_counts = converter
-                .data_page_row_counts(column_offset_index, row_groups, &row_group_indices)
+                .data_page_row_counts(page_index, row_groups, &row_group_indices)
                 .unwrap();
             assert_eq!(
                 row_counts, expected_row_counts,
@@ -378,6 +374,490 @@ impl Test<'_> {
 //
 // Remaining cases
 //   f64::NAN
+
+fn int96_from_nanos(nanos: i128) -> parquet::data_type::Int96 {
+    const NANOS_PER_DAY: i128 = 86_400_000_000_000;
+    let day = i32::try_from(nanos.div_euclid(NANOS_PER_DAY) + 2_440_588).unwrap();
+    let nanos = nanos.rem_euclid(NANOS_PER_DAY) as u64;
+    let mut value = parquet::data_type::Int96::new();
+    value.set_data(nanos as u32, (nanos >> 32) as u32, day as u32);
+    value
+}
+
+#[test]
+fn test_int96_timestamp_statistics() {
+    use parquet::data_type::Int96Type;
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
+
+    let min = i128::from(i64::MIN);
+    let max = i128::from(i64::MAX);
+    let nanos_per_day = 86_400_000_000_000;
+    let min_day = (i128::from(i32::MIN) - 2_440_588) * nanos_per_day;
+    let max_day = (i128::from(i32::MAX) - 2_440_588) * nanos_per_day;
+    let bounds = [
+        (-1_234_567_890, -1),
+        (0, 1_234_567_890),
+        (min, min + 1),
+        (max - 1, max),
+        (min * 1_000, (min + 1) * 1_000),
+        ((max - 1) * 1_000, max * 1_000),
+        // The full signed Julian day range fits seconds and milliseconds.
+        (min_day, min_day + nanos_per_day - 1),
+        (max_day, max_day + nanos_per_day - 1),
+        // One overflowing endpoint invalidates both bounds, since the data
+        // reader wraps values that do not fit the requested timestamp unit.
+        (min - 1, 0),
+        (0, max + 1),
+        ((min - 1) * 1_000, 0),
+        (min * 1_000 - 1, 0),
+        (0, (max + 1) * 1_000),
+    ];
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let schema = Arc::new(parse_message_type("message test { OPTIONAL INT96 ts; }").unwrap());
+    let props = Arc::new(
+        WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build(),
+    );
+    let mut writer = SerializedFileWriter::new(file.reopen().unwrap(), schema, props).unwrap();
+    for bound in bounds.iter().map(Some).chain(std::iter::once(None)) {
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        let (values, levels) = match bound {
+            Some(&(min, max)) => (
+                vec![int96_from_nanos(min), int96_from_nanos(max)],
+                [1, 0, 1],
+            ),
+            None => (vec![], [0, 0, 0]),
+        };
+        column
+            .typed::<Int96Type>()
+            .write_batch(&values, Some(&levels), None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+    }
+    writer.close().unwrap();
+
+    for unit in [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ] {
+        for timezone in [None, Some("UTC".into())] {
+            let data_type = DataType::Timestamp(unit, timezone.clone());
+            let schema = Arc::new(Schema::new(vec![Field::new("ts", data_type.clone(), true)]));
+            let options = ArrowReaderOptions::new()
+                .with_schema(schema)
+                .with_page_index_policy(PageIndexPolicy::Required);
+            let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+                file.reopen().unwrap(),
+                options,
+            )
+            .unwrap();
+            assert_eq!(
+                reader.metadata().file_metadata().column_order(0),
+                ColumnOrder::INT96_TIMESTAMP_ORDER
+            );
+            let converter =
+                StatisticsConverter::try_new("ts", reader.schema(), reader.parquet_schema())
+                    .unwrap()
+                    .with_column_orders(
+                        reader
+                            .metadata()
+                            .file_metadata()
+                            .column_orders()
+                            .map(Vec::as_slice),
+                    );
+            let divisor = match unit {
+                TimeUnit::Second => 1_000_000_000,
+                TimeUnit::Millisecond => 1_000_000,
+                TimeUnit::Microsecond => 1_000,
+                TimeUnit::Nanosecond => 1,
+            };
+            let expected: Vec<_> = bounds
+                .iter()
+                .map(|&(min, max)| {
+                    Some((
+                        i64::try_from(min.div_euclid(divisor)).ok()?,
+                        i64::try_from(max.div_euclid(divisor)).ok()?,
+                    ))
+                })
+                .chain(std::iter::once(None))
+                .collect();
+            let array = |is_min| -> ArrayRef {
+                let values = expected
+                    .iter()
+                    .map(|bound| bound.map(|(min, max)| if is_min { min } else { max }));
+                match unit {
+                    TimeUnit::Second => Arc::new(
+                        TimestampSecondArray::from_iter(values).with_timezone_opt(timezone.clone()),
+                    ),
+                    TimeUnit::Millisecond => Arc::new(
+                        TimestampMillisecondArray::from_iter(values)
+                            .with_timezone_opt(timezone.clone()),
+                    ),
+                    TimeUnit::Microsecond => Arc::new(
+                        TimestampMicrosecondArray::from_iter(values)
+                            .with_timezone_opt(timezone.clone()),
+                    ),
+                    TimeUnit::Nanosecond => Arc::new(
+                        TimestampNanosecondArray::from_iter(values)
+                            .with_timezone_opt(timezone.clone()),
+                    ),
+                }
+            };
+            let row_groups = reader.metadata().row_groups();
+            let page_index = reader.metadata().page_index().unwrap().as_ref();
+            let indices: Vec<_> = (0..row_groups.len()).collect();
+            assert_eq!(
+                converter.row_group_mins(row_groups).unwrap().as_ref(),
+                array(true).as_ref()
+            );
+            assert_eq!(
+                converter.row_group_maxes(row_groups).unwrap().as_ref(),
+                array(false).as_ref()
+            );
+            assert_eq!(
+                converter
+                    .data_page_mins(page_index, &indices)
+                    .unwrap()
+                    .as_ref(),
+                array(true).as_ref()
+            );
+            assert_eq!(
+                converter
+                    .data_page_maxes(page_index, &indices)
+                    .unwrap()
+                    .as_ref(),
+                array(false).as_ref()
+            );
+            let null_counts = UInt64Array::from_iter_values(
+                std::iter::repeat_n(1, bounds.len()).chain(std::iter::once(3)),
+            );
+            assert_eq!(
+                converter.row_group_null_counts(row_groups).unwrap(),
+                null_counts
+            );
+            assert_eq!(
+                converter
+                    .data_page_null_counts(page_index, &indices)
+                    .unwrap(),
+                null_counts
+            );
+
+            // Bounds must agree with the actual reader's rounding, including
+            // negative sub-second values and the extreme representable days.
+            let batches: Vec<_> = reader.build().unwrap().collect::<Result<_, _>>().unwrap();
+            let actual = arrow::compute::concat(
+                &batches
+                    .iter()
+                    .map(|b| b.column(0).as_ref())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+            for (i, bound) in expected.iter().enumerate() {
+                if bound.is_some() {
+                    assert_eq!(
+                        actual.slice(i * 3, 1).as_ref(),
+                        array(true).slice(i, 1).as_ref()
+                    );
+                    assert_eq!(
+                        actual.slice(i * 3 + 2, 1).as_ref(),
+                        array(false).slice(i, 1).as_ref()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_int96_statistics_column_orders() {
+    use parquet::basic::SortOrder;
+    use parquet::data_type::{Int32Type, Int96Type};
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
+
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let schema = Arc::new(
+        parse_message_type(
+            "message test {
+                REQUIRED GROUP ids { REQUIRED INT32 first; REQUIRED INT32 second; }
+                OPTIONAL INT96 ts;
+            }",
+        )
+        .unwrap(),
+    );
+    let props = Arc::new(
+        WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_dictionary_enabled(false)
+            .set_data_page_row_count_limit(2)
+            .set_write_batch_size(2)
+            .build(),
+    );
+    let mut writer = SerializedFileWriter::new(file.reopen().unwrap(), schema, props).unwrap();
+    for start in [1, 5] {
+        let mut row_group = writer.next_row_group().unwrap();
+        for _ in 0..2 {
+            let mut column = row_group.next_column().unwrap().unwrap();
+            column
+                .typed::<Int32Type>()
+                .write_batch(&[0, 1, 2, 3], None, None)
+                .unwrap();
+            column.close().unwrap();
+        }
+        let mut column = row_group.next_column().unwrap().unwrap();
+        let values: Vec<_> = (start..start + 3)
+            .map(|value| int96_from_nanos(value * 1_000_000_000))
+            .collect();
+        column
+            .typed::<Int96Type>()
+            .write_batch(&values, Some(&[1, 0, 1, 1]), None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+    }
+    writer.close().unwrap();
+
+    let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+        file.reopen().unwrap(),
+        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
+    )
+    .unwrap();
+    let metadata = reader.metadata();
+    let row_groups = metadata.row_groups();
+    let page_index = metadata.page_index().unwrap().as_ref();
+    let indices = [0, 1];
+    let orders = metadata.file_metadata().column_orders().unwrap();
+    assert_eq!(orders[2], ColumnOrder::INT96_TIMESTAMP_ORDER);
+    let unsupported_orders = [
+        None,
+        Some(vec![]),
+        Some(vec![ColumnOrder::INT96_TIMESTAMP_ORDER; 2]),
+        Some(vec![
+            ColumnOrder::INT96_TIMESTAMP_ORDER,
+            ColumnOrder::INT96_TIMESTAMP_ORDER,
+            ColumnOrder::UNDEFINED,
+        ]),
+        Some(vec![
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::UNKNOWN,
+        ]),
+        Some(vec![
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
+        ]),
+        Some(vec![
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED),
+        ]),
+        Some(vec![
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::UNDEFINED,
+            ColumnOrder::IEEE_754_TOTAL_ORDER,
+        ]),
+    ];
+    for unit in [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ] {
+        let data_type = DataType::Timestamp(unit, None);
+        // The struct has two leaves, so the INT96 column's Parquet leaf index
+        // differs from its Arrow field index.
+        let schema = Schema::new(vec![
+            Field::new(
+                "ids",
+                DataType::Struct(
+                    vec![
+                        Field::new("first", DataType::Int32, false),
+                        Field::new("second", DataType::Int32, false),
+                    ]
+                    .into(),
+                ),
+                false,
+            ),
+            Field::new("ts", data_type.clone(), true),
+        ]);
+        let converters = || {
+            [
+                StatisticsConverter::try_new("ts", &schema, reader.parquet_schema()).unwrap(),
+                StatisticsConverter::from_column_index(2, schema.field(1), reader.parquet_schema())
+                    .unwrap(),
+            ]
+        };
+        let check = |converter: &StatisticsConverter<'_>, enabled: bool| {
+            assert_eq!(converter.parquet_column_index(), Some(2));
+            let expected = |values: &[i64]| -> ArrayRef {
+                if !enabled {
+                    return new_null_array(&data_type, values.len());
+                }
+                let seconds = TimestampSecondArray::from(values.to_vec());
+                arrow::compute::cast(&seconds, &data_type).unwrap()
+            };
+            for (actual, values) in [
+                (converter.row_group_mins(row_groups).unwrap(), vec![1, 5]),
+                (converter.row_group_maxes(row_groups).unwrap(), vec![3, 7]),
+                (
+                    converter.data_page_mins(page_index, &indices).unwrap(),
+                    vec![1, 2, 5, 6],
+                ),
+                (
+                    converter.data_page_maxes(page_index, &indices).unwrap(),
+                    vec![1, 3, 5, 7],
+                ),
+            ] {
+                assert_eq!(actual.as_ref(), expected(&values).as_ref());
+            }
+            assert_eq!(
+                converter.row_group_null_counts(row_groups).unwrap(),
+                UInt64Array::from(vec![1, 1])
+            );
+            assert_eq!(
+                converter
+                    .data_page_null_counts(page_index, &indices)
+                    .unwrap(),
+                UInt64Array::from(vec![1, 0, 1, 0])
+            );
+        };
+        for converter in converters() {
+            check(&converter, false);
+            check(&converter.with_column_orders(Some(orders)), true);
+        }
+        for column_orders in &unsupported_orders {
+            for converter in converters() {
+                // Replacing the orders must also clear an earlier valid order.
+                let converter = converter
+                    .with_column_orders(Some(orders))
+                    .with_column_orders(column_orders.as_deref());
+                check(&converter, false);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_int96_unusable_statistics() {
+    use parquet::schema::parser::parse_message_type;
+
+    let parquet_schema = Arc::new(SchemaDescriptor::new(Arc::new(
+        parse_message_type("message test { OPTIONAL INT96 ts; }").unwrap(),
+    )));
+    let valid = int96_from_nanos(0);
+    let mut bounds = vec![
+        (Some(valid), None, false),
+        (None, Some(valid), false),
+        (Some(valid), Some(valid), true),
+    ];
+    // Nanos must be in [0, nanos_per_day), even when the requested unit is coarser.
+    for nanos in [86_400_000_000_000_u64, u64::MAX] {
+        let mut invalid = valid;
+        invalid.set_data(nanos as u32, (nanos >> 32) as u32, valid.data()[2]);
+        bounds.extend([
+            (Some(valid), Some(invalid), false),
+            (Some(invalid), Some(valid), false),
+        ]);
+    }
+    let row_groups: Vec<_> = bounds
+        .into_iter()
+        .map(|(min, max, deprecated)| {
+            let column = ColumnChunkMetaData::builder(parquet_schema.column(0))
+                .set_num_values(1)
+                .set_statistics(Statistics::int96(min, max, None, Some(0), deprecated))
+                .build()
+                .unwrap();
+            RowGroupMetaData::builder(parquet_schema.clone())
+                .set_num_rows(1)
+                .set_column_metadata(vec![column])
+                .build()
+                .unwrap()
+        })
+        .collect();
+    for unit in [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ] {
+        let data_type = DataType::Timestamp(unit, None);
+        let schema = Schema::new(vec![Field::new("ts", data_type.clone(), true)]);
+        let converter = StatisticsConverter::try_new("ts", &schema, &parquet_schema)
+            .unwrap()
+            .with_column_orders(Some(&[ColumnOrder::INT96_TIMESTAMP_ORDER]));
+        let expected = new_null_array(&data_type, row_groups.len());
+        assert_eq!(
+            converter.row_group_mins(&row_groups).unwrap().as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(
+            converter.row_group_maxes(&row_groups).unwrap().as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(
+            converter.row_group_null_counts(&row_groups).unwrap(),
+            UInt64Array::from(vec![0; row_groups.len()])
+        );
+    }
+}
+
+#[test]
+fn test_int64_timestamp_one_sided_statistics() {
+    use parquet::schema::parser::parse_message_type;
+
+    let parquet_schema = Arc::new(SchemaDescriptor::new(Arc::new(
+        parse_message_type("message test { OPTIONAL INT64 ts; }").unwrap(),
+    )));
+    let bounds = [(Some(i64::MIN), None), (None, Some(i64::MAX))];
+    let row_groups: Vec<_> = bounds
+        .into_iter()
+        .map(|(min, max)| {
+            let column = ColumnChunkMetaData::builder(parquet_schema.column(0))
+                .set_num_values(1)
+                .set_statistics(Statistics::int64(min, max, None, Some(0), false))
+                .build()
+                .unwrap();
+            RowGroupMetaData::builder(parquet_schema.clone())
+                .set_num_rows(1)
+                .set_column_metadata(vec![column])
+                .build()
+                .unwrap()
+        })
+        .collect();
+    for unit in [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ] {
+        let data_type = DataType::Timestamp(unit, None);
+        let schema = Schema::new(vec![Field::new("ts", data_type.clone(), true)]);
+        let converter = StatisticsConverter::try_new("ts", &schema, &parquet_schema).unwrap();
+        let expected = |is_min| {
+            let values = Int64Array::from_iter(
+                bounds
+                    .iter()
+                    .map(|&(min, max)| if is_min { min } else { max }),
+            );
+            arrow::compute::cast(&values, &data_type).unwrap()
+        };
+        assert_eq!(
+            converter.row_group_mins(&row_groups).unwrap().as_ref(),
+            expected(true).as_ref()
+        );
+        assert_eq!(
+            converter.row_group_maxes(&row_groups).unwrap().as_ref(),
+            expected(false).as_ref()
+        );
+    }
+}
 
 #[tokio::test]
 async fn test_max_and_min_value_truncated() {
@@ -644,7 +1124,7 @@ async fn test_data_page_stats_with_all_null_page() {
 
 /////////////// MORE GENERAL TESTS //////////////////////
 // . Many columns in a file
-// . Differnet data types
+// . Different data types
 // . Different row group sizes
 
 // Four different integer types
@@ -781,7 +1261,7 @@ async fn test_float_16() {
         expected_min: Arc::new(Float16Array::from(vec![
             f16::from_f32(-5.),
             f16::from_f32(-4.),
-            f16::from_f32(-0.),
+            f16::from_f32(0.),
             f16::from_f32(5.),
         ])),
         // maxes are [-1, 0, 4, 9]
@@ -817,7 +1297,7 @@ async fn test_float_32() {
     Test {
         reader: &reader,
         // mins are [-5, -4, 0, 5]
-        expected_min: Arc::new(Float32Array::from(vec![-5., -4., -0., 5.0])),
+        expected_min: Arc::new(Float32Array::from(vec![-5., -4., 0., 5.0])),
         // maxes are [-1, 0, 4, 9]
         expected_max: Arc::new(Float32Array::from(vec![-1., 0., 4., 9.])),
         // nulls are [0, 0, 0, 0]
@@ -846,7 +1326,7 @@ async fn test_float_64() {
     Test {
         reader: &reader,
         // mins are [-5, -4, 0, 5]
-        expected_min: Arc::new(Float64Array::from(vec![-5., -4., -0., 5.0])),
+        expected_min: Arc::new(Float64Array::from(vec![-5., -4., 0., 5.0])),
         // maxes are [-1, 0, 4, 9]
         expected_max: Arc::new(Float64Array::from(vec![-1., 0., 4., 9.])),
         // nulls are [0, 0, 0, 0]
@@ -1897,7 +2377,7 @@ async fn test_float64() {
 
     Test {
         reader: &reader,
-        expected_min: Arc::new(Float64Array::from(vec![-5.0, -4.0, -0.0, 5.0])),
+        expected_min: Arc::new(Float64Array::from(vec![-5.0, -4.0, 0.0, 5.0])),
         expected_max: Arc::new(Float64Array::from(vec![-1.0, 0.0, 4.0, 9.0])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
@@ -1925,7 +2405,7 @@ async fn test_float16() {
     Test {
         reader: &reader,
         expected_min: Arc::new(Float16Array::from(
-            vec![-5.0, -4.0, -0.0, 5.0]
+            vec![-5.0, -4.0, 0.0, 5.0]
                 .into_iter()
                 .map(f16::from_f32)
                 .collect::<Vec<_>>(),
@@ -2049,7 +2529,7 @@ async fn test_decimal128() {
 }
 #[tokio::test]
 async fn test_decimal_256() {
-    // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precicion 9, scale 2
+    // This creates a parquet file of 1 column "decimal256_col" with decimal data type and precision 9, scale 2
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
         scenario: Scenario::Decimal256,
@@ -2628,13 +3108,16 @@ mod test {
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
         ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
-        Int32Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+        Int32Array, Int64Array, RecordBatch, StringArray, StructArray, TimestampNanosecondArray,
         new_empty_array,
     };
-    use arrow_schema::{DataType, SchemaRef, TimeUnit};
+    use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
     use bytes::Bytes;
     use parquet::arrow::parquet_column;
+    use parquet::data_type::{ByteArray, ByteArrayType, Int32Type};
     use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
     use std::path::PathBuf;
     use std::sync::Arc;
     // TODO error cases (with parquet statistics that are mismatched in expected type)
@@ -2899,6 +3382,161 @@ mod test {
         }
     }
 
+    #[test]
+    fn struct_leaf_statistics_from_column_index() {
+        let leaf_field = Arc::new(Field::new("leaf", DataType::Int32, true));
+        let leaf_array: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(3),
+            Some(1),
+            None,
+            Some(9),
+            Some(4),
+            Some(6),
+        ]));
+
+        let amount_array = decimal128_array(
+            [
+                Some(i128::from(100)),
+                Some(i128::from(-500)),
+                None,
+                Some(i128::from(2000)),
+                Some(i128::from(600)),
+                Some(i128::from(50)),
+            ],
+            20,
+            2,
+        );
+        let amount_field = Arc::new(Field::new("amount", amount_array.data_type().clone(), true));
+
+        let struct_array = StructArray::from(vec![
+            (leaf_field.clone(), leaf_array),
+            (amount_field.clone(), amount_array),
+        ]);
+        let struct_array: ArrayRef = Arc::new(struct_array);
+        let input_batch = RecordBatch::try_from_iter([("c1", struct_array)]).unwrap();
+
+        let reader = build_parquet_file(
+            ROWS_PER_ROW_GROUP * 2,
+            Some(EnabledStatistics::Page),
+            Some(ROWS_PER_ROW_GROUP),
+            vec![input_batch],
+        );
+
+        let schema = reader.schema();
+        let metadata = reader.metadata();
+        let parquet_schema = reader.parquet_schema();
+        let row_groups = metadata.row_groups();
+        let row_group_indices = [0];
+        let page_index = metadata
+            .page_index()
+            .expect("file should have page indices")
+            .as_ref();
+
+        let DataType::Struct(fields) = schema.field_with_name("c1").unwrap().data_type() else {
+            unreachable!("c1 must be a struct field")
+        };
+        let leaf_arrow_field = fields[0].as_ref();
+        let amount_arrow_field = fields[1].as_ref();
+
+        assert_eq!(parquet_column(parquet_schema, schema, "c1"), None);
+
+        let leaf_converter =
+            StatisticsConverter::from_column_index(0, leaf_arrow_field, parquet_schema).unwrap();
+
+        assert_eq!(leaf_converter.parquet_column_index(), Some(0));
+        assert_eq!(leaf_converter.arrow_field(), leaf_arrow_field);
+
+        let leaf_mins = leaf_converter.row_group_mins(row_groups.iter()).unwrap();
+        assert_eq!(&leaf_mins, &i32_array([Some(1)]));
+
+        let leaf_maxes = leaf_converter.row_group_maxes(row_groups.iter()).unwrap();
+        assert_eq!(&leaf_maxes, &i32_array([Some(9)]));
+
+        let leaf_null_counts = leaf_converter
+            .row_group_null_counts(row_groups.iter())
+            .unwrap();
+        assert_eq!(leaf_null_counts, UInt64Array::from(vec![1]));
+
+        let leaf_row_counts = leaf_converter
+            .row_group_row_counts(row_groups.iter())
+            .unwrap();
+        assert_eq!(leaf_row_counts, Some(UInt64Array::from(vec![6])));
+
+        let leaf_page_mins = leaf_converter
+            .data_page_mins(page_index, row_group_indices.iter())
+            .unwrap();
+        assert_eq!(&leaf_page_mins, &i32_array([Some(1), Some(4)]));
+
+        let leaf_page_maxes = leaf_converter
+            .data_page_maxes(page_index, row_group_indices.iter())
+            .unwrap();
+        assert_eq!(&leaf_page_maxes, &i32_array([Some(3), Some(9)]));
+
+        let leaf_page_null_counts = leaf_converter
+            .data_page_null_counts(page_index, row_group_indices.iter())
+            .unwrap();
+        assert_eq!(leaf_page_null_counts, UInt64Array::from(vec![1, 0]));
+
+        let leaf_page_row_counts = leaf_converter
+            .data_page_row_counts(page_index, row_groups, row_group_indices.iter())
+            .unwrap();
+        assert_eq!(leaf_page_row_counts, Some(UInt64Array::from(vec![3, 3])));
+
+        let amount_converter =
+            StatisticsConverter::from_column_index(1, amount_arrow_field, parquet_schema).unwrap();
+
+        let amount_mins = amount_converter.row_group_mins(row_groups.iter()).unwrap();
+        assert_eq!(
+            &amount_mins,
+            &decimal128_array([Some(i128::from(-500))], 20, 2)
+        );
+
+        let amount_maxes = amount_converter.row_group_maxes(row_groups.iter()).unwrap();
+        assert_eq!(
+            &amount_maxes,
+            &decimal128_array([Some(i128::from(2000))], 20, 2)
+        );
+
+        let amount_page_mins = amount_converter
+            .data_page_mins(page_index, row_group_indices.iter())
+            .unwrap();
+        assert_eq!(
+            &amount_page_mins,
+            &decimal128_array([Some(i128::from(-500)), Some(i128::from(50))], 20, 2)
+        );
+
+        let amount_page_maxes = amount_converter
+            .data_page_maxes(page_index, row_group_indices.iter())
+            .unwrap();
+        assert_eq!(
+            &amount_page_maxes,
+            &decimal128_array([Some(i128::from(100)), Some(i128::from(2000))], 20, 2)
+        );
+
+        let column_count = parquet_schema.columns().len();
+        let err =
+            StatisticsConverter::from_column_index(column_count, leaf_arrow_field, parquet_schema)
+                .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Arrow: Parquet column index {column_count} out of bounds, column count {column_count}"
+            )
+        );
+    }
+
+    fn decimal128_array(
+        input: impl IntoIterator<Item = Option<i128>>,
+        precision: u8,
+        scale: i8,
+    ) -> ArrayRef {
+        Arc::new(
+            Decimal128Array::from_iter(input)
+                .with_precision_and_scale(precision, scale)
+                .unwrap(),
+        )
+    }
+
     /// Write the specified batches out as parquet and return the metadata
     fn parquet_metadata(schema: SchemaRef, batch: RecordBatch) -> Arc<ParquetMetaData> {
         let props = WriterProperties::builder()
@@ -3030,10 +3668,10 @@ mod test {
 
     fn timestamp_nanoseconds_array(
         input: impl IntoIterator<Item = Option<i64>>,
-        timzezone: Option<&str>,
+        timezone: Option<&str>,
     ) -> ArrayRef {
         let array: TimestampNanosecondArray = input.into_iter().collect();
-        match timzezone {
+        match timezone {
             Some(tz) => Arc::new(array.with_timezone(tz)),
             None => Arc::new(array),
         }
@@ -3045,5 +3683,132 @@ mod test {
             .map(|s| s.map(|s| s.to_string()))
             .collect();
         Arc::new(array)
+    }
+
+    // Verifies that distinct_count is correctly read back from UTF-8 column statistics.
+    // Uses the low-level writer to inject a known distinct_count into the parquet footer
+    // since ArrowWriter does not yet write this field.
+    #[test]
+    fn test_row_group_distinct_counts_utf8_roundtrip() {
+        let unique_string_values: Vec<ByteArray> = (0..10)
+            .map(|index| ByteArray::from(format!("value_{index}").into_bytes()))
+            .collect();
+
+        let parquet_schema = Arc::new(
+            parse_message_type("message schema { REQUIRED BYTE_ARRAY col (UTF8); }").unwrap(),
+        );
+        let writer_properties = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .build(),
+        );
+
+        let mut file_buffer: Vec<u8> = Vec::new();
+        let mut file_writer =
+            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties).unwrap();
+
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        let min_value = unique_string_values.first().unwrap().clone();
+        let max_value = unique_string_values.last().unwrap().clone();
+        let expected_distinct_count = unique_string_values.len() as u64;
+        column_writer
+            .typed::<ByteArrayType>()
+            .write_batch_with_statistics(
+                &unique_string_values,
+                None,
+                None,
+                Some(&min_value),
+                Some(&max_value),
+                Some(expected_distinct_count),
+            )
+            .unwrap();
+        column_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+        file_writer.close().unwrap();
+
+        let parquet_bytes = Bytes::from(file_buffer);
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes).unwrap();
+        let file_metadata = reader_builder.metadata().clone();
+        let arrow_schema = reader_builder.schema().clone();
+        let parquet_schema_descriptor = file_metadata.file_metadata().schema_descr();
+
+        let statistics_converter =
+            StatisticsConverter::try_new("col", &arrow_schema, parquet_schema_descriptor).unwrap();
+        let distinct_counts = statistics_converter
+            .row_group_distinct_counts(file_metadata.row_groups().iter())
+            .unwrap();
+
+        assert_eq!(
+            distinct_counts,
+            UInt64Array::from(vec![Some(expected_distinct_count)]),
+            "expected distinct_count of 10 unique string values"
+        );
+    }
+
+    // Verifies that a missing distinct_count in one row group does not affect the others.
+    #[test]
+    fn test_row_group_distinct_counts_absent() {
+        let parquet_schema =
+            Arc::new(parse_message_type("message schema { REQUIRED INT32 col; }").unwrap());
+        let writer_properties = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .build(),
+        );
+
+        let mut file_buffer: Vec<u8> = Vec::new();
+        let mut file_writer =
+            SerializedFileWriter::new(&mut file_buffer, parquet_schema, writer_properties).unwrap();
+
+        // row group 0: distinct_count present
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch_with_statistics(&[1, 2], None, None, Some(&1), Some(&2), Some(2))
+            .unwrap();
+        column_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+
+        // row group 1: distinct_count absent — should appear as null in output
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch_with_statistics(&[3, 4], None, None, Some(&3), Some(&4), None)
+            .unwrap();
+        column_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+
+        // row group 2: distinct_count present — iteration must reach here despite row group 1
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int32Type>()
+            .write_batch_with_statistics(&[5, 6, 7, 8, 9], None, None, Some(&5), Some(&9), Some(5))
+            .unwrap();
+        column_writer.close().unwrap();
+        row_group_writer.close().unwrap();
+
+        file_writer.close().unwrap();
+
+        let parquet_bytes = Bytes::from(file_buffer);
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(parquet_bytes).unwrap();
+        let file_metadata = reader_builder.metadata().clone();
+        let arrow_schema = reader_builder.schema().clone();
+        let parquet_schema_descriptor = file_metadata.file_metadata().schema_descr();
+
+        let statistics_converter =
+            StatisticsConverter::try_new("col", &arrow_schema, parquet_schema_descriptor).unwrap();
+        let distinct_counts = statistics_converter
+            .row_group_distinct_counts(file_metadata.row_groups().iter())
+            .unwrap();
+
+        assert_eq!(
+            distinct_counts,
+            UInt64Array::from(vec![Some(2), None, Some(5)]),
+            "a missing distinct_count in one row group should not affect the others"
+        );
     }
 }

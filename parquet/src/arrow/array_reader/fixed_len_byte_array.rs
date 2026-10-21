@@ -17,18 +17,20 @@
 
 use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be};
+use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
-use crate::column::reader::decoder::ColumnValueDecoder;
+use crate::column::reader::decoder::{ColumnValueDecoder, normalize_fixed_len_byte_array_payload};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
     ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
+    OffsetSizeTrait,
 };
 use arrow_buffer::{Buffer, IntervalDayTime, i256};
 use arrow_data::ArrayDataBuilder;
@@ -40,14 +42,12 @@ use std::ops::Range;
 use std::sync::Arc;
 
 /// Returns an [`ArrayReader`] that decodes the provided fixed length byte array column
-///
-/// `batch_size` is used to pre-allocate internal buffers,
-/// avoiding reallocations when reading the first batch of data.
 pub fn make_fixed_len_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
     batch_size: usize,
+    padding_threshold: Option<i16>,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -131,6 +131,7 @@ pub fn make_fixed_len_byte_array_reader(
         data_type,
         byte_length,
         batch_size,
+        padding_threshold,
     )))
 }
 
@@ -150,8 +151,12 @@ impl FixedLenByteArrayReader {
         data_type: ArrowType,
         byte_length: usize,
         batch_size: usize,
+        padding_threshold: Option<i16>,
     ) -> Self {
-        let record_reader = GenericRecordReader::new(column_desc, batch_size);
+        let mut record_reader = GenericRecordReader::new(column_desc, batch_size);
+        if let Some(threshold) = padding_threshold {
+            record_reader.set_padding_threshold(threshold);
+        }
         Self {
             data_type,
             byte_length,
@@ -177,12 +182,23 @@ impl ArrayReader for FixedLenByteArrayReader {
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
+        let len = self.record_reader.values_written();
+
         let record_data = self.record_reader.consume_record_data();
+        debug_assert_eq!(
+            record_data.buffer.len(),
+            len * self.byte_length,
+            "fixed-len byte array buffer size mismatch: {} bytes for {} elements of size {}",
+            record_data.buffer.len(),
+            len,
+            self.byte_length,
+        );
+        let null_bit_buffer = self.record_reader.consume_compact_bitmap();
 
         let array_data = ArrayDataBuilder::new(ArrowType::FixedSizeBinary(self.byte_length as i32))
-            .len(self.record_reader.num_values())
+            .len(len)
             .add_buffer(Buffer::from_vec(record_data.buffer))
-            .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
+            .null_bit_buffer(null_bit_buffer);
 
         let binary = FixedSizeBinaryArray::from(unsafe { array_data.build_unchecked() });
 
@@ -258,10 +274,14 @@ impl ArrayReader for FixedLenByteArrayReader {
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer.as_deref()
     }
+
+    fn max_def_level(&self) -> i16 {
+        self.record_reader.max_def_level()
+    }
 }
 
 #[derive(Default)]
-struct FixedLenByteArrayBuffer {
+pub(super) struct FixedLenByteArrayBuffer {
     buffer: Vec<u8>,
     /// The length of each element in bytes
     byte_length: Option<usize>,
@@ -296,11 +316,23 @@ fn move_values<F>(
 impl ValuesBuffer for FixedLenByteArrayBuffer {
     fn with_capacity(capacity: usize) -> Self {
         // `byte_length` is not known initially, so preserve the value-count
-        // hint so the first decode can allocate the exact byte capacity.
+        // hint so the first decode can allocate the initial byte capacity.
         Self {
             buffer: Vec::new(),
             byte_length: None,
             values_capacity: Some(capacity),
+        }
+    }
+
+    fn reserve_exact(&mut self, additional: usize) {
+        match self.byte_length {
+            Some(byte_length) => self
+                .buffer
+                .reserve_exact(additional.saturating_mul(byte_length)),
+            None => {
+                let capacity = self.values_capacity.get_or_insert(0);
+                *capacity = (*capacity).max(additional);
+            }
         }
     }
 
@@ -310,10 +342,16 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
         values_read: usize,
         levels_read: usize,
         valid_mask: &[u8],
-    ) {
+    ) -> Result<()> {
         let byte_length = self.byte_length.unwrap_or_default();
 
-        assert_eq!(self.buffer.len(), (read_offset + values_read) * byte_length);
+        if self.buffer.len() != (read_offset + values_read) * byte_length {
+            return Err(general_err!(
+                "found inconsistent buffer length while padding nulls: expected {} bytes, got {}",
+                (read_offset + values_read) * byte_length,
+                self.buffer.len()
+            ));
+        }
         self.buffer
             .resize((read_offset + levels_read) * byte_length, 0);
 
@@ -339,13 +377,88 @@ impl ValuesBuffer for FixedLenByteArrayBuffer {
             };
             move_values(&mut self.buffer, byte_length, values_range, valid_mask, op);
         }
+        Ok(())
     }
 }
 
-struct ValueDecoder {
+pub(super) struct ValueDecoder {
     byte_length: usize,
     dict_page: Option<Bytes>,
     decoder: Option<Decoder>,
+}
+
+impl ValueDecoder {
+    pub(super) fn read_offsets<I: OffsetSizeTrait>(
+        &mut self,
+        out: &mut OffsetBuffer<I>,
+        num_values: usize,
+    ) -> Result<usize> {
+        let start = out.values.len();
+        let read = self.read_values(&mut out.values, num_values)?;
+        out.offsets.reserve(read);
+        for value in 1..=read {
+            out.offsets.push(
+                I::from_usize(start + value * self.byte_length)
+                    .ok_or_else(|| general_err!("index overflow decoding fixed byte array"))?,
+            );
+        }
+        Ok(read)
+    }
+
+    fn read_values(&mut self, out: &mut Vec<u8>, num_values: usize) -> Result<usize> {
+        if self.byte_length == 0 {
+            return Ok(num_values);
+        }
+
+        match self.decoder.as_mut().unwrap() {
+            Decoder::Plain { offset, buf } => {
+                let to_read =
+                    (num_values * self.byte_length).min(buf.len() - *offset) / self.byte_length;
+                let end_offset = *offset + to_read * self.byte_length;
+                out.extend_from_slice(&buf.as_ref()[*offset..end_offset]);
+                *offset = end_offset;
+                Ok(to_read)
+            }
+            Decoder::Dict { decoder } => {
+                let dict = self.dict_page.as_ref().unwrap();
+                if dict.is_empty() {
+                    return Ok(0);
+                }
+
+                decoder.read(num_values, |keys| {
+                    out.reserve(keys.len() * self.byte_length);
+                    for key in keys {
+                        let offset = *key as usize * self.byte_length;
+                        out.extend_from_slice(&dict.as_ref()[offset..offset + self.byte_length]);
+                    }
+                    Ok(())
+                })
+            }
+            Decoder::Delta { decoder } => {
+                let to_read = num_values.min(decoder.remaining());
+                out.reserve(to_read * self.byte_length);
+
+                decoder.read(to_read, |slice| {
+                    if slice.len() != self.byte_length {
+                        return Err(general_err!(
+                            "encountered array with incorrect length, got {} expected {}",
+                            slice.len(),
+                            self.byte_length
+                        ));
+                    }
+                    out.extend_from_slice(slice);
+                    Ok(())
+                })
+            }
+            Decoder::ByteStreamSplit { buf, offset } => {
+                let total_values = buf.len() / self.byte_length;
+                let to_read = num_values.min(total_values - *offset);
+                read_byte_stream_split(out, buf, *offset, to_read, self.byte_length);
+                *offset += to_read;
+                Ok(to_read)
+            }
+        }
+    }
 }
 
 impl ColumnValueDecoder for ValueDecoder {
@@ -375,14 +488,12 @@ impl ColumnValueDecoder for ValueDecoder {
                 encoding
             ));
         }
-        let expected_len = num_values as usize * self.byte_length;
-        if expected_len > buf.len() {
-            return Err(general_err!(
-                "too few bytes in dictionary page, expected {} got {}",
-                expected_len,
-                buf.len()
-            ));
-        }
+        let buf = normalize_fixed_len_byte_array_payload(
+            buf,
+            num_values as usize,
+            self.byte_length,
+            "dictionary page",
+        )?;
 
         self.dict_page = Some(buf);
         Ok(())
@@ -425,79 +536,25 @@ impl ColumnValueDecoder for ValueDecoder {
             Some(x) => assert_eq!(x, self.byte_length),
             None => {
                 out.byte_length = Some(self.byte_length);
-                // TODO: collapse to a let-chain once MSRV ≥ 1.88
-                // (`if out.buffer.is_empty() && let Some(cap) = out.values_capacity.take()`)
-                if out.buffer.is_empty() {
-                    if let Some(values_capacity) = out.values_capacity.take() {
-                        // now that the byte length per output element is known,
-                        // allocate the actual needed space.
-                        let byte_capacity = values_capacity.saturating_mul(self.byte_length);
-                        out.buffer = Vec::with_capacity(byte_capacity);
-                    }
+                if out.buffer.is_empty()
+                    && let Some(values_capacity) = out.values_capacity.take()
+                {
+                    // now that the byte length per output element is known,
+                    // allocate the actual needed space.
+                    let byte_capacity = values_capacity.saturating_mul(self.byte_length);
+                    out.buffer = Vec::with_capacity(byte_capacity);
                 }
             }
         }
 
-        match self.decoder.as_mut().unwrap() {
-            Decoder::Plain { offset, buf } => {
-                let to_read =
-                    (num_values * self.byte_length).min(buf.len() - *offset) / self.byte_length;
-                let end_offset = *offset + to_read * self.byte_length;
-                out.buffer
-                    .extend_from_slice(&buf.as_ref()[*offset..end_offset]);
-                *offset = end_offset;
-                Ok(to_read)
-            }
-            Decoder::Dict { decoder } => {
-                let dict = self.dict_page.as_ref().unwrap();
-                // All data must be NULL
-                if dict.is_empty() {
-                    return Ok(0);
-                }
-
-                decoder.read(num_values, |keys| {
-                    out.buffer.reserve(keys.len() * self.byte_length);
-                    for key in keys {
-                        let offset = *key as usize * self.byte_length;
-                        let val = &dict.as_ref()[offset..offset + self.byte_length];
-                        out.buffer.extend_from_slice(val);
-                    }
-                    Ok(())
-                })
-            }
-            Decoder::Delta { decoder } => {
-                let to_read = num_values.min(decoder.remaining());
-                out.buffer.reserve(to_read * self.byte_length);
-
-                decoder.read(to_read, |slice| {
-                    if slice.len() != self.byte_length {
-                        return Err(general_err!(
-                            "encountered array with incorrect length, got {} expected {}",
-                            slice.len(),
-                            self.byte_length
-                        ));
-                    }
-                    out.buffer.extend_from_slice(slice);
-                    Ok(())
-                })
-            }
-            Decoder::ByteStreamSplit { buf, offset } => {
-                // we have n=`byte_length` streams of length `buf.len/byte_length`
-                // to read value i, we need the i'th byte from each of the streams
-                // so `offset` should be the value offset, not the byte offset
-                let total_values = buf.len() / self.byte_length;
-                let to_read = num_values.min(total_values - *offset);
-
-                // now read the n streams and reassemble values into the output buffer
-                read_byte_stream_split(&mut out.buffer, buf, *offset, to_read, self.byte_length);
-
-                *offset += to_read;
-                Ok(to_read)
-            }
-        }
+        self.read_values(&mut out.buffer, num_values)
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        if self.byte_length == 0 {
+            return Ok(num_values);
+        }
+
         match self.decoder.as_mut().unwrap() {
             Decoder::Plain { offset, buf } => {
                 let to_read = num_values.min((buf.len() - *offset) / self.byte_length);
@@ -523,7 +580,7 @@ impl ColumnValueDecoder for ValueDecoder {
 // `offset`. Values will be appended to `dst`.
 fn read_byte_stream_split(
     dst: &mut Vec<u8>,
-    src: &mut Bytes,
+    src: &Bytes,
     offset: usize,
     num_values: usize,
     data_width: usize,
@@ -558,6 +615,18 @@ mod tests {
     use arrow_array::{Decimal256Array, RecordBatch};
     use bytes::Bytes;
     use std::sync::Arc;
+
+    #[test]
+    fn test_pending_reservation_tracks_max_capacity() {
+        let mut buffer = FixedLenByteArrayBuffer::with_capacity(0);
+
+        buffer.reserve_exact(8);
+        buffer.reserve_exact(4);
+        assert_eq!(buffer.values_capacity, Some(8));
+
+        buffer.reserve_exact(12);
+        assert_eq!(buffer.values_capacity, Some(12));
+    }
 
     #[test]
     fn test_decimal_list() {

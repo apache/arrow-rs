@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 
 use crate::{
     Array, ArrayAccessor, ArrayRef, PrimitiveArray,
@@ -116,30 +116,66 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// - If `run_ends` has any null values
     /// - If `run_ends` doesn't consist of strictly increasing positive integers
     pub fn try_new(run_ends: &PrimitiveArray<R>, values: &dyn Array) -> Result<Self, ArrowError> {
-        let run_ends_type = run_ends.data_type().clone();
-        let values_type = values.data_type().clone();
-        let ree_array_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", run_ends_type, false)),
-            Arc::new(Field::new("values", values_type, true)),
+        // 1. run_ends and values must have the same (physical) length.
+        if run_ends.len() != values.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "The run_ends array length should be the same as values array length. Run_ends array length is {}, values array length is {}",
+                run_ends.len(),
+                values.len()
+            )));
+        }
+
+        // 2. run_ends must not contain null values.
+        if run_ends.nulls().is_some() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Found null values in run_ends array. The run_ends array should not have null values."
+                    .to_string(),
+            ));
+        }
+
+        // 3. run_ends must be strictly increasing, strictly positive integers.
+        if let Some(first) = run_ends.values().first() {
+            let mut prev_value = *first;
+            if prev_value <= R::Native::usize_as(0) {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "The values in run_ends array should be strictly positive. Found value {prev_value:?} at index 0 that does not match the criteria."
+                )));
+            }
+
+            for (ix, &run_end) in run_ends.values().iter().enumerate().skip(1) {
+                if run_end <= prev_value {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "The values in run_ends array should be strictly increasing. Found value {run_end:?} at index {ix} with previous value {prev_value:?} that does not match the criteria."
+                    )));
+                }
+                prev_value = run_end;
+            }
+        }
+
+        let data_type = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                run_ends.data_type().clone(),
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                values.data_type().clone(),
+                true,
+            )),
         );
-        let len = RunArray::logical_len(run_ends);
-        let builder = ArrayDataBuilder::new(ree_array_type)
-            .len(len)
-            .add_child_data(run_ends.to_data())
-            .add_child_data(values.to_data());
 
-        // `build_unchecked` is used to avoid recursive validation of child arrays.
-        let array_data = unsafe { builder.build_unchecked() };
+        let logical_len = RunArray::logical_len(run_ends);
+        // Safety: validated above that the run ends are strictly increasing, strictly
+        // positive integers, so the last value equals the logical length.
+        let run_ends_buffer =
+            unsafe { RunEndBuffer::new_unchecked(run_ends.values().clone(), 0, logical_len) };
 
-        // Safety: `validate_data` checks below
-        //    1. The given array data has exactly two child arrays.
-        //    2. The first child array (run_ends) has valid data type.
-        //    3. run_ends array does not have null values
-        //    4. run_ends array has non-zero and strictly increasing values.
-        //    5. The length of run_ends array and values array are the same.
-        array_data.validate_data()?;
-
-        Ok(array_data.into())
+        Ok(Self {
+            data_type,
+            run_ends: run_ends_buffer,
+            values: values.slice(0, values.len()),
+        })
     }
 
     /// Create a new [`RunArray`] from the provided parts, without validation
@@ -204,6 +240,22 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (DataType, RunEndBuffer<R::Native>, ArrayRef) {
         (self.data_type, self.run_ends, self.values)
+    }
+
+    /// The field that describes the run ends of this array.
+    pub fn run_ends_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::RunEndEncoded(f, _) => f,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The field that describes the values of this array.
+    pub fn values_field(&self) -> &FieldRef {
+        match &self.data_type {
+            DataType::RunEndEncoded(_, f) => f,
+            _ => unreachable!(),
+        }
     }
 
     /// Returns a reference to the [`RunEndBuffer`].
@@ -374,9 +426,9 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         // deconstruct the run ends child array
         let (
             run_end_data_type,
-            _run_end_len,
+            run_end_len,
             _run_end_nulls,
-            _run_end_offset,
+            run_end_offset,
             run_end_buffers,
             _run_end_child_data,
         ) = run_end_child.into_parts();
@@ -384,7 +436,7 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         let [run_end_buffer]: [arrow_buffer::Buffer; 1] = run_end_buffers
             .try_into()
             .expect("Run ends should have exactly one buffer");
-        let scalar = ScalarBuffer::from(run_end_buffer);
+        let scalar = ScalarBuffer::new(run_end_buffer, run_end_offset, run_end_len);
         let run_ends = unsafe { RunEndBuffer::new_unchecked(scalar, offset, len) };
 
         let values = make_array(values_child);
@@ -626,7 +678,7 @@ pub type Int32RunArray = RunArray<Int32Type>;
 /// ```
 pub type Int64RunArray = RunArray<Int64Type>;
 
-/// A [`RunArray`] typed typed on its child values array
+/// A [`RunArray`] typed on its child values array
 ///
 /// Implements [`ArrayAccessor`] and [`IntoIterator`] allowing fast access to its elements
 ///
@@ -813,11 +865,12 @@ impl<R: RunEndIndexType> AnyRunEndArray for RunArray<R> {
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
+    use rand::RngExt;
     use rand::rng;
     use rand::seq::SliceRandom;
 
     use super::*;
+    use crate::Float32Array;
     use crate::Int64Array;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
@@ -891,7 +944,7 @@ mod tests {
                     None => {
                         assert!(physical_array.is_null(*physical_ix))
                     }
-                };
+                }
             });
     }
     #[test]
@@ -1170,7 +1223,7 @@ mod tests {
             } else {
                 let physical_ix = run_array.get_physical_index(i);
                 assert!(typed.values().is_null(physical_ix));
-            };
+            }
         }
     }
 
@@ -1183,7 +1236,7 @@ mod tests {
 
             // create run array using input_array
             let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
-            builder.extend(input_array.clone().into_iter());
+            builder.extend(input_array.clone());
 
             let run_array = builder.finish();
             let physical_values_array = run_array.values().as_primitive::<Int32Type>();
@@ -1518,5 +1571,41 @@ mod tests {
         let created_from_parts =
             unsafe { RunArray::<Int32Type>::new_unchecked(dt, buffer, values) };
         assert_eq!(array, created_from_parts);
+    }
+
+    #[test]
+    fn test_from_array_data_offset() {
+        let dt = DataType::RunEndEncoded(
+            Arc::new(Field::new(
+                Field::REE_RUN_ENDS_FIELD_DEFAULT_NAME,
+                DataType::Int32,
+                false,
+            )),
+            Arc::new(Field::new(
+                Field::REE_VALUES_FIELD_DEFAULT_NAME,
+                DataType::Float32,
+                true,
+            )),
+        );
+
+        let runs = ArrayData::builder(DataType::Int32)
+            .len(2)
+            .offset(2)
+            .add_buffer(vec![-10_i32, -20, 1_i32, 4, 0, 100].into())
+            .build()
+            .unwrap();
+        let values = Float32Array::from(vec![1.5, 2.5]);
+
+        let data = ArrayDataBuilder::new(dt)
+            .len(3)
+            .child_data(vec![runs, values.to_data()])
+            .build()
+            .unwrap();
+        let array = RunArray::<Int32Type>::from(data);
+        let array = array.downcast::<Float32Array>().unwrap();
+
+        assert_eq!(array.value(0), 1.5);
+        assert_eq!(array.value(1), 2.5);
+        assert_eq!(array.value(2), 2.5);
     }
 }

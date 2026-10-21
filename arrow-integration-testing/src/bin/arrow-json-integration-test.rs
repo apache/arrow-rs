@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
-#![allow(unused_crate_dependencies)]
+//! Converts between the Arrow IPC file format and the integration test JSON format.
 
 use arrow::error::{ArrowError, Result};
 use arrow::ipc::reader::FileReader;
@@ -159,8 +158,8 @@ fn validate(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()> {
         if let Some(Ok(arrow_batch)) = arrow_reader.next() {
             // compare batches
             let num_columns = arrow_batch.num_columns();
-            assert!(num_columns == json_batch.num_columns());
-            assert!(arrow_batch.num_rows() == json_batch.num_rows());
+            assert_eq!(num_columns, json_batch.num_columns());
+            assert_eq!(arrow_batch.num_rows(), json_batch.num_rows());
 
             for i in 0..num_columns {
                 assert_eq!(

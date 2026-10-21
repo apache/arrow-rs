@@ -39,7 +39,7 @@
 //! ```
 //!
 //! SBBFs use eight hash functions to cleanly fit in SIMD lanes<sup>[2][sbbf-paper]</sup>, therefore
-//! `k` is set to 8. The SBBF will spread those `m` bits accross a set of `b` blocks that
+//! `k` is set to 8. The SBBF will spread those `m` bits across a set of `b` blocks that
 //! are each 256 bits, i.e., 32 bytes, in size. The number of blocks is chosen as:
 //!
 //! ```text
@@ -402,11 +402,14 @@ impl Sbbf {
     /// Creates a new [Sbbf] from a raw byte slice.
     pub fn new(bitset: &[u8]) -> Self {
         let data = bitset
-            .chunks_exact(4 * 8)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|chunk| {
                 let mut block = Block::ZERO;
-                for (i, word) in chunk.chunks_exact(4).enumerate() {
-                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
+                let (words, _remainder) = chunk.as_chunks::<4>();
+                for (i, word) in words.iter().enumerate() {
+                    block[i] = u32::from_le_bytes(*word);
                 }
                 block
             })
@@ -446,7 +449,7 @@ impl Sbbf {
         // Safety: Block is repr(transparent) and [u32; 8] can be reinterpreted as [u8; 32].
         let slice = unsafe {
             std::slice::from_raw_parts(
-                self.0.as_ptr() as *const u8,
+                self.0.as_ptr().cast::<u8>(),
                 self.0.len() * size_of::<Block>(),
             )
         };
@@ -575,6 +578,26 @@ impl Sbbf {
         self.0.len()
     }
 
+    /// Estimate the false positive probability (FPP) of this filter at its current size.
+    ///
+    /// This is the same estimate [`Self::fold_to_target_fpp`] uses to choose how far to fold.
+    ///
+    /// This lets a caller inspect a filter before folding or writing it, for example to
+    /// discard a filter that already exceeds its target FPP. Returns `1.0` for a filter
+    /// with no blocks.
+    pub fn estimated_fpp(&self) -> f64 {
+        if self.0.is_empty() {
+            return 1.0;
+        }
+        self.average_fill().powi(8)
+    }
+
+    /// Average fraction of bits set per block. The filter must have at least one block.
+    fn average_fill(&self) -> f64 {
+        let total_set_bits: u64 = self.0.iter().map(|b| u64::from(b.count_ones())).sum();
+        total_set_bits as f64 / (self.0.len() as f64 * 256.0)
+    }
+
     /// Fold the bloom filter down to the smallest size that still meets the target FPP
     /// (False Positive Percentage).
     ///
@@ -643,8 +666,7 @@ impl Sbbf {
         }
 
         // Single pass: compute average per-block fill rate.
-        let total_set_bits: u64 = self.0.iter().map(|b| u64::from(b.count_ones())).sum();
-        let avg_fill = total_set_bits as f64 / (len as f64 * 256.0);
+        let avg_fill = self.average_fill();
 
         // Empty filter: can fold all the way down.
         if avg_fill == 0.0 {
@@ -771,6 +793,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_mask_set_quick_check() {
         for i in 0..1_000_000 {
             let result = Block::mask(i);
@@ -779,6 +802,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_block_insert_and_check() {
         for i in 0..1_000_000 {
             let mut block = Block::ZERO;
@@ -788,6 +812,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_sbbf_insert_and_check() {
         let mut sbbf = Sbbf(vec![Block::ZERO; 1_000]);
         for i in 0..1_000_000 {
@@ -907,8 +932,7 @@ mod tests {
         for v in &values {
             assert!(
                 sbbf.check(v.as_str()),
-                "Value '{}' missing after folding (false negative!)",
-                v
+                "Value '{v}' missing after folding (false negative!)"
             );
         }
     }
@@ -947,6 +971,51 @@ mod tests {
         let mut sbbf = Sbbf::new_with_num_of_bytes(1024); // 32 blocks
         sbbf.fold_to_target_fpp(0.01);
         assert_eq!(sbbf.num_blocks(), 1);
+    }
+
+    #[test]
+    fn test_estimated_fpp_matches_serialized_bitset() {
+        for num_bytes in [BITSET_MIN_LENGTH, 1024, 64 * 1024] {
+            for ndv in [0u64, 1, 10, 100, 1_000, 10_000, 100_000] {
+                let mut sbbf = Sbbf::new_with_num_of_bytes(num_bytes);
+                for i in 0..ndv {
+                    sbbf.insert(&i);
+                }
+
+                let mut bitset = Vec::new();
+                sbbf.write_bitset(&mut bitset).unwrap();
+                let set_bits: u64 = bitset.iter().map(|b| u64::from(b.count_ones())).sum();
+                let expected = (set_bits as f64 / (bitset.len() as f64 * 8.0)).powi(8);
+
+                assert_eq!(
+                    sbbf.estimated_fpp().to_bits(),
+                    expected.to_bits(),
+                    "{num_bytes} bytes, {ndv} values"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_estimated_fpp_bounds() {
+        assert_eq!(Sbbf::new_with_num_of_bytes(1024).estimated_fpp(), 0.0);
+        assert_eq!(Sbbf::new(&[0xFF; 1024]).estimated_fpp(), 1.0);
+        assert_eq!(Sbbf::new(&[]).estimated_fpp(), 1.0);
+    }
+
+    #[test]
+    fn test_estimated_fpp_increases_when_folded() {
+        let mut sbbf = Sbbf::new_with_num_of_bytes(64 * 1024);
+        for i in 0..1_000 {
+            sbbf.insert(&i);
+        }
+        let before = sbbf.estimated_fpp();
+        sbbf.fold_n(3);
+        assert!(
+            sbbf.estimated_fpp() > before,
+            "folding must not lower the estimate: {before} -> {}",
+            sbbf.estimated_fpp()
+        );
     }
 
     #[test]
@@ -989,8 +1058,7 @@ mod tests {
         for value in &test_values {
             assert!(
                 reconstructed.check(value),
-                "Value '{}' should be present after round-trip",
-                value
+                "Value '{value}' should be present after round-trip"
             );
         }
     }
@@ -1032,6 +1100,7 @@ mod tests {
     /// Combined: every hash sets the *same bits* in the *same destination
     /// block* whether you fold or build fresh → filters are bit-identical.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_sbbf_folded_equals_fresh() {
         let values = (0..5000).map(|i| format!("elem_{i}")).collect::<Vec<_>>();
         let hashes = values
@@ -1050,7 +1119,7 @@ mod tests {
             }
 
             // --- Per-hash verification of the two lemmas ---
-            for &h in hashes.iter() {
+            for &h in &hashes {
                 // mask(h as u32) gives the 8-bit pattern that this hash sets
                 // inside whichever block it lands in. It uses only the lower
                 // 32 bits of h, so it's the same regardless of filter size.
@@ -1129,6 +1198,7 @@ mod tests {
     /// At each intermediate size we build a fresh filter and assert
     /// bit-equality, confirming the lemma composes across folds.
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_multi_step_fold() {
         let values = (0..3000).map(|i| format!("x_{i}")).collect::<Vec<_>>();
 
@@ -1158,6 +1228,7 @@ mod tests {
     ///
     /// compare the final size after folding against the theoretical optimal size
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_fold_size_vs_optimal_fixed_size() {
         for (ndv, target_fpp) in [
             (1000, 0.05),
@@ -1192,6 +1263,7 @@ mod tests {
     /// we measure fpp empirically by probing with values that were never inserted
     /// and counting how many are incorrectly marked as present
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_folded_fpp_matches_fresh_fpp() {
         let ndv = 2000;
         let num_probes = 50_000;

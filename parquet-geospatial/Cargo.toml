@@ -20,7 +20,6 @@ name = "parquet-geospatial"
 version = { workspace = true }
 license = { workspace = true }
 description = "Apache Parquet Geometry and Geography implementation in Rust"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "geometry", "geography"]
@@ -41,3 +40,6 @@ wkt = { version = "0.14" }
 [lib]
 name = "parquet_geospatial"
 bench = false
+
+[lints]
+workspace = true

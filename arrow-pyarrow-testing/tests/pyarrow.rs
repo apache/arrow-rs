@@ -42,9 +42,10 @@ use arrow_array::{
     Array, ArrayRef, BinaryViewArray, Int32Array, RecordBatch, StringArray, StringViewArray,
 };
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
-use pyo3::exceptions::PyTypeError;
+use arrow_schema::Schema;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::types::{PyAnyMethods, PyModule};
-use pyo3::Python;
+use pyo3::{IntoPyObject, Python};
 use std::ffi::CString;
 use std::sync::Arc;
 
@@ -56,8 +57,7 @@ fn test_to_pyarrow() {
     let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
     // The "very long string" will not be inlined, and force the creation of a data buffer.
     let c: ArrayRef = Arc::new(StringViewArray::from(vec!["short", "a very long string"]));
-    let input = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
-    println!("input: {input:?}");
+    let input = RecordBatch::try_from_iter([("a", a), ("b", b), ("c", c)]).unwrap();
 
     let res = Python::attach(|py| {
         let py_input = input.to_pyarrow(py)?;
@@ -68,6 +68,24 @@ fn test_to_pyarrow() {
     .unwrap();
 
     assert_eq!(input, res);
+}
+
+#[test]
+fn test_to_pyarrow_pair() {
+    Python::initialize();
+
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+    let input = RecordBatch::try_from_iter([("a", a), ("b", b)]).unwrap();
+
+    let res = Python::attach(|py| {
+        let record_batch = input.to_pyarrow(py)?;
+        let tuple = (record_batch.clone(), record_batch).into_pyobject(py)?;
+        Vec::<RecordBatch>::from_pyarrow_bound(&tuple)
+    })
+    .unwrap();
+    assert_eq!(input, res[0]);
+    assert_eq!(input, res[1]);
 }
 
 #[test]
@@ -84,7 +102,6 @@ fn test_to_pyarrow_byte_view() {
         ])
         .unwrap();
 
-        println!("input: {input:?}");
         let res = Python::attach(|py| {
             let py_input = input.to_pyarrow(py)?;
             let records = RecordBatch::from_pyarrow_bound(&py_input)?;
@@ -121,6 +138,63 @@ value = NotATuple()
         assert_eq!(
             err.to_string(),
             "TypeError: Expected __arrow_c_array__ to return a tuple of (schema, array) capsules."
+        );
+    });
+}
+
+#[test]
+fn test_from_pyarrow_non_capsule() {
+    Python::initialize();
+
+    Python::attach(|py| {
+        let code = CString::new(
+            r#"
+class NotACapsule:
+    def __arrow_c_schema__(self):
+        return 1
+
+value = NotACapsule()
+"#,
+        )
+        .unwrap();
+
+        let module = PyModule::from_code(py, code.as_c_str(), c"test.py", c"test_module").unwrap();
+        let value = module.getattr("value").unwrap();
+
+        let err = Schema::from_pyarrow_bound(&value).unwrap_err();
+        assert!(err.is_instance_of::<PyTypeError>(py));
+        assert_eq!(
+            err.to_string(),
+            "TypeError: Expected __arrow_c_schema__ to return a capsule."
+        );
+    });
+}
+
+#[test]
+fn test_from_pyarrow_nullable_struct_array() {
+    Python::initialize();
+
+    Python::attach(|py| {
+        let code = CString::new(
+            r#"
+import pyarrow as pa
+
+value = pa.array(
+    [{"a": 1}, None],
+    type=pa.struct([pa.field("a", pa.int32())]),
+)
+"#,
+        )
+        .unwrap();
+
+        let module = PyModule::from_code(py, code.as_c_str(), c"test.py", c"test_module").unwrap();
+        let value = module.getattr("value").unwrap();
+
+        let err = RecordBatch::from_pyarrow_bound(&value).unwrap_err();
+        assert!(err.is_instance_of::<PyValueError>(py));
+        assert_eq!(
+            err.to_string(),
+            "ValueError: Cannot convert nullable StructArray to RecordBatch, see StructArray documentation"
         );
     });
 }

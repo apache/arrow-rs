@@ -38,12 +38,10 @@ use tonic::{
 
 pub type Builder = fn(usize) -> ArrayRef;
 
-pub const TYPES: &[(&str, Builder)] = &[
-    ("fixed", fixed),
-    ("nested", nested),
-    ("variable", variable),
-    ("dict", dict),
-];
+pub const TYPES: &[(&str, Builder)] =
+    &[("fixed", fixed), ("nested", nested), ("variable", variable)];
+
+pub const DICT_TYPES: &[(&str, Builder)] = &[("dict", dict)];
 
 fn fixed(n: usize) -> ArrayRef {
     Arc::new(Int64Array::from_iter_values(0..n as i64))
@@ -81,13 +79,6 @@ pub fn build_batch(name: &str, rows: usize, cols: usize, build: Builder) -> Reco
 #[derive(Clone, Default)]
 pub struct BenchServer {
     frames: Arc<RwLock<Vec<FlightData>>>,
-}
-
-impl BenchServer {
-    #[allow(dead_code)]
-    pub fn set_frames(&self, frames: Vec<FlightData>) {
-        *self.frames.write().unwrap() = frames;
-    }
 }
 
 fn unimpl<T>() -> Result<T, Status> {
@@ -128,7 +119,6 @@ impl FlightService for BenchServer {
     async fn do_action(&self, _: Request<Action>) -> Result<Response<Self::DoActionStream>, Status> { unimpl() }
     async fn list_actions(&self, _: Request<Empty>) -> Result<Response<Self::ListActionsStream>, Status> { unimpl() }
 }
-#[allow(dead_code)]
 pub async fn start_server() -> (Channel, BenchServer) {
     const DUMMY_URL: &str = "http://localhost:50051";
 

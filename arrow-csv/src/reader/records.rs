@@ -62,6 +62,13 @@ pub struct RecordDecoder {
     /// Default value is false
     /// When enabled fills in missing columns with null
     truncated_rows: bool,
+
+    /// The number of rows padded because they had fewer fields than expected
+    ///
+    /// Only incremented when `truncated_rows` is enabled. Cumulative over the
+    /// lifetime of this decoder, i.e. not reset by [`Self::flush`], but reset by
+    /// [`Self::clear`] along with the buffered rows it counted
+    truncated_row_count: usize,
 }
 
 impl RecordDecoder {
@@ -77,6 +84,7 @@ impl RecordDecoder {
             data: vec![],
             num_rows: 0,
             truncated_rows,
+            truncated_row_count: 0,
         }
     }
 
@@ -141,6 +149,7 @@ impl RecordDecoder {
                                 self.offsets[self.offsets_len..self.offsets_len + fill_count]
                                     .fill(fill_value);
                                 self.offsets_len += fill_count;
+                                self.truncated_row_count += 1;
                             } else {
                                 return Err(ArrowError::CsvError(format!(
                                     "incorrect number of fields for line {}, expected {} got {}",
@@ -180,12 +189,22 @@ impl RecordDecoder {
         self.num_rows == 0
     }
 
+    /// Returns the number of rows padded because they had fewer fields than expected
+    ///
+    /// Cumulative across [`Self::flush`] calls, reset by [`Self::clear`]
+    pub fn truncated_row_count(&self) -> usize {
+        self.truncated_row_count
+    }
+
     /// Clears the current contents of the decoder
     pub fn clear(&mut self) {
         // This does not reset current_field to allow clearing part way through a record
         self.offsets_len = 1;
         self.data_len = 0;
         self.num_rows = 0;
+        // The rows counted so far are being discarded along with the buffered data,
+        // so they must not be reported as padded
+        self.truncated_row_count = 0;
     }
 
     /// Flushes the current contents of the reader
@@ -237,6 +256,8 @@ impl RecordDecoder {
         let num_rows = self.num_rows;
 
         // Reset state
+        // `truncated_row_count` is deliberately left alone so that it accumulates
+        // across the batches produced by a single decoder
         self.offsets_len = 1;
         self.data_len = 0;
         self.num_rows = 0;
@@ -403,6 +424,40 @@ mod tests {
         let (read, bytes) = decoder.decode(csv.as_bytes(), 5).unwrap();
         assert_eq!(read, 5);
         assert_eq!(bytes, csv.len());
+        // Only "v" is short, the rows starting with a delimiter have both fields
+        assert_eq!(decoder.truncated_row_count(), 1);
+    }
+
+    #[test]
+    fn test_truncated_row_count_not_reset_by_flush() {
+        let csv = "a\nb,2\nc\n";
+        let mut decoder = RecordDecoder::new(Reader::new(), 2, true);
+
+        let (read, _) = decoder.decode(csv.as_bytes(), 2).unwrap();
+        assert_eq!(read, 2);
+        assert_eq!(decoder.truncated_row_count(), 1);
+        decoder.flush().unwrap();
+        assert_eq!(decoder.truncated_row_count(), 1);
+
+        let (read, _) = decoder.decode(&csv.as_bytes()[6..], 1).unwrap();
+        assert_eq!(read, 1);
+        assert_eq!(decoder.truncated_row_count(), 2);
+        decoder.flush().unwrap();
+        assert_eq!(decoder.truncated_row_count(), 2);
+    }
+
+    #[test]
+    fn test_truncated_row_count_reset_by_clear() {
+        let csv = "a\nb,2\n";
+        let mut decoder = RecordDecoder::new(Reader::new(), 2, true);
+
+        let (read, _) = decoder.decode(csv.as_bytes(), 2).unwrap();
+        assert_eq!(read, 2);
+        assert_eq!(decoder.truncated_row_count(), 1);
+
+        // The rows are discarded, so the padding done to them is discarded too
+        decoder.clear();
+        assert_eq!(decoder.truncated_row_count(), 0);
     }
 
     /// Regression test for an overflow path found by the `arrow-csv`

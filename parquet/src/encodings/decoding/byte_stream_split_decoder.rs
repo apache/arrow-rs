@@ -33,8 +33,14 @@ pub struct ByteStreamSplitDecoder<T: DataType> {
     values_decoded: usize,
 }
 
+impl<T: DataType> Default for ByteStreamSplitDecoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: DataType> ByteStreamSplitDecoder<T> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             _phantom: PhantomData,
             encoded_bytes: Bytes::new(),
@@ -146,7 +152,7 @@ pub struct VariableWidthByteStreamSplitDecoder<T: DataType> {
 }
 
 impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
-    pub(crate) fn new(type_length: i32) -> Self {
+    pub fn new(type_length: i32) -> Self {
         Self {
             _phantom: PhantomData,
             encoded_bytes: Bytes::new(),
@@ -160,7 +166,7 @@ impl<T: DataType> VariableWidthByteStreamSplitDecoder<T> {
 impl<T: DataType> Decoder<T> for VariableWidthByteStreamSplitDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         // Rough check that all data elements are the same length
-        if data.len() % self.type_width != 0 {
+        if !data.len().is_multiple_of(self.type_width) {
             return Err(general_err!(
                 "Input data length is not a multiple of type width {}",
                 self.type_width
