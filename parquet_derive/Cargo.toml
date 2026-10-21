@@ -20,7 +20,6 @@ name = "parquet_derive"
 version = { workspace = true }
 license = { workspace = true }
 description = "Derive macros for the Rust implementation of Apache Parquet"
-homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["parquet"]
