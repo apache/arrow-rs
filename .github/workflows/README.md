@@ -21,3 +21,9 @@ CI runs a subset of checks on pull requests, selected by the changed files.
 The merge queue runs the full test suite against the proposed merge result.
 Pushes to `main` populate caches and publish documentation without repeating tests.
 A single required status check combines the results and blocks merging on failure.
+
+New jobs that are small and short should use `runs-on: ubuntu-slim`, as ASF Infra recommends.
+These runners have 1 vCPU, 5 GB of memory, no Docker engine and a 15-minute hard limit, but
+they usually start much sooner than `ubuntu-latest` when the shared ASF runner pool is busy.
+They come without a Rust toolchain, so jobs that need `cargo` can use
+`.github/actions/setup-rustup`.
